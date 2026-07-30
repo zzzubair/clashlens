@@ -51,7 +51,7 @@ Do not add war, Clan War League, clan-management, base-management, or prescripti
 
 ## Architecture
 
-`docs/architecture.md` defines the confirmed Phase 1 architecture: one repository and logical product, PostgreSQL as the primary structured datastore and durable queue, a Go collector that preserves official API evidence, Python domain-processing/API/analytics runtimes, a TypeScript website, a separate immutable raw-response archive, staggered polling, and versioned precomputed analytics.
+`docs/architecture.md` defines one logical product: PostgreSQL for structured data and durable queues, Go for official API collection and raw evidence, Python for domain processing, the API, and analytics, TypeScript for the website, and a separate immutable raw-response archive.
 
 The Go collector must not implement canonical battle linking, ranked-day reconciliation, shield or automatic-defense inference, army classification, or product analytics. Python owns those domain interpretations, and TypeScript consumes the Python API without duplicating their rules.
 
@@ -66,20 +66,24 @@ Remaining storage products, detailed module boundaries, frameworks, hosting mode
 - Do not log credentials or unnecessary personal data.
 - Do not commit, push, rebase, or open a pull request unless a maintainer asks.
 - State what changed, what was verified, what was not verified, and what remains open.
+- Prefer the simplest complete solution. Do not trade away correctness, evidence, or visible uncertainty.
 
-## Simplicity
+## Model Routing
 
-Understand the problem before building. Prefer the simplest design that fully satisfies confirmed functionality, performance, and trust requirements. Do not add abstractions, services, or features for hypothetical needs. Push back when a simpler complete solution exists, but never trade away correctness, evidence, or visible uncertainty.
+- `gpt-5.6-sol` orchestrates: it retains the conversation, makes decisions, and responds to the maintainer.
+- Proactively delegate bounded implementation, research, testing, migrations, data processing, and bulk work to fresh `gpt-5.6-luna` subagents with `xhigh` reasoning and no context fork. If the runtime cannot select them, use the best fresh subagent and report the limit.
+- Give each subagent a self-contained task with its context, constraints, and acceptance tests.
+- The orchestrator monitors progress, answers questions, reviews results, corrects problems, and verifies delegated work before finishing.
 
 ## Feature Workflow
 
 For substantial features:
 
-1. Read the source documents and inspect the working tree. Do not commit without maintainer approval.
-2. Use `/grilling` to resolve rules. Update the existing product, domain, or architecture documents only when their shared meanings change.
-3. When requested, create an approved GitHub issue as the feature specification, including scope, rules, acceptance criteria, dependencies, and tests. GitHub actions are outward-facing.
-4. Use `/prototype` in an isolated worktree and non-production `prototypes/` path. Record findings and specification changes on the issue before implementation.
-5. After maintainer approval, plan and implement with migrations and tests, then run applicable reviews.
-6. Open a PR only when asked. Report verification honestly; the maintainer decides whether to approve and merge.
+1. Read the source documents and inspect the working tree.
+2. Use `/grilling` to resolve rules. Update source documents only when shared meanings change.
+3. When asked, create an approved GitHub issue with scope, rules, acceptance criteria, dependencies, and tests.
+4. Use `/prototype` in an isolated worktree under `prototypes/`. Record findings and specification changes on the issue.
+5. After approval, plan and implement with migrations, tests, and applicable reviews.
+6. Open a PR only when asked. The maintainer decides whether to approve and merge.
 
-The repository is the source of truth. Existing product/domain/architecture documents own shared meanings; the approved issue directs the change; merged code, migrations, and tests become its executable implementation. Update the existing documents in the same PR whenever implementation changes their meanings.
+The repository is the source of truth. Source documents own shared meanings; the approved issue directs the work; merged code, migrations, and tests are executable. Update source documents in the same PR when meanings change.
