@@ -1,6 +1,6 @@
 # Clash Lens Agent Guide
 
-Clash Lens is at an early stage. The Phase 1 product scope is final. Detailed specifications, architecture, and implementation remain open.
+Clash Lens is at an early stage. The Phase 1 product scope, architecture shape, PostgreSQL database, and Go/Python/TypeScript runtime split are confirmed. Detailed specifications, remaining technology choices, and implementation remain open.
 
 ## Sources of Truth
 
@@ -16,14 +16,14 @@ Report conflicts between these files. Do not choose silently.
 Phase 1 supports Legend I. It includes:
 
 - Broad Legend I army and outcome analysis.
-- Separate offense and defense analytics by trophy range and time period.
+- Separate offense and defense analytics by trophy range or tracked leaderboard cohort and time period.
 - Trustworthy personal season tracking.
 - Public player pages and official leaderboard context.
 - Optional Discord or Google accounts.
 - Multi-account summary pages and saved player groups.
 - Website, minimal Discord access, Google Sheets exports, and an OBS browser overlay.
 
-Ranked leagues below Legend I come later.
+Ranked tournaments other than Legend I come later.
 
 Do not add war, Clan War League, clan-management, base-management, or prescriptive army or base recommendations to Phase 1.
 
@@ -51,9 +51,11 @@ Do not add war, Clan War League, clan-management, base-management, or prescripti
 
 ## Architecture
 
-No implementation architecture is confirmed.
+`docs/architecture.md` defines the confirmed Phase 1 architecture: one repository and logical product, PostgreSQL as the primary structured datastore and durable queue, a Go collector that preserves official API evidence, Python domain-processing/API/analytics runtimes, a TypeScript website, a separate immutable raw-response archive, staggered polling, and versioned precomputed analytics.
 
-Do not commit the project to a language, database, service boundary, framework, hosting model, or cloud provider without presenting trade-offs and receiving maintainer approval.
+The Go collector must not implement canonical battle linking, ranked-day reconciliation, shield or automatic-defense inference, army classification, or product analytics. Python owns those domain interpretations, and TypeScript consumes the Python API without duplicating their rules.
+
+Remaining storage products, detailed module boundaries, frameworks, hosting models, and cloud providers remain open. Do not confirm one without presenting trade-offs and receiving maintainer approval.
 
 ## Working Rules
 
@@ -64,3 +66,20 @@ Do not commit the project to a language, database, service boundary, framework, 
 - Do not log credentials or unnecessary personal data.
 - Do not commit, push, rebase, or open a pull request unless a maintainer asks.
 - State what changed, what was verified, what was not verified, and what remains open.
+
+## Simplicity
+
+Understand the problem before building. Prefer the simplest design that fully satisfies confirmed functionality, performance, and trust requirements. Do not add abstractions, services, or features for hypothetical needs. Push back when a simpler complete solution exists, but never trade away correctness, evidence, or visible uncertainty.
+
+## Feature Workflow
+
+For substantial features:
+
+1. Read the source documents and inspect the working tree. Do not commit without maintainer approval.
+2. Use `/grilling` to resolve rules. Update the existing product, domain, or architecture documents only when their shared meanings change.
+3. When requested, create an approved GitHub issue as the feature specification, including scope, rules, acceptance criteria, dependencies, and tests. GitHub actions are outward-facing.
+4. Use `/prototype` in an isolated worktree and non-production `prototypes/` path. Record findings and specification changes on the issue before implementation.
+5. After maintainer approval, plan and implement with migrations and tests, then run applicable reviews.
+6. Open a PR only when asked. Report verification honestly; the maintainer decides whether to approve and merge.
+
+The repository is the source of truth. Existing product/domain/architecture documents own shared meanings; the approved issue directs the change; merged code, migrations, and tests become its executable implementation. Update the existing documents in the same PR whenever implementation changes their meanings.
