@@ -66,6 +66,7 @@ Remaining storage products, detailed module boundaries, frameworks, hosting mode
 - Do not log credentials or unnecessary personal data.
 - Do not commit, push, rebase, or open a pull request unless a maintainer asks.
 - State what changed, what was verified, what was not verified, and what remains open.
+- Use ASD-STE100 Simplified Technical English in every response to the maintainer. Prefer short sentences, common words, active voice, and consistent terms. Keep code, commands, identifiers, and required technical terms exact.
 - Prefer the simplest complete solution. Do not trade away correctness, evidence, or visible uncertainty.
 
 ## Model Routing
