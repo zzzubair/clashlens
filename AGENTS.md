@@ -1,5 +1,13 @@
 # Clash Lens Agent Guide
 
+## Model Routing
+
+- `gpt-5.6-sol` is the orchestrator and the maintainer-facing task. Sol retains the conversation, resolves maintainer-level ambiguity, makes product, domain, architecture, and scope decisions, and owns the final response.
+- Use a separate persisted `gpt-5.6-luna` task with maximum reasoning and no inherited conversation context as the Luna Max worker for all repository changes and substantial work. Luna can make reasonable implementation choices within the defined bounds.
+- Give Luna a closed-ended, self-contained prompt with relevant context, a clear outcome, explicit scope, constraints, acceptance tests, and a requirement to create and complete its own persistent goal. This bounds the task without dictating exact wording, code, or every implementation step, so Luna can make reasonable implementation choices without drifting from the intended result.
+- Sol must actively babysit Luna throughout the task: monitor progress, detect drift, answer questions, and send steering or correction prompts as soon as needed. Sol must then review every change, run independent verification, and report what changed, what was and was not verified, and what remains open. Sol must not finish while required work is active or unverified.
+- Luna is not a Codex multi-agent v2 subagent. If a Luna task cannot launch, use the best supported fresh Sol or Terra subagent with the same bounded prompt and report the limit.
+
 Clash Lens is at an early stage. The Phase 1 product scope, architecture shape, PostgreSQL database, and Go/Python/TypeScript runtime split are confirmed. Detailed specifications, remaining technology choices, and implementation remain open.
 
 ## Sources of Truth
@@ -68,13 +76,6 @@ Remaining storage products, detailed module boundaries, frameworks, hosting mode
 - State what changed, what was verified, what was not verified, and what remains open.
 - Use ASD-STE100 Simplified Technical English in every response to the maintainer. Prefer short sentences, common words, active voice, and consistent terms. Keep code, commands, identifiers, and required technical terms exact.
 - Prefer the simplest complete solution. Do not trade away correctness, evidence, or visible uncertainty.
-
-## Model Routing
-
-- `gpt-5.6-sol` orchestrates: it retains the conversation, makes decisions, and responds to the maintainer.
-- Proactively delegate bounded implementation, research, testing, migrations, data processing, and bulk work to fresh `gpt-5.6-luna` subagents with `xhigh` reasoning and no context fork. If the runtime cannot select them, use the best fresh subagent and report the limit.
-- Give each subagent a self-contained task with its context, constraints, and acceptance tests.
-- The orchestrator monitors progress, answers questions, reviews results, corrects problems, and verifies delegated work before finishing.
 
 ## Feature Workflow
 
