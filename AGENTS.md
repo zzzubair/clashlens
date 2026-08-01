@@ -77,6 +77,7 @@ Remaining storage products, detailed module boundaries, frameworks, hosting mode
 - Do not turn open specification details into product rules without maintainer approval.
 - Add proportionate tests when implementation changes begin.
 - Do not log credentials or unnecessary personal data.
+- This repository is private. Use the authenticated `gh` CLI for all GitHub actions.
 - Do not commit, push, rebase, or open a pull request unless a maintainer asks.
 - State what changed, what was verified, what was not verified, and what remains open.
 - Use ASD-STE100 Simplified Technical English in every response to the maintainer. Prefer short sentences, common words, active voice, and consistent terms. Keep code, commands, identifiers, and required technical terms exact.
