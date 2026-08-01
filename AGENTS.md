@@ -1,13 +1,17 @@
 # Clash Lens Agent Guide
 
-## Model Routing
+## Shared Agent Workflow
 
-- `gpt-5.6-sol` is the orchestrator and the maintainer-facing task. Sol retains the conversation, resolves maintainer-level ambiguity, makes product, domain, architecture, and scope decisions, and owns the final response.
-- Use a separate persisted `gpt-5.6-luna` task with maximum reasoning and no inherited conversation context as the Luna Max worker for substantial implementation, research, testing, migrations, data processing, bulk work, and other tasks that benefit from a worker. Luna can make reasonable implementation choices within the defined bounds.
-- Give Luna a closed-ended, self-contained prompt with relevant context, a clear outcome, explicit scope, constraints, acceptance tests, and a requirement to create and complete its own persistent goal. This bounds the task without dictating exact wording, code, or every implementation step, so Luna can make reasonable implementation choices without drifting from the intended result.
-- Sol must actively babysit Luna throughout the task: monitor progress, detect drift, answer questions, and send steering or correction prompts as soon as needed. Sol must then review every change, run independent verification, and report what changed, what was and was not verified, and what remains open. Sol must not finish while required work is active or unverified.
-- Sol handles brief conversation, decisions, coordination, review, small deterministic edits, routine read-only checks, and mechanical Git operations such as staging reviewed files, committing, and pushing. Do not launch Luna when delegation adds more overhead than value.
-- Luna is not a Codex multi-agent v2 subagent. If a Luna task cannot launch, use the best supported fresh Sol or Terra subagent with the same bounded prompt and report the limit.
+The repository defines its shared OpenCode agents in `.opencode/agents/` and selects the default agent in `opencode.json`:
+
+- `lead` uses `openai/gpt-5.6-sol` with the `xhigh` variant. It is the maintainer-facing senior engineer and owns decisions, delegation, final review, verification, and the final response.
+- `implementer` uses `openai/gpt-5.6-luna` with the `max` variant for substantial implementation and tests.
+- `researcher` uses Luna Max with read-only permissions for primary-source research.
+- `reviewer` uses Luna Max with read-only permissions for detailed first-pass review. `lead` still owns the final review.
+
+For delegated work, `lead` gives the subagent a bounded, self-contained task with context, scope, constraints, acceptance criteria, and verification requirements. The subagent reports its work, verification, limits, and open items. `lead` inspects the result and repository state, resumes the same subagent with specific corrections when needed, and independently verifies the final state. It does not finish while required work is active, incomplete, or unverified.
+
+Luna can make reasonable choices inside the assigned bounds but returns open product, domain, architecture, technology, or scope decisions to `lead`. `lead` handles small or decision-heavy work directly and does not delegate when delegation costs more than the work.
 
 Clash Lens is at an early stage. The Phase 1 product scope, architecture shape, PostgreSQL database, and Go/Python/TypeScript runtime split are confirmed. Detailed specifications, remaining technology choices, and implementation remain open.
 
@@ -83,9 +87,9 @@ Remaining storage products, detailed module boundaries, frameworks, hosting mode
 For substantial features:
 
 1. Read the source documents and inspect the working tree.
-2. Use `/grilling` to resolve rules. Update source documents only when shared meanings change.
+2. Resolve unclear rules and decisions with the maintainer. Update source documents only when shared meanings change.
 3. When asked, create an approved GitHub issue with scope, rules, acceptance criteria, dependencies, and tests.
-4. Use `/prototype` in an isolated worktree under `prototypes/`. Record findings and specification changes on the issue.
+4. When a prototype is approved, build it in an isolated worktree under `prototypes/`. Record findings and specification changes on the issue.
 5. After approval, plan and implement with migrations, tests, and applicable reviews.
 6. Open a PR only when asked. The maintainer decides whether to approve and merge.
 
