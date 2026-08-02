@@ -42,6 +42,25 @@ type collectorConfig struct {
 	collectorVersion          string
 }
 
+type maintenanceConfig struct {
+	databaseURL   string
+	schemaVersion int
+}
+
+func loadMaintenanceConfig(getenv func(string) string) (maintenanceConfig, error) {
+	config := maintenanceConfig{
+		databaseURL:   strings.TrimSpace(getenv("CLASHLENS_DATABASE_URL")),
+		schemaVersion: 1,
+	}
+	if err := optionalInt(getenv, "CLASHLENS_SCHEMA_VERSION", &config.schemaVersion); err != nil {
+		return maintenanceConfig{}, err
+	}
+	if config.databaseURL == "" {
+		return maintenanceConfig{}, errors.New("CLASHLENS_DATABASE_URL is required")
+	}
+	return config, nil
+}
+
 func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	config := collectorConfig{
 		databaseURL:             strings.TrimSpace(getenv("CLASHLENS_DATABASE_URL")),
@@ -133,6 +152,9 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	}
 	if err := optionalInt(getenv, "CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", &config.requestsPerSecondPerKey); err != nil {
 		return collectorConfig{}, err
+	}
+	if config.requestsPerSecondPerKey < 1 || config.requestsPerSecondPerKey > 30 {
+		return collectorConfig{}, errors.New("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY must be between 1 and 30")
 	}
 	if err := optionalInt(getenv, "CLASHLENS_WORKERS_PER_KEY", &config.workersPerKey); err != nil {
 		return collectorConfig{}, err

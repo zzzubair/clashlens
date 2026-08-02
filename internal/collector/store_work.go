@@ -143,7 +143,10 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 	if err := transaction.QueryRow(ctx, `
 		SELECT status, result_attempt_id
 		FROM collector_jobs
-		WHERE id = $1 AND lease_token = $2
+		WHERE id = $1
+			AND lease_token = $2
+			AND status = 'leased'
+			AND lease_expires_at > clock_timestamp()
 		FOR UPDATE
 	`, job.id, job.leaseToken).Scan(&status, &existingAttempt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -157,29 +160,38 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 
 	requiresActivePlayer := job.workType == "regular_poll"
 	eligibilityPlayerID := job.playerID
+	eligibilityRootJobID := job.id
+	eligibilityAttemptID := existingAttempt
 	if job.workType == "endpoint_retry" && job.parentAttemptID.Valid {
 		var parentWorkType string
 		if err := transaction.QueryRow(ctx, `
-			WITH RECURSIVE lineage (work_type, player_id, parent_attempt_id, depth) AS (
-				SELECT parent_job.work_type, parent_job.player_id, parent_job.parent_attempt_id, 1
+			WITH RECURSIVE lineage (attempt_id, job_id, work_type, player_id, parent_attempt_id, depth) AS (
+				SELECT parent_attempt.id, parent_job.id, parent_job.work_type,
+					parent_job.player_id, parent_job.parent_attempt_id, 1
 				FROM collector_attempts AS parent_attempt
 				JOIN collector_jobs AS parent_job ON parent_job.id = parent_attempt.job_id
 				WHERE parent_attempt.id = $1
 
 				UNION ALL
 
-				SELECT parent_job.work_type, parent_job.player_id, parent_job.parent_attempt_id, child.depth + 1
+				SELECT parent_attempt.id, parent_job.id, parent_job.work_type,
+					parent_job.player_id, parent_job.parent_attempt_id, child.depth + 1
 				FROM lineage AS child
 				JOIN collector_attempts AS parent_attempt ON parent_attempt.id = child.parent_attempt_id
 				JOIN collector_jobs AS parent_job ON parent_job.id = parent_attempt.job_id
 				WHERE child.work_type = 'endpoint_retry' AND child.depth < 32
 			)
-			SELECT work_type, player_id
+			SELECT work_type, player_id, job_id, attempt_id
 			FROM lineage
 			WHERE work_type <> 'endpoint_retry'
 			ORDER BY depth
 			LIMIT 1
-		`, job.parentAttemptID.Int64).Scan(&parentWorkType, &eligibilityPlayerID); err != nil {
+		`, job.parentAttemptID.Int64).Scan(
+			&parentWorkType,
+			&eligibilityPlayerID,
+			&eligibilityRootJobID,
+			&eligibilityAttemptID,
+		); err != nil {
 			return 0, nil, fmt.Errorf("load endpoint retry eligibility: %w", err)
 		}
 		requiresActivePlayer = parentWorkType == "regular_poll"
@@ -193,13 +205,101 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 			return 0, nil, fmt.Errorf("check regular player eligibility: %w", err)
 		}
 		if !active {
-			if _, err := transaction.Exec(ctx, `
+			attemptNeedsResolution := false
+			if eligibilityAttemptID.Valid {
+				var attemptStatus string
+				if err := transaction.QueryRow(ctx, `
+					SELECT status FROM collector_attempts WHERE id = $1 FOR UPDATE
+				`, eligibilityAttemptID).Scan(&attemptStatus); err != nil {
+					return 0, nil, fmt.Errorf("lock inactive collection attempt: %w", err)
+				}
+				switch attemptStatus {
+				case "running", "incomplete":
+					attemptNeedsResolution = true
+				case "failed":
+				case "complete":
+					return 0, nil, errors.New("inactive collection attempt was already complete")
+				default:
+					return 0, nil, fmt.Errorf("inactive collection attempt has unknown status %q", attemptStatus)
+				}
+			}
+			command, err := transaction.Exec(ctx, `
 				UPDATE collector_jobs
 				SET status = 'cancelled', cancel_reason = 'player_inactive',
 					lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = $2
 				WHERE id = $1
-			`, job.id, now); err != nil {
+					AND lease_token = $3
+					AND status = 'leased'
+					AND lease_expires_at > clock_timestamp()
+			`, job.id, now, job.leaseToken)
+			if err != nil {
 				return 0, nil, fmt.Errorf("cancel inactive claimed job: %w", err)
+			}
+			if command.RowsAffected() != 1 {
+				return 0, nil, errLeaseLost
+			}
+			if eligibilityAttemptID.Valid {
+				if _, err := transaction.Exec(ctx, `
+					UPDATE collector_endpoint_results
+					SET outcome = 'failed',
+						next_retry_at = NULL,
+						failure_category = 'player_inactive'
+					WHERE attempt_id = $1 AND outcome <> 'observed'
+				`, eligibilityAttemptID); err != nil {
+					return 0, nil, fmt.Errorf("fail inactive attempt endpoints: %w", err)
+				}
+				if attemptNeedsResolution {
+					command, err = transaction.Exec(ctx, `
+						UPDATE collector_attempts
+						SET status = 'failed', completed_at = $2
+						WHERE id = $1 AND status IN ('running', 'incomplete')
+					`, eligibilityAttemptID, now)
+					if err != nil {
+						return 0, nil, fmt.Errorf("fail inactive collection attempt: %w", err)
+					}
+					if command.RowsAffected() != 1 {
+						return 0, nil, errors.New("inactive collection attempt changed while locked")
+					}
+				}
+				if _, err := transaction.Exec(ctx, `
+					UPDATE collector_jobs
+					SET status = 'cancelled',
+						cancel_reason = 'player_inactive',
+						lease_owner = NULL,
+						lease_token = NULL,
+						lease_expires_at = NULL,
+						updated_at = $2
+					WHERE parent_attempt_id = $1
+						AND status IN ('pending', 'waiting_retry')
+				`, eligibilityAttemptID, now); err != nil {
+					return 0, nil, fmt.Errorf("cancel inactive sibling retries: %w", err)
+				}
+			}
+			if eligibilityRootJobID != job.id {
+				command, err = transaction.Exec(ctx, `
+					UPDATE collector_jobs
+					SET status = 'cancelled',
+						cancel_reason = 'player_inactive',
+						lease_owner = NULL,
+						lease_token = NULL,
+						lease_expires_at = NULL,
+						updated_at = $2
+					WHERE id = $1 AND status = 'waiting_retry'
+				`, eligibilityRootJobID, now)
+				if err != nil {
+					return 0, nil, fmt.Errorf("cancel inactive root job: %w", err)
+				}
+				if command.RowsAffected() != 1 {
+					var rootStatus string
+					if err := transaction.QueryRow(ctx, `
+						SELECT status FROM collector_jobs WHERE id = $1
+					`, eligibilityRootJobID).Scan(&rootStatus); err != nil {
+						return 0, nil, fmt.Errorf("check inactive root job: %w", err)
+					}
+					if rootStatus != "cancelled" {
+						return 0, nil, fmt.Errorf("inactive root job has status %q", rootStatus)
+					}
+				}
 			}
 			if err := transaction.Commit(ctx); err != nil {
 				return 0, nil, fmt.Errorf("commit inactive job cancellation: %w", err)
@@ -296,6 +396,7 @@ func (s *store) beginEndpointRequest(
 			AND job.id = $5
 			AND job.lease_token = $3
 			AND job.status = 'leased'
+			AND job.lease_expires_at > clock_timestamp()
 		RETURNING endpoint_result.request_count
 	`, attemptID, string(endpoint), job.leaseToken, startedAt, job.id).Scan(&requestCount)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -331,13 +432,16 @@ func (s *store) commitObservation(
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
-	var currentToken string
+	var leaseCurrent bool
 	if err := transaction.QueryRow(ctx, `
-		SELECT lease_token
+		SELECT true
 		FROM collector_jobs
-		WHERE id = $1 AND status = 'leased'
+		WHERE id = $1
+			AND lease_token = $2
+			AND status = 'leased'
+			AND lease_expires_at > clock_timestamp()
 		FOR UPDATE
-	`, job.id).Scan(&currentToken); err != nil || currentToken != job.leaseToken {
+	`, job.id, job.leaseToken).Scan(&leaseCurrent); err != nil {
 		return errLeaseLost
 	}
 
@@ -410,6 +514,14 @@ func (s *store) commitObservation(
 		WHERE attempt_id = $1
 			AND endpoint = $2
 			AND execution_token = $3
+			AND EXISTS (
+				SELECT 1
+				FROM collector_jobs AS job
+				WHERE job.id = $13
+					AND job.lease_token = $3
+					AND job.status = 'leased'
+					AND job.lease_expires_at > clock_timestamp()
+			)
 	`,
 		attemptID,
 		string(endpoint),
@@ -423,6 +535,7 @@ func (s *store) commitObservation(
 		archiveReference,
 		observationID,
 		keyLabel,
+		job.id,
 	)
 	if err != nil {
 		return fmt.Errorf("update endpoint result: %w", err)
@@ -474,7 +587,10 @@ func (s *store) finishAttempt(ctx context.Context, job *collectionJob, attemptID
 			lease_token = NULL,
 			lease_expires_at = NULL,
 			updated_at = $3
-		WHERE id = $1 AND lease_token = $2 AND status = 'leased'
+		WHERE id = $1
+			AND lease_token = $2
+			AND status = 'leased'
+			AND lease_expires_at > clock_timestamp()
 	`, job.id, job.leaseToken, completedAt)
 	if err != nil {
 		return fmt.Errorf("complete collector job: %w", err)

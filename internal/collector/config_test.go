@@ -66,6 +66,17 @@ func TestLoadConfigCanExplicitlyAllowInteractiveCapacityForNormalWork(t *testing
 	}
 }
 
+func TestLoadConfigRejectsPerKeyRateAboveOfficialLimit(t *testing.T) {
+	t.Parallel()
+	environment := validConfigEnvironment()
+	environment["CLASHLENS_REQUESTS_PER_SECOND_PER_KEY"] = "31"
+
+	_, err := loadConfig(func(name string) string { return environment[name] })
+	if err == nil || !strings.Contains(err.Error(), "between 1 and 30") {
+		t.Fatalf("loadConfig error = %v, want per-key rate limit error", err)
+	}
+}
+
 func validConfigEnvironment() map[string]string {
 	return map[string]string{
 		"CLASHLENS_DATABASE_URL":         "postgres://collector@127.0.0.1/collector",

@@ -49,8 +49,8 @@ type APIKeyStatus struct {
 }
 
 func newKeyPool(keys []APIKey, requestsPerSecond int, allowDegradedNormal bool) (*keyPool, error) {
-	if requestsPerSecond < 1 {
-		return nil, errors.New("requests per second must be positive")
+	if requestsPerSecond < 1 || requestsPerSecond > 30 {
+		return nil, errors.New("requests per second per key must be between 1 and 30")
 	}
 	seen := make(map[string]struct{}, len(keys))
 	seenSecrets := make(map[[sha256.Size]byte]struct{}, len(keys))

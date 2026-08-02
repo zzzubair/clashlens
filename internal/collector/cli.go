@@ -107,7 +107,7 @@ func RunCLI(
 		})
 
 	case "maintenance":
-		return runMaintenance(ctx, arguments[1:], getenv, stdout, stderr, logger)
+		return runMaintenance(ctx, arguments[1:], getenv, stdout, stderr)
 	default:
 		return fmt.Errorf("unknown collector command %q", arguments[0])
 	}
@@ -119,20 +119,19 @@ func runMaintenance(
 	getenv func(string) string,
 	stdout io.Writer,
 	stderr io.Writer,
-	logger *slog.Logger,
 ) error {
 	if len(arguments) == 0 {
 		return errors.New("maintenance command is required: list-failed, list-leases, requeue, or reset-processing")
 	}
-	config, err := loadConfig(getenv)
+	config, err := loadMaintenanceConfig(getenv)
 	if err != nil {
 		return err
 	}
-	app, err := newApplication(ctx, config, logger)
+	store, err := openStore(ctx, config.databaseURL, config.schemaVersion)
 	if err != nil {
 		return err
 	}
-	defer app.close()
+	defer store.close()
 
 	switch arguments[0] {
 	case "list-failed":
@@ -142,7 +141,7 @@ func runMaintenance(
 		if err := flags.Parse(arguments[1:]); err != nil {
 			return err
 		}
-		failures, err := app.store.listFailedWork(ctx, *limit)
+		failures, err := store.listFailedWork(ctx, *limit)
 		if err != nil {
 			return err
 		}
@@ -173,7 +172,7 @@ func runMaintenance(
 		if err := flags.Parse(arguments[1:]); err != nil {
 			return err
 		}
-		leases, err := app.store.listStuckLeases(ctx, time.Now().UTC(), *limit)
+		leases, err := store.listStuckLeases(ctx, time.Now().UTC(), *limit)
 		if err != nil {
 			return err
 		}
@@ -200,7 +199,7 @@ func runMaintenance(
 		if *jobID < 1 {
 			return errors.New("maintenance requeue requires a positive --job-id")
 		}
-		if err := app.store.requeueFailedJob(ctx, *jobID, time.Now().UTC()); err != nil {
+		if err := store.requeueFailedJob(ctx, *jobID, time.Now().UTC()); err != nil {
 			return err
 		}
 		return json.NewEncoder(stdout).Encode(map[string]string{"status": "requeued", "job_id": strconv.FormatInt(*jobID, 10)})
@@ -215,7 +214,7 @@ func runMaintenance(
 		if *processingJobID < 1 {
 			return errors.New("maintenance reset-processing requires a positive --processing-job-id")
 		}
-		if err := app.store.resetProcessingJob(ctx, *processingJobID, time.Now().UTC()); err != nil {
+		if err := store.resetProcessingJob(ctx, *processingJobID, time.Now().UTC()); err != nil {
 			return err
 		}
 		return json.NewEncoder(stdout).Encode(map[string]string{

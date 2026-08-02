@@ -68,7 +68,7 @@ Useful optional variables:
 | `CLASHLENS_RETRY_MAXIMUM_DELAY` | `30s` | Maximum retry delay. |
 | `CLASHLENS_RETRY_JITTER_FRACTION` | `0.2` | Retry jitter from `0` through `1`. |
 | `CLASHLENS_INTERACTIVE_COOLDOWN` | `30s` | Recent-success window for interactive intent coalescing. |
-| `CLASHLENS_REQUESTS_PER_SECOND_PER_KEY` | `30` | Request limit for each process-owned key. |
+| `CLASHLENS_REQUESTS_PER_SECOND_PER_KEY` | `30` | Request limit for each process-owned key. The accepted range is `1` through `30`. |
 | `CLASHLENS_WORKERS_PER_KEY` | `8` | Small Go worker goroutines per configured key. Tune with API latency and PostgreSQL capacity. |
 | `CLASHLENS_MAXIMUM_RESPONSE_BYTES` | `4194304` | Maximum body size for one official response. |
 | `CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL` | `false` | Explicit degraded-mode use of reserved interactive keys for normal work. |
@@ -119,6 +119,7 @@ Inspect and recover durable failures:
 ```
 
 Maintenance output contains IDs, categories, states, and times. It does not contain API-key secrets or raw response bodies.
+Maintenance commands require only `CLASHLENS_DATABASE_URL` and the optional schema version. Archive or API-key outages do not block database recovery commands.
 
 ## Health and metrics
 
@@ -128,6 +129,8 @@ When `CLASHLENS_HEALTH_LISTEN` is set:
 - `/readyz` returns JSON with separate `postgresql`, `archive`, `normal_api_keys`, and `interactive_api_keys` states.
 - `/metrics` reports queue depth and age, active and expired leases, incomplete attempts, retries, terminal failures, endpoint freshness, reset progress, live-refresh latency and reuse counts, API outcomes, storage errors, and per-key rate, cooldown, and quarantine state by non-secret label.
 
+Startup writes and verifies one empty `readiness/<process-token>` object. This proves that the configured archive credentials can write before the process accepts work. `/readyz` then checks that the verified archive bucket remains available.
+
 Keep this listener on a private operations network or localhost. It has no built-in authentication.
 
 ## Failure and shutdown rules
@@ -135,6 +138,6 @@ Keep this listener on a private operations network or localhost. It has no built
 - A response becomes an observation only after exact archive bytes pass SHA-256 verification.
 - Profile and battle-log outcomes are independent. A successful endpoint remains durable when its sibling fails.
 - Retry jobs target only incomplete endpoints.
-- Execution tokens fence late workers after lease loss.
+- Execution tokens and lease-expiry checks fence late workers. An expired lease cannot renew or publish durable worker results, even if no other worker has reclaimed it yet.
 - Workers renew active leases. Graceful shutdown cancels requests, releases unfinished leases to `pending`, and does not mark unfinished work complete.
 - When a required key pool has no healthy key, workers leave new work unclaimed. Normal workers do not use interactive keys unless the degraded-mode variable is explicitly true.

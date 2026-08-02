@@ -23,8 +23,9 @@ type fakeS3Object struct {
 }
 
 type fakeS3 struct {
-	mu      sync.Mutex
-	objects map[string]*fakeS3Object
+	mu           sync.Mutex
+	objects      map[string]*fakeS3Object
+	rejectWrites bool
 }
 
 func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
@@ -69,6 +70,12 @@ func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 			response.WriteHeader(http.StatusOK)
 			_, _ = response.Write(object.body)
 		case http.MethodPut:
+			if backend.rejectWrites {
+				response.Header().Set("Content-Type", "application/xml")
+				response.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(response, `<Error><Code>AccessDenied</Code></Error>`)
+				return
+			}
 			body, err := io.ReadAll(request.Body)
 			if err != nil {
 				http.Error(response, err.Error(), http.StatusInternalServerError)
@@ -90,6 +97,18 @@ func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 	}))
 	t.Cleanup(server.Close)
 	return server, backend
+}
+
+func (backend *fakeS3) contentObjectCount() int {
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	count := 0
+	for key := range backend.objects {
+		if strings.HasPrefix(key, "sha256/") {
+			count++
+		}
+	}
+	return count
 }
 
 func TestS3ArchiveReusesVerifiedContentAddressedObject(t *testing.T) {

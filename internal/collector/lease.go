@@ -10,8 +10,11 @@ import (
 func (s *store) renewLease(ctx context.Context, job *collectionJob, expiresAt time.Time) error {
 	command, err := s.pool.Exec(ctx, `
 		UPDATE collector_jobs
-		SET lease_expires_at = $3, updated_at = $3
-		WHERE id = $1 AND lease_token = $2 AND status = 'leased'
+		SET lease_expires_at = $3, updated_at = clock_timestamp()
+		WHERE id = $1
+			AND lease_token = $2
+			AND status = 'leased'
+			AND lease_expires_at > clock_timestamp()
 	`, job.id, job.leaseToken, expiresAt)
 	if err != nil {
 		return fmt.Errorf("renew collector job lease: %w", err)

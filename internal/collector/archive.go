@@ -14,8 +14,9 @@ import (
 )
 
 type s3Archive struct {
-	client *minio.Client
-	bucket string
+	client        *minio.Client
+	bucket        string
+	writeVerified bool
 }
 
 var errArchiveChecksumMismatch = errors.New("archive checksum mismatch")
@@ -36,6 +37,9 @@ func newS3Archive(endpoint string, secure bool, bucket, accessKey, secretKey str
 }
 
 func (a *s3Archive) ready(ctx context.Context) error {
+	if !a.writeVerified {
+		return errors.New("archive write readiness was not verified")
+	}
 	exists, err := a.client.BucketExists(ctx, a.bucket)
 	if err != nil {
 		return fmt.Errorf("check archive bucket readiness: %w", err)
@@ -43,6 +47,35 @@ func (a *s3Archive) ready(ctx context.Context) error {
 	if !exists {
 		return fmt.Errorf("archive bucket %q does not exist", a.bucket)
 	}
+	return nil
+}
+
+func (a *s3Archive) verifyWriteCapability(ctx context.Context, probeID string) error {
+	if probeID == "" {
+		return errors.New("archive write readiness probe ID is required")
+	}
+	emptyDigest := sha256.Sum256(nil)
+	emptyHash := hex.EncodeToString(emptyDigest[:])
+	objectKey := "readiness/" + probeID
+	_, err := a.client.PutObject(ctx, a.bucket, objectKey, bytes.NewReader(nil), 0, minio.PutObjectOptions{
+		ContentType:          "application/octet-stream",
+		DisableContentSha256: true,
+		DisableMultipart:     true,
+		UserMetadata: map[string]string{
+			"sha256": emptyHash,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("archive write readiness: %w", err)
+	}
+	info, err := a.client.StatObject(ctx, a.bucket, objectKey, minio.StatObjectOptions{})
+	if err != nil {
+		return fmt.Errorf("archive write readiness verification: %w", err)
+	}
+	if info.Size != 0 || info.Metadata.Get("X-Amz-Meta-Sha256") != emptyHash {
+		return errors.New("archive write readiness verification returned unexpected object metadata")
+	}
+	a.writeVerified = true
 	return nil
 }
 

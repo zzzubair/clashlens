@@ -120,11 +120,11 @@ func TestCollectorExecutablePreserves404MalformedJSONAndContentReuse(t *testing.
 		)
 	}
 
+	if objects := archiveBackend.contentObjectCount(); objects != 3 {
+		t.Fatalf("archive object count = %d, want 3 distinct content objects", objects)
+	}
 	archiveBackend.mu.Lock()
 	defer archiveBackend.mu.Unlock()
-	if len(archiveBackend.objects) != 3 {
-		t.Fatalf("archive object count = %d, want 3 distinct content objects", len(archiveBackend.objects))
-	}
 	for _, body := range [][]byte{notFoundBody, malformedBody, battleLogBody} {
 		found := false
 		for _, object := range archiveBackend.objects {

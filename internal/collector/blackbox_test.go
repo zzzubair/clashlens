@@ -128,11 +128,11 @@ func TestCollectorExecutableHappyPathAgainstFakeOfficialAPI(t *testing.T) {
 		t.Fatalf("durable outputs = %d observations, %d processing jobs, %d completed regular jobs; want 2, 2, 1", observations, processingJobs, completedRegularJobs)
 	}
 
+	if objects := s3Backend.contentObjectCount(); objects != 2 {
+		t.Fatalf("raw archive contains %d objects, want 2", objects)
+	}
 	s3Backend.mu.Lock()
 	defer s3Backend.mu.Unlock()
-	if len(s3Backend.objects) != 2 {
-		t.Fatalf("raw archive contains %d objects, want 2", len(s3Backend.objects))
-	}
 	archivedBodies := map[string]bool{}
 	for _, object := range s3Backend.objects {
 		archivedBodies[string(object.body)] = true

@@ -117,6 +117,57 @@ func TestReadinessReportsDependencyAndKeyPoolComponentsSeparately(t *testing.T) 
 	}
 }
 
+func TestMaintenanceListFailedNeedsOnlyPostgreSQLConfiguration(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	environment := map[string]string{
+		"CLASHLENS_DATABASE_URL": databaseURL,
+	}
+	var stdout, stderr bytes.Buffer
+
+	err := RunCLI(
+		ctx,
+		[]string{"maintenance", "list-failed"},
+		func(name string) string { return environment[name] },
+		&stdout,
+		&stderr,
+	)
+	if err != nil {
+		t.Fatalf("maintenance list-failed returned an error: %v; stderr = %q", err, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("maintenance list-failed output = %q, want no failed work", stdout.String())
+	}
+}
+
+func TestStartupGuardRequiresArchiveWriteCapability(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	archive, backend := newFakeS3Server(t)
+	backend.mu.Lock()
+	backend.rejectWrites = true
+	backend.mu.Unlock()
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(api.Close)
+	environment := runtimeTestEnvironment(databaseURL, archive.URL, api.URL)
+	var stdout, stderr bytes.Buffer
+
+	err := RunCLI(
+		ctx,
+		[]string{"run", "--once", "--role", "worker"},
+		func(name string) string { return environment[name] },
+		&stdout,
+		&stderr,
+	)
+	if err == nil || !strings.Contains(err.Error(), "archive write readiness") {
+		t.Fatalf("RunCLI error = %v, want archive write readiness error", err)
+	}
+}
+
 func runtimeTestEnvironment(databaseURL, archiveURL, apiURL string) map[string]string {
 	return map[string]string{
 		"CLASHLENS_DATABASE_URL":               databaseURL,

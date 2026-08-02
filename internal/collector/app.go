@@ -75,6 +75,10 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 		store.close()
 		return nil, err
 	}
+	if err := archive.verifyWriteCapability(ctx, ownerToken); err != nil {
+		store.close()
+		return nil, fmt.Errorf("collector startup guard failed: %w", err)
+	}
 	app := &application{
 		config:  config,
 		store:   store,

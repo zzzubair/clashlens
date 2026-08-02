@@ -48,8 +48,8 @@ func (s *store) recordTransportFailure(
 	`, job.id, attemptID, job.playerID, job.normalizedTag, string(endpoint), startedAt, failedAt, category, keyLabel); err != nil {
 		return fmt.Errorf("insert transport failure: %w", err)
 	}
-	if _, err := transaction.Exec(ctx, `
-		UPDATE collector_endpoint_results
+	command, err := transaction.Exec(ctx, `
+		UPDATE collector_endpoint_results AS endpoint_result
 		SET outcome = 'transport_failed',
 			request_started_at = $3,
 			next_retry_at = $4,
@@ -60,9 +60,20 @@ func (s *store) recordTransportFailure(
 			observation_id = NULL,
 			failure_category = $5,
 			key_label = $6
-		WHERE attempt_id = $1 AND endpoint = $2 AND execution_token = $7
-	`, attemptID, string(endpoint), startedAt, nextRetryAt, category, keyLabel, job.leaseToken); err != nil {
+		FROM collector_jobs AS job
+		WHERE endpoint_result.attempt_id = $1
+			AND endpoint_result.endpoint = $2
+			AND endpoint_result.execution_token = $7
+			AND job.id = $8
+			AND job.lease_token = $7
+			AND job.status = 'leased'
+			AND job.lease_expires_at > clock_timestamp()
+	`, attemptID, string(endpoint), startedAt, nextRetryAt, category, keyLabel, job.leaseToken, job.id)
+	if err != nil {
 		return fmt.Errorf("update transport-failed endpoint: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return errLeaseLost
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return fmt.Errorf("commit transport failure: %w", err)
@@ -97,6 +108,7 @@ func (s *store) recordStorageFailure(
 			AND job.id = $9
 			AND job.lease_token = $3
 			AND job.status = 'leased'
+			AND job.lease_expires_at > clock_timestamp()
 	`,
 		attemptID,
 		string(endpoint),
@@ -118,20 +130,20 @@ func (s *store) recordStorageFailure(
 }
 
 func lockCurrentLease(ctx context.Context, transaction pgx.Tx, job *collectionJob) error {
-	var token string
+	var found bool
 	if err := transaction.QueryRow(ctx, `
-		SELECT lease_token
+		SELECT true
 		FROM collector_jobs
-		WHERE id = $1 AND status = 'leased'
+		WHERE id = $1
+			AND lease_token = $2
+			AND status = 'leased'
+			AND lease_expires_at > clock_timestamp()
 		FOR UPDATE
-	`, job.id).Scan(&token); err != nil {
+	`, job.id, job.leaseToken).Scan(&found); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errLeaseLost
 		}
 		return fmt.Errorf("lock current lease: %w", err)
-	}
-	if token != job.leaseToken {
-		return errLeaseLost
 	}
 	return nil
 }

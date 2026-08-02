@@ -183,3 +183,13 @@ func TestKeyPoolRejectsDuplicateSecretAcrossLabels(t *testing.T) {
 		t.Fatal("duplicate-secret error exposes the API key value")
 	}
 }
+
+func TestKeyPoolRejectsPerKeyRateAboveOfficialLimit(t *testing.T) {
+	t.Parallel()
+	_, err := newKeyPool([]APIKey{
+		{Label: "normal", Secret: "secret", Pool: normalPool},
+	}, 31, false)
+	if err == nil || !strings.Contains(err.Error(), "between 1 and 30") {
+		t.Fatalf("newKeyPool error = %v, want per-key rate limit error", err)
+	}
+}
