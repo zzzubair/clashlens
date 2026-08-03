@@ -1,0 +1,8 @@
+FROM docker.io/library/alpine:3.23
+
+RUN apk add --no-cache ca-certificates tinyproxy
+
+COPY filter /etc/tinyproxy/filter
+
+USER tinyproxy:tinyproxy
+ENTRYPOINT ["tinyproxy", "-d", "-c", "/etc/tinyproxy/tinyproxy.conf"]

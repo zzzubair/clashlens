@@ -1,0 +1,7 @@
+# Local deployment configuration and credentials.
+/app.env
+/app.env.*
+!/app.env.example
+/secrets/
+/deploy/secrets/
+*.secret
