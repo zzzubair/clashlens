@@ -2,16 +2,16 @@
 
 ## Shared Agent Workflow
 
-The repository defines its shared OpenCode agents in `.opencode/agents/` and selects the default agent in `opencode.json`:
+Hermes Agent owns the shared agent workflow:
 
-- `lead` uses `openai/gpt-5.6-sol` with the `xhigh` variant. It is the maintainer-facing senior engineer and owns decisions, delegation, final review, verification, and the final response.
-- `implementer` uses `openai/gpt-5.6-luna` with the `max` variant for substantial implementation and tests.
-- `researcher` uses Luna Max with read-only permissions for primary-source research.
-- `reviewer` uses Luna Max with read-only permissions for detailed first-pass review. `lead` still owns the final review.
+- The maintainer-facing orchestrator uses `openai/gpt-5.6-sol`. It owns decisions, delegation, final review, verification, and the final response.
+- Implementation, research, and review subagents use `openai/gpt-5.6-luna` with max reasoning.
+- Kanban can coordinate the coder profile. The coder profile also uses Luna with max reasoning.
+- Do not use the repository's former OpenCode agents or configuration.
 
-For delegated work, `lead` gives the subagent a bounded, self-contained task with context, scope, constraints, acceptance criteria, and verification requirements. The subagent reports its work, verification, limits, and open items. `lead` inspects the result and repository state, resumes the same subagent with specific corrections when needed, and independently verifies the final state. It does not finish while required work is active, incomplete, or unverified.
+For delegated work, the Sol orchestrator gives the Luna subagent a bounded, self-contained task with context, scope, constraints, acceptance criteria, and verification requirements. The subagent reports its work, verification, limits, and open items. The orchestrator inspects the result and repository state, resumes the same subagent with specific corrections when needed, and independently verifies the final state. It does not finish while required work is active, incomplete, or unverified.
 
-Luna can make reasonable choices inside the assigned bounds but returns open product, domain, architecture, technology, or scope decisions to `lead`. `lead` handles small or decision-heavy work directly and does not delegate when delegation costs more than the work.
+Luna can make reasonable choices inside the assigned bounds but returns open product, domain, architecture, technology, or scope decisions to the Sol orchestrator. The orchestrator handles small or decision-heavy work directly and does not delegate when delegation costs more than the work.
 
 Clash Lens is at an early stage. The Phase 1 product scope, architecture shape, PostgreSQL database, and Go/Python/TypeScript runtime split are confirmed. Detailed specifications, remaining technology choices, and implementation remain open.
 
