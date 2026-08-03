@@ -56,6 +56,7 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 	}
 	api, err := newOfficialAPIClient(officialAPIConfig{
 		origin:                config.officialAPIOrigin,
+		proxyURL:              config.officialAPIProxyURL,
 		allowInsecureTestHTTP: config.allowInsecureTestHTTP,
 		connectionTimeout:     config.connectionTimeout,
 		responseHeaderTimeout: config.responseHeaderTimeout,

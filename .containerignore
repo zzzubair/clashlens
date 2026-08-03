@@ -1,0 +1,6 @@
+.git
+.gitignore
+app.env*
+secrets/
+deploy/secrets/
+bin/

@@ -19,6 +19,7 @@ type collectorConfig struct {
 	archiveAccessKey          string
 	archiveSecretKey          string
 	officialAPIOrigin         string
+	officialAPIProxyURL       string
 	allowInsecureTestHTTP     bool
 	keys                      []APIKey
 	allowInteractiveForNormal bool
@@ -48,8 +49,12 @@ type maintenanceConfig struct {
 }
 
 func loadMaintenanceConfig(getenv func(string) string) (maintenanceConfig, error) {
+	databaseURL, err := secretSetting(getenv, "CLASHLENS_DATABASE_URL")
+	if err != nil {
+		return maintenanceConfig{}, err
+	}
 	config := maintenanceConfig{
-		databaseURL:   strings.TrimSpace(getenv("CLASHLENS_DATABASE_URL")),
+		databaseURL:   databaseURL,
 		schemaVersion: 1,
 	}
 	if err := optionalInt(getenv, "CLASHLENS_SCHEMA_VERSION", &config.schemaVersion); err != nil {
@@ -62,14 +67,27 @@ func loadMaintenanceConfig(getenv func(string) string) (maintenanceConfig, error
 }
 
 func loadConfig(getenv func(string) string) (collectorConfig, error) {
+	databaseURL, err := secretSetting(getenv, "CLASHLENS_DATABASE_URL")
+	if err != nil {
+		return collectorConfig{}, err
+	}
+	archiveAccessKey, err := secretSetting(getenv, "CLASHLENS_ARCHIVE_ACCESS_KEY")
+	if err != nil {
+		return collectorConfig{}, err
+	}
+	archiveSecretKey, err := secretSetting(getenv, "CLASHLENS_ARCHIVE_SECRET_KEY")
+	if err != nil {
+		return collectorConfig{}, err
+	}
 	config := collectorConfig{
-		databaseURL:             strings.TrimSpace(getenv("CLASHLENS_DATABASE_URL")),
+		databaseURL:             databaseURL,
 		schemaVersion:           1,
 		archiveEndpoint:         strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_ENDPOINT")),
 		archiveBucket:           strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_BUCKET")),
-		archiveAccessKey:        getenv("CLASHLENS_ARCHIVE_ACCESS_KEY"),
-		archiveSecretKey:        getenv("CLASHLENS_ARCHIVE_SECRET_KEY"),
+		archiveAccessKey:        archiveAccessKey,
+		archiveSecretKey:        archiveSecretKey,
 		officialAPIOrigin:       strings.TrimSpace(getenv("CLASHLENS_OFFICIAL_API_ORIGIN")),
+		officialAPIProxyURL:     strings.TrimSpace(getenv("CLASHLENS_OFFICIAL_API_PROXY_URL")),
 		requestsPerSecondPerKey: 30,
 		workersPerKey:           8,
 		pollCycle:               5 * time.Minute,
@@ -96,7 +114,6 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 		config.collectorVersion = "prototype"
 	}
 
-	var err error
 	if config.archiveSecure, err = optionalBool(getenv, "CLASHLENS_ARCHIVE_SECURE", true); err != nil {
 		return collectorConfig{}, err
 	}
@@ -214,10 +231,33 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	if origin.Scheme != "https" && !config.allowInsecureTestHTTP {
 		return collectorConfig{}, errors.New("CLASHLENS_OFFICIAL_API_ORIGIN must use HTTPS")
 	}
+	if config.officialAPIProxyURL != "" {
+		proxyURL, parseError := url.Parse(config.officialAPIProxyURL)
+		if parseError != nil || proxyURL.Host == "" || (proxyURL.Scheme != "http" && proxyURL.Scheme != "https") ||
+			proxyURL.User != nil || proxyURL.Path != "" || proxyURL.RawQuery != "" || proxyURL.Fragment != "" {
+			return collectorConfig{}, errors.New("CLASHLENS_OFFICIAL_API_PROXY_URL must be an HTTP or HTTPS origin without credentials, path, query, or fragment")
+		}
+	}
 	if config.retryMaximumDelay < config.retryBaseDelay {
 		return collectorConfig{}, errors.New("retry maximum delay must not be less than retry base delay")
 	}
 	return config, nil
+}
+
+func secretSetting(getenv func(string) string, name string) (string, error) {
+	direct := strings.TrimSpace(getenv(name))
+	path := strings.TrimSpace(getenv(name + "_FILE"))
+	if direct != "" && path != "" {
+		return "", fmt.Errorf("%s and %s_FILE must not both be set", name, name)
+	}
+	if path == "" {
+		return direct, nil
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read %s_FILE: %w", name, err)
+	}
+	return strings.TrimSpace(string(contents)), nil
 }
 
 func parseConfiguredKeys(inline, fileSpecs string, pool capacityPool) ([]APIKey, error) {

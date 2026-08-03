@@ -53,6 +53,36 @@ func TestOfficialAPIClientEscapesPlayerTagExactlyOnceOnWire(t *testing.T) {
 	}
 }
 
+func TestOfficialAPIClientUsesConfiguredProxy(t *testing.T) {
+	t.Parallel()
+	requests := make(chan string, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests <- request.URL.String()
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"tag":"#2PP"}`))
+	}))
+	t.Cleanup(proxy.Close)
+
+	client, err := newOfficialAPIClient(officialAPIConfig{
+		origin:                "http://api.example.test",
+		proxyURL:              proxy.URL,
+		allowInsecureTestHTTP: true,
+		connectionTimeout:     time.Second,
+		responseHeaderTimeout: time.Second,
+		totalTimeout:          time.Second,
+		maximumResponseBytes:  1024,
+	})
+	if err != nil {
+		t.Fatalf("newOfficialAPIClient returned an error: %v", err)
+	}
+	if _, err := client.fetch(context.Background(), profileEndpoint, "#2PP", "test-secret"); err != nil {
+		t.Fatalf("fetch returned an error: %v", err)
+	}
+	if got := <-requests; got != "http://api.example.test/v1/players/%232PP" {
+		t.Fatalf("proxy request URL = %q, want official API URL", got)
+	}
+}
+
 func TestOfficialAPIClientRejectsCrossOriginRedirect(t *testing.T) {
 	t.Parallel()
 	targetRequests := 0

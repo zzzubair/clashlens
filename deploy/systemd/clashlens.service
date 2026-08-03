@@ -1,0 +1,16 @@
+[Unit]
+Description=Clash Lens collector stack
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/clashlens
+ExecStart=%h/clashlens/deploy.sh up
+ExecStop=%h/clashlens/deploy.sh down
+TimeoutStartSec=10min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=default.target

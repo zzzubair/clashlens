@@ -21,6 +21,7 @@ const (
 
 type officialAPIConfig struct {
 	origin                string
+	proxyURL              string
 	allowInsecureTestHTTP bool
 	connectionTimeout     time.Duration
 	responseHeaderTimeout time.Duration
@@ -62,8 +63,18 @@ func newOfficialAPIClient(config officialAPIConfig) (*officialAPIClient, error) 
 	if config.maximumResponseBytes < 1 {
 		return nil, errors.New("official API maximum response size must be positive")
 	}
+	var proxy func(*http.Request) (*url.URL, error)
+	if config.proxyURL != "" {
+		parsedProxy, parseError := url.Parse(config.proxyURL)
+		if parseError != nil || parsedProxy.Host == "" || (parsedProxy.Scheme != "http" && parsedProxy.Scheme != "https") ||
+			parsedProxy.User != nil || parsedProxy.Path != "" || parsedProxy.RawQuery != "" || parsedProxy.Fragment != "" {
+			return nil, errors.New("official API proxy must be an HTTP or HTTPS origin without credentials, path, query, or fragment")
+		}
+		proxy = http.ProxyURL(parsedProxy)
+	}
 
 	transport := &http.Transport{
+		Proxy: proxy,
 		DialContext: (&net.Dialer{
 			Timeout:   config.connectionTimeout,
 			KeepAlive: 30 * time.Second,

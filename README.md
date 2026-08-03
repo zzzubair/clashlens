@@ -25,6 +25,7 @@ The Phase 1 product scope and initial architecture are defined: PostgreSQL for s
 - [Domain rules](docs/domain.md)
 - [Architecture](docs/architecture.md)
 - [Collector prototype runbook](docs/collector-prototype.md)
+- [Fedora deployment runbook](docs/deployment.md)
 
 ## Fan Content Notice
 
