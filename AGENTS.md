@@ -2,16 +2,9 @@
 
 ## Shared Agent Workflow
 
-Hermes Agent owns the shared agent workflow:
-
-- The maintainer-facing orchestrator uses `openai/gpt-5.6-sol`. It owns decisions, delegation, final review, verification, and the final response.
-- Implementation, research, and review subagents use `openai/gpt-5.6-luna` with max reasoning.
-- Kanban can coordinate the coder profile. The coder profile also uses Luna with max reasoning.
+- The maintainer-facing agent uses `openai/gpt-5.6-sol` and owns decisions, coordination, final review, and the final response.
+- Heavy implementation, research, and review work uses `openai/gpt-5.6-luna` with max reasoning through Hermes subagents or the Kanban coder profile.
 - Do not use the repository's former OpenCode agents or configuration.
-
-For delegated work, the Sol orchestrator gives the Luna subagent a bounded, self-contained task with context, scope, constraints, acceptance criteria, and verification requirements. The subagent reports its work, verification, limits, and open items. The orchestrator inspects the result and repository state, resumes the same subagent with specific corrections when needed, and independently verifies the final state. It does not finish while required work is active, incomplete, or unverified.
-
-Luna can make reasonable choices inside the assigned bounds but returns open product, domain, architecture, technology, or scope decisions to the Sol orchestrator. The orchestrator handles small or decision-heavy work directly and does not delegate when delegation costs more than the work.
 
 Clash Lens is at an early stage. The Phase 1 product scope, architecture shape, PostgreSQL database, and Go/Python/TypeScript runtime split are confirmed. Detailed specifications, remaining technology choices, and implementation remain open.
 
