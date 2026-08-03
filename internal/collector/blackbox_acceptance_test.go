@@ -17,6 +17,68 @@ import (
 	"time"
 )
 
+func TestCollectorExecutableDoesNotClaimWhenArchiveReadinessFails(t *testing.T) {
+	if testing.Short() {
+		t.Skip("black-box process test")
+	}
+	databaseURL := startContractDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	store, err := openStore(ctx, databaseURL, 1)
+	if err != nil {
+		t.Fatalf("openStore returned an error: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, normalized_tag, capacity_pool, priority, due_at, coalescing_key, status
+		) VALUES ('live_refresh', '#2PP', 'interactive', 250, now() - interval '1 minute', 'blackbox-admission-test', 'pending')
+	`); err != nil {
+		t.Fatalf("insert due job: %v", err)
+	}
+	store.close()
+
+	var apiRequests atomic.Int64
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		apiRequests.Add(1)
+		response.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(api.Close)
+	archive, archiveBackend := newFakeS3Server(t)
+	archiveBackend.mu.Lock()
+	archiveBackend.failBucketChecksAfter = 1
+	archiveBackend.mu.Unlock()
+	binary := buildCollectorBinary(t, ctx)
+	environment := runtimeTestEnvironment(databaseURL, archive.URL, api.URL)
+	command := exec.CommandContext(ctx, binary, "run", "--once", "--role", "worker")
+	command.Env = collectorProcessEnvironment(environment)
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err == nil || !strings.Contains(stderr.String(), "archive") {
+		t.Fatalf("collector error = %v and stderr = %q, want archive readiness failure", err, stderr.String())
+	}
+	if requests := apiRequests.Load(); requests != 0 {
+		t.Fatalf("official API request count = %d, want 0", requests)
+	}
+
+	store, err = openStore(ctx, databaseURL, 1)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store.close()
+	var status string
+	var attempts int
+	if err := store.pool.QueryRow(ctx, `SELECT status FROM collector_jobs WHERE coalescing_key = 'blackbox-admission-test'`).Scan(&status); err != nil {
+		t.Fatalf("read due job status: %v", err)
+	}
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM collector_attempts`).Scan(&attempts); err != nil {
+		t.Fatalf("count attempts: %v", err)
+	}
+	if status != "pending" || attempts != 0 {
+		t.Fatalf("job status = %q and attempts = %d, want pending and 0", status, attempts)
+	}
+}
+
 func TestCollectorExecutablePreserves404MalformedJSONAndContentReuse(t *testing.T) {
 	if testing.Short() {
 		t.Skip("black-box process test")

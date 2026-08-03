@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -62,6 +63,120 @@ func TestStartupGuardFailsBeforeClaimWhenArchiveIsUnavailable(t *testing.T) {
 	}
 	if status != "pending" {
 		t.Fatalf("due job status = %q, want pending", status)
+	}
+}
+
+func TestWorkerDoesNotClaimWhenArchiveBecomesUnavailable(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	archive, archiveBackend := newFakeS3Server(t)
+	var apiRequests atomic.Int64
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		apiRequests.Add(1)
+		response.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(api.Close)
+	environment := runtimeTestEnvironment(databaseURL, archive.URL, api.URL)
+	config, err := loadConfig(func(name string) string { return environment[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+	app, err := newApplication(ctx, config, nil)
+	if err != nil {
+		t.Fatalf("newApplication returned an error: %v", err)
+	}
+	defer app.close()
+	if _, err := app.store.pool.Exec(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, normalized_tag, capacity_pool, priority, due_at, coalescing_key, status
+		) VALUES ('live_refresh', '#2PP', 'interactive', 250, now() - interval '1 minute', 'admission-test', 'pending')
+	`); err != nil {
+		t.Fatalf("insert due job: %v", err)
+	}
+
+	archiveBackend.mu.Lock()
+	archiveBackend.unavailable = true
+	archiveBackend.mu.Unlock()
+	claimed, err := app.configuredWorker("admission-test").runOnce(ctx, interactivePool)
+	if err == nil || !strings.Contains(err.Error(), "archive") {
+		t.Fatalf("worker error = %v, want archive readiness error", err)
+	}
+	if claimed {
+		t.Fatal("worker claimed a job while archive readiness failed")
+	}
+	if requests := apiRequests.Load(); requests != 0 {
+		t.Fatalf("official API request count = %d, want 0", requests)
+	}
+
+	var status string
+	var attempts int
+	if err := app.store.pool.QueryRow(ctx, `SELECT status FROM collector_jobs WHERE coalescing_key = 'admission-test'`).Scan(&status); err != nil {
+		t.Fatalf("read due job status: %v", err)
+	}
+	if err := app.store.pool.QueryRow(ctx, `SELECT count(*) FROM collector_attempts`).Scan(&attempts); err != nil {
+		t.Fatalf("count attempts: %v", err)
+	}
+	if status != "pending" || attempts != 0 {
+		t.Fatalf("job status = %q and attempts = %d, want pending and 0", status, attempts)
+	}
+}
+
+func TestWorkerDoesNotClaimWhenPostgreSQLBecomesUnavailable(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	archive, _ := newFakeS3Server(t)
+	var apiRequests atomic.Int64
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		apiRequests.Add(1)
+		response.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(api.Close)
+	environment := runtimeTestEnvironment(databaseURL, archive.URL, api.URL)
+	config, err := loadConfig(func(name string) string { return environment[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+	app, err := newApplication(ctx, config, nil)
+	if err != nil {
+		t.Fatalf("newApplication returned an error: %v", err)
+	}
+	if _, err := app.store.pool.Exec(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, normalized_tag, capacity_pool, priority, due_at, coalescing_key, status
+		) VALUES ('live_refresh', '#2PP', 'interactive', 250, now() - interval '1 minute', 'postgres-admission-test', 'pending')
+	`); err != nil {
+		t.Fatalf("insert due job: %v", err)
+	}
+
+	app.store.close()
+	claimed, err := app.configuredWorker("postgres-admission-test").runOnce(ctx, interactivePool)
+	if err == nil || !strings.Contains(err.Error(), "postgresql") {
+		t.Fatalf("worker error = %v, want PostgreSQL readiness error", err)
+	}
+	if claimed {
+		t.Fatal("worker claimed a job while PostgreSQL readiness failed")
+	}
+	if requests := apiRequests.Load(); requests != 0 {
+		t.Fatalf("official API request count = %d, want 0", requests)
+	}
+
+	store, err := openStore(ctx, databaseURL, 1)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	defer store.close()
+	var status string
+	var attempts int
+	if err := store.pool.QueryRow(ctx, `SELECT status FROM collector_jobs WHERE coalescing_key = 'postgres-admission-test'`).Scan(&status); err != nil {
+		t.Fatalf("read due job status: %v", err)
+	}
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM collector_attempts`).Scan(&attempts); err != nil {
+		t.Fatalf("count attempts: %v", err)
+	}
+	if status != "pending" || attempts != 0 {
+		t.Fatalf("job status = %q and attempts = %d, want pending and 0", status, attempts)
 	}
 }
 

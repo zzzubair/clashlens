@@ -26,6 +26,7 @@ type workerConfig struct {
 	collectorVersion    string
 	maximumRetries      int
 	retryPolicy         retryPolicy
+	dependenciesReady   func(context.Context) error
 	metrics             *collectorMetrics
 	logger              *slog.Logger
 	disableLeaseRenewal bool
@@ -56,6 +57,11 @@ func newWorker(
 }
 
 func (w *worker) runOnce(ctx context.Context, pool capacityPool) (bool, error) {
+	if w.config.dependenciesReady != nil {
+		if err := w.config.dependenciesReady(ctx); err != nil {
+			return false, err
+		}
+	}
 	if err := w.keys.readyForPool(pool); err != nil {
 		return false, err
 	}

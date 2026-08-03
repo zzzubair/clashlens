@@ -23,9 +23,12 @@ type fakeS3Object struct {
 }
 
 type fakeS3 struct {
-	mu           sync.Mutex
-	objects      map[string]*fakeS3Object
-	rejectWrites bool
+	mu                    sync.Mutex
+	objects               map[string]*fakeS3Object
+	rejectWrites          bool
+	unavailable           bool
+	bucketChecks          int
+	failBucketChecksAfter int
 }
 
 func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
@@ -35,11 +38,20 @@ func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		backend.mu.Lock()
 		defer backend.mu.Unlock()
+		if backend.unavailable {
+			http.Error(response, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
 
 		key := strings.TrimPrefix(request.URL.Path, "/evidence/")
 		switch request.Method {
 		case http.MethodHead:
 			if key == "" {
+				backend.bucketChecks++
+				if backend.failBucketChecksAfter > 0 && backend.bucketChecks > backend.failBucketChecksAfter {
+					http.Error(response, "unavailable", http.StatusServiceUnavailable)
+					return
+				}
 				response.WriteHeader(http.StatusOK)
 				return
 			}

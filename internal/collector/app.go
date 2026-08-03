@@ -137,6 +137,17 @@ func (a *application) readiness(ctx context.Context) (readinessReport, error) {
 	return report, errors.Join(failures...)
 }
 
+func (a *application) dependenciesReady(ctx context.Context) error {
+	var failures []error
+	if err := a.store.ready(ctx); err != nil {
+		failures = append(failures, fmt.Errorf("postgresql: %w", err))
+	}
+	if err := a.archive.ready(ctx); err != nil {
+		failures = append(failures, fmt.Errorf("archive: %w", err))
+	}
+	return errors.Join(failures...)
+}
+
 func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 	scheduled, err := a.store.scheduleDueRegular(ctx, now, a.config.pollCycle, a.config.scheduleBatchSize)
 	if err != nil {
@@ -162,10 +173,11 @@ func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 
 func (a *application) configuredWorker(ownerSuffix string) *worker {
 	return newWorker(a.store, a.archive, a.api, a.keys, workerConfig{
-		owner:            a.owner + "-" + ownerSuffix,
-		leaseDuration:    a.config.leaseDuration,
-		collectorVersion: a.config.collectorVersion,
-		maximumRetries:   a.config.maximumRetries,
+		owner:             a.owner + "-" + ownerSuffix,
+		leaseDuration:     a.config.leaseDuration,
+		collectorVersion:  a.config.collectorVersion,
+		maximumRetries:    a.config.maximumRetries,
+		dependenciesReady: a.dependenciesReady,
 		retryPolicy: newRetryPolicy(
 			a.config.retryBaseDelay,
 			a.config.retryMaximumDelay,
