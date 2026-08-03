@@ -73,6 +73,7 @@ Remaining storage products, detailed module boundaries, frameworks, hosting mode
 ## Working Rules
 
 - Read the applicable source documents before changing product, domain, or architecture behavior.
+- Create feature and prototype worktrees as siblings outside the main checkout under `../ClashLens-worktrees/<name>/`. Do not nest worktrees inside the main checkout.
 - Preserve maintainer changes and keep each change focused.
 - Do not turn open specification details into product rules without maintainer approval.
 - Add proportionate tests when implementation changes begin.
@@ -90,7 +91,7 @@ For substantial features:
 1. Read the source documents and inspect the working tree.
 2. Resolve unclear rules and decisions with the maintainer. Update source documents only when shared meanings change.
 3. When asked, create an approved GitHub issue with scope, rules, acceptance criteria, dependencies, and tests.
-4. When a prototype is approved, build it in an isolated worktree under `prototypes/`. Record findings and specification changes on the issue.
+4. When a prototype is approved, build it in an isolated sibling worktree under `../ClashLens-worktrees/`. Record findings and specification changes on the issue.
 5. After approval, plan and implement with migrations, tests, and applicable reviews.
 6. Open a PR only when asked. The maintainer decides whether to approve and merge.
 
