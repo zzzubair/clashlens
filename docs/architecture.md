@@ -2,7 +2,7 @@
 
 ## Status
 
-Clash Lens has a confirmed Phase 1 architecture and initial runtime split. PostgreSQL is the primary structured database, Go owns official API collection, Python owns domain processing, the public API, and analytics, and TypeScript owns the website. Frameworks, remaining infrastructure products, hosting, and cloud providers remain open.
+Clash Lens has a confirmed Phase 1 architecture and runtime split. PostgreSQL is the primary structured database, Go owns official API collection, Python owns domain processing, analytics, accounts, integrations, and a private service API, and TypeScript owns the public website and its backend. Frameworks, remaining infrastructure products, and cloud providers remain open.
 
 The accepted shape is one repository and one logical product with independently running roles, a separate raw-evidence archive, durable staggered ingestion, and versioned precomputed analytics. Technology choices must preserve the product and domain rules rather than redefine them.
 
@@ -31,20 +31,35 @@ Any implementation must support:
 
 - Use one repository and one logical product with explicit internal module and runtime boundaries.
 - Use a Go collector runtime for poll scheduling, API-key rate limiting, official API requests, retries, raw-response archiving, and append-only observation recording.
-- Use Python core runtimes for observation processing, canonical battle linking, ranked-day reconciliation, army decoding and classification, snapshot generation, analytics, accounts, integrations, and the public API.
-- Run the Python public API and Python background processing as separate runtime roles so worker failures do not take the API or website offline.
-- Use a TypeScript website that consumes the Python public API. Do not reproduce domain calculations or confidence rules in browser code.
+- Use one Python codebase for observation processing, canonical battle linking, ranked-day reconciliation, army decoding and classification, snapshot generation, analytics, accounts, integrations, and a private service API.
+- Run the private Python API, one general background worker, and the Discord bot as separate processes from the same Python codebase. A worker or bot failure must not take the private API or website offline.
+- Let the general Python worker handle different background job types, including observation processing, replay, snapshot generation, analytics, and exports. Add specialized worker programs only when measured delay, resource use, or isolation needs justify them.
+- Use private HTTP with JSON between the Python API and its trusted consumers. Do not publish the Python API outside the private Podman network, and do not add a service token while all callers remain on that trusted network.
+- Use a TypeScript website with a backend. The browser communicates only with the TypeScript website backend, which calls the private Python API. The browser must never call Python directly.
+- Require the TypeScript website backend, Discord bot, and future product integrations to use the private Python API. They must not access PostgreSQL or the raw archive directly.
+- Keep product meanings and calculations in Python. The TypeScript website may format and present returned results, but it must not reproduce domain calculations, confidence rules, cohort membership, rankings, or analytics.
+- Let the TypeScript website backend own Discord or Google login and browser sessions. Let Python own Clash Lens account records, saved tags, groups, permissions, and other account-domain data.
 - The Go collector stores evidence but does not create canonical battles, infer shields or automatic defense, classify armies, reconcile ranked days, or calculate product analytics.
+- Let Go and Python coordinate through PostgreSQL queues and stored observation metadata. Do not add direct Go-to-Python or Python-to-Go service calls.
 - Keep one authoritative schema-migration stream and shared versioned contracts across Go, Python, and TypeScript. Do not let each runtime invent its own meaning for shared fields.
-- The eventual Discord runtime shape remains open because the exact Discord interaction model is not yet specified.
+- Keep the Discord bot in the Python codebase and run it as a separate process that consumes the private Python API. Its commands and response formats remain open.
 - Treat these as focused runtime roles within one product, not independently designed microservices. Add further service boundaries only after measured scaling or isolation needs prove them.
+
+### Deployment and Resource Limits
+
+- Run the Phase 1 system on one Fedora host with approximately 16 GB of available memory and one private rootless Podman network.
+- Keep the whole system memory-efficient. Use bounded queues, batches, connection pools, concurrency, and caches. Do not keep duplicate full datasets in process memory when PostgreSQL or the raw archive already owns them.
+- Measure memory use for PostgreSQL, Go, each Python process, and the TypeScript website under realistic collection, replay, analytics, and website load before production activation.
+- Set explicit per-process memory limits and preserve headroom for Fedora, rootless Podman, PostgreSQL maintenance, and temporary workload spikes. Exact budgets require measured evidence and remain open until load testing.
+- Split a process or move a role to another host only when measured latency, memory pressure, throughput, or failure isolation proves that the single-host model is insufficient.
 
 ### Structured Data and Raw Evidence
 
 - Use PostgreSQL as the primary structured datastore for Phase 1 operational data and analytics.
 - Give each player a database-generated internal numeric identifier for relational references.
-- Keep the normalized Clash player tag unique and use it as the player's public identity. Never expose the internal player identifier through public pages or APIs.
+- Keep the normalized Clash player tag unique and use it as the player's public identity. Never expose the internal player identifier through the private Python API, website responses, or public pages.
 - Use a separate immutable object or blob archive for untouched official API response bodies.
+- Give raw-archive access only to the Go collector and Python background worker. The private Python API, TypeScript website, Discord bot, and other integrations use processed PostgreSQL data only.
 - Content-address raw response bodies by a cryptographic hash. Store one immutable body for an identical hash while allowing every observation occurrence to reference it.
 - Record each completed API response as append-only observation metadata, including player, endpoint, request and response times, HTTP status, response hash, archive reference, and collector version.
 - Never overwrite an earlier observation with a later response. Keep evidence fields immutable and track processing or retry state separately.
@@ -78,8 +93,8 @@ Any implementation must support:
 - Under normal operation, use a staggered 5-minute polling cycle and fetch both the player profile and battle log for each actively tracked player.
 - Assign four API keys to normal collection, providing up to 120 requests per second while keeping each key at or below 30 requests per second.
 - Reserve a fifth API key for newly submitted tags and explicit user-requested live refreshes so interactive traffic is not blocked behind the population-wide collection cycle.
-- Route interactive refreshes through the Go collector and the same raw-evidence pipeline; the Python API and TypeScript website must never receive or use a Supercell API key directly.
-- Return the latest saved player representation and its freshness immediately from the Python API, then expose refresh progress so the TypeScript website can update after the new observation is processed.
+- Route interactive refreshes through the Go collector and the same raw-evidence pipeline; the private Python API and TypeScript website must never receive or use a Supercell API key directly.
+- Return the latest saved player representation and its freshness immediately through the TypeScript website backend and private Python API, then expose refresh progress so the website can update after the new observation is processed.
 - Do not block the initial player-page response on a live Supercell request.
 - Reset-baseline sweeps and failed-request retries may run at higher priority without changing the normal 5-minute cadence.
 - Preserve a successful endpoint response when its paired request fails, mark the polling attempt incomplete, and prioritize the missing request for retry.
@@ -120,7 +135,7 @@ Any implementation must support:
 
 The implementation must make these conditions observable even though the specific monitoring stack remains open:
 
-- API request volume and per-key throttling.
+- Private service request volume and official API per-key throttling.
 - Queue depth, oldest due job, retry volume, and failed work.
 - Player-profile and battle-log freshness.
 - Incomplete polling attempts and unresolved reconciliation.
@@ -137,13 +152,13 @@ The following choices remain open:
 - Raw object or blob archive product.
 - Detailed internal module boundaries and dependency rules.
 - Go collector libraries and packaging.
-- Python backend framework and public API style.
-- TypeScript website framework, rendering model, and packaging.
-- Discord interaction and runtime model.
-- Authentication provider integration and account model.
+- Python backend framework and the private HTTP/JSON route and schema contract.
+- TypeScript website framework, server rendering details, and packaging.
+- Discord commands and response formats.
+- Authentication provider integration and session implementation.
 - Google Sheets integration.
 - OBS delivery model.
-- Deployment packaging and hosting model.
+- Deployment images, process limits, and exact memory budgets.
 - Cloud or infrastructure provider.
 - Monitoring, logging, and alerting products.
 - Backup retention and tested recovery procedures.

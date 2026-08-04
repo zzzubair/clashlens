@@ -57,11 +57,11 @@ Do not add war, Clan War League, clan-management, base-management, or prescripti
 
 ## Architecture
 
-`docs/architecture.md` defines one logical product: PostgreSQL for structured data and durable queues, Go for official API collection and raw evidence, Python for domain processing, the API, and analytics, TypeScript for the website, and a separate immutable raw-response archive.
+`docs/architecture.md` defines one logical product: PostgreSQL for structured data and durable queues, Go for official API collection and raw evidence, one Python codebase for domain processing, analytics, integrations, accounts, and a private service API, TypeScript for the public website and its backend, and a separate immutable raw-response archive.
 
-The Go collector must not implement canonical battle linking, ranked-day reconciliation, shield or automatic-defense inference, army classification, or product analytics. Python owns those domain interpretations, and TypeScript consumes the Python API without duplicating their rules.
+The Go collector must not implement canonical battle linking, ranked-day reconciliation, shield or automatic-defense inference, army classification, or product analytics. Python owns those domain interpretations. The TypeScript website backend, Discord bot, and future integrations consume the private Python API without direct PostgreSQL or raw-archive access. Browser code communicates only with the TypeScript website backend and does not duplicate Python-owned rules.
 
-Remaining storage products, detailed module boundaries, frameworks, hosting models, and cloud providers remain open. Do not confirm one without presenting trade-offs and receiving maintainer approval.
+Phase 1 runs on one Fedora host with approximately 16 GB of available memory and a private rootless Podman network. Remaining storage products, detailed module boundaries, frameworks, deployment details, and cloud providers remain open. Do not confirm one without presenting trade-offs and receiving maintainer approval.
 
 ## Working Rules
 

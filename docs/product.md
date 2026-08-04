@@ -140,7 +140,7 @@ The primary user is an individual competitive rank pusher. The same public data 
 - Prescriptive “use this army” or “use this base” recommendations.
 - Paid access to player data or analytics.
 - Scraping competitor services to seed player tags or copy player data.
-- Specific language, framework, infrastructure-product, hosting-provider, and implementation choices that remain open in `docs/architecture.md`.
+- Specific framework, remaining infrastructure-product, cloud-provider, and implementation choices that remain open in `docs/architecture.md`.
 
 ## Open Specification Work
 

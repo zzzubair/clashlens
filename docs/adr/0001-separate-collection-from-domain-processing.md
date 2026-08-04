@@ -1,6 +1,6 @@
 # Separate collection from domain processing
 
-Clash Lens uses Go for official API collection, Python for domain processing, the public API, and analytics, and TypeScript for the website. These are focused runtime roles in one repository and one logical product. Go is responsible for concurrent polling, rate limiting, retries, raw-response archiving, and append-only observation metadata; Python alone turns that evidence into canonical battles, ranked days, classifications, snapshots, and analytics; TypeScript presents data obtained through the Python API.
+Clash Lens uses Go for official API collection, one Python codebase for domain processing, analytics, accounts, integrations, and a private service API, and TypeScript for the public website and its backend. These are focused runtime roles in one repository and one logical product. Go is responsible for concurrent polling, rate limiting, retries, raw-response archiving, and append-only observation metadata. Python alone turns that evidence into canonical battles, ranked days, classifications, snapshots, and analytics. The browser communicates only with the TypeScript website backend, which obtains product data through the private Python API.
 
 This split accepts three toolchains because the collection boundary is narrow and operationally distinct, while Python is a better home for the evolving domain and analytics model and TypeScript is the natural website runtime. The boundary prevents collection concerns from duplicating or silently redefining product rules.
 
@@ -10,4 +10,7 @@ This split accepts three toolchains because the collection boundary is narrow an
 - PostgreSQL schema changes use one authoritative migration stream shared by all runtimes.
 - Cross-runtime contracts must be explicit, versioned, and tested.
 - Raw evidence must be durably recorded before Python processing begins.
+- Go and Python coordinate through PostgreSQL queues and observation metadata, not direct service calls.
+- The private Python API, one general background worker, and the Discord bot run as separate processes from the same Python codebase.
+- The website backend, Discord bot, and future integrations use the private Python API and do not access PostgreSQL or the raw archive directly.
 - CI and local development must support Go, Python, and TypeScript without turning them into independently designed microservices.

@@ -3,9 +3,15 @@
 This runbook deploys the Go collector and PostgreSQL with rootless Podman.
 It uses direct Podman commands. It does not use Compose.
 
+The accepted Phase 1 target adds the private Python API, Python worker, Discord
+bot, and TypeScript website backend to the same Fedora host and private rootless
+Podman network. This runbook continues to cover only the components that exist.
+Future deployment work must extend it without publishing the private Python API.
+
 ## Requirements
 
 - Fedora with rootless Podman 5.8 or later.
+- Approximately 16 GB of memory is available for the complete Phase 1 system.
 - A running rootless Podman user session.
 - Network access to the official API, the external S3-compatible archive, and the image registries.
 - A restricted CONNECT proxy when the API keys allowlist a different host's fixed public IP.
@@ -17,6 +23,13 @@ Keep `app.env` and the API-key files outside version control.
 The deployment imports the database password, database URL, archive HMAC pair,
 and API keys into rootless Podman file secrets. Container metadata contains
 only secret names and mounted file paths, not those credential values.
+
+The complete deployment must use bounded process memory, queues, batches,
+connection pools, concurrency, and caches. It must measure total and per-process
+memory under realistic load, set explicit process limits, and preserve headroom
+for Fedora, rootless Podman, PostgreSQL maintenance, and workload spikes. Do not
+add in-memory copies of full datasets that PostgreSQL or the raw archive already
+owns. Exact memory budgets remain open until load tests provide evidence.
 
 ## Configure
 
