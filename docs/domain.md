@@ -36,7 +36,11 @@
 - Legend I rows use `battleType: "legend"`.
 - Battle rows include an attack-or-defense flag and a `battleTimestamp`.
 - Battle rows include stars, destruction, opponent data, and `armyShareCode`.
-- Battle rows do not include the trophy change directly. Clash Lens derives it from the battle result using a versioned trophy-allocation rule.
+- Battle rows do not include the trophy change directly. Clash Lens derives it from stars and destruction using the versioned table in `docs/data/legend-trophy-allocation-v1.csv`.
+- For each star count, use the last trophy value whose minimum destruction percentage is not greater than the battle's destruction percentage. Reject impossible or out-of-range star and destruction combinations instead of guessing.
+- A 0-star attack at 0 through 9 percent destruction gives the attacker 0 trophies. Other 0-star attacks give the attacker the amount in the table, but the defender loses 0 trophies.
+- For 1-star, 2-star, and 3-star attacks, the attacker gains the table amount and the defender loses the same amount.
+- Store the trophy-allocation rule version with each calculated battle result so later rule changes can replay saved evidence.
 - A battle that produces zero trophies is still an exact event and counts toward the player's attack or defense count.
 - Repeated polls overlap. Clash Lens must not create duplicate battle events from repeated observations.
 - Preserve every raw source observation, including its fetch time and untouched response body.
@@ -44,7 +48,11 @@
 - Start tracking a valid tag when Clash Lens first confirms it for active tracking.
 - Reconstruct all retained timestamped Legend I events available at first observation.
 - Mark history before the first reliable observation as partial or unavailable. Do not invent missing history.
-- Give each battle a stable identity and make ingestion idempotent.
+- Identify one Legend I battle by its ranked day, normalized attacker tag, and normalized defender tag. The same attacker cannot attack the same defender more than once in one Legend I ranked day; the same pairing on a later ranked day is a different battle.
+- Treat repeated polls and matching attacker-side and defender-side rows as evidence for the same battle. One valid row is enough to store the battle. Track whether the attacker's log and defender's log have each reported it. Show the battle on each player's daily log after that player's own battle-log observation reports it; the other side may appear later. When both sides arrive, attach them to the same saved battle.
+- Keep timestamp, army share code, stars, and destruction as battle details and consistency checks, not identity fields. A missing or corrected detail must not create a second battle.
+- If the attacker-side and defender-side reports conflict, preserve both reports and exclude the battle from analytics affected by the conflicting fields until later evidence or a correction resolves the conflict. Do not silently choose one side.
+- Make battle ingestion idempotent so one battle contributes only once to analytics.
 
 ## Inferred Shielded Days
 

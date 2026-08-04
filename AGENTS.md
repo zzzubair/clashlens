@@ -61,7 +61,7 @@ Do not add war, Clan War League, clan-management, base-management, or prescripti
 
 The Go collector must not implement canonical battle linking, ranked-day reconciliation, shield or automatic-defense inference, army classification, or product analytics. Python owns those domain interpretations. The TypeScript website backend, Discord bot, and future integrations consume the private Python API without direct PostgreSQL or raw-archive access. Browser code communicates only with the TypeScript website backend and does not duplicate Python-owned rules.
 
-Phase 1 runs on one Fedora host with approximately 16 GB of available memory and a private rootless Podman network. Remaining storage products, detailed module boundaries, frameworks, deployment details, and cloud providers remain open. Do not confirm one without presenting trade-offs and receiving maintainer approval.
+Phase 1 runs on one Fedora host with approximately 16 GB of available memory and a private rootless Podman network. The Python stack is confirmed in `docs/architecture.md`. Remaining storage products, detailed module boundaries, the TypeScript framework, deployment details, and cloud providers remain open. Do not confirm one without presenting trade-offs and receiving maintainer approval.
 
 ## Working Rules
 

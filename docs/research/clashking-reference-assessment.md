@@ -157,7 +157,7 @@ This is also the correct time to verify the official current rate-limit contract
 3. **Run an approved official-schema characterization test.** Treat it as a small collector acceptance test, not an ad hoc script, and record only sanitized schema results.
 4. **Prototype the Python army decoder/classifier separately.** It may consume a pinned MIT parser, but must persist raw payload/token/errors, metadata and decoder versions, then produce an explicit `Unclassified` outcome. Reuse the recommendations and caveats in [`army-share-code.md`](army-share-code.md).
 5. **Create owned synthetic test fixtures.** `ClashTestingAPI` can accelerate a local mock, but acceptance tests must encode the Clash Lens domain invariants—not third-party mock omissions.
-6. **Defer framework/service decisions.** Do not use the MIT dashboard, bot, or proxy as implicit approval for Next.js, disnake, a proxy runtime, MongoDB/Redis/Kafka, Google Sheets format, or OBS delivery. Those choices remain open in `docs/architecture.md`.
+6. **Keep remaining framework and service decisions explicit.** The Phase 1 Python stack is confirmed in `docs/architecture.md`. Do not use the MIT dashboard, bot, or proxy as implicit approval for Next.js, a proxy runtime, MongoDB/Redis/Kafka, Google Sheets format, or OBS delivery. Those choices remain open in `docs/architecture.md`.
 
 ## Explicitly rejected or deferred
 

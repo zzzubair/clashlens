@@ -17,7 +17,7 @@ Clash Lens provides data. It does not prescribe a specific army or base.
 
 ## Status
 
-The Phase 1 product scope and initial architecture are defined: PostgreSQL for structured data, Go for official API collection, one Python codebase for domain processing and a private service API, and TypeScript for the public website and its backend. Frameworks, remaining infrastructure products, and implementation details remain open.
+The Phase 1 product scope and architecture are defined: PostgreSQL for structured data, Go for official API collection, one confirmed Python stack for domain processing and a private service API, and TypeScript for the public website and its backend. The TypeScript framework, remaining infrastructure products, and implementation details remain open.
 
 ## Documentation
 

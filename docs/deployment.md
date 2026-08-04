@@ -24,6 +24,12 @@ The deployment imports the database password, database URL, archive HMAC pair,
 and API keys into rootless Podman file secrets. Container metadata contains
 only secret names and mounted file paths, not those credential values.
 
+The future private Python API container also receives the interactive API-key
+secret for player-token verification only. The Python worker, Discord bot, and
+TypeScript website containers must not receive it. Go interactive collection is
+limited to 29 requests per second and Python verification to 1 request per
+second so the shared key remains within its 30-request-per-second ceiling.
+
 The complete deployment must use bounded process memory, queues, batches,
 connection pools, concurrency, and caches. It must measure total and per-process
 memory under realistic load, set explicit process limits, and preserve headroom
@@ -136,3 +142,10 @@ restore a tested PostgreSQL backup before starting the old image.
 Immutable archive objects are not removed by `down` and are not rolled back.
 The deployment does not configure backups, point-in-time recovery, systemd
 linger, or monitoring. Those remain operator responsibilities.
+
+Future Python deployment uses one versioned image for the private API, general
+worker, and Discord bot, with a different command for each container. Apply the
+shared SQL migrations before starting the new image. Keep schema changes
+compatible with the previous Python image for at least one release. Roll back
+application code by starting that previous compatible image; do not run an
+automatic database down-migration.

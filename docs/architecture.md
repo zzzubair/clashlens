@@ -2,7 +2,7 @@
 
 ## Status
 
-Clash Lens has a confirmed Phase 1 architecture and runtime split. PostgreSQL is the primary structured database, Go owns official API collection, Python owns domain processing, analytics, accounts, integrations, and a private service API, and TypeScript owns the public website and its backend. Frameworks, remaining infrastructure products, and cloud providers remain open.
+Clash Lens has a confirmed Phase 1 architecture and runtime split. PostgreSQL is the primary structured database, Go owns official API collection, Python owns domain processing, analytics, accounts, integrations, and a private service API, and TypeScript owns the public website and its backend. The Phase 1 Python stack is confirmed. The TypeScript framework, remaining infrastructure products, and cloud providers remain open.
 
 The accepted shape is one repository and one logical product with independently running roles, a separate raw-evidence archive, durable staggered ingestion, and versioned precomputed analytics. Technology choices must preserve the product and domain rules rather than redefine them.
 
@@ -35,10 +35,14 @@ Any implementation must support:
 - Run the private Python API, one general background worker, and the Discord bot as separate processes from the same Python codebase. A worker or bot failure must not take the private API or website offline.
 - Let the general Python worker handle different background job types, including observation processing, replay, snapshot generation, analytics, and exports. Add specialized worker programs only when measured delay, resource use, or isolation needs justify them.
 - Use private HTTP with JSON between the Python API and its trusted consumers. Do not publish the Python API outside the private Podman network, and do not add a service token while all callers remain on that trusted network.
+- Use FastAPI for the private HTTP API, Pydantic for request and response validation, psycopg 3 with direct SQL for PostgreSQL access, discord.py for the bot, pytest for tests, and uv for dependency locking. Do not add Django, Celery, Redis, or an SQLAlchemy ORM in Phase 1.
+- Design the private API around product operations that return screen-ready data: player pages and daily logs, refresh submission and status, live and frozen leaderboards, analytics, account and group management, verified player links, and exports. Do not add a generic database-query API.
 - Use a TypeScript website with a backend. The browser communicates only with the TypeScript website backend, which calls the private Python API. The browser must never call Python directly.
 - Require the TypeScript website backend, Discord bot, and future product integrations to use the private Python API. They must not access PostgreSQL or the raw archive directly.
 - Keep product meanings and calculations in Python. The TypeScript website may format and present returned results, but it must not reproduce domain calculations, confidence rules, cohort membership, rankings, or analytics.
-- Let the TypeScript website backend own Discord or Google login and browser sessions. Let Python own Clash Lens account records, saved tags, groups, permissions, and other account-domain data.
+- Let the TypeScript website backend own Discord or Google login and browser sessions. Let Python own Clash Lens account records, unique usernames, display names, saved tags, verified player-account links, groups, permissions, and other account-domain data.
+- Let only the private Python API process call the official `POST /players/{playerTag}/verifytoken` endpoint to verify a player-account link. It may use the interactive Supercell API key only for this endpoint. The Python worker, Discord bot, and TypeScript website must not receive that key.
+- Treat the one-time player API token as a request-only secret. Do not persist, archive, log, or include it in metrics or error details. Persist only the verification result, verification time, player tag, and Clash Lens account link.
 - The Go collector stores evidence but does not create canonical battles, infer shields or automatic defense, classify armies, reconcile ranked days, or calculate product analytics.
 - Let Go and Python coordinate through PostgreSQL queues and stored observation metadata. Do not add direct Go-to-Python or Python-to-Go service calls.
 - Keep one authoritative schema-migration stream and shared versioned contracts across Go, Python, and TypeScript. Do not let each runtime invent its own meaning for shared fields.
@@ -52,6 +56,9 @@ Any implementation must support:
 - Measure memory use for PostgreSQL, Go, each Python process, and the TypeScript website under realistic collection, replay, analytics, and website load before production activation.
 - Set explicit per-process memory limits and preserve headroom for Fedora, rootless Podman, PostgreSQL maintenance, and temporary workload spikes. Exact budgets require measured evidence and remain open until load testing.
 - Split a process or move a role to another host only when measured latency, memory pressure, throughput, or failure isolation proves that the single-host model is insufficient.
+- Build one versioned Python container image and run the private API, general worker, and Discord bot from it with different commands.
+- Apply the shared SQL migrations before starting a new application version. Keep schema changes compatible with the previous Python image for at least one release.
+- Roll back application code by starting the previous compatible image. Do not automatically reverse database migrations.
 
 ### Structured Data and Raw Evidence
 
@@ -92,8 +99,8 @@ Any implementation must support:
 - Do not log API keys or other credentials.
 - Under normal operation, use a staggered 5-minute polling cycle and fetch both the player profile and battle log for each actively tracked player.
 - Assign four API keys to normal collection, providing up to 120 requests per second while keeping each key at or below 30 requests per second.
-- Reserve a fifth API key for newly submitted tags and explicit user-requested live refreshes so interactive traffic is not blocked behind the population-wide collection cycle.
-- Route interactive refreshes through the Go collector and the same raw-evidence pipeline; the private Python API and TypeScript website must never receive or use a Supercell API key directly.
+- Share a fifth API key between Go interactive collection and Python player-token verification. Reserve at most 29 requests per second for Go and at most 1 request per second for Python so their combined configured ceiling remains at or below 30 requests per second.
+- Route newly submitted tags and explicit user-requested live refreshes through the Go collector and the same raw-evidence pipeline. The only Python exception is the private API's player-token verification call. The TypeScript website must never receive or use a Supercell API key directly.
 - Return the latest saved player representation and its freshness immediately through the TypeScript website backend and private Python API, then expose refresh progress so the website can update after the new observation is processed.
 - Do not block the initial player-page response on a live Supercell request.
 - Reset-baseline sweeps and failed-request retries may run at higher priority without changing the normal 5-minute cadence.
@@ -145,6 +152,14 @@ The implementation must make these conditions observable even though the specifi
 
 Recovery-time objectives, recovery-point objectives, backup retention, alert thresholds, and monitoring products remain open decisions.
 
+### Python Verification Requirements
+
+- Test parsers, domain rules, trophy allocation, battle deduplication, ranked-day reconciliation, account permissions, and API response contracts.
+- Test worker claims, leases, fencing, idempotency, and atomic completion against real PostgreSQL rather than a SQL mock.
+- Test raw-archive reads with synthetic archived responses, including missing objects and checksum mismatches.
+- Run an end-to-end test from a stored observation and processing job through canonical product data and a private API response.
+- Run realistic memory and load tests for the API, worker, bot, replay, analytics, and database connection pools before production activation.
+
 ## Open Technology and Integration Decisions
 
 The following choices remain open:
@@ -152,13 +167,13 @@ The following choices remain open:
 - Raw object or blob archive product.
 - Detailed internal module boundaries and dependency rules.
 - Go collector libraries and packaging.
-- Python backend framework and the private HTTP/JSON route and schema contract.
+- Exact private HTTP/JSON routes, schema details, dependency versions, and dependency update policy.
 - TypeScript website framework, server rendering details, and packaging.
 - Discord commands and response formats.
 - Authentication provider integration and session implementation.
 - Google Sheets integration.
 - OBS delivery model.
-- Deployment images, process limits, and exact memory budgets.
+- Exact image construction, process limits, and memory budgets.
 - Cloud or infrastructure provider.
 - Monitoring, logging, and alerting products.
 - Backup retention and tested recovery procedures.

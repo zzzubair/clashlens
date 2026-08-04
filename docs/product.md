@@ -22,8 +22,14 @@ The primary user is an individual competitive rank pusher. The same public data 
 
 - A **player page** is a public web page for one Clash of Clans player tag.
 - A **Clash Lens account** is an optional profile authenticated through Discord or Google.
+- Every Clash Lens account has one required unique **username** and one required **display name**. Display names do not need to be unique.
+- A **user page** is a public web page identified by the account's username. It shows the account's display name and every verified player account linked to that Clash Lens account.
 - A **saved player tag** is a public player tag added to a Clash Lens account for convenience. Saving a tag does not prove ownership of the game account.
-- A **multi-account view** summarizes the player tags saved to one Clash Lens account and links to each player page.
+- A **linked player account** is a player tag that the user verified through the official `POST /players/{playerTag}/verifytoken` endpoint with the one-time player API token from the game. The link records verified control at the time of verification.
+- Every linked player account is public on the account's user page. Phase 1 does not provide per-account visibility controls.
+- One player tag can link to only one Clash Lens account at a time. Moving it to another Clash Lens account requires a fresh player-token verification.
+- Never request a player's game login credentials. Do not retain or log the one-time player API token after its verification request finishes.
+- A **multi-account view** summarizes the verified player accounts linked to one Clash Lens account and links to each player page.
 - A **group** is a named set of player tags organized by a Clash Lens account.
 - The **Tracked Players leaderboard** orders players currently tracked in Legend I. Its positions are Clash Lens positions among tracked players; official rank provenance is shown where the official API supplies it.
 - A **frozen leaderboard** is the published reset snapshot used for shared daily leaderboard analytics.
@@ -69,7 +75,9 @@ The primary user is an individual competitive rank pusher. The same public data 
 - Preserve a fully observed zero-event day as an inferred shielded day instead of omitting it or labeling it missing.
 - Show inferred shield status and its evidence separately from exact battle events.
 - Make the current season’s day-by-day log the primary player-page view. Show the active day as a live row.
+- Label the active ranked day **Live**. After the day ends, label it **Complete** only when all trophy movement and required evidence reconcile; otherwise label it **Partial** and state the missing or uncertain evidence.
 - Let users expand a ranked day to inspect its timestamped attacks, defenses, opponents, results, army data, and confidence.
+- Add late evidence to the affected ended day. Rebuild only the affected day and dependent summaries, and publish a corrected version of any changed frozen result instead of silently replacing it.
 - Preserve and expose every ranked season collected by Clash Lens.
 - Show the first tracked day and all known coverage gaps.
 
@@ -86,12 +94,16 @@ The primary user is an individual competitive rank pusher. The same public data 
 - Offer a separately labeled live view based on newer observations.
 - Show tracked population, measured coverage, source provenance, snapshot time, and freshness, and link entries to player pages.
 - Keep public player data and public analytics available without sign-in.
+- Provide a public user page for each Clash Lens username. Show its non-unique display name and all player accounts currently linked through successful player-token verification.
 
 ### Accounts and Groups
 
 - Offer optional Clash Lens accounts authenticated through Discord or Google.
+- Let one Clash Lens account link both a Discord identity and a Google identity. Each provider identity can belong to only one Clash Lens account.
 - Let one Clash Lens account save multiple player tags.
-- Provide one account summary page for saved tags, with links to each public player page.
+- Provide one multi-account summary page for verified linked player accounts, with links to each public player page.
+- Let users link player accounts only after successful official player-token verification. One player tag can link to only one Clash Lens account at a time, and moving it requires fresh verification.
+- Let users modify only their own saved tags, linked player accounts, groups, and preferences.
 - Let account users create named groups of player tags for easy tracking.
 - Use authentication to organize public data and preferences. Do not use it to unlock hidden player data.
 
@@ -132,6 +144,7 @@ The primary user is an individual competitive rank pusher. The same public data 
 - Comply with the current Supercell Fan Content Policy and API terms.
 - Do not imply that Supercell endorses Clash Lens.
 - Include all required fan-content notices on applicable public surfaces.
+- Do not provide delegated or shared game-account access. Account sharing violates Supercell's terms; Clash Lens verifies only that the current user can supply the account's one-time player API token.
 
 ## Out of Scope for Phase 1
 
@@ -140,7 +153,7 @@ The primary user is an individual competitive rank pusher. The same public data 
 - Prescriptive “use this army” or “use this base” recommendations.
 - Paid access to player data or analytics.
 - Scraping competitor services to seed player tags or copy player data.
-- Specific framework, remaining infrastructure-product, cloud-provider, and implementation choices that remain open in `docs/architecture.md`.
+- The TypeScript framework and remaining infrastructure-product, cloud-provider, and implementation choices that remain open in `docs/architecture.md`.
 
 ## Open Specification Work
 
@@ -155,5 +168,5 @@ The product scope is final. The following implementation-level details remain fo
 - Discord commands and response formats.
 - Google Sheets export formats and refresh behavior.
 - OBS overlay layouts and creator workflows.
-- Account, group, preference, and privacy behavior.
+- Username syntax and case normalization, profile editing, account deletion, player-account unlinking, and verification-audit retention.
 - Product success measures and validation thresholds.
