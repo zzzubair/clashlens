@@ -4,7 +4,11 @@
 
 - A **Legend I ranked day** starts at **05:00 UTC** and ends at **05:00 UTC** the next day.
 - A Legend I season lasts exactly **28 ranked days**.
-- Season dates are calculated from a confirmed anchor date. The anchor date still needs to be recorded.
+- A Legend I season starts and ends on a Monday at **05:00 UTC**.
+- Use official profile field `currentLeagueSeasonId = 1783918800`, or **2026-07-13 05:00 UTC**, as the version 1 season anchor. The official `previousLeagueSeasonId = 1781499600`, or **2026-06-15 05:00 UTC**, confirms the preceding boundary exactly 28 days earlier.
+- Use half-open intervals. A season includes its start boundary and excludes its end boundary. Ranked day 1 of the anchored season starts on **2026-07-13 05:00 UTC** and ends on **2026-07-14 05:00 UTC**. Ranked day 28 starts on **2026-08-09 05:00 UTC** and ends when the next season starts on **2026-08-10 05:00 UTC**.
+- Derive other season boundaries in exact 28-day steps from a confirmed anchor. Store the official season ID and the season-anchor rule version with each derived ranked day and season.
+- A newer valid Legend I profile may advance the confirmed anchor when its current and previous season IDs are Mondays at 05:00 UTC and exactly 28 days apart. If accepted Legend I profiles disagree, retain the last confirmed anchor and mark the new source contract as conflicting.
 - A player can have up to 8 attacks and 8 defenses in one ranked day.
 - Store and calculate time in Coordinated Universal Time (UTC).
 - The ranked-day boundary remains 05:00 UTC even when reset processing and snapshot publication finish later.
@@ -13,23 +17,38 @@
 
 - A **known player** is a valid, normalized player tag retained by Clash Lens after submission or discovery through an official Clash of Clans API source.
 - An **actively tracked player** is a known player currently confirmed to be participating in Legend I and receiving regular Phase 1 collection.
+- Confirm Legend I membership from the current official player-profile `leagueTier` field. Adapter version 1 uses `leagueTier.id = 105000036` with the expected name `Legend I`. Do not use the older `league` field; it can report `Unranked` for a current Legend I player.
+- Deactivate an actively tracked player only when a newer valid profile contains a tier ID and name that the accepted adapter version explicitly recognizes as non-Legend-I. An unknown tier ID, an unexpected name for a known ID, or a missing or malformed tier is a source-contract conflict or uncertain evidence. Keep the last confirmed eligibility state, mark it stale or conflicting, and require adapter review; do not activate or deactivate from that evidence.
 - An **inactive known player** is retained with all existing history but does not receive regular Legend I battle collection.
-- The **Tracked Players leaderboard** orders actively tracked players. A position on it means position among players tracked by Clash Lens, not a claim of complete global coverage.
-- Use the official API rank wherever Supercell supplies it, including its ordering of equal-trophy players in the official Top 200.
-- Beyond the available official ranks, order players by trophies descending and resolve equal-trophy ties with a versioned deterministic hash of the normalized player tag.
+- The **Tracked Players leaderboard** orders actively tracked players by the newest valid trophy observation that Clash Lens has accepted for each player. A position on it means position among players tracked by Clash Lens, not a claim of complete global coverage or one simultaneous official observation.
+- Keep a player in this ordering when a later request is missing, delayed, malformed, or unsuccessful. Change the player's trophy value only when Clash Lens accepts a newer valid observation. Remove the player from active ordering only when newer valid evidence shows that the player is no longer eligible for active Legend I tracking.
+- Show the trophy observation time, age, and freshness state with each leaderboard entry. Old data remains ranked and remains eligible for that snapshot's cumulative Top-N cohorts and rank bands, but the snapshot and its analytics must show how much membership uses old data.
+- Order the official Top-200 data view by the rank that Supercell supplies, including its ordering of equal-trophy players. It remains a separate rank system even when the public Tracked Players surface shows the official rank field.
+- Order all Tracked Players entries by newest accepted trophies descending and resolve equal-trophy ties with a versioned deterministic hash of the normalized player tag. An official rank is separate provenance and does not change a Tracked Players position.
 - Never use fresh randomness for a snapshot tie-break. The same tag, trophies, and ordering-rule version must reproduce the same position.
 - Every snapshot must identify the ordering-rule version it used.
-- Top-N eligibility and ordering behavior for stale or missing entries remain open product specifications.
 - Begin Phase 1 with the existing set of approximately 12,370 known tags.
 - Accept valid player tags submitted by users.
 - Discover additional tags only through official Clash of Clans API sources, including official leaderboards, clan data, and opponents present in official battle logs.
 - Normalize and deduplicate a tag before adding it to the known-player registry.
 - Add a known player to active tracking after confirming that the player is in Legend I.
-- When an actively tracked player leaves Legend I, retain the tag and history but remove the player from active Legend I tracking.
+- When newer valid evidence from the accepted tier table shows that an actively tracked player left Legend I, retain the tag and history but remove the player from active Legend I tracking.
 - Re-evaluate inactive known players during the Monday promotion and demotion transition and whenever a tag is rediscovered or submitted.
 - Retaining inactive tags must allow later ranked-tournament support without re-creating player identity or losing history.
 
 ## Official API Observations
+
+### Official Global Top 200
+
+- The only authoritative source for the current official global player rank is `GET /v1/locations/global/rankings/players?limit=200` from the official Clash of Clans API.
+- A complete official Top-200 observation contains exactly 200 entries, exactly 200 unique valid normalized player tags, and the official `rank` values 1 through 200 once each. The same normalized tag at more than one rank is invalid. Use the returned rank. Do not calculate official rank from trophies or response position.
+- Keep official rank separate from Tracked Players position. A player can have one, both, or neither.
+- The verified response does not supply a season identifier. Store official rank as a current observation with its source and observation time. Any Legend I season association is Clash Lens derived context, not an official season field.
+- Preserve the untouched response as raw evidence. Add its valid player tags to the known-player registry and request normal profile collection for newly discovered tags.
+- Maintain one most recent complete official Top-200 view. Atomically replace it only after a newer observation passes all completeness checks. A failed, short, malformed, duplicate-tagged, duplicate-ranked, or rank-gapped response remains visible as a failed or partial collection attempt but does not replace the most recent complete view.
+- Show when the current official Top 200 was observed and whether a newer refresh attempt failed. Do not imply that one API response and the latest per-player profile observations were captured at the same instant.
+
+### Player Profiles and Battle Logs
 
 - The official battle-log API returns up to the latest 50 battles.
 - One response can mix `legend`, `ranked`, and `homeVillage` battles.
@@ -50,9 +69,20 @@
 - Mark history before the first reliable observation as partial or unavailable. Do not invent missing history.
 - Identify one Legend I battle by its ranked day, normalized attacker tag, and normalized defender tag. The same attacker cannot attack the same defender more than once in one Legend I ranked day; the same pairing on a later ranked day is a different battle.
 - Treat repeated polls and matching attacker-side and defender-side rows as evidence for the same battle. One valid row is enough to store the battle. Track whether the attacker's log and defender's log have each reported it. Show the battle on each player's daily log after that player's own battle-log observation reports it; the other side may appear later. When both sides arrive, attach them to the same saved battle.
+- Trust each player's own newest valid battle-log report for that player's daily log and trophy reconciliation. Use the attacker's own report for offense analytics and the defender's own report for defense analytics. A repeated poll of the same side updates that side only when it is newer valid evidence.
 - Keep timestamp, army share code, stars, and destruction as battle details and consistency checks, not identity fields. A missing or corrected detail must not create a second battle.
-- If the attacker-side and defender-side reports conflict, preserve both reports and exclude the battle from analytics affected by the conflicting fields until later evidence or a correction resolves the conflict. Do not silently choose one side.
+- The source contract expects the two sides to agree. If they do not, preserve both reports and mark a perspective disagreement. Do not let one side overwrite the other. Keep each side in its own player view and analytics lens, and include the disagreement in data-quality counts.
 - Make battle ingestion idempotent so one battle contributes only once to analytics.
+
+## Ranked-Day Evidence Coverage
+
+- A **reset-baseline sweep** for one player is one durable boundary attempt that requests both profile and battle-log endpoints after the 05:00 UTC boundary. Its endpoint results retain the same sweep ID and boundary time even when one endpoint succeeds before a retry completes the other.
+- A valid **reset baseline** requires a valid profile from that sweep collected before the player's first retained Legend I event in the new ranked day and a valid associated battle-log response. The sweep should finish before the snapshot target, but publication delay alone does not invalidate otherwise ordered evidence. An older profile can keep the player in a leaderboard, but it cannot prove a ranked-day boundary.
+- A ranked day has **continuous battle-log coverage** when valid battle-log observations form a chain from the battle-log response in the start reset-baseline sweep through the battle-log response in the next boundary's end sweep. Each consecutive response must either contain fewer than the official 50-row maximum or share at least one stable battle identity with the preceding response. A full 50-row response with no overlap creates a coverage gap.
+- Every new row exposed by the chain must be retained and processed. A malformed, unsupported, or identity-conflicting Legend I row creates a visible coverage gap until later valid evidence resolves it.
+- Poll success percentage and elapsed time alone do not prove coverage. Use source-row continuity and boundary evidence.
+- A ranked day has **complete evidence coverage** only when its start and end sweep IDs each link a valid profile and battle-log response, it has continuous battle-log coverage between those responses, and it has valid applicable Legend I rows, established attack and defense counts, and known boundary adjustments. A legacy profile-only reset attempt cannot prove Complete.
+- Late evidence may close a coverage gap and create a corrected ranked-day version. Do not rewrite the previous version in place.
 
 ## Inferred Shielded Days
 
@@ -60,7 +90,7 @@
 - The official API does not directly confirm shield state. Clash Lens may classify a day only as **inferred shielded**.
 - Infer a shielded day only when all of the following are true:
   - The player remained eligible for active Legend I tracking.
-  - Successful player-profile and battle-log observations provide sufficient coverage across the ranked day.
+  - The ranked day has complete evidence coverage.
   - The player's trophies did not change across the ranked day.
   - The battle log contains no Legend I attack or defense event timestamped within the ranked day.
   - No automatic defense adjustment applies.
@@ -75,7 +105,7 @@
 - It is a settlement adjustment, not a battle event. It has no opponent, army, destruction result, or battle timestamp.
 - There is no automatic offense adjustment.
 - Zero-trophy defense events count as observed defenses when determining how many defenses are missing.
-- Calculate an automatic defense adjustment only when retained battle-log observations provide enough coverage to establish the defense-event counts and observed event losses for both the previous and current days. If any formula input may be incomplete because collection evidence is missing, do not replace the unknown evidence with an adjustment.
+- Calculate an automatic defense adjustment only when the previous and current days have continuous battle-log coverage and retained evidence establishes their defense-event counts and observed event losses. If any formula input may be incomplete because collection evidence is missing, do not replace the unknown evidence with an adjustment.
 - For a current day with 1 through 7 established defense events, calculate the positive loss magnitude per missing defense as:
 
   `floor((previous day observed event loss + current day observed event loss) / (previous day defense-event count + current day defense-event count))`
@@ -84,9 +114,17 @@
 - Multiply the floored loss by `8 - current day defense-event count` to calculate the total automatic defense adjustment.
 - Do not apply this inference rule to a day with zero established defense events. Preserve the evidence and mark the day uncertain if that exceptional case occurs.
 - A **calculated automatic defense adjustment** uses the versioned averaging rule when the reset outcome cannot yet isolate the exact adjustment.
-- A **confirmed automatic defense adjustment** requires sufficient battle-event coverage plus post-reset trophy evidence that jointly isolate the adjustment. Trophy reconciliation alone does not prove its cause.
+- A **confirmed automatic defense adjustment** requires continuous battle-log coverage for the previous and current days plus valid start and end reset baselines whose trophy values jointly isolate the adjustment. Trophy reconciliation alone does not prove its cause.
 - Show the adjustment separately from battle events and identify whether it is calculated or confirmed.
 - Automatic defense adjustments affect ranked-day trophy reconciliation but never contribute to army usage, three-star rate, or other battle-event analytics.
+
+## Weekly and Season Trophy Resets
+
+- At each Monday 05:00 UTC boundary, a player who remains in Legend I with fewer than 5,000 trophies resets to 5,000 trophies.
+- At the start of each 28-day Legend I season, every Legend I player resets to 5,000 trophies. Excess trophies above 5,000 become Legend trophies under the official game rule.
+- Store a weekly or season reset as an explicit boundary adjustment. It is not a battle, attack gain, defense loss, or automatic defense adjustment.
+- Reconcile the ended ranked day before the weekly or season reset. Apply the boundary adjustment after that reconciliation, and use the adjusted value as the next ranked day's starting trophies.
+- Show each boundary adjustment and its official rule version separately. Do not include it in offense, defense, army, or battle-outcome analytics.
 
 ## Ranked-Day and Leaderboard Snapshots
 
@@ -126,6 +164,7 @@
 - A selected trophy range includes battle-time trophy values from 5 below through 5 above the selected value, inclusive.
 - Trophy ranges, cumulative cohorts, rank bands, and rank streaks are alternative population filters unless a future specification explicitly defines their intersection.
 - Every aggregate must state its population filter, time period, observed sample size, measured coverage, freshness, classification version, classification confidence, unclassified count, and analytics-rule version.
+- When a selected one-snapshot cohort includes entries that use old trophy observations, return the available analytics and state the old-entry count and age. Do not silently replace the requested population or present it as fully fresh.
 - Do not silently exclude malformed, partial, zero-trophy, or unclassified observations. Show their effect on coverage and confidence.
 - Preserve previously published analytics with their original rule labels when classification or calculation rules change.
 
@@ -134,8 +173,8 @@
 - An **exact event** is a valid timestamped Legend I battle observation from the official Clash of Clans API.
 - An **incomplete collection attempt** has valid evidence from one requested endpoint but is still missing its paired evidence.
 - An **inferred shielded day** is a derived ranked-day state supported by complete observations; it is not an official shield confirmation or an exact battle event.
-- A **reconciled ranked day** satisfies `final trophies = start trophies + attack gain - defense loss`, including any automatic defense adjustment.
-- A **complete ranked day** is reconciled and has enough evidence to show that no relevant event or settlement adjustment is missing.
+- A **reconciled ranked day** satisfies `final trophies before a weekly or season boundary reset = start trophies + attack gain - defense loss`, including any automatic defense adjustment. A separate boundary adjustment explains any change to the next ranked day's starting trophies.
+- A **complete ranked day** is reconciled, has complete evidence coverage, and has no unresolved event, eligibility, or settlement-adjustment input. Otherwise it is partial with a machine-readable reason.
 - Timestamps allow exact event attribution, but timestamps alone do not prove that a ranked day is complete.
 - If Clash Lens cannot prove completeness, mark the ranked day as partial or uncertain and preserve the reason.
 - Player-profile trophies and battle-log events may become visible at different times. Preserve both observations and require eventual reconciliation rather than assuming paired responses are atomic.

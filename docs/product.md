@@ -88,11 +88,14 @@ The primary user is an individual competitive rank pusher. The same public data 
 - Let a user request a live refresh without blocking the initial page. Update the page when the newly collected observation has been processed.
 - Provide one public Tracked Players leaderboard for the actively tracked Legend I population.
 - On that same leaderboard surface, show the official top-200 rank as a separate provenance-backed field when supplied by the official Clash of Clans API.
+- Maintain the most recent complete official global Top 200 from the official API. Replace it only after one newer response contains 200 unique valid normalized player tags and valid ranks 1 through 200 once each. If a refresh fails or is partial, keep the prior complete list available and show the failed refresh state.
+- Show the official observation time. The official response has no season identifier, so do not present a derived Legend I season label as an official API field.
 - Do not describe Clash Lens positions beyond the official source as official positions.
 - Keep serving the previously frozen leaderboard until its replacement is published as one internally consistent snapshot version.
 - Show missing, stale, or uncertain entries within a published snapshot rather than treating atomic publication as proof of complete coverage.
 - Offer a separately labeled live view based on newer observations.
 - Show tracked population, measured coverage, source provenance, snapshot time, and freshness, and link entries to player pages.
+- Keep the latest accepted Tracked Players ordering available when a refresh is delayed or fails. Keep entries that use older valid trophy observations in the ordering and label their observation time, age, and freshness. Update the ordering when newer valid observations arrive.
 - Keep public player data and public analytics available without sign-in.
 - Provide a public user page for each Clash Lens username. Show its non-unique display name and all player accounts currently linked through successful player-token verification.
 
@@ -159,9 +162,8 @@ The primary user is an individual competitive rank pusher. The same public data 
 
 The product scope is final. The following implementation-level details remain for later specifications and issues:
 
-- Time-period defaults other than the confirmed 7-day rank-streak default, evidence thresholds, and behavior when a requested cohort has insufficient fresh observations.
+- Time-period defaults other than the confirmed 7-day rank-streak default.
 - Rank-band input limits and interaction design.
-- Whether stale or missing snapshot entries remain eligible for one-snapshot Top-N cohorts or rank bands and which value orders them.
 - The full metric set and visualization design for meta analysis.
 - Army-share-code decoding and army-archetype classification rules.
 - Exact player-page, leaderboard, multi-account, and group interactions.

@@ -28,7 +28,17 @@ The future private Python API container also receives the interactive API-key
 secret for player-token verification only. The Python worker, Discord bot, and
 TypeScript website containers must not receive it. Go interactive collection is
 limited to 29 requests per second and Python verification to 1 request per
-second so the shared key remains within its 30-request-per-second ceiling.
+second under the Phase 1 internal safety budget; these values are not a published
+Supercell allowance. Both
+runtimes must reserve requests through the PostgreSQL traffic gate defined in
+`docs/architecture.md`; separate process-local counters do not enforce the
+combined limit. Do not mount the shared key into Python until the gate migration,
+Go integration, and Python integration are active.
+
+Use separate archive credentials for Go and the Python worker. Go may write and
+may read an object only for immediate archive integrity verification. The worker
+may read archived evidence for processing and replay. The private API, bot, and
+website backend must not receive either archive credential.
 
 The complete deployment must use bounded process memory, queues, batches,
 connection pools, concurrency, and caches. It must measure total and per-process
@@ -144,8 +154,24 @@ The deployment does not configure backups, point-in-time recovery, systemd
 linger, or monitoring. Those remain operator responsibilities.
 
 Future Python deployment uses one versioned image for the private API, general
-worker, and Discord bot, with a different command for each container. Apply the
-shared SQL migrations before starting the new image. Keep schema changes
+worker, and Discord bot, with a different command for each container. Deploy the
+version-1-and-2 bridge Go collector before migration 2. Apply migration 2, verify
+the bridge collector, and only then start the Python roles. The current Go image,
+which requires exactly contract version 1, is not a valid rollback after that
+migration. Keep later schema changes
 compatible with the previous Python image for at least one release. Roll back
 application code by starting that previous compatible image; do not run an
 automatic database down-migration.
+
+Migration 2 must add the durable per-player reset-baseline sweep identity that
+links the profile and battle-log results for one 05:00 UTC boundary. Legacy
+profile-only reset work remains evidence, but it cannot prove complete ranked-day
+coverage.
+
+Replay requests use a root-owned host wrapper and a separate PostgreSQL
+replay-request role. Only allowlisted authenticated host administrators may run
+the wrapper through `sudo`. It records the operator identity from the trusted
+sudo audit context and requires a reason. Do not mount the replay-request secret
+in the API, worker, bot, website, or collector containers. Their database roles
+must not be able to insert replay requests. Reject direct service-account use and
+all replay requests received through HTTP or Discord.

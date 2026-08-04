@@ -4,7 +4,7 @@ Status: executable prototype for GitHub issue #2. This is not a production deplo
 
 ## Boundary
 
-The collector gets raw player-profile and battle-log responses from the official Clash of Clans API. It archives each exact response body before it publishes a PostgreSQL observation. It then creates a durable `python_processing_jobs` record.
+The current executable prototype gets raw player-profile and battle-log responses from the official Clash of Clans API. It archives each exact response body before it publishes a PostgreSQL observation. It then creates a durable `python_processing_jobs` record. Its current `reset_profile` work collects only the profile endpoint; it does not create the paired profile and battle-log reset-baseline sweep identity required to prove complete ranked-day evidence. The accepted next contract adds that paired sweep in migration 2 and also adds the official global Top-200 response as a player-independent observation. The current schema and executable implement neither change.
 
 The collector does not parse battle meaning. It does not link battles, reconcile ranked days, infer shields or automatic defenses, classify armies, or calculate product analytics. Python owns those tasks. See [architecture.md](architecture.md) and [ADR 0001](adr/0001-separate-collection-from-domain-processing.md).
 
@@ -68,10 +68,10 @@ Useful optional variables:
 | `CLASHLENS_RETRY_MAXIMUM_DELAY` | `30s` | Maximum retry delay. |
 | `CLASHLENS_RETRY_JITTER_FRACTION` | `0.2` | Retry jitter from `0` through `1`. |
 | `CLASHLENS_INTERACTIVE_COOLDOWN` | `30s` | Recent-success window for interactive intent coalescing. |
-| `CLASHLENS_REQUESTS_PER_SECOND_PER_KEY` | `30` | Request limit for each process-owned key. The accepted range is `1` through `30`. |
+| `CLASHLENS_REQUESTS_PER_SECOND_PER_KEY` | `30` | Current internal prototype safety budget for each process-owned key. It is not a published Supercell limit and does not prove the accepted Go/Python gate for a shared key. |
 | `CLASHLENS_WORKERS_PER_KEY` | `8` | Small Go worker goroutines per configured key. Tune with API latency and PostgreSQL capacity. |
 | `CLASHLENS_MAXIMUM_RESPONSE_BYTES` | `4194304` | Maximum body size for one official response. |
-| `CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL` | `false` | Explicit degraded-mode use of reserved interactive keys for normal work. |
+| `CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL` | `false` | Prototype-only degraded use of reserved interactive keys for normal work. Production must reject it. |
 
 `CLASHLENS_ALLOW_REDUCED_KEY_POOLS` and `CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN` exist only for isolated tests and local prototypes. Do not set them in production.
 
@@ -90,7 +90,7 @@ Separate scheduler and worker processes:
 ./bin/collector run --role worker
 ```
 
-PostgreSQL advisory locks enforce one live worker-process owner for each API-key secret. A second worker process with the same key fails at startup. This keeps the per-key in-memory rate limit authoritative across processes. Scheduler and maintenance processes do not own API keys.
+PostgreSQL advisory locks enforce one live Go worker-process owner for each API-key secret. A second Go worker process with the same key fails at startup. This makes the current in-memory limiter authoritative only for this Go-only prototype. Before Python receives the shared interactive key, Go and Python must use the PostgreSQL traffic gate in [architecture.md](architecture.md); the advisory lock and two process-local counters are not proof of the combined limit. Scheduler and maintenance processes do not own API keys.
 
 Run one bounded scheduling and drain cycle:
 
