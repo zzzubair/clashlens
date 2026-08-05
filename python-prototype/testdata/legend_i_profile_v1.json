@@ -1,0 +1,17 @@
+{
+  "tag": "#2PP",
+  "name": "Synthetic Legend I",
+  "expLevel": 275,
+  "trophies": 6123,
+  "bestTrophies": 6450,
+  "leagueTier": {
+    "id": 105000036,
+    "name": "Legend I"
+  },
+  "currentLeagueSeasonId": "1783918800",
+  "previousLeagueSeasonId": "1781499600",
+  "clan": {
+    "tag": "#2CLAN",
+    "name": "Synthetic Clan"
+  }
+}
