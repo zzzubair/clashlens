@@ -119,6 +119,10 @@ fi
 rm -f "$STATE_DIR/network-clashlens-python-prototype-network"
 
 "$ROOT_DIR/deploy.sh" init >/dev/null
+if ! grep -Fq -- 'clashlens-python-prototype-postgres-password\,type=mount\,target=/run/secrets/postgres-password\,uid=70\,gid=70\,mode=0400' "$LOG_FILE"; then
+    printf 'PostgreSQL password secret was not mounted for the pinned image runtime identity\n' >&2
+    exit 1
+fi
 database_url=$(<"$TEST_ROOT/secrets/database-url")
 database_password=$(<"$TEST_ROOT/secrets/postgres-password")
 expected_database_url="postgresql://clashlens_prototype:${database_password}@postgres:5432/clashlens_prototype?sslmode=disable"
