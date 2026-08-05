@@ -286,6 +286,7 @@ start_postgres() {
         --network "$NETWORK_NAME" \
         --network-alias postgres \
         --volume "$VOLUME_NAME:/var/lib/postgresql/data" \
+        --user 70:70 \
         --secret "$(secret_name postgres-password),type=mount,target=/run/secrets/postgres-password,uid=70,gid=70,mode=0400" \
         --env POSTGRES_DB="$POSTGRES_DB" \
         --env POSTGRES_USER="$POSTGRES_USER" \

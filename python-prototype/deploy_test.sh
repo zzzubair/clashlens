@@ -119,6 +119,11 @@ fi
 rm -f "$STATE_DIR/network-clashlens-python-prototype-network"
 
 "$ROOT_DIR/deploy.sh" init >/dev/null
+postgres_run=$(grep 'docker.io/library/postgres:17-alpine' "$LOG_FILE")
+if [[ "$postgres_run" != *'--user 70:70'* ]]; then
+    printf 'PostgreSQL did not start with the pinned image runtime identity\n' >&2
+    exit 1
+fi
 if ! grep -Fq -- 'clashlens-python-prototype-postgres-password\,type=mount\,target=/run/secrets/postgres-password\,uid=70\,gid=70\,mode=0400' "$LOG_FILE"; then
     printf 'PostgreSQL password secret was not mounted for the pinned image runtime identity\n' >&2
     exit 1
