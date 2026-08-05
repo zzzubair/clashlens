@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from threading import Event
 
 from .archive import ArchiveReadError, S3ArchiveReader
 from .db import PROCESSING_VERSION, Claim, Database, LeaseLost
@@ -25,7 +27,9 @@ class ObservationProcessor:
         self.database = database
         self.archive = archive
 
-    def process_once(self, *, owner: str, lease_seconds: int = 30) -> ProcessResult | None:
+    def process_once(
+        self, *, owner: str, lease_seconds: int = 30
+    ) -> ProcessResult | None:
         claim = self.database.claim_job(owner=owner, lease_seconds=lease_seconds)
         if claim is None:
             return None
@@ -38,7 +42,9 @@ class ObservationProcessor:
         owner: str,
         lease_seconds: int = 30,
     ) -> ProcessResult | None:
-        claim = self.database.claim_job(owner=owner, lease_seconds=lease_seconds, job_id=job_id)
+        claim = self.database.claim_job(
+            owner=owner, lease_seconds=lease_seconds, job_id=job_id
+        )
         if claim is None:
             return None
         return self._process_claim(claim)
@@ -67,7 +73,11 @@ class ObservationProcessor:
             (claim.endpoint_version, ENDPOINT_VERSION, "unsupported_endpoint_version"),
             (claim.schema_version, SCHEMA_VERSION, "unsupported_schema_version"),
             (claim.parser_version, PARSER_VERSION, "unsupported_parser_version"),
-            (claim.processing_version, PROCESSING_VERSION, "unsupported_processing_version"),
+            (
+                claim.processing_version,
+                PROCESSING_VERSION,
+                "unsupported_processing_version",
+            ),
         )
         for actual, expected, category in supported_versions:
             if actual == expected:
@@ -84,7 +94,9 @@ class ObservationProcessor:
             return ProcessResult(claim.job_id, "failed", category)
 
         try:
-            archived = self.archive.read_verified(claim.archive_reference, claim.response_hash)
+            archived = self.archive.read_verified(
+                claim.archive_reference, claim.response_hash
+            )
         except ArchiveReadError as error:
             try:
                 state = self.database.fail_claim(
@@ -132,9 +144,15 @@ class ObservationProcessor:
         owner: str,
         max_jobs: int = 100,
         lease_seconds: int = 30,
+        stop_requested: Event | None = None,
+        readiness_check: Callable[[], bool] | None = None,
     ) -> list[ProcessResult]:
         results: list[ProcessResult] = []
+        if readiness_check is not None and not readiness_check():
+            return results
         for _ in range(max_jobs):
+            if stop_requested is not None and stop_requested.is_set():
+                break
             result = self.process_once(owner=owner, lease_seconds=lease_seconds)
             if result is None:
                 break

@@ -170,11 +170,13 @@ name = "clashlens-python-prototype"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "certifi" },
     { name = "discord-py" },
     { name = "fastapi" },
     { name = "minio" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "pydantic" },
+    { name = "urllib3" },
     { name = "uvicorn" },
 ]
 
@@ -186,11 +188,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "certifi", specifier = "==2026.7.22" },
     { name = "discord-py", specifier = "==2.7.1" },
     { name = "fastapi", specifier = "==0.141.1" },
     { name = "minio", specifier = "==7.2.20" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = "==3.3.4" },
     { name = "pydantic", specifier = "==2.13.4" },
+    { name = "urllib3", specifier = "==2.7.0" },
     { name = "uvicorn", specifier = "==0.52.1" },
 ]
 

@@ -86,7 +86,9 @@ def _seed(
     return job_id, reference
 
 
-def test_schema_refuses_to_upgrade_an_existing_contract_v1_database(database_url: str) -> None:
+def test_schema_refuses_to_upgrade_an_existing_contract_v1_database(
+    database_url: str,
+) -> None:
     db = Database(database_url)
     db.apply_schema()
     with db.pool.connection() as connection:
@@ -117,6 +119,8 @@ def test_real_postgres_job_claim_profile_effects_and_idempotent_rerun(
             bucket="evidence",
             access_key="test",
             secret_key="test",
+            secure=False,
+            allow_insecure_test_origin=True,
         ),
     )
 
@@ -124,12 +128,24 @@ def test_real_postgres_job_claim_profile_effects_and_idempotent_rerun(
 
     assert first is not None
     assert first.outcome == "processed"
-    assert db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,)) == "complete"
+    assert (
+        db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,))
+        == "complete"
+    )
     assert db.scalar("SELECT count(*) FROM player_profile_versions") == 1
     assert db.scalar("SELECT count(*) FROM player_profile_effects") == 1
-    assert db.scalar("SELECT parser_version FROM player_profile_versions") == "profile-parser-v1"
-    assert db.scalar("SELECT endpoint_version FROM player_profile_versions") == "profile-v1"
-    assert db.scalar("SELECT schema_version FROM player_profile_versions") == "profile-schema-v1"
+    assert (
+        db.scalar("SELECT parser_version FROM player_profile_versions")
+        == "profile-parser-v1"
+    )
+    assert (
+        db.scalar("SELECT endpoint_version FROM player_profile_versions")
+        == "profile-v1"
+    )
+    assert (
+        db.scalar("SELECT schema_version FROM player_profile_versions")
+        == "profile-schema-v1"
+    )
 
     db.requeue_completed_job(job_id)
     second = processor.process_once(owner="worker-b")
@@ -138,7 +154,13 @@ def test_real_postgres_job_claim_profile_effects_and_idempotent_rerun(
     assert second.outcome == "processed"
     assert db.scalar("SELECT count(*) FROM player_profile_versions") == 1
     assert db.scalar("SELECT count(*) FROM player_profile_effects") == 1
-    assert db.scalar("SELECT count(*) FROM python_processing_attempts WHERE job_id = %s", (job_id,)) == 2
+    assert (
+        db.scalar(
+            "SELECT count(*) FROM python_processing_attempts WHERE job_id = %s",
+            (job_id,),
+        )
+        == 2
+    )
     db.close()
 
 
@@ -157,6 +179,8 @@ def test_equal_time_uncertain_profile_does_not_replace_confirmed_current_state(
             bucket="evidence",
             access_key="test",
             secret_key="test",
+            secure=False,
+            allow_insecure_test_origin=True,
         ),
     )
     first = processor.process_once(owner="current-state-one")
@@ -165,7 +189,9 @@ def test_equal_time_uncertain_profile_does_not_replace_confirmed_current_state(
     uncertain_payload = json.loads(FIXTURE.read_bytes())
     uncertain_payload["name"] = "Equal-time uncertain evidence"
     uncertain_payload["leagueTier"] = {"id": 999999999, "name": "Unexpected Tier"}
-    uncertain_body = json.dumps(uncertain_payload, separators=(",", ":")).encode("utf-8")
+    uncertain_body = json.dumps(uncertain_payload, separators=(",", ":")).encode(
+        "utf-8"
+    )
     uncertain_digest = hashlib.sha256(uncertain_body).hexdigest()
     uncertain_key = f"sha256/{uncertain_digest[:2]}/{uncertain_digest}"
     archive_server[3].objects[uncertain_key] = uncertain_body
@@ -215,7 +241,10 @@ def test_expired_or_wrong_lease_cannot_write_product_effects_or_complete(
         db.complete_profile(claim, profile)
 
     assert db.scalar("SELECT count(*) FROM player_profile_versions") == 0
-    assert db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,)) == "leased"
+    assert (
+        db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,))
+        == "leased"
+    )
     db.close()
 
 
@@ -234,7 +263,10 @@ def test_expired_lease_stops_after_the_configured_attempt_limit(
     replacement = db.claim_job(owner="replacement-worker", lease_seconds=30)
 
     assert replacement is None
-    assert db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,)) == "failed"
+    assert (
+        db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,))
+        == "failed"
+    )
     assert (
         db.scalar(
             "SELECT failure_category FROM python_processing_jobs WHERE id = %s",
@@ -242,7 +274,12 @@ def test_expired_lease_stops_after_the_configured_attempt_limit(
         )
         == "lease_expired_max_attempts"
     )
-    assert db.scalar("SELECT state FROM python_processing_attempts WHERE job_id = %s", (job_id,)) == "stale"
+    assert (
+        db.scalar(
+            "SELECT state FROM python_processing_attempts WHERE job_id = %s", (job_id,)
+        )
+        == "stale"
+    )
     db.close()
 
 
@@ -262,6 +299,8 @@ def test_missing_archive_retries_once_then_becomes_a_durable_integrity_failure(
             bucket="evidence",
             access_key="test",
             secret_key="test",
+            secure=False,
+            allow_insecure_test_origin=True,
         ),
     )
 
@@ -277,7 +316,10 @@ def test_missing_archive_retries_once_then_becomes_a_durable_integrity_failure(
     assert first is not None and first.outcome == "retrying"
     assert second is not None and second.outcome == "failed"
     assert second.category == "archive_missing"
-    assert db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,)) == "failed"
+    assert (
+        db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,))
+        == "failed"
+    )
     assert db.scalar("SELECT count(*) FROM player_profile_effects") == 0
     db.close()
 
@@ -313,6 +355,8 @@ def test_malformed_success_and_non_success_are_distinct_classified_outcomes(
             bucket="evidence",
             access_key="test",
             secret_key="test",
+            secure=False,
+            allow_insecure_test_origin=True,
         ),
     )
 
@@ -359,7 +403,11 @@ def test_malformed_success_and_non_success_are_distinct_classified_outcomes(
         ("collector_observations", "endpoint_version", "unsupported_endpoint_version"),
         ("collector_observations", "schema_version", "unsupported_schema_version"),
         ("python_processing_jobs", "parser_version", "unsupported_parser_version"),
-        ("python_processing_jobs", "processing_version", "unsupported_processing_version"),
+        (
+            "python_processing_jobs",
+            "processing_version",
+            "unsupported_processing_version",
+        ),
     ],
 )
 def test_worker_rejects_unsupported_observation_and_processor_versions_before_archive_read(
@@ -392,6 +440,8 @@ def test_worker_rejects_unsupported_observation_and_processor_versions_before_ar
             bucket="evidence",
             access_key="test",
             secret_key="test",
+            secure=False,
+            allow_insecure_test_origin=True,
         ),
     )
 
@@ -400,7 +450,10 @@ def test_worker_rejects_unsupported_observation_and_processor_versions_before_ar
     assert result is not None
     assert result.outcome == "failed"
     assert result.category == category
-    assert db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,)) == "failed"
+    assert (
+        db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,))
+        == "failed"
+    )
     assert db.scalar("SELECT count(*) FROM player_profile_effects") == 0
     assert archive_server[3].get_count == before_archive_reads
     db.close()
@@ -420,6 +473,8 @@ def test_signed_api_reads_saved_data_with_freshness_and_eligibility_without_arch
             bucket="evidence",
             access_key="test",
             secret_key="test",
+            secure=False,
+            allow_insecure_test_origin=True,
         ),
     )
     assert processor.process_once(owner="worker-api") is not None

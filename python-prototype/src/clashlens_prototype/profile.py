@@ -64,7 +64,9 @@ class ParsedProfile:
 def normalize_player_tag(value: str) -> str:
     normalized = value.strip().upper()
     if not _PLAYER_TAG_RE.fullmatch(normalized):
-        raise ProfileParseError("invalid_player_tag", "profile tag is not a valid normalized player tag")
+        raise ProfileParseError(
+            "invalid_player_tag", "profile tag is not a valid normalized player tag"
+        )
     return normalized
 
 
@@ -78,30 +80,41 @@ def parse_profile(
     try:
         payload = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ProfileParseError("malformed_json", "profile body is not valid JSON") from error
+        raise ProfileParseError(
+            "malformed_json", "profile body is not valid JSON"
+        ) from error
     if not isinstance(payload, dict):
-        raise ProfileParseError("unsupported_profile_schema", "profile JSON must be an object")
+        raise ProfileParseError(
+            "unsupported_profile_schema", "profile JSON must be an object"
+        )
     try:
         profile = PlayerProfileV1.model_validate(payload)
     except ValidationError as error:
-        raise ProfileParseError("unsupported_profile_schema", "profile does not match profile-schema-v1") from error
+        raise ProfileParseError(
+            "unsupported_profile_schema", "profile does not match profile-schema-v1"
+        ) from error
 
     expected_normalized = normalize_player_tag(expected_tag)
     try:
         source_normalized = normalize_player_tag(profile.tag)
     except ProfileParseError as error:
-        raise ProfileParseError("source_identity_mismatch", "profile tag is invalid") from error
+        raise ProfileParseError(
+            "source_identity_mismatch", "profile tag is invalid"
+        ) from error
     if source_normalized != expected_normalized:
         raise ProfileParseError(
             "source_identity_mismatch",
             f"profile tag {source_normalized} does not match expected observation tag {expected_normalized}",
         )
     if observed_at.tzinfo is None or observed_at.utcoffset() is None:
-        raise ProfileParseError("invalid_observation_time", "observation time must include a UTC offset")
+        raise ProfileParseError(
+            "invalid_observation_time", "observation time must include a UTC offset"
+        )
     observed_utc = observed_at.astimezone(UTC)
     eligibility = (
         "eligible"
-        if profile.league_tier.id == LEGEND_I_TIER_ID and profile.league_tier.name == LEGEND_I_TIER_NAME
+        if profile.league_tier.id == LEGEND_I_TIER_ID
+        and profile.league_tier.name == LEGEND_I_TIER_NAME
         else "uncertain"
     )
     return ParsedProfile(

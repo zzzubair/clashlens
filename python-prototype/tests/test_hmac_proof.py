@@ -38,9 +38,10 @@ def test_golden_vectors_match_signing_contract() -> None:
         )
 
         assert build_signing_bytes(signing_input).hex() == vector["signing_bytes_hex"]
-        assert sign(bytes.fromhex(vector["key_hex"]), signing_input) == vector[
-            "signature_b64url"
-        ]
+        assert (
+            sign(bytes.fromhex(vector["key_hex"]), signing_input)
+            == vector["signature_b64url"]
+        )
 
 
 def test_verifier_accepts_golden_vectors() -> None:
@@ -67,7 +68,9 @@ def test_verifier_accepts_golden_vectors() -> None:
             method=vector["method"],
             raw_target=vector["target"].encode("ascii"),
             body=bytes.fromhex(vector["body_hex"]),
-            keys={(vector["caller"], vector["key_id"]): bytes.fromhex(vector["key_hex"])},
+            keys={
+                (vector["caller"], vector["key_id"]): bytes.fromhex(vector["key_hex"])
+            },
             now=vector["verification_time"],
         )
 
@@ -113,6 +116,8 @@ def test_verifier_rejects_unknown_proof_version_with_a_valid_signature() -> None
             method=vector["method"],
             raw_target=vector["target"].encode("ascii"),
             body=b"",
-            keys={(vector["caller"], vector["key_id"]): bytes.fromhex(vector["key_hex"])},
+            keys={
+                (vector["caller"], vector["key_id"]): bytes.fromhex(vector["key_hex"])
+            },
             now=vector["verification_time"],
         )

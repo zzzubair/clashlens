@@ -117,7 +117,9 @@ def verify_proof(
     for field, header_name in PROOF_HEADERS.items():
         matching = [value for name, value in headers if name.lower() == header_name]
         if len(matching) != 1:
-            raise InvalidProof(f"expected exactly one {header_name.decode('ascii')} header")
+            raise InvalidProof(
+                f"expected exactly one {header_name.decode('ascii')} header"
+            )
         try:
             values[field] = matching[0].decode("ascii")
         except UnicodeDecodeError as error:
@@ -147,7 +149,9 @@ def verify_proof(
     if not caller or not key_id:
         raise InvalidProof("caller and key ID must not be empty")
     if bool(provider) != bool(provider_subject):
-        raise InvalidProof("provider and provider subject must both be empty or non-empty")
+        raise InvalidProof(
+            "provider and provider subject must both be empty or non-empty"
+        )
     if provider and provider not in ALLOWED_PROVIDERS:
         raise InvalidProof("provider is not allowed")
     try:
@@ -193,7 +197,9 @@ def _decode_text(value: str) -> str:
     try:
         if not _is_canonical_base64url(value):
             raise ValueError("noncanonical base64url")
-        decoded = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+        )
         text = decoded.decode("utf-8")
     except (UnicodeDecodeError, ValueError) as error:
         raise InvalidProof("invalid base64url text field") from error
@@ -203,10 +209,16 @@ def _decode_text(value: str) -> str:
 
 
 def _is_canonical_base64url(value: str) -> bool:
-    if any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_" for character in value):
+    if any(
+        character
+        not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        for character in value
+    ):
         return False
     try:
-        decoded = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+        )
     except (binascii.Error, ValueError):
         return False
     return _encode_base64url(decoded) == value

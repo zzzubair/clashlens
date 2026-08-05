@@ -44,6 +44,9 @@ func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 		}
 
 		key := strings.TrimPrefix(request.URL.Path, "/evidence/")
+		if request.URL.Path == "/evidence" {
+			key = ""
+		}
 		switch request.Method {
 		case http.MethodHead:
 			if key == "" {

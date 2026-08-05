@@ -98,6 +98,7 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 		"--max-jobs", "1",
 		"--archive-endpoint", strings.TrimPrefix(archive.URL, "http://"),
 		"--archive-bucket", "evidence",
+		"--archive-insecure-test-only",
 	)
 	if !strings.Contains(workerOutput, `"outcome": "processed"`) && !strings.Contains(workerOutput, `"outcome":"processed"`) {
 		t.Fatalf("worker output = %q", workerOutput)

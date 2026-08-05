@@ -9,11 +9,17 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from .db import Database
-from .hmac_proof import InvalidProof, verify_proof
+from .db import PROTOTYPE_CONTRACT_VERSION, Database
+from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .profile import normalize_player_tag
 
-PLAYER_PAGE_CALLERS = frozenset({"typescript-website", "discord-bot"})
+DEFAULT_MAX_REQUEST_BODY_BYTES = 1_048_576
+PLAYER_READ_OPERATION = "player.read"
+CALLER_OPERATIONS = {
+    "typescript-website": frozenset({PLAYER_READ_OPERATION}),
+    "discord-bot": frozenset({PLAYER_READ_OPERATION}),
+}
+HEALTH_PATHS = frozenset({"/livez", "/readyz"})
 
 
 class PlayerPageResponse(BaseModel):
@@ -33,6 +39,10 @@ class PlayerPageResponse(BaseModel):
     parser_version: str
 
 
+class RequestBodyTooLarge(ValueError):
+    pass
+
+
 def create_app(
     database_url: str | None = None,
     *,
@@ -40,11 +50,16 @@ def create_app(
     database: Database | None = None,
     clock: Callable[[], int | float] = time.time,
     freshness_seconds: int = 900,
+    max_body_bytes: int = DEFAULT_MAX_REQUEST_BODY_BYTES,
 ) -> FastAPI:
     if database is None and database_url is None:
         raise ValueError("database_url or database is required")
     if not keys:
         raise ValueError("at least one private API HMAC key is required")
+    if freshness_seconds < 0:
+        raise ValueError("freshness window must not be negative")
+    if max_body_bytes <= 0:
+        raise ValueError("private API request body limit must be positive")
     caller_counts: dict[str, int] = {}
     for (caller, key_id), key in keys.items():
         if not caller or not key_id:
@@ -59,19 +74,38 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        yield
-        if owns_store:
-            store.close()
+        _app.state.shutting_down = False
+        try:
+            yield
+        finally:
+            _app.state.shutting_down = True
+            if owns_store:
+                store.close()
 
     app = FastAPI(title="Clash Lens Python prototype", lifespan=lifespan)
     app.state.database = store
+    app.state.max_body_bytes = max_body_bytes
+    app.state.shutting_down = False
+
+    @app.exception_handler(Exception)
+    async def safe_internal_error(_request: Request, _error: Exception) -> JSONResponse:
+        return JSONResponse(status_code=500, content={"error": "internal_error"})
 
     @app.middleware("http")
     async def verify_private_proof(request: Request, call_next):
-        body = await request.body()
+        if request.scope.get("path") in HEALTH_PATHS:
+            return await call_next(request)
+        try:
+            body = await _read_limited_body(request, max_body_bytes)
+        except RequestBodyTooLarge:
+            return JSONResponse(
+                status_code=413, content={"error": "request_body_too_large"}
+            )
         raw_path = request.scope.get("raw_path")
         if not isinstance(raw_path, bytes):
-            raw_path = str(request.scope.get("path", "")).encode("ascii")
+            raw_path = str(request.scope.get("path", "")).encode(
+                "ascii", errors="replace"
+            )
         raw_query = request.scope.get("query_string", b"")
         if not isinstance(raw_query, bytes):
             raw_query = bytes(raw_query)
@@ -85,20 +119,36 @@ def create_app(
                 keys=keys,
                 now=int(clock()),
             )
-        except InvalidProof as error:
-            return JSONResponse(
-                status_code=401,
-                content={"error": "invalid_proof", "detail": str(error)},
-            )
+        except InvalidProof:
+            return JSONResponse(status_code=401, content={"error": "invalid_proof"})
         request.state.verified_proof = proof
         return await call_next(request)
 
+    @app.get("/livez")
+    async def liveness() -> dict[str, bool]:
+        return {"live": True}
+
+    @app.get("/readyz")
+    async def readiness() -> JSONResponse:
+        if app.state.shutting_down:
+            return JSONResponse(status_code=503, content={"ready": False})
+        try:
+            ready = bool(
+                store.is_ready(expected_contract_version=PROTOTYPE_CONTRACT_VERSION)
+            )
+        except Exception:  # noqa: BLE001 - health output must not expose backend details
+            ready = False
+        return JSONResponse(status_code=200 if ready else 503, content={"ready": ready})
+
     @app.get("/v1/players/{player_tag}", response_model=PlayerPageResponse)
-    async def get_player(request: Request, player_tag: str) -> PlayerPageResponse | JSONResponse:
-        if request.state.verified_proof.caller not in PLAYER_PAGE_CALLERS:
+    async def get_player(
+        request: Request, player_tag: str
+    ) -> PlayerPageResponse | JSONResponse:
+        proof: VerifiedProof = request.state.verified_proof
+        if not _is_authorized(proof, PLAYER_READ_OPERATION):
             return JSONResponse(
                 status_code=403,
-                content={"error": "caller_not_authorized"},
+                content={"error": "caller_operation_not_authorized"},
             )
         try:
             normalized_tag = normalize_player_tag(player_tag)
@@ -127,3 +177,37 @@ def create_app(
         )
 
     return app
+
+
+async def _read_limited_body(request: Request, limit: int) -> bytes:
+    content_lengths = [
+        value
+        for name, value in request.scope.get("headers", [])
+        if name.lower() == b"content-length"
+    ]
+    if content_lengths:
+        try:
+            declared_lengths = [int(value) for value in content_lengths]
+        except (TypeError, ValueError) as error:
+            raise RequestBodyTooLarge from error
+        if len(set(declared_lengths)) != 1:
+            raise RequestBodyTooLarge
+        declared = declared_lengths[0]
+        if declared < 0 or declared > limit:
+            raise RequestBodyTooLarge
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > limit:
+            raise RequestBodyTooLarge
+        body.extend(chunk)
+    request._body = bytes(body)  # type: ignore[attr-defined]
+    return bytes(body)
+
+
+def _is_authorized(proof: VerifiedProof, operation: str) -> bool:
+    allowed = CALLER_OPERATIONS.get(proof.caller, frozenset())
+    if operation not in allowed:
+        return False
+    # The profile prototype has no account resolver. Do not treat provider headers
+    # as authorization until a Python-owned account mapping exists.
+    return not proof.provider and not proof.provider_subject

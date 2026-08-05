@@ -55,6 +55,17 @@ class Database:
     def close(self) -> None:
         self.pool.close()
 
+    def is_ready(self, *, expected_contract_version: int) -> bool:
+        with self.pool.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT version
+                FROM clash_lens_contract
+                WHERE singleton = true
+                """
+            ).fetchone()
+            return row is not None and int(row[0]) == expected_contract_version
+
     def apply_schema(self) -> None:
         schema = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
         with self.pool.connection() as connection:
@@ -66,7 +77,9 @@ class Database:
                     "SELECT version FROM clash_lens_contract WHERE singleton = true"
                 ).fetchone()
                 if contract is None:
-                    raise RuntimeError("existing Clash Lens contract has no singleton version row")
+                    raise RuntimeError(
+                        "existing Clash Lens contract has no singleton version row"
+                    )
                 version = int(contract[0])
                 if version != PROTOTYPE_CONTRACT_VERSION:
                     raise RuntimeError(
@@ -147,7 +160,12 @@ class Database:
                         SET observation_id = EXCLUDED.observation_id
                     RETURNING id
                     """,
-                    (observation_id, DEFAULT_PARSER_VERSION, PROCESSING_VERSION, max_attempts),
+                    (
+                        observation_id,
+                        DEFAULT_PARSER_VERSION,
+                        PROCESSING_VERSION,
+                        max_attempts,
+                    ),
                 ).fetchone()
                 assert job is not None
                 return observation_id, int(job[0])
@@ -220,22 +238,26 @@ class Database:
                 ).fetchone()
                 if row is None:
                     return None
-                data = dict(row) if isinstance(row, dict) else {
-                    "job_id": row[0],
-                    "observation_id": row[1],
-                    "parser_version": row[2],
-                    "processing_version": row[3],
-                    "attempt_count": row[4],
-                    "max_attempts": row[5],
-                    "normalized_tag": row[6],
-                    "endpoint": row[7],
-                    "endpoint_version": row[8],
-                    "schema_version": row[9],
-                    "response_observed_at": row[10],
-                    "http_status": row[11],
-                    "response_hash": row[12],
-                    "archive_reference": row[13],
-                }
+                data = (
+                    dict(row)
+                    if isinstance(row, dict)
+                    else {
+                        "job_id": row[0],
+                        "observation_id": row[1],
+                        "parser_version": row[2],
+                        "processing_version": row[3],
+                        "attempt_count": row[4],
+                        "max_attempts": row[5],
+                        "normalized_tag": row[6],
+                        "endpoint": row[7],
+                        "endpoint_version": row[8],
+                        "schema_version": row[9],
+                        "response_observed_at": row[10],
+                        "http_status": row[11],
+                        "response_hash": row[12],
+                        "archive_reference": row[13],
+                    }
+                )
                 if int(data["attempt_count"]) > 0:
                     connection.execute(
                         """
@@ -384,13 +406,17 @@ class Database:
                         profile.observed_at,
                     ),
                 )
-                self._finish_claim(connection, claim, job, state="complete", outcome="processed")
+                self._finish_claim(
+                    connection, claim, job, state="complete", outcome="processed"
+                )
 
     def complete_classified(self, claim: Claim, *, outcome: str) -> None:
         with self.pool.connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
-                self._finish_claim(connection, claim, job, state="complete", outcome=outcome)
+                self._finish_claim(
+                    connection, claim, job, state="complete", outcome=outcome
+                )
 
     def fail_claim(
         self,
@@ -414,7 +440,14 @@ class Database:
                         outcome = %s, failure_category = %s
                     WHERE id = %s AND job_id = %s AND lease_token = %s
                     """,
-                    (state, outcome, category, claim.attempt_id, claim.job_id, claim.lease_token),
+                    (
+                        state,
+                        outcome,
+                        category,
+                        claim.attempt_id,
+                        claim.job_id,
+                        claim.lease_token,
+                    ),
                 )
                 completed = connection.execute(
                     """
@@ -535,7 +568,14 @@ class Database:
             SET state = %s, completed_at = clock_timestamp(), outcome = %s
             WHERE id = %s AND job_id = %s AND lease_owner = %s AND lease_token = %s
             """,
-            ("complete" if state == "complete" else "failed", outcome, claim.attempt_id, claim.job_id, claim.lease_owner, claim.lease_token),
+            (
+                "complete" if state == "complete" else "failed",
+                outcome,
+                claim.attempt_id,
+                claim.job_id,
+                claim.lease_owner,
+                claim.lease_token,
+            ),
         )
         if attempt.rowcount != 1:
             raise LeaseLost("processing attempt fence was lost")

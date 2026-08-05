@@ -44,7 +44,9 @@ def archive_server():
     body = FIXTURE.read_bytes()
     digest = hashlib.sha256(body).hexdigest()
     key = f"sha256/{digest[:2]}/{digest}"
-    handler = type("FixtureS3Handler", (_S3Handler,), {"objects": {key: body}, "get_count": 0})
+    handler = type(
+        "FixtureS3Handler", (_S3Handler,), {"objects": {key: body}, "get_count": 0}
+    )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -56,9 +58,18 @@ def archive_server():
         server.server_close()
 
 
-def test_s3_archive_reader_fetches_bytes_and_checks_sha256_before_json_parse(archive_server) -> None:
+def test_s3_archive_reader_fetches_bytes_and_checks_sha256_before_json_parse(
+    archive_server,
+) -> None:
     endpoint, reference, digest, handler = archive_server
-    reader = S3ArchiveReader(endpoint=endpoint, bucket="evidence", access_key="test", secret_key="test")
+    reader = S3ArchiveReader(
+        endpoint=endpoint,
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        secure=False,
+        allow_insecure_test_origin=True,
+    )
 
     result = reader.read_verified(reference, digest)
 
@@ -70,7 +81,14 @@ def test_s3_archive_reader_classifies_tampered_bytes(archive_server) -> None:
     endpoint, reference, digest, handler = archive_server
     key = reference.removeprefix("s3://evidence/")
     handler.objects[key] = b"tampered"
-    reader = S3ArchiveReader(endpoint=endpoint, bucket="evidence", access_key="test", secret_key="test")
+    reader = S3ArchiveReader(
+        endpoint=endpoint,
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        secure=False,
+        allow_insecure_test_origin=True,
+    )
 
     with pytest.raises(ArchiveReadError, match="archive_checksum_mismatch"):
         reader.read_verified(reference, digest)
@@ -79,13 +97,22 @@ def test_s3_archive_reader_classifies_tampered_bytes(archive_server) -> None:
 def test_s3_archive_reader_classifies_missing_object(archive_server) -> None:
     endpoint, _reference, digest, _handler = archive_server
     missing_reference = f"s3://evidence/sha256/{digest[:2]}/missing"
-    reader = S3ArchiveReader(endpoint=endpoint, bucket="evidence", access_key="test", secret_key="test")
+    reader = S3ArchiveReader(
+        endpoint=endpoint,
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        secure=False,
+        allow_insecure_test_origin=True,
+    )
 
     with pytest.raises(ArchiveReadError, match="archive_missing"):
         reader.read_verified(missing_reference, digest)
 
 
-def test_s3_archive_reader_rejects_a_body_over_the_configured_limit(archive_server) -> None:
+def test_s3_archive_reader_rejects_a_body_over_the_configured_limit(
+    archive_server,
+) -> None:
     endpoint, reference, digest, handler = archive_server
     key = reference.removeprefix("s3://evidence/")
     handler.objects[key] = b"x" * 11
@@ -94,6 +121,8 @@ def test_s3_archive_reader_rejects_a_body_over_the_configured_limit(archive_serv
         bucket="evidence",
         access_key="test",
         secret_key="test",
+        secure=False,
+        allow_insecure_test_origin=True,
         max_body_bytes=10,
     )
 
@@ -101,3 +130,79 @@ def test_s3_archive_reader_rejects_a_body_over_the_configured_limit(archive_serv
         reader.read_verified(reference, digest)
 
     assert captured.value.retryable is False
+
+
+def test_s3_archive_reader_defaults_to_tls_and_requires_an_explicit_test_override() -> (
+    None
+):
+    reader = S3ArchiveReader(
+        endpoint="archive.example.test:9000",
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+    )
+
+    assert reader.secure is True
+
+    with pytest.raises(ValueError, match="insecure archive origin"):
+        S3ArchiveReader(
+            endpoint="127.0.0.1:9000",
+            bucket="evidence",
+            access_key="test",
+            secret_key="test",
+            secure=False,
+        )
+
+
+def test_s3_archive_reader_retries_one_transient_archive_read() -> None:
+    body = b"{}"
+    digest = hashlib.sha256(body).hexdigest()
+
+    class Response:
+        def __init__(self) -> None:
+            self.headers = {"Content-Length": str(len(body))}
+
+        def read(self, _limit: int) -> bytes:
+            return body
+
+        def close(self) -> None:
+            return
+
+        def release_conn(self) -> None:
+            return
+
+    reader = S3ArchiveReader(
+        endpoint="archive.example.test:9000",
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        max_retries=1,
+    )
+    calls = 0
+
+    def get_object(_bucket: str, _key: str) -> Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("temporary connection failure")
+        return Response()
+
+    reader.client.get_object = get_object  # type: ignore[method-assign]
+
+    result = reader.read_verified("s3://evidence/object", digest)
+
+    assert result.body == body
+    assert calls == 2
+
+
+def test_s3_archive_reader_reports_archive_readiness_without_claiming_work() -> None:
+    reader = S3ArchiveReader(
+        endpoint="archive.example.test:9000",
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        max_retries=0,
+    )
+    reader.client.bucket_exists = lambda _bucket: False  # type: ignore[method-assign]
+
+    assert reader.check_ready() is False
