@@ -62,16 +62,42 @@ case "$cmd" in
     [[ "$action" == exists ]] && [[ -f "$state/container-$name" ]] ;;
   run)
     name=''
+    user=''
+    volume=''
     while (($#)); do
-      if [[ "$1" == '--name' ]]; then name=$2; shift 2; else shift; fi
+      case "$1" in
+        --name) name=$2; shift 2 ;;
+        --user) user=$2; shift 2 ;;
+        --volume) volume=$2; shift 2 ;;
+        *) shift ;;
+      esac
     done
     [[ -n "$name" ]] || { printf 'missing name\n' >&2; exit 1; }
     touch "$state/container-$name" "$state/container-$name-owned"
+    printf '%s\n' "$user" > "$state/container-$name-user"
+    printf '%s\n' "$volume" > "$state/container-$name-volume"
     printf '%s\n' "id-$name"
     ;;
   rm)
-    while (($#)) && [[ "$1" == -* ]]; do shift; done
-    rm -f "$state/container-${1:-}"
+    name=''
+    remove_volumes=false
+    while (($#)); do
+      case "$1" in
+        --volumes) remove_volumes=true ;;
+        --*) ;;
+        *) name=$1 ;;
+      esac
+      shift
+    done
+    volume=''
+    if [[ -f "$state/container-$name-volume" ]]; then
+      volume=$(<"$state/container-$name-volume")
+    fi
+    rm -f "$state/container-$name" "$state/container-$name-owned" \
+      "$state/container-$name-user" "$state/container-$name-volume"
+    if [[ "$remove_volumes" == true && -n "$volume" ]]; then
+      rm -f "$state/volume-${volume%%:*}"
+    fi
     ;;
   start) : ;;
   build) touch "$state/image"; printf 'built\n' ;;
@@ -87,7 +113,12 @@ case "$cmd" in
     ;;
   inspect)
     name=${@: -1}
-    [[ -f "$state/container-$name-owned" ]] && printf 'true\n'
+    if [[ "$*" == *'.Config.User'* ]]; then
+      [[ -f "$state/container-$name-user" ]] || exit 1
+      printf '%s\n' "$(<"$state/container-$name-user")"
+    else
+      [[ -f "$state/container-$name-owned" ]] && printf 'true\n'
+    fi
     ;;
   ps) printf 'clashlens-python-prototype-api\tUp\nclashlens-python-prototype-worker\tUp\n' ;;
   logs) : ;;
@@ -128,6 +159,35 @@ if ! grep -Fq -- 'clashlens-python-prototype-postgres-password\,type=mount\,targ
     printf 'PostgreSQL password secret was not mounted for the pinned image runtime identity\n' >&2
     exit 1
 fi
+
+# An empty Podman Config.User uses the image default, which is root for the stale container.
+POSTGRES_STATE="$STATE_DIR/container-clashlens-python-prototype-postgres"
+POSTGRES_VOLUME_STATE="$STATE_DIR/volume-clashlens-python-prototype-postgres-data"
+[[ -f "$POSTGRES_VOLUME_STATE" ]] || {
+    printf 'test setup did not create the named PostgreSQL volume\n' >&2
+    exit 1
+}
+touch "$POSTGRES_STATE" "$POSTGRES_STATE-owned"
+: > "$POSTGRES_STATE-user"
+printf '%s\n' 'clashlens-python-prototype-postgres-data:/var/lib/postgresql/data' > "$POSTGRES_STATE-volume"
+if ! "$ROOT_DIR/deploy.sh" init >/dev/null; then
+    printf 'deployment failed while reconciling a stale PostgreSQL container\n' >&2
+    exit 1
+fi
+if [[ ! -f "$POSTGRES_VOLUME_STATE" ]]; then
+    printf 'stale PostgreSQL recreation removed the named volume\n' >&2
+    exit 1
+fi
+postgres_user=$(<"$POSTGRES_STATE-user")
+if [[ "$postgres_user" != '70:70' ]]; then
+    printf 'stale PostgreSQL container was not recreated with Config.User 70:70\n' >&2
+    exit 1
+fi
+if ! grep -q -- 'rm --force clashlens-python-prototype-postgres' "$LOG_FILE"; then
+    printf 'stale PostgreSQL container was not removed before recreation\n' >&2
+    exit 1
+fi
+
 database_url=$(<"$TEST_ROOT/secrets/database-url")
 database_password=$(<"$TEST_ROOT/secrets/postgres-password")
 expected_database_url="postgresql://clashlens_prototype:${database_password}@postgres:5432/clashlens_prototype?sslmode=disable"

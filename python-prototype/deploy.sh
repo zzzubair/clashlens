@@ -14,6 +14,7 @@ API_CONTAINER=${PREFIX}-api
 WORKER_CONTAINER=${PREFIX}-worker
 ARCHIVE_CONTAINER=${PREFIX}-archive-fixture
 IMAGE_NAME=localhost/${PREFIX}:prototype
+POSTGRES_RUNTIME_IDENTITY=70:70
 MAX_API_BODY_BYTES=16777216
 MAX_ARCHIVE_BODY_BYTES=67108864
 MAX_ARCHIVE_CONNECT_TIMEOUT_SECONDS=60
@@ -265,6 +266,12 @@ container_is_owned() {
         | grep -qx true
 }
 
+postgres_container_has_expected_identity() {
+    local configured_identity
+    configured_identity=$("$PODMAN_BIN" inspect --format '{{.Config.User}}' "$POSTGRES_CONTAINER" 2>/dev/null) || return 1
+    [[ "$configured_identity" == "$POSTGRES_RUNTIME_IDENTITY" ]]
+}
+
 ensure_network_and_volume() {
     if ! "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1; then
         "$PODMAN_BIN" network create --label "io.clashlens.prototype=true" "$NETWORK_NAME" >/dev/null
@@ -286,7 +293,7 @@ start_postgres() {
         --network "$NETWORK_NAME" \
         --network-alias postgres \
         --volume "$VOLUME_NAME:/var/lib/postgresql/data" \
-        --user 70:70 \
+        --user "$POSTGRES_RUNTIME_IDENTITY" \
         --secret "$(secret_name postgres-password),type=mount,target=/run/secrets/postgres-password,uid=70,gid=70,mode=0400" \
         --env POSTGRES_DB="$POSTGRES_DB" \
         --env POSTGRES_USER="$POSTGRES_USER" \
@@ -339,7 +346,11 @@ runtime_init() {
         start_postgres
     else
         container_is_owned "$POSTGRES_CONTAINER" || die "existing PostgreSQL container is not owned by this prototype"
-        "$PODMAN_BIN" start "$POSTGRES_CONTAINER" >/dev/null 2>&1 || true
+        if ! postgres_container_has_expected_identity; then
+            start_postgres
+        else
+            "$PODMAN_BIN" start "$POSTGRES_CONTAINER" >/dev/null 2>&1 || true
+        fi
     fi
     wait_for_postgres
     apply_schema
