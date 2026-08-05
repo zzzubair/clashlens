@@ -5,6 +5,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from clashlens_prototype.api import create_app
@@ -113,6 +114,21 @@ def test_private_api_rejects_a_body_over_the_explicit_limit_before_proof_verific
 
     assert response.status_code == 413
     assert response.json() == {"error": "request_body_too_large"}
+
+
+def test_health_operations_also_reject_a_body_over_the_explicit_limit() -> None:
+    database = FakeDatabase()
+
+    with TestClient(_app(database, max_body_bytes=8)) as client:
+        response = client.request("GET", "/readyz", content=b"012345678")
+
+    assert response.status_code == 413
+    assert response.json() == {"error": "request_body_too_large"}
+
+
+def test_api_rejects_an_unbounded_request_body_setting() -> None:
+    with pytest.raises(ValueError, match="supported maximum"):
+        _app(FakeDatabase(), max_body_bytes=16 * 1024 * 1024 + 1)
 
 
 def test_invalid_private_proof_has_a_safe_error_envelope() -> None:

@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import urllib.request
+from collections import deque
 from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -23,7 +24,9 @@ from .api import create_app
 from .archive import S3ArchiveReader
 from .db import Database
 from .hmac_proof import SigningInput, load_secret_file, sign
-from .worker import ObservationProcessor
+from .worker import ObservationProcessor, ProcessResult
+
+MAX_REPORTED_RESULTS = 100
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -203,7 +206,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 )
             )
             return 0
-        all_results = []
+        recent_results: deque[ProcessResult] = deque(maxlen=MAX_REPORTED_RESULTS)
+        processed_count = 0
         while not stop_requested.is_set():
             results = processor.process_until_idle(
                 owner=arguments.owner,
@@ -212,14 +216,16 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 stop_requested=stop_requested,
                 readiness_check=archive.check_ready,
             )
-            all_results.extend(results)
+            processed_count += len(results)
+            recent_results.extend(results)
             if not results:
                 stop_requested.wait(arguments.poll_interval_seconds)
         print(
             json.dumps(
                 {
                     "status": "stopped",
-                    "results": [asdict(result) for result in all_results],
+                    "processed_count": processed_count,
+                    "results": [asdict(result) for result in recent_results],
                 }
             )
         )

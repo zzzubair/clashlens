@@ -10,8 +10,10 @@ from typing import ClassVar
 import pytest
 
 from clashlens_prototype.archive import (
+    MAX_ARCHIVE_BODY_BYTES,
     ArchiveReadError,
     S3ArchiveReader,
+    _BoundedResponse,
 )
 
 FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
@@ -206,3 +208,62 @@ def test_s3_archive_reader_reports_archive_readiness_without_claiming_work() -> 
     reader.client.bucket_exists = lambda _bucket: False  # type: ignore[method-assign]
 
     assert reader.check_ready() is False
+
+
+def test_s3_archive_reader_sets_a_total_request_deadline() -> None:
+    reader = S3ArchiveReader(
+        endpoint="archive.example.test:9000",
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        connect_timeout_seconds=2,
+        read_timeout_seconds=8,
+    )
+
+    timeout = reader.http_client.connection_pool_kw["timeout"]
+
+    assert timeout.total == 10
+
+
+def test_archive_error_response_reads_are_bounded() -> None:
+    class Response:
+        def __init__(self) -> None:
+            self.amount: int | None = None
+
+        def read(
+            self,
+            amount: int,
+            *,
+            decode_content: bool | None,
+            cache_content: bool,
+        ) -> bytes:
+            self.amount = amount
+            return b"x" * amount
+
+    response = Response()
+    bounded = _BoundedResponse(response, max_body_bytes=10)
+
+    body = bounded.read(cache_content=True)
+
+    assert response.amount == 11
+    assert len(body) == 11
+
+
+def test_s3_archive_reader_rejects_unbounded_resource_settings() -> None:
+    with pytest.raises(ValueError, match="supported maximum"):
+        S3ArchiveReader(
+            endpoint="archive.example.test:9000",
+            bucket="evidence",
+            access_key="test",
+            secret_key="test",
+            max_body_bytes=MAX_ARCHIVE_BODY_BYTES + 1,
+        )
+
+    with pytest.raises(ValueError, match="supported maximum"):
+        S3ArchiveReader(
+            endpoint="archive.example.test:9000",
+            bucket="evidence",
+            access_key="test",
+            secret_key="test",
+            read_timeout_seconds=301,
+        )

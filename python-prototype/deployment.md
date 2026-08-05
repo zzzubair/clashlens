@@ -45,6 +45,8 @@ The deployment supports one current and one previous HMAC key for the fixed `typ
 
 The API accepts either key during rotation, but the deployment probe uses the current key.
 
+After changing either HMAC key file, run `./deploy.sh up` or `./deploy.sh verify` to recreate the mounted Podman secrets before the API starts.
+
 ## Lifecycle commands
 
 ```sh
@@ -63,6 +65,8 @@ The API accepts either key during rotation, but the deployment probe uses the cu
 `build` creates one versioned application image for the API, worker, and temporary archive fixture commands.
 
 `up` rebuilds the image, starts the API and worker, and waits for `GET http://127.0.0.1:18080/readyz` to report `{"ready":true}`.
+
+The readiness wait covers the API and PostgreSQL contract only; the worker also needs the configured archive endpoint to be reachable before it can process jobs.
 
 The API publishes only on loopback and the PostgreSQL and archive services have no host ports.
 
@@ -96,11 +100,11 @@ The synthetic fixture never uses real archive credentials and is not a productio
 
 | Area | Default | Behavior |
 |---|---:|---|
-| Private API request body | `1,048,576` bytes | Requests above the limit return `413 request_body_too_large`. |
-| Archive response body | `2,000,000` bytes | The response is rejected before JSON parsing. |
-| Archive connect timeout | `5` seconds | The MinIO client has no unbounded connect wait. |
-| Archive read timeout | `15` seconds | Slow archive reads fail with a bounded timeout. |
-| Archive reader retries | `1` retry | Client-library retries are disabled; the reader owns the bounded retry loop. |
+| Private API request body | `1,048,576` bytes | Requests above the limit return `413 request_body_too_large`; the configured limit cannot exceed `16 MiB`. |
+| Archive response body | `2,000,000` bytes | The response is rejected before JSON parsing; the configured limit cannot exceed `64 MiB`. |
+| Archive connect timeout | `5` seconds | The MinIO client has no unbounded connect wait; the configured value cannot exceed `60` seconds. |
+| Archive read timeout | `15` seconds | Slow archive reads fail with a bounded total request deadline; the configured value cannot exceed `300` seconds. |
+| Archive reader retries | `1` retry | Client-library retries are disabled; the reader owns the bounded retry loop with a maximum of `5` retries. |
 | Processing attempts | `2` by default in the seed command | The durable job state stops retrying after the configured maximum. |
 | HMAC proof lifetime | `30` seconds | The existing proof verifier rejects longer lifetimes. |
 | API memory | `512m` container limit | The API uses a read-only root filesystem and a small `/tmp` tmpfs. |

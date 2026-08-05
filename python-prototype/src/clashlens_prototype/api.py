@@ -14,6 +14,7 @@ from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .profile import normalize_player_tag
 
 DEFAULT_MAX_REQUEST_BODY_BYTES = 1_048_576
+MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 PLAYER_READ_OPERATION = "player.read"
 CALLER_OPERATIONS = {
     "typescript-website": frozenset({PLAYER_READ_OPERATION}),
@@ -60,6 +61,8 @@ def create_app(
         raise ValueError("freshness window must not be negative")
     if max_body_bytes <= 0:
         raise ValueError("private API request body limit must be positive")
+    if max_body_bytes > MAX_REQUEST_BODY_BYTES:
+        raise ValueError("private API request body limit exceeds the supported maximum")
     caller_counts: dict[str, int] = {}
     for (caller, key_id), key in keys.items():
         if not caller or not key_id:
@@ -93,14 +96,14 @@ def create_app(
 
     @app.middleware("http")
     async def verify_private_proof(request: Request, call_next):
-        if request.scope.get("path") in HEALTH_PATHS:
-            return await call_next(request)
         try:
             body = await _read_limited_body(request, max_body_bytes)
         except RequestBodyTooLarge:
             return JSONResponse(
                 status_code=413, content={"error": "request_body_too_large"}
             )
+        if request.scope.get("path") in HEALTH_PATHS:
+            return await call_next(request)
         raw_path = request.scope.get("raw_path")
         if not isinstance(raw_path, bytes):
             raw_path = str(request.scope.get("path", "")).encode(

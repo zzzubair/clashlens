@@ -14,6 +14,7 @@ PROOF_VERSION = "clashlens-hmac-v1"
 AUDIENCE = "clashlens-python-private-api"
 ALLOWED_PROVIDERS = frozenset({"discord", "google"})
 _METHOD_RE = re.compile(r"^[A-Z]+$")
+_MAX_UNIX_TIME_DIGITS = 19
 
 PROOF_HEADERS = {
     "proof_version": b"x-clashlens-proof-version",
@@ -227,6 +228,11 @@ def _is_canonical_base64url(value: str) -> bool:
 def _parse_canonical_unix_time(value: str) -> int:
     if not value or (value != "0" and (value.startswith("0") or not value.isdecimal())):
         raise InvalidProof("Unix time must be canonical non-negative decimal")
+    if len(value) > _MAX_UNIX_TIME_DIGITS:
+        raise InvalidProof("Unix time exceeds the supported range")
     if value == "0":
         return 0
-    return int(value)
+    try:
+        return int(value)
+    except ValueError as error:
+        raise InvalidProof("Unix time is not a valid integer") from error

@@ -14,6 +14,12 @@ API_CONTAINER=${PREFIX}-api
 WORKER_CONTAINER=${PREFIX}-worker
 ARCHIVE_CONTAINER=${PREFIX}-archive-fixture
 IMAGE_NAME=localhost/${PREFIX}:prototype
+MAX_API_BODY_BYTES=16777216
+MAX_ARCHIVE_BODY_BYTES=67108864
+MAX_ARCHIVE_CONNECT_TIMEOUT_SECONDS=60
+MAX_ARCHIVE_READ_TIMEOUT_SECONDS=300
+MAX_ARCHIVE_RETRIES=5
+MAX_ARCHIVE_RETRY_BACKOFF_SECONDS=30
 
 CONFIG_LOADED=false
 SECRET_DIR=""
@@ -60,6 +66,11 @@ EOF
 }
 
 ensure_config_file() {
+    local config_dir
+    config_dir=$(dirname -- "$ENV_FILE")
+    if [[ ! -d "$config_dir" ]]; then
+        install -d -m 700 "$config_dir"
+    fi
     if [[ ! -f "$ENV_FILE" ]]; then
         install -m 600 "$ROOT_DIR/prototype.env.example" "$ENV_FILE"
         say "created file-backed configuration at $ENV_FILE" >&2
@@ -102,6 +113,16 @@ load_config() {
     CONFIG_LOADED=true
 }
 
+decimal_positive_at_most() {
+    awk -v value="$1" -v maximum="$2" \
+        'BEGIN { exit !(value > 0 && value <= maximum) }'
+}
+
+decimal_nonnegative_at_most() {
+    awk -v value="$1" -v maximum="$2" \
+        'BEGIN { exit !(value >= 0 && value <= maximum) }'
+}
+
 validate_config() {
     [[ "$SECRET_DIR" = /* ]] || die "CLASHLENS_SECRET_DIR must be an absolute path"
     [[ "$ARCHIVE_ENDPOINT" =~ ^[^/:]+:[1-9][0-9]{1,5}$ ]] || die "archive endpoint must be a host:port value"
@@ -113,13 +134,19 @@ validate_config() {
     [[ "$POSTGRES_DB" =~ ^[a-z_][a-z0-9_]*$ ]] || die "invalid PostgreSQL database name"
     [[ "$POSTGRES_USER" =~ ^[a-z_][a-z0-9_]*$ ]] || die "invalid PostgreSQL user name"
     [[ "$API_PORT" =~ ^[1-9][0-9]{2,4}$ && "$API_PORT" -le 65535 ]] || die "invalid API port"
-    [[ "$API_MAX_BODY_BYTES" =~ ^[1-9][0-9]*$ ]] || die "invalid API body limit"
+    [[ "$API_MAX_BODY_BYTES" =~ ^[1-9][0-9]{0,7}$ && "$API_MAX_BODY_BYTES" -le "$MAX_API_BODY_BYTES" ]] || die "invalid API body limit"
     [[ "$ARCHIVE_BUCKET" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || die "invalid archive bucket"
-    [[ "$ARCHIVE_MAX_BODY_BYTES" =~ ^[1-9][0-9]*$ ]] || die "invalid archive body limit"
-    [[ "$ARCHIVE_MAX_RETRIES" =~ ^[0-9]+$ ]] || die "invalid archive retry limit"
-    [[ "$ARCHIVE_CONNECT_TIMEOUT_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ && "$ARCHIVE_CONNECT_TIMEOUT_SECONDS" != 0 ]] || die "invalid archive connect timeout"
-    [[ "$ARCHIVE_READ_TIMEOUT_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ && "$ARCHIVE_READ_TIMEOUT_SECONDS" != 0 ]] || die "invalid archive read timeout"
-    [[ "$ARCHIVE_RETRY_BACKOFF_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "invalid archive retry backoff"
+    [[ "$ARCHIVE_MAX_BODY_BYTES" =~ ^[1-9][0-9]{0,7}$ && "$ARCHIVE_MAX_BODY_BYTES" -le "$MAX_ARCHIVE_BODY_BYTES" ]] || die "invalid archive body limit"
+    [[ "$ARCHIVE_MAX_RETRIES" =~ ^[0-5]$ ]] || die "invalid archive retry limit"
+    [[ "$ARCHIVE_CONNECT_TIMEOUT_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] && \
+        decimal_positive_at_most "$ARCHIVE_CONNECT_TIMEOUT_SECONDS" "$MAX_ARCHIVE_CONNECT_TIMEOUT_SECONDS" || \
+        die "invalid archive connect timeout"
+    [[ "$ARCHIVE_READ_TIMEOUT_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] && \
+        decimal_positive_at_most "$ARCHIVE_READ_TIMEOUT_SECONDS" "$MAX_ARCHIVE_READ_TIMEOUT_SECONDS" || \
+        die "invalid archive read timeout"
+    [[ "$ARCHIVE_RETRY_BACKOFF_SECONDS" =~ ^[0-9]+([.][0-9]+)?$ ]] && \
+        decimal_nonnegative_at_most "$ARCHIVE_RETRY_BACKOFF_SECONDS" "$MAX_ARCHIVE_RETRY_BACKOFF_SECONDS" || \
+        die "invalid archive retry backoff"
     if [[ -n "${CLASHLENS_DATABASE_URL:-}" || -n "${CLASHLENS_ARCHIVE_ACCESS_KEY:-}" || -n "${CLASHLENS_ARCHIVE_SECRET_KEY:-}" ]]; then
         die "credentials must be stored in files, not configuration values"
     fi
@@ -162,7 +189,8 @@ ensure_host_secrets() {
     local db_password
     db_password=$(<"$SECRET_DIR/postgres-password")
     [[ "$db_password" =~ ^[A-Za-z0-9]+$ ]] || die "postgres password file must contain generated alphanumeric text"
-    (umask 077; printf 'postgresql://%s:%s@postgres:5432/%s?sslmode=disable\n' "$POSTGRES_USER" "$db_password" "$POSTGRES_DB" > "$SECRET_DIR/database-url")
+    local database_url="postgresql://${POSTGRES_USER}:${db_password}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+    (umask 077; printf '%s\n' "$database_url" > "$SECRET_DIR/database-url")
     chmod 600 "$SECRET_DIR/database-url"
 }
 
@@ -184,9 +212,38 @@ ensure_podman_secret() {
     local name
     name=$(secret_name "$file_name")
     if "$PODMAN_BIN" secret inspect "$name" >/dev/null 2>&1; then
+        secret_is_owned "$name" || die "existing Podman secret is not owned by this prototype"
         return
     fi
-    "$PODMAN_BIN" secret create "$name" "$path" >/dev/null
+    "$PODMAN_BIN" secret create --label io.clashlens.prototype=true "$name" "$path" >/dev/null
+}
+
+refresh_hmac_secrets() {
+    local file_name name
+    remove_container "$API_CONTAINER"
+    for file_name in typescript-current typescript-previous; do
+        name=$(secret_name "$file_name")
+        if "$PODMAN_BIN" secret inspect "$name" >/dev/null 2>&1; then
+            secret_is_owned "$name" || die "existing Podman secret is not owned by this prototype"
+            "$PODMAN_BIN" secret rm "$name" >/dev/null
+        fi
+        "$PODMAN_BIN" secret create --label io.clashlens.prototype=true "$name" "$SECRET_DIR/$file_name" >/dev/null
+    done
+}
+
+secret_is_owned() {
+    local name=$1
+    "$PODMAN_BIN" secret inspect \
+        --format '{{ index .Spec.Labels "io.clashlens.prototype" }}' "$name" 2>/dev/null \
+        | grep -qx true
+}
+
+resource_is_owned() {
+    local kind=$1
+    local name=$2
+    "$PODMAN_BIN" "$kind" inspect \
+        --format '{{ index .Labels "io.clashlens.prototype" }}' "$name" 2>/dev/null \
+        | grep -qx true
 }
 
 container_exists() {
@@ -196,16 +253,28 @@ container_exists() {
 remove_container() {
     local name=$1
     if container_exists "$name"; then
+        container_is_owned "$name" || die "existing Podman container is not owned by this prototype"
         "$PODMAN_BIN" rm --force "$name" >/dev/null
     fi
+}
+
+container_is_owned() {
+    local name=$1
+    "$PODMAN_BIN" inspect \
+        --format '{{ index .Config.Labels "io.clashlens.prototype" }}' "$name" 2>/dev/null \
+        | grep -qx true
 }
 
 ensure_network_and_volume() {
     if ! "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1; then
         "$PODMAN_BIN" network create --label "io.clashlens.prototype=true" "$NETWORK_NAME" >/dev/null
+    elif ! resource_is_owned network "$NETWORK_NAME"; then
+        die "existing Podman network is not owned by this prototype"
     fi
     if ! "$PODMAN_BIN" volume exists "$VOLUME_NAME" >/dev/null 2>&1; then
         "$PODMAN_BIN" volume create --label "io.clashlens.prototype=true" "$VOLUME_NAME" >/dev/null
+    elif ! resource_is_owned volume "$VOLUME_NAME"; then
+        die "existing Podman volume is not owned by this prototype"
     fi
 }
 
@@ -213,6 +282,7 @@ start_postgres() {
     remove_container "$POSTGRES_CONTAINER"
     "$PODMAN_BIN" run --detach \
         --name "$POSTGRES_CONTAINER" \
+        --label io.clashlens.prototype=true \
         --network "$NETWORK_NAME" \
         --network-alias postgres \
         --volume "$VOLUME_NAME:/var/lib/postgresql/data" \
@@ -267,6 +337,7 @@ runtime_init() {
     if ! container_exists "$POSTGRES_CONTAINER"; then
         start_postgres
     else
+        container_is_owned "$POSTGRES_CONTAINER" || die "existing PostgreSQL container is not owned by this prototype"
         "$PODMAN_BIN" start "$POSTGRES_CONTAINER" >/dev/null 2>&1 || true
     fi
     wait_for_postgres
@@ -277,6 +348,7 @@ start_api() {
     remove_container "$API_CONTAINER"
     "$PODMAN_BIN" run --detach \
         --name "$API_CONTAINER" \
+        --label io.clashlens.prototype=true \
         --network "$NETWORK_NAME" \
         --publish "127.0.0.1:${API_PORT}:8000" \
         --secret "$(secret_name database-url),type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400" \
@@ -309,6 +381,7 @@ start_worker() {
     fi
     "$PODMAN_BIN" run --detach \
         --name "$WORKER_CONTAINER" \
+        --label io.clashlens.prototype=true \
         --network "$NETWORK_NAME" \
         --secret "$(secret_name database-url),type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400" \
         --secret "$(secret_name archive-access-key),type=mount,target=/run/secrets/archive-access-key,uid=10001,gid=10001,mode=0400" \
@@ -353,6 +426,7 @@ cmd_init() {
 cmd_up() {
     runtime_init
     build_image
+    refresh_hmac_secrets
     start_api
     start_worker false
     wait_for_api
@@ -421,12 +495,14 @@ cmd_verify() {
     validate_config
     runtime_init
     build_image
+    refresh_hmac_secrets
     start_api
     wait_for_api
     trap cleanup_verify EXIT
     remove_container "$ARCHIVE_CONTAINER"
     "$PODMAN_BIN" run --detach \
         --name "$ARCHIVE_CONTAINER" \
+        --label io.clashlens.prototype=true \
         --network "$NETWORK_NAME" \
         --network-alias archive-fixture \
         --read-only \

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import time
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlsplit
 
 import certifi
@@ -17,6 +19,46 @@ DEFAULT_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_READ_TIMEOUT_SECONDS = 15.0
 DEFAULT_MAX_RETRIES = 1
 DEFAULT_RETRY_BACKOFF_SECONDS = 0.1
+MAX_ARCHIVE_BODY_BYTES = 64 * 1024 * 1024
+MAX_CONNECT_TIMEOUT_SECONDS = 60.0
+MAX_READ_TIMEOUT_SECONDS = 300.0
+MAX_ARCHIVE_RETRIES = 5
+MAX_RETRY_BACKOFF_SECONDS = 30.0
+
+
+class _BoundedResponse:
+    def __init__(self, response: Any, max_body_bytes: int) -> None:
+        self._response = response
+        self._max_read_bytes = max_body_bytes + 1
+
+    def read(
+        self,
+        amt: int | None = None,
+        decode_content: bool | None = None,
+        cache_content: bool = False,
+    ) -> bytes:
+        if amt is None or amt < 0:
+            bounded_amount = self._max_read_bytes
+        else:
+            bounded_amount = min(amt, self._max_read_bytes)
+        return self._response.read(
+            bounded_amount,
+            decode_content=decode_content,
+            cache_content=cache_content,
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._response, name)
+
+
+class _BoundedPoolManager(urllib3.PoolManager):
+    def __init__(self, *, max_body_bytes: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._max_body_bytes = max_body_bytes
+
+    def urlopen(self, *args: Any, **kwargs: Any) -> _BoundedResponse:
+        response = super().urlopen(*args, **kwargs)
+        return _BoundedResponse(response, self._max_body_bytes)
 
 
 class ArchiveReadError(RuntimeError):
@@ -57,12 +99,27 @@ class S3ArchiveReader:
             raise ValueError("archive bucket is required")
         if max_body_bytes <= 0:
             raise ValueError("archive body limit must be positive")
-        if connect_timeout_seconds <= 0 or read_timeout_seconds <= 0:
+        if max_body_bytes > MAX_ARCHIVE_BODY_BYTES:
+            raise ValueError("archive body limit exceeds the supported maximum")
+        if (
+            not math.isfinite(connect_timeout_seconds)
+            or not math.isfinite(read_timeout_seconds)
+            or connect_timeout_seconds <= 0
+            or read_timeout_seconds <= 0
+        ):
             raise ValueError("archive connect and read timeouts must be positive")
+        if connect_timeout_seconds > MAX_CONNECT_TIMEOUT_SECONDS:
+            raise ValueError("archive connect timeout exceeds the supported maximum")
+        if read_timeout_seconds > MAX_READ_TIMEOUT_SECONDS:
+            raise ValueError("archive read timeout exceeds the supported maximum")
         if max_retries < 0:
             raise ValueError("archive retry count must not be negative")
-        if retry_backoff_seconds < 0:
-            raise ValueError("archive retry backoff must not be negative")
+        if max_retries > MAX_ARCHIVE_RETRIES:
+            raise ValueError("archive retry count exceeds the supported maximum")
+        if not math.isfinite(retry_backoff_seconds) or retry_backoff_seconds < 0:
+            raise ValueError("archive retry backoff must be finite and non-negative")
+        if retry_backoff_seconds > MAX_RETRY_BACKOFF_SECONDS:
+            raise ValueError("archive retry backoff exceeds the supported maximum")
         if not secure and not allow_insecure_test_origin:
             raise ValueError(
                 "insecure archive origin requires an explicit test-only override"
@@ -74,10 +131,12 @@ class S3ArchiveReader:
         self.read_timeout_seconds = read_timeout_seconds
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
-        self.http_client = urllib3.PoolManager(
+        self.http_client = _BoundedPoolManager(
+            max_body_bytes=max_body_bytes,
             maxsize=4,
             block=True,
             timeout=urllib3.Timeout(
+                total=connect_timeout_seconds + read_timeout_seconds,
                 connect=connect_timeout_seconds,
                 read=read_timeout_seconds,
             ),

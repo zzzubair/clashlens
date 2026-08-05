@@ -8,6 +8,7 @@ import pytest
 from clashlens_prototype.hmac_proof import (
     InvalidProof,
     SigningInput,
+    _parse_canonical_unix_time,
     build_signing_bytes,
     sign,
     verify_proof,
@@ -121,3 +122,8 @@ def test_verifier_rejects_unknown_proof_version_with_a_valid_signature() -> None
             },
             now=vector["verification_time"],
         )
+
+
+def test_timestamp_parser_rejects_unbounded_decimal_input_as_invalid_proof() -> None:
+    with pytest.raises(InvalidProof):
+        _parse_canonical_unix_time("1" * 5000)
