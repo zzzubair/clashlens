@@ -1,0 +1,32 @@
+[project]
+name = "clashlens-python-prototype"
+version = "0.0.0"
+description = "Throwaway Issue 29 Python-layer prototype"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "certifi==2026.7.22",
+  "discord.py==2.7.1",
+  "fastapi==0.141.1",
+  "minio==7.2.20",
+  "psycopg[binary,pool]==3.3.4",
+  "pydantic==2.13.4",
+  "urllib3==2.7.0",
+  "uvicorn==0.52.1",
+]
+
+[dependency-groups]
+dev = [
+  "httpx2==2.9.1",
+  "pytest==9.1.1",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff.lint]
+ignore = ["SIM117"]
+
+[tool.uv]
+package = false
