@@ -1,0 +1,20 @@
+FROM docker.io/library/node:24.19.0-bookworm-slim AS build
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY . .
+RUN npm run build:verify
+
+FROM docker.io/library/node:24.19.0-bookworm-slim AS runtime
+
+ENV NODE_ENV=production \
+    CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-python-hmac
+WORKDIR /app
+COPY --from=build /app/package.json /app/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+COPY --from=build /app/build ./build
+
+USER node
+EXPOSE 3000
+CMD ["node", "./node_modules/@react-router/serve/bin.cjs", "./build/server/index.js"]
