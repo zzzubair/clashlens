@@ -170,10 +170,24 @@ ensure_host_file() {
         if [[ "$kind" == hmac ]]; then
             (umask 077; openssl rand 32 | base64 -w0 | tr '+/' '-_' | tr -d '='; printf '\n') > "$temporary"
         else
-            (umask 077; openssl rand -hex 24; printf '\n') > "$temporary"
+            (umask 077; openssl rand -hex 24 | tr -d '\r\n'; printf '\n') > "$temporary"
         fi
         chmod 600 "$temporary"
         mv -f "$temporary" "$path"
+    elif [[ "$kind" == password ]]; then
+        local value newline_count temporary owner group
+        value=$(<"$path")
+        [[ "$value" =~ ^[A-Za-z0-9]+$ ]] || die "password file must contain generated alphanumeric text"
+        newline_count=$(LC_ALL=C tr -cd '\n' < "$path" | wc -c)
+        if [[ "$newline_count" != 1 ]]; then
+            temporary="${path}.tmp.$$"
+            owner=$(stat -c '%u' "$path")
+            group=$(stat -c '%g' "$path")
+            (umask 077; printf '%s\n' "$value") > "$temporary"
+            chmod 600 "$temporary"
+            chown "$owner:$group" "$temporary"
+            mv -f "$temporary" "$path"
+        fi
     fi
     chmod 600 "$path"
 }
@@ -217,6 +231,17 @@ ensure_podman_secret() {
         return
     fi
     "$PODMAN_BIN" secret create --label io.clashlens.prototype=true "$name" "$path" >/dev/null
+}
+
+refresh_podman_secret() {
+    local file_name=$1
+    local path="$SECRET_DIR/$file_name"
+    local name
+    name=$(secret_name "$file_name")
+    if "$PODMAN_BIN" secret inspect "$name" >/dev/null 2>&1; then
+        secret_is_owned "$name" || die "existing Podman secret is not owned by this prototype"
+    fi
+    "$PODMAN_BIN" secret create --replace --label io.clashlens.prototype=true "$name" "$path" >/dev/null
 }
 
 refresh_hmac_secrets() {
@@ -335,10 +360,10 @@ runtime_init() {
     validate_config
     require_podman
     ensure_host_secrets
-    ensure_podman_secret postgres-password
-    ensure_podman_secret database-url
-    ensure_podman_secret archive-access-key
-    ensure_podman_secret archive-secret-key
+    refresh_podman_secret postgres-password
+    refresh_podman_secret database-url
+    refresh_podman_secret archive-access-key
+    refresh_podman_secret archive-secret-key
     ensure_podman_secret typescript-current
     ensure_podman_secret typescript-previous
     ensure_network_and_volume

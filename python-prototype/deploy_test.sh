@@ -49,10 +49,12 @@ case "$cmd" in
           [[ -f "$state/secret-$name" ]]
         fi
         ;;
-      rm) rm -f "$state/secret-$name" "$state/secret-$name-owned" ;;
+      rm) rm -f "$state/secret-$name" "$state/secret-$name-owned" "$state/secret-$name-content" ;;
       create)
         name=${@: -2:1}
+        source=${@: -1}
         touch "$state/secret-$name" "$state/secret-$name-owned"
+        cp -- "$source" "$state/secret-$name-content"
         printf '%s\n' "$name"
         ;;
       *) exit 1 ;;
@@ -150,6 +152,66 @@ fi
 rm -f "$STATE_DIR/network-clashlens-python-prototype-network"
 
 "$ROOT_DIR/deploy.sh" init >/dev/null
+
+for name in postgres-password archive-access-key archive-secret-key; do
+    path="$TEST_ROOT/secrets/$name"
+    newline_count=$(tr -cd '\n' < "$path" | wc -c)
+    value=$(<"$path")
+    [[ "$newline_count" == 1 && "$value" =~ ^[A-Za-z0-9]+$ ]] || {
+        printf '%s did not contain one alphanumeric line with one final LF\n' "$name" >&2
+        exit 1
+    }
+    final_byte=$(tail -c 1 "$path" | od -An -t x1 | tr -d ' \n')
+    [[ "$final_byte" == 0a ]] || {
+        printf '%s did not end with LF\n' "$name" >&2
+        exit 1
+    }
+done
+
+declare -A legacy_values=()
+declare -A legacy_metadata=()
+declare -A legacy_inodes=()
+for name in postgres-password archive-access-key archive-secret-key; do
+    path="$TEST_ROOT/secrets/$name"
+    legacy_values["$name"]=$(<"$path")
+    printf '%s\n\n' "${legacy_values[$name]}" > "$path"
+    chmod 600 "$path"
+    legacy_metadata["$name"]=$(stat -c '%a:%u:%g' "$path")
+    legacy_inodes["$name"]=$(stat -c '%i' "$path")
+    printf '%s\n\n' "${legacy_values[$name]}" > "$STATE_DIR/secret-clashlens-python-prototype-$name-content"
+done
+
+if "$ROOT_DIR/deploy.sh" init >/dev/null; then
+    :
+else
+    printf 'deployment failed while normalizing legacy secret files\n' >&2
+    exit 1
+fi
+for name in postgres-password archive-access-key archive-secret-key; do
+    path="$TEST_ROOT/secrets/$name"
+    newline_count=$(tr -cd '\n' < "$path" | wc -c)
+    value=$(<"$path")
+    [[ "$newline_count" == 1 && "$value" == "${legacy_values[$name]}" ]] || {
+        printf '%s did not normalize to its original semantic value with one LF\n' "$name" >&2
+        exit 1
+    }
+    [[ "$(stat -c '%a:%u:%g' "$path")" == "${legacy_metadata[$name]}" ]] || {
+        printf '%s mode or owner changed during normalization\n' "$name" >&2
+        exit 1
+    }
+    [[ "$(stat -c '%i' "$path")" != "${legacy_inodes[$name]}" ]] || {
+        printf '%s was not replaced atomically\n' "$name" >&2
+        exit 1
+    }
+    secret_content="$STATE_DIR/secret-clashlens-python-prototype-$name-content"
+    secret_newline_count=$(tr -cd '\n' < "$secret_content" | wc -c)
+    secret_value=$(<"$secret_content")
+    [[ "$secret_newline_count" == 1 && "$secret_value" == "${legacy_values[$name]}" ]] || {
+        printf 'owned Podman secret %s retained stale line endings\n' "$name" >&2
+        exit 1
+    }
+done
+
 postgres_run=$(grep 'docker.io/library/postgres:17-alpine' "$LOG_FILE")
 if [[ "$postgres_run" != *'--user 70:70'* ]]; then
     printf 'PostgreSQL did not start with the pinned image runtime identity\n' >&2
