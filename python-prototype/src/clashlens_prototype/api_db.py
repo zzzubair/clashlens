@@ -798,6 +798,81 @@ class ApiDatabase:
 
     def get_frozen_leaderboard(self, *, limit: int) -> dict[str, Any] | None:
         with self.pool.connection() as connection:
+            # The domain snapshot is the immutable publication source. A
+            # building candidate is never current; the newest published version
+            # remains visible until its complete entry set commits.
+            snapshot = connection.execute(
+                """
+                SELECT id, boundary_at, version, ordering_rule_version,
+                       freshness_rule_version, measured_coverage,
+                       eligible_population_count, included_entry_count,
+                       stale_entry_count, fresh_entry_count,
+                       excluded_missing_count, excluded_invalid_count,
+                       excluded_malformed_count, excluded_conflicting_count
+                FROM leaderboard_snapshots
+                WHERE snapshot_kind = 'frozen' AND state = 'published'
+                ORDER BY boundary_at DESC, version DESC, id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            if snapshot is not None:
+                rows = connection.execute(
+                    """
+                    SELECT entry.position, player.normalized_tag,
+                           profile.name, entry.trophies,
+                           entry.profile_observed_at,
+                           entry.profile_freshness,
+                           entry.profile_confidence,
+                           entry.official_rank
+                    FROM leaderboard_snapshot_entries AS entry
+                    JOIN players AS player ON player.id = entry.player_id
+                    LEFT JOIN LATERAL (
+                        SELECT version.name
+                        FROM player_profile_versions AS version
+                        WHERE version.observation_id = entry.profile_observation_id
+                        ORDER BY version.id DESC
+                        LIMIT 1
+                    ) AS profile ON true
+                    WHERE entry.snapshot_id = %s
+                    ORDER BY entry.position
+                    LIMIT %s
+                    """,
+                    (snapshot[0], limit),
+                ).fetchall()
+                return {
+                    "kind": "frozen",
+                    "snapshot_id": str(snapshot[0]),
+                    "boundary_at": snapshot[1].astimezone(UTC).isoformat(),
+                    "version": int(snapshot[2]),
+                    "ordering_rule_version": _text(snapshot[3]),
+                    "coverage": {
+                        "measured": float(snapshot[5]),
+                        "eligible_population": int(snapshot[6]),
+                        "included_entries": int(snapshot[7]),
+                        "stale_entries": int(snapshot[8]),
+                        "fresh_entries": int(snapshot[9]),
+                        "excluded_missing": int(snapshot[10]),
+                        "excluded_invalid": int(snapshot[11]),
+                        "excluded_malformed": int(snapshot[12]),
+                        "excluded_conflicting": int(snapshot[13]),
+                    },
+                    "entries": [
+                        {
+                            "position": int(row[0]),
+                            "tag": _text(row[1]),
+                            "name": None if row[2] is None else _text(row[2]),
+                            "trophies": int(row[3]),
+                            "observed_at": row[4].astimezone(UTC).isoformat(),
+                            "freshness": _text(row[5]),
+                            "confidence": _text(row[6]),
+                            "official_rank": None if row[7] is None else int(row[7]),
+                        }
+                        for row in rows
+                    ],
+                }
+
+            # Keep the populated v1 API relation readable during migration. It
+            # is used only when no immutable domain snapshot exists yet.
             snapshot = connection.execute(
                 """
                 SELECT id, public_id, boundary_at, version,

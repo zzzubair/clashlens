@@ -1542,38 +1542,78 @@ class Database:
                 ).fetchone()
                 if ranked_day is None:
                     raise ValueError("ranked-day version for snapshot does not exist")
+                boundary_at = ranked_day[1]
+                boundary_text = claim.input_json.get("boundary_at")
+                if boundary_text is not None:
+                    boundary_at = datetime.fromisoformat(
+                        str(boundary_text).replace("Z", "+00:00")
+                    ).astimezone(UTC)
+                if boundary_at != ranked_day[1]:
+                    raise ValueError("snapshot boundary does not match ranked-day boundary")
+
+                # Select the newest accepted profile version first, then test its
+                # historical eligibility. A newer ineligible version therefore
+                # blocks an older eligible version, while current player effects
+                # and every post-boundary version remain outside this snapshot.
                 profile_rows = connection.execute(
                     """
-                    SELECT DISTINCT ON (p.id)
-                           p.id, p.normalized_tag, v.trophies,
-                           v.observation_id, v.observed_at, v.eligibility_state
-                    FROM players AS p
-                    JOIN player_profile_versions AS v ON v.player_id = p.id
-                    WHERE p.active = true
-                      AND v.source_contract_state = 'accepted'
-                    ORDER BY p.id, v.observed_at DESC, v.id DESC
-                    """
+                    WITH accepted_profiles AS (
+                        SELECT DISTINCT ON (v.player_id)
+                               p.id, p.normalized_tag, v.trophies,
+                               v.observation_id, v.observed_at,
+                               v.eligibility_state
+                        FROM player_profile_versions AS v
+                        JOIN players AS p ON p.id = v.player_id
+                        WHERE v.observed_at <= %s
+                          AND v.source_contract_state = 'accepted'
+                        ORDER BY v.player_id, v.observed_at DESC, v.id DESC
+                    )
+                    SELECT id, normalized_tag, trophies, observation_id,
+                           observed_at, eligibility_state
+                    FROM accepted_profiles
+                    WHERE eligibility_state = 'eligible'
+                    ORDER BY id
+                    """,
+                    (boundary_at,),
                 ).fetchall()
+
                 official_rows = connection.execute(
                     """
+                    WITH complete_versions AS (
+                        SELECT v.id, v.observed_at
+                        FROM official_top200_versions AS v
+                        JOIN official_top200_attempts AS a ON a.id = v.attempt_id
+                        JOIN official_top200_entries AS e ON e.version_id = v.id
+                        WHERE a.outcome = 'official_observed'
+                          AND v.observed_at <= %s
+                        GROUP BY v.id, v.observed_at
+                        HAVING count(*) = 200
+                           AND count(DISTINCT e.rank) = 200
+                           AND min(e.rank) = 1
+                           AND max(e.rank) = 200
+                    ), latest_complete AS (
+                        SELECT id
+                        FROM complete_versions
+                        ORDER BY observed_at DESC, id DESC
+                        LIMIT 1
+                    )
                     SELECT e.player_id, e.rank, v.id, v.observed_at
                     FROM official_top200_entries AS e
                     JOIN official_top200_versions AS v ON v.id = e.version_id
-                    WHERE v.id = (
-                        SELECT id FROM official_top200_versions
-                        ORDER BY published_at DESC, id DESC LIMIT 1
-                    )
-                    """
+                    JOIN latest_complete AS latest ON latest.id = v.id
+                    """,
+                    (boundary_at,),
                 ).fetchall()
                 official_by_player = {
                     int(row[0]): (int(row[1]), int(row[2]), row[3])
                     for row in official_rows
                 }
+
                 entries: list[dict[str, Any]] = []
                 for row in profile_rows:
-                    age_seconds = max(
-                        0, int((ranked_day[1] - row[4]).total_seconds())
-                    )
+                    age_seconds = int((boundary_at - row[4]).total_seconds())
+                    if age_seconds < 0:
+                        raise ValueError("snapshot selected future profile evidence")
                     freshness = (
                         "fresh"
                         if age_seconds <= PROFILE_FRESHNESS_SECONDS
@@ -1588,11 +1628,7 @@ class Database:
                             "observed_at": row[4],
                             "age_seconds": age_seconds,
                             "freshness": freshness,
-                            "confidence": (
-                                "confirmed"
-                                if _text_value(row[5]) == "eligible"
-                                else "uncertain"
-                            ),
+                            "confidence": "confirmed",
                             "tie_hash": deterministic_tag_hash(_text_value(row[1])),
                             "official": official_by_player.get(int(row[0])),
                         }
@@ -1604,21 +1640,187 @@ class Database:
                         str(item["tag"]),
                     )
                 )
-                stale_count = sum(
-                    1 for entry in entries if entry["freshness"] == "stale"
-                )
+
+                quality_row = connection.execute(
+                    """
+                    WITH known_players AS (
+                        SELECT id
+                        FROM players
+                        WHERE active = true
+                        UNION
+                        SELECT DISTINCT v.player_id
+                        FROM player_profile_versions AS v
+                        WHERE v.observed_at <= %s
+                        UNION
+                        SELECT DISTINCT o.player_id
+                        FROM collector_observations AS o
+                        WHERE o.endpoint = 'profile'
+                          AND o.player_id IS NOT NULL
+                          AND o.response_completed_at <= %s
+                    ), latest_accepted AS (
+                        SELECT DISTINCT ON (v.player_id)
+                               v.player_id, v.trophies, v.observed_at,
+                               v.eligibility_state
+                        FROM player_profile_versions AS v
+                        WHERE v.observed_at <= %s
+                          AND v.source_contract_state = 'accepted'
+                        ORDER BY v.player_id, v.observed_at DESC, v.id DESC
+                    ), latest_any AS (
+                        SELECT DISTINCT ON (v.player_id)
+                               v.player_id, v.eligibility_state,
+                               v.source_contract_state
+                        FROM player_profile_versions AS v
+                        WHERE v.observed_at <= %s
+                        ORDER BY v.player_id, v.observed_at DESC, v.id DESC
+                    ), latest_profile_job AS (
+                        SELECT DISTINCT ON (o.player_id)
+                               o.player_id, j.failure_category, j.outcome
+                        FROM collector_observations AS o
+                        JOIN python_processing_jobs AS j
+                          ON j.observation_id = o.id
+                        WHERE o.endpoint = 'profile'
+                          AND o.player_id IS NOT NULL
+                          AND o.response_completed_at <= %s
+                        ORDER BY o.player_id, o.response_completed_at DESC, o.id DESC
+                    ), classified AS (
+                        SELECT k.id,
+                               accepted.trophies,
+                               accepted.observed_at,
+                               accepted.eligibility_state AS accepted_state,
+                               any_profile.source_contract_state AS any_source_state,
+                               job.failure_category
+                        FROM known_players AS k
+                        LEFT JOIN latest_accepted AS accepted
+                          ON accepted.player_id = k.id
+                        LEFT JOIN latest_any AS any_profile
+                          ON any_profile.player_id = k.id
+                        LEFT JOIN latest_profile_job AS job
+                          ON job.player_id = k.id
+                    )
+                    SELECT
+                        count(*) FILTER (
+                            WHERE accepted_state = 'eligible'
+                        ),
+                        count(*) FILTER (
+                            WHERE accepted_state = 'eligible'
+                              AND trophies IS NOT NULL
+                        ),
+                        count(*) FILTER (
+                            WHERE accepted_state = 'eligible'
+                              AND %s - observed_at > make_interval(secs => %s)
+                        ),
+                        count(*) FILTER (
+                            WHERE accepted_state = 'eligible'
+                              AND %s - observed_at <= make_interval(secs => %s)
+                        ),
+                        count(*) FILTER (
+                            WHERE accepted_state IS NULL
+                              AND any_source_state IS NULL
+                              AND failure_category IS NULL
+                        ),
+                        count(*) FILTER (
+                            WHERE accepted_state = 'uncertain'
+                        ),
+                        count(*) FILTER (
+                            WHERE accepted_state IS NULL
+                              AND any_source_state IS NULL
+                              AND failure_category IN (
+                                  'malformed_json',
+                                  'unsupported_profile_schema',
+                                  'source_identity_mismatch',
+                                  'invalid_player_tag'
+                              )
+                        ),
+                        count(*) FILTER (
+                            WHERE accepted_state IS NULL
+                              AND any_source_state = 'conflict'
+                        )
+                    FROM classified
+                    """,
+                    (
+                        boundary_at,
+                        boundary_at,
+                        boundary_at,
+                        boundary_at,
+                        boundary_at,
+                        boundary_at,
+                        PROFILE_FRESHNESS_SECONDS,
+                        boundary_at,
+                        PROFILE_FRESHNESS_SECONDS,
+                    ),
+                ).fetchone()
+                assert quality_row is not None
+                quality = {
+                    "eligible_population_count": int(quality_row[0]),
+                    "included_entry_count": int(quality_row[1]),
+                    "stale_entry_count": int(quality_row[2]),
+                    "fresh_entry_count": int(quality_row[3]),
+                    "excluded_missing_count": int(quality_row[4]),
+                    "excluded_invalid_count": int(quality_row[5]),
+                    "excluded_malformed_count": int(quality_row[6]),
+                    "excluded_conflicting_count": int(quality_row[7]),
+                }
+                if quality["included_entry_count"] != len(entries):
+                    raise ValueError("snapshot quality count does not match entries")
                 coverage = (
-                    (len(entries) - stale_count) / len(entries) if entries else 0
+                    quality["included_entry_count"]
+                    / quality["eligible_population_count"]
+                    if quality["eligible_population_count"]
+                    else 0.0
                 )
+                hash_entries = [
+                    {
+                        "player_id": entry["player_id"],
+                        "tag": entry["tag"],
+                        "trophies": entry["trophies"],
+                        "profile_observation_id": entry["observation_id"],
+                        "profile_observed_at": entry["observed_at"].astimezone(UTC).isoformat(),
+                        "profile_age_seconds": entry["age_seconds"],
+                        "profile_freshness": entry["freshness"],
+                        "profile_confidence": entry["confidence"],
+                        "tie_hash": entry["tie_hash"],
+                        "official_rank": (
+                            entry["official"][0]
+                            if entry["official"] is not None
+                            else None
+                        ),
+                        "official_rank_version_id": (
+                            entry["official"][1]
+                            if entry["official"] is not None
+                            else None
+                        ),
+                        "official_rank_observed_at": (
+                            entry["official"][2].astimezone(UTC).isoformat()
+                            if entry["official"] is not None
+                            else None
+                        ),
+                    }
+                    for entry in entries
+                ]
+                hash_payload = {
+                    "boundary_at": boundary_at.astimezone(UTC).isoformat(),
+                    "ordering_rule_version": SNAPSHOT_ORDERING_RULE_VERSION,
+                    "freshness_rule_version": FRESHNESS_RULE_VERSION,
+                    "entries": hash_entries,
+                    "quality": quality,
+                }
+                input_hash = hashlib.sha256(
+                    json.dumps(
+                        hash_payload,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
                 for snapshot_kind in ("frozen", "live"):
                     self._publish_snapshot_kind(
                         connection,
                         snapshot_kind=snapshot_kind,
-                        boundary_at=ranked_day[1],
+                        boundary_at=boundary_at,
                         ranked_day_version_id=ranked_day_version_id,
                         entries=entries,
                         coverage=coverage,
-                        stale_count=stale_count,
+                        quality=quality,
+                        input_hash=input_hash,
                     )
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
@@ -2519,55 +2721,99 @@ class Database:
         ranked_day_version_id: int,
         entries: list[dict[str, Any]],
         coverage: float,
-        stale_count: int,
+        quality: dict[str, int],
+        input_hash: str,
     ) -> None:
+        # Serialize versions for one kind and boundary. A correction marks the
+        # earlier publication superseded without changing its immutable data.
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (
+                "leaderboard-snapshot-v2:" + snapshot_kind + ":" + boundary_at.isoformat(),
+            ),
+        )
         existing = connection.execute(
             """
-            SELECT id FROM leaderboard_snapshots
-            WHERE snapshot_kind = %s AND boundary_at = %s
-              AND source_ranked_day_version_id = %s
+            SELECT id, state
+            FROM leaderboard_snapshots
+            WHERE snapshot_kind = %s
+              AND boundary_at = %s
+              AND input_hash = %s
+            ORDER BY id DESC
+            LIMIT 1
+            FOR UPDATE
             """,
-            (snapshot_kind, boundary_at, ranked_day_version_id),
+            (snapshot_kind, boundary_at, input_hash),
         ).fetchone()
-        if existing is not None:
+        if existing is not None and _text_value(existing[1]) != "building":
+            # The input identity is the replay key. Entries and dependent work
+            # remain one immutable set for this hash.
             return
+
         prior = connection.execute(
             """
-            SELECT id, version FROM leaderboard_snapshots
-            WHERE snapshot_kind = %s AND boundary_at = %s
+            SELECT id, version
+            FROM leaderboard_snapshots
+            WHERE snapshot_kind = %s
+              AND boundary_at = %s
               AND state = 'published'
-            FOR UPDATE
+            ORDER BY version DESC, id DESC
+            LIMIT 1
             """,
             (snapshot_kind, boundary_at),
         ).fetchone()
-        next_version = int(prior[1]) + 1 if prior is not None else 1
-        if prior is not None:
-            connection.execute(
-                "UPDATE leaderboard_snapshots SET state = 'superseded' WHERE id = %s",
-                (prior[0],),
-            )
-        snapshot = connection.execute(
-            """
-            INSERT INTO leaderboard_snapshots (
-                snapshot_kind, boundary_at, version, correction_of_id,
-                ordering_rule_version, freshness_rule_version, state,
-                source_ranked_day_version_id, measured_coverage, stale_entry_count
-            ) VALUES (%s, %s, %s, %s, %s, %s, 'building', %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                snapshot_kind,
-                boundary_at,
-                next_version,
-                prior[0] if prior is not None else None,
-                SNAPSHOT_ORDERING_RULE_VERSION,
-                FRESHNESS_RULE_VERSION,
-                ranked_day_version_id,
-                coverage,
-                stale_count,
-            ),
-        ).fetchone()
-        assert snapshot is not None
+        if existing is not None:
+            snapshot_id = int(existing[0])
+        else:
+            next_version_row = connection.execute(
+                """
+                SELECT COALESCE(max(version), 0) + 1
+                FROM leaderboard_snapshots
+                WHERE snapshot_kind = %s AND boundary_at = %s
+                """,
+                (snapshot_kind, boundary_at),
+            ).fetchone()
+            assert next_version_row is not None
+            next_version = int(next_version_row[0])
+            snapshot = connection.execute(
+                """
+                INSERT INTO leaderboard_snapshots (
+                    snapshot_kind, boundary_at, version, correction_of_id,
+                    ordering_rule_version, freshness_rule_version, state,
+                    source_ranked_day_version_id, measured_coverage,
+                    stale_entry_count, input_hash,
+                    eligible_population_count, included_entry_count,
+                    fresh_entry_count, excluded_missing_count,
+                    excluded_invalid_count, excluded_malformed_count,
+                    excluded_conflicting_count
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, 'building', %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                RETURNING id
+                """,
+                (
+                    snapshot_kind,
+                    boundary_at,
+                    next_version,
+                    prior[0] if prior is not None else None,
+                    SNAPSHOT_ORDERING_RULE_VERSION,
+                    FRESHNESS_RULE_VERSION,
+                    ranked_day_version_id,
+                    coverage,
+                    quality["stale_entry_count"],
+                    input_hash,
+                    quality["eligible_population_count"],
+                    quality["included_entry_count"],
+                    quality["fresh_entry_count"],
+                    quality["excluded_missing_count"],
+                    quality["excluded_invalid_count"],
+                    quality["excluded_malformed_count"],
+                    quality["excluded_conflicting_count"],
+                ),
+            ).fetchone()
+            assert snapshot is not None
+            snapshot_id = int(snapshot[0])
         for position, entry in enumerate(entries, start=1):
             official = entry["official"]
             connection.execute(
@@ -2576,14 +2822,18 @@ class Database:
                     snapshot_id, position, player_id, trophies,
                     trophy_observation_id, trophy_observed_at,
                     observation_age_seconds, freshness, confidence, tie_hash,
+                    profile_observation_id, profile_observed_at,
+                    profile_age_seconds, profile_freshness, profile_confidence,
                     official_rank, official_rank_version_id,
                     official_rank_observed_at
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s
                 )
+                ON CONFLICT (snapshot_id, position) DO NOTHING
                 """,
                 (
-                    snapshot[0],
+                    snapshot_id,
                     position,
                     entry["player_id"],
                     entry["trophies"],
@@ -2593,6 +2843,11 @@ class Database:
                     entry["freshness"],
                     entry["confidence"],
                     entry["tie_hash"],
+                    entry["observation_id"],
+                    entry["observed_at"],
+                    entry["age_seconds"],
+                    entry["freshness"],
+                    entry["confidence"],
                     official[0] if official is not None else None,
                     official[1] if official is not None else None,
                     official[2] if official is not None else None,
@@ -2604,8 +2859,17 @@ class Database:
             SET state = 'published', published_at = clock_timestamp()
             WHERE id = %s AND state = 'building'
             """,
-            (snapshot[0],),
+            (snapshot_id,),
         )
+        if prior is not None and int(prior[0]) != snapshot_id:
+            connection.execute(
+                """
+                UPDATE leaderboard_snapshots
+                SET state = 'superseded'
+                WHERE id = %s AND state = 'published'
+                """,
+                (prior[0],),
+            )
 
     @staticmethod
     def _store_ranked_day_adjustments(

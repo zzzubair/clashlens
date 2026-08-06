@@ -2288,6 +2288,244 @@ CREATE TABLE IF NOT EXISTS api_frozen_leaderboard_entries (
     UNIQUE (leaderboard_id, player_id)
 );
 
+CREATE INDEX IF NOT EXISTS api_frozen_leaderboards_current_v2
+    ON api_frozen_leaderboards (boundary_at DESC, version DESC);
+
+-- Snapshot publication v2 is temporal and append-only. The defaults keep
+-- populated v1 rows readable while new publishers write complete provenance.
+ALTER TABLE leaderboard_snapshots
+    ADD COLUMN IF NOT EXISTS input_hash text NOT NULL DEFAULT repeat('0', 64),
+    ADD COLUMN IF NOT EXISTS eligible_population_count integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS included_entry_count integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS fresh_entry_count integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS excluded_missing_count integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS excluded_invalid_count integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS excluded_malformed_count integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS excluded_conflicting_count integer NOT NULL DEFAULT 0;
+
+ALTER TABLE leaderboard_snapshot_entries
+    ADD COLUMN IF NOT EXISTS profile_observation_id bigint
+        REFERENCES collector_observations (id),
+    ADD COLUMN IF NOT EXISTS profile_observed_at timestamptz,
+    ADD COLUMN IF NOT EXISTS profile_age_seconds integer,
+    ADD COLUMN IF NOT EXISTS profile_freshness text,
+    ADD COLUMN IF NOT EXISTS profile_confidence text;
+
+-- v1 named these fields trophy_*; retain them and backfill the exact profile
+-- aliases for populated v1 rows. New rows must write both names consistently.
+UPDATE leaderboard_snapshot_entries
+SET profile_observation_id = trophy_observation_id,
+    profile_observed_at = trophy_observed_at,
+    profile_age_seconds = observation_age_seconds,
+    profile_freshness = freshness,
+    profile_confidence = confidence
+WHERE profile_observation_id IS NULL;
+
+-- Populate v2 quality totals for already published v1 rows before adding the
+-- v2 consistency check. These defaults describe the known entry population;
+-- they do not claim missing v2 exclusions were measured.
+UPDATE leaderboard_snapshots AS s
+SET eligible_population_count = counts.included_count,
+    included_entry_count = counts.included_count,
+    fresh_entry_count = counts.included_count - s.stale_entry_count
+FROM (
+    SELECT snapshot_id, count(*)::integer AS included_count
+    FROM leaderboard_snapshot_entries
+    GROUP BY snapshot_id
+) AS counts
+WHERE s.id = counts.snapshot_id
+  AND s.eligible_population_count = 0
+  AND s.included_entry_count = 0;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'leaderboard_snapshots'::regclass
+          AND conname = 'leaderboard_snapshots_input_hash_v2_check'
+    ) THEN
+        ALTER TABLE leaderboard_snapshots
+            ADD CONSTRAINT leaderboard_snapshots_input_hash_v2_check
+            CHECK (input_hash ~ '^[0-9a-f]{64}$');
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'leaderboard_snapshots'::regclass
+          AND conname = 'leaderboard_snapshots_quality_v2_check'
+    ) THEN
+        ALTER TABLE leaderboard_snapshots
+            ADD CONSTRAINT leaderboard_snapshots_quality_v2_check
+            CHECK (
+                eligible_population_count >= 0
+                AND included_entry_count >= 0
+                AND fresh_entry_count >= 0
+                AND stale_entry_count >= 0
+                AND excluded_missing_count >= 0
+                AND excluded_invalid_count >= 0
+                AND excluded_malformed_count >= 0
+                AND excluded_conflicting_count >= 0
+                AND included_entry_count <= eligible_population_count
+                AND fresh_entry_count <= included_entry_count
+                AND measured_coverage BETWEEN 0 AND 1
+            );
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'leaderboard_snapshots'::regclass
+          AND conname = 'leaderboard_snapshots_correction_v2_check'
+    ) THEN
+        ALTER TABLE leaderboard_snapshots
+            ADD CONSTRAINT leaderboard_snapshots_correction_v2_check
+            CHECK (correction_of_id IS NULL OR correction_of_id <> id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'leaderboard_snapshot_entries'::regclass
+          AND conname = 'leaderboard_snapshot_entries_profile_v2_check'
+    ) THEN
+        ALTER TABLE leaderboard_snapshot_entries
+            ADD CONSTRAINT leaderboard_snapshot_entries_profile_v2_check
+            CHECK (
+                profile_observation_id IS NULL
+                OR profile_observation_id = trophy_observation_id
+            );
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'leaderboard_snapshot_entries'::regclass
+          AND conname = 'leaderboard_snapshot_entries_profile_time_v2_check'
+    ) THEN
+        ALTER TABLE leaderboard_snapshot_entries
+            ADD CONSTRAINT leaderboard_snapshot_entries_profile_time_v2_check
+            CHECK (
+                (profile_observed_at IS NULL AND profile_age_seconds IS NULL)
+                OR (profile_observed_at IS NOT NULL AND profile_age_seconds >= 0)
+            );
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'leaderboard_snapshot_entries'::regclass
+          AND conname = 'leaderboard_snapshot_entries_profile_labels_v2_check'
+    ) THEN
+        ALTER TABLE leaderboard_snapshot_entries
+            ADD CONSTRAINT leaderboard_snapshot_entries_profile_labels_v2_check
+            CHECK (
+                profile_freshness IS NULL
+                OR profile_freshness IN ('fresh', 'stale')
+            );
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'leaderboard_snapshot_entries'::regclass
+          AND conname = 'leaderboard_snapshot_entries_profile_confidence_v2_check'
+    ) THEN
+        ALTER TABLE leaderboard_snapshot_entries
+            ADD CONSTRAINT leaderboard_snapshot_entries_profile_confidence_v2_check
+            CHECK (
+                profile_confidence IS NULL
+                OR profile_confidence IN ('confirmed', 'uncertain')
+            );
+    END IF;
+END
+$$;
+
+-- A correction is a new immutable version. More than one completed version may
+-- exist for one boundary; the current reader chooses the greatest version.
+-- Only the published-to-superseded lifecycle marker may update an old row.
+DROP INDEX IF EXISTS leaderboard_snapshots_current_published;
+CREATE INDEX IF NOT EXISTS leaderboard_snapshots_completed_v2
+    ON leaderboard_snapshots (snapshot_kind, boundary_at DESC, version DESC, id DESC)
+    WHERE state = 'published';
+CREATE UNIQUE INDEX IF NOT EXISTS leaderboard_snapshots_input_hash_v2
+    ON leaderboard_snapshots (snapshot_kind, boundary_at, input_hash)
+    WHERE input_hash <> repeat('0', 64);
+
+CREATE OR REPLACE FUNCTION clashlens_guard_snapshot_immutable_v2()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        RAISE EXCEPTION 'published leaderboard snapshots are immutable';
+    END IF;
+    IF OLD.state = 'published' AND NEW.state = 'superseded' THEN
+        IF NEW.id IS DISTINCT FROM OLD.id
+           OR NEW.snapshot_kind IS DISTINCT FROM OLD.snapshot_kind
+           OR NEW.boundary_at IS DISTINCT FROM OLD.boundary_at
+           OR NEW.version IS DISTINCT FROM OLD.version
+           OR NEW.correction_of_id IS DISTINCT FROM OLD.correction_of_id
+           OR NEW.ordering_rule_version IS DISTINCT FROM OLD.ordering_rule_version
+           OR NEW.freshness_rule_version IS DISTINCT FROM OLD.freshness_rule_version
+           OR NEW.source_ranked_day_version_id IS DISTINCT FROM OLD.source_ranked_day_version_id
+           OR NEW.measured_coverage IS DISTINCT FROM OLD.measured_coverage
+           OR NEW.stale_entry_count IS DISTINCT FROM OLD.stale_entry_count
+           OR NEW.input_hash IS DISTINCT FROM OLD.input_hash
+           OR NEW.eligible_population_count IS DISTINCT FROM OLD.eligible_population_count
+           OR NEW.included_entry_count IS DISTINCT FROM OLD.included_entry_count
+           OR NEW.fresh_entry_count IS DISTINCT FROM OLD.fresh_entry_count
+           OR NEW.excluded_missing_count IS DISTINCT FROM OLD.excluded_missing_count
+           OR NEW.excluded_invalid_count IS DISTINCT FROM OLD.excluded_invalid_count
+           OR NEW.excluded_malformed_count IS DISTINCT FROM OLD.excluded_malformed_count
+           OR NEW.excluded_conflicting_count IS DISTINCT FROM OLD.excluded_conflicting_count
+           OR NEW.created_at IS DISTINCT FROM OLD.created_at
+           OR NEW.published_at IS DISTINCT FROM OLD.published_at
+        THEN
+            RAISE EXCEPTION 'leaderboard snapshot fields are immutable after insert';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF OLD.state <> 'building' THEN
+        RAISE EXCEPTION 'published leaderboard snapshots are immutable';
+    END IF;
+    IF NEW.id IS DISTINCT FROM OLD.id
+       OR NEW.snapshot_kind IS DISTINCT FROM OLD.snapshot_kind
+       OR NEW.boundary_at IS DISTINCT FROM OLD.boundary_at
+       OR NEW.version IS DISTINCT FROM OLD.version
+       OR NEW.correction_of_id IS DISTINCT FROM OLD.correction_of_id
+       OR NEW.ordering_rule_version IS DISTINCT FROM OLD.ordering_rule_version
+       OR NEW.freshness_rule_version IS DISTINCT FROM OLD.freshness_rule_version
+       OR NEW.source_ranked_day_version_id IS DISTINCT FROM OLD.source_ranked_day_version_id
+       OR NEW.measured_coverage IS DISTINCT FROM OLD.measured_coverage
+       OR NEW.stale_entry_count IS DISTINCT FROM OLD.stale_entry_count
+       OR NEW.input_hash IS DISTINCT FROM OLD.input_hash
+       OR NEW.eligible_population_count IS DISTINCT FROM OLD.eligible_population_count
+       OR NEW.included_entry_count IS DISTINCT FROM OLD.included_entry_count
+       OR NEW.fresh_entry_count IS DISTINCT FROM OLD.fresh_entry_count
+       OR NEW.excluded_missing_count IS DISTINCT FROM OLD.excluded_missing_count
+       OR NEW.excluded_invalid_count IS DISTINCT FROM OLD.excluded_invalid_count
+       OR NEW.excluded_malformed_count IS DISTINCT FROM OLD.excluded_malformed_count
+       OR NEW.excluded_conflicting_count IS DISTINCT FROM OLD.excluded_conflicting_count
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at
+       OR NEW.state <> 'published'
+       OR NEW.published_at IS NULL
+    THEN
+        RAISE EXCEPTION 'leaderboard snapshot fields are immutable after insert';
+    END IF;
+    RETURN NEW;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION clashlens_guard_snapshot_entry_immutable_v2()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'leaderboard snapshot entries are immutable';
+END
+$$;
+
+DROP TRIGGER IF EXISTS leaderboard_snapshots_immutable_v2
+    ON leaderboard_snapshots;
+CREATE TRIGGER leaderboard_snapshots_immutable_v2
+BEFORE UPDATE OR DELETE ON leaderboard_snapshots
+FOR EACH ROW EXECUTE FUNCTION clashlens_guard_snapshot_immutable_v2();
+
+DROP TRIGGER IF EXISTS leaderboard_snapshot_entries_immutable_v2
+    ON leaderboard_snapshot_entries;
+CREATE TRIGGER leaderboard_snapshot_entries_immutable_v2
+BEFORE UPDATE OR DELETE ON leaderboard_snapshot_entries
+FOR EACH ROW EXECUTE FUNCTION clashlens_guard_snapshot_entry_immutable_v2();
+
 CREATE OR REPLACE FUNCTION clashlens_enqueue_interactive(
     requested_type text,
     requested_tag text,
