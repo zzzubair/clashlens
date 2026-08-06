@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import psycopg
+
 from clashlens_prototype.archive import S3ArchiveReader
 from clashlens_prototype.db import Database
 from clashlens_prototype.worker import ObservationProcessor
@@ -28,6 +30,303 @@ def _processor(connection_info: str, archive_server) -> tuple[Database, Observat
         ),
     )
     return database, processor
+
+
+def _prepare_reset_baseline_pair(
+    connection_info: str,
+    archive_server,
+    *,
+    boundary: datetime,
+    battle_body: bytes | None = None,
+    wrong_battle_attempt: bool = False,
+) -> tuple[int, int, int, int]:
+    profile_observation_id, profile_job_id = store_observation(
+        connection_info,
+        archive_server,
+        occurrence_key="reset-pair-profile",
+        endpoint="profile",
+        body=PROFILE_FIXTURE.read_bytes(),
+        observed_at=boundary,
+        normalized_tag="#2PP",
+    )
+    battle_observation_id, battle_job_id = store_observation(
+        connection_info,
+        archive_server,
+        occurrence_key="reset-pair-battle",
+        endpoint="battle_log",
+        body=battle_body if battle_body is not None else json.dumps({"items": []}).encode(),
+        observed_at=boundary,
+        normalized_tag="#2PP",
+    )
+    with psycopg.connect(connection_info) as connection:
+        player_id = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+        ).fetchone()[0]
+        sweep_id = connection.execute(
+            """
+            INSERT INTO collector_reset_sweeps (boundary_at)
+            VALUES (%s)
+            RETURNING id
+            """,
+            (boundary,),
+        ).fetchone()[0]
+        baseline_sweep_id = connection.execute(
+            """
+            INSERT INTO collector_reset_baseline_sweeps (
+                reset_sweep_id, player_id, boundary_at, evidence_kind, state
+            ) VALUES (%s, %s, %s, 'paired_v2', 'pending')
+            RETURNING id
+            """,
+            (sweep_id, player_id, boundary),
+        ).fetchone()[0]
+        root_job_id = connection.execute(
+            """
+            INSERT INTO collector_jobs (
+                work_type, scope, player_id, normalized_tag, capacity_pool,
+                priority, due_at, coalescing_key, sweep_id,
+                reset_baseline_sweep_id, status
+            ) VALUES (
+                'reset_baseline', 'player', %s, '#2PP', 'normal', 400, %s,
+                'reset-baseline-test', %s, %s, 'complete'
+            )
+            RETURNING id
+            """,
+            (player_id, boundary, sweep_id, baseline_sweep_id),
+        ).fetchone()[0]
+        attempt_id = connection.execute(
+            """
+            INSERT INTO collector_attempts (
+                job_id, status, started_at, completed_at
+            ) VALUES (%s, 'complete', %s, %s)
+            RETURNING id
+            """,
+            (root_job_id, boundary, boundary),
+        ).fetchone()[0]
+        battle_attempt_id = attempt_id
+        if wrong_battle_attempt:
+            battle_attempt_id = connection.execute(
+                """
+                INSERT INTO collector_attempts (
+                    job_id, attempt_number, status, started_at, completed_at
+                ) VALUES (%s, 2, 'complete', %s, %s)
+                RETURNING id
+                """,
+                (root_job_id, boundary, boundary),
+            ).fetchone()[0]
+        connection.execute(
+            "UPDATE collector_jobs SET result_attempt_id = %s WHERE id = %s",
+            (attempt_id, root_job_id),
+        )
+        connection.execute(
+            """
+            UPDATE collector_observations
+            SET collection_job_id = %s, attempt_id = %s
+            WHERE id = %s
+            """,
+            (root_job_id, attempt_id, profile_observation_id),
+        )
+        connection.execute(
+            """
+            UPDATE collector_observations
+            SET collection_job_id = %s, attempt_id = %s
+            WHERE id = %s
+            """,
+            (root_job_id, battle_attempt_id, battle_observation_id),
+        )
+        for endpoint, observation_id in (
+            ("profile", profile_observation_id),
+            ("battle_log", battle_observation_id),
+        ):
+            source = connection.execute(
+                """
+                SELECT request_started_at, response_completed_at, http_status,
+                       response_hash, archive_reference
+                FROM collector_observations
+                WHERE id = %s
+                """,
+                (observation_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO collector_endpoint_results (
+                    attempt_id, endpoint, outcome, request_started_at,
+                    response_completed_at, http_status, response_hash,
+                    archive_reference, observation_id, request_count,
+                    key_label
+                ) VALUES (%s, %s, 'observed', %s, %s, %s, %s, %s, %s, 1, 'normal-a')
+                """,
+                (attempt_id, endpoint, *source, observation_id),
+            )
+        connection.commit()
+    return profile_observation_id, battle_observation_id, profile_job_id, battle_job_id
+
+
+def test_reset_baseline_evidence_is_created_from_one_go_attempt_and_is_versioned(
+    database_url: str,
+    archive_server,
+) -> None:
+    boundary = datetime(2026, 8, 4, 5, tzinfo=UTC)
+    with domain_database(database_url) as connection_info:
+        profile_observation_id, battle_observation_id, profile_job_id, battle_job_id = (
+            _prepare_reset_baseline_pair(
+                connection_info,
+                archive_server,
+                boundary=boundary,
+            )
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            profile_result = processor.process_job(
+                profile_job_id,
+                owner="reset-profile-worker",
+            )
+            assert profile_result is not None and profile_result.outcome == "processed"
+            with database.pool.connection() as connection:
+                partial_rows = connection.execute(
+                    """
+                    SELECT profile_observation_id, battle_log_observation_id,
+                           profile_valid, battle_log_valid, legacy_profile_only
+                    FROM reset_baseline_evidence
+                    ORDER BY id
+                    """
+                ).fetchall()
+            assert partial_rows == [
+                (profile_observation_id, battle_observation_id, True, False, False)
+            ]
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                    """
+                ).fetchone()[0] == 0
+
+            battle_result = processor.process_job(
+                battle_job_id,
+                owner="reset-battle-worker",
+            )
+            assert battle_result is not None and battle_result.outcome == "processed"
+            with database.pool.connection() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT profile_observation_id, battle_log_observation_id,
+                           profile_valid, battle_log_valid, legacy_profile_only
+                    FROM reset_baseline_evidence
+                    ORDER BY id
+                    """
+                ).fetchall()
+                reconciliation_count = connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                    """
+                ).fetchone()[0]
+            assert rows == [
+                (profile_observation_id, battle_observation_id, True, False, False),
+                (profile_observation_id, battle_observation_id, True, True, False),
+            ]
+            assert reconciliation_count == 1
+
+            database.requeue_completed_job(battle_job_id)
+            replay = processor.process_job(battle_job_id, owner="reset-battle-replay")
+            assert replay is not None and replay.outcome == "processed"
+            with database.pool.connection() as connection:
+                versions = connection.execute(
+                    "SELECT version, state FROM reset_baseline_evidence ORDER BY version"
+                ).fetchall()
+                assert connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                    """
+                ).fetchone()[0] == 1
+            assert [(row[0], text(row[1])) for row in versions] == [
+                (1, "partial"),
+                (2, "complete"),
+            ]
+        finally:
+            database.close()
+
+
+def test_malformed_reset_evidence_is_failed_without_reconciliation_enqueue(
+    database_url: str,
+    archive_server,
+) -> None:
+    boundary = datetime(2026, 8, 4, 5, tzinfo=UTC)
+    with domain_database(database_url) as connection_info:
+        _profile_observation, _battle_observation, profile_job, battle_job = (
+            _prepare_reset_baseline_pair(
+                connection_info,
+                archive_server,
+                boundary=boundary,
+                battle_body=b'{"items":',
+            )
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            profile_result = processor.process_job(profile_job, owner="malformed-profile")
+            assert profile_result is not None and profile_result.outcome == "processed"
+            battle_result = processor.process_job(battle_job, owner="malformed-battle")
+            assert battle_result is not None
+            assert battle_result.outcome == "failed"
+            assert text(battle_result.category) == "malformed_json"
+            with database.pool.connection() as connection:
+                state, reasons = connection.execute(
+                    "SELECT state, failure_reasons FROM reset_baseline_evidence ORDER BY version DESC LIMIT 1"
+                ).fetchone()
+                reconciliation_count = connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                    """
+                ).fetchone()[0]
+            assert text(state) == "failed"
+            assert "battle_log_malformed_json" in [text(reason) for reason in reasons]
+            assert reconciliation_count == 0
+        finally:
+            database.close()
+
+
+def test_wrong_attempt_reset_evidence_is_failed_without_reconciliation_enqueue(
+    database_url: str,
+    archive_server,
+) -> None:
+    boundary = datetime(2026, 8, 4, 5, tzinfo=UTC)
+    with domain_database(database_url) as connection_info:
+        _profile_observation, _battle_observation, profile_job, battle_job = (
+            _prepare_reset_baseline_pair(
+                connection_info,
+                archive_server,
+                boundary=boundary,
+                wrong_battle_attempt=True,
+            )
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            profile_result = processor.process_job(profile_job, owner="wrong-attempt-profile")
+            assert profile_result is not None and profile_result.outcome == "processed"
+            battle_result = processor.process_job(battle_job, owner="wrong-attempt-battle")
+            assert battle_result is not None and battle_result.outcome == "processed"
+            with database.pool.connection() as connection:
+                state, reasons = connection.execute(
+                    "SELECT state, failure_reasons FROM reset_baseline_evidence ORDER BY version DESC LIMIT 1"
+                ).fetchone()
+                reconciliation_count = connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                    """
+                ).fetchone()[0]
+            assert text(state) == "failed"
+            assert "battle_log_wrong_attempt" in [text(reason) for reason in reasons]
+            assert reconciliation_count == 0
+        finally:
+            database.close()
 
 
 def test_profile_and_battle_observations_process_independently_into_canonical_evidence(
@@ -172,6 +471,74 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
             )
             assert tuple(text(value) for value in opponent) == (False, "unknown")
             assert first_rows == 2
+        finally:
+            database.close()
+
+
+def test_canonical_battle_keeps_detail_disagreement_for_both_perspectives(
+    database_url: str,
+    archive_server,
+) -> None:
+    observed_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
+    with domain_database(database_url) as connection_info:
+        attacker_body = BATTLE_FIXTURE.read_bytes()
+        _attacker_observation_id, attacker_job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="disagreement-attacker",
+            endpoint="battle_log",
+            body=attacker_body,
+            observed_at=observed_at,
+            normalized_tag="#2PP",
+        )
+        defender_payload = json.loads(attacker_body)
+        defender_row = defender_payload["items"][0]
+        defender_row["attackOrDefense"] = "defense"
+        defender_row["opponent"] = {
+            "tag": "#2PP",
+            "name": "Synthetic Attacker",
+            "trophies": 6022,
+        }
+        defender_row["armyShareCode"] = "different-share-code"
+        _defender_observation_id, defender_job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="disagreement-defender",
+            endpoint="battle_log",
+            body=json.dumps({"items": [defender_row]}).encode(),
+            observed_at=observed_at + timedelta(minutes=1),
+            normalized_tag="#8PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            attacker_result = processor.process_job(
+                attacker_job_id,
+                owner="disagreement-attacker",
+            )
+            defender_result = processor.process_job(
+                defender_job_id,
+                owner="disagreement-defender",
+            )
+            assert attacker_result is not None and attacker_result.outcome == "processed"
+            assert defender_result is not None and defender_result.outcome == "processed"
+            with database.pool.connection() as connection:
+                state, disagreement_fields = connection.execute(
+                    "SELECT disagreement_state, disagreement_fields FROM legend_battles"
+                ).fetchone()
+                perspectives = connection.execute(
+                    """
+                    SELECT p.perspective, e.id, e.army_share_code
+                    FROM battle_perspectives AS p
+                    JOIN battle_evidence AS e ON e.id = p.evidence_id
+                    ORDER BY p.perspective
+                    """
+                ).fetchall()
+            assert text(state) == "disagreement"
+            assert {text(row[0]) for row in perspectives} == {"attacker", "defender"}
+            assert len({row[1] for row in perspectives}) == 2
+            assert [text(field) for field in disagreement_fields] == [
+                "army_share_code"
+            ]
         finally:
             database.close()
 

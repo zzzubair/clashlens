@@ -1343,6 +1343,421 @@ CREATE UNIQUE INDEX IF NOT EXISTS reset_baseline_evidence_boundary_player
     ON reset_baseline_evidence (boundary_at, player_id)
     WHERE sweep_id IS NULL;
 
+-- Versioned paired reset evidence is the only reset-baseline proof consumed by
+-- ranked-day reconciliation. Existing profile-only or manually linked rows
+-- remain readable, but they cannot become a paired complete baseline.
+ALTER TABLE legend_battles
+    ADD COLUMN IF NOT EXISTS disagreement_fields text[] NOT NULL DEFAULT ARRAY[]::text[];
+
+ALTER TABLE reset_baseline_evidence
+    DROP CONSTRAINT IF EXISTS reset_baseline_evidence_sweep_id_player_id_key,
+    ADD COLUMN IF NOT EXISTS reset_baseline_sweep_id bigint,
+    ADD COLUMN IF NOT EXISTS collection_job_id bigint,
+    ADD COLUMN IF NOT EXISTS attempt_id bigint,
+    ADD COLUMN IF NOT EXISTS profile_processing_outcome_id bigint,
+    ADD COLUMN IF NOT EXISTS battle_log_processing_outcome_id bigint,
+    ADD COLUMN IF NOT EXISTS parser_version text NOT NULL DEFAULT 'supercell-source-parser-v1',
+    ADD COLUMN IF NOT EXISTS processing_version text NOT NULL DEFAULT 'clashlens-domain-processing-v1',
+    ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS supersedes_id bigint,
+    ADD COLUMN IF NOT EXISTS state text NOT NULL DEFAULT 'partial',
+    ADD COLUMN IF NOT EXISTS failure_reasons jsonb NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS evidence_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS evidence_key text,
+    ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT clock_timestamp();
+
+UPDATE reset_baseline_evidence AS evidence
+SET reset_baseline_sweep_id = baseline.id
+FROM collector_reset_baseline_sweeps AS baseline
+WHERE evidence.reset_baseline_sweep_id IS NULL
+  AND evidence.sweep_id = baseline.reset_sweep_id
+  AND evidence.player_id = baseline.player_id;
+
+UPDATE reset_baseline_evidence
+SET state = 'partial',
+    failure_reasons = CASE
+        WHEN legacy_profile_only THEN '["legacy_profile_only"]'::jsonb
+        WHEN collection_job_id IS NULL OR attempt_id IS NULL
+            THEN '["unbound_reset_evidence"]'::jsonb
+        ELSE failure_reasons
+    END
+WHERE collection_job_id IS NULL
+  AND (
+        state = 'complete'
+        OR (profile_valid AND battle_log_valid)
+      );
+
+UPDATE reset_baseline_evidence
+SET evidence_key = format(
+    'legacy-reset-baseline:%s:%s:%s',
+    COALESCE(sweep_id, 0), player_id, id
+)
+WHERE evidence_key IS NULL;
+
+ALTER TABLE reset_baseline_evidence
+    ALTER COLUMN evidence_key SET NOT NULL;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'reset_baseline_evidence'::regclass
+          AND conname = 'reset_baseline_evidence_reset_sweep_v2_fk'
+    ) THEN
+        ALTER TABLE reset_baseline_evidence
+            ADD CONSTRAINT reset_baseline_evidence_reset_sweep_v2_fk
+            FOREIGN KEY (reset_baseline_sweep_id)
+            REFERENCES collector_reset_baseline_sweeps (id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'reset_baseline_evidence'::regclass
+          AND conname = 'reset_baseline_evidence_collection_job_v2_fk'
+    ) THEN
+        ALTER TABLE reset_baseline_evidence
+            ADD CONSTRAINT reset_baseline_evidence_collection_job_v2_fk
+            FOREIGN KEY (collection_job_id)
+            REFERENCES collector_jobs (id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'reset_baseline_evidence'::regclass
+          AND conname = 'reset_baseline_evidence_attempt_v2_fk'
+    ) THEN
+        ALTER TABLE reset_baseline_evidence
+            ADD CONSTRAINT reset_baseline_evidence_attempt_v2_fk
+            FOREIGN KEY (attempt_id)
+            REFERENCES collector_attempts (id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'reset_baseline_evidence'::regclass
+          AND conname = 'reset_baseline_evidence_profile_processing_v2_fk'
+    ) THEN
+        ALTER TABLE reset_baseline_evidence
+            ADD CONSTRAINT reset_baseline_evidence_profile_processing_v2_fk
+            FOREIGN KEY (profile_processing_outcome_id)
+            REFERENCES observation_processing_outcomes (id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'reset_baseline_evidence'::regclass
+          AND conname = 'reset_baseline_evidence_battle_processing_v2_fk'
+    ) THEN
+        ALTER TABLE reset_baseline_evidence
+            ADD CONSTRAINT reset_baseline_evidence_battle_processing_v2_fk
+            FOREIGN KEY (battle_log_processing_outcome_id)
+            REFERENCES observation_processing_outcomes (id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'reset_baseline_evidence'::regclass
+          AND conname = 'reset_baseline_evidence_supersedes_v2_fk'
+    ) THEN
+        ALTER TABLE reset_baseline_evidence
+            ADD CONSTRAINT reset_baseline_evidence_supersedes_v2_fk
+            FOREIGN KEY (supersedes_id)
+            REFERENCES reset_baseline_evidence (id);
+    END IF;
+END
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'reset_baseline_evidence'::regclass
+          AND conname = 'reset_baseline_evidence_state_v2_check'
+    ) THEN
+        ALTER TABLE reset_baseline_evidence
+            ADD CONSTRAINT reset_baseline_evidence_state_v2_check
+            CHECK (state IN ('partial', 'complete', 'failed'));
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'reset_baseline_evidence'::regclass
+          AND conname = 'reset_baseline_evidence_version_v2_check'
+    ) THEN
+        ALTER TABLE reset_baseline_evidence
+            ADD CONSTRAINT reset_baseline_evidence_version_v2_check
+            CHECK (version > 0);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'reset_baseline_evidence'::regclass
+          AND conname = 'reset_baseline_evidence_reason_array_v2_check'
+    ) THEN
+        ALTER TABLE reset_baseline_evidence
+            ADD CONSTRAINT reset_baseline_evidence_reason_array_v2_check
+            CHECK (jsonb_typeof(failure_reasons) = 'array');
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'reset_baseline_evidence'::regclass
+          AND conname = 'reset_baseline_evidence_complete_v2_check'
+    ) THEN
+        ALTER TABLE reset_baseline_evidence
+            ADD CONSTRAINT reset_baseline_evidence_complete_v2_check
+            CHECK (
+                state <> 'complete'
+                OR (
+                    reset_baseline_sweep_id IS NOT NULL
+                    AND collection_job_id IS NOT NULL
+                    AND attempt_id IS NOT NULL
+                    AND profile_observation_id IS NOT NULL
+                    AND battle_log_observation_id IS NOT NULL
+                    AND profile_processing_outcome_id IS NOT NULL
+                    AND battle_log_processing_outcome_id IS NOT NULL
+                    AND profile_valid
+                    AND battle_log_valid
+                    AND NOT legacy_profile_only
+                    AND jsonb_array_length(failure_reasons) = 0
+                )
+            );
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'legend_battles'::regclass
+          AND conname = 'legend_battles_disagreement_fields_v2_check'
+    ) THEN
+        ALTER TABLE legend_battles
+            ADD CONSTRAINT legend_battles_disagreement_fields_v2_check
+            CHECK (
+                disagreement_fields <@ ARRAY[
+                    'battle_timestamp', 'stars', 'destruction_percentage',
+                    'army_share_code', 'attacker_trophies', 'defender_trophies',
+                    'attacker_gain', 'defender_loss'
+                ]::text[]
+            );
+    END IF;
+END
+$$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS reset_baseline_evidence_sweep_version_v2
+    ON reset_baseline_evidence (reset_baseline_sweep_id, version)
+    WHERE reset_baseline_sweep_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS reset_baseline_evidence_sweep_key_v2
+    ON reset_baseline_evidence (reset_baseline_sweep_id, evidence_key)
+    WHERE reset_baseline_sweep_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS reset_baseline_evidence_lookup_v2
+    ON reset_baseline_evidence (player_id, boundary_at, state, version DESC);
+
+CREATE OR REPLACE FUNCTION clashlens_reset_job_lineage_v2(
+    observed_job_id bigint,
+    root_job_id bigint
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+AS $$
+    WITH RECURSIVE lineage(id, parent_attempt_id) AS (
+        SELECT job.id, job.parent_attempt_id
+        FROM collector_jobs AS job
+        WHERE job.id = observed_job_id
+        UNION
+        SELECT parent_job.id, parent_job.parent_attempt_id
+        FROM lineage AS child
+        JOIN collector_attempts AS parent_attempt
+          ON parent_attempt.id = child.parent_attempt_id
+        JOIN collector_jobs AS parent_job
+          ON parent_job.id = parent_attempt.job_id
+    )
+    SELECT EXISTS (SELECT 1 FROM lineage WHERE id = root_job_id)
+$$;
+
+CREATE OR REPLACE FUNCTION clashlens_validate_reset_baseline_evidence_v2()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    baseline collector_reset_baseline_sweeps%ROWTYPE;
+    root_job collector_jobs%ROWTYPE;
+    attempt_job_id bigint;
+    source_observation collector_observations%ROWTYPE;
+    processing observation_processing_outcomes%ROWTYPE;
+    profile_version_exists boolean;
+    battle_log_valid boolean;
+BEGIN
+    IF NEW.evidence_key IS NULL THEN
+        NEW.evidence_key := format(
+            'reset-baseline:%s:%s:%s:%s:%s:%s:%s',
+            COALESCE(NEW.reset_baseline_sweep_id, 0),
+            NEW.version,
+            COALESCE(NEW.profile_observation_id, 0),
+            COALESCE(NEW.battle_log_observation_id, 0),
+            NEW.state,
+            NEW.profile_valid,
+            NEW.battle_log_valid
+        );
+    END IF;
+
+    IF NEW.reset_baseline_sweep_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT * INTO baseline
+    FROM collector_reset_baseline_sweeps
+    WHERE id = NEW.reset_baseline_sweep_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'reset evidence references an unknown baseline sweep';
+    END IF;
+    IF NEW.sweep_id IS DISTINCT FROM baseline.reset_sweep_id
+       OR NEW.player_id IS DISTINCT FROM baseline.player_id
+       OR NEW.boundary_at IS DISTINCT FROM baseline.boundary_at THEN
+        RAISE EXCEPTION 'reset evidence identity does not match its immutable sweep';
+    END IF;
+
+    IF NEW.collection_job_id IS NULL THEN
+        IF NEW.state = 'complete' THEN
+            RAISE EXCEPTION 'complete reset evidence requires a collection job';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    SELECT * INTO root_job
+    FROM collector_jobs
+    WHERE id = NEW.collection_job_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'reset evidence references an unknown collection job';
+    END IF;
+    IF root_job.work_type NOT IN ('reset_baseline', 'legacy_reset_profile')
+       OR root_job.reset_baseline_sweep_id IS DISTINCT FROM NEW.reset_baseline_sweep_id
+       OR root_job.sweep_id IS DISTINCT FROM baseline.reset_sweep_id
+       OR root_job.player_id IS DISTINCT FROM NEW.player_id THEN
+        RAISE EXCEPTION 'reset evidence collection job identity does not match';
+    END IF;
+    IF NEW.attempt_id IS NULL THEN
+        IF NEW.state = 'complete' THEN
+            RAISE EXCEPTION 'complete reset evidence requires an attempt';
+        END IF;
+    ELSE
+        SELECT job_id INTO attempt_job_id
+        FROM collector_attempts
+        WHERE id = NEW.attempt_id;
+        IF attempt_job_id IS DISTINCT FROM root_job.id THEN
+            RAISE EXCEPTION 'reset evidence attempt is not the root attempt';
+        END IF;
+    END IF;
+
+    IF NEW.profile_observation_id IS NOT NULL THEN
+        SELECT * INTO source_observation
+        FROM collector_observations
+        WHERE id = NEW.profile_observation_id;
+        IF NOT FOUND OR source_observation.endpoint <> 'profile' THEN
+            RAISE EXCEPTION 'reset evidence profile reference is not a profile observation';
+        END IF;
+        IF NEW.state = 'complete' THEN
+            IF source_observation.attempt_id IS DISTINCT FROM NEW.attempt_id
+               OR source_observation.player_id IS DISTINCT FROM NEW.player_id
+               OR source_observation.response_completed_at < baseline.boundary_at
+               OR NOT clashlens_reset_job_lineage_v2(
+                    source_observation.collection_job_id, root_job.id
+               ) THEN
+                RAISE EXCEPTION 'complete reset evidence profile is outside its job attempt';
+            END IF;
+        END IF;
+    END IF;
+
+    IF NEW.battle_log_observation_id IS NOT NULL THEN
+        SELECT * INTO source_observation
+        FROM collector_observations
+        WHERE id = NEW.battle_log_observation_id;
+        IF NOT FOUND OR source_observation.endpoint <> 'battle_log' THEN
+            RAISE EXCEPTION 'reset evidence battle-log reference is not a battle-log observation';
+        END IF;
+        IF NEW.state = 'complete' THEN
+            IF source_observation.attempt_id IS DISTINCT FROM NEW.attempt_id
+               OR source_observation.player_id IS DISTINCT FROM NEW.player_id
+               OR source_observation.response_completed_at < baseline.boundary_at
+               OR NOT clashlens_reset_job_lineage_v2(
+                    source_observation.collection_job_id, root_job.id
+               ) THEN
+                RAISE EXCEPTION 'complete reset evidence battle log is outside its job attempt';
+            END IF;
+        END IF;
+    END IF;
+
+    IF NEW.state = 'complete' THEN
+        SELECT * INTO processing
+        FROM observation_processing_outcomes
+        WHERE id = NEW.profile_processing_outcome_id;
+        IF NOT FOUND OR processing.endpoint <> 'profile'
+           OR processing.observation_id IS DISTINCT FROM NEW.profile_observation_id
+           OR processing.outcome <> 'processed' THEN
+            RAISE EXCEPTION 'complete reset evidence profile was not successfully processed';
+        END IF;
+        SELECT * INTO processing
+        FROM observation_processing_outcomes
+        WHERE id = NEW.battle_log_processing_outcome_id;
+        IF NOT FOUND OR processing.endpoint <> 'battle_log'
+           OR processing.observation_id IS DISTINCT FROM NEW.battle_log_observation_id
+           OR processing.outcome <> 'processed' THEN
+            RAISE EXCEPTION 'complete reset evidence battle log was not successfully processed';
+        END IF;
+        SELECT EXISTS (
+            SELECT 1
+            FROM player_profile_versions AS profile
+            WHERE profile.observation_id = NEW.profile_observation_id
+              AND profile.parser_version = NEW.parser_version
+              AND profile.source_contract_state = 'accepted'
+              AND profile.eligibility_state = 'eligible'
+        ) INTO profile_version_exists;
+        IF NOT profile_version_exists THEN
+            RAISE EXCEPTION 'complete reset evidence profile is not accepted Legend I evidence';
+        END IF;
+        SELECT EXISTS (
+            SELECT 1
+            FROM battle_log_observations AS log
+            WHERE log.observation_id = NEW.battle_log_observation_id
+              AND log.parser_version = NEW.parser_version
+              AND NOT log.has_row_gap
+        ) INTO battle_log_valid;
+        IF NOT battle_log_valid THEN
+            RAISE EXCEPTION 'complete reset evidence battle log contains a parse gap';
+        END IF;
+        IF EXISTS (
+            SELECT 1
+            FROM battle_evidence AS evidence
+            JOIN legend_battles AS battle ON battle.id = evidence.battle_id
+            JOIN collector_observations AS profile_observation
+              ON profile_observation.id = NEW.profile_observation_id
+            WHERE (
+                    battle.attacker_player_id = NEW.player_id
+                    OR battle.defender_player_id = NEW.player_id
+                )
+              AND evidence.battle_timestamp >= baseline.boundary_at
+              AND evidence.battle_timestamp < baseline.boundary_at + interval '1 day'
+              AND evidence.battle_timestamp <= profile_observation.response_completed_at
+        ) THEN
+            RAISE EXCEPTION 'complete reset evidence profile does not precede the first retained event';
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM collector_endpoint_results AS result
+            WHERE result.attempt_id = NEW.attempt_id
+              AND result.endpoint = 'profile'
+              AND result.observation_id = NEW.profile_observation_id
+              AND result.outcome = 'observed'
+        ) OR NOT EXISTS (
+            SELECT 1 FROM collector_endpoint_results AS result
+            WHERE result.attempt_id = NEW.attempt_id
+              AND result.endpoint = 'battle_log'
+              AND result.observation_id = NEW.battle_log_observation_id
+              AND result.outcome = 'observed'
+        ) THEN
+            RAISE EXCEPTION 'complete reset evidence does not match both endpoint results';
+        END IF;
+    END IF;
+    RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS reset_baseline_evidence_validate_v2
+    ON reset_baseline_evidence;
+CREATE TRIGGER reset_baseline_evidence_validate_v2
+BEFORE INSERT OR UPDATE ON reset_baseline_evidence
+FOR EACH ROW
+EXECUTE FUNCTION clashlens_validate_reset_baseline_evidence_v2();
+
 CREATE TABLE IF NOT EXISTS ranked_day_versions (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     player_id bigint NOT NULL REFERENCES players (id),

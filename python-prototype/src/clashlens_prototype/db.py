@@ -659,6 +659,7 @@ class Database:
                         "season_anchor_conflict" if anchor_outcome == "conflict" else None
                     ),
                 )
+                self._refresh_reset_baseline_evidence(connection, claim)
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
                 )
@@ -836,6 +837,7 @@ class Database:
                     "processed_with_gaps" if battle_log.has_row_gap else "processed"
                 )
                 self._record_processing_outcome(connection, claim, outcome=outcome)
+                self._refresh_reset_baseline_evidence(connection, claim)
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome=outcome
                 )
@@ -1448,6 +1450,7 @@ class Database:
                     claim,
                     outcome="non_success" if outcome == "source_non_success" else outcome,
                 )
+                self._refresh_reset_baseline_evidence(connection, claim)
                 if claim.endpoint == "global_player_rankings":
                     self._record_official_failed_attempt(
                         connection, claim, outcome="non_success", category="non_success"
@@ -1514,15 +1517,22 @@ class Database:
                 )
                 if completed.rowcount != 1:
                     raise LeaseLost("job lease was lost while recording failure")
-                if not should_retry and claim.observation_id is not None:
+                if claim.observation_id is not None:
                     failure_outcome = self._failure_outcome(category)
-                    self._record_processing_outcome(
+                    if not should_retry:
+                        self._record_processing_outcome(
+                            connection,
+                            claim,
+                            outcome=failure_outcome,
+                            failure_category=category,
+                        )
+                    self._refresh_reset_baseline_evidence(
                         connection,
                         claim,
-                        outcome=failure_outcome,
                         failure_category=category,
+                        failure_retryable=should_retry,
                     )
-                    if claim.endpoint == "global_player_rankings":
+                    if not should_retry and claim.endpoint == "global_player_rankings":
                         self._record_official_failed_attempt(
                             connection,
                             claim,
@@ -1590,6 +1600,454 @@ class Database:
                 "source_http_status": row[11],
             }
 
+    def _refresh_reset_baseline_evidence(
+        self,
+        connection: Any,
+        claim: Claim,
+        *,
+        failure_category: str | None = None,
+        failure_retryable: bool = False,
+    ) -> None:
+        if claim.observation_id is None:
+            return
+        context = self._load_reset_baseline_context(connection, claim.observation_id)
+        if context is None:
+            return
+
+        (
+            root_job_id,
+            root_work_type,
+            root_player_id,
+            root_tag,
+            reset_sweep_id,
+            baseline_id,
+            expected_attempt_id,
+            boundary_at,
+            evidence_kind,
+        ) = context
+        root_work_type = _text_value(root_work_type)
+        evidence_kind = _text_value(evidence_kind)
+        endpoint_details: dict[str, dict[str, Any]] = {}
+        for endpoint in ("profile", "battle_log"):
+            endpoint_details[endpoint] = self._load_reset_endpoint_evidence(
+                connection,
+                endpoint=endpoint,
+                root_job_id=int(root_job_id),
+                root_player_id=int(root_player_id),
+                root_tag=_text_value(root_tag),
+                expected_attempt_id=(
+                    int(expected_attempt_id)
+                    if expected_attempt_id is not None
+                    else None
+                ),
+                boundary_at=boundary_at,
+                parser_version=claim.parser_version,
+                processing_version=claim.processing_version,
+                claim=claim,
+                failure_category=failure_category,
+                failure_retryable=failure_retryable,
+            )
+
+        reasons: list[str] = []
+        for endpoint in ("profile", "battle_log"):
+            reasons.extend(endpoint_details[endpoint]["reasons"])
+        if root_work_type != "reset_baseline" or evidence_kind != "paired_v2":
+            reasons.append("legacy_profile_only")
+        reasons = list(dict.fromkeys(reasons))
+
+        profile_valid = bool(endpoint_details["profile"]["valid"])
+        battle_log_valid = bool(endpoint_details["battle_log"]["valid"])
+        hard_failure = bool(
+            root_work_type != "reset_baseline"
+            or evidence_kind != "paired_v2"
+            or any(endpoint_details[endpoint]["hard_failure"] for endpoint in endpoint_details)
+        )
+        if profile_valid and battle_log_valid and not hard_failure:
+            state = "complete"
+            reasons = []
+        elif hard_failure:
+            state = "failed"
+        else:
+            state = "partial"
+
+        profile = endpoint_details["profile"]
+        battle_log = endpoint_details["battle_log"]
+        evidence_json = {
+            "reset_baseline_sweep_id": int(baseline_id),
+            "reset_sweep_id": int(reset_sweep_id),
+            "collection_job_id": int(root_job_id),
+            "attempt_id": (
+                int(expected_attempt_id) if expected_attempt_id is not None else None
+            ),
+            "profile": {
+                "observation_id": profile["observation_id"],
+                "processing_outcome_id": profile["processing_outcome_id"],
+                "collector_outcome": profile["collector_outcome"],
+                "processing_outcome": profile["processing_outcome"],
+            },
+            "battle_log": {
+                "observation_id": battle_log["observation_id"],
+                "processing_outcome_id": battle_log["processing_outcome_id"],
+                "collector_outcome": battle_log["collector_outcome"],
+                "processing_outcome": battle_log["processing_outcome"],
+            },
+            "failure_reasons": reasons,
+        }
+        fingerprint_data = {
+            "baseline_id": int(baseline_id),
+            "root_job_id": int(root_job_id),
+            "attempt_id": (
+                int(expected_attempt_id) if expected_attempt_id is not None else None
+            ),
+            "profile_observation_id": profile["observation_id"],
+            "battle_log_observation_id": battle_log["observation_id"],
+            "profile_processing_outcome_id": profile["processing_outcome_id"],
+            "battle_log_processing_outcome_id": battle_log["processing_outcome_id"],
+            "profile_valid": profile_valid,
+            "battle_log_valid": battle_log_valid,
+            "state": state,
+            "failure_reasons": reasons,
+            "parser_version": claim.parser_version,
+            "processing_version": claim.processing_version,
+        }
+        evidence_key = hashlib.sha256(
+            json.dumps(fingerprint_data, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+        connection.execute(
+            "SELECT id FROM collector_reset_baseline_sweeps WHERE id = %s FOR UPDATE",
+            (baseline_id,),
+        )
+        existing = connection.execute(
+            """
+            SELECT id, version
+            FROM reset_baseline_evidence
+            WHERE reset_baseline_sweep_id = %s AND evidence_key = %s
+            """,
+            (baseline_id, evidence_key),
+        ).fetchone()
+        if existing is not None:
+            baseline_evidence_id = int(existing[0])
+            baseline_version = int(existing[1])
+        else:
+            prior = connection.execute(
+                """
+                SELECT id, version
+                FROM reset_baseline_evidence
+                WHERE reset_baseline_sweep_id = %s
+                ORDER BY version DESC, id DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (baseline_id,),
+            ).fetchone()
+            baseline_version = int(prior[1]) + 1 if prior is not None else 1
+            inserted = connection.execute(
+                """
+                INSERT INTO reset_baseline_evidence (
+                    sweep_id, player_id, boundary_at,
+                    profile_observation_id, battle_log_observation_id,
+                    profile_valid, battle_log_valid, legacy_profile_only,
+                    reset_baseline_sweep_id, collection_job_id, attempt_id,
+                    profile_processing_outcome_id, battle_log_processing_outcome_id,
+                    parser_version, processing_version, version, supersedes_id,
+                    state, failure_reasons, evidence_json, evidence_key
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )
+                RETURNING id
+                """,
+                (
+                    int(reset_sweep_id),
+                    int(root_player_id),
+                    boundary_at,
+                    profile["observation_id"],
+                    battle_log["observation_id"],
+                    profile_valid,
+                    battle_log_valid,
+                    root_work_type != "reset_baseline" or evidence_kind != "paired_v2",
+                    int(baseline_id),
+                    int(root_job_id),
+                    expected_attempt_id,
+                    profile["processing_outcome_id"],
+                    battle_log["processing_outcome_id"],
+                    claim.parser_version,
+                    claim.processing_version,
+                    baseline_version,
+                    prior[0] if prior is not None else None,
+                    state,
+                    Jsonb(reasons),
+                    Jsonb(evidence_json),
+                    evidence_key,
+                ),
+            ).fetchone()
+            assert inserted is not None
+            baseline_evidence_id = int(inserted[0])
+
+        if state == "complete":
+            self._enqueue_reset_reconciliation(
+                connection,
+                baseline_id=int(baseline_evidence_id),
+                baseline_version=baseline_version,
+                player_id=int(root_player_id),
+                boundary_at=boundary_at,
+            )
+
+    @staticmethod
+    def _load_reset_baseline_context(
+        connection: Any,
+        observation_id: int,
+    ) -> tuple[Any, ...] | None:
+        row = connection.execute(
+            """
+            SELECT root.id, root.work_type, root.player_id, root.normalized_tag,
+                   root.sweep_id, root.reset_baseline_sweep_id,
+                   COALESCE(root.result_attempt_id, observed.attempt_id),
+                   baseline.boundary_at, baseline.evidence_kind
+            FROM collector_observations AS observed
+            LEFT JOIN collector_attempts AS source_attempt
+              ON source_attempt.id = observed.attempt_id
+            LEFT JOIN collector_jobs AS attempt_job
+              ON attempt_job.id = source_attempt.job_id
+            LEFT JOIN collector_jobs AS source_job
+              ON source_job.id = observed.collection_job_id
+            JOIN collector_jobs AS root
+              ON root.id = CASE
+                    WHEN attempt_job.work_type IN ('reset_baseline', 'legacy_reset_profile')
+                        THEN attempt_job.id
+                    WHEN source_job.work_type IN ('reset_baseline', 'legacy_reset_profile')
+                        THEN source_job.id
+                    ELSE NULL
+                 END
+            JOIN collector_reset_baseline_sweeps AS baseline
+              ON baseline.id = root.reset_baseline_sweep_id
+            WHERE observed.id = %s
+            """,
+            (observation_id,),
+        ).fetchone()
+        return None if row is None else tuple(row)
+
+    @staticmethod
+    def _load_reset_endpoint_evidence(
+        connection: Any,
+        *,
+        endpoint: str,
+        root_job_id: int,
+        root_player_id: int,
+        root_tag: str,
+        expected_attempt_id: int | None,
+        boundary_at: datetime,
+        parser_version: str,
+        processing_version: str,
+        claim: Claim,
+        failure_category: str | None,
+        failure_retryable: bool,
+    ) -> dict[str, Any]:
+        row = None
+        if expected_attempt_id is not None:
+            row = connection.execute(
+                """
+                SELECT result.outcome, result.observation_id,
+                       observed.attempt_id, observed.collection_job_id,
+                       observed.player_id, observed.normalized_tag,
+                       observed.response_completed_at, observed.http_status,
+                       processing.id, processing.outcome, processing.failure_category,
+                       profile.id, profile.source_contract_state,
+                       profile.eligibility_state, battle_log.id, battle_log.has_row_gap
+                FROM collector_endpoint_results AS result
+                LEFT JOIN collector_observations AS observed
+                  ON observed.id = result.observation_id
+                LEFT JOIN observation_processing_outcomes AS processing
+                  ON processing.observation_id = observed.id
+                 AND processing.parser_version = %s
+                 AND processing.processing_version = %s
+                LEFT JOIN player_profile_versions AS profile
+                  ON profile.observation_id = observed.id
+                 AND profile.parser_version = %s
+                LEFT JOIN battle_log_observations AS battle_log
+                  ON battle_log.observation_id = observed.id
+                 AND battle_log.parser_version = %s
+                WHERE result.attempt_id = %s AND result.endpoint = %s
+                """,
+                (
+                    parser_version,
+                    processing_version,
+                    parser_version,
+                    parser_version,
+                    expected_attempt_id,
+                    endpoint,
+                ),
+            ).fetchone()
+
+        observation_id = int(row[1]) if row is not None and row[1] is not None else None
+        processing_id = int(row[8]) if row is not None and row[8] is not None else None
+        collector_outcome = _text_value(row[0]) if row is not None else None
+        processing_outcome = _text_value(row[9]) if row is not None and row[9] is not None else None
+        reasons: list[str] = []
+        hard_failure = False
+        missing = False
+
+        if row is None or observation_id is None:
+            observation_id = (
+                int(claim.observation_id)
+                if claim.endpoint == endpoint and claim.observation_id is not None
+                else None
+            )
+            if claim.endpoint == endpoint and claim.observation_id == observation_id:
+                processing = connection.execute(
+                    """
+                    SELECT id, outcome, failure_category
+                    FROM observation_processing_outcomes
+                    WHERE observation_id = %s
+                      AND parser_version = %s
+                      AND processing_version = %s
+                    """,
+                    (observation_id, parser_version, processing_version),
+                ).fetchone()
+                if processing is not None:
+                    processing_id = int(processing[0])
+                    processing_outcome = _text_value(processing[1])
+            missing = True
+            reasons.append(f"missing_{endpoint}_observation")
+            if collector_outcome in {"failed", "storage_failed"}:
+                hard_failure = True
+            elif collector_outcome is not None:
+                reasons.append(f"collector_{endpoint}_{collector_outcome}")
+        else:
+            observed_attempt_id = int(row[2]) if row[2] is not None else None
+            observed_player_id = int(row[4]) if row[4] is not None else None
+            observed_tag = _text_value(row[5]) if row[5] is not None else None
+            if observed_attempt_id != expected_attempt_id:
+                reasons.append(f"{endpoint}_wrong_attempt")
+                hard_failure = True
+            if observed_player_id != root_player_id or observed_tag != root_tag:
+                reasons.append(f"{endpoint}_wrong_player")
+                hard_failure = True
+            in_lineage = connection.execute(
+                "SELECT clashlens_reset_job_lineage_v2(%s, %s)",
+                (row[3], root_job_id),
+            ).fetchone()[0]
+            if not in_lineage:
+                reasons.append(f"{endpoint}_outside_sweep")
+                hard_failure = True
+            if row[6] is None or row[6] < boundary_at:
+                reasons.append(f"{endpoint}_stale")
+                hard_failure = True
+
+            if processing_outcome is None:
+                missing = True
+                if (
+                    claim.endpoint == endpoint
+                    and claim.observation_id == observation_id
+                    and failure_category is not None
+                ):
+                    suffix = f"_{failure_category}"
+                    reasons.append(
+                        f"{endpoint}{suffix}{'_retrying' if failure_retryable else ''}"
+                    )
+                    hard_failure = not failure_retryable
+                else:
+                    reasons.append(f"unprocessed_{endpoint}")
+            elif processing_outcome == "non_success":
+                reasons.append(f"{endpoint}_non_success")
+                hard_failure = True
+            elif processing_outcome != "processed":
+                category = (
+                    _text_value(row[10]) if row[10] is not None else processing_outcome
+                )
+                reasons.append(f"{endpoint}_{category}")
+                hard_failure = True
+            elif endpoint == "profile":
+                if (
+                    row[11] is None
+                    or _text_value(row[12]) != "accepted"
+                    or _text_value(row[13]) != "eligible"
+                ):
+                    reasons.append("profile_invalid")
+                    hard_failure = True
+                else:
+                    first_event = connection.execute(
+                        """
+                        SELECT min(evidence.battle_timestamp)
+                        FROM battle_evidence AS evidence
+                        JOIN legend_battles AS battle
+                          ON battle.id = evidence.battle_id
+                        WHERE (
+                                battle.attacker_player_id = %s
+                                OR battle.defender_player_id = %s
+                            )
+                          AND evidence.battle_timestamp >= %s
+                          AND evidence.battle_timestamp < %s + interval '1 day'
+                        """,
+                        (root_player_id, root_player_id, boundary_at, boundary_at),
+                    ).fetchone()[0]
+                    if first_event is not None and row[6] >= first_event:
+                        reasons.append("profile_after_first_event")
+                        hard_failure = True
+            elif row[14] is None or bool(row[15]):
+                reasons.append("battle_log_malformed")
+                hard_failure = True
+
+        valid = not reasons and not missing and not hard_failure
+        return {
+            "observation_id": observation_id,
+            "processing_outcome_id": processing_id,
+            "collector_outcome": collector_outcome,
+            "processing_outcome": processing_outcome,
+            "reasons": reasons,
+            "hard_failure": hard_failure,
+            "valid": valid,
+        }
+
+    @staticmethod
+    def _enqueue_reset_reconciliation(
+        connection: Any,
+        *,
+        baseline_id: int,
+        baseline_version: int,
+        player_id: int,
+        boundary_at: datetime,
+    ) -> None:
+        boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ranked_day_start = boundary_at - timedelta(days=1)
+        ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        deduplication_key = (
+            f"reconcile:reset-baseline:{baseline_id}:v{baseline_version}"
+        )
+        connection.execute(
+            """
+            INSERT INTO python_processing_jobs (
+                observation_id, work_type, deduplication_key, input_json,
+                status, due_at, parser_version, processing_version,
+                domain_rule_version, analytics_rule_version
+            ) VALUES (
+                NULL, 'reconcile_ranked_day', %s, %s, 'pending', clock_timestamp(),
+                %s, %s, %s, %s
+            )
+            ON CONFLICT (deduplication_key) DO NOTHING
+            """,
+            (
+                deduplication_key,
+                Jsonb(
+                    {
+                        "player_id": int(player_id),
+                        "ranked_day_start": ranked_day_start_text,
+                        "boundary_at": boundary_text,
+                        "reset_baseline_id": int(baseline_id),
+                        "reset_baseline_version": int(baseline_version),
+                    }
+                ),
+                DEFAULT_PARSER_VERSION,
+                PROCESSING_VERSION,
+                DOMAIN_RULE_VERSION,
+                ANALYTICS_RULE_VERSION,
+            ),
+        )
+
     @staticmethod
     def _load_reset_baseline(
         connection: Any,
@@ -1599,22 +2057,92 @@ class Database:
     ) -> tuple[Any, ...] | None:
         return connection.execute(
             """
-            SELECT r.id, v.trophies
-            FROM reset_baseline_evidence AS r
-            JOIN player_profile_versions AS v
-              ON v.observation_id = r.profile_observation_id
-             AND v.parser_version = %s
-            JOIN battle_log_observations AS b
-              ON b.observation_id = r.battle_log_observation_id
-             AND b.parser_version = %s
-            WHERE r.player_id = %s AND r.boundary_at = %s
-              AND r.sweep_id IS NOT NULL
-              AND r.profile_valid AND r.battle_log_valid
-              AND NOT r.legacy_profile_only
-            ORDER BY r.id DESC, v.id DESC
+            SELECT evidence.id, profile.trophies
+            FROM reset_baseline_evidence AS evidence
+            JOIN collector_reset_baseline_sweeps AS baseline
+              ON baseline.id = evidence.reset_baseline_sweep_id
+            JOIN collector_jobs AS root_job
+              ON root_job.id = evidence.collection_job_id
+             AND root_job.work_type = 'reset_baseline'
+             AND root_job.reset_baseline_sweep_id = evidence.reset_baseline_sweep_id
+             AND root_job.sweep_id = baseline.reset_sweep_id
+            JOIN collector_attempts AS root_attempt
+              ON root_attempt.id = evidence.attempt_id
+             AND root_attempt.job_id = root_job.id
+            JOIN collector_observations AS profile_observation
+              ON profile_observation.id = evidence.profile_observation_id
+             AND profile_observation.endpoint = 'profile'
+             AND profile_observation.attempt_id = evidence.attempt_id
+             AND profile_observation.player_id = evidence.player_id
+             AND clashlens_reset_job_lineage_v2(
+                    profile_observation.collection_job_id, root_job.id
+                 )
+            JOIN observation_processing_outcomes AS profile_processing
+              ON profile_processing.id = evidence.profile_processing_outcome_id
+             AND profile_processing.observation_id = profile_observation.id
+             AND profile_processing.parser_version = evidence.parser_version
+             AND profile_processing.processing_version = evidence.processing_version
+             AND profile_processing.outcome = 'processed'
+            JOIN player_profile_versions AS profile
+              ON profile.observation_id = profile_observation.id
+             AND profile.parser_version = evidence.parser_version
+             AND profile.source_contract_state = 'accepted'
+             AND profile.eligibility_state = 'eligible'
+            JOIN collector_endpoint_results AS profile_result
+              ON profile_result.attempt_id = evidence.attempt_id
+             AND profile_result.endpoint = 'profile'
+             AND profile_result.observation_id = profile_observation.id
+             AND profile_result.outcome = 'observed'
+            JOIN collector_observations AS battle_observation
+              ON battle_observation.id = evidence.battle_log_observation_id
+             AND battle_observation.endpoint = 'battle_log'
+             AND battle_observation.attempt_id = evidence.attempt_id
+             AND battle_observation.player_id = evidence.player_id
+             AND clashlens_reset_job_lineage_v2(
+                    battle_observation.collection_job_id, root_job.id
+                 )
+            JOIN observation_processing_outcomes AS battle_processing
+              ON battle_processing.id = evidence.battle_log_processing_outcome_id
+             AND battle_processing.observation_id = battle_observation.id
+             AND battle_processing.parser_version = evidence.parser_version
+             AND battle_processing.processing_version = evidence.processing_version
+             AND battle_processing.outcome = 'processed'
+            JOIN battle_log_observations AS battle_log
+              ON battle_log.observation_id = battle_observation.id
+             AND battle_log.parser_version = evidence.parser_version
+             AND NOT battle_log.has_row_gap
+            JOIN collector_endpoint_results AS battle_result
+              ON battle_result.attempt_id = evidence.attempt_id
+             AND battle_result.endpoint = 'battle_log'
+             AND battle_result.observation_id = battle_observation.id
+             AND battle_result.outcome = 'observed'
+            WHERE evidence.player_id = %s
+              AND evidence.boundary_at = %s
+              AND baseline.player_id = evidence.player_id
+              AND baseline.boundary_at = evidence.boundary_at
+              AND evidence.parser_version = %s
+              AND evidence.state = 'complete'
+              AND evidence.version > 0
+              AND evidence.profile_valid
+              AND evidence.battle_log_valid
+              AND NOT evidence.legacy_profile_only
+              AND NOT EXISTS (
+                    SELECT 1
+                    FROM battle_evidence AS event_evidence
+                    JOIN legend_battles AS event_battle
+                      ON event_battle.id = event_evidence.battle_id
+                    WHERE (
+                            event_battle.attacker_player_id = evidence.player_id
+                            OR event_battle.defender_player_id = evidence.player_id
+                        )
+                      AND event_evidence.battle_timestamp >= evidence.boundary_at
+                      AND event_evidence.battle_timestamp < evidence.boundary_at + interval '1 day'
+                      AND event_evidence.battle_timestamp <= profile_observation.response_completed_at
+                )
+            ORDER BY evidence.version DESC, evidence.id DESC
             LIMIT 1
             """,
-            (parser_version, parser_version, player_id, boundary_at),
+            (player_id, boundary_at, parser_version),
         ).fetchone()
 
     @staticmethod
@@ -1859,6 +2387,15 @@ class Database:
         rows = connection.execute(
             """
             SELECT e.battle_timestamp, e.stars, e.destruction_percentage,
+                   e.army_share_code,
+                   CASE
+                       WHEN p.perspective = 'attacker' THEN e.reporter_trophies
+                       ELSE e.opponent_trophies
+                   END AS attacker_trophies,
+                   CASE
+                       WHEN p.perspective = 'attacker' THEN e.opponent_trophies
+                       ELSE e.reporter_trophies
+                   END AS defender_trophies,
                    e.attacker_gain, e.defender_loss
             FROM battle_perspectives AS p
             JOIN battle_evidence AS e ON e.id = p.evidence_id
@@ -1869,15 +2406,38 @@ class Database:
         ).fetchall()
         if len(rows) < 2:
             state = "single_perspective"
+            disagreement_fields: list[str] = []
         else:
-            state = "agreed" if tuple(rows[0]) == tuple(rows[1]) else "disagreement"
+            field_names = (
+                "battle_timestamp",
+                "stars",
+                "destruction_percentage",
+                "army_share_code",
+                "attacker_trophies",
+                "defender_trophies",
+                "attacker_gain",
+                "defender_loss",
+            )
+            disagreement_fields = []
+            for index, field_name in enumerate(field_names):
+                left, right = rows[0][index], rows[1][index]
+                # A missing absolute trophy value is unknown evidence, not a
+                # disagreement with a value reported by the other perspective.
+                if field_name in {"attacker_trophies", "defender_trophies"}:
+                    if left is None or right is None:
+                        continue
+                if left != right:
+                    disagreement_fields.append(field_name)
+            state = "agreed" if not disagreement_fields else "disagreement"
         connection.execute(
             """
             UPDATE legend_battles
-            SET disagreement_state = %s, updated_at = clock_timestamp()
+            SET disagreement_state = %s,
+                disagreement_fields = %s,
+                updated_at = clock_timestamp()
             WHERE id = %s
             """,
-            (state, battle_id),
+            (state, disagreement_fields, battle_id),
         )
 
     @staticmethod

@@ -4,6 +4,8 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import psycopg
+
 from clashlens_prototype.archive import S3ArchiveReader
 from clashlens_prototype.db import Database
 from clashlens_prototype.worker import ObservationProcessor
@@ -42,6 +44,110 @@ def _processor(connection_info: str, archive_server) -> tuple[Database, Observat
     )
 
 
+def _seed_reset_collection_identity(
+    connection_info: str,
+    *,
+    key: str,
+    boundary: datetime,
+    profile_observation_id: int,
+    battle_observation_id: int,
+) -> None:
+    with psycopg.connect(connection_info) as connection:
+        player_id = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+        ).fetchone()[0]
+        baseline = connection.execute(
+            """
+            SELECT id, reset_sweep_id
+            FROM collector_reset_baseline_sweeps
+            WHERE player_id = %s AND boundary_at = %s
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (player_id, boundary),
+        ).fetchone()
+        if baseline is None:
+            reset_sweep_id = connection.execute(
+                """
+                INSERT INTO collector_reset_sweeps (boundary_at)
+                VALUES (%s)
+                RETURNING id
+                """,
+                (boundary,),
+            ).fetchone()[0]
+            baseline_sweep_id = connection.execute(
+                """
+                INSERT INTO collector_reset_baseline_sweeps (
+                    reset_sweep_id, player_id, boundary_at, evidence_kind, state
+                ) VALUES (%s, %s, %s, 'paired_v2', 'pending')
+                RETURNING id
+                """,
+                (reset_sweep_id, player_id, boundary),
+            ).fetchone()[0]
+        else:
+            baseline_sweep_id, reset_sweep_id = int(baseline[0]), int(baseline[1])
+        root_job_id = connection.execute(
+            """
+            INSERT INTO collector_jobs (
+                work_type, scope, player_id, normalized_tag, capacity_pool,
+                priority, due_at, coalescing_key, sweep_id,
+                reset_baseline_sweep_id, status
+            ) VALUES (
+                'reset_baseline', 'player', %s, '#2PP', 'normal', 400, %s,
+                %s, %s, %s, 'complete'
+            )
+            RETURNING id
+            """,
+            (player_id, boundary, f"reset-baseline-{key}", reset_sweep_id, baseline_sweep_id),
+        ).fetchone()[0]
+        root_attempt_id = connection.execute(
+            """
+            INSERT INTO collector_attempts (
+                job_id, status, started_at, completed_at
+            ) VALUES (%s, 'complete', %s, %s)
+            RETURNING id
+            """,
+            (root_job_id, boundary, boundary),
+        ).fetchone()[0]
+        connection.execute(
+            "UPDATE collector_jobs SET result_attempt_id = %s WHERE id = %s",
+            (root_attempt_id, root_job_id),
+        )
+        connection.execute(
+            """
+            UPDATE collector_observations
+            SET collection_job_id = %s, attempt_id = %s
+            WHERE id IN (%s, %s)
+            """,
+            (root_job_id, root_attempt_id, profile_observation_id, battle_observation_id),
+        )
+        for endpoint, observation_id in (
+            ("profile", profile_observation_id),
+            ("battle_log", battle_observation_id),
+        ):
+            source = connection.execute(
+                """
+                SELECT request_started_at, response_completed_at, http_status,
+                       response_hash, archive_reference
+                FROM collector_observations
+                WHERE id = %s
+                """,
+                (observation_id,),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO collector_endpoint_results (
+                    attempt_id, endpoint, outcome, request_started_at,
+                    response_completed_at, http_status, response_hash,
+                    archive_reference, observation_id, request_count,
+                    key_label
+                ) VALUES (%s, %s, 'observed', %s, %s, %s, %s, %s, %s, 1, 'normal-a')
+                """,
+                (root_attempt_id, endpoint, *source, observation_id),
+            )
+        connection.commit()
+
+
 def _store_baseline_pair(
     connection_info: str,
     archive_server,
@@ -50,8 +156,8 @@ def _store_baseline_pair(
     boundary: datetime,
     trophies: int,
     empty_battle_log: bool,
-) -> tuple[int, int]:
-    profile_observation, _ = store_observation(
+) -> tuple[int, int, int, int]:
+    profile_observation, profile_job = store_observation(
         connection_info,
         archive_server,
         occurrence_key=f"{key}-profile",
@@ -60,7 +166,7 @@ def _store_baseline_pair(
         observed_at=boundary,
         normalized_tag="#2PP",
     )
-    battle_observation, _ = store_observation(
+    battle_observation, battle_job = store_observation(
         connection_info,
         archive_server,
         occurrence_key=f"{key}-battle",
@@ -69,46 +175,14 @@ def _store_baseline_pair(
         observed_at=boundary,
         normalized_tag="#2PP",
     )
-    return profile_observation, battle_observation
-
-
-def _link_reset_evidence(
-    database: Database,
-    *,
-    boundary: datetime,
-    profile_observation_id: int,
-    battle_observation_id: int,
-) -> None:
-    with database.pool.connection() as connection:
-        with connection.transaction():
-            sweep = connection.execute(
-                """
-                INSERT INTO collector_reset_sweeps (boundary_at)
-                VALUES (%s)
-                RETURNING id
-                """,
-                (boundary,),
-            ).fetchone()
-            player = connection.execute(
-                "SELECT id FROM players WHERE normalized_tag = '#2PP'"
-            ).fetchone()
-            assert sweep is not None and player is not None
-            connection.execute(
-                """
-                INSERT INTO reset_baseline_evidence (
-                    sweep_id, player_id, boundary_at,
-                    profile_observation_id, battle_log_observation_id,
-                    profile_valid, battle_log_valid, legacy_profile_only
-                ) VALUES (%s, %s, %s, %s, %s, true, true, false)
-                """,
-                (
-                    sweep[0],
-                    player[0],
-                    boundary,
-                    profile_observation_id,
-                    battle_observation_id,
-                ),
-            )
+    _seed_reset_collection_identity(
+        connection_info,
+        key=key,
+        boundary=boundary,
+        profile_observation_id=profile_observation,
+        battle_observation_id=battle_observation,
+    )
+    return profile_observation, battle_observation, profile_job, battle_job
 
 
 def test_durable_reconciliation_versions_late_corrections_without_rewriting_history(
@@ -116,15 +190,17 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
     archive_server,
 ) -> None:
     with domain_database(database_url) as connection_info:
-        start_profile, start_battle = _store_baseline_pair(
-            connection_info,
-            archive_server,
-            key="start",
-            boundary=DAY_START,
-            trophies=6000,
-            empty_battle_log=True,
+        start_profile, start_battle, start_profile_job, start_battle_job = (
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key="start",
+                boundary=DAY_START,
+                trophies=6000,
+                empty_battle_log=True,
+            )
         )
-        store_observation(
+        _middle_observation, middle_job = store_observation(
             connection_info,
             archive_server,
             occurrence_key="middle-battle",
@@ -133,38 +209,46 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             observed_at=DAY_START + timedelta(hours=7),
             normalized_tag="#2PP",
         )
-        end_profile, end_battle = _store_baseline_pair(
-            connection_info,
-            archive_server,
-            key="end",
-            boundary=DAY_END,
-            trophies=6040,
-            empty_battle_log=False,
+        end_profile, end_battle, end_profile_job, end_battle_job = (
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key="end",
+                boundary=DAY_END,
+                trophies=6040,
+                empty_battle_log=False,
+            )
         )
         database, processor = _processor(connection_info, archive_server)
         try:
-            results = processor.process_until_idle(owner="source-worker")
+            results = []
+            for job_id in (
+                start_profile_job,
+                start_battle_job,
+                middle_job,
+                end_profile_job,
+                end_battle_job,
+            ):
+                result = processor.process_job(job_id, owner=f"source-{job_id}")
+                assert result is not None and result.outcome == "processed"
+                results.append(result)
             assert len(results) == 5
-            assert all(result.outcome == "processed" for result in results)
-            _link_reset_evidence(
-                database,
-                boundary=DAY_START,
-                profile_observation_id=start_profile,
-                battle_observation_id=start_battle,
-            )
-            _link_reset_evidence(
-                database,
-                boundary=DAY_END,
-                profile_observation_id=end_profile,
-                battle_observation_id=end_battle,
-            )
 
-            first_job = database.enqueue_reconciliation(
-                player_tag="#2PP",
-                day_start=DAY_START,
-                now=DAY_END + timedelta(minutes=1),
-                request_key="first",
-            )
+            ranked_day_start_text = DAY_START.strftime("%Y-%m-%dT%H:%M:%SZ")
+            with database.pool.connection() as connection:
+                first_job_row = connection.execute(
+                    """
+                    SELECT id
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                      AND input_json->>'ranked_day_start' = %s
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    (ranked_day_start_text,),
+                ).fetchone()
+            assert first_job_row is not None
+            first_job = int(first_job_row[0])
             first = processor.process_job(first_job, owner="reconcile-first")
             assert first is not None and first.outcome == "processed"
             with database.pool.connection() as connection:
@@ -204,36 +288,40 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 )
                 assert result is not None and result.outcome == "processed"
 
-            corrected_profile, corrected_job = store_observation(
+            (
+                corrected_profile,
+                corrected_battle,
+                corrected_profile_job,
+                corrected_battle_job,
+            ) = _store_baseline_pair(
                 connection_info,
                 archive_server,
-                occurrence_key="corrected-end-profile",
-                endpoint="profile",
-                body=_profile(6039),
-                observed_at=DAY_END + timedelta(seconds=1),
-                normalized_tag="#2PP",
+                key="end-correction",
+                boundary=DAY_END,
+                trophies=6039,
+                empty_battle_log=False,
             )
-            corrected_source = processor.process_job(
-                corrected_job, owner="corrected-source"
-            )
-            assert corrected_source is not None
-            with database.pool.connection() as connection:
-                connection.execute(
-                    """
-                    UPDATE reset_baseline_evidence
-                    SET profile_observation_id = %s
-                    WHERE boundary_at = %s
-                    """,
-                    (corrected_profile, DAY_END),
-                )
-                connection.commit()
+            assert corrected_profile != end_profile
+            assert corrected_battle != end_battle
+            for job_id in (corrected_profile_job, corrected_battle_job):
+                result = processor.process_job(job_id, owner=f"correction-{job_id}")
+                assert result is not None and result.outcome == "processed"
 
-            second_job = database.enqueue_reconciliation(
-                player_tag="#2PP",
-                day_start=DAY_START,
-                now=DAY_END + timedelta(minutes=2),
-                request_key="late-correction",
-            )
+            with database.pool.connection() as connection:
+                second_job_row = connection.execute(
+                    """
+                    SELECT id
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                      AND input_json->>'ranked_day_start' = %s
+                      AND id <> %s
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    (ranked_day_start_text, first_job),
+                ).fetchone()
+            assert second_job_row is not None
+            second_job = int(second_job_row[0])
             second = processor.process_job(second_job, owner="reconcile-correction")
             assert second is not None and second.outcome == "processed"
             with database.pool.connection() as connection:
