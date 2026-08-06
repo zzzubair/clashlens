@@ -1,166 +1,170 @@
 # Product Scope
 
+## Ownership
+
+This file owns the product mission, Phase 1 scope, user-facing terms, capabilities, product rules, out-of-scope work, and open product specifications.
+
+- [`docs/domain.md`](domain.md) owns exact meanings for time, players, observations, events, adjustments, snapshots, cohorts, analytics, and confidence states.
+- [`docs/architecture.md`](architecture.md) owns the accepted runtime shape, implementation boundaries, security rules, and open technology choices.
+
+Preserve the distinction between product scope, domain rules, and implementation choices.
+
 ## Mission
 
 Clash Lens democratizes competitive Clash of Clans ranked data. It brings scattered observations together so players can make evidence-led decisions instead of relying on isolated logs, opinions, or guesswork.
 
-Clash Lens provides data and analysis. It does not prescribe a specific army or base.
+Clash Lens provides data and analysis. Users choose their armies, bases, and actions.
 
-## Phase 1 Goal
+## Phase 1 boundary
 
-Phase 1 supports Legend I. Its north star is that a Legend I player should not need another data product to compete effectively.
+Phase 1 supports Legend I. Its north star is that a Legend I player should not need another data product to compete effectively. The product is global and English first. Ranked tournaments other than Legend I come after Phase 1.
 
-Clash Lens combines broad Legend I meta analysis, trustworthy personal tracking, official leaderboard context, and convenient access across several surfaces. It is global and English first.
+The scope is final. The implementation-level details that remain open are listed in [Open specification work](#open-specification-work).
 
-Ranked tournaments other than Legend I come after Phase 1.
+## Primary user
 
-## Target User
+The primary user is an individual competitive rank pusher. The same public data supports creators, players with several accounts, clans, friends, and followers.
 
-The primary user is an individual competitive rank pusher. The same public data also supports creators, players with several accounts, clans, friends, and followers.
+## Product terms
 
-## Terms
+### Public and account terms
 
 - A **player page** is a public web page for one Clash of Clans player tag.
 - A **Clash Lens account** is an optional profile authenticated through Discord or Google.
 - Every Clash Lens account has one required unique **username** and one required **display name**. Display names do not need to be unique.
 - A **user page** is a public web page identified by the account's username. It shows the account's display name and every verified player account linked to that Clash Lens account.
 - A **saved player tag** is a public player tag added to a Clash Lens account for convenience. Saving a tag does not prove ownership of the game account.
-- A **linked player account** is a player tag that the user verified through the official `POST /players/{playerTag}/verifytoken` endpoint with the one-time player API token from the game. The link records verified control at the time of verification.
-- Every linked player account is public on the account's user page. Phase 1 does not provide per-account visibility controls.
-- One player tag can link to only one Clash Lens account at a time. Moving it to another Clash Lens account requires a fresh player-token verification.
-- Never request a player's game login credentials. Do not retain or log the one-time player API token after its verification request finishes.
+- A **linked player account** is a player tag verified through the official `POST /players/{playerTag}/verifytoken` endpoint with the one-time player API token from the game. The link records verified control at the time of verification.
+- Every linked player account is public on the account's user page. Phase 1 has no per-account visibility controls.
+- One player tag can link to only one Clash Lens account at a time. Moving it to another Clash Lens account requires fresh player-token verification.
+- Clash Lens never requests a player's game login credentials. It does not retain or log the one-time player API token after its verification request finishes.
 - A **multi-account view** summarizes the verified player accounts linked to one Clash Lens account and links to each player page.
 - A **group** is a named set of player tags organized by a Clash Lens account.
-- The **Tracked Players leaderboard** orders players currently tracked in Legend I. Its positions are Clash Lens positions among tracked players; official rank provenance is shown where the official API supplies it.
-- A **frozen leaderboard** is the published reset snapshot used for shared daily leaderboard analytics.
-- A **live leaderboard** uses newer observations and is labeled separately from the frozen snapshot.
-- An **inferred shielded day** is a fully observed Legend I ranked day with unchanged trophies and no Legend I battle-log events. It indicates likely use of a 1-day or 2-day shield; the official API does not directly confirm the shield.
-- A **rank band** is a lower-exclusive, upper-inclusive frozen-snapshot range. For example, the band `(200, 1,000]` contains ranks 201 through 1,000.
-- A **rank streak** is the set of players who remain within a selected cumulative Top-N cohort or rank band in every frozen daily snapshot across a consecutive period.
-- The **defense lens** analyzes the armies and outcomes seen by defenders in a selected trophy range or frozen leaderboard cohort and time period.
-- The **offense lens** analyzes the armies and outcomes produced by attackers in a selected trophy range or frozen leaderboard cohort and time period.
 
-## Phase 1 Capabilities
+### Domain terms
 
-### Legend I Coverage
+[`docs/domain.md`](domain.md) owns the exact definitions and rules for the Tracked Players leaderboard, official rank, frozen and live leaderboards, inferred shielded days, rank bands, rank streaks, and offense and defense lenses. Product capabilities use those terms without redefining them here.
 
-- Let anyone submit a valid player tag for tracking.
+## Phase 1 capabilities
+
+### Legend I coverage and discovery
+
+- Accept any valid player tag submitted by a user.
 - Discover additional player tags only through official Clash of Clans API sources, such as leaderboards and clan data.
-- Track as much of the Legend I population as official sources allow.
-- Show measured coverage and gaps. Do not claim full-league coverage unless Clash Lens can prove it.
+- Track as much of the Legend I population as official sources allow. Show measured coverage and gaps. Claim full-league coverage only when Clash Lens can prove it.
 - When Clash Lens first sees a valid tag, retain it as a known player and show the available profile and retained Legend I observations immediately.
 - Begin regular Phase 1 battle collection after confirming that the player is in Legend I. Mark earlier coverage as partial or unavailable.
 
-### Legend I Meta Analysis
+### Legend I meta analysis
 
 - Preserve and decode the `armyShareCode` from timestamped Legend I battles.
 - Keep the exact decoded army composition and classify it into a versioned army archetype without discarding the raw source value.
 - Let users analyze army usage and three-star rate for a trophy range, cumulative Tracked Players leaderboard cohort, rank band, or rank-streak cohort within a stated time period.
-- Offer cumulative frozen-snapshot presets for the Top 10, 50, 100, 200, 500, 1,000, 2,000, 5,000, and 10,000 tracked players.
-- Let users select rank bands, such as ranks 51–100 or ranks 201–1,000.
-- Let users list players who remained within a selected Top-N cohort or rank band for a consecutive period, defaulting to 7 days.
-- Exclude players with a stale, missing, or uncertain entry on any required day from the confirmed rank-streak list.
-- Count an inferred shielded day toward a rank streak when the player's fresh frozen-snapshot rank remains within the selected cohort or band.
-- Show how many days in the streak were inferred shielded days.
-- Let users inspect the observed offense armies, offense outcomes, defenses received, and defense outcomes for that rank-streak cohort over the same period.
-- Do not present one changing Top-N population as a single multi-day cohort; use rank streaks when the question is who remained consistently within a rank selection.
-- Offer a trophy-centered view covering 5 trophies below through 5 trophies above a selected value.
+- Offer cumulative frozen-snapshot presets for Top 10, Top 50, Top 100, Top 200, Top 500, Top 1,000, Top 2,000, Top 5,000, and Top 10,000 tracked players.
+- Let users select rank bands such as ranks 51–100 or ranks 201–1,000.
+- Let users list players who remained within a selected Top-N cohort or rank band for a consecutive period. The default period is 7 days.
+- Exclude a player with a stale, missing, or uncertain entry on any required day from the confirmed rank-streak list.
+- Count an inferred shielded day toward a rank streak when the player's fresh frozen-snapshot rank remains within the selected cohort or band. Show how many days in the streak were inferred shielded days.
+- Let users inspect the observed offense armies, offense outcomes, defenses received, and defense outcomes for the rank-streak cohort over the same period.
+- Use rank streaks when the question is which players remained consistently within a rank selection. A changing Top-N population is not one multi-day cohort.
+- Offer a trophy-centered view from 5 trophies below through 5 trophies above a selected value.
 - Keep offense and defense perspectives separate.
 - Use observed attack patterns and outcomes to support army-selection and base-selection decisions.
 - Show sample size, measured coverage, freshness, classification confidence, and unclassified observations with every aggregate.
 
-### Personal Tracking
+### Personal tracking
 
-- Track each player’s timestamped daily attacks and defenses.
-- Preserve a fully observed zero-event day as an inferred shielded day instead of omitting it or labeling it missing.
+- Track each player's timestamped daily attacks and defenses.
+- Preserve a fully observed zero-event day as an inferred shielded day. Keep it separate from a missing day.
 - Show inferred shield status and its evidence separately from exact battle events.
-- Make the current season’s day-by-day log the primary player-page view. Show the active day as a live row.
-- Label the active ranked day **Live**. After the day ends, label it **Complete** only when all trophy movement and required evidence reconcile; otherwise label it **Partial** and state the missing or uncertain evidence.
+- Make the current season's day-by-day log the primary player-page view. Show the active day as a live row.
+- Label the active ranked day **Live**. After the day ends, label it **Complete** only when trophy movement and required evidence reconcile. Otherwise label it **Partial** and state the missing or uncertain evidence.
 - Let users expand a ranked day to inspect its timestamped attacks, defenses, opponents, results, army data, and confidence.
-- Add late evidence to the affected ended day. Rebuild only the affected day and dependent summaries, and publish a corrected version of any changed frozen result instead of silently replacing it.
+- Add late evidence to the affected ended day. Rebuild only that day and dependent summaries. Publish a corrected version of any changed frozen result instead of silently replacing it.
 - Preserve and expose every ranked season collected by Clash Lens.
 - Show the first tracked day and all known coverage gaps.
 
-### Public Discovery
+### Public discovery
 
 - Provide a public player page for each tracked player tag without requiring a Clash Lens account.
 - Show the latest saved player data immediately with its observation time and freshness.
-- Let a user request a live refresh without blocking the initial page. Update the page when the newly collected observation has been processed.
+- Let a user request a live refresh without blocking the initial page. Update the page after the new observation has been processed.
 - Provide one public Tracked Players leaderboard for the actively tracked Legend I population.
-- On that same leaderboard surface, show the official top-200 rank as a separate provenance-backed field when supplied by the official Clash of Clans API.
-- Maintain the most recent complete official global Top 200 from the official API. Replace it only after one newer response contains 200 unique valid normalized player tags and valid ranks 1 through 200 once each. If a refresh fails or is partial, keep the prior complete list available and show the failed refresh state.
-- Show the official observation time. The official response has no season identifier, so do not present a derived Legend I season label as an official API field.
-- Do not describe Clash Lens positions beyond the official source as official positions.
-- Keep serving the previously frozen leaderboard until its replacement is published as one internally consistent snapshot version.
-- Show missing, stale, or uncertain entries within a published snapshot rather than treating atomic publication as proof of complete coverage.
+- On that leaderboard, show the official top-200 rank as a separate provenance-backed field when the official Clash of Clans API supplies it.
+- Maintain the most recent complete official global Top 200 from the official API. Replace it only after one newer response contains 200 unique valid normalized player tags and valid ranks 1 through 200 once each.
+- Keep the prior complete official Top 200 available when a refresh fails or is partial. Show the failed refresh state.
+- Show the official observation time. The official response has no season identifier. A derived Legend I season label is not an official API field.
+- Describe only the source-backed positions as official. Clash Lens positions are not official positions.
+- Keep serving the previous frozen leaderboard until its replacement publishes as one internally consistent snapshot version.
+- Show missing, partial, stale, or uncertain entries within a published snapshot. Atomic publication does not prove complete coverage.
 - Offer a separately labeled live view based on newer observations.
-- Show tracked population, measured coverage, source provenance, snapshot time, and freshness, and link entries to player pages.
+- Show tracked population, measured coverage, source provenance, snapshot time, and freshness. Link entries to player pages.
 - Keep the latest accepted Tracked Players ordering available when a refresh is delayed or fails. Keep entries that use older valid trophy observations in the ordering and label their observation time, age, and freshness. Update the ordering when newer valid observations arrive.
-- Keep public player data and public analytics available without sign-in.
 - Provide a public user page for each Clash Lens username. Show its non-unique display name and all player accounts currently linked through successful player-token verification.
 
-### Accounts and Groups
+### Accounts and groups
 
 - Offer optional Clash Lens accounts authenticated through Discord or Google.
 - Let one Clash Lens account link both a Discord identity and a Google identity. Each provider identity can belong to only one Clash Lens account.
 - Let one Clash Lens account save multiple player tags.
 - Provide one multi-account summary page for verified linked player accounts, with links to each public player page.
-- Let users link player accounts only after successful official player-token verification. One player tag can link to only one Clash Lens account at a time, and moving it requires fresh verification.
+- Link player accounts only after successful official player-token verification. One player tag can link to only one Clash Lens account at a time, and moving it requires fresh verification.
 - Let users modify only their own saved tags, linked player accounts, groups, and preferences.
 - Let account users create named groups of player tags for easy tracking.
-- Use authentication to organize public data and preferences. Do not use it to unlock hidden player data.
+- Use authentication to organize public data and preferences. It does not unlock hidden player data.
 
-### Surfaces
+### Product surfaces
 
 - Use the website as the primary product surface.
-- Provide minimal and easy Discord access. The exact Discord workflow remains a later specification decision.
+- Provide minimal, easy Discord access. The exact Discord workflow remains a later specification decision.
 - Provide Google Sheets exports for analysis and sharing.
 - Provide an OBS browser overlay as a creator-facing growth and publicity surface.
-- Keep shared data meanings, confidence states, and freshness consistent across all applicable surfaces.
+- Keep shared data meanings, confidence states, and freshness consistent across applicable surfaces.
 
-## Product Rules
+## Product rules
 
-### Trust
+### Trust and evidence
 
 - Clash Lens must be trustworthy.
 - Treat event accuracy, ranked-day reconciliation, and ranked-day completeness as separate claims.
-- Mark a ranked day complete only when the stored events and final trophy balance reconcile and the available evidence shows that no relevant event or settlement adjustment is missing.
+- Mark a ranked day **Complete** only when stored events and final trophy balance reconcile and available evidence shows that no relevant event or settlement adjustment is missing. Apply the exact evidence rules in [`docs/domain.md`](domain.md).
 - Show partial, stale, missing, malformed, or uncertain data explicitly.
 - Do not overstate accuracy, coverage, completeness, or classification confidence.
 
-### Evidence, Not Prescriptions
+### Evidence, not prescriptions
 
-- Provide observed data and reproducible analysis so users can make their own decisions.
-- Do not prescribe a specific army or base.
-- Do not present opinion as measured evidence.
+- Provide observed data and reproducible analysis so users make their own decisions.
+- Keep army-selection and base-selection decisions with the user. Do not prescribe a specific army or base.
+- Keep opinion separate from measured evidence.
 
-### Free Access and Monetization
+### Free access and monetization
 
 - Keep all of Clash Lens free.
-- Do not add subscriptions, premium tiers, paywalls, or paid feature gates.
-- Do not require a Clash Lens account to view public player data or public analytics.
-- Authentication may be required to store personal organization and preferences.
-- Monetization remains open, but it must not restrict access and must comply with the current Supercell Fan Content Policy and API terms.
+- Keep public player data and public analytics available without sign-in.
+- Keep authentication for personal organization and preferences; it may be required to store them. Authentication does not unlock hidden player data.
+- Keep subscriptions, premium tiers, paywalls, and paid feature gates out of the product.
+- Monetization remains an open choice only if it does not restrict public access and complies with the current Supercell Fan Content Policy and API terms.
 
-### Supercell Policy
+### Sources and Supercell policy
 
+- Use official Clash of Clans API sources and user-submitted tags for player discovery.
+- Keep competitor-service scraping outside the product.
 - Comply with the current Supercell Fan Content Policy and API terms.
-- Do not imply that Supercell endorses Clash Lens.
-- Include all required fan-content notices on applicable public surfaces.
-- Do not provide delegated or shared game-account access. Account sharing violates Supercell's terms; Clash Lens verifies only that the current user can supply the account's one-time player API token.
+- Keep required fan-content notices on applicable public surfaces. Do not imply Supercell endorsement.
+- Provide no delegated or shared game-account access. Account sharing violates Supercell's terms. Clash Lens verifies only that the current user can supply the account's one-time player API token.
 
-## Out of Scope for Phase 1
+## Out of scope for Phase 1
 
 - Ranked tournaments other than Legend I.
 - War, Clan War League, clan-management, and base-management systems.
 - Prescriptive “use this army” or “use this base” recommendations.
 - Paid access to player data or analytics.
-- Scraping competitor services to seed player tags or copy player data.
-- The TypeScript framework and remaining infrastructure-product, cloud-provider, and implementation choices that remain open in `docs/architecture.md`.
+- Competitor-service scraping to seed player tags or copy player data.
+- The TypeScript framework and the remaining infrastructure-product, cloud-provider, and implementation choices that remain open in [`docs/architecture.md`](architecture.md).
 
-## Open Specification Work
+## Open specification work
 
-The product scope is final. The following implementation-level details remain for later specifications and issues:
+The product scope is final. These implementation-level details remain for later specifications and issues:
 
 - Time-period defaults other than the confirmed 7-day rank-streak default.
 - Rank-band input limits and interaction design.

@@ -1,91 +1,61 @@
-# Clash Lens Agent Guide
+# Agent Guide
 
-## Shared Agent Workflow
+## Agent roles
 
 - The maintainer-facing agent uses `openai/gpt-5.6-sol` and owns decisions, coordination, final review, and the final response.
 - Heavy implementation, research, and review work uses `openai/gpt-5.6-luna` with max reasoning through Hermes subagents or the Kanban coder profile.
-- Do not use the repository's former OpenCode agents or configuration.
+- A direct maintainer instruction overrides this default role split.
+- The repository's former OpenCode agents and configuration are retired.
 
-Clash Lens is at an early stage. The Phase 1 product scope, architecture shape, PostgreSQL database, and Go/Python/TypeScript runtime split are confirmed. Detailed specifications, remaining technology choices, and implementation remain open.
+## Status
 
-## Sources of Truth
+Clash Lens is early stage. Phase 1 supports Legend I. The product scope and architecture shape are confirmed: PostgreSQL stores structured data and durable queues; Go collects official API evidence; Python owns domain processing, analytics, accounts, integrations, and the private service API; TypeScript owns the public website and backend; and a separate immutable raw-response archive is part of the shape. The Phase 1 Python stack is confirmed. Phase 1 runs on one Fedora host with about 16 GB available memory and a private rootless Podman network.
 
-- `README.md` gives the repository overview and current status.
-- `docs/product.md` owns product scope and product rules.
-- `docs/domain.md` owns confirmed domain terminology and invariants.
-- `docs/architecture.md` owns architecture status and open decisions.
+Remaining detailed specifications, most implementation, the raw-archive product, detailed module boundaries, the TypeScript framework, remaining infrastructure products, the complete Phase 1 deployment, cloud providers, and exact resource budgets remain open. Present trade-offs and obtain maintainer approval before confirming an open choice.
 
-Report conflicts between these files. Do not choose silently.
+## Source map
 
-## Phase 1 Scope
+Read the source that matches the branch of work:
 
-Phase 1 supports Legend I. It includes:
+- **Product** — [`docs/product.md`](docs/product.md): mission, Phase 1 scope, user and account terms, capabilities, access, surfaces, policy, out-of-scope work, and product specifications.
+- **Domain** — [`docs/domain.md`](docs/domain.md): time, players, observations, battles, ranked days, snapshots, cohorts, analytics, and confidence states.
+- **Architecture** — [`docs/architecture.md`](docs/architecture.md): runtime ownership, private API security, jobs, storage, collection, deployment, recovery, observability, verification, and open technology choices.
+- **Runbooks** — [`docs/collector-prototype.md`](docs/collector-prototype.md) and [`docs/deployment.md`](docs/deployment.md) for the current Go deployment; [`python-prototype/README.md`](python-prototype/README.md) and [`python-prototype/deployment.md`](python-prototype/deployment.md) for the throwaway Python seam.
+- **Overview** — [`README.md`](README.md): public orientation and links to the detailed sources.
 
-- Broad Legend I army and outcome analysis.
-- Separate offense and defense analytics by trophy range or tracked leaderboard cohort and time period.
-- Trustworthy personal season tracking.
-- Public player pages and official leaderboard context.
-- Optional Discord or Google accounts.
-- Multi-account summary pages and saved player groups.
-- Website, minimal Discord access, Google Sheets exports, and an OBS browser overlay.
+Report conflicts with exact locations. Keep open decisions open; do not choose silently.
 
-Ranked tournaments other than Legend I come later.
+## Fast guards
 
-Do not add war, Clan War League, clan-management, base-management, or prescriptive army or base recommendations to Phase 1.
+- Keep Phase 1 on Legend I. Keep other ranked tournaments, war, Clan War League, clan-management, base-management, and prescriptive army or base recommendations out of Phase 1.
+- Provide data and analysis so users decide. Keep public player data and analytics free and available without sign-in. Authentication organizes public data and preferences.
+- Use official Clash of Clans API sources and user-submitted tags. Comply with the current Supercell Fan Content Policy and API terms. Keep the product unofficial and never imply endorsement.
+- Preserve timestamped raw observations, including `armyShareCode`. Keep ingestion idempotent, deduplicate repeated and two-sided observations, and keep derived results reproducible and versioned. Show missing, partial, stale, malformed, unclassified, and uncertain data. Do not claim full coverage or complete accuracy without evidence. Use UTC.
+- Go collects and archives evidence. It does not implement canonical battle linking, ranked-day reconciliation, shield or automatic-defense inference, army classification, or analytics. Python owns those rules. The TypeScript backend, Discord bot, and future integrations use the private Python API; browser code uses only the TypeScript backend and does not reproduce Python-owned rules.
+- Keep shared meanings, confidence states, and freshness consistent across surfaces. Keep credentials and unnecessary personal data out of logs. Follow the exact domain and verification rules in [`docs/domain.md`](docs/domain.md) and [`docs/architecture.md`](docs/architecture.md).
 
-## Product Guardrails
+## Working rules
 
-- Clash Lens provides data and analysis. Users make the decisions.
-- Keep all public player data and analytics free.
-- Do not add subscriptions, paywalls, premium tiers, or paid feature gates.
-- Use only official Clash of Clans API sources and user-submitted tags for player discovery.
-- Do not scrape competitor services for player tags or player data.
-- Comply with the current Supercell Fan Content Policy and API terms.
-- Do not imply Supercell endorsement.
-- Keep shared data meanings and confidence states consistent across all applicable surfaces.
-
-## Trust and Data
-
-- Preserve raw source observations, including timestamps and `armyShareCode`.
-- Make ingestion idempotent and deduplicate repeated or two-sided observations of the same battle.
-- Keep derived analytics reproducible and versioned.
-- Treat exact events, reconciled ranked days, and complete ranked days as separate states.
-- Show missing, partial, stale, malformed, unclassified, or uncertain data.
-- Do not claim full coverage or complete accuracy without evidence.
-- Use UTC internally.
-- `docs/domain.md` owns the exact domain rules.
-
-## Architecture
-
-`docs/architecture.md` defines one logical product: PostgreSQL for structured data and durable queues, Go for official API collection and raw evidence, one Python codebase for domain processing, analytics, integrations, accounts, and a private service API, TypeScript for the public website and its backend, and a separate immutable raw-response archive.
-
-The Go collector must not implement canonical battle linking, ranked-day reconciliation, shield or automatic-defense inference, army classification, or product analytics. Python owns those domain interpretations. The TypeScript website backend, Discord bot, and future integrations consume the private Python API without direct PostgreSQL or raw-archive access. Browser code communicates only with the TypeScript website backend and does not duplicate Python-owned rules.
-
-Phase 1 runs on one Fedora host with approximately 16 GB of available memory and a private rootless Podman network. The Python stack is confirmed in `docs/architecture.md`. Remaining storage products, detailed module boundaries, the TypeScript framework, deployment details, and cloud providers remain open. Do not confirm one without presenting trade-offs and receiving maintainer approval.
-
-## Working Rules
-
-- Read the applicable source documents before changing product, domain, or architecture behavior.
-- Create feature and prototype worktrees as siblings outside the main checkout under `../ClashLens-worktrees/<name>/`. Do not nest worktrees inside the main checkout.
-- Preserve maintainer changes and keep each change focused.
-- Do not turn open specification details into product rules without maintainer approval.
+- Inspect the working tree and read applicable sources before changing behavior. Preserve maintainer changes and keep each change focused.
+- Create feature and prototype worktrees as siblings under `../ClashLens-worktrees/<name>/`, outside the main checkout.
 - Add proportionate tests when implementation changes begin.
-- Do not log credentials or unnecessary personal data.
-- This repository is private. Use the authenticated `gh` CLI for all GitHub actions.
-- Do not commit, push, rebase, or open a pull request unless a maintainer asks.
-- State what changed, what was verified, what was not verified, and what remains open.
-- Use ASD-STE100 Simplified Technical English in every response to the maintainer. Prefer short sentences, common words, active voice, and consistent terms. Keep code, commands, identifiers, and required technical terms exact.
-- Prefer the simplest complete solution. Do not trade away correctness, evidence, or visible uncertainty.
+- Use the authenticated `gh` CLI for GitHub actions; this repository is private.
+- Use ASD-STE100 Simplified Technical English in maintainer-facing responses. Keep code, commands, identifiers, and required technical terms exact.
+- Prefer the simplest complete solution. Preserve correctness, evidence, and visible uncertainty. Never turn an open specification detail into a product rule without maintainer approval.
 
-## Feature Workflow
+## Substantial feature workflow
 
-For substantial features:
+1. **Inspect.** Read source documents and inspect the working tree. Done when applicable rules are identified.
+2. **Resolve.** Raise unclear rules or conflicts with the maintainer. Update source documents only when shared meanings change. Done when the rule or open decision is explicit.
+3. **Issue.** When asked, create an approved GitHub issue with scope, rules, acceptance criteria, dependencies, and tests. Done when the issue directs the work.
+4. **Prototype.** When approved, build in an isolated sibling worktree and record findings and specification changes on the issue. Done when the prototype answers its question and findings are recorded.
+5. **Implement.** After approval, plan and implement with migrations, tests, and applicable reviews. Done when requested behavior and tests are in the focused change.
+6. **Publish.** Open a pull request only when asked. The maintainer decides whether to approve and merge.
 
-1. Read the source documents and inspect the working tree.
-2. Resolve unclear rules and decisions with the maintainer. Update source documents only when shared meanings change.
-3. When asked, create an approved GitHub issue with scope, rules, acceptance criteria, dependencies, and tests.
-4. When a prototype is approved, build it in an isolated sibling worktree under `../ClashLens-worktrees/`. Record findings and specification changes on the issue.
-5. After approval, plan and implement with migrations, tests, and applicable reviews.
-6. Open a PR only when asked. The maintainer decides whether to approve and merge.
+Do not commit, push, rebase, or open a pull request unless a maintainer asks.
 
-The repository is the source of truth. Source documents own shared meanings; the approved issue directs the work; merged code, migrations, and tests are executable. Update source documents in the same PR when meanings change.
+## Completion and reporting
+
+Source documents own shared meanings. Approved issues direct scoped work. Merged code, migrations, and tests are executable truth. Update the source document in the same pull request when a shared meaning changes.
+
+Report what changed, what was verified, what was not verified, and what remains open. Report conflicts instead of resolving them by assumption.
