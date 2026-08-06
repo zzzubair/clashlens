@@ -40,7 +40,7 @@ HMAC_CALLER=""
 HMAC_KEY_ID=""
 HMAC_PREVIOUS_KEY_ID=""
 FIXTURE_FILE="$ROOT_DIR/testdata/legend_i_profile_v1.json"
-VERIFY_INSECURE_WORKER=false
+VERIFY_RESTORE_WORKER=false
 
 say() {
     printf '%s\n' "$*"
@@ -170,10 +170,24 @@ ensure_host_file() {
         if [[ "$kind" == hmac ]]; then
             (umask 077; openssl rand 32 | base64 -w0 | tr '+/' '-_' | tr -d '='; printf '\n') > "$temporary"
         else
-            (umask 077; openssl rand -hex 24; printf '\n') > "$temporary"
+            (umask 077; openssl rand -hex 24 | tr -d '\r\n'; printf '\n') > "$temporary"
         fi
         chmod 600 "$temporary"
         mv -f "$temporary" "$path"
+    elif [[ "$kind" == password ]]; then
+        local value newline_count temporary owner group
+        value=$(<"$path")
+        [[ "$value" =~ ^[A-Za-z0-9]+$ ]] || die "password file must contain generated alphanumeric text"
+        newline_count=$(LC_ALL=C tr -cd '\n' < "$path" | wc -c)
+        if [[ "$newline_count" != 1 ]]; then
+            temporary="${path}.tmp.$$"
+            owner=$(stat -c '%u' "$path")
+            group=$(stat -c '%g' "$path")
+            (umask 077; printf '%s\n' "$value") > "$temporary"
+            chmod 600 "$temporary"
+            chown "$owner:$group" "$temporary"
+            mv -f "$temporary" "$path"
+        fi
     fi
     chmod 600 "$path"
 }
@@ -217,6 +231,26 @@ ensure_podman_secret() {
         return
     fi
     "$PODMAN_BIN" secret create --label io.clashlens.prototype=true "$name" "$path" >/dev/null
+}
+
+refresh_podman_secret() {
+    local file_name=$1
+    local path="$SECRET_DIR/$file_name"
+    local name
+    name=$(secret_name "$file_name")
+    if "$PODMAN_BIN" secret inspect "$name" >/dev/null 2>&1; then
+        secret_is_owned "$name" || die "existing Podman secret is not owned by this prototype"
+    fi
+    "$PODMAN_BIN" secret create --replace --label io.clashlens.prototype=true "$name" "$path" >/dev/null
+}
+
+refresh_application_secrets() {
+    local file_name
+    remove_container "$API_CONTAINER"
+    remove_container "$WORKER_CONTAINER"
+    for file_name in database-url archive-access-key archive-secret-key; do
+        refresh_podman_secret "$file_name"
+    done
 }
 
 refresh_hmac_secrets() {
@@ -335,7 +369,7 @@ runtime_init() {
     validate_config
     require_podman
     ensure_host_secrets
-    ensure_podman_secret postgres-password
+    refresh_podman_secret postgres-password
     ensure_podman_secret database-url
     ensure_podman_secret archive-access-key
     ensure_podman_secret archive-secret-key
@@ -438,6 +472,7 @@ cmd_init() {
 cmd_up() {
     runtime_init
     build_image
+    refresh_application_secrets
     refresh_hmac_secrets
     start_api
     start_worker false
@@ -496,9 +531,9 @@ wait_for_saved_player() {
 cleanup_verify() {
     set +e
     remove_container "$ARCHIVE_CONTAINER"
-    if [[ "$VERIFY_INSECURE_WORKER" == true ]]; then
+    if [[ "$VERIFY_RESTORE_WORKER" == true ]]; then
         start_worker false >/dev/null 2>&1 || true
-        VERIFY_INSECURE_WORKER=false
+        VERIFY_RESTORE_WORKER=false
     fi
 }
 
@@ -507,10 +542,12 @@ cmd_verify() {
     validate_config
     runtime_init
     build_image
+    trap cleanup_verify EXIT
+    VERIFY_RESTORE_WORKER=true
+    refresh_application_secrets
     refresh_hmac_secrets
     start_api
     wait_for_api
-    trap cleanup_verify EXIT
     remove_container "$ARCHIVE_CONTAINER"
     "$PODMAN_BIN" run --detach \
         --name "$ARCHIVE_CONTAINER" \
@@ -528,7 +565,6 @@ cmd_verify() {
         --file /opt/clashlens/testdata/legend_i_profile_v1.json \
         --bucket "$ARCHIVE_BUCKET" --host 0.0.0.0 --port 9000 >/dev/null
     start_worker true archive-fixture:9000
-    VERIFY_INSECURE_WORKER=true
     local digest object_key now
     digest=$(sha256sum "$FIXTURE_FILE" | cut -d ' ' -f 1)
     object_key="synthetic/${digest}.json"
@@ -544,7 +580,7 @@ cmd_verify() {
     wait_for_saved_player
     remove_container "$ARCHIVE_CONTAINER"
     start_worker false
-    VERIFY_INSECURE_WORKER=false
+    VERIFY_RESTORE_WORKER=false
     wait_for_saved_player
     trap - EXIT
     say "synthetic profile verified through the temporary archive and saved-data API"
