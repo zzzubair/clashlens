@@ -53,6 +53,20 @@ case "$cmd" in
       create)
         name=${@: -2:1}
         source=${@: -1}
+        if [[ "$*" == *'--replace'* ]]; then
+          case "$name" in
+            clashlens-python-prototype-database-url)
+              if [[ -f "$state/container-clashlens-python-prototype-api" || -f "$state/container-clashlens-python-prototype-worker" ]]; then
+                touch "$state/secret-$name-replaced-while-consumer-active"
+              fi
+              ;;
+            clashlens-python-prototype-archive-access-key|clashlens-python-prototype-archive-secret-key)
+              if [[ -f "$state/container-clashlens-python-prototype-worker" ]]; then
+                touch "$state/secret-$name-replaced-while-consumer-active"
+              fi
+              ;;
+          esac
+        fi
         touch "$state/secret-$name" "$state/secret-$name-owned"
         cp -- "$source" "$state/secret-$name-content"
         printf '%s\n' "$name"
@@ -66,18 +80,32 @@ case "$cmd" in
     name=''
     user=''
     volume=''
+    secret_names=()
     while (($#)); do
       case "$1" in
         --name) name=$2; shift 2 ;;
         --user) user=$2; shift 2 ;;
         --volume) volume=$2; shift 2 ;;
+        --secret) secret_names+=("${2%%,*}"); shift 2 ;;
         *) shift ;;
       esac
     done
     [[ -n "$name" ]] || { printf 'missing name\n' >&2; exit 1; }
     touch "$state/container-$name" "$state/container-$name-owned"
+    generation=0
+    if [[ -f "$state/container-$name-generation" ]]; then
+      generation=$(<"$state/container-$name-generation")
+    fi
+    printf '%s\n' "$((generation + 1))" > "$state/container-$name-generation"
     printf '%s\n' "$user" > "$state/container-$name-user"
     printf '%s\n' "$volume" > "$state/container-$name-volume"
+    for secret_name in "${secret_names[@]}"; do
+      if [[ -f "$state/secret-$secret_name-content" ]]; then
+        cp -- "$state/secret-$secret_name-content" "$state/container-$name-secret-$secret_name-content"
+      else
+        : > "$state/container-$name-secret-$secret_name-content"
+      fi
+    done
     printf '%s\n' "id-$name"
     ;;
   rm)
@@ -110,6 +138,7 @@ case "$cmd" in
       pg_isready|psql) cat >/dev/null || true ;;
       python)
         if printf '%s\n' "$*" | grep -q ' probe '; then printf '{"tag":"#2PP"}\n'; fi
+        if [[ "${FAKE_PODMAN_FAIL_SEED:-false}" == true && "$*" == *seed* ]]; then exit 42; fi
         ;;
     esac
     ;;
@@ -153,6 +182,8 @@ rm -f "$STATE_DIR/network-clashlens-python-prototype-network"
 
 "$ROOT_DIR/deploy.sh" init >/dev/null
 
+"$ROOT_DIR/deploy.sh" up >/dev/null
+
 for name in postgres-password archive-access-key archive-secret-key; do
     path="$TEST_ROOT/secrets/$name"
     newline_count=$(tr -cd '\n' < "$path" | wc -c)
@@ -178,8 +209,24 @@ for name in postgres-password archive-access-key archive-secret-key; do
     chmod 600 "$path"
     legacy_metadata["$name"]=$(stat -c '%a:%u:%g' "$path")
     legacy_inodes["$name"]=$(stat -c '%i' "$path")
-    printf '%s\n\n' "${legacy_values[$name]}" > "$STATE_DIR/secret-clashlens-python-prototype-$name-content"
 done
+
+declare -A application_values=()
+for name in database-url archive-access-key archive-secret-key; do
+    path="$TEST_ROOT/secrets/$name"
+    application_values["$name"]=$(<"$path")
+    printf '%s\n\n' "${application_values[$name]}" > "$path"
+    printf '%s\n\n' "${application_values[$name]}" > "$STATE_DIR/secret-clashlens-python-prototype-$name-content"
+    for consumer in api worker; do
+        if [[ "$consumer" == api && "$name" != database-url ]]; then
+            continue
+        fi
+        printf '%s\n\n' "${application_values[$name]}" > \
+            "$STATE_DIR/container-clashlens-python-prototype-$consumer-secret-clashlens-python-prototype-$name-content"
+    done
+done
+worker_generation_before=$(<"$STATE_DIR/container-clashlens-python-prototype-worker-generation")
+api_generation_before=$(<"$STATE_DIR/container-clashlens-python-prototype-api-generation")
 
 if "$ROOT_DIR/deploy.sh" init >/dev/null; then
     :
@@ -203,11 +250,84 @@ for name in postgres-password archive-access-key archive-secret-key; do
         printf '%s was not replaced atomically\n' "$name" >&2
         exit 1
     }
+done
+
+secret_content="$STATE_DIR/secret-clashlens-python-prototype-postgres-password-content"
+secret_newline_count=$(tr -cd '\n' < "$secret_content" | wc -c)
+secret_value=$(<"$secret_content")
+[[ "$secret_newline_count" == 1 && "$secret_value" == "${legacy_values[postgres-password]}" ]] || {
+    printf 'PostgreSQL Podman secret did not refresh from its normalized host file\n' >&2
+    exit 1
+}
+for name in database-url archive-access-key archive-secret-key; do
     secret_content="$STATE_DIR/secret-clashlens-python-prototype-$name-content"
     secret_newline_count=$(tr -cd '\n' < "$secret_content" | wc -c)
     secret_value=$(<"$secret_content")
-    [[ "$secret_newline_count" == 1 && "$secret_value" == "${legacy_values[$name]}" ]] || {
-        printf 'owned Podman secret %s retained stale line endings\n' "$name" >&2
+    [[ "$secret_newline_count" == 2 && "$secret_value" == "${application_values[$name]}" ]] || {
+        printf 'init replaced application Podman secret %s behind its consumers\n' "$name" >&2
+        exit 1
+    }
+done
+[[ "$(<"$STATE_DIR/container-clashlens-python-prototype-worker-generation")" == "$worker_generation_before" ]] || {
+    printf 'init recreated the worker instead of retaining its running consumer\n' >&2
+    exit 1
+}
+[[ "$(<"$STATE_DIR/container-clashlens-python-prototype-api-generation")" == "$api_generation_before" ]] || {
+    printf 'init recreated the API instead of retaining its running consumer\n' >&2
+    exit 1
+}
+worker_archive_snapshot="$STATE_DIR/container-clashlens-python-prototype-worker-secret-clashlens-python-prototype-archive-access-key-content"
+[[ "$(tr -cd '\n' < "$worker_archive_snapshot" | wc -c)" == 2 ]] || {
+    printf 'init changed the running worker archive secret mount\n' >&2
+    exit 1
+}
+
+unowned_secret="$STATE_DIR/secret-clashlens-python-prototype-archive-access-key-owned"
+rm -f "$unowned_secret"
+if "$ROOT_DIR/deploy.sh" init >/dev/null 2>&1; then
+    printf 'deployment accepted an unowned application secret\n' >&2
+    exit 1
+fi
+touch "$unowned_secret"
+
+"$ROOT_DIR/deploy.sh" up >/dev/null
+for name in database-url archive-access-key archive-secret-key; do
+    secret_content="$STATE_DIR/secret-clashlens-python-prototype-$name-content"
+    secret_newline_count=$(tr -cd '\n' < "$secret_content" | wc -c)
+    secret_value=$(<"$secret_content")
+    [[ "$secret_newline_count" == 1 && "$secret_value" == "${application_values[$name]}" ]] || {
+        printf 'up did not refresh application Podman secret %s from its normalized host file\n' "$name" >&2
+        exit 1
+    }
+    [[ ! -f "$STATE_DIR/secret-clashlens-python-prototype-$name-replaced-while-consumer-active" ]] || {
+        printf 'up replaced application secret %s before removing every consumer\n' "$name" >&2
+        exit 1
+    }
+    for consumer in api worker; do
+        if [[ "$consumer" == api && "$name" != database-url ]]; then
+            continue
+        fi
+        consumer_content="$STATE_DIR/container-clashlens-python-prototype-$consumer-secret-clashlens-python-prototype-$name-content"
+        [[ "$(tr -cd '\n' < "$consumer_content" | wc -c)" == 1 && "$(<"$consumer_content")" == "${application_values[$name]}" ]] || {
+            printf 'up recreated %s with stale application secret %s\n' "$consumer" "$name" >&2
+            exit 1
+        }
+    done
+done
+[[ "$(<"$STATE_DIR/container-clashlens-python-prototype-worker-generation")" -gt "$worker_generation_before" ]] || {
+    printf 'up did not recreate the worker after refreshing application secrets\n' >&2
+    exit 1
+}
+[[ "$(<"$STATE_DIR/container-clashlens-python-prototype-api-generation")" -gt "$api_generation_before" ]] || {
+    printf 'up did not recreate the API after refreshing application secrets\n' >&2
+    exit 1
+}
+for name in database-url archive-access-key archive-secret-key; do
+    replacement_line=$(grep -n "secret create --replace .*clashlens-python-prototype-$name " "$LOG_FILE" | tail -n 1 | cut -d: -f1)
+    api_remove_line=$(grep -n 'rm --force clashlens-python-prototype-api' "$LOG_FILE" | tail -n 1 | cut -d: -f1)
+    worker_remove_line=$(grep -n 'rm --force clashlens-python-prototype-worker' "$LOG_FILE" | tail -n 1 | cut -d: -f1)
+    [[ -n "$replacement_line" && "$api_remove_line" -lt "$replacement_line" && "$worker_remove_line" -lt "$replacement_line" ]] || {
+        printf 'up replaced application secret %s before removing every consumer\n' "$name" >&2
         exit 1
     }
 done
@@ -270,6 +390,63 @@ if DEPLOY_ENV_FILE="$INVALID_ENV_PATH" "$ROOT_DIR/deploy.sh" init >/dev/null 2>&
 fi
 "$ROOT_DIR/deploy.sh" init >/dev/null
 "$ROOT_DIR/deploy.sh" up >/dev/null
+
+for name in database-url archive-access-key archive-secret-key; do
+    path="$TEST_ROOT/secrets/$name"
+    printf '%s\n\n' "${application_values[$name]}" > "$path"
+    printf '%s\n\n' "${application_values[$name]}" > "$STATE_DIR/secret-clashlens-python-prototype-$name-content"
+    for consumer in api worker; do
+        if [[ "$consumer" == api && "$name" != database-url ]]; then
+            continue
+        fi
+        printf '%s\n\n' "${application_values[$name]}" > \
+            "$STATE_DIR/container-clashlens-python-prototype-$consumer-secret-clashlens-python-prototype-$name-content"
+    done
+done
+worker_generation_before_verify=$(<"$STATE_DIR/container-clashlens-python-prototype-worker-generation")
+api_generation_before_verify=$(<"$STATE_DIR/container-clashlens-python-prototype-api-generation")
+if FAKE_PODMAN_FAIL_SEED=true "$ROOT_DIR/deploy.sh" verify >/dev/null 2>&1; then
+    printf 'verify unexpectedly succeeded in its failure cleanup control\n' >&2
+    exit 1
+fi
+[[ -f "$STATE_DIR/container-clashlens-python-prototype-worker" ]] || {
+    printf 'verify failure did not restore the normal worker\n' >&2
+    exit 1
+}
+[[ "$(<"$STATE_DIR/container-clashlens-python-prototype-worker-generation")" -gt "$worker_generation_before_verify" ]] || {
+    printf 'verify failure did not recreate the normal worker\n' >&2
+    exit 1
+}
+[[ "$(<"$STATE_DIR/container-clashlens-python-prototype-api-generation")" -gt "$api_generation_before_verify" ]] || {
+    printf 'verify did not recreate the API after refreshing application secrets\n' >&2
+    exit 1
+}
+last_worker_run=$(grep 'run .*clashlens-python-prototype-worker' "$LOG_FILE" | tail -n 1)
+if [[ "$last_worker_run" == *'--archive-insecure-test-only'* ]]; then
+    printf 'verify failure left the temporary insecure worker command running\n' >&2
+    exit 1
+fi
+for name in database-url archive-access-key archive-secret-key; do
+    secret_content="$STATE_DIR/secret-clashlens-python-prototype-$name-content"
+    [[ "$(tr -cd '\n' < "$secret_content" | wc -c)" == 1 && "$(<"$secret_content")" == "${application_values[$name]}" ]] || {
+        printf 'verify did not refresh application secret %s from its normalized host file\n' "$name" >&2
+        exit 1
+    }
+    [[ ! -f "$STATE_DIR/secret-clashlens-python-prototype-$name-replaced-while-consumer-active" ]] || {
+        printf 'verify replaced application secret %s before removing every consumer\n' "$name" >&2
+        exit 1
+    }
+    for consumer in api worker; do
+        if [[ "$consumer" == api && "$name" != database-url ]]; then
+            continue
+        fi
+        consumer_content="$STATE_DIR/container-clashlens-python-prototype-$consumer-secret-clashlens-python-prototype-$name-content"
+        [[ "$(tr -cd '\n' < "$consumer_content" | wc -c)" == 1 && "$(<"$consumer_content")" == "${application_values[$name]}" ]] || {
+            printf 'verify recreated %s with stale application secret %s\n' "$consumer" "$name" >&2
+            exit 1
+        }
+    done
+done
 "$ROOT_DIR/deploy.sh" verify >/dev/null
 
 if [[ -f "$STATE_DIR/container-clashlens-python-prototype-archive-fixture" ]]; then

@@ -244,6 +244,15 @@ refresh_podman_secret() {
     "$PODMAN_BIN" secret create --replace --label io.clashlens.prototype=true "$name" "$path" >/dev/null
 }
 
+refresh_application_secrets() {
+    local file_name
+    remove_container "$API_CONTAINER"
+    remove_container "$WORKER_CONTAINER"
+    for file_name in database-url archive-access-key archive-secret-key; do
+        refresh_podman_secret "$file_name"
+    done
+}
+
 refresh_hmac_secrets() {
     local file_name name
     remove_container "$API_CONTAINER"
@@ -361,9 +370,9 @@ runtime_init() {
     require_podman
     ensure_host_secrets
     refresh_podman_secret postgres-password
-    refresh_podman_secret database-url
-    refresh_podman_secret archive-access-key
-    refresh_podman_secret archive-secret-key
+    ensure_podman_secret database-url
+    ensure_podman_secret archive-access-key
+    ensure_podman_secret archive-secret-key
     ensure_podman_secret typescript-current
     ensure_podman_secret typescript-previous
     ensure_network_and_volume
@@ -463,6 +472,7 @@ cmd_init() {
 cmd_up() {
     runtime_init
     build_image
+    refresh_application_secrets
     refresh_hmac_secrets
     start_api
     start_worker false
@@ -532,6 +542,7 @@ cmd_verify() {
     validate_config
     runtime_init
     build_image
+    refresh_application_secrets
     refresh_hmac_secrets
     start_api
     wait_for_api
