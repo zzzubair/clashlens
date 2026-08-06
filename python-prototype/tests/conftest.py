@@ -20,6 +20,11 @@ class _FixtureS3Handler(BaseHTTPRequestHandler):
         del format, args
 
     def do_GET(self) -> None:
+        if self.path.split("?", 1)[0].rstrip("/") == "/evidence":
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         key = self.path.split("?", 1)[0].removeprefix("/evidence/")
         body = type(self).objects.get(key)
         if body is None:
@@ -34,6 +39,10 @@ class _FixtureS3Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_HEAD(self) -> None:
+        if self.path.split("?", 1)[0].rstrip("/") == "/evidence":
+            self.send_response(200)
+            self.end_headers()
+            return
         key = self.path.split("?", 1)[0].removeprefix("/evidence/")
         body = type(self).objects.get(key)
         if body is None and key:

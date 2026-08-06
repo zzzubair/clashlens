@@ -3,7 +3,10 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-MIGRATION_FILE="$ROOT_DIR/deploy/migrations/0001_collector.sql"
+MIGRATION_FILES=(
+  "$ROOT_DIR/deploy/migrations/0001_collector.sql"
+  "$ROOT_DIR/deploy/migrations/0002_python_layer.sql"
+)
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
 CURL_BIN=${CURL_BIN:-curl}
@@ -13,8 +16,10 @@ NETWORK_NAME=clashlens-private
 POSTGRES_VOLUME=clashlens-postgres-data
 POSTGRES_CONTAINER=clashlens-postgres
 COLLECTOR_CONTAINER=clashlens-collector
+PYTHON_WORKER_CONTAINER=clashlens-python-worker
 POSTGRES_IMAGE=docker.io/library/postgres:17-alpine
 COLLECTOR_IMAGE=localhost/clashlens-collector:deployment
+PYTHON_WORKER_IMAGE=localhost/clashlens-python-worker:deployment
 HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8081
 
@@ -36,6 +41,9 @@ Commands:
   enqueue [collector args]     Enqueue work, or pass a tag as the only argument.
   maintenance <collector args>
                                Run a collector maintenance command.
+  python-up                    Build, start, and verify the production Python worker.
+  python-down                  Remove only the production Python worker container.
+  python-status                Show the production Python worker container status.
 EOF
 }
 
@@ -274,11 +282,23 @@ wait_for_postgres() {
   die "PostgreSQL did not become ready"
 }
 
-apply_migration() {
-  [[ -f "$MIGRATION_FILE" ]] || die "missing deployment migration"
+apply_migration_file() {
+  local migration_file=$1
+  [[ -f "$migration_file" ]] || die "missing deployment migration"
   "$PODMAN_BIN" exec --interactive "$POSTGRES_CONTAINER" \
     psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
-    <"$MIGRATION_FILE"
+    <"$migration_file"
+}
+
+apply_initial_contract() {
+  apply_migration_file "${MIGRATION_FILES[0]}"
+}
+
+advance_contract() {
+  local migration_file
+  for migration_file in "${MIGRATION_FILES[@]:1}"; do
+    apply_migration_file "$migration_file"
+  done
 }
 
 build_collector_image() {
@@ -287,6 +307,77 @@ build_collector_image() {
     --file "$ROOT_DIR/Containerfile" \
     --tag "$COLLECTOR_IMAGE" \
     "$ROOT_DIR"
+}
+
+build_python_worker_image() {
+  "$PODMAN_BIN" build \
+    --pull=missing \
+    --file "$ROOT_DIR/python-prototype/Containerfile" \
+    --tag "$PYTHON_WORKER_IMAGE" \
+    "$ROOT_DIR/python-prototype"
+}
+
+require_python_worker_runtime() {
+  "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1 || \
+    die "private network is missing; run up first"
+  container_running "$POSTGRES_CONTAINER" || die "PostgreSQL is not running; run up first"
+
+  local version
+  version=$("$PODMAN_BIN" exec "$POSTGRES_CONTAINER" \
+    psql --tuples-only --no-align --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+    --command 'SELECT version FROM clash_lens_contract' 2>/dev/null || true)
+  version=$(trim "$version")
+  [[ "$version" == "2" ]] || die "production contract version 2 is required"
+}
+
+start_python_worker() {
+  if container_exists "$PYTHON_WORKER_CONTAINER"; then
+    "$PODMAN_BIN" rm --force "$PYTHON_WORKER_CONTAINER" >/dev/null
+  fi
+
+  replace_secret_value clashlens-python-worker-database-url "$CLASHLENS_DATABASE_URL"
+  replace_secret_value clashlens-python-worker-archive-access-key "$CLASHLENS_ARCHIVE_ACCESS_KEY"
+  replace_secret_value clashlens-python-worker-archive-secret-key "$CLASHLENS_ARCHIVE_SECRET_KEY"
+
+  "$PODMAN_BIN" run \
+    --detach \
+    --name "$PYTHON_WORKER_CONTAINER" \
+    --network "$NETWORK_NAME" \
+    --env "CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url" \
+    --env CLASHLENS_ARCHIVE_ENDPOINT \
+    --env CLASHLENS_ARCHIVE_BUCKET \
+    --env "CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key" \
+    --env "CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key" \
+    --secret clashlens-python-worker-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400 \
+    --secret clashlens-python-worker-archive-access-key,type=mount,target=/run/secrets/archive-access-key,uid=10001,gid=10001,mode=0400 \
+    --secret clashlens-python-worker-archive-secret-key,type=mount,target=/run/secrets/archive-secret-key,uid=10001,gid=10001,mode=0400 \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+    --cap-drop all \
+    --security-opt no-new-privileges \
+    --memory 384m \
+    --pids-limit 256 \
+    --cpus 1.0 \
+    --health-cmd "python -m clashlens_prototype.cli ready --expected-contract-version 2" \
+    --health-interval 30s \
+    --health-timeout 20s \
+    --health-retries 3 \
+    --restart unless-stopped \
+    --label org.clashlens.component=python-worker \
+    "$PYTHON_WORKER_IMAGE" \
+    worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --run-forever >/dev/null
+}
+
+wait_for_python_worker() {
+  local attempt
+  for ((attempt = 1; attempt <= 60; attempt++)); do
+    if container_running "$PYTHON_WORKER_CONTAINER" && \
+      "$PODMAN_BIN" healthcheck run "$PYTHON_WORKER_CONTAINER" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+  die "production Python worker did not become healthy"
 }
 
 collector_secret_args() {
@@ -391,7 +482,7 @@ initialize_runtime() {
   ensure_volume
   ensure_postgres
   wait_for_postgres
-  apply_migration
+  apply_initial_contract
 }
 
 image_exists() {
@@ -424,6 +515,7 @@ show_status() {
   fi
   status_of_container postgres "$POSTGRES_CONTAINER"
   status_of_container collector "$COLLECTOR_CONTAINER"
+  status_of_container python-worker "$PYTHON_WORKER_CONTAINER"
 }
 
 stop_and_remove() {
@@ -448,11 +540,11 @@ shift
 
 full_configuration=false
 case "$command" in
-  init|up|restart)
+  init|up|restart|python-up)
     load_env_file
     full_configuration=true
     ;;
-  status|logs|down|enqueue|maintenance)
+  status|logs|down|enqueue|maintenance|python-down|python-status)
     if [[ -f "$ENV_FILE" ]]; then
       load_env_file
     fi
@@ -465,8 +557,10 @@ NETWORK_NAME=${CLASHLENS_PODMAN_NETWORK:-$NETWORK_NAME}
 POSTGRES_VOLUME=${CLASHLENS_PODMAN_VOLUME:-$POSTGRES_VOLUME}
 POSTGRES_CONTAINER=${CLASHLENS_POSTGRES_CONTAINER:-$POSTGRES_CONTAINER}
 COLLECTOR_CONTAINER=${CLASHLENS_COLLECTOR_CONTAINER:-$COLLECTOR_CONTAINER}
+PYTHON_WORKER_CONTAINER=${CLASHLENS_PYTHON_WORKER_CONTAINER:-$PYTHON_WORKER_CONTAINER}
 POSTGRES_IMAGE=${CLASHLENS_POSTGRES_IMAGE:-$POSTGRES_IMAGE}
 COLLECTOR_IMAGE=${CLASHLENS_COLLECTOR_IMAGE:-$COLLECTOR_IMAGE}
+PYTHON_WORKER_IMAGE=${CLASHLENS_PYTHON_WORKER_IMAGE:-$PYTHON_WORKER_IMAGE}
 CLASHLENS_ARCHIVE_SECURE=${CLASHLENS_ARCHIVE_SECURE:-true}
 CLASHLENS_HEALTH_HOST=${CLASHLENS_HEALTH_HOST:-$HEALTH_HOST}
 CLASHLENS_HEALTH_PORT=${CLASHLENS_HEALTH_PORT:-$HEALTH_PORT}
@@ -488,9 +582,11 @@ case "$command" in
     [[ $# == 0 ]] || die "up accepts no arguments"
     validate_key_files "$CLASHLENS_NORMAL_API_KEY_FILES"
     validate_key_files "$CLASHLENS_INTERACTIVE_API_KEY_FILES"
-    initialize_runtime
     build_collector_image
+    initialize_runtime
     start_collector
+    wait_for_collector
+    advance_contract
     wait_for_collector
     printf 'collector is ready at http://%s:%s/readyz\n' "$HEALTH_HOST" "$HEALTH_PORT"
     ;;
@@ -501,6 +597,8 @@ case "$command" in
     initialize_runtime
     image_exists || die "collector image is missing; run up first"
     start_collector
+    wait_for_collector
+    advance_contract
     wait_for_collector
     printf 'collector restarted and is ready at http://%s:%s/readyz\n' "$HEALTH_HOST" "$HEALTH_PORT"
     ;;
@@ -514,8 +612,10 @@ case "$command" in
       target=$COLLECTOR_CONTAINER
     elif [[ "$component" == "postgres" ]]; then
       target=$POSTGRES_CONTAINER
+    elif [[ "$component" == "python-worker" ]]; then
+      target=$PYTHON_WORKER_CONTAINER
     else
-      die "logs target must be collector or postgres"
+      die "logs target must be collector, postgres, or python-worker"
     fi
     shift || true
     container_exists "$target" || die "$component container does not exist"
@@ -524,6 +624,7 @@ case "$command" in
   down)
     [[ $# == 0 ]] || die "down accepts no arguments"
     require_podman
+    stop_and_remove "$PYTHON_WORKER_CONTAINER"
     stop_and_remove "$COLLECTOR_CONTAINER"
     stop_and_remove "$POSTGRES_CONTAINER"
     printf 'containers removed; network and data volume were kept\n'
@@ -538,6 +639,27 @@ case "$command" in
   maintenance)
     [[ $# -gt 0 ]] || die "maintenance requires a collector maintenance command"
     run_collector_command maintenance "$@"
+    ;;
+  python-up)
+    [[ $# == 0 ]] || die "python-up accepts no arguments"
+    require_podman
+    require_rootless_podman
+    require_python_worker_runtime
+    build_python_worker_image
+    start_python_worker
+    wait_for_python_worker
+    printf 'production Python worker is healthy\n'
+    ;;
+  python-down)
+    [[ $# == 0 ]] || die "python-down accepts no arguments"
+    require_podman
+    stop_and_remove "$PYTHON_WORKER_CONTAINER"
+    printf 'production Python worker container removed\n'
+    ;;
+  python-status)
+    [[ $# == 0 ]] || die "python-status accepts no arguments"
+    require_podman
+    status_of_container python-worker "$PYTHON_WORKER_CONTAINER"
     ;;
   help|-h|--help)
     usage

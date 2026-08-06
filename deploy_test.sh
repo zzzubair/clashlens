@@ -99,8 +99,17 @@ printf '%q ' "$@" >>"$FAKE_PODMAN_LOG"
 printf '\n' >>"$FAKE_PODMAN_LOG"
 case "${1:-} ${2:-}" in
   "info --format") printf 'true\n' ;;
-  "network exists"|"volume exists"|"container exists"|"image exists") exit 1 ;;
+  "network exists") [[ "${FAKE_PRODUCTION_READY:-}" == "1" ]] ;;
+  "volume exists"|"image exists") exit 1 ;;
+  "container exists") [[ "${FAKE_PRODUCTION_READY:-}" == "1" ]] ;;
+  "container inspect") printf 'true\n' ;;
+  "healthcheck run") exit 0 ;;
   "exec --interactive") cat >/dev/null ;;
+  "exec clashlens-postgres")
+    if [[ "$*" == *"SELECT version FROM clash_lens_contract"* ]]; then
+      printf '2\n'
+    fi
+    ;;
   "exec "*) exit 0 ;;
 esac
 EOF
@@ -123,6 +132,7 @@ CLASHLENS_ARCHIVE_BUCKET=clash-lens-test
 CLASHLENS_ARCHIVE_ACCESS_KEY=test-archive-access
 CLASHLENS_ARCHIVE_SECRET_KEY=test-archive-secret
 CLASHLENS_OFFICIAL_API_ORIGIN=https://api.clashofclans.com
+CLASHLENS_SCHEMA_VERSION=2
 CLASHLENS_API_KEY_HOST_DIR=$KEY_DIR
 CLASHLENS_NORMAL_API_KEY_FILES=normal-1=/run/secrets/normal-1,normal-2=/run/secrets/normal-2,normal-3=/run/secrets/normal-3,normal-4=/run/secrets/normal-4
 CLASHLENS_INTERACTIVE_API_KEY_FILES=interactive-1=/run/secrets/interactive-1
@@ -162,6 +172,39 @@ postgres_run=$(grep 'postgres:17-alpine' "$PODMAN_LOG")
 collector_run=$(grep 'clashlens-collector:deployment' "$PODMAN_LOG" | grep '^run ')
 normalized_postgres_run=${postgres_run//\\/}
 normalized_collector_run=${collector_run//\\/}
+
+migration_exec_count=$(grep -c '^exec --interactive clashlens-postgres psql ' "$PODMAN_LOG")
+[[ "$migration_exec_count" == "2" ]] || {
+  printf 'deployment applied %s migration files, want 2\n' "$migration_exec_count" >&2
+  exit 1
+}
+
+collector_build_line=$(grep -n '^build .*clashlens-collector:deployment' "$PODMAN_LOG")
+collector_build_line=${collector_build_line%%:*}
+collector_start_line=$(grep -n '^run .*clashlens-collector:deployment' "$PODMAN_LOG")
+collector_start_line=${collector_start_line%%:*}
+migration_lines=()
+while IFS=: read -r line_number _; do
+  migration_lines+=("$line_number")
+done < <(grep -n '^exec --interactive clashlens-postgres psql ' "$PODMAN_LOG")
+second_migration_line=${migration_lines[1]:-}
+[[ -n "$collector_build_line" && -n "$second_migration_line" && "$collector_build_line" -lt "$second_migration_line" ]] || {
+  printf 'collector bridge image was not built before migration 0002\n' >&2
+  exit 1
+}
+[[ -n "$collector_start_line" && "$collector_start_line" -lt "$second_migration_line" ]] || {
+  printf 'collector bridge was not started before migration 0002\n' >&2
+  exit 1
+}
+
+[[ "$normalized_collector_run" == *'--env CLASHLENS_SCHEMA_VERSION '* ]] || {
+  printf 'collector bridge did not receive the schema version setting\n' >&2
+  exit 1
+}
+grep -q '^CLASHLENS_SCHEMA_VERSION=2$' "$ENV_FILE" || {
+  printf 'deployment test did not configure schema version 2\n' >&2
+  exit 1
+}
 
 if [[ "$postgres_run" == *"--env-file"* ]]; then
   printf 'PostgreSQL received the full app.env file\n' >&2
@@ -236,3 +279,73 @@ for name in normal-1 normal-2 normal-3 normal-4 interactive-1; do
 done
 
 printf 'ok: deployment limits secret scope and maps the health port correctly\n'
+
+FAKE_PRODUCTION_READY=1 \
+  FAKE_PODMAN_LOG="$PODMAN_LOG" \
+  DEPLOY_ENV_FILE="$ENV_FILE" \
+  PODMAN_BIN="$FAKE_BIN/podman" \
+  "$ROOT_DIR/deploy.sh" python-up >/dev/null
+
+python_worker_run=$(grep 'clashlens-python-worker:deployment' "$PODMAN_LOG" | grep '^run ')
+normalized_python_worker_run=${python_worker_run//\\/}
+[[ -n "$python_worker_run" ]] || {
+  printf 'production Python worker was not started\n' >&2
+  exit 1
+}
+[[ "$normalized_python_worker_run" == *'--network clashlens-private'* ]] || {
+  printf 'production Python worker did not use the private network\n' >&2
+  exit 1
+}
+[[ "$normalized_python_worker_run" != *'--publish'* ]] || {
+  printf 'production Python worker published a host port\n' >&2
+  exit 1
+}
+for specification in \
+  '--read-only' \
+  '--cap-drop all' \
+  '--security-opt no-new-privileges' \
+  '--memory 384m' \
+  '--pids-limit 256' \
+  '--cpus 1.0' \
+  '--health-cmd python -m clashlens_prototype.cli ready --expected-contract-version 2' \
+  'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --run-forever'; do
+  [[ "$normalized_python_worker_run" == *"$specification"* ]] || {
+    printf 'production Python worker is missing runtime setting %s\n' "$specification" >&2
+    exit 1
+  }
+done
+for name in database-url archive-access-key archive-secret-key; do
+  grep -q "^secret create --replace clashlens-python-worker-$name -" "$PODMAN_LOG" || {
+    printf 'production Python worker secret %s was not refreshed\n' "$name" >&2
+    exit 1
+  }
+  [[ "$normalized_python_worker_run" == *"clashlens-python-worker-$name,type=mount,target=/run/secrets/$name,uid=10001,gid=10001,mode=0400"* ]] || {
+    printf 'production Python worker secret %s was not mounted for UID 10001\n' "$name" >&2
+    exit 1
+  }
+done
+for setting in \
+  'CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url' \
+  'CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key' \
+  'CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key'; do
+  [[ "$normalized_python_worker_run" == *"--env $setting"* ]] || {
+    printf 'production Python worker credential file setting %s is missing\n' "$setting" >&2
+    exit 1
+  }
+done
+[[ "$normalized_python_worker_run" != *'test-db-password'* && "$normalized_python_worker_run" != *'test-archive-secret'* ]] || {
+  printf 'production Python worker command exposed a credential value\n' >&2
+  exit 1
+}
+
+unit=$(<"$ROOT_DIR/deploy/systemd/clashlens-python-worker.service")
+[[ "$unit" == *'ExecStart=%h/clashlens/deploy.sh python-up'* ]] || {
+  printf 'production Python worker unit has no tracked start command\n' >&2
+  exit 1
+}
+[[ "$unit" == *'ExecStop=%h/clashlens/deploy.sh python-down'* ]] || {
+  printf 'production Python worker unit has no tracked stop command\n' >&2
+  exit 1
+}
+
+printf 'ok: production Python worker is private, bounded, secret-backed, and systemd-managed\n'

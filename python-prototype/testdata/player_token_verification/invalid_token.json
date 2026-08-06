@@ -1,0 +1,6 @@
+{
+  "http_status": 200,
+  "body": {"status": "invalid"},
+  "expected_outcome": "invalid_token",
+  "expected_key_action": "none"
+}

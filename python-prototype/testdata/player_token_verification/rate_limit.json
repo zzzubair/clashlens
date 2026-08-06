@@ -1,0 +1,6 @@
+{
+  "http_status": 429,
+  "body": {"reason": "throttled", "message": "Request was throttled."},
+  "expected_outcome": "verification_unavailable",
+  "expected_key_action": "cooldown"
+}

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -10,11 +12,41 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from .profile import ParsedProfile
+from .analytics import (
+    CLASSIFICATION_CONFIDENCE,
+    CLASSIFICATION_VERSION,
+    FRESHNESS_RULE_VERSION,
+    PROFILE_FRESHNESS_SECONDS,
+    SNAPSHOT_ORDERING_RULE_VERSION,
+    deterministic_tag_hash,
+)
+from .battle import ParsedBattleLog, SOURCE_PARSER_VERSION
+from .domain import (
+    DomainRuleError,
+    SEASON_ANCHOR_RULE_VERSION,
+    ranked_day_for,
+    validate_season_anchor,
+)
+from .profile import ParsedProfile, normalize_player_tag
+from .rankings import ParsedOfficialRankings
+from .reconciliation import (
+    RECONCILIATION_RULE_VERSION,
+    BattleContribution,
+    CoverageObservation,
+    PreviousRankedDay,
+    ReconciliationInput,
+    ReconciliationResult,
+    reconcile_ranked_day,
+)
 
-PROCESSING_VERSION = "python-processing-prototype-v1"
-DEFAULT_PARSER_VERSION = "profile-parser-v1"
-PROTOTYPE_CONTRACT_VERSION = 2
+PROCESSING_VERSION = "clashlens-domain-processing-v1"
+DEFAULT_PARSER_VERSION = SOURCE_PARSER_VERSION
+DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
+ANALYTICS_RULE_VERSION = "legend-analytics-v1"
+CONTRACT_VERSION = 2
+# Compatibility alias for the API/account integration worker. Domain code uses
+# CONTRACT_VERSION and the integration owner can remove this alias when api.py moves.
+PROTOTYPE_CONTRACT_VERSION = CONTRACT_VERSION
 
 
 class LeaseLost(RuntimeError):
@@ -24,22 +56,27 @@ class LeaseLost(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class Claim:
     job_id: int
-    observation_id: int
+    work_type: str
+    deduplication_key: str
+    input_json: dict[str, Any]
+    observation_id: int | None
     attempt_id: int
     attempt_number: int
-    normalized_tag: str
-    endpoint: str
-    endpoint_version: str
-    schema_version: str
-    observed_at: datetime
-    http_status: int
-    response_hash: str
-    archive_reference: str
+    normalized_tag: str | None
+    endpoint: str | None
+    endpoint_version: str | None
+    schema_version: str | None
+    observed_at: datetime | None
+    http_status: int | None
+    response_hash: str | None
+    archive_reference: str | None
     lease_owner: str
     lease_token: str
     lease_expires_at: datetime
     parser_version: str
     processing_version: str
+    domain_rule_version: str
+    analytics_rule_version: str
     max_attempts: int
 
 
@@ -51,6 +88,13 @@ class Database:
             max_size=max_size,
             open=True,
         )
+        self._jobs_relation = "python_processing_jobs"
+        with self.pool.connection() as connection:
+            worker_view = connection.execute(
+                "SELECT to_regclass('python_processing_jobs_worker')"
+            ).fetchone()
+            if worker_view is not None and worker_view[0] is not None:
+                self._jobs_relation = "python_processing_jobs_worker"
 
     def close(self) -> None:
         self.pool.close()
@@ -67,10 +111,16 @@ class Database:
             return row is not None and int(row[0]) == expected_contract_version
 
     def apply_schema(self) -> None:
-        schema = Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
+        root = Path(__file__).parents[3]
+        migration_0001 = (root / "deploy" / "migrations" / "0001_collector.sql").read_text(
+            encoding="utf-8"
+        )
+        migration_0002 = (root / "deploy" / "migrations" / "0002_python_layer.sql").read_text(
+            encoding="utf-8"
+        )
         with self.pool.connection() as connection:
             relation = connection.execute(
-                "SELECT to_regclass('public.clash_lens_contract')"
+                "SELECT to_regclass('clash_lens_contract')"
             ).fetchone()
             if relation is not None and relation[0] is not None:
                 contract = connection.execute(
@@ -81,13 +131,14 @@ class Database:
                         "existing Clash Lens contract has no singleton version row"
                     )
                 version = int(contract[0])
-                if version != PROTOTYPE_CONTRACT_VERSION:
+                if version != CONTRACT_VERSION:
                     raise RuntimeError(
                         f"refusing to alter existing Clash Lens contract version {version}; "
-                        f"prototype requires version {PROTOTYPE_CONTRACT_VERSION}"
+                        f"Python layer requires version {CONTRACT_VERSION}"
                     )
-            connection.execute(schema)
-            connection.commit()
+                return
+            connection.execute(migration_0001)
+            connection.execute(migration_0002)
 
     def clear_prototype_data(self) -> None:
         with self.pool.connection() as connection:
@@ -118,17 +169,71 @@ class Database:
         collector_version: str,
         max_attempts: int = 2,
     ) -> tuple[int, int]:
+        del endpoint_version, schema_version
+        global_scope = endpoint == "global_player_rankings"
+        collector_work_type = "global_player_rankings" if global_scope else "initial_collection"
+        job_scope = "global" if global_scope else "player"
+        job_tag = None if global_scope else normalized_tag
         with self.pool.connection() as connection:
             with connection.transaction():
+                player_id = None
+                if not global_scope:
+                    player = connection.execute(
+                        """
+                        INSERT INTO players (normalized_tag, active)
+                        VALUES (%s, false)
+                        ON CONFLICT (normalized_tag) DO UPDATE
+                            SET normalized_tag = EXCLUDED.normalized_tag
+                        RETURNING id
+                        """,
+                        (normalized_tag,),
+                    ).fetchone()
+                    assert player is not None
+                    player_id = int(player[0])
+                collector_job = connection.execute(
+                    """
+                    INSERT INTO collector_jobs (
+                        work_type, player_id, normalized_tag, scope, capacity_pool,
+                        priority, due_at, coalescing_key, status, required_endpoint
+                    ) VALUES (
+                        %s, %s, %s, %s, 'normal', 300, %s, %s, 'complete', %s
+                    )
+                    RETURNING id
+                    """,
+                    (
+                        collector_work_type,
+                        player_id,
+                        job_tag,
+                        job_scope,
+                        observed_at,
+                        occurrence_key,
+                        endpoint,
+                    ),
+                ).fetchone()
+                assert collector_job is not None
+                collector_job_id = int(collector_job[0])
+                attempt = connection.execute(
+                    """
+                    INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
+                    VALUES (%s, 'complete', %s, %s)
+                    RETURNING id
+                    """,
+                    (collector_job_id, observed_at, observed_at),
+                ).fetchone()
+                assert attempt is not None
+                attempt_id = int(attempt[0])
                 observation = connection.execute(
                     """
                     INSERT INTO collector_observations (
-                        occurrence_key, normalized_tag, endpoint, endpoint_version,
-                        schema_version, request_started_at, response_observed_at,
-                        http_status, response_hash, archive_reference, collector_version
+                        occurrence_key, collection_job_id, attempt_id, scope,
+                        player_id, normalized_tag, endpoint,
+                        request_started_at, response_completed_at,
+                        http_status, response_hash, archive_reference, collector_version,
+                        key_label, evidence_headers
                     ) VALUES (
-                        %s, %s, %s, %s, %s, %s - interval '1 second', %s,
-                        %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s,
+                        %s - interval '1 second', %s,
+                        %s, %s, %s, %s, 'normal-a', '{}'::jsonb
                     )
                     ON CONFLICT (occurrence_key) DO UPDATE
                         SET occurrence_key = EXCLUDED.occurrence_key
@@ -136,10 +241,12 @@ class Database:
                     """,
                     (
                         occurrence_key,
-                        normalized_tag,
+                        collector_job_id,
+                        attempt_id,
+                        job_scope,
+                        player_id,
+                        job_tag,
                         endpoint,
-                        endpoint_version,
-                        schema_version,
                         observed_at,
                         observed_at,
                         http_status,
@@ -153,7 +260,7 @@ class Database:
                 job = connection.execute(
                     """
                     INSERT INTO python_processing_jobs (
-                        observation_id, work_type, state, due_at,
+                        observation_id, work_type, status, due_at,
                         parser_version, processing_version, max_attempts
                     ) VALUES (%s, 'process_observation', 'pending', clock_timestamp(), %s, %s, %s)
                     ON CONFLICT (observation_id) DO UPDATE
@@ -170,6 +277,62 @@ class Database:
                 assert job is not None
                 return observation_id, int(job[0])
 
+    def enqueue_reconciliation(
+        self,
+        *,
+        player_tag: str,
+        day_start: datetime,
+        now: datetime,
+        request_key: str,
+    ) -> int:
+        del now  # Production jobs use the worker's current time at claim.
+        normalized_tag = normalize_player_tag(player_tag)
+        ranked_day = ranked_day_for(day_start)
+        ranked_day_start = ranked_day.start.astimezone(UTC)
+        ranked_day_start_text = ranked_day_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        deduplication_key = (
+            f"reconcile:{normalized_tag}:{ranked_day_start_text}:{request_key}"
+        )
+        with self.pool.connection() as connection:
+            player = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s",
+                (normalized_tag,),
+            ).fetchone()
+            if player is None:
+                raise ValueError(f"unknown reconciliation player {normalized_tag}")
+            player_id = int(player[0])
+            row = connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    observation_id, work_type, deduplication_key, input_json,
+                    status, due_at, parser_version, processing_version,
+                    domain_rule_version, analytics_rule_version
+                ) VALUES (
+                    NULL, 'reconcile_ranked_day', %s, %s,
+                    'pending', clock_timestamp(), %s, %s, %s, %s
+                )
+                ON CONFLICT (deduplication_key) DO UPDATE SET
+                    deduplication_key = EXCLUDED.deduplication_key
+                RETURNING id
+                """,
+                (
+                    deduplication_key,
+                    Jsonb(
+                        {
+                            "player_id": player_id,
+                            "ranked_day_start": ranked_day_start_text,
+                        }
+                    ),
+                    DEFAULT_PARSER_VERSION,
+                    PROCESSING_VERSION,
+                    DOMAIN_RULE_VERSION,
+                    ANALYTICS_RULE_VERSION,
+                ),
+            ).fetchone()
+            connection.commit()
+            assert row is not None
+            return int(row[0])
+
     def claim_job(
         self,
         *,
@@ -184,11 +347,11 @@ class Database:
         with self.pool.connection() as connection:
             with connection.transaction():
                 connection.execute(
-                    """
+                    f"""
                     UPDATE python_processing_attempts AS a
                     SET state = 'stale', completed_at = clock_timestamp(),
                         failure_category = COALESCE(a.failure_category, 'lease_expired')
-                    FROM python_processing_jobs AS j
+                    FROM {self._jobs_relation} AS j
                     WHERE a.job_id = j.id AND a.state = 'running'
                       AND j.state = 'leased'
                       AND j.lease_expires_at <= clock_timestamp()
@@ -196,8 +359,8 @@ class Database:
                     """
                 )
                 connection.execute(
-                    """
-                    UPDATE python_processing_jobs
+                    f"""
+                    UPDATE {self._jobs_relation}
                     SET state = 'failed', outcome = 'durable_failure',
                         failure_category = 'lease_expired_max_attempts',
                         failure_detail = 'lease expired after the configured attempt limit',
@@ -222,13 +385,15 @@ class Database:
                 row = connection.execute(
                     f"""
                     SELECT
-                        j.id AS job_id, j.observation_id, j.parser_version,
-                        j.processing_version, j.attempt_count, j.max_attempts,
+                        j.id AS job_id, j.work_type, j.deduplication_key,
+                        j.input_json, j.observation_id, j.parser_version,
+                        j.processing_version, j.domain_rule_version,
+                        j.analytics_rule_version, j.attempt_count, j.max_attempts,
                         o.normalized_tag, o.endpoint, o.endpoint_version,
                         o.schema_version, o.response_observed_at, o.http_status,
                         o.response_hash, o.archive_reference
-                    FROM python_processing_jobs AS j
-                    JOIN collector_observations AS o ON o.id = j.observation_id
+                    FROM {self._jobs_relation} AS j
+                    LEFT JOIN collector_observations AS o ON o.id = j.observation_id
                     WHERE {where}
                     ORDER BY j.due_at, j.id
                     FOR UPDATE OF j SKIP LOCKED
@@ -243,19 +408,24 @@ class Database:
                     if isinstance(row, dict)
                     else {
                         "job_id": row[0],
-                        "observation_id": row[1],
-                        "parser_version": row[2],
-                        "processing_version": row[3],
-                        "attempt_count": row[4],
-                        "max_attempts": row[5],
-                        "normalized_tag": row[6],
-                        "endpoint": row[7],
-                        "endpoint_version": row[8],
-                        "schema_version": row[9],
-                        "response_observed_at": row[10],
-                        "http_status": row[11],
-                        "response_hash": row[12],
-                        "archive_reference": row[13],
+                        "work_type": row[1],
+                        "deduplication_key": row[2],
+                        "input_json": row[3],
+                        "observation_id": row[4],
+                        "parser_version": row[5],
+                        "processing_version": row[6],
+                        "domain_rule_version": row[7],
+                        "analytics_rule_version": row[8],
+                        "attempt_count": row[9],
+                        "max_attempts": row[10],
+                        "normalized_tag": row[11],
+                        "endpoint": row[12],
+                        "endpoint_version": row[13],
+                        "schema_version": row[14],
+                        "response_observed_at": row[15],
+                        "http_status": row[16],
+                        "response_hash": row[17],
+                        "archive_reference": row[18],
                     }
                 )
                 if int(data["attempt_count"]) > 0:
@@ -271,8 +441,8 @@ class Database:
                 token = uuid4().hex
                 attempt_number = int(data["attempt_count"]) + 1
                 leased = connection.execute(
-                    """
-                    UPDATE python_processing_jobs
+                    f"""
+                    UPDATE {self._jobs_relation}
                     SET state = 'leased', lease_owner = %s, lease_token = %s,
                         lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
                         attempt_count = attempt_count + 1,
@@ -296,26 +466,66 @@ class Database:
                 assert attempt is not None
                 return Claim(
                     job_id=int(data["job_id"]),
-                    observation_id=int(data["observation_id"]),
+                    work_type=_text_value(data["work_type"]),
+                    deduplication_key=_text_value(data["deduplication_key"]),
+                    input_json=dict(data["input_json"]),
+                    observation_id=(
+                        int(data["observation_id"])
+                        if data["observation_id"] is not None
+                        else None
+                    ),
                     attempt_id=int(attempt[0]),
                     attempt_number=attempt_number,
-                    normalized_tag=_text_value(data["normalized_tag"]),
-                    endpoint=_text_value(data["endpoint"]),
-                    endpoint_version=_text_value(data["endpoint_version"]),
-                    schema_version=_text_value(data["schema_version"]),
+                    normalized_tag=(
+                        _text_value(data["normalized_tag"])
+                        if data["normalized_tag"] is not None
+                        else None
+                    ),
+                    endpoint=(
+                        _text_value(data["endpoint"])
+                        if data["endpoint"] is not None
+                        else None
+                    ),
+                    endpoint_version=(
+                        _text_value(data["endpoint_version"])
+                        if data["endpoint_version"] is not None
+                        else None
+                    ),
+                    schema_version=(
+                        _text_value(data["schema_version"])
+                        if data["schema_version"] is not None
+                        else None
+                    ),
                     observed_at=data["response_observed_at"],
-                    http_status=int(data["http_status"]),
-                    response_hash=_text_value(data["response_hash"]),
-                    archive_reference=_text_value(data["archive_reference"]),
+                    http_status=(
+                        int(data["http_status"])
+                        if data["http_status"] is not None
+                        else None
+                    ),
+                    response_hash=(
+                        _text_value(data["response_hash"])
+                        if data["response_hash"] is not None
+                        else None
+                    ),
+                    archive_reference=(
+                        _text_value(data["archive_reference"])
+                        if data["archive_reference"] is not None
+                        else None
+                    ),
                     lease_owner=owner,
                     lease_token=token,
                     lease_expires_at=leased[0],
                     parser_version=_text_value(data["parser_version"]),
                     processing_version=_text_value(data["processing_version"]),
+                    domain_rule_version=_text_value(data["domain_rule_version"]),
+                    analytics_rule_version=_text_value(data["analytics_rule_version"]),
                     max_attempts=int(data["max_attempts"]),
                 )
 
     def complete_profile(self, claim: Claim, profile: ParsedProfile) -> None:
+        observation_id, http_status, response_hash, observed_at, endpoint, schema_version = (
+            self._observation_source(claim)
+        )
         with self.pool.connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
@@ -340,10 +550,12 @@ class Database:
                         player_id, observation_id, normalized_tag, endpoint_version,
                         schema_version, parser_version, observed_at, source_http_status,
                         name, trophies, league_tier_id, league_tier_name,
-                        eligibility_state, profile_json
+                        eligibility_state, current_league_season_id,
+                        previous_league_season_id, eligibility_reason,
+                        source_contract_state, season_anchor_state, profile_json
                     ) VALUES (
                         %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     ON CONFLICT (observation_id, parser_version) DO UPDATE SET
                         name = EXCLUDED.name,
@@ -351,23 +563,33 @@ class Database:
                         league_tier_id = EXCLUDED.league_tier_id,
                         league_tier_name = EXCLUDED.league_tier_name,
                         eligibility_state = EXCLUDED.eligibility_state,
+                        current_league_season_id = EXCLUDED.current_league_season_id,
+                        previous_league_season_id = EXCLUDED.previous_league_season_id,
+                        eligibility_reason = EXCLUDED.eligibility_reason,
+                        source_contract_state = EXCLUDED.source_contract_state,
+                        season_anchor_state = EXCLUDED.season_anchor_state,
                         profile_json = EXCLUDED.profile_json
                     RETURNING id
                     """,
                     (
                         player[0],
-                        claim.observation_id,
+                        observation_id,
                         profile.normalized_tag,
                         profile.endpoint_version,
                         profile.schema_version,
                         profile.parser_version,
                         profile.observed_at,
-                        claim.http_status,
+                        http_status,
                         profile.name,
                         profile.trophies,
                         profile.league_tier_id,
                         profile.league_tier_name,
                         profile.eligibility_state,
+                        profile.current_league_season_id,
+                        profile.previous_league_season_id,
+                        profile.eligibility_reason,
+                        profile.source_contract_state,
+                        profile.season_anchor_state,
                         Jsonb(profile.profile_json),
                     ),
                 ).fetchone()
@@ -379,7 +601,10 @@ class Database:
                     VALUES (%s, %s, 'current_profile')
                     ON CONFLICT (observation_id, effect_kind) DO NOTHING
                     """,
-                    (profile_version_id, claim.observation_id),
+                    (profile_version_id, observation_id),
+                )
+                anchor_outcome = self._record_season_anchor(
+                    connection, profile_version_id, profile
                 )
                 connection.execute(
                     """
@@ -389,7 +614,15 @@ class Database:
                             WHEN %s = 'ineligible' THEN false
                             ELSE active
                         END,
-                        eligibility_state = %s,
+                        next_due_at = CASE
+                            WHEN %s = 'eligible' THEN COALESCE(next_due_at, clock_timestamp())
+                            WHEN %s = 'ineligible' THEN NULL
+                            ELSE next_due_at
+                        END,
+                        eligibility_state = CASE
+                            WHEN %s IN ('eligible', 'ineligible') THEN %s
+                            ELSE eligibility_state
+                        END,
                         current_profile_version_id = %s,
                         current_observed_at = %s,
                         updated_at = clock_timestamp()
@@ -400,12 +633,808 @@ class Database:
                         profile.eligibility_state,
                         profile.eligibility_state,
                         profile.eligibility_state,
+                        profile.eligibility_state,
+                        profile.eligibility_state,
+                        profile.eligibility_state,
                         profile_version_id,
                         profile.observed_at,
                         player[0],
                         profile.observed_at,
                     ),
                 )
+                self._record_parsed_payload(
+                    connection,
+                    endpoint=endpoint,
+                    response_hash=response_hash,
+                    parser_version=profile.parser_version,
+                    schema_version=schema_version,
+                    parse_outcome="valid",
+                    parsed_json=profile.profile_json,
+                )
+                self._record_processing_outcome(
+                    connection,
+                    claim,
+                    outcome="processed",
+                    failure_category=(
+                        "season_anchor_conflict" if anchor_outcome == "conflict" else None
+                    ),
+                )
+                self._finish_claim(
+                    connection, claim, job, state="complete", outcome="processed"
+                )
+
+    def complete_battle_log(self, claim: Claim, battle_log: ParsedBattleLog) -> None:
+        observation_id, _http_status, response_hash, _observed_at, endpoint, schema_version = (
+            self._observation_source(claim)
+        )
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                job = self._lock_live_claim(connection, claim)
+                reporter_id = self._upsert_player(
+                    connection, battle_log.normalized_tag, active=False
+                )
+                log_row = connection.execute(
+                    """
+                    INSERT INTO battle_log_observations (
+                        observation_id, player_id, parser_version, observed_at,
+                        row_count, has_row_gap
+                    ) VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (observation_id, parser_version) DO UPDATE SET
+                        row_count = EXCLUDED.row_count,
+                        has_row_gap = EXCLUDED.has_row_gap
+                    RETURNING id
+                    """,
+                    (
+                        observation_id,
+                        reporter_id,
+                        battle_log.parser_version,
+                        battle_log.observed_at,
+                        battle_log.row_count,
+                        battle_log.has_row_gap,
+                    ),
+                ).fetchone()
+                assert log_row is not None
+                log_id = int(log_row[0])
+                for row in battle_log.rows:
+                    source_row = connection.execute(
+                        """
+                        INSERT INTO battle_source_rows (
+                            battle_log_observation_id, source_row_index, outcome,
+                            failure_category, source_json
+                        ) VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (battle_log_observation_id, source_row_index)
+                        DO UPDATE SET
+                            outcome = EXCLUDED.outcome,
+                            failure_category = EXCLUDED.failure_category,
+                            source_json = EXCLUDED.source_json
+                        RETURNING id
+                        """,
+                        (
+                            log_id,
+                            row.source_row_index,
+                            row.outcome,
+                            row.failure_category,
+                            Jsonb(row.source_json),
+                        ),
+                    ).fetchone()
+                    assert source_row is not None
+                    if row.battle is None:
+                        continue
+                    battle = row.battle
+                    attacker_id = self._upsert_player(
+                        connection,
+                        battle.attacker_tag,
+                        active=False,
+                    )
+                    defender_id = self._upsert_player(
+                        connection,
+                        battle.defender_tag,
+                        active=False,
+                    )
+                    opponent_id = defender_id if battle.perspective == "attacker" else attacker_id
+                    connection.execute(
+                        """
+                        INSERT INTO known_player_discoveries (
+                            player_id, observation_id, source_row_index,
+                            source_kind, discovered_at
+                        ) VALUES (%s, %s, %s, 'battle_opponent', %s)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (
+                            opponent_id,
+                            observation_id,
+                            row.source_row_index,
+                            battle_log.observed_at,
+                        ),
+                    )
+                    canonical = connection.execute(
+                        """
+                        INSERT INTO legend_battles (
+                            ranked_day_start, attacker_player_id, defender_player_id
+                        ) VALUES (%s, %s, %s)
+                        ON CONFLICT (
+                            ranked_day_start, attacker_player_id, defender_player_id
+                        ) DO UPDATE SET updated_at = clock_timestamp()
+                        RETURNING id
+                        """,
+                        (battle.ranked_day_start, attacker_id, defender_id),
+                    ).fetchone()
+                    assert canonical is not None
+                    evidence = connection.execute(
+                        """
+                        INSERT INTO battle_evidence (
+                            battle_id, source_row_id, observation_id,
+                            reporting_player_id, perspective, battle_timestamp,
+                            stars, destruction_percentage, army_share_code,
+                            reporter_trophies, opponent_trophies, attacker_gain,
+                            defender_loss, trophy_rule_version, source_observed_at,
+                            parser_version
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        ON CONFLICT (source_row_id) DO UPDATE SET
+                            source_row_id = EXCLUDED.source_row_id
+                        RETURNING id
+                        """,
+                        (
+                            canonical[0],
+                            source_row[0],
+                            observation_id,
+                            reporter_id,
+                            battle.perspective,
+                            battle.battle_timestamp,
+                            battle.stars,
+                            battle.destruction_percentage,
+                            battle.army_share_code,
+                            battle.reporter_trophies,
+                            battle.opponent_trophies,
+                            battle.attacker_gain,
+                            battle.defender_loss,
+                            battle.trophy_rule_version,
+                            battle_log.observed_at,
+                            battle_log.parser_version,
+                        ),
+                    ).fetchone()
+                    assert evidence is not None
+                    connection.execute(
+                        """
+                        INSERT INTO battle_perspectives (
+                            battle_id, perspective, evidence_id, source_observed_at
+                        ) VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (battle_id, perspective) DO UPDATE SET
+                            evidence_id = EXCLUDED.evidence_id,
+                            source_observed_at = EXCLUDED.source_observed_at,
+                            updated_at = clock_timestamp()
+                        WHERE EXCLUDED.source_observed_at > battle_perspectives.source_observed_at
+                           OR (
+                               EXCLUDED.source_observed_at = battle_perspectives.source_observed_at
+                               AND EXCLUDED.evidence_id > battle_perspectives.evidence_id
+                           )
+                        """,
+                        (
+                            canonical[0],
+                            battle.perspective,
+                            evidence[0],
+                            battle_log.observed_at,
+                        ),
+                    )
+                    self._refresh_battle_disagreement(connection, int(canonical[0]))
+
+                self._record_parsed_payload(
+                    connection,
+                    endpoint=endpoint,
+                    response_hash=response_hash,
+                    parser_version=battle_log.parser_version,
+                    schema_version=schema_version,
+                    parse_outcome=(
+                        "valid_with_gaps" if battle_log.has_row_gap else "valid"
+                    ),
+                    parsed_json={"items": [row.source_json for row in battle_log.rows]},
+                )
+                outcome = (
+                    "processed_with_gaps" if battle_log.has_row_gap else "processed"
+                )
+                self._record_processing_outcome(connection, claim, outcome=outcome)
+                self._finish_claim(
+                    connection, claim, job, state="complete", outcome=outcome
+                )
+
+    def complete_rankings(
+        self,
+        claim: Claim,
+        rankings: ParsedOfficialRankings,
+    ) -> None:
+        observation_id, _http_status, response_hash, observed_at, endpoint, schema_version = (
+            self._observation_source(claim)
+        )
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                job = self._lock_live_claim(connection, claim)
+                attempt = connection.execute(
+                    """
+                    INSERT INTO official_top200_attempts (
+                        observation_id, parser_version, outcome, failure_reasons,
+                        observed_at, season_provenance, official_season_id
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (observation_id, parser_version) DO UPDATE SET
+                        outcome = EXCLUDED.outcome,
+                        failure_reasons = EXCLUDED.failure_reasons
+                    RETURNING id
+                    """,
+                    (
+                        observation_id,
+                        rankings.parser_version,
+                        rankings.outcome,
+                        Jsonb(list(rankings.failure_reasons)),
+                        observed_at,
+                        rankings.season_provenance,
+                        rankings.official_season_id,
+                    ),
+                ).fetchone()
+                assert attempt is not None
+                player_ids: dict[str, int] = {}
+                for entry in rankings.entries:
+                    player_id = self._upsert_player(
+                        connection, entry.normalized_tag, active=False
+                    )
+                    player_ids[entry.normalized_tag] = player_id
+                    connection.execute(
+                        """
+                        INSERT INTO known_player_discoveries (
+                            player_id, observation_id, source_row_index,
+                            source_kind, discovered_at
+                        ) VALUES (%s, %s, %s, 'official_ranking', %s)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (player_id, observation_id, entry.rank - 1, observed_at),
+                    )
+                if rankings.outcome == "official_observed":
+                    version = connection.execute(
+                        """
+                        INSERT INTO official_top200_versions (
+                            attempt_id, observation_id, observed_at, parser_version
+                        ) VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (attempt_id) DO UPDATE
+                            SET attempt_id = EXCLUDED.attempt_id
+                        RETURNING id
+                        """,
+                        (
+                            attempt[0],
+                            observation_id,
+                            observed_at,
+                            rankings.parser_version,
+                        ),
+                    ).fetchone()
+                    assert version is not None
+                    for entry in rankings.entries:
+                        connection.execute(
+                            """
+                            INSERT INTO official_top200_entries (
+                                version_id, rank, player_id, normalized_tag, source_json
+                            ) VALUES (%s, %s, %s, %s, %s)
+                            ON CONFLICT (version_id, rank) DO UPDATE SET
+                                player_id = EXCLUDED.player_id,
+                                normalized_tag = EXCLUDED.normalized_tag,
+                                source_json = EXCLUDED.source_json
+                            """,
+                            (
+                                version[0],
+                                entry.rank,
+                                player_ids[entry.normalized_tag],
+                                entry.normalized_tag,
+                                Jsonb(entry.source_json),
+                            ),
+                        )
+                self._record_parsed_payload(
+                    connection,
+                    endpoint=endpoint,
+                    response_hash=response_hash,
+                    parser_version=rankings.parser_version,
+                    schema_version=schema_version,
+                    parse_outcome="valid",
+                    parsed_json={
+                        "items": [entry.source_json for entry in rankings.entries],
+                        "paging": {"cursors": {}},
+                    },
+                )
+                self._record_processing_outcome(
+                    connection,
+                    claim,
+                    outcome="processed",
+                    failure_category=(
+                        None
+                        if rankings.outcome == "official_observed"
+                        else rankings.outcome
+                    ),
+                )
+                self._finish_claim(
+                    connection,
+                    claim,
+                    job,
+                    state="complete",
+                    outcome=rankings.outcome,
+                )
+
+    def complete_reconciliation(self, claim: Claim) -> None:
+        player_id = int(claim.input_json["player_id"])
+        day_start = datetime.fromisoformat(
+            str(claim.input_json["ranked_day_start"]).replace("Z", "+00:00")
+        )
+        now = datetime.now(UTC)
+        ranked_day = ranked_day_for(day_start)
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                job = self._lock_live_claim(connection, claim)
+                player = connection.execute(
+                    "SELECT id, normalized_tag FROM players WHERE id = %s",
+                    (player_id,),
+                ).fetchone()
+                if player is None:
+                    raise ValueError(f"unknown reconciliation player id {player_id}")
+                player_tag = _text_value(player[1])
+
+                start_baseline = self._load_reset_baseline(
+                    connection, player_id, ranked_day.start, claim.parser_version
+                )
+                end_baseline = self._load_reset_baseline(
+                    connection, player_id, ranked_day.end, claim.parser_version
+                )
+                coverage_rows = connection.execute(
+                    """
+                    SELECT blo.observed_at, blo.row_count, blo.has_row_gap,
+                           COALESCE(
+                               array_agg(DISTINCT be.battle_id::text)
+                                   FILTER (WHERE be.battle_id IS NOT NULL),
+                               ARRAY[]::text[]
+                           )
+                    FROM battle_log_observations AS blo
+                    LEFT JOIN battle_evidence AS be
+                      ON be.observation_id = blo.observation_id
+                    WHERE blo.player_id = %s
+                      AND blo.observed_at BETWEEN %s AND %s
+                    GROUP BY blo.id, blo.observed_at, blo.row_count, blo.has_row_gap
+                    ORDER BY blo.observed_at, blo.id
+                    """,
+                    (player_id, ranked_day.start, ranked_day.end),
+                ).fetchall()
+                coverage = tuple(
+                    CoverageObservation(
+                        observed_at=row[0],
+                        row_count=int(row[1]),
+                        has_row_gap=bool(row[2]),
+                        battle_identities=tuple(str(value) for value in row[3]),
+                    )
+                    for row in coverage_rows
+                )
+                contribution_rows = connection.execute(
+                    """
+                    SELECT b.id, p.perspective,
+                           CASE
+                               WHEN p.perspective = 'attacker' THEN e.attacker_gain
+                               ELSE e.defender_loss
+                           END
+                    FROM legend_battles AS b
+                    JOIN battle_perspectives AS p ON p.battle_id = b.id
+                    JOIN battle_evidence AS e ON e.id = p.evidence_id
+                    WHERE e.battle_timestamp >= %s
+                      AND e.battle_timestamp < %s
+                      AND (
+                          (p.perspective = 'attacker' AND b.attacker_player_id = %s)
+                          OR
+                          (p.perspective = 'defender' AND b.defender_player_id = %s)
+                      )
+                    ORDER BY b.id, p.perspective
+                    """,
+                    (ranked_day.start, ranked_day.end, player_id, player_id),
+                ).fetchall()
+                contributions = tuple(
+                    BattleContribution(
+                        battle_identity=str(row[0]),
+                        lens=("offense" if _text_value(row[1]) == "attacker" else "defense"),
+                        trophy_amount=int(row[2]),
+                    )
+                    for row in contribution_rows
+                )
+                previous_row = connection.execute(
+                    """
+                    SELECT state, defense_count, observed_defense_loss,
+                           COALESCE(shield_duration_days, 0)
+                    FROM ranked_day_versions
+                    WHERE player_id = %s AND ranked_day_start = %s
+                      AND reconciliation_rule_version = %s
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """,
+                    (
+                        player_id,
+                        ranked_day.start - timedelta(days=1),
+                        RECONCILIATION_RULE_VERSION,
+                    ),
+                ).fetchone()
+                previous = (
+                    PreviousRankedDay(
+                        complete=_text_value(previous_row[0]) == "Complete",
+                        observed_defense_count=int(previous_row[1]),
+                        observed_defense_loss=int(previous_row[2]),
+                        shield_run_length=int(previous_row[3]),
+                    )
+                    if previous_row is not None
+                    else None
+                )
+                anchor = connection.execute(
+                    """
+                    SELECT current_league_season_id, previous_league_season_id,
+                           current_start, previous_start
+                    FROM legend_season_anchors
+                    WHERE state = 'confirmed' AND anchor_rule_version = %s
+                    """,
+                    (SEASON_ANCHOR_RULE_VERSION,),
+                ).fetchone()
+                anchor_valid = anchor is not None and ranked_day.start >= anchor[3]
+                if anchor is None:
+                    official_season_id = "unknown"
+                    season_start = ranked_day.start
+                elif ranked_day.start >= anchor[2]:
+                    official_season_id = _text_value(anchor[0])
+                    season_start = anchor[2]
+                else:
+                    official_season_id = _text_value(anchor[1])
+                    season_start = anchor[3]
+                season_day_number = (ranked_day.start - season_start).days + 1
+                boundary_kind = None
+                if anchor is not None and ranked_day.end == anchor[2]:
+                    boundary_kind = "season"
+                elif ranked_day.end.weekday() == 0:
+                    boundary_kind = "weekly"
+
+                result = reconcile_ranked_day(
+                    ReconciliationInput(
+                        ranked_day=ranked_day,
+                        now=now,
+                        start_baseline_id=(
+                            int(start_baseline[0]) if start_baseline is not None else None
+                        ),
+                        end_baseline_id=(
+                            int(end_baseline[0]) if end_baseline is not None else None
+                        ),
+                        start_trophies=(
+                            int(start_baseline[1]) if start_baseline is not None else None
+                        ),
+                        next_start_trophies=(
+                            int(end_baseline[1]) if end_baseline is not None else None
+                        ),
+                        coverage_observations=coverage,
+                        contributions=contributions,
+                        previous_day=previous,
+                        boundary_kind=boundary_kind,
+                        season_anchor_valid=anchor_valid,
+                    )
+                )
+                result_data = {
+                    "state": result.state,
+                    "confidence": result.confidence,
+                    "failure_reasons": result.failure_reasons,
+                    "start_trophies": (
+                        int(start_baseline[1]) if start_baseline is not None else None
+                    ),
+                    "next_start_trophies": (
+                        int(end_baseline[1]) if end_baseline is not None else None
+                    ),
+                    "attack_count": result.attack_count,
+                    "defense_count": result.defense_count,
+                    "attack_gain": result.attack_trophy_gain,
+                    "observed_defense_loss": result.observed_defense_loss,
+                    "automatic_defense_loss": result.automatic_defense_loss,
+                    "final_trophies_before_reset": result.final_trophies_before_reset,
+                    "shield_state": result.shield_state,
+                    "shield_duration_days": result.shield_duration_days,
+                    "coverage_complete": result.coverage_complete,
+                }
+                result_hash = hashlib.sha256(
+                    json.dumps(result_data, sort_keys=True).encode()
+                ).hexdigest()
+                existing = connection.execute(
+                    """
+                    SELECT id FROM ranked_day_versions
+                    WHERE player_id = %s AND ranked_day_start = %s
+                      AND reconciliation_rule_version = %s AND result_hash = %s
+                    """,
+                    (
+                        player_id,
+                        ranked_day.start,
+                        RECONCILIATION_RULE_VERSION,
+                        result_hash,
+                    ),
+                ).fetchone()
+                if existing is None:
+                    previous_version = connection.execute(
+                        """
+                        SELECT id, version FROM ranked_day_versions
+                        WHERE player_id = %s AND ranked_day_start = %s
+                          AND reconciliation_rule_version = %s
+                        ORDER BY version DESC LIMIT 1
+                        FOR UPDATE
+                        """,
+                        (player_id, ranked_day.start, RECONCILIATION_RULE_VERSION),
+                    ).fetchone()
+                    version_number = (
+                        int(previous_version[1]) + 1
+                        if previous_version is not None
+                        else 1
+                    )
+                    version = connection.execute(
+                        """
+                        INSERT INTO ranked_day_versions (
+                            player_id, ranked_day_start, ranked_day_end,
+                            official_season_id, season_day_number,
+                            season_anchor_rule_version, reconciliation_rule_version,
+                            result_hash, version, replaces_version_id, state, confidence,
+                            failure_reasons, start_trophies,
+                            final_trophies_before_reset, next_start_trophies,
+                            attack_count, defense_count, attack_gain,
+                            observed_defense_loss, automatic_defense_loss,
+                            evidence_complete, reconciled, shield_state,
+                            shield_duration_days, start_baseline_id, end_baseline_id
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s
+                        ) RETURNING id
+                        """,
+                        (
+                            player_id,
+                            ranked_day.start,
+                            ranked_day.end,
+                            official_season_id,
+                            season_day_number,
+                            SEASON_ANCHOR_RULE_VERSION,
+                            RECONCILIATION_RULE_VERSION,
+                            result_hash,
+                            version_number,
+                            previous_version[0] if previous_version is not None else None,
+                            result.state,
+                            result.confidence,
+                            Jsonb(list(result.failure_reasons)),
+                            result_data["start_trophies"],
+                            result.final_trophies_before_reset,
+                            result_data["next_start_trophies"],
+                            result.attack_count,
+                            result.defense_count,
+                            result.attack_trophy_gain,
+                            result.observed_defense_loss,
+                            result.automatic_defense_loss,
+                            result.coverage_complete
+                            and start_baseline is not None
+                            and end_baseline is not None,
+                            result.state == "Complete",
+                            result.shield_state,
+                            result.shield_duration_days,
+                            start_baseline[0] if start_baseline is not None else None,
+                            end_baseline[0] if end_baseline is not None else None,
+                        ),
+                    ).fetchone()
+                    assert version is not None
+                    version_id = int(version[0])
+                    self._store_ranked_day_adjustments(connection, version_id, result)
+                    self._enqueue_ranked_day_dependents(
+                        connection,
+                        version_id,
+                        player_id,
+                        ranked_day.start,
+                        ranked_day.end,
+                    )
+                self._finish_claim(
+                    connection, claim, job, state="complete", outcome="processed"
+                )
+
+    def complete_snapshot(self, claim: Claim) -> None:
+        ranked_day_version_id = int(claim.input_json["ranked_day_version_id"])
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                job = self._lock_live_claim(connection, claim)
+                ranked_day = connection.execute(
+                    """
+                    SELECT ranked_day_start, ranked_day_end
+                    FROM ranked_day_versions WHERE id = %s
+                    """,
+                    (ranked_day_version_id,),
+                ).fetchone()
+                if ranked_day is None:
+                    raise ValueError("ranked-day version for snapshot does not exist")
+                profile_rows = connection.execute(
+                    """
+                    SELECT DISTINCT ON (p.id)
+                           p.id, p.normalized_tag, v.trophies,
+                           v.observation_id, v.observed_at, v.eligibility_state
+                    FROM players AS p
+                    JOIN player_profile_versions AS v ON v.player_id = p.id
+                    WHERE p.active = true
+                      AND v.source_contract_state = 'accepted'
+                    ORDER BY p.id, v.observed_at DESC, v.id DESC
+                    """
+                ).fetchall()
+                official_rows = connection.execute(
+                    """
+                    SELECT e.player_id, e.rank, v.id, v.observed_at
+                    FROM official_top200_entries AS e
+                    JOIN official_top200_versions AS v ON v.id = e.version_id
+                    WHERE v.id = (
+                        SELECT id FROM official_top200_versions
+                        ORDER BY published_at DESC, id DESC LIMIT 1
+                    )
+                    """
+                ).fetchall()
+                official_by_player = {
+                    int(row[0]): (int(row[1]), int(row[2]), row[3])
+                    for row in official_rows
+                }
+                entries: list[dict[str, Any]] = []
+                for row in profile_rows:
+                    age_seconds = max(
+                        0, int((ranked_day[1] - row[4]).total_seconds())
+                    )
+                    freshness = (
+                        "fresh"
+                        if age_seconds <= PROFILE_FRESHNESS_SECONDS
+                        else "stale"
+                    )
+                    entries.append(
+                        {
+                            "player_id": int(row[0]),
+                            "tag": _text_value(row[1]),
+                            "trophies": int(row[2]),
+                            "observation_id": int(row[3]),
+                            "observed_at": row[4],
+                            "age_seconds": age_seconds,
+                            "freshness": freshness,
+                            "confidence": (
+                                "confirmed"
+                                if _text_value(row[5]) == "eligible"
+                                else "uncertain"
+                            ),
+                            "tie_hash": deterministic_tag_hash(_text_value(row[1])),
+                            "official": official_by_player.get(int(row[0])),
+                        }
+                    )
+                entries.sort(
+                    key=lambda item: (
+                        -int(item["trophies"]),
+                        str(item["tie_hash"]),
+                        str(item["tag"]),
+                    )
+                )
+                stale_count = sum(
+                    1 for entry in entries if entry["freshness"] == "stale"
+                )
+                coverage = (
+                    (len(entries) - stale_count) / len(entries) if entries else 0
+                )
+                for snapshot_kind in ("frozen", "live"):
+                    self._publish_snapshot_kind(
+                        connection,
+                        snapshot_kind=snapshot_kind,
+                        boundary_at=ranked_day[1],
+                        ranked_day_version_id=ranked_day_version_id,
+                        entries=entries,
+                        coverage=coverage,
+                        stale_count=stale_count,
+                    )
+                self._finish_claim(
+                    connection, claim, job, state="complete", outcome="processed"
+                )
+
+    def complete_analytics(self, claim: Claim) -> None:
+        ranked_day_version_id = int(claim.input_json["ranked_day_version_id"])
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                job = self._lock_live_claim(connection, claim)
+                snapshot = connection.execute(
+                    """
+                    SELECT id, boundary_at, measured_coverage, stale_entry_count
+                    FROM leaderboard_snapshots
+                    WHERE source_ranked_day_version_id = %s
+                      AND snapshot_kind = 'frozen'
+                    """,
+                    (ranked_day_version_id,),
+                ).fetchone()
+                ranked_day = connection.execute(
+                    """
+                    SELECT ranked_day_start, ranked_day_end
+                    FROM ranked_day_versions WHERE id = %s
+                    """,
+                    (ranked_day_version_id,),
+                ).fetchone()
+                if snapshot is None or ranked_day is None:
+                    raise ValueError("frozen snapshot dependency is not complete")
+                for lens, perspective in (
+                    ("offense", "attacker"),
+                    ("defense", "defender"),
+                ):
+                    sample_rows = connection.execute(
+                        """
+                        SELECT b.id, b.disagreement_state, e.stars
+                        FROM battle_perspectives AS p
+                        JOIN legend_battles AS b ON b.id = p.battle_id
+                        JOIN battle_evidence AS e ON e.id = p.evidence_id
+                        JOIN leaderboard_snapshot_entries AS se
+                          ON se.snapshot_id = %s
+                         AND se.player_id = CASE
+                             WHEN p.perspective = 'attacker'
+                                 THEN b.attacker_player_id
+                             ELSE b.defender_player_id
+                         END
+                        WHERE p.perspective = %s
+                          AND e.battle_timestamp >= %s
+                          AND e.battle_timestamp < %s
+                        ORDER BY b.id
+                        """,
+                        (snapshot[0], perspective, ranked_day[0], ranked_day[1]),
+                    ).fetchall()
+                    sample_size = len(sample_rows)
+                    three_star_count = sum(int(row[2]) == 3 for row in sample_rows)
+                    disagreement_count = sum(
+                        _text_value(row[1]) == "disagreement" for row in sample_rows
+                    )
+                    freshness = "fresh" if int(snapshot[3]) == 0 else "mixed"
+                    summary = connection.execute(
+                        """
+                        INSERT INTO analytics_summaries (
+                            snapshot_id, lens, population_filter,
+                            period_start, period_end, sample_size,
+                            measured_coverage, freshness, classification_version,
+                            classification_confidence, unclassified_count,
+                            disagreement_count, analytics_rule_version
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                        )
+                        ON CONFLICT (
+                            snapshot_id, lens, population_filter,
+                            period_start, period_end, analytics_rule_version
+                        ) DO UPDATE SET sample_size = EXCLUDED.sample_size
+                        RETURNING id
+                        """,
+                        (
+                            snapshot[0],
+                            lens,
+                            Jsonb({"population": "tracked_players"}),
+                            ranked_day[0],
+                            ranked_day[1],
+                            sample_size,
+                            snapshot[2],
+                            freshness,
+                            CLASSIFICATION_VERSION,
+                            CLASSIFICATION_CONFIDENCE,
+                            sample_size,
+                            disagreement_count,
+                            ANALYTICS_RULE_VERSION,
+                        ),
+                    ).fetchone()
+                    assert summary is not None
+                    connection.execute(
+                        """
+                        INSERT INTO analytics_breakdowns (
+                            summary_id, army_archetype, attack_count,
+                            three_star_count, usage_rate, three_star_rate
+                        ) VALUES (%s, 'Unclassified', %s, %s, %s, %s)
+                        ON CONFLICT (summary_id, army_archetype) DO UPDATE SET
+                            attack_count = EXCLUDED.attack_count,
+                            three_star_count = EXCLUDED.three_star_count,
+                            usage_rate = EXCLUDED.usage_rate,
+                            three_star_rate = EXCLUDED.three_star_rate
+                        """,
+                        (
+                            summary[0],
+                            sample_size,
+                            three_star_count,
+                            1 if sample_size else None,
+                            (
+                                three_star_count / sample_size
+                                if sample_size
+                                else None
+                            ),
+                        ),
+                    )
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
                 )
@@ -414,6 +1443,15 @@ class Database:
         with self.pool.connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
+                self._record_processing_outcome(
+                    connection,
+                    claim,
+                    outcome="non_success" if outcome == "source_non_success" else outcome,
+                )
+                if claim.endpoint == "global_player_rankings":
+                    self._record_official_failed_attempt(
+                        connection, claim, outcome="non_success", category="non_success"
+                    )
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome=outcome
                 )
@@ -450,8 +1488,8 @@ class Database:
                     ),
                 )
                 completed = connection.execute(
-                    """
-                    UPDATE python_processing_jobs
+                    f"""
+                    UPDATE {self._jobs_relation}
                     SET state = %s,
                         due_at = CASE WHEN %s THEN clock_timestamp() + interval '1 second' ELSE due_at END,
                         outcome = %s, failure_category = %s, failure_detail = %s,
@@ -476,13 +1514,28 @@ class Database:
                 )
                 if completed.rowcount != 1:
                     raise LeaseLost("job lease was lost while recording failure")
+                if not should_retry and claim.observation_id is not None:
+                    failure_outcome = self._failure_outcome(category)
+                    self._record_processing_outcome(
+                        connection,
+                        claim,
+                        outcome=failure_outcome,
+                        failure_category=category,
+                    )
+                    if claim.endpoint == "global_player_rankings":
+                        self._record_official_failed_attempt(
+                            connection,
+                            claim,
+                            outcome=failure_outcome,
+                            category=category,
+                        )
                 return state
 
     def requeue_completed_job(self, job_id: int) -> None:
         with self.pool.connection() as connection:
             connection.execute(
-                """
-                UPDATE python_processing_jobs
+                f"""
+                UPDATE {self._jobs_relation}
                 SET state = 'pending', due_at = clock_timestamp(), outcome = NULL,
                     failure_category = NULL, failure_detail = NULL,
                     lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
@@ -496,8 +1549,8 @@ class Database:
     def expire_lease(self, job_id: int) -> None:
         with self.pool.connection() as connection:
             connection.execute(
-                """
-                UPDATE python_processing_jobs
+                f"""
+                UPDATE {self._jobs_relation}
                 SET lease_expires_at = clock_timestamp() - interval '1 second'
                 WHERE id = %s AND state = 'leased'
                 """,
@@ -537,11 +1590,536 @@ class Database:
                 "source_http_status": row[11],
             }
 
-    def _lock_live_claim(self, connection: Any, claim: Claim) -> dict[str, Any]:
+    @staticmethod
+    def _load_reset_baseline(
+        connection: Any,
+        player_id: int,
+        boundary_at: datetime,
+        parser_version: str,
+    ) -> tuple[Any, ...] | None:
+        return connection.execute(
+            """
+            SELECT r.id, v.trophies
+            FROM reset_baseline_evidence AS r
+            JOIN player_profile_versions AS v
+              ON v.observation_id = r.profile_observation_id
+             AND v.parser_version = %s
+            JOIN battle_log_observations AS b
+              ON b.observation_id = r.battle_log_observation_id
+             AND b.parser_version = %s
+            WHERE r.player_id = %s AND r.boundary_at = %s
+              AND r.sweep_id IS NOT NULL
+              AND r.profile_valid AND r.battle_log_valid
+              AND NOT r.legacy_profile_only
+            ORDER BY r.id DESC, v.id DESC
+            LIMIT 1
+            """,
+            (parser_version, parser_version, player_id, boundary_at),
+        ).fetchone()
+
+    @staticmethod
+    def _publish_snapshot_kind(
+        connection: Any,
+        *,
+        snapshot_kind: str,
+        boundary_at: datetime,
+        ranked_day_version_id: int,
+        entries: list[dict[str, Any]],
+        coverage: float,
+        stale_count: int,
+    ) -> None:
+        existing = connection.execute(
+            """
+            SELECT id FROM leaderboard_snapshots
+            WHERE snapshot_kind = %s AND boundary_at = %s
+              AND source_ranked_day_version_id = %s
+            """,
+            (snapshot_kind, boundary_at, ranked_day_version_id),
+        ).fetchone()
+        if existing is not None:
+            return
+        prior = connection.execute(
+            """
+            SELECT id, version FROM leaderboard_snapshots
+            WHERE snapshot_kind = %s AND boundary_at = %s
+              AND state = 'published'
+            FOR UPDATE
+            """,
+            (snapshot_kind, boundary_at),
+        ).fetchone()
+        next_version = int(prior[1]) + 1 if prior is not None else 1
+        if prior is not None:
+            connection.execute(
+                "UPDATE leaderboard_snapshots SET state = 'superseded' WHERE id = %s",
+                (prior[0],),
+            )
+        snapshot = connection.execute(
+            """
+            INSERT INTO leaderboard_snapshots (
+                snapshot_kind, boundary_at, version, correction_of_id,
+                ordering_rule_version, freshness_rule_version, state,
+                source_ranked_day_version_id, measured_coverage, stale_entry_count
+            ) VALUES (%s, %s, %s, %s, %s, %s, 'building', %s, %s, %s)
+            RETURNING id
+            """,
+            (
+                snapshot_kind,
+                boundary_at,
+                next_version,
+                prior[0] if prior is not None else None,
+                SNAPSHOT_ORDERING_RULE_VERSION,
+                FRESHNESS_RULE_VERSION,
+                ranked_day_version_id,
+                coverage,
+                stale_count,
+            ),
+        ).fetchone()
+        assert snapshot is not None
+        for position, entry in enumerate(entries, start=1):
+            official = entry["official"]
+            connection.execute(
+                """
+                INSERT INTO leaderboard_snapshot_entries (
+                    snapshot_id, position, player_id, trophies,
+                    trophy_observation_id, trophy_observed_at,
+                    observation_age_seconds, freshness, confidence, tie_hash,
+                    official_rank, official_rank_version_id,
+                    official_rank_observed_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                """,
+                (
+                    snapshot[0],
+                    position,
+                    entry["player_id"],
+                    entry["trophies"],
+                    entry["observation_id"],
+                    entry["observed_at"],
+                    entry["age_seconds"],
+                    entry["freshness"],
+                    entry["confidence"],
+                    entry["tie_hash"],
+                    official[0] if official is not None else None,
+                    official[1] if official is not None else None,
+                    official[2] if official is not None else None,
+                ),
+            )
+        connection.execute(
+            """
+            UPDATE leaderboard_snapshots
+            SET state = 'published', published_at = clock_timestamp()
+            WHERE id = %s AND state = 'building'
+            """,
+            (snapshot[0],),
+        )
+
+    @staticmethod
+    def _store_ranked_day_adjustments(
+        connection: Any,
+        ranked_day_version_id: int,
+        result: ReconciliationResult,
+    ) -> None:
+        if result.automatic_defense_loss is not None:
+            connection.execute(
+                """
+                INSERT INTO ranked_day_adjustments (
+                    ranked_day_version_id, adjustment_type, amount,
+                    evidence_state, rule_version, evidence_json
+                ) VALUES (%s, 'automatic_defense', %s, %s, %s, %s)
+                """,
+                (
+                    ranked_day_version_id,
+                    -result.automatic_defense_loss,
+                    result.automatic_defense_evidence_state,
+                    RECONCILIATION_RULE_VERSION,
+                    Jsonb(
+                        {
+                            "defense_count": result.defense_count,
+                            "observed_defense_loss": result.observed_defense_loss,
+                        }
+                    ),
+                ),
+            )
+        if result.boundary_adjustment_type is not None:
+            connection.execute(
+                """
+                INSERT INTO ranked_day_adjustments (
+                    ranked_day_version_id, adjustment_type, amount,
+                    evidence_state, rule_version, evidence_json
+                ) VALUES (%s, %s, %s, 'official_rule', %s, '{}'::jsonb)
+                """,
+                (
+                    ranked_day_version_id,
+                    result.boundary_adjustment_type,
+                    result.boundary_adjustment,
+                    RECONCILIATION_RULE_VERSION,
+                ),
+            )
+
+    @staticmethod
+    def _enqueue_ranked_day_dependents(
+        connection: Any,
+        ranked_day_version_id: int,
+        player_id: int,
+        ranked_day_start: datetime,
+        boundary_at: datetime,
+    ) -> None:
+        ranked_day_version_id = int(ranked_day_version_id)
+        player_id = int(player_id)
+        ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        boundary_at_text = boundary_at.astimezone(UTC).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        common_input = {
+            "player_id": player_id,
+            "ranked_day_start": ranked_day_start_text,
+            "ranked_day_version_id": ranked_day_version_id,
+        }
+        input_by_work_type = {
+            "build_snapshot": {
+                **common_input,
+                "boundary_at": boundary_at_text,
+            },
+            "build_analytics": {
+                **common_input,
+                "selection": {"ranked_day_version_id": ranked_day_version_id},
+            },
+        }
+        for work_type in ("build_snapshot", "build_analytics"):
+            deduplication_key = f"{work_type}:ranked-day-version:{ranked_day_version_id}"
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    observation_id, work_type, deduplication_key, input_json,
+                    status, due_at, parser_version, processing_version,
+                    domain_rule_version, analytics_rule_version
+                ) VALUES (NULL, %s, %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)
+                ON CONFLICT (deduplication_key) DO NOTHING
+                """,
+                (
+                    work_type,
+                    deduplication_key,
+                    Jsonb(input_by_work_type[work_type]),
+                    DEFAULT_PARSER_VERSION,
+                    PROCESSING_VERSION,
+                    DOMAIN_RULE_VERSION,
+                    ANALYTICS_RULE_VERSION,
+                ),
+            )
+
+    @staticmethod
+    def _observation_source(
+        claim: Claim,
+    ) -> tuple[int, int, str, datetime, str, str]:
+        values = (
+            claim.observation_id,
+            claim.http_status,
+            claim.response_hash,
+            claim.observed_at,
+            claim.endpoint,
+            claim.schema_version,
+        )
+        if any(value is None for value in values):
+            raise ValueError("observation work is missing its archived source metadata")
+        assert claim.observation_id is not None
+        assert claim.http_status is not None
+        assert claim.response_hash is not None
+        assert claim.observed_at is not None
+        assert claim.endpoint is not None
+        assert claim.schema_version is not None
+        return (
+            claim.observation_id,
+            claim.http_status,
+            claim.response_hash,
+            claim.observed_at,
+            claim.endpoint,
+            claim.schema_version,
+        )
+
+    @staticmethod
+    def _upsert_player(connection: Any, normalized_tag: str, *, active: bool) -> int:
         row = connection.execute(
             """
+            INSERT INTO players (normalized_tag, active, eligibility_state)
+            VALUES (%s, %s, 'unknown')
+            ON CONFLICT (normalized_tag) DO UPDATE
+                SET updated_at = clock_timestamp()
+            RETURNING id
+            """,
+            (normalized_tag, active),
+        ).fetchone()
+        assert row is not None
+        return int(row[0])
+
+    @staticmethod
+    def _refresh_battle_disagreement(connection: Any, battle_id: int) -> None:
+        rows = connection.execute(
+            """
+            SELECT e.battle_timestamp, e.stars, e.destruction_percentage,
+                   e.attacker_gain, e.defender_loss
+            FROM battle_perspectives AS p
+            JOIN battle_evidence AS e ON e.id = p.evidence_id
+            WHERE p.battle_id = %s
+            ORDER BY p.perspective
+            """,
+            (battle_id,),
+        ).fetchall()
+        if len(rows) < 2:
+            state = "single_perspective"
+        else:
+            state = "agreed" if tuple(rows[0]) == tuple(rows[1]) else "disagreement"
+        connection.execute(
+            """
+            UPDATE legend_battles
+            SET disagreement_state = %s, updated_at = clock_timestamp()
+            WHERE id = %s
+            """,
+            (state, battle_id),
+        )
+
+    @staticmethod
+    def _record_parsed_payload(
+        connection: Any,
+        *,
+        endpoint: str,
+        response_hash: str,
+        parser_version: str,
+        schema_version: str,
+        parse_outcome: str,
+        parsed_json: Any,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO parsed_source_payloads (
+                endpoint, response_hash, parser_version, schema_version,
+                parse_outcome, parsed_json
+            ) VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (endpoint, response_hash, parser_version) DO UPDATE SET
+                parse_outcome = EXCLUDED.parse_outcome,
+                parsed_json = EXCLUDED.parsed_json
+            """,
+            (
+                endpoint,
+                response_hash,
+                parser_version,
+                schema_version,
+                parse_outcome,
+                Jsonb(parsed_json),
+            ),
+        )
+
+    @staticmethod
+    def _record_processing_outcome(
+        connection: Any,
+        claim: Claim,
+        *,
+        outcome: str,
+        failure_category: str | None = None,
+    ) -> None:
+        observation_id, http_status, response_hash, observed_at, endpoint, _schema = (
+            Database._observation_source(claim)
+        )
+        connection.execute(
+            """
+            INSERT INTO observation_processing_outcomes (
+                observation_id, parser_version, processing_version, endpoint,
+                response_hash, source_http_status, source_observed_at,
+                outcome, failure_category
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (observation_id, parser_version, processing_version)
+            DO UPDATE SET
+                outcome = EXCLUDED.outcome,
+                failure_category = EXCLUDED.failure_category
+            """,
+            (
+                observation_id,
+                claim.parser_version,
+                claim.processing_version,
+                endpoint,
+                response_hash,
+                http_status,
+                observed_at,
+                outcome,
+                failure_category,
+            ),
+        )
+
+    @staticmethod
+    def _failure_outcome(category: str) -> str:
+        if category.startswith("archive_") or category == "checksum_mismatch":
+            return "integrity_failure"
+        if category.startswith("unsupported_") or category.endswith("_schema"):
+            return "unsupported"
+        return "malformed"
+
+    @staticmethod
+    def _record_official_failed_attempt(
+        connection: Any,
+        claim: Claim,
+        *,
+        outcome: str,
+        category: str,
+    ) -> None:
+        observation_id, _status, _hash, observed_at, _endpoint, _schema = (
+            Database._observation_source(claim)
+        )
+        connection.execute(
+            """
+            INSERT INTO official_top200_attempts (
+                observation_id, parser_version, outcome, failure_reasons,
+                observed_at, season_provenance
+            ) VALUES (%s, %s, %s, %s, %s, 'not_supplied')
+            ON CONFLICT (observation_id, parser_version) DO UPDATE SET
+                outcome = EXCLUDED.outcome,
+                failure_reasons = EXCLUDED.failure_reasons
+            """,
+            (
+                observation_id,
+                claim.parser_version,
+                outcome,
+                Jsonb([category]),
+                observed_at,
+            ),
+        )
+
+    @staticmethod
+    def _record_season_anchor(
+        connection: Any,
+        profile_version_id: int,
+        profile: ParsedProfile,
+    ) -> str:
+        outcome = "not_applicable"
+        failure_reason: str | None = None
+        anchor = None
+        if profile.eligibility_state == "eligible":
+            try:
+                if (
+                    profile.current_league_season_id is None
+                    or profile.previous_league_season_id is None
+                ):
+                    raise DomainRuleError(
+                        "invalid_season_anchor", "profile season values are missing"
+                    )
+                anchor = validate_season_anchor(
+                    profile.current_league_season_id,
+                    profile.previous_league_season_id,
+                )
+                outcome = "accepted"
+            except DomainRuleError as error:
+                outcome = "conflict"
+                failure_reason = error.category
+
+        if anchor is not None:
+            current = connection.execute(
+                """
+                SELECT a.id, a.current_league_season_id, a.previous_league_season_id,
+                       a.current_start, v.observed_at
+                FROM legend_season_anchors AS a
+                JOIN player_profile_versions AS v
+                  ON v.id = a.source_profile_version_id
+                WHERE a.state = 'confirmed'
+                  AND a.anchor_rule_version = %s
+                FOR UPDATE OF a
+                """,
+                (SEASON_ANCHOR_RULE_VERSION,),
+            ).fetchone()
+            if current is None:
+                connection.execute(
+                    """
+                    INSERT INTO legend_season_anchors (
+                        current_league_season_id, previous_league_season_id,
+                        current_start, previous_start, anchor_rule_version,
+                        source_profile_version_id, state
+                    ) VALUES (%s, %s, %s, %s, %s, %s, 'confirmed')
+                    """,
+                    (
+                        anchor.current_id,
+                        anchor.previous_id,
+                        anchor.current_start,
+                        anchor.previous_start,
+                        SEASON_ANCHOR_RULE_VERSION,
+                        profile_version_id,
+                    ),
+                )
+            elif (
+                _text_value(current[1]) == anchor.current_id
+                and _text_value(current[2]) == anchor.previous_id
+            ):
+                pass
+            elif profile.observed_at <= current[4]:
+                pass
+            elif anchor.current_start > current[3]:
+                connection.execute(
+                    "UPDATE legend_season_anchors SET state = 'superseded' WHERE id = %s",
+                    (current[0],),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO legend_season_anchors (
+                        current_league_season_id, previous_league_season_id,
+                        current_start, previous_start, anchor_rule_version,
+                        source_profile_version_id, state
+                    ) VALUES (%s, %s, %s, %s, %s, %s, 'confirmed')
+                    ON CONFLICT (current_league_season_id, anchor_rule_version)
+                    DO UPDATE SET
+                        source_profile_version_id = EXCLUDED.source_profile_version_id,
+                        state = 'confirmed',
+                        confirmed_at = clock_timestamp()
+                    """,
+                    (
+                        anchor.current_id,
+                        anchor.previous_id,
+                        anchor.current_start,
+                        anchor.previous_start,
+                        SEASON_ANCHOR_RULE_VERSION,
+                        profile_version_id,
+                    ),
+                )
+            else:
+                outcome = "conflict"
+                failure_reason = "season_anchor_disagreement"
+
+        connection.execute(
+            """
+            INSERT INTO season_anchor_evidence (
+                profile_version_id, current_league_season_id,
+                previous_league_season_id, current_start, previous_start,
+                anchor_rule_version, outcome, failure_reason
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (profile_version_id) DO UPDATE SET
+                outcome = EXCLUDED.outcome,
+                failure_reason = EXCLUDED.failure_reason
+            """,
+            (
+                profile_version_id,
+                profile.current_league_season_id,
+                profile.previous_league_season_id,
+                anchor.current_start if anchor is not None else None,
+                anchor.previous_start if anchor is not None else None,
+                SEASON_ANCHOR_RULE_VERSION,
+                outcome,
+                failure_reason,
+            ),
+        )
+        if outcome == "conflict":
+            connection.execute(
+                """
+                UPDATE player_profile_versions
+                SET source_contract_state = 'conflict', season_anchor_state = 'conflict'
+                WHERE id = %s
+                """,
+                (profile_version_id,),
+            )
+        return outcome
+
+    def _lock_live_claim(self, connection: Any, claim: Claim) -> dict[str, Any]:
+        row = connection.execute(
+            f"""
             SELECT id, attempt_count, max_attempts
-            FROM python_processing_jobs
+            FROM {self._jobs_relation}
             WHERE id = %s AND state = 'leased'
               AND lease_owner = %s AND lease_token = %s
               AND lease_expires_at > clock_timestamp()
@@ -580,8 +2158,8 @@ class Database:
         if attempt.rowcount != 1:
             raise LeaseLost("processing attempt fence was lost")
         completed = connection.execute(
-            """
-            UPDATE python_processing_jobs
+            f"""
+            UPDATE {self._jobs_relation}
             SET state = %s, outcome = %s, failure_category = NULL, failure_detail = NULL,
                 lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
                 completed_at = clock_timestamp(), updated_at = clock_timestamp()

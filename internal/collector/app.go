@@ -76,6 +76,24 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 		store.close()
 		return nil, err
 	}
+	if config.schemaVersion >= 2 {
+		interactiveKey, keyError := onlyInteractiveKey(config.keys)
+		if keyError != nil {
+			store.close()
+			return nil, keyError
+		}
+		if err := store.registerSharedCredential(
+			ctx,
+			bearerTokenFingerprint(interactiveKey.Secret),
+			29,
+			1,
+			30,
+			"collector:startup",
+		); err != nil {
+			store.close()
+			return nil, fmt.Errorf("register shared interactive API credential: %w", err)
+		}
+	}
 	if err := archive.verifyWriteCapability(ctx, ownerToken); err != nil {
 		store.close()
 		return nil, fmt.Errorf("collector startup guard failed: %w", err)
@@ -95,6 +113,19 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 		return nil, fmt.Errorf("collector startup guard failed: %w", err)
 	}
 	return app, nil
+}
+
+func onlyInteractiveKey(keys []APIKey) (APIKey, error) {
+	var interactive []APIKey
+	for _, key := range keys {
+		if key.Pool == interactivePool {
+			interactive = append(interactive, key)
+		}
+	}
+	if len(interactive) != 1 {
+		return APIKey{}, errors.New("exactly one shared interactive API key is required")
+	}
+	return interactive[0], nil
 }
 
 func (a *application) close() {
@@ -156,6 +187,13 @@ func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 	for range scheduled {
 		a.metrics.recordJob("regular_poll", string(normalPool), "scheduled")
 	}
+	globalRankingsCreated, err := a.store.scheduleGlobalRankings(ctx, now, 5*time.Minute)
+	if err != nil {
+		return err
+	}
+	if globalRankingsCreated {
+		a.metrics.recordJob("global_player_rankings", string(normalPool), "scheduled")
+	}
 	boundary := resetBoundaryAtOrBefore(now)
 	sweepID, created, err := a.store.scheduleResetSweep(ctx, boundary)
 	if err != nil {
@@ -165,6 +203,7 @@ func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 		ctx,
 		"scheduler tick",
 		"regular_jobs_created", scheduled,
+		"global_rankings_job_created", globalRankingsCreated,
 		"reset_sweep_id", sweepID,
 		"reset_sweep_created", created,
 	)

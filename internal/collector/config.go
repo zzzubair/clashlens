@@ -206,6 +206,9 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	if !allowReducedPools && len(interactiveKeys) != 1 {
 		return collectorConfig{}, errors.New("configure exactly one interactive API key or explicitly allow reduced key pools")
 	}
+	if len(interactiveKeys) != 1 {
+		return collectorConfig{}, errors.New("configure exactly one shared interactive API key")
+	}
 	if len(normalKeys) == 0 || len(interactiveKeys) == 0 {
 		return collectorConfig{}, errors.New("normal and interactive API key pools must each contain at least one key")
 	}
@@ -282,9 +285,9 @@ func parseConfiguredKeys(inline, fileSpecs string, pool capacityPool) ([]APIKey,
 		if err != nil {
 			return nil, fmt.Errorf("read API key file for label %q: %w", label, err)
 		}
-		secret := strings.TrimSpace(string(contents))
-		if secret == "" {
-			return nil, fmt.Errorf("API key file for label %q is empty", label)
+		secret, parseError := parseBearerTokenBytes(contents)
+		if parseError != nil {
+			return nil, fmt.Errorf("API key file for label %q: %w", label, parseError)
 		}
 		keys = append(keys, APIKey{Label: label, Secret: secret, Pool: pool})
 	}

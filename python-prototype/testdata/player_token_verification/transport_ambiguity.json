@@ -1,0 +1,5 @@
+{
+  "transport_error": "timeout_after_request_started",
+  "expected_outcome": "verification_unavailable",
+  "expected_key_action": "none"
+}

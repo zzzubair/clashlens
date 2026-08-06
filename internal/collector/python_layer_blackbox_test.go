@@ -110,7 +110,7 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 	}
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })
 	var state string
-	if err := connection.QueryRow(ctx, "SELECT state FROM python_processing_jobs").Scan(&state); err != nil {
+	if err := connection.QueryRow(ctx, "SELECT status FROM python_processing_jobs").Scan(&state); err != nil {
 		t.Fatalf("read Python job state: %v", err)
 	}
 	if state != "complete" {

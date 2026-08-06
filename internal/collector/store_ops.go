@@ -52,8 +52,8 @@ func (s *store) ready(ctx context.Context) error {
 	if err := s.pool.QueryRow(ctx, `SELECT version FROM clash_lens_contract WHERE singleton`).Scan(&version); err != nil {
 		return fmt.Errorf("read shared schema contract during readiness check: %w", err)
 	}
-	if version != s.contractVersion {
-		return fmt.Errorf("%w: got %d, want %d", errIncompatibleContract, version, s.contractVersion)
+	if !supportsContractVersion(version, s.maxContractVersion) {
+		return fmt.Errorf("%w: got %d, support through %d", errIncompatibleContract, version, s.maxContractVersion)
 	}
 	return nil
 }

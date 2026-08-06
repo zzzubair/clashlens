@@ -22,6 +22,16 @@ func (s *store) recordTransportFailure(
 	category string,
 	keyLabel string,
 ) error {
+	contractVersion, err := s.currentContractVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if contractVersion >= 2 {
+		return s.recordTransportFailureV2(
+			ctx, job, attemptID, endpoint, startedAt, failedAt,
+			nextRetryAt, category, keyLabel,
+		)
+	}
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin transport failure transaction: %w", err)
@@ -90,6 +100,13 @@ func (s *store) recordStorageFailure(
 	category string,
 	keyLabel string,
 ) error {
+	contractVersion, err := s.currentContractVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if contractVersion >= 2 {
+		return s.recordStorageFailureV2(ctx, job, attemptID, endpoint, response, category, keyLabel)
+	}
 	command, err := s.pool.Exec(ctx, `
 		UPDATE collector_endpoint_results AS endpoint_result
 		SET outcome = 'storage_failed',
@@ -155,6 +172,10 @@ func (s *store) resolveAttempt(
 	now time.Time,
 	maximumRetries int,
 ) error {
+	contractVersion, err := s.currentContractVersion(ctx)
+	if err != nil {
+		return err
+	}
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin attempt resolution transaction: %w", err)
@@ -215,6 +236,18 @@ func (s *store) resolveAttempt(
 		`, rootJobID, now, job.id); err != nil {
 			return fmt.Errorf("complete collector jobs: %w", err)
 		}
+		if contractVersion >= 2 {
+			if _, err := transaction.Exec(ctx, `
+				UPDATE collector_reset_baseline_sweeps AS baseline
+				SET state = 'complete', completed_at = $2
+				FROM collector_jobs AS root_job
+				WHERE root_job.id = $1
+				  AND baseline.id = root_job.reset_baseline_sweep_id
+				  AND baseline.evidence_kind = 'paired_v2'
+			`, rootJobID, now); err != nil {
+				return fmt.Errorf("complete retried reset baseline: %w", err)
+			}
+		}
 		if err := transaction.Commit(ctx); err != nil {
 			return fmt.Errorf("commit completed attempt: %w", err)
 		}
@@ -244,7 +277,29 @@ func (s *store) resolveAttempt(
 			dueAt = endpoint.nextRetryAt.Time
 		}
 		coalescingKey := "retry:" + strconv.FormatInt(attemptID, 10) + ":" + string(endpoint.name) + ":" + strconv.Itoa(nextRetryCount)
-		if _, err := transaction.Exec(ctx, `
+		if contractVersion >= 2 {
+			var normalizedTag any = job.normalizedTag
+			if job.scope == "global" {
+				normalizedTag = nil
+			}
+			if _, err := transaction.Exec(ctx, `
+				INSERT INTO collector_jobs (
+					work_type, scope, player_id, normalized_tag, capacity_pool,
+					priority, due_at, coalescing_key, sweep_id,
+					reset_baseline_sweep_id, parent_attempt_id,
+					required_endpoint, status
+				)
+				VALUES (
+					'endpoint_retry', $1, $2, $3, $4, 300, $5, $6,
+					$7, $8, $9, $10, 'pending'
+				)
+				ON CONFLICT DO NOTHING
+			`, job.scope, job.playerID, normalizedTag, string(job.pool), dueAt,
+				coalescingKey, job.sweepID, job.resetBaselineSweepID, attemptID,
+				string(endpoint.name)); err != nil {
+				return fmt.Errorf("insert version-two endpoint retry: %w", err)
+			}
+		} else if _, err := transaction.Exec(ctx, `
 			INSERT INTO collector_jobs (
 				work_type,
 				player_id,
@@ -285,6 +340,18 @@ func (s *store) resolveAttempt(
 		`, rootJobID, now, job.id); err != nil {
 			return fmt.Errorf("fail collector jobs: %w", err)
 		}
+		if contractVersion >= 2 {
+			if _, err := transaction.Exec(ctx, `
+				UPDATE collector_reset_baseline_sweeps AS baseline
+				SET state = 'failed', completed_at = $2
+				FROM collector_jobs AS root_job
+				WHERE root_job.id = $1
+				  AND baseline.id = root_job.reset_baseline_sweep_id
+				  AND baseline.evidence_kind = 'paired_v2'
+			`, rootJobID, now); err != nil {
+				return fmt.Errorf("fail retried reset baseline: %w", err)
+			}
+		}
 		if _, err := transaction.Exec(ctx, `
 			UPDATE collector_jobs
 			SET status = 'cancelled',
@@ -311,6 +378,18 @@ func (s *store) resolveAttempt(
 			WHERE id = $1
 		`, rootJobID, now); err != nil {
 			return fmt.Errorf("mark root job waiting for retry: %w", err)
+		}
+		if contractVersion >= 2 {
+			if _, err := transaction.Exec(ctx, `
+				UPDATE collector_reset_baseline_sweeps AS baseline
+				SET state = 'incomplete', completed_at = NULL
+				FROM collector_jobs AS root_job
+				WHERE root_job.id = $1
+				  AND baseline.id = root_job.reset_baseline_sweep_id
+				  AND baseline.evidence_kind = 'paired_v2'
+			`, rootJobID); err != nil {
+				return fmt.Errorf("mark reset baseline incomplete: %w", err)
+			}
 		}
 		if job.id != rootJobID {
 			if _, err := transaction.Exec(ctx, `

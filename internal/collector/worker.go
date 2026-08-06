@@ -179,6 +179,9 @@ func (w *worker) collectEndpoint(
 		if err != nil {
 			return err
 		}
+		if err := w.acquireSharedPermitForRequest(ctx, key); err != nil {
+			return err
+		}
 		w.config.metrics.recordAPIRequest(string(endpoint), string(job.pool))
 
 		response, err := w.api.fetch(ctx, endpoint, job.normalizedTag, key.Secret)
@@ -224,10 +227,35 @@ func (w *worker) collectEndpoint(
 		w.config.metrics.recordAPIOutcome(string(endpoint), HTTPStatusClass(response.statusCode))
 		authenticationFailure := authenticationFailureStatus(response.statusCode)
 		if authenticationFailure {
+			if key.Pool == interactivePool {
+				if err := w.store.quarantineSharedCredential(
+					ctx,
+					bearerTokenFingerprint(key.Secret),
+					"collector:worker",
+					"official_api_authentication_failure",
+				); err != nil {
+					return err
+				}
+			}
 			if err := w.keys.quarantine(key.Label); err != nil {
 				return err
 			}
 			w.config.metrics.recordQuarantine(key.Label, string(key.Pool))
+		}
+		if response.statusCode == http.StatusTooManyRequests && key.Pool == interactivePool {
+			cooldown := time.Second
+			if parsed, ok := parseRetryAfter(response.responseCompletedAt, response.headers["Retry-After"]); ok && parsed > 0 {
+				cooldown = parsed
+			}
+			if err := w.store.cooldownSharedCredential(
+				ctx,
+				bearerTokenFingerprint(key.Secret),
+				cooldown,
+				"collector:worker",
+				"official_api_429",
+			); err != nil {
+				return err
+			}
 		}
 		digest := sha256.Sum256(response.body)
 		hash := hex.EncodeToString(digest[:])
@@ -341,6 +369,52 @@ func (w *worker) collectEndpoint(
 			continue
 		}
 		return nil
+	}
+}
+
+func (w *worker) acquireSharedPermitForRequest(ctx context.Context, key APIKey) error {
+	if key.Pool != interactivePool {
+		return nil
+	}
+	contractVersion, err := w.store.currentContractVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if contractVersion < 2 {
+		return nil
+	}
+	fingerprint := bearerTokenFingerprint(key.Secret)
+	if err := w.store.registerSharedCredential(ctx, fingerprint, 29, 1, 30, "collector:worker"); err != nil {
+		return err
+	}
+	for {
+		permit, err := w.store.acquireSharedPermit(ctx, fingerprint, "go")
+		if err != nil {
+			return err
+		}
+		if permit.granted {
+			return nil
+		}
+		if permit.state == "quarantined" || permit.state == "retired" {
+			_ = w.keys.quarantine(key.Label)
+			return fmt.Errorf("%w: shared interactive credential is %s", errNoHealthyKey, permit.state)
+		}
+		wait := 10 * time.Millisecond
+		if permit.nextEligibleAt != nil {
+			wait = permit.nextEligibleAt.Sub(permit.databaseTime)
+			if wait < 10*time.Millisecond {
+				wait = 10 * time.Millisecond
+			}
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 

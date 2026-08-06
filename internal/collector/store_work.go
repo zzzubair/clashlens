@@ -18,14 +18,17 @@ var (
 )
 
 type collectionJob struct {
-	id               int64
-	workType         string
-	playerID         pgtype.Int8
-	normalizedTag    string
-	pool             capacityPool
-	parentAttemptID  pgtype.Int8
-	requiredEndpoint pgtype.Text
-	leaseToken       string
+	id                   int64
+	workType             string
+	scope                string
+	playerID             pgtype.Int8
+	normalizedTag        string
+	pool                 capacityPool
+	parentAttemptID      pgtype.Int8
+	requiredEndpoint     pgtype.Text
+	sweepID              pgtype.Int8
+	resetBaselineSweepID pgtype.Int8
+	leaseToken           string
 }
 
 func (s *store) claimNext(
@@ -95,11 +98,14 @@ func (s *store) claimNext(
 		WHERE job.id = candidate.id
 		RETURNING job.id,
 			job.work_type,
+			COALESCE(to_jsonb(job) ->> 'scope', 'player'),
 			job.player_id,
-			job.normalized_tag,
+			COALESCE(job.normalized_tag, ''),
 			job.capacity_pool,
 			job.parent_attempt_id,
 			job.required_endpoint,
+			job.sweep_id,
+			(to_jsonb(job) ->> 'reset_baseline_sweep_id')::bigint,
 			job.lease_token
 	`, string(pool), now, owner, leaseToken, leaseDuration)
 
@@ -108,11 +114,14 @@ func (s *store) claimNext(
 	if err := row.Scan(
 		&job.id,
 		&job.workType,
+		&job.scope,
 		&job.playerID,
 		&job.normalizedTag,
 		&poolName,
 		&job.parentAttemptID,
 		&job.requiredEndpoint,
+		&job.sweepID,
+		&job.resetBaselineSweepID,
 		&job.leaseToken,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -327,8 +336,11 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 	}
 
 	required := []endpointName{profileEndpoint, battleLogEndpoint}
-	if job.workType == "reset_profile" {
+	if job.workType == "legacy_reset_profile" || job.workType == "reset_profile" {
 		required = []endpointName{profileEndpoint}
+	}
+	if job.workType == "global_player_rankings" {
+		required = []endpointName{globalPlayerRankingsEndpoint}
 	}
 	if job.workType == "endpoint_retry" {
 		required = []endpointName{endpointName(job.requiredEndpoint.String)}
@@ -383,8 +395,15 @@ func (s *store) beginEndpointRequest(
 	endpoint endpointName,
 	startedAt time.Time,
 ) (int, error) {
+	contractVersion, err := s.currentContractVersion(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if contractVersion >= 2 {
+		return s.beginEndpointRequestV2(ctx, job, attemptID, endpoint, startedAt)
+	}
 	var requestCount int
-	err := s.pool.QueryRow(ctx, `
+	err = s.pool.QueryRow(ctx, `
 		UPDATE collector_endpoint_results AS endpoint_result
 		SET request_count = request_count + 1,
 			execution_token = $3,
@@ -422,6 +441,16 @@ func (s *store) commitObservation(
 	outcome string,
 	nextRetryAt *time.Time,
 ) error {
+	contractVersion, err := s.currentContractVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if contractVersion >= 2 {
+		return s.commitObservationV2(
+			ctx, job, attemptID, endpoint, requestCount, response, hash,
+			archiveReference, collectorVersion, keyLabel, outcome, nextRetryAt,
+		)
+	}
 	headers, err := json.Marshal(response.headers)
 	if err != nil {
 		return fmt.Errorf("encode evidence headers: %w", err)
@@ -597,6 +626,15 @@ func (s *store) finishAttempt(ctx context.Context, job *collectionJob, attemptID
 	}
 	if command.RowsAffected() != 1 {
 		return errLeaseLost
+	}
+	if job.resetBaselineSweepID.Valid {
+		if _, err := transaction.Exec(ctx, `
+			UPDATE collector_reset_baseline_sweeps
+			SET state = 'complete', completed_at = $2
+			WHERE id = $1 AND evidence_kind = 'paired_v2'
+		`, job.resetBaselineSweepID, completedAt); err != nil {
+			return fmt.Errorf("complete reset baseline sweep: %w", err)
+		}
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		return fmt.Errorf("commit completion transaction: %w", err)

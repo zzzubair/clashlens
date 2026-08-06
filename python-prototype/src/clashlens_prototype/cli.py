@@ -65,6 +65,13 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--run-forever", action="store_true")
     worker.add_argument("--poll-interval-seconds", type=float, default=1.0)
 
+    ready = subparsers.add_parser(
+        "ready", help="check the production worker database and archive dependencies"
+    )
+    _database_argument(ready)
+    _archive_arguments(ready)
+    ready.add_argument("--expected-contract-version", type=int, default=2)
+
     serve = subparsers.add_parser(
         "serve", help="run the signed saved-data FastAPI route"
     )
@@ -155,6 +162,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if arguments.command == "worker":
             return _run_worker(arguments)
+        if arguments.command == "ready":
+            return _run_ready(arguments)
         if arguments.command == "serve":
             app = create_app(
                 _database_url(arguments),
@@ -229,6 +238,22 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 }
             )
         )
+        return 0
+    finally:
+        database.close()
+
+
+def _run_ready(arguments: argparse.Namespace) -> int:
+    database = Database(_database_url(arguments))
+    try:
+        archive = _archive(arguments)
+        if not database.is_ready(
+            expected_contract_version=arguments.expected_contract_version
+        ):
+            return 1
+        if not archive.check_ready():
+            return 1
+        print(json.dumps({"status": "ready"}))
         return 0
     finally:
         database.close()

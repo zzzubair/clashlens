@@ -1,6 +1,6 @@
--- ISSUE 29 PYTHON-LAYER PROTOTYPE ONLY.
--- This file is a test/learning contract. It is not migration 0001 or a production migration.
--- The production v1 -> v2 migration and collector bridge remain open work.
+-- Standalone Python-layer schema fixture for prototype-only local tests.
+-- Production tests and deployment use deploy/migrations/0001_collector.sql and
+-- deploy/migrations/0002_python_layer.sql. Do not use this fixture in production.
 
 CREATE TABLE IF NOT EXISTS clash_lens_contract (
     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
@@ -13,8 +13,8 @@ ON CONFLICT (singleton) DO NOTHING;
 CREATE TABLE IF NOT EXISTS collector_observations (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     occurrence_key text NOT NULL UNIQUE,
-    normalized_tag text NOT NULL,
-    endpoint text NOT NULL CHECK (endpoint = 'profile'),
+    normalized_tag text,
+    endpoint text NOT NULL CHECK (endpoint IN ('profile', 'battle_log', 'global_player_rankings')),
     endpoint_version text NOT NULL,
     schema_version text NOT NULL,
     request_started_at timestamptz NOT NULL,
@@ -30,12 +30,16 @@ CREATE TABLE IF NOT EXISTS python_processing_jobs (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     observation_id bigint NOT NULL UNIQUE REFERENCES collector_observations (id),
     work_type text NOT NULL CHECK (work_type = 'process_observation'),
+    deduplication_key text GENERATED ALWAYS AS ('process-observation:' || observation_id::text) STORED,
+    input_json jsonb NOT NULL DEFAULT '{}'::jsonb,
     state text NOT NULL CHECK (state IN (
         'pending', 'leased', 'waiting_retry', 'complete', 'failed', 'cancelled'
     )),
     due_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    parser_version text NOT NULL,
-    processing_version text NOT NULL,
+    parser_version text NOT NULL DEFAULT 'supercell-source-parser-v1',
+    processing_version text NOT NULL DEFAULT 'clashlens-domain-processing-v1',
+    domain_rule_version text NOT NULL DEFAULT 'clashlens-domain-rules-v1',
+    analytics_rule_version text NOT NULL DEFAULT 'legend-analytics-v1',
     lease_owner text,
     lease_token text,
     lease_expires_at timestamptz,
@@ -81,6 +85,7 @@ CREATE TABLE IF NOT EXISTS players (
     eligibility_state text NOT NULL DEFAULT 'unknown' CHECK (
         eligibility_state IN ('unknown', 'eligible', 'ineligible', 'uncertain')
     ),
+    next_due_at timestamptz,
     current_profile_version_id bigint,
     current_observed_at timestamptz,
     updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
@@ -103,6 +108,11 @@ CREATE TABLE IF NOT EXISTS player_profile_versions (
     eligibility_state text NOT NULL CHECK (
         eligibility_state IN ('eligible', 'ineligible', 'uncertain')
     ),
+    current_league_season_id text,
+    previous_league_season_id text,
+    eligibility_reason text NOT NULL DEFAULT 'legacy_unknown',
+    source_contract_state text NOT NULL DEFAULT 'accepted',
+    season_anchor_state text NOT NULL DEFAULT 'conflict',
     profile_json jsonb NOT NULL,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     UNIQUE (observation_id, parser_version)
@@ -118,3 +128,62 @@ CREATE TABLE IF NOT EXISTS player_profile_effects (
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     UNIQUE (observation_id, effect_kind)
 );
+
+CREATE TABLE IF NOT EXISTS observation_processing_outcomes (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    observation_id bigint NOT NULL REFERENCES collector_observations (id),
+    parser_version text NOT NULL,
+    processing_version text NOT NULL,
+    endpoint text NOT NULL,
+    response_hash text NOT NULL CHECK (response_hash ~ '^[0-9a-f]{64}$'),
+    source_http_status integer NOT NULL,
+    source_observed_at timestamptz NOT NULL,
+    outcome text NOT NULL CHECK (outcome IN (
+        'processed', 'processed_with_gaps', 'non_success', 'malformed',
+        'unsupported', 'integrity_failure'
+    )),
+    failure_category text,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE (observation_id, parser_version, processing_version)
+);
+
+CREATE TABLE IF NOT EXISTS parsed_source_payloads (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    endpoint text NOT NULL,
+    response_hash text NOT NULL CHECK (response_hash ~ '^[0-9a-f]{64}$'),
+    parser_version text NOT NULL,
+    schema_version text NOT NULL,
+    parse_outcome text NOT NULL CHECK (parse_outcome IN ('valid', 'valid_with_gaps')),
+    parsed_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE (endpoint, response_hash, parser_version)
+);
+
+CREATE TABLE IF NOT EXISTS season_anchor_evidence (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    profile_version_id bigint NOT NULL UNIQUE REFERENCES player_profile_versions (id),
+    current_league_season_id text,
+    previous_league_season_id text,
+    current_start timestamptz,
+    previous_start timestamptz,
+    anchor_rule_version text NOT NULL,
+    outcome text NOT NULL CHECK (outcome IN ('accepted', 'conflict', 'not_applicable')),
+    failure_reason text,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE TABLE IF NOT EXISTS legend_season_anchors (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    current_league_season_id text NOT NULL,
+    previous_league_season_id text NOT NULL,
+    current_start timestamptz NOT NULL,
+    previous_start timestamptz NOT NULL,
+    anchor_rule_version text NOT NULL,
+    source_profile_version_id bigint NOT NULL REFERENCES player_profile_versions (id),
+    state text NOT NULL CHECK (state IN ('confirmed', 'superseded')),
+    confirmed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE (current_league_season_id, anchor_rule_version)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS legend_season_anchors_one_confirmed
+    ON legend_season_anchors (anchor_rule_version)
+    WHERE state = 'confirmed';

@@ -1,0 +1,6 @@
+{
+  "http_status": 200,
+  "body": {"status": "ok"},
+  "expected_outcome": "verified",
+  "expected_key_action": "none"
+}

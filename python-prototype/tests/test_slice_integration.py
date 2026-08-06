@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
@@ -129,14 +130,14 @@ def test_real_postgres_job_claim_profile_effects_and_idempotent_rerun(
     assert first is not None
     assert first.outcome == "processed"
     assert (
-        db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,))
+        db.scalar("SELECT status FROM python_processing_jobs WHERE id = %s", (job_id,))
         == "complete"
     )
     assert db.scalar("SELECT count(*) FROM player_profile_versions") == 1
     assert db.scalar("SELECT count(*) FROM player_profile_effects") == 1
     assert (
         db.scalar("SELECT parser_version FROM player_profile_versions")
-        == "profile-parser-v1"
+        == "supercell-source-parser-v1"
     )
     assert (
         db.scalar("SELECT endpoint_version FROM player_profile_versions")
@@ -242,7 +243,7 @@ def test_expired_or_wrong_lease_cannot_write_product_effects_or_complete(
 
     assert db.scalar("SELECT count(*) FROM player_profile_versions") == 0
     assert (
-        db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,))
+        db.scalar("SELECT status FROM python_processing_jobs WHERE id = %s", (job_id,))
         == "leased"
     )
     db.close()
@@ -264,7 +265,7 @@ def test_expired_lease_stops_after_the_configured_attempt_limit(
 
     assert replacement is None
     assert (
-        db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,))
+        db.scalar("SELECT status FROM python_processing_jobs WHERE id = %s", (job_id,))
         == "failed"
     )
     assert (
@@ -317,7 +318,7 @@ def test_missing_archive_retries_once_then_becomes_a_durable_integrity_failure(
     assert second is not None and second.outcome == "failed"
     assert second.category == "archive_missing"
     assert (
-        db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,))
+        db.scalar("SELECT status FROM python_processing_jobs WHERE id = %s", (job_id,))
         == "failed"
     )
     assert db.scalar("SELECT count(*) FROM player_profile_effects") == 0
@@ -391,29 +392,22 @@ def test_malformed_success_and_non_success_are_distinct_classified_outcomes(
     assert non_success_result is not None
     assert non_success_result.outcome == "classified"
     assert non_success_result.category == "non_success"
-    assert db.scalar("SELECT state FROM python_processing_jobs") == "complete"
+    assert db.scalar("SELECT status FROM python_processing_jobs") == "complete"
     assert db.scalar("SELECT count(*) FROM player_profile_effects") == 0
-    assert handler.get_count == before_archive_reads
+    assert handler.get_count == before_archive_reads + 1
     db.close()
 
 
 @pytest.mark.parametrize(
-    ("table", "column", "category"),
+    ("column", "category"),
     [
-        ("collector_observations", "endpoint_version", "unsupported_endpoint_version"),
-        ("collector_observations", "schema_version", "unsupported_schema_version"),
-        ("python_processing_jobs", "parser_version", "unsupported_parser_version"),
-        (
-            "python_processing_jobs",
-            "processing_version",
-            "unsupported_processing_version",
-        ),
+        ("parser_version", "unsupported_parser_version"),
+        ("processing_version", "unsupported_processing_version"),
     ],
 )
-def test_worker_rejects_unsupported_observation_and_processor_versions_before_archive_read(
+def test_worker_rejects_unsupported_mutable_versions_before_archive_read(
     database_url: str,
     archive_server,
-    table: str,
     column: str,
     category: str,
 ) -> None:
@@ -421,15 +415,10 @@ def test_worker_rejects_unsupported_observation_and_processor_versions_before_ar
     db.apply_schema()
     db.clear_prototype_data()
     job_id, _reference = _seed(db, archive_server)
-    record_id = db.scalar(
-        "SELECT observation_id FROM python_processing_jobs WHERE id = %s",
-        (job_id,),
-    )
-    target_id = record_id if table == "collector_observations" else job_id
     with db.pool.connection() as connection:
         connection.execute(
-            f"UPDATE {table} SET {column} = %s WHERE id = %s",
-            ("unsupported-v99", target_id),
+            f"UPDATE python_processing_jobs SET {column} = %s WHERE id = %s",
+            ("unsupported-v99", job_id),
         )
         connection.commit()
     before_archive_reads = archive_server[3].get_count
@@ -451,11 +440,33 @@ def test_worker_rejects_unsupported_observation_and_processor_versions_before_ar
     assert result.outcome == "failed"
     assert result.category == category
     assert (
-        db.scalar("SELECT state FROM python_processing_jobs WHERE id = %s", (job_id,))
+        db.scalar("SELECT status FROM python_processing_jobs WHERE id = %s", (job_id,))
         == "failed"
     )
     assert db.scalar("SELECT count(*) FROM player_profile_effects") == 0
     assert archive_server[3].get_count == before_archive_reads
+    db.close()
+
+
+def test_database_rejects_unsupported_collector_endpoint_before_generated_versions(
+    database_url: str,
+    archive_server,
+) -> None:
+    db = Database(database_url)
+    db.apply_schema()
+    db.clear_prototype_data()
+    _job_id, _reference = _seed(db, archive_server)
+    observation_id = db.scalar(
+        "SELECT id FROM collector_observations WHERE occurrence_key = %s",
+        ("synthetic-profile-1",),
+    )
+    with db.pool.connection() as connection:
+        with pytest.raises(psycopg.errors.CheckViolation):
+            with connection.transaction():
+                connection.execute(
+                    "UPDATE collector_observations SET endpoint = %s WHERE id = %s",
+                    ("unsupported-v99", observation_id),
+                )
     db.close()
 
 
@@ -515,7 +526,7 @@ def test_signed_api_reads_saved_data_with_freshness_and_eligibility_without_arch
     assert payload["freshness"] == "fresh"
     assert payload["eligibility"] == "eligible"
     assert payload["coverage"] == "profile"
-    assert payload["parser_version"] == "profile-parser-v1"
+    assert payload["parser_version"] == "supercell-source-parser-v1"
     assert "id" not in payload
     assert previous_response.status_code == 200
     assert denied_response.status_code == 403
