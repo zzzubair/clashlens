@@ -91,6 +91,9 @@ case "$cmd" in
       esac
     done
     [[ -n "$name" ]] || { printf 'missing name\n' >&2; exit 1; }
+    if [[ "${FAKE_PODMAN_FAIL_API_RUN:-false}" == true && "$name" == clashlens-python-prototype-api ]]; then
+      exit 43
+    fi
     touch "$state/container-$name" "$state/container-$name-owned"
     generation=0
     if [[ -f "$state/container-$name-generation" ]]; then
@@ -405,6 +408,24 @@ for name in database-url archive-access-key archive-secret-key; do
 done
 worker_generation_before_verify=$(<"$STATE_DIR/container-clashlens-python-prototype-worker-generation")
 api_generation_before_verify=$(<"$STATE_DIR/container-clashlens-python-prototype-api-generation")
+if FAKE_PODMAN_FAIL_API_RUN=true "$ROOT_DIR/deploy.sh" verify >/dev/null 2>&1; then
+    printf 'verify unexpectedly succeeded when API startup failed\n' >&2
+    exit 1
+fi
+[[ -f "$STATE_DIR/container-clashlens-python-prototype-worker" ]] || {
+    printf 'verify API-start failure did not restore the normal worker\n' >&2
+    exit 1
+}
+[[ "$(<"$STATE_DIR/container-clashlens-python-prototype-worker-generation")" -gt "$worker_generation_before_verify" ]] || {
+    printf 'verify API-start failure did not recreate the normal worker\n' >&2
+    exit 1
+}
+last_worker_run=$(grep 'run .*clashlens-python-prototype-worker' "$LOG_FILE" | tail -n 1)
+if [[ "$last_worker_run" == *'--archive-insecure-test-only'* ]]; then
+    printf 'verify API-start failure restored an insecure worker\n' >&2
+    exit 1
+fi
+worker_generation_before_verify=$(<"$STATE_DIR/container-clashlens-python-prototype-worker-generation")
 if FAKE_PODMAN_FAIL_SEED=true "$ROOT_DIR/deploy.sh" verify >/dev/null 2>&1; then
     printf 'verify unexpectedly succeeded in its failure cleanup control\n' >&2
     exit 1
