@@ -1770,14 +1770,16 @@ CREATE TABLE IF NOT EXISTS ranked_day_versions (
     result_hash text NOT NULL CHECK (result_hash ~ '^[0-9a-f]{64}$'),
     version integer NOT NULL CHECK (version > 0),
     replaces_version_id bigint REFERENCES ranked_day_versions (id),
-    state text NOT NULL CHECK (state IN ('Live', 'Complete', 'Partial')),
+    state text NOT NULL CHECK (state IN (
+        'Live', 'Complete', 'Partial', 'Inconsistent', 'Malformed'
+    )),
     confidence text NOT NULL CHECK (confidence IN ('exact', 'inferred', 'partial', 'uncertain')),
     failure_reasons jsonb NOT NULL DEFAULT '[]'::jsonb,
     start_trophies integer,
     final_trophies_before_reset integer,
     next_start_trophies integer,
-    attack_count integer NOT NULL DEFAULT 0 CHECK (attack_count BETWEEN 0 AND 8),
-    defense_count integer NOT NULL DEFAULT 0 CHECK (defense_count BETWEEN 0 AND 8),
+    attack_count integer NOT NULL DEFAULT 0 CHECK (attack_count >= 0),
+    defense_count integer NOT NULL DEFAULT 0 CHECK (defense_count >= 0),
     attack_gain integer NOT NULL DEFAULT 0 CHECK (attack_gain >= 0),
     observed_defense_loss integer NOT NULL DEFAULT 0 CHECK (observed_defense_loss >= 0),
     automatic_defense_loss integer,
@@ -1785,7 +1787,8 @@ CREATE TABLE IF NOT EXISTS ranked_day_versions (
     reconciled boolean NOT NULL DEFAULT false,
     shield_state text NOT NULL DEFAULT 'not_inferred'
         CHECK (shield_state IN (
-            'not_inferred', 'not_shielded', 'inferred_shielded', 'uncertain_sequence'
+            'not_inferred', 'not_shielded', 'inferred_shielded',
+            'uncertain_sequence', 'unknown'
         )),
     shield_duration_days integer,
     start_baseline_id bigint REFERENCES reset_baseline_evidence (id),
@@ -1796,6 +1799,162 @@ CREATE TABLE IF NOT EXISTS ranked_day_versions (
 );
 CREATE INDEX IF NOT EXISTS ranked_day_versions_latest
     ON ranked_day_versions (player_id, ranked_day_start, reconciliation_rule_version, version DESC);
+
+-- Ranked-day reconciliation v2 stores the complete immutable input and formula
+-- boundary. The defaults keep populated v1 rows readable without claiming that
+-- their missing v2 evidence is complete.
+ALTER TABLE ranked_day_versions
+    ADD COLUMN IF NOT EXISTS input_hash text NOT NULL DEFAULT repeat('0', 64),
+    ADD COLUMN IF NOT EXISTS parser_version text NOT NULL DEFAULT 'supercell-source-parser-v1',
+    ADD COLUMN IF NOT EXISTS processing_version text NOT NULL DEFAULT 'clashlens-domain-processing-v1',
+    ADD COLUMN IF NOT EXISTS domain_rule_version text NOT NULL DEFAULT 'clashlens-domain-rules-v1',
+    ADD COLUMN IF NOT EXISTS analytics_rule_version text NOT NULL DEFAULT 'legend-analytics-v1',
+    ADD COLUMN IF NOT EXISTS trophy_allocation_rule_versions jsonb NOT NULL
+        DEFAULT '["legend-trophy-allocation-v1"]'::jsonb,
+    ADD COLUMN IF NOT EXISTS automatic_defense_evidence_state text NOT NULL
+        DEFAULT 'unknown',
+    ADD COLUMN IF NOT EXISTS net_trophy_change integer,
+    ADD COLUMN IF NOT EXISTS observed_trophy_change integer,
+    ADD COLUMN IF NOT EXISTS boundary_adjustment integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS boundary_adjustment_type text,
+    ADD COLUMN IF NOT EXISTS observed_boundary_adjustment integer,
+    ADD COLUMN IF NOT EXISTS expected_next_start_trophies integer,
+    ADD COLUMN IF NOT EXISTS unexplained_residual integer,
+    ADD COLUMN IF NOT EXISTS formula_components jsonb NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS input_evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS coverage_evidence jsonb NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS contribution_evidence jsonb NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS shield_evidence jsonb NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS coverage_complete boolean NOT NULL DEFAULT false;
+
+ALTER TABLE ranked_day_versions
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_state_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_confidence_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_attack_count_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_defense_count_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_attack_gain_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_observed_defense_loss_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_shield_state_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_state_v2_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_attack_count_v2_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_defense_count_v2_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_automatic_state_v2_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_automatic_amount_v2_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_shield_state_v2_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_json_shape_v2_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_formula_v2_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_formula_json_v2_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_hash_v2_check,
+    DROP CONSTRAINT IF EXISTS ranked_day_versions_rule_versions_v2_check;
+
+ALTER TABLE ranked_day_versions
+    ADD CONSTRAINT ranked_day_versions_state_v2_check
+        CHECK (state IN ('Live', 'Complete', 'Partial', 'Inconsistent', 'Malformed')),
+    ADD CONSTRAINT ranked_day_versions_attack_count_v2_check
+        CHECK (attack_count >= 0),
+    ADD CONSTRAINT ranked_day_versions_defense_count_v2_check
+        CHECK (defense_count >= 0),
+    ADD CONSTRAINT ranked_day_versions_automatic_state_v2_check
+        CHECK (automatic_defense_evidence_state IN (
+            'not_applicable', 'calculated', 'confirmed', 'unknown'
+        )),
+    ADD CONSTRAINT ranked_day_versions_automatic_amount_v2_check
+        CHECK (
+            automatic_defense_loss IS NULL OR automatic_defense_loss >= 0
+        ),
+    ADD CONSTRAINT ranked_day_versions_shield_state_v2_check
+        CHECK (shield_state IN (
+            'not_inferred', 'not_shielded', 'inferred_shielded',
+            'uncertain_sequence', 'unknown'
+        )),
+    ADD CONSTRAINT ranked_day_versions_hash_v2_check
+        CHECK (input_hash ~ '^[0-9a-f]{64}$'),
+    ADD CONSTRAINT ranked_day_versions_rule_versions_v2_check
+        CHECK (jsonb_typeof(trophy_allocation_rule_versions) = 'array'),
+    ADD CONSTRAINT ranked_day_versions_json_shape_v2_check
+        CHECK (
+            jsonb_typeof(failure_reasons) = 'array'
+            AND jsonb_typeof(formula_components) = 'object'
+            AND jsonb_typeof(input_evidence) = 'object'
+            AND jsonb_typeof(coverage_evidence) = 'array'
+            AND jsonb_typeof(contribution_evidence) = 'array'
+            AND jsonb_typeof(shield_evidence) = 'object'
+        ),
+    ADD CONSTRAINT ranked_day_versions_formula_v2_check
+        CHECK (
+            (net_trophy_change IS NULL OR (
+                start_trophies IS NOT NULL
+                AND final_trophies_before_reset IS NOT NULL
+                AND net_trophy_change = final_trophies_before_reset - start_trophies
+            ))
+            AND (expected_next_start_trophies IS NULL OR (
+                final_trophies_before_reset IS NOT NULL
+                AND expected_next_start_trophies =
+                    final_trophies_before_reset + boundary_adjustment
+            ))
+            AND (observed_boundary_adjustment IS NULL OR (
+                next_start_trophies IS NOT NULL
+                AND final_trophies_before_reset IS NOT NULL
+                AND observed_boundary_adjustment =
+                    next_start_trophies - final_trophies_before_reset
+            ))
+            AND (unexplained_residual IS NULL OR (
+                next_start_trophies IS NOT NULL
+                AND expected_next_start_trophies IS NOT NULL
+                AND unexplained_residual =
+                    next_start_trophies - expected_next_start_trophies
+            ))
+            AND (
+                automatic_defense_evidence_state = 'unknown'
+                OR (
+                    automatic_defense_evidence_state = 'not_applicable'
+                    AND automatic_defense_loss IS NULL
+                )
+                OR (
+                    automatic_defense_evidence_state IN ('calculated', 'confirmed')
+                    AND automatic_defense_loss IS NOT NULL
+                )
+            )
+            AND (
+                boundary_adjustment_type IS NULL
+                OR boundary_adjustment_type IN ('weekly_reset', 'season_reset')
+            )
+            AND (
+                shield_duration_days IS NULL
+                OR shield_duration_days > 0
+            )
+            AND (
+                shield_state <> 'inferred_shielded'
+                OR shield_duration_days BETWEEN 1 AND 2
+            )
+        ),
+    ADD CONSTRAINT ranked_day_versions_formula_json_v2_check
+        CHECK (
+            formula_components = '{}'::jsonb
+            OR (
+                CASE
+                    WHEN formula_components ? 'attack_gain' THEN
+                        jsonb_typeof(formula_components -> 'attack_gain') = 'number'
+                        AND (formula_components ->> 'attack_gain')::integer = attack_gain
+                    ELSE true
+                END
+                AND CASE
+                    WHEN formula_components ? 'observed_defense_loss' THEN
+                        jsonb_typeof(formula_components -> 'observed_defense_loss') = 'number'
+                        AND (formula_components ->> 'observed_defense_loss')::integer = observed_defense_loss
+                    ELSE true
+                END
+                AND CASE
+                    WHEN formula_components ? 'automatic_defense_loss' THEN
+                        (formula_components ->> 'automatic_defense_loss') IS NULL
+                        OR (
+                            jsonb_typeof(formula_components -> 'automatic_defense_loss') = 'number'
+                            AND (formula_components ->> 'automatic_defense_loss')::integer = automatic_defense_loss
+                        )
+                    ELSE true
+                END
+            )
+        );
 
 CREATE TABLE IF NOT EXISTS ranked_day_adjustments (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

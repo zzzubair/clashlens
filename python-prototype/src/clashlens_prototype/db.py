@@ -24,6 +24,7 @@ from .battle import ParsedBattleLog, SOURCE_PARSER_VERSION
 from .domain import (
     DomainRuleError,
     SEASON_ANCHOR_RULE_VERSION,
+    TROPHY_ALLOCATION_RULE_VERSION,
     ranked_day_for,
     validate_season_anchor,
 )
@@ -977,48 +978,116 @@ class Database:
                 player_tag = _text_value(player[1])
 
                 start_baseline = self._load_reset_baseline(
-                    connection, player_id, ranked_day.start, claim.parser_version
+                    connection,
+                    player_id,
+                    ranked_day.start,
+                    claim.parser_version,
+                    claim.processing_version,
                 )
                 end_baseline = self._load_reset_baseline(
-                    connection, player_id, ranked_day.end, claim.parser_version
+                    connection,
+                    player_id,
+                    ranked_day.end,
+                    claim.parser_version,
+                    claim.processing_version,
                 )
                 coverage_rows = connection.execute(
                     """
-                    SELECT blo.observed_at, blo.row_count, blo.has_row_gap,
-                           COALESCE(
-                               array_agg(DISTINCT be.battle_id::text)
-                                   FILTER (WHERE be.battle_id IS NOT NULL),
-                               ARRAY[]::text[]
-                           )
+                    SELECT
+                        blo.observation_id,
+                        blo.observed_at,
+                        blo.row_count,
+                        blo.has_row_gap,
+                        COALESCE(evidence.battle_identities, ARRAY[]::text[]),
+                        COALESCE(evidence.source_row_ids, ARRAY[]::bigint[]),
+                        COALESCE(row_flags.malformed_count, 0),
+                        COALESCE(row_flags.unclassified_count, 0),
+                        COALESCE(processing.outcome = 'processed', false),
+                        observed.response_hash,
+                        blo.parser_version,
+                        processing.processing_version
                     FROM battle_log_observations AS blo
-                    LEFT JOIN battle_evidence AS be
-                      ON be.observation_id = blo.observation_id
+                    JOIN collector_observations AS observed
+                      ON observed.id = blo.observation_id
+                    LEFT JOIN observation_processing_outcomes AS processing
+                      ON processing.observation_id = blo.observation_id
+                     AND processing.parser_version = blo.parser_version
+                    LEFT JOIN LATERAL (
+                        SELECT
+                            array_agg(be.battle_id::text ORDER BY be.id)
+                                FILTER (WHERE be.battle_id IS NOT NULL)
+                                AS battle_identities,
+                            array_agg(sr.id ORDER BY sr.id)
+                                FILTER (WHERE sr.id IS NOT NULL)
+                                AS source_row_ids
+                        FROM battle_source_rows AS sr
+                        LEFT JOIN battle_evidence AS be
+                          ON be.source_row_id = sr.id
+                        WHERE sr.battle_log_observation_id = blo.id
+                    ) AS evidence ON true
+                    LEFT JOIN LATERAL (
+                        SELECT
+                            count(*) FILTER (
+                                WHERE sr.outcome = 'malformed_legend_row'
+                                   OR sr.failure_category LIKE 'malformed%%'
+                                   OR sr.failure_category LIKE 'unsupported%%'
+                                   OR sr.failure_category LIKE 'identity%%'
+                            ) AS malformed_count,
+                            count(*) FILTER (
+                                WHERE sr.failure_category LIKE 'unclassified%%'
+                            ) AS unclassified_count
+                        FROM battle_source_rows AS sr
+                        WHERE sr.battle_log_observation_id = blo.id
+                    ) AS row_flags ON true
                     WHERE blo.player_id = %s
                       AND blo.observed_at BETWEEN %s AND %s
-                    GROUP BY blo.id, blo.observed_at, blo.row_count, blo.has_row_gap
                     ORDER BY blo.observed_at, blo.id
                     """,
                     (player_id, ranked_day.start, ranked_day.end),
                 ).fetchall()
                 coverage = tuple(
                     CoverageObservation(
-                        observed_at=row[0],
-                        row_count=int(row[1]),
-                        has_row_gap=bool(row[2]),
-                        battle_identities=tuple(str(value) for value in row[3]),
+                        observation_id=int(row[0]),
+                        observed_at=row[1],
+                        row_count=int(row[2]),
+                        has_row_gap=bool(row[3]),
+                        battle_identities=tuple(str(value) for value in row[4]),
+                        source_row_ids=tuple(int(value) for value in row[5]),
+                        malformed_row_count=int(row[6]),
+                        unclassified_row_count=int(row[7]),
+                        valid=bool(row[8]),
+                        response_hash=_text_value(row[9]),
+                        parser_version=_text_value(row[10]),
+                        processing_version=(
+                            _text_value(row[11]) if row[11] is not None else None
+                        ),
                     )
                     for row in coverage_rows
                 )
                 contribution_rows = connection.execute(
                     """
-                    SELECT b.id, p.perspective,
-                           CASE
-                               WHEN p.perspective = 'attacker' THEN e.attacker_gain
-                               ELSE e.defender_loss
-                           END
+                    SELECT
+                        b.id,
+                        p.perspective,
+                        e.id,
+                        e.source_row_id,
+                        e.observation_id,
+                        e.source_observed_at,
+                        e.battle_timestamp,
+                        e.stars,
+                        e.destruction_percentage,
+                        e.army_share_code,
+                        e.attacker_gain,
+                        e.defender_loss,
+                        e.trophy_rule_version,
+                        b.disagreement_state,
+                        source_row.outcome,
+                        source_row.failure_category
                     FROM legend_battles AS b
                     JOIN battle_perspectives AS p ON p.battle_id = b.id
                     JOIN battle_evidence AS e ON e.id = p.evidence_id
+                    JOIN battle_source_rows AS source_row
+                      ON source_row.id = e.source_row_id
                     WHERE e.battle_timestamp >= %s
                       AND e.battle_timestamp < %s
                       AND (
@@ -1033,19 +1102,49 @@ class Database:
                 contributions = tuple(
                     BattleContribution(
                         battle_identity=str(row[0]),
-                        lens=("offense" if _text_value(row[1]) == "attacker" else "defense"),
-                        trophy_amount=int(row[2]),
+                        lens=(
+                            "offense"
+                            if _text_value(row[1]) == "attacker"
+                            else "defense"
+                        ),
+                        trophy_amount=int(
+                            row[10] if _text_value(row[1]) == "attacker" else row[11]
+                        ),
+                        source_rule_version=_text_value(row[12]),
+                        valid=_text_value(row[14]) == "valid_legend",
+                        failure_reason=(
+                            _text_value(row[15]) if row[15] is not None else None
+                        ),
+                        disagreement=_text_value(row[13]) == "disagreement",
+                        source_observation_id=int(row[4]),
+                        source_evidence_id=int(row[2]),
+                        source_row_id=int(row[3]),
+                        source_observed_at=row[5],
+                        battle_timestamp=row[6],
+                        stars=int(row[7]),
+                        destruction_percentage=int(row[8]),
+                        army_share_code=_text_value(row[9]),
+                        attacker_gain=int(row[10]),
+                        defender_loss=int(row[11]),
                     )
                     for row in contribution_rows
                 )
                 previous_row = connection.execute(
                     """
-                    SELECT state, defense_count, observed_defense_loss,
-                           COALESCE(shield_duration_days, 0)
+                    SELECT
+                        id,
+                        state,
+                        confidence,
+                        defense_count,
+                        observed_defense_loss,
+                        coverage_complete,
+                        shield_state,
+                        shield_duration_days,
+                        input_hash
                     FROM ranked_day_versions
                     WHERE player_id = %s AND ranked_day_start = %s
                       AND reconciliation_rule_version = %s
-                    ORDER BY version DESC
+                    ORDER BY version DESC, id DESC
                     LIMIT 1
                     """,
                     (
@@ -1056,10 +1155,28 @@ class Database:
                 ).fetchone()
                 previous = (
                     PreviousRankedDay(
-                        complete=_text_value(previous_row[0]) == "Complete",
-                        observed_defense_count=int(previous_row[1]),
-                        observed_defense_loss=int(previous_row[2]),
-                        shield_run_length=int(previous_row[3]),
+                        complete=(
+                            _text_value(previous_row[1]) == "Complete"
+                            and bool(previous_row[5])
+                        ),
+                        observed_defense_count=int(previous_row[3]),
+                        observed_defense_loss=int(previous_row[4]),
+                        shield_run_length=(
+                            int(previous_row[7] or 0)
+                            if _text_value(previous_row[6]) == "inferred_shielded"
+                            else 0
+                        ),
+                        coverage_complete=bool(previous_row[5]),
+                        shield_state=_text_value(previous_row[6]),
+                        version_id=int(previous_row[0]),
+                        ranked_day_start=ranked_day.start - timedelta(days=1),
+                        state=_text_value(previous_row[1]),
+                        confidence=_text_value(previous_row[2]),
+                        input_hash=(
+                            _text_value(previous_row[8])
+                            if previous_row[8] is not None
+                            else None
+                        ),
                     )
                     if previous_row is not None
                     else None
@@ -1090,51 +1207,179 @@ class Database:
                 elif ranked_day.end.weekday() == 0:
                     boundary_kind = "weekly"
 
+                trophy_rule_versions = tuple(
+                    sorted(
+                        {
+                            contribution.source_rule_version
+                            for contribution in contributions
+                            if contribution.source_rule_version is not None
+                        }
+                    )
+                )
+                baseline_eligibility = tuple(
+                    value
+                    for value in (
+                        start_baseline.get("eligibility_state")
+                        if start_baseline is not None
+                        else None,
+                        end_baseline.get("eligibility_state")
+                        if end_baseline is not None
+                        else None,
+                    )
+                    if value is not None
+                )
+                player_eligible = bool(baseline_eligibility) and all(
+                    value == "eligible" for value in baseline_eligibility
+                )
+                malformed_evidence = any(
+                    observation.malformed_row_count > 0
+                    for observation in coverage
+                )
+                unclassified_evidence = any(
+                    observation.unclassified_row_count > 0
+                    for observation in coverage
+                )
+                perspective_disagreement = any(
+                    contribution.disagreement for contribution in contributions
+                )
                 result = reconcile_ranked_day(
                     ReconciliationInput(
                         ranked_day=ranked_day,
                         now=now,
                         start_baseline_id=(
-                            int(start_baseline[0]) if start_baseline is not None else None
+                            int(start_baseline["id"])
+                            if start_baseline is not None
+                            else None
                         ),
                         end_baseline_id=(
-                            int(end_baseline[0]) if end_baseline is not None else None
+                            int(end_baseline["id"])
+                            if end_baseline is not None
+                            else None
                         ),
                         start_trophies=(
-                            int(start_baseline[1]) if start_baseline is not None else None
+                            int(start_baseline["trophies"])
+                            if start_baseline is not None
+                            and start_baseline["trophies"] is not None
+                            else None
                         ),
                         next_start_trophies=(
-                            int(end_baseline[1]) if end_baseline is not None else None
+                            int(end_baseline["trophies"])
+                            if end_baseline is not None
+                            and end_baseline["trophies"] is not None
+                            else None
                         ),
                         coverage_observations=coverage,
                         contributions=contributions,
                         previous_day=previous,
                         boundary_kind=boundary_kind,
                         season_anchor_valid=anchor_valid,
+                        start_baseline_complete=(
+                            bool(start_baseline["complete"])
+                            if start_baseline is not None
+                            else False
+                        ),
+                        end_baseline_complete=(
+                            bool(end_baseline["complete"])
+                            if end_baseline is not None
+                            else False
+                        ),
+                        player_eligible=player_eligible,
+                        perspective_disagreement=perspective_disagreement,
+                        malformed_evidence=malformed_evidence,
+                        unclassified_evidence=unclassified_evidence,
+                        start_baseline_evidence=(
+                            start_baseline["evidence"]
+                            if start_baseline is not None
+                            else {}
+                        ),
+                        end_baseline_evidence=(
+                            end_baseline["evidence"]
+                            if end_baseline is not None
+                            else {}
+                        ),
+                        parser_version=claim.parser_version,
+                        processing_version=claim.processing_version,
+                        domain_rule_version=claim.domain_rule_version,
+                        season_anchor_rule_version=SEASON_ANCHOR_RULE_VERSION,
+                        trophy_allocation_rule_versions=trophy_rule_versions,
                     )
                 )
                 result_data = {
                     "state": result.state,
                     "confidence": result.confidence,
-                    "failure_reasons": result.failure_reasons,
+                    "failure_reasons": list(result.failure_reasons),
                     "start_trophies": (
-                        int(start_baseline[1]) if start_baseline is not None else None
+                        int(start_baseline["trophies"])
+                        if start_baseline is not None
+                        and start_baseline["trophies"] is not None
+                        else None
                     ),
                     "next_start_trophies": (
-                        int(end_baseline[1]) if end_baseline is not None else None
+                        int(end_baseline["trophies"])
+                        if end_baseline is not None
+                        and end_baseline["trophies"] is not None
+                        else None
                     ),
                     "attack_count": result.attack_count,
                     "defense_count": result.defense_count,
                     "attack_gain": result.attack_trophy_gain,
                     "observed_defense_loss": result.observed_defense_loss,
                     "automatic_defense_loss": result.automatic_defense_loss,
+                    "automatic_defense_evidence_state": (
+                        result.automatic_defense_evidence_state
+                    ),
+                    "net_trophy_change": result.net_trophy_change,
+                    "observed_trophy_change": result.observed_trophy_change,
                     "final_trophies_before_reset": result.final_trophies_before_reset,
+                    "boundary_adjustment": result.boundary_adjustment,
+                    "boundary_adjustment_type": result.boundary_adjustment_type,
+                    "observed_boundary_adjustment": result.observed_boundary_adjustment,
+                    "expected_next_start_trophies": (
+                        result.expected_next_start_trophies
+                    ),
+                    "unexplained_residual": result.unexplained_residual,
                     "shield_state": result.shield_state,
                     "shield_duration_days": result.shield_duration_days,
                     "coverage_complete": result.coverage_complete,
+                    "formula_components": result.formula_components,
+                    "input_evidence": result.input_evidence,
+                    "shield_evidence": result.shield_evidence,
                 }
+                rule_versions = {
+                    "parser_version": claim.parser_version,
+                    "processing_version": claim.processing_version,
+                    "domain_rule_version": claim.domain_rule_version,
+                    "season_anchor_rule_version": SEASON_ANCHOR_RULE_VERSION,
+                    "reconciliation_rule_version": RECONCILIATION_RULE_VERSION,
+                    "trophy_allocation_rule_versions": list(trophy_rule_versions),
+                }
+                input_payload = {
+                    "player_id": player_id,
+                    "ranked_day_start": ranked_day.start.isoformat(),
+                    "ranked_day_end": ranked_day.end.isoformat(),
+                    "official_season_id": official_season_id,
+                    "season_day_number": season_day_number,
+                    "boundary_kind": boundary_kind,
+                    "rule_versions": rule_versions,
+                    "input_evidence": result.input_evidence,
+                }
+                input_hash = hashlib.sha256(
+                    json.dumps(
+                        input_payload,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest()
                 result_hash = hashlib.sha256(
-                    json.dumps(result_data, sort_keys=True).encode()
+                    json.dumps(
+                        {
+                            "input_hash": input_hash,
+                            "result": result_data,
+                            "rule_versions": rule_versions,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
                 ).hexdigest()
                 existing = connection.execute(
                     """
@@ -1165,23 +1410,50 @@ class Database:
                         if previous_version is not None
                         else 1
                     )
+                    input_evidence = result.input_evidence
+                    coverage_evidence = input_evidence.get(
+                        "coverage_observations", []
+                    )
+                    contribution_evidence = input_evidence.get(
+                        "contributions", []
+                    )
+                    evidence_complete = bool(
+                        result.coverage_complete
+                        and start_baseline is not None
+                        and start_baseline["complete"]
+                        and end_baseline is not None
+                        and end_baseline["complete"]
+                    )
                     version = connection.execute(
                         """
                         INSERT INTO ranked_day_versions (
                             player_id, ranked_day_start, ranked_day_end,
                             official_season_id, season_day_number,
                             season_anchor_rule_version, reconciliation_rule_version,
-                            result_hash, version, replaces_version_id, state, confidence,
+                            result_hash, input_hash,
+                            parser_version, processing_version, domain_rule_version,
+                            analytics_rule_version, trophy_allocation_rule_versions,
+                            version, replaces_version_id, state, confidence,
                             failure_reasons, start_trophies,
                             final_trophies_before_reset, next_start_trophies,
+                            expected_next_start_trophies,
                             attack_count, defense_count, attack_gain,
                             observed_defense_loss, automatic_defense_loss,
-                            evidence_complete, reconciled, shield_state,
-                            shield_duration_days, start_baseline_id, end_baseline_id
+                            automatic_defense_evidence_state, net_trophy_change,
+                            observed_trophy_change, boundary_adjustment,
+                            boundary_adjustment_type, observed_boundary_adjustment,
+                            unexplained_residual, formula_components,
+                            input_evidence, coverage_evidence,
+                            contribution_evidence, shield_evidence,
+                            evidence_complete, coverage_complete, reconciled,
+                            shield_state, shield_duration_days,
+                            start_baseline_id, end_baseline_id
                         ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s
                         ) RETURNING id
                         """,
                         (
@@ -1193,6 +1465,12 @@ class Database:
                             SEASON_ANCHOR_RULE_VERSION,
                             RECONCILIATION_RULE_VERSION,
                             result_hash,
+                            input_hash,
+                            claim.parser_version,
+                            claim.processing_version,
+                            claim.domain_rule_version,
+                            claim.analytics_rule_version,
+                            Jsonb(trophy_rule_versions),
                             version_number,
                             previous_version[0] if previous_version is not None else None,
                             result.state,
@@ -1201,19 +1479,39 @@ class Database:
                             result_data["start_trophies"],
                             result.final_trophies_before_reset,
                             result_data["next_start_trophies"],
+                            result.expected_next_start_trophies,
                             result.attack_count,
                             result.defense_count,
                             result.attack_trophy_gain,
                             result.observed_defense_loss,
                             result.automatic_defense_loss,
-                            result.coverage_complete
-                            and start_baseline is not None
-                            and end_baseline is not None,
+                            result.automatic_defense_evidence_state,
+                            result.net_trophy_change,
+                            result.observed_trophy_change,
+                            result.boundary_adjustment,
+                            result.boundary_adjustment_type,
+                            result.observed_boundary_adjustment,
+                            result.unexplained_residual,
+                            Jsonb(result.formula_components),
+                            Jsonb(input_evidence),
+                            Jsonb(coverage_evidence),
+                            Jsonb(contribution_evidence),
+                            Jsonb(result.shield_evidence),
+                            evidence_complete,
+                            result.coverage_complete,
                             result.state == "Complete",
                             result.shield_state,
                             result.shield_duration_days,
-                            start_baseline[0] if start_baseline is not None else None,
-                            end_baseline[0] if end_baseline is not None else None,
+                            (
+                                start_baseline["id"]
+                                if start_baseline is not None
+                                else None
+                            ),
+                            (
+                                end_baseline["id"]
+                                if end_baseline is not None
+                                else None
+                            ),
                         ),
                     ).fetchone()
                     assert version is not None
@@ -2054,96 +2352,163 @@ class Database:
         player_id: int,
         boundary_at: datetime,
         parser_version: str,
-    ) -> tuple[Any, ...] | None:
-        return connection.execute(
+        processing_version: str,
+    ) -> dict[str, Any] | None:
+        row = connection.execute(
             """
-            SELECT evidence.id, profile.trophies
+            SELECT
+                evidence.id,
+                evidence.version,
+                evidence.state,
+                evidence.sweep_id,
+                evidence.reset_baseline_sweep_id,
+                evidence.collection_job_id,
+                evidence.attempt_id,
+                evidence.profile_observation_id,
+                evidence.battle_log_observation_id,
+                evidence.profile_processing_outcome_id,
+                evidence.battle_log_processing_outcome_id,
+                evidence.profile_valid,
+                evidence.battle_log_valid,
+                evidence.legacy_profile_only,
+                evidence.failure_reasons,
+                evidence.evidence_json,
+                evidence.evidence_key,
+                evidence.boundary_at,
+                baseline.evidence_kind,
+                profile.id,
+                profile.trophies,
+                profile.eligibility_state,
+                profile.source_contract_state,
+                profile.observed_at,
+                battle_log.id,
+                battle_log.row_count,
+                battle_log.has_row_gap,
+                profile_observation.response_hash,
+                battle_observation.response_hash
             FROM reset_baseline_evidence AS evidence
-            JOIN collector_reset_baseline_sweeps AS baseline
+            LEFT JOIN collector_reset_baseline_sweeps AS baseline
               ON baseline.id = evidence.reset_baseline_sweep_id
-            JOIN collector_jobs AS root_job
-              ON root_job.id = evidence.collection_job_id
-             AND root_job.work_type = 'reset_baseline'
-             AND root_job.reset_baseline_sweep_id = evidence.reset_baseline_sweep_id
-             AND root_job.sweep_id = baseline.reset_sweep_id
-            JOIN collector_attempts AS root_attempt
-              ON root_attempt.id = evidence.attempt_id
-             AND root_attempt.job_id = root_job.id
-            JOIN collector_observations AS profile_observation
+            LEFT JOIN player_profile_versions AS profile
+              ON profile.observation_id = evidence.profile_observation_id
+             AND profile.parser_version = evidence.parser_version
+            LEFT JOIN collector_observations AS profile_observation
               ON profile_observation.id = evidence.profile_observation_id
              AND profile_observation.endpoint = 'profile'
-             AND profile_observation.attempt_id = evidence.attempt_id
-             AND profile_observation.player_id = evidence.player_id
-             AND clashlens_reset_job_lineage_v2(
-                    profile_observation.collection_job_id, root_job.id
-                 )
-            JOIN observation_processing_outcomes AS profile_processing
-              ON profile_processing.id = evidence.profile_processing_outcome_id
-             AND profile_processing.observation_id = profile_observation.id
-             AND profile_processing.parser_version = evidence.parser_version
-             AND profile_processing.processing_version = evidence.processing_version
-             AND profile_processing.outcome = 'processed'
-            JOIN player_profile_versions AS profile
-              ON profile.observation_id = profile_observation.id
-             AND profile.parser_version = evidence.parser_version
-             AND profile.source_contract_state = 'accepted'
-             AND profile.eligibility_state = 'eligible'
-            JOIN collector_endpoint_results AS profile_result
-              ON profile_result.attempt_id = evidence.attempt_id
-             AND profile_result.endpoint = 'profile'
-             AND profile_result.observation_id = profile_observation.id
-             AND profile_result.outcome = 'observed'
-            JOIN collector_observations AS battle_observation
+            LEFT JOIN battle_log_observations AS battle_log
+              ON battle_log.observation_id = evidence.battle_log_observation_id
+             AND battle_log.parser_version = evidence.parser_version
+            LEFT JOIN collector_observations AS battle_observation
               ON battle_observation.id = evidence.battle_log_observation_id
              AND battle_observation.endpoint = 'battle_log'
-             AND battle_observation.attempt_id = evidence.attempt_id
-             AND battle_observation.player_id = evidence.player_id
-             AND clashlens_reset_job_lineage_v2(
-                    battle_observation.collection_job_id, root_job.id
-                 )
-            JOIN observation_processing_outcomes AS battle_processing
-              ON battle_processing.id = evidence.battle_log_processing_outcome_id
-             AND battle_processing.observation_id = battle_observation.id
-             AND battle_processing.parser_version = evidence.parser_version
-             AND battle_processing.processing_version = evidence.processing_version
-             AND battle_processing.outcome = 'processed'
-            JOIN battle_log_observations AS battle_log
-              ON battle_log.observation_id = battle_observation.id
-             AND battle_log.parser_version = evidence.parser_version
-             AND NOT battle_log.has_row_gap
-            JOIN collector_endpoint_results AS battle_result
-              ON battle_result.attempt_id = evidence.attempt_id
-             AND battle_result.endpoint = 'battle_log'
-             AND battle_result.observation_id = battle_observation.id
-             AND battle_result.outcome = 'observed'
             WHERE evidence.player_id = %s
               AND evidence.boundary_at = %s
-              AND baseline.player_id = evidence.player_id
-              AND baseline.boundary_at = evidence.boundary_at
               AND evidence.parser_version = %s
-              AND evidence.state = 'complete'
-              AND evidence.version > 0
-              AND evidence.profile_valid
-              AND evidence.battle_log_valid
-              AND NOT evidence.legacy_profile_only
-              AND NOT EXISTS (
-                    SELECT 1
-                    FROM battle_evidence AS event_evidence
-                    JOIN legend_battles AS event_battle
-                      ON event_battle.id = event_evidence.battle_id
-                    WHERE (
-                            event_battle.attacker_player_id = evidence.player_id
-                            OR event_battle.defender_player_id = evidence.player_id
-                        )
-                      AND event_evidence.battle_timestamp >= evidence.boundary_at
-                      AND event_evidence.battle_timestamp < evidence.boundary_at + interval '1 day'
-                      AND event_evidence.battle_timestamp <= profile_observation.response_completed_at
-                )
+              AND evidence.processing_version = %s
             ORDER BY evidence.version DESC, evidence.id DESC
             LIMIT 1
             """,
-            (player_id, boundary_at, parser_version),
+            (player_id, boundary_at, parser_version, processing_version),
         ).fetchone()
+        if row is None:
+            return None
+
+        state = _text_value(row[2])
+        profile_valid = bool(row[11])
+        battle_log_valid = bool(row[12])
+        legacy_profile_only = bool(row[13])
+        profile_accepted = (
+            row[19] is not None
+            and _text_value(row[22]) == "accepted"
+            and _text_value(row[22]) is not None
+        )
+        profile_eligible = _text_value(row[21]) == "eligible"
+        battle_log_valid_evidence = (
+            row[24] is not None and not bool(row[26])
+        )
+        complete = bool(
+            state == "complete"
+            and profile_valid
+            and battle_log_valid
+            and not legacy_profile_only
+            and profile_accepted
+            and profile_eligible
+            and battle_log_valid_evidence
+            and row[7] is not None
+            and row[8] is not None
+            and row[9] is not None
+            and row[10] is not None
+        )
+        failure_reasons = row[14] if isinstance(row[14], list) else []
+        evidence_json = row[15] if isinstance(row[15], dict) else {}
+        evidence = {
+            "id": int(row[0]),
+            "version": int(row[1]),
+            "state": state,
+            "sweep_id": int(row[3]) if row[3] is not None else None,
+            "reset_baseline_sweep_id": (
+                int(row[4]) if row[4] is not None else None
+            ),
+            "collection_job_id": (
+                int(row[5]) if row[5] is not None else None
+            ),
+            "attempt_id": int(row[6]) if row[6] is not None else None,
+            "profile_observation_id": (
+                int(row[7]) if row[7] is not None else None
+            ),
+            "battle_log_observation_id": (
+                int(row[8]) if row[8] is not None else None
+            ),
+            "profile_processing_outcome_id": (
+                int(row[9]) if row[9] is not None else None
+            ),
+            "battle_log_processing_outcome_id": (
+                int(row[10]) if row[10] is not None else None
+            ),
+            "profile_valid": profile_valid,
+            "battle_log_valid": battle_log_valid,
+            "legacy_profile_only": legacy_profile_only,
+            "failure_reasons": list(failure_reasons),
+            "evidence_key": _text_value(row[16]),
+            "boundary_at": row[17].astimezone(UTC).isoformat(),
+            "evidence_kind": (
+                _text_value(row[18]) if row[18] is not None else None
+            ),
+            "profile": {
+                "id": int(row[19]) if row[19] is not None else None,
+                "trophies": int(row[20]) if row[20] is not None else None,
+                "eligibility_state": (
+                    _text_value(row[21]) if row[21] is not None else None
+                ),
+                "source_contract_state": (
+                    _text_value(row[22]) if row[22] is not None else None
+                ),
+                "observed_at": (
+                    row[23].astimezone(UTC).isoformat()
+                    if row[23] is not None
+                    else None
+                ),
+                "response_hash": _text_value(row[27]),
+            },
+            "battle_log": {
+                "id": int(row[24]) if row[24] is not None else None,
+                "row_count": int(row[25]) if row[25] is not None else None,
+                "has_row_gap": bool(row[26]) if row[26] is not None else None,
+                "response_hash": _text_value(row[28]),
+            },
+            "stored_evidence": evidence_json,
+        }
+        return {
+            "id": int(row[0]),
+            "version": int(row[1]),
+            "state": state,
+            "complete": complete,
+            "trophies": int(row[20]) if row[20] is not None else None,
+            "eligibility_state": (
+                _text_value(row[21]) if row[21] is not None else None
+            ),
+            "evidence": evidence,
+        }
 
     @staticmethod
     def _publish_snapshot_kind(

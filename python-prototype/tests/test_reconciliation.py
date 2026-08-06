@@ -101,20 +101,22 @@ def test_automatic_defense_adjustment_can_be_calculated_without_end_confirmation
 def test_zero_defenses_does_not_apply_automatic_adjustment_and_has_uncertain_shield_rules() -> None:
     first = reconcile_ranked_day(
         _input(
-            next_start_trophies=6020,
-            contributions=(BattleContribution("attack-1", "offense", 20),),
+            next_start_trophies=6000,
+            contributions=(),
             previous_day=PreviousRankedDay(True, 8, 100, 0),
         )
     )
     third = reconcile_ranked_day(
         _input(
-            next_start_trophies=6020,
-            contributions=(BattleContribution("attack-1", "offense", 20),),
+            next_start_trophies=6000,
+            contributions=(),
             previous_day=PreviousRankedDay(True, 0, 0, 2),
         )
     )
 
     assert first.automatic_defense_loss is None
+    assert first.automatic_defense_evidence_state == "not_applicable"
+    assert first.state == "Complete"
     assert first.shield_state == "inferred_shielded"
     assert first.shield_duration_days == 1
     assert third.shield_state == "uncertain_sequence"
@@ -135,23 +137,206 @@ def test_coverage_gap_or_missing_overlap_makes_ended_day_partial() -> None:
         _input(coverage_observations=tuple(no_overlap))
     )
 
-    assert gap_result.state == "Partial"
+    assert gap_result.state == "Malformed"
     assert "battle_log_row_gap" in gap_result.failure_reasons
     assert overlap_result.state == "Partial"
     assert "battle_log_overlap_gap" in overlap_result.failure_reasons
 
 
 def test_weekly_and_season_reset_adjustments_reconcile_against_5000_baseline() -> None:
-    for boundary_kind in ("weekly", "season"):
-        result = reconcile_ranked_day(
-            _input(
-                contributions=(BattleContribution("attack-1", "offense", 20),),
-                next_start_trophies=5000,
-                boundary_kind=boundary_kind,
+    weekly = reconcile_ranked_day(
+        _input(
+            start_trophies=4900,
+            contributions=(BattleContribution("attack-1", "offense", 20),),
+            next_start_trophies=5000,
+            boundary_kind="weekly",
+        )
+    )
+    season = reconcile_ranked_day(
+        _input(
+            contributions=(BattleContribution("attack-1", "offense", 20),),
+            next_start_trophies=5000,
+            boundary_kind="season",
+        )
+    )
+
+    assert weekly.state == "Complete"
+    assert weekly.final_trophies_before_reset == 4920
+    assert weekly.boundary_adjustment == 80
+    assert weekly.boundary_adjustment_type == "weekly_reset"
+    assert season.state == "Complete"
+    assert season.final_trophies_before_reset == 6020
+    assert season.boundary_adjustment == -1020
+    assert season.boundary_adjustment_type == "season_reset"
+
+
+def test_automatic_defense_uses_previous_and_current_observed_losses() -> None:
+    result = reconcile_ranked_day(
+        _input(
+            start_trophies=6000,
+            next_start_trophies=5858,
+            contributions=(BattleContribution("defense-1", "defense", 30),),
+            previous_day=PreviousRankedDay(
+                complete=True,
+                observed_defense_count=2,
+                observed_defense_loss=20,
+                shield_run_length=0,
+            ),
+        )
+    )
+
+    assert result.automatic_defense_loss == 112
+    assert result.final_trophies_before_reset == 5858
+    assert result.state == "Complete"
+
+
+def test_shield_is_not_inferred_when_the_player_has_an_attack() -> None:
+    result = reconcile_ranked_day(
+        _input(
+            start_trophies=6000,
+            next_start_trophies=6020,
+            contributions=(BattleContribution("attack-1", "offense", 20),),
+            previous_day=PreviousRankedDay(
+                complete=True,
+                observed_defense_count=8,
+                observed_defense_loss=100,
+                shield_run_length=0,
+            ),
+        )
+    )
+
+    assert result.shield_state == "not_inferred"
+    assert result.shield_duration_days is None
+
+
+def test_weekly_reset_is_not_applied_when_final_trophies_are_at_or_above_5000() -> None:
+    result = reconcile_ranked_day(
+        _input(
+            start_trophies=6000,
+            next_start_trophies=6020,
+            contributions=(BattleContribution("attack-1", "offense", 20),),
+            boundary_kind="weekly",
+            previous_day=PreviousRankedDay(True, 8, 100, 0),
+        )
+    )
+
+    assert result.final_trophies_before_reset == 6020
+    assert result.boundary_adjustment == 0
+    assert result.boundary_adjustment_type is None
+    assert result.state == "Complete"
+
+
+def test_reconciliation_exposes_net_change_boundary_and_unexplained_residual() -> None:
+    result = reconcile_ranked_day(
+        _input(
+            start_trophies=6000,
+            next_start_trophies=5941,
+            contributions=(
+                BattleContribution("attack-1", "offense", 20),
+                BattleContribution("defense-1", "defense", 10),
+            ),
+        )
+    )
+
+    assert result.attack_trophy_gain == 20
+    assert result.observed_defense_loss == 10
+    assert result.net_trophy_change == -60
+    assert result.boundary_adjustment == 0
+    assert result.unexplained_residual == 1
+    assert result.formula_components["expected_next_start_trophies"] == 5940
+    assert result.state == "Inconsistent"
+    assert "trophy_equation_mismatch" in result.failure_reasons
+
+
+def test_malformed_battle_log_evidence_is_not_reported_as_a_normal_partial_day() -> None:
+    result = reconcile_ranked_day(
+        _input(
+            coverage_observations=_coverage(gap=True),
+        )
+    )
+
+    assert result.state == "Malformed"
+    assert "battle_log_row_gap" in result.failure_reasons
+
+
+def test_shield_requires_observation_coverage() -> None:
+    result = reconcile_ranked_day(
+        _input(
+            start_trophies=6000,
+            next_start_trophies=6000,
+            contributions=(),
+            coverage_observations=(),
+            previous_day=PreviousRankedDay(True, 8, 100, 0),
+        )
+    )
+
+    assert result.shield_state == "unknown"
+    assert result.shield_duration_days is None
+    assert result.automatic_defense_evidence_state == "not_applicable"
+
+
+def test_repeated_and_two_sided_contributions_count_once_per_own_perspective() -> None:
+    result = reconcile_ranked_day(
+        _input(
+            contributions=(
+                BattleContribution("shared-battle", "offense", 20),
+                BattleContribution("shared-battle", "offense", 20),
+                BattleContribution("shared-battle", "defense", 10),
+                BattleContribution("shared-battle", "defense", 10),
             )
         )
+    )
 
-        assert result.state == "Complete"
-        assert result.final_trophies_before_reset == 6020
-        assert result.boundary_adjustment == -1020
-        assert result.boundary_adjustment_type == f"{boundary_kind}_reset"
+    assert result.state == "Complete"
+    assert result.attack_count == 1
+    assert result.defense_count == 1
+    assert result.attack_trophy_gain == 20
+    assert result.observed_defense_loss == 10
+    included = [
+        item
+        for item in result.input_evidence["contributions"]
+        if item["included"]
+    ]
+    excluded = [
+        item
+        for item in result.input_evidence["contributions"]
+        if not item["included"]
+    ]
+    assert {(item["lens"], item["included"]) for item in included} == {
+        ("offense", True),
+        ("defense", True),
+    }
+    assert len(excluded) == 2
+
+
+def test_incomplete_coverage_keeps_one_to_seven_defense_adjustment_unknown() -> None:
+    result = reconcile_ranked_day(
+        _input(
+            coverage_observations=_coverage(gap=True),
+            contributions=(BattleContribution("defense-1", "defense", 10),),
+            next_start_trophies=None,
+        )
+    )
+
+    assert result.automatic_defense_loss is None
+    assert result.automatic_defense_evidence_state == "unknown"
+    assert result.state == "Malformed"
+    assert "automatic_defense_basis_unavailable" in result.failure_reasons
+
+
+def test_more_than_eight_defenses_is_a_visible_partial_anomaly() -> None:
+    result = reconcile_ranked_day(
+        _input(
+            contributions=tuple(
+                BattleContribution(f"defense-{index}", "defense", 10)
+                for index in range(9)
+            ),
+            next_start_trophies=5910,
+            previous_day=PreviousRankedDay(True, 8, 100, 0),
+        )
+    )
+
+    assert result.defense_count == 9
+    assert result.automatic_defense_loss is None
+    assert result.state == "Partial"
+    assert "defense_count_exceeds_eight" in result.failure_reasons

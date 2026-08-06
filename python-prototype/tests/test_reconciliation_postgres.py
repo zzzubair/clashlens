@@ -351,6 +351,44 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     ORDER BY version
                     """
                 ).fetchall()
+                version_cursor = connection.execute(
+                    """
+                    SELECT id, player_id, ranked_day_start, ranked_day_end,
+                           official_season_id, season_day_number,
+                           season_anchor_rule_version, reconciliation_rule_version,
+                           result_hash, input_hash, parser_version,
+                           processing_version, domain_rule_version,
+                           analytics_rule_version, trophy_allocation_rule_versions,
+                           version, replaces_version_id, state, confidence,
+                           failure_reasons, start_trophies,
+                           final_trophies_before_reset, next_start_trophies,
+                           expected_next_start_trophies, attack_count, defense_count,
+                           attack_gain, observed_defense_loss,
+                           automatic_defense_loss,
+                           automatic_defense_evidence_state, net_trophy_change,
+                           observed_trophy_change, boundary_adjustment,
+                           boundary_adjustment_type, observed_boundary_adjustment,
+                           unexplained_residual, formula_components, input_evidence,
+                           coverage_evidence, contribution_evidence, shield_evidence,
+                           evidence_complete, coverage_complete, reconciled,
+                           shield_state, shield_duration_days, start_baseline_id,
+                           end_baseline_id
+                    FROM ranked_day_versions
+                    ORDER BY version
+                    """
+                )
+                version_columns = version_cursor.description
+                assert version_columns is not None
+                version_details = [
+                    dict(
+                        zip(
+                            [column.name for column in version_columns],
+                            row,
+                            strict=True,
+                        )
+                    )
+                    for row in version_cursor.fetchall()
+                ]
                 dependent_jobs = connection.execute(
                     """
                     SELECT work_type, count(*)
@@ -358,6 +396,15 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     WHERE work_type IN ('build_snapshot', 'build_analytics')
                     GROUP BY work_type
                     ORDER BY work_type
+                    """
+                ).fetchall()
+                dependent_sets = connection.execute(
+                    """
+                    SELECT input_json->>'ranked_day_version_id', work_type, count(*)
+                    FROM python_processing_jobs
+                    WHERE work_type IN ('build_snapshot', 'build_analytics')
+                    GROUP BY input_json->>'ranked_day_version_id', work_type
+                    ORDER BY input_json->>'ranked_day_version_id', work_type
                     """
                 ).fetchall()
                 snapshots = connection.execute(
@@ -391,11 +438,117 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
 
             assert [(row[0], text(row[1])) for row in versions] == [
                 (1, "Complete"),
-                (2, "Partial"),
+                (2, "Inconsistent"),
             ]
             assert versions[0][3] is None
             assert versions[1][3] is not None
             assert "trophy_equation_mismatch" in versions[1][2]
+            assert len(version_details) == 2
+            first_version, second_version = version_details
+            assert [item["version"] for item in version_details] == [1, 2]
+            assert first_version["replaces_version_id"] is None
+            assert second_version["replaces_version_id"] == first_version["id"]
+            assert text(first_version["state"]) == "Complete"
+            assert text(first_version["confidence"]) == "exact"
+            assert text(second_version["state"]) == "Inconsistent"
+            assert text(second_version["confidence"]) == "uncertain"
+            assert first_version["reconciled"] is True
+            assert second_version["reconciled"] is False
+            assert first_version["evidence_complete"] is True
+            assert second_version["evidence_complete"] is True
+            assert first_version["coverage_complete"] is True
+            assert second_version["coverage_complete"] is True
+            assert text(first_version["parser_version"]) == "supercell-source-parser-v1"
+            assert text(first_version["processing_version"]) == "clashlens-domain-processing-v1"
+            assert text(first_version["domain_rule_version"]) == "clashlens-domain-rules-v1"
+            assert text(first_version["analytics_rule_version"]) == "legend-analytics-v1"
+            assert text(first_version["season_anchor_rule_version"]) == "legend-season-anchor-v1"
+            assert text(first_version["reconciliation_rule_version"]) == (
+                "legend-ranked-day-reconciliation-v2"
+            )
+            assert first_version["trophy_allocation_rule_versions"] == [
+                "legend-trophy-allocation-v1"
+            ]
+            assert second_version["trophy_allocation_rule_versions"] == [
+                "legend-trophy-allocation-v1"
+            ]
+            assert len(text(first_version["input_hash"])) == 64
+            assert len(text(second_version["input_hash"])) == 64
+            assert len(text(first_version["result_hash"])) == 64
+            assert len(text(second_version["result_hash"])) == 64
+            assert first_version["input_hash"] != second_version["input_hash"]
+            assert first_version["result_hash"] != second_version["result_hash"]
+            assert first_version["start_trophies"] == 6000
+            assert first_version["final_trophies_before_reset"] == 6040
+            assert first_version["next_start_trophies"] == 6040
+            assert first_version["expected_next_start_trophies"] == 6040
+            assert first_version["attack_count"] == 1
+            assert first_version["defense_count"] == 0
+            assert first_version["attack_gain"] == 40
+            assert first_version["observed_defense_loss"] == 0
+            assert first_version["automatic_defense_loss"] is None
+            assert text(first_version["automatic_defense_evidence_state"]) == (
+                "not_applicable"
+            )
+            assert first_version["net_trophy_change"] == 40
+            assert first_version["observed_trophy_change"] == 40
+            assert first_version["boundary_adjustment"] == 0
+            assert first_version["boundary_adjustment_type"] is None
+            assert first_version["observed_boundary_adjustment"] == 0
+            assert first_version["unexplained_residual"] == 0
+            assert second_version["next_start_trophies"] == 6039
+            assert second_version["observed_trophy_change"] == 39
+            assert second_version["observed_boundary_adjustment"] == -1
+            assert second_version["unexplained_residual"] == -1
+            equation = (
+                "next_start = start + attack_gain - defense_loss "
+                "- automatic_defense_loss + boundary_adjustment"
+            )
+            assert first_version["formula_components"]["equation"] == equation
+            assert second_version["formula_components"]["equation"] == equation
+            assert first_version["formula_components"]["unexplained_residual"] == 0
+            assert second_version["formula_components"]["unexplained_residual"] == -1
+            assert first_version["formula_components"]["attack_gain"] == 40
+            assert first_version["formula_components"]["observed_defense_loss"] == 0
+            assert first_version["formula_components"]["automatic_defense_loss"] is None
+            assert first_version["input_evidence"]["player_eligible"] is True
+            assert first_version["input_evidence"]["coverage_observations"] == (
+                first_version["coverage_evidence"]
+            )
+            assert first_version["input_evidence"]["contributions"] == (
+                first_version["contribution_evidence"]
+            )
+            assert isinstance(first_version["coverage_evidence"], list)
+            assert isinstance(first_version["contribution_evidence"], list)
+            assert isinstance(first_version["shield_evidence"], dict)
+            included = [
+                item
+                for item in first_version["contribution_evidence"]
+                if item["included"]
+            ]
+            excluded = [
+                item
+                for item in first_version["contribution_evidence"]
+                if not item["included"]
+            ]
+            assert len(included) == 1
+            assert all(item["lens"] == "offense" for item in included)
+            assert all(item["lens"] == "offense" for item in excluded)
+            assert text(first_version["shield_state"]) == "not_inferred"
+            assert first_version["shield_duration_days"] is None
+            assert first_version["shield_evidence"]["attack_count_zero"] is False
+            assert first_version["shield_evidence"]["coverage_complete"] is True
+            assert first_version["start_baseline_id"] is not None
+            assert first_version["end_baseline_id"] is not None
+            assert second_version["end_baseline_id"] != first_version["end_baseline_id"]
+            assert [
+                (int(row[0]), text(row[1]), row[2]) for row in dependent_sets
+            ] == [
+                (first_version["id"], "build_analytics", 1),
+                (first_version["id"], "build_snapshot", 1),
+                (second_version["id"], "build_analytics", 1),
+                (second_version["id"], "build_snapshot", 1),
+            ]
             assert [(text(row[0]), row[1]) for row in dependent_jobs] == [
                 ("build_analytics", 2),
                 ("build_snapshot", 2),
@@ -427,5 +580,104 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             )
             assert all(text(row[4]) == "legend-analytics-v1" for row in summaries)
             assert [text(row[0]) for row in breakdowns] == ["Unclassified"] * 4
+        finally:
+            database.close()
+
+
+def test_postgres_persists_complete_inferred_shield_evidence(
+    database_url: str,
+    archive_server,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        _start_profile, _start_battle, start_profile_job, start_battle_job = (
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key="shield-start",
+                boundary=DAY_START,
+                trophies=6000,
+                empty_battle_log=True,
+            )
+        )
+        _end_profile, _end_battle, end_profile_job, end_battle_job = (
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key="shield-end",
+                boundary=DAY_END,
+                trophies=6000,
+                empty_battle_log=True,
+            )
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for job_id in (
+                start_profile_job,
+                start_battle_job,
+                end_profile_job,
+                end_battle_job,
+            ):
+                result = processor.process_job(job_id, owner=f"shield-source-{job_id}")
+                assert result is not None and result.outcome == "processed"
+            ranked_day_start_text = DAY_START.strftime("%Y-%m-%dT%H:%M:%SZ")
+            with database.pool.connection() as connection:
+                reconcile_job = connection.execute(
+                    """
+                    SELECT id
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                      AND input_json->>'ranked_day_start' = %s
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    (ranked_day_start_text,),
+                ).fetchone()
+            assert reconcile_job is not None
+            result = processor.process_job(
+                int(reconcile_job[0]), owner="shield-reconcile"
+            )
+            assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT version, state, confidence, failure_reasons,
+                           attack_count, defense_count, attack_gain,
+                           observed_defense_loss, automatic_defense_loss,
+                           automatic_defense_evidence_state, net_trophy_change,
+                           observed_trophy_change, expected_next_start_trophies,
+                           unexplained_residual, formula_components,
+                           input_evidence, coverage_evidence,
+                           contribution_evidence, shield_evidence,
+                           coverage_complete, reconciled, shield_state,
+                           shield_duration_days
+                    FROM ranked_day_versions
+                    WHERE ranked_day_start = %s
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """,
+                    (DAY_START,),
+                ).fetchone()
+            assert row is not None
+            assert row[0] == 1
+            assert text(row[1]) == "Complete"
+            assert text(row[2]) == "inferred"
+            assert row[3] == []
+            assert row[4:9] == (0, 0, 0, 0, None)
+            assert text(row[9]) == "not_applicable"
+            assert row[10:14] == (0, 0, 6000, 0)
+            assert row[14]["equation"] == (
+                "next_start = start + attack_gain - defense_loss "
+                "- automatic_defense_loss + boundary_adjustment"
+            )
+            assert row[14]["unexplained_residual"] == 0
+            assert row[15]["player_eligible"] is True
+            assert row[16] == row[15]["coverage_observations"]
+            assert row[17] == row[15]["contributions"] == []
+            assert row[18]["attack_count_zero"] is True
+            assert row[18]["defense_count_zero"] is True
+            assert row[19] is True
+            assert row[20] is True
+            assert text(row[21]) == "inferred_shielded"
+            assert row[22] == 1
         finally:
             database.close()
