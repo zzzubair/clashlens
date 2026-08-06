@@ -1,6 +1,9 @@
 package collector
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +43,32 @@ func TestLoadConfigSeparatesNormalAndInteractiveKeys(t *testing.T) {
 	}
 	if config.workersPerKey != 8 {
 		t.Fatalf("workersPerKey = %d, want 8", config.workersPerKey)
+	}
+}
+
+func TestLoadConfigDisablesGlobalRankingsByDefault(t *testing.T) {
+	t.Parallel()
+
+	config, err := loadConfig(func(name string) string { return validConfigEnvironment()[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+	if config.enableGlobalRankings {
+		t.Fatal("enableGlobalRankings = true, want the safe beta default false")
+	}
+}
+
+func TestLoadConfigCanExplicitlyEnableGlobalRankings(t *testing.T) {
+	t.Parallel()
+	environment := validConfigEnvironment()
+	environment["CLASHLENS_ENABLE_GLOBAL_RANKINGS"] = "true"
+
+	config, err := loadConfig(func(name string) string { return environment[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+	if !config.enableGlobalRankings {
+		t.Fatal("enableGlobalRankings = false, want explicit true")
 	}
 }
 
@@ -134,6 +163,26 @@ func TestLoadConfigRejectsDirectAndFileCredentialTogether(t *testing.T) {
 	_, err := loadConfig(func(name string) string { return environment[name] })
 	if err == nil || !strings.Contains(err.Error(), "must not both be set") {
 		t.Fatalf("loadConfig error = %v, want direct-and-file conflict", err)
+	}
+}
+
+func TestConfigLogExposesOnlyGlobalRankingsBoolean(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	logConfigState(context.Background(), logger, collectorConfig{
+		enableGlobalRankings: true,
+		databaseURL:          "postgres://collector:database-secret@postgres/collector",
+		archiveSecretKey:     "archive-secret",
+	})
+
+	logOutput := output.String()
+	if !strings.Contains(logOutput, `"global_rankings_enabled":true`) {
+		t.Fatalf("configuration log = %q, want boolean global-rankings state", logOutput)
+	}
+	for _, secret := range []string{"database-secret", "archive-secret", "postgres://"} {
+		if strings.Contains(logOutput, secret) {
+			t.Fatalf("configuration log contains secret or connection data %q: %s", secret, logOutput)
+		}
 	}
 }
 

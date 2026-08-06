@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,64 @@ import (
 	"testing"
 	"time"
 )
+
+func TestSchedulerDoesNotScheduleGlobalRankingsWhenBetaGateIsDisabled(t *testing.T) {
+	ctx := context.Background()
+	store := startVersionTwoStore(t, ctx)
+	app := &application{
+		config: collectorConfig{
+			pollCycle:            5 * time.Minute,
+			scheduleBatchSize:    10,
+			enableGlobalRankings: false,
+		},
+		store:   store,
+		metrics: newCollectorMetrics(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	now := time.Date(2026, time.August, 5, 5, 0, 0, 0, time.UTC)
+	if err := app.schedulerOnce(ctx, now); err != nil {
+		t.Fatalf("schedulerOnce returned an error: %v", err)
+	}
+	var globalJobs int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FROM collector_jobs WHERE work_type = 'global_player_rankings'
+	`).Scan(&globalJobs); err != nil {
+		t.Fatalf("count global rankings jobs: %v", err)
+	}
+	if globalJobs != 0 {
+		t.Fatalf("global rankings jobs = %d, want 0 when beta gate is disabled", globalJobs)
+	}
+}
+
+func TestSchedulerSchedulesGlobalRankingsWhenBetaGateIsEnabled(t *testing.T) {
+	ctx := context.Background()
+	store := startVersionTwoStore(t, ctx)
+	app := &application{
+		config: collectorConfig{
+			pollCycle:            5 * time.Minute,
+			scheduleBatchSize:    10,
+			enableGlobalRankings: true,
+		},
+		store:   store,
+		metrics: newCollectorMetrics(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	now := time.Date(2026, time.August, 5, 5, 0, 0, 0, time.UTC)
+	if err := app.schedulerOnce(ctx, now); err != nil {
+		t.Fatalf("schedulerOnce returned an error: %v", err)
+	}
+	var globalJobs int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FROM collector_jobs WHERE work_type = 'global_player_rankings'
+	`).Scan(&globalJobs); err != nil {
+		t.Fatalf("count global rankings jobs: %v", err)
+	}
+	if globalJobs != 1 {
+		t.Fatalf("global rankings jobs = %d, want 1 when beta gate is enabled", globalJobs)
+	}
+}
 
 func TestStartupGuardFailsBeforeClaimWhenArchiveIsUnavailable(t *testing.T) {
 	databaseURL := startContractDatabase(t)

@@ -182,6 +182,32 @@ func TestProductionMigrationTwoEnforcesGlobalAndPlayerCollectorScope(t *testing.
 	`, "player observation without identity", globalJobID, globalAttemptID)
 	assertSQLRejected(t, ctx, connection, `
 		INSERT INTO collector_observations (
+			occurrence_key, collection_job_id, attempt_id, scope, normalized_tag,
+			endpoint, request_method, request_path, request_query, request_started_at,
+			response_completed_at, http_status, response_hash, archive_reference,
+			paging_envelope_state, collector_version, source_adapter_version,
+			key_label, evidence_headers
+		) VALUES (
+			'invalid-player-id-profile', $1, $2, 'player', '#2PP',
+			'profile', 'GET', '/v1/players/%232PP', '', clock_timestamp(),
+			clock_timestamp(), 200, repeat('b', 64), 's3://evidence/b',
+			'not_applicable', 'collector-v2', 'player-profile-v1', 'normal-1', '{}'::jsonb
+		)
+	`, "player observation without relational player identity", globalJobID, globalAttemptID)
+	assertSQLRejected(t, ctx, connection, `
+		INSERT INTO collector_transport_failures (
+			collection_job_id, attempt_id, scope, player_id, normalized_tag,
+			endpoint, request_method, request_path, request_query,
+			paging_envelope_state, source_adapter_version, request_started_at,
+			failed_at, failure_category, retry_state, key_label
+		) VALUES (
+			$1, $2, 'player', NULL, '#2PP', 'profile', 'GET',
+			'/v1/players/%232PP', '', 'unknown_no_response', 'player-profile-v1',
+			clock_timestamp(), clock_timestamp(), 'network', 'retryable', 'normal-1'
+		)
+	`, "player transport failure without relational player identity", globalJobID, globalAttemptID)
+	assertSQLRejected(t, ctx, connection, `
+		INSERT INTO collector_observations (
 			occurrence_key, collection_job_id, attempt_id, scope, endpoint,
 			request_method, request_path, request_query, request_started_at,
 			response_completed_at, http_status, response_hash, archive_reference,

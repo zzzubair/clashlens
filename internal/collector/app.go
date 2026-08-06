@@ -187,9 +187,12 @@ func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 	for range scheduled {
 		a.metrics.recordJob("regular_poll", string(normalPool), "scheduled")
 	}
-	globalRankingsCreated, err := a.store.scheduleGlobalRankings(ctx, now, 5*time.Minute)
-	if err != nil {
-		return err
+	var globalRankingsCreated bool
+	if a.config.enableGlobalRankings {
+		globalRankingsCreated, err = a.store.scheduleGlobalRankings(ctx, now, 5*time.Minute)
+		if err != nil {
+			return err
+		}
 	}
 	if globalRankingsCreated {
 		a.metrics.recordJob("global_player_rankings", string(normalPool), "scheduled")

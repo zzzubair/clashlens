@@ -40,6 +40,7 @@ func RunCLI(
 		if err != nil {
 			return err
 		}
+		logConfigState(ctx, logger, config)
 		app, err := newApplication(ctx, config, logger)
 		if err != nil {
 			return err
@@ -84,6 +85,7 @@ func RunCLI(
 		if err != nil {
 			return err
 		}
+		logConfigState(ctx, logger, config)
 		app, err := newApplication(ctx, config, logger)
 		if err != nil {
 			return err

@@ -233,6 +233,7 @@ func (s *store) scheduleResetSweep(ctx context.Context, boundary time.Time) (int
 	defer func() { _ = transaction.Rollback(ctx) }()
 
 	var sweepID int64
+	created := true
 	err = transaction.QueryRow(ctx, `
 		INSERT INTO collector_reset_sweeps (boundary_at)
 		VALUES ($1)
@@ -240,27 +241,28 @@ func (s *store) scheduleResetSweep(ctx context.Context, boundary time.Time) (int
 		RETURNING id
 	`, boundary).Scan(&sweepID)
 	if errors.Is(err, pgx.ErrNoRows) {
+		created = false
 		if err := transaction.QueryRow(ctx, `
-			SELECT id FROM collector_reset_sweeps WHERE boundary_at = $1
+			SELECT id FROM collector_reset_sweeps
+			WHERE boundary_at = $1
+			FOR UPDATE
 		`, boundary).Scan(&sweepID); err != nil {
 			return 0, false, fmt.Errorf("find existing reset sweep: %w", err)
 		}
-		if err := transaction.Commit(ctx); err != nil {
-			return 0, false, fmt.Errorf("commit existing reset sweep lookup: %w", err)
-		}
-		return sweepID, false, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return 0, false, fmt.Errorf("create reset sweep: %w", err)
 	}
 
-	if _, err := transaction.Exec(ctx, `
-		INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
-		SELECT $1, id FROM players WHERE active
-	`, sweepID); err != nil {
-		return 0, false, fmt.Errorf("fix reset sweep membership: %w", err)
-	}
 	if contractVersion >= 2 {
+		// A retry repairs work that was not committed before a scheduler restart.
+		// The sweep ID and each baseline identity remain stable across retries.
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
+			SELECT $1, id FROM players WHERE active
+			ON CONFLICT (sweep_id, player_id) DO NOTHING
+		`, sweepID); err != nil {
+			return 0, false, fmt.Errorf("fix paired reset sweep membership: %w", err)
+		}
 		if _, err := transaction.Exec(ctx, `
 			INSERT INTO collector_reset_baseline_sweeps (
 				reset_sweep_id, player_id, boundary_at, evidence_kind, state
@@ -296,35 +298,50 @@ func (s *store) scheduleResetSweep(ctx context.Context, boundary time.Time) (int
 			 AND baseline.player_id = member.player_id
 			WHERE member.sweep_id = $1
 			  AND baseline.evidence_kind = 'paired_v2'
+			  AND NOT EXISTS (
+				  SELECT 1
+				  FROM collector_jobs AS existing
+				  WHERE existing.sweep_id = $1
+				    AND existing.reset_baseline_sweep_id = baseline.id
+				    AND existing.work_type = 'reset_baseline'
+			  )
 			ON CONFLICT DO NOTHING
 		`, sweepID, boundary); err != nil {
 			return 0, false, fmt.Errorf("create paired reset jobs: %w", err)
 		}
-	} else if _, err := transaction.Exec(ctx, `
-		INSERT INTO collector_jobs (
-			work_type, player_id, normalized_tag, capacity_pool, priority,
-			due_at, coalescing_key, sweep_id, status
-		)
-		SELECT 'reset_profile',
-			player.id,
-			player.normalized_tag,
-			'normal',
-			400,
-			$2,
-			'reset:' || $1::bigint::text || ':' || player.id::text,
-			$1,
-			'pending'
-		FROM collector_reset_sweep_members AS member
-		JOIN players AS player ON player.id = member.player_id
-		WHERE member.sweep_id = $1
-	`, sweepID, boundary); err != nil {
-		return 0, false, fmt.Errorf("create legacy reset profile jobs: %w", err)
+	} else if created {
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
+			SELECT $1, id FROM players WHERE active
+		`, sweepID); err != nil {
+			return 0, false, fmt.Errorf("create reset sweep membership: %w", err)
+		}
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO collector_jobs (
+				work_type, player_id, normalized_tag, capacity_pool, priority,
+				due_at, coalescing_key, sweep_id, status
+			)
+			SELECT 'reset_profile',
+				player.id,
+				player.normalized_tag,
+				'normal',
+				400,
+				$2,
+				'reset:' || $1::bigint::text || ':' || player.id::text,
+				$1,
+				'pending'
+			FROM collector_reset_sweep_members AS member
+			JOIN players AS player ON player.id = member.player_id
+			WHERE member.sweep_id = $1
+		`, sweepID, boundary); err != nil {
+			return 0, false, fmt.Errorf("create legacy reset profile jobs: %w", err)
+		}
 	}
 
 	if err := transaction.Commit(ctx); err != nil {
 		return 0, false, fmt.Errorf("commit reset sweep: %w", err)
 	}
-	return sweepID, true, nil
+	return sweepID, created, nil
 }
 
 func (s *store) currentContractVersion(ctx context.Context) (int, error) {

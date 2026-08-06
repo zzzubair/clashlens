@@ -1,8 +1,10 @@
 package collector
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strconv"
@@ -21,6 +23,7 @@ type collectorConfig struct {
 	officialAPIOrigin         string
 	officialAPIProxyURL       string
 	allowInsecureTestHTTP     bool
+	enableGlobalRankings      bool
 	keys                      []APIKey
 	allowInteractiveForNormal bool
 	requestsPerSecondPerKey   int
@@ -118,6 +121,9 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 		return collectorConfig{}, err
 	}
 	if config.allowInsecureTestHTTP, err = optionalBool(getenv, "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN", false); err != nil {
+		return collectorConfig{}, err
+	}
+	if config.enableGlobalRankings, err = optionalBool(getenv, "CLASHLENS_ENABLE_GLOBAL_RANKINGS", false); err != nil {
 		return collectorConfig{}, err
 	}
 	allowReducedPools, err := optionalBool(getenv, "CLASHLENS_ALLOW_REDUCED_KEY_POOLS", false)
@@ -245,6 +251,17 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 		return collectorConfig{}, errors.New("retry maximum delay must not be less than retry base delay")
 	}
 	return config, nil
+}
+
+func logConfigState(ctx context.Context, logger *slog.Logger, config collectorConfig) {
+	if logger == nil {
+		return
+	}
+	logger.InfoContext(
+		ctx,
+		"collector configuration loaded",
+		"global_rankings_enabled", config.enableGlobalRankings,
+	)
 }
 
 func secretSetting(getenv func(string) string, name string) (string, error) {

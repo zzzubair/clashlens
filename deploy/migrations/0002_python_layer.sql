@@ -300,7 +300,8 @@ ALTER TABLE collector_observations
         endpoint IN ('profile', 'battle_log', 'global_player_rankings')
     ),
     ADD CONSTRAINT collector_observations_scope_v2_check CHECK (
-        (scope = 'player' AND normalized_tag IS NOT NULL
+        (scope = 'player' AND player_id IS NOT NULL
+            AND normalized_tag IS NOT NULL
             AND endpoint IN ('profile', 'battle_log'))
         OR (scope = 'global' AND player_id IS NULL AND normalized_tag IS NULL
             AND endpoint = 'global_player_rankings')
@@ -338,7 +339,8 @@ ALTER TABLE collector_transport_failures
         endpoint IN ('profile', 'battle_log', 'global_player_rankings')
     ),
     ADD CONSTRAINT collector_transport_failures_scope_v2_check CHECK (
-        (scope = 'player' AND normalized_tag IS NOT NULL
+        (scope = 'player' AND player_id IS NOT NULL
+            AND normalized_tag IS NOT NULL
             AND endpoint IN ('profile', 'battle_log'))
         OR (scope = 'global' AND player_id IS NULL AND normalized_tag IS NULL
             AND endpoint = 'global_player_rankings')

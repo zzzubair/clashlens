@@ -120,7 +120,7 @@ func (s *store) queueStatistics(ctx context.Context) (queueStatistics, error) {
 		LEFT JOIN collector_jobs AS job
 			ON job.sweep_id = sweep.id
 			AND job.player_id = member.player_id
-			AND job.work_type = 'reset_profile'
+			AND job.work_type IN ('reset_baseline', 'legacy_reset_profile')
 		GROUP BY sweep.id, sweep.created_at
 	`).Scan(&statistics.resetCreatedAt, &statistics.resetMembers, &statistics.resetObserved)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {

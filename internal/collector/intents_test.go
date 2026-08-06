@@ -158,3 +158,80 @@ func TestResetSweepFixesActiveMembershipAndCreatesProfileOnlyJobs(t *testing.T) 
 		t.Fatalf("reset outputs = %d members, %d jobs, %d invalid jobs; want 2, 2, 0", members, jobs, nonProfileJobs)
 	}
 }
+
+func TestVersionTwoResetSweepRetryRepairsLateOrMissingPairedWork(t *testing.T) {
+	ctx := context.Background()
+	store := startVersionTwoStore(t, ctx)
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO players (normalized_tag, active, next_due_at)
+		VALUES ('#2PP', true, now())
+	`); err != nil {
+		t.Fatalf("insert initial reset player: %v", err)
+	}
+
+	boundary := time.Date(2026, time.August, 5, 5, 0, 0, 0, time.UTC)
+	sweepID, created, err := store.scheduleResetSweep(ctx, boundary)
+	if err != nil {
+		t.Fatalf("schedule initial reset sweep: %v", err)
+	}
+	if !created {
+		t.Fatal("initial reset sweep was not created")
+	}
+
+	if _, err := store.pool.Exec(ctx, `
+		DELETE FROM collector_jobs
+		WHERE sweep_id = $1
+	`, sweepID); err != nil {
+		t.Fatalf("remove one reset job to model interrupted scheduling: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		DELETE FROM collector_reset_baseline_sweeps
+		WHERE reset_sweep_id = $1
+	`, sweepID); err != nil {
+		t.Fatalf("remove paired reset baselines to model interrupted scheduling: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO players (normalized_tag, active, next_due_at)
+		VALUES ('#2PQ', true, now())
+	`); err != nil {
+		t.Fatalf("insert late active reset player: %v", err)
+	}
+
+	retriedSweepID, created, err := store.scheduleResetSweep(ctx, boundary)
+	if err != nil {
+		t.Fatalf("retry reset sweep scheduling: %v", err)
+	}
+	if created || retriedSweepID != sweepID {
+		t.Fatalf("retry reset sweep = id %d created %v, want existing id %d and no new sweep", retriedSweepID, created, sweepID)
+	}
+
+	var members, baselines, jobs int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM collector_reset_sweep_members WHERE sweep_id = $1),
+			(SELECT count(*) FROM collector_reset_baseline_sweeps
+			 WHERE reset_sweep_id = $1 AND evidence_kind = 'paired_v2'),
+			(SELECT count(*) FROM collector_jobs
+			 WHERE sweep_id = $1 AND work_type = 'reset_baseline')
+	`, sweepID).Scan(&members, &baselines, &jobs); err != nil {
+		t.Fatalf("read repaired paired reset work: %v", err)
+	}
+	if members != 2 || baselines != 2 || jobs != 2 {
+		t.Fatalf("repaired reset work = %d members, %d baselines, %d jobs; want 2, 2, 2", members, baselines, jobs)
+	}
+	var duplicateGroups int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FROM (
+			SELECT reset_baseline_sweep_id
+			FROM collector_jobs
+			WHERE sweep_id = $1 AND work_type = 'reset_baseline'
+			GROUP BY reset_baseline_sweep_id
+			HAVING count(*) > 1
+		) AS duplicates
+	`, sweepID).Scan(&duplicateGroups); err != nil {
+		t.Fatalf("count duplicate reset jobs: %v", err)
+	}
+	if duplicateGroups != 0 {
+		t.Fatalf("duplicate reset job groups = %d, want 0", duplicateGroups)
+	}
+}
