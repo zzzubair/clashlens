@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -28,7 +29,9 @@ type collectionJob struct {
 	requiredEndpoint     pgtype.Text
 	sweepID              pgtype.Int8
 	resetBaselineSweepID pgtype.Int8
+	leaseOwner           string
 	leaseToken           string
+	leaseGeneration      int64
 }
 
 func (s *store) claimNext(
@@ -69,6 +72,12 @@ func (s *store) claimNext(
 		return nil, fmt.Errorf("cancel inactive regular jobs: %w", err)
 	}
 
+	if s.contractVersion >= 2 {
+		if err := s.recoverExpiredAttemptsV2(ctx, transaction, string(pool), now); err != nil {
+			return nil, err
+		}
+	}
+
 	row := transaction.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT id
@@ -106,6 +115,8 @@ func (s *store) claimNext(
 			job.required_endpoint,
 			job.sweep_id,
 			(to_jsonb(job) ->> 'reset_baseline_sweep_id')::bigint,
+			job.lease_owner,
+			COALESCE((to_jsonb(job) ->> 'lease_generation')::bigint, 0),
 			job.lease_token
 	`, string(pool), now, owner, leaseToken, leaseDuration)
 
@@ -122,6 +133,8 @@ func (s *store) claimNext(
 		&job.requiredEndpoint,
 		&job.sweepID,
 		&job.resetBaselineSweepID,
+		&job.leaseOwner,
+		&job.leaseGeneration,
 		&job.leaseToken,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -133,11 +146,232 @@ func (s *store) claimNext(
 		return nil, fmt.Errorf("claim collector job: %w", err)
 	}
 	job.pool = capacityPool(poolName)
+	job.leaseOwner = owner
+	if s.contractVersion >= 2 {
+		var generation int64
+		if err := transaction.QueryRow(ctx, `
+			SELECT lease_generation
+			FROM collector_jobs
+			WHERE id = $1
+			FOR UPDATE
+		`, job.id).Scan(&generation); err != nil {
+			return nil, fmt.Errorf("read collector lease generation: %w", err)
+		}
+		command, err := transaction.Exec(ctx, `
+			UPDATE collector_jobs
+			SET lease_generation = lease_generation + 1
+			WHERE id = $1
+			AND lease_owner = $2
+			AND lease_token = $3
+			AND status = 'leased'
+			AND lease_expires_at > clock_timestamp()
+		`, job.id, owner, leaseToken)
+		if err != nil {
+			return nil, fmt.Errorf("advance collector lease generation: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return nil, errLeaseLost
+		}
+		job.leaseGeneration = generation + 1
+	}
 
 	if err := transaction.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit claim transaction: %w", err)
 	}
 	return &job, nil
+}
+
+const maxCollectorAttemptsV2 = 3
+
+func (s *store) recoverExpiredAttemptsV2(ctx context.Context, transaction pgx.Tx, pool string, now time.Time) error {
+	rows, err := transaction.Query(ctx, `
+		SELECT job.id, job.lease_owner, job.lease_token, job.lease_generation,
+			job.result_attempt_id
+		FROM collector_jobs AS job
+		WHERE job.capacity_pool = $1
+			AND job.status = 'leased'
+			AND job.lease_expires_at <= $2
+		ORDER BY job.id
+		FOR UPDATE OF job SKIP LOCKED
+	`, pool, now)
+	if err != nil {
+		return fmt.Errorf("select expired collector leases: %w", err)
+	}
+
+	type expiredLease struct {
+		jobID      int64
+		leaseOwner string
+		leaseToken string
+		generation int64
+		attemptID  pgtype.Int8
+	}
+	expired := make([]expiredLease, 0)
+	for rows.Next() {
+		var lease expiredLease
+		if err := rows.Scan(
+			&lease.jobID,
+			&lease.leaseOwner,
+			&lease.leaseToken,
+			&lease.generation,
+			&lease.attemptID,
+		); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan expired collector lease: %w", err)
+		}
+		expired = append(expired, lease)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read expired collector leases: %w", err)
+	}
+	rows.Close()
+
+	for _, lease := range expired {
+		attemptNumber := 0
+		attemptStatus := ""
+		failureCategory := pgtype.Text{}
+		if lease.attemptID.Valid {
+			err := transaction.QueryRow(ctx, `
+				SELECT status, attempt_number, failure_category
+				FROM collector_attempts
+				WHERE id = $1 AND job_id = $2
+				FOR UPDATE
+			`, lease.attemptID.Int64, lease.jobID).Scan(
+				&attemptStatus,
+				&attemptNumber,
+				&failureCategory,
+			)
+			if errors.Is(err, pgx.ErrNoRows) {
+				lease.attemptID = pgtype.Int8{}
+			} else if err != nil {
+				return fmt.Errorf("lock expired collector attempt: %w", err)
+			}
+		}
+		if !lease.attemptID.Valid {
+			if err := transaction.QueryRow(ctx, `
+				SELECT COALESCE(MAX(attempt_number), 0)
+				FROM collector_attempts
+				WHERE job_id = $1
+			`, lease.jobID).Scan(&attemptNumber); err != nil {
+				return fmt.Errorf("read collector attempt bound: %w", err)
+			}
+		}
+
+		if lease.attemptID.Valid && attemptStatus != "complete" {
+			if _, err := transaction.Exec(ctx, `
+				UPDATE collector_endpoint_results AS endpoint_result
+				SET outcome = 'failed',
+					next_retry_at = NULL,
+					execution_token = NULL,
+					failure_category = 'lease_expired'
+				FROM collector_jobs AS job
+				WHERE endpoint_result.attempt_id = $1
+					AND job.id = $2
+					AND job.lease_owner = $3
+					AND job.lease_token = $4
+					AND job.lease_generation = $5
+					AND job.status = 'leased'
+					AND job.lease_expires_at <= $6
+					AND endpoint_result.outcome <> 'observed'
+			`, lease.attemptID.Int64, lease.jobID, lease.leaseOwner, lease.leaseToken, lease.generation, now); err != nil {
+				return fmt.Errorf("fail expired collector endpoints: %w", err)
+			}
+
+			command, err := transaction.Exec(ctx, `
+				UPDATE collector_attempts AS attempt
+				SET status = 'failed',
+					completed_at = $6,
+					failure_category = 'lease_expired',
+					lease_owner = NULL,
+					lease_token = NULL
+				FROM collector_jobs AS job
+				WHERE attempt.id = $1
+					AND attempt.job_id = $2
+					AND job.id = $2
+					AND job.lease_owner = $3
+					AND job.lease_token = $4
+					AND job.lease_generation = $5
+					AND job.status = 'leased'
+					AND job.lease_expires_at <= $6
+					AND attempt.status <> 'complete'
+			`, lease.attemptID.Int64, lease.jobID, lease.leaseOwner, lease.leaseToken, lease.generation, now)
+			if err != nil {
+				return fmt.Errorf("terminalize expired collector attempt: %w", err)
+			}
+			if command.RowsAffected() != 1 {
+				return errLeaseLost
+			}
+
+			if _, err := transaction.Exec(ctx, `
+				INSERT INTO collector_attempt_events (
+					job_id, attempt_id, event_type, from_status, to_status,
+					lease_owner, lease_token, lease_generation, failure_category
+				)
+				SELECT job.id, $1, 'lease_expired', $2, 'failed',
+					job.lease_owner, job.lease_token, job.lease_generation,
+					'lease_expired'
+				FROM collector_jobs AS job
+				WHERE job.id = $3
+					AND job.lease_owner = $4
+					AND job.lease_token = $5
+					AND job.lease_generation = $6
+					AND job.status = 'leased'
+					AND job.lease_expires_at <= $7
+				ON CONFLICT (attempt_id, event_type, lease_generation) DO NOTHING
+			`, lease.attemptID.Int64, attemptStatus, lease.jobID, lease.leaseOwner, lease.leaseToken, lease.generation, now); err != nil {
+				return fmt.Errorf("record expired collector attempt event: %w", err)
+			}
+		} else if lease.attemptID.Valid && failureCategory.Valid && failureCategory.String == "lease_expired" {
+			if _, err := transaction.Exec(ctx, `
+				INSERT INTO collector_attempt_events (
+					job_id, attempt_id, event_type, from_status, to_status,
+					lease_owner, lease_token, lease_generation, failure_category
+				)
+				SELECT job.id, $1, 'lease_expired', 'failed', 'failed',
+					job.lease_owner, job.lease_token, job.lease_generation,
+					'lease_expired'
+				FROM collector_jobs AS job
+				WHERE job.id = $2
+					AND job.lease_owner = $3
+					AND job.lease_token = $4
+					AND job.lease_generation = $5
+					AND job.status = 'leased'
+					AND job.lease_expires_at <= $6
+				ON CONFLICT (attempt_id, event_type, lease_generation) DO NOTHING
+			`, lease.attemptID.Int64, lease.jobID, lease.leaseOwner, lease.leaseToken, lease.generation, now); err != nil {
+				return fmt.Errorf("record existing expired collector attempt event: %w", err)
+			}
+		}
+
+		status := "pending"
+		if attemptNumber >= maxCollectorAttemptsV2 {
+			status = "failed"
+		}
+		command, err := transaction.Exec(ctx, `
+			UPDATE collector_jobs
+			SET status = $6,
+				due_at = CASE WHEN $6 = 'pending' THEN $5 ELSE due_at END,
+				cancel_reason = CASE WHEN $6 = 'failed' THEN 'lease_expired' ELSE NULL END,
+				lease_owner = NULL,
+				lease_token = NULL,
+				lease_expires_at = NULL,
+				result_attempt_id = NULL,
+				updated_at = $5
+			WHERE id = $1
+				AND lease_owner = $2
+				AND lease_token = $3
+				AND lease_generation = $4
+				AND status = 'leased'
+				AND lease_expires_at <= $5
+		`, lease.jobID, lease.leaseOwner, lease.leaseToken, lease.generation, now, status)
+		if err != nil {
+			return fmt.Errorf("release expired collector job: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return errLeaseLost
+		}
+	}
+	return nil
 }
 
 func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time.Time) (int64, []endpointName, error) {
@@ -149,7 +383,7 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 
 	var status string
 	var existingAttempt pgtype.Int8
-	if err := transaction.QueryRow(ctx, `
+	leaseQuery := `
 		SELECT status, result_attempt_id
 		FROM collector_jobs
 		WHERE id = $1
@@ -157,7 +391,23 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 			AND status = 'leased'
 			AND lease_expires_at > clock_timestamp()
 		FOR UPDATE
-	`, job.id, job.leaseToken).Scan(&status, &existingAttempt); err != nil {
+	`
+	leaseArgs := []any{job.id, job.leaseToken}
+	if s.contractVersion >= 2 {
+		leaseQuery = `
+			SELECT status, result_attempt_id
+			FROM collector_jobs
+			WHERE id = $1
+				AND lease_owner = $3
+				AND lease_token = $2
+				AND lease_generation = $4
+				AND status = 'leased'
+				AND lease_expires_at > clock_timestamp()
+			FOR UPDATE
+		`
+		leaseArgs = []any{job.id, job.leaseToken, job.leaseOwner, job.leaseGeneration}
+	}
+	if err := transaction.QueryRow(ctx, leaseQuery, leaseArgs...).Scan(&status, &existingAttempt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, nil, errLeaseLost
 		}
@@ -318,9 +568,37 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 	}
 
 	attemptID := existingAttempt.Int64
+	if existingAttempt.Valid && s.contractVersion >= 2 && job.workType != "endpoint_retry" {
+		if err := lockCurrentAttemptV2(ctx, transaction, job, existingAttempt.Int64); err != nil {
+			return 0, nil, err
+		}
+	}
 	if !existingAttempt.Valid {
 		if job.workType == "endpoint_retry" && job.parentAttemptID.Valid {
 			attemptID = job.parentAttemptID.Int64
+		} else if s.contractVersion >= 2 {
+			var previousAttemptNumber int
+			if err := transaction.QueryRow(ctx, `
+				SELECT COALESCE(MAX(attempt_number), 0)
+				FROM collector_attempts
+				WHERE job_id = $1
+			`, job.id).Scan(&previousAttemptNumber); err != nil {
+				return 0, nil, fmt.Errorf("read collection attempt number: %w", err)
+			}
+			if previousAttemptNumber >= maxCollectorAttemptsV2 {
+				return 0, nil, fmt.Errorf("collector job %d exhausted attempt limit", job.id)
+			}
+			if err := transaction.QueryRow(ctx, `
+				INSERT INTO collector_attempts (
+					job_id, attempt_number, lease_owner, lease_token,
+					lease_generation, status, started_at
+				)
+				VALUES ($1, $2, $3, $4, $5, 'running', $6)
+				RETURNING id
+			`, job.id, previousAttemptNumber+1, job.leaseOwner, job.leaseToken,
+				job.leaseGeneration, now).Scan(&attemptID); err != nil {
+				return 0, nil, fmt.Errorf("create version-two collection attempt: %w", err)
+			}
 		} else if err := transaction.QueryRow(ctx, `
 			INSERT INTO collector_attempts (job_id, status, started_at)
 			VALUES ($1, 'running', $2)
@@ -328,10 +606,33 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 		`, job.id, now).Scan(&attemptID); err != nil {
 			return 0, nil, fmt.Errorf("create collection attempt: %w", err)
 		}
-		if _, err := transaction.Exec(ctx, `
-			UPDATE collector_jobs SET result_attempt_id = $2 WHERE id = $1
-		`, job.id, attemptID); err != nil {
+		var command pgconn.CommandTag
+		if s.contractVersion >= 2 {
+			command, err = transaction.Exec(ctx, `
+				UPDATE collector_jobs
+				SET result_attempt_id = $2
+				WHERE id = $1
+					AND lease_owner = $3
+					AND lease_token = $4
+					AND lease_generation = $5
+					AND status = 'leased'
+					AND lease_expires_at > clock_timestamp()
+			`, job.id, attemptID, job.leaseOwner, job.leaseToken, job.leaseGeneration)
+		} else {
+			command, err = transaction.Exec(ctx, `
+				UPDATE collector_jobs
+				SET result_attempt_id = $2
+				WHERE id = $1
+					AND lease_token = $3
+					AND status = 'leased'
+					AND lease_expires_at > clock_timestamp()
+			`, job.id, attemptID, job.leaseToken)
+		}
+		if err != nil {
 			return 0, nil, fmt.Errorf("link collection attempt: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return 0, nil, errLeaseLost
 		}
 	}
 
@@ -381,6 +682,33 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 		return 0, nil, fmt.Errorf("read required endpoint work: %w", err)
 	}
 	rows.Close()
+
+	if s.contractVersion >= 2 {
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO collector_attempt_events (
+				job_id, attempt_id, event_type, from_status, to_status,
+				lease_owner, lease_token, lease_generation
+			)
+			SELECT job.id, $1, 'claimed', NULL, 'running',
+				job.lease_owner, job.lease_token, job.lease_generation
+			FROM collector_jobs AS job
+			WHERE job.id = $2
+				AND job.lease_owner = $3
+				AND job.lease_token = $4
+				AND job.lease_generation = $5
+				AND job.status = 'leased'
+				AND job.lease_expires_at > clock_timestamp()
+				AND (job.result_attempt_id = $1 OR job.parent_attempt_id = $1)
+			ON CONFLICT (attempt_id, event_type, lease_generation) DO NOTHING
+		`, attemptID, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration); err != nil {
+			return 0, nil, fmt.Errorf("record claimed collection attempt event: %w", err)
+		}
+		if err := lockCurrentLeaseV2(ctx, transaction, job); err != nil {
+			return 0, nil, err
+		}
+	} else if err := lockCurrentLease(ctx, transaction, job); err != nil {
+		return 0, nil, err
+	}
 
 	if err := transaction.Commit(ctx); err != nil {
 		return 0, nil, fmt.Errorf("commit attempt transaction: %w", err)
@@ -579,7 +907,178 @@ func (s *store) commitObservation(
 	return nil
 }
 
+func (s *store) finishAttemptV2(ctx context.Context, job *collectionJob, attemptID int64, completedAt time.Time) error {
+	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin version-two completion transaction: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+
+	if err := lockCurrentAttemptV2(ctx, transaction, job, attemptID); err != nil {
+		return err
+	}
+	var rootJobID int64
+	if err := transaction.QueryRow(ctx, `
+		SELECT job_id
+		FROM collector_attempts
+		WHERE id = $1
+		FOR UPDATE
+	`, attemptID).Scan(&rootJobID); err != nil {
+		return fmt.Errorf("lock version-two completion attempt: %w", err)
+	}
+	var incomplete int
+	if err := transaction.QueryRow(ctx, `
+		SELECT count(*)
+		FROM collector_endpoint_results
+		WHERE attempt_id = $1 AND outcome <> 'observed'
+	`, attemptID).Scan(&incomplete); err != nil {
+		return fmt.Errorf("count version-two incomplete endpoints: %w", err)
+	}
+
+	if incomplete > 0 {
+		command, err := transaction.Exec(ctx, `
+			UPDATE collector_attempts AS attempt
+			SET status = 'incomplete'
+			FROM collector_jobs AS current_job
+			WHERE attempt.id = $1
+				AND attempt.status IN ('running', 'incomplete')
+				AND current_job.id = $2
+				AND current_job.lease_owner = $3
+				AND current_job.lease_token = $4
+				AND current_job.lease_generation = $5
+				AND current_job.status = 'leased'
+				AND current_job.lease_expires_at > clock_timestamp()
+				AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
+		`, attemptID, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration)
+		if err != nil {
+			return fmt.Errorf("mark version-two attempt incomplete: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return errLeaseLost
+		}
+		if err := transaction.Commit(ctx); err != nil {
+			return fmt.Errorf("commit version-two incomplete attempt: %w", err)
+		}
+		return nil
+	}
+
+	command, err := transaction.Exec(ctx, `
+		UPDATE collector_attempts AS attempt
+		SET status = 'complete', completed_at = $2
+		FROM collector_jobs AS current_job
+		WHERE attempt.id = $1
+			AND attempt.job_id = $3
+			AND attempt.status IN ('running', 'incomplete')
+			AND current_job.id = $4
+			AND current_job.lease_owner = $5
+			AND current_job.lease_token = $6
+			AND current_job.lease_generation = $7
+			AND current_job.status = 'leased'
+			AND current_job.lease_expires_at > clock_timestamp()
+			AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
+	`, attemptID, completedAt, rootJobID, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration)
+	if err != nil {
+		return fmt.Errorf("complete version-two attempt: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return errLeaseLost
+	}
+
+	if _, err := transaction.Exec(ctx, `
+		UPDATE collector_reset_baseline_sweeps AS baseline
+		SET state = 'complete', completed_at = $2
+		FROM collector_jobs AS root_job
+		JOIN collector_jobs AS current_job ON current_job.id = $3
+		WHERE root_job.id = $1
+			AND baseline.id = root_job.reset_baseline_sweep_id
+			AND baseline.evidence_kind = 'paired_v2'
+			AND current_job.lease_owner = $4
+			AND current_job.lease_token = $5
+			AND current_job.lease_generation = $6
+			AND current_job.status = 'leased'
+			AND current_job.lease_expires_at > clock_timestamp()
+			AND (current_job.result_attempt_id = $7 OR current_job.parent_attempt_id = $7)
+	`, rootJobID, completedAt, job.id, job.leaseOwner, job.leaseToken,
+		job.leaseGeneration, attemptID); err != nil {
+		return fmt.Errorf("complete version-two reset baseline: %w", err)
+	}
+
+	if rootJobID == job.id {
+		command, err = transaction.Exec(ctx, `
+			UPDATE collector_jobs
+			SET status = 'complete',
+				lease_owner = NULL,
+				lease_token = NULL,
+				lease_expires_at = NULL,
+				updated_at = $5
+			WHERE id = $1
+				AND lease_owner = $2
+				AND lease_token = $3
+				AND lease_generation = $4
+				AND status = 'leased'
+				AND lease_expires_at > clock_timestamp()
+				AND (result_attempt_id = $6 OR parent_attempt_id = $6)
+		`, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration, completedAt, attemptID)
+		if err != nil {
+			return fmt.Errorf("complete version-two collector job: %w", err)
+		}
+	} else {
+		command, err = transaction.Exec(ctx, `
+			UPDATE collector_jobs AS root_job
+			SET status = 'complete', updated_at = $6
+			FROM collector_jobs AS current_job
+			WHERE root_job.id = $1
+				AND current_job.id = $2
+				AND root_job.status IN ('waiting_retry', 'leased')
+				AND current_job.lease_owner = $3
+				AND current_job.lease_token = $4
+				AND current_job.lease_generation = $5
+				AND current_job.status = 'leased'
+				AND current_job.lease_expires_at > clock_timestamp()
+				AND (current_job.result_attempt_id = $7 OR current_job.parent_attempt_id = $7)
+		`, rootJobID, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration, completedAt, attemptID)
+		if err != nil {
+			return fmt.Errorf("complete version-two root collector job: %w", err)
+		}
+		if command.RowsAffected() != 1 {
+			return errLeaseLost
+		}
+		command, err = transaction.Exec(ctx, `
+			UPDATE collector_jobs
+			SET status = 'complete',
+				lease_owner = NULL,
+				lease_token = NULL,
+				lease_expires_at = NULL,
+				updated_at = $5
+			WHERE id = $1
+				AND lease_owner = $2
+				AND lease_token = $3
+				AND lease_generation = $4
+				AND status = 'leased'
+				AND lease_expires_at > clock_timestamp()
+				AND (result_attempt_id = $6 OR parent_attempt_id = $6)
+			`, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration, completedAt, attemptID)
+		if err != nil {
+			return fmt.Errorf("complete version-two retry collector job: %w", err)
+		}
+	}
+	if command.RowsAffected() != 1 {
+		return errLeaseLost
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("commit version-two completion transaction: %w", err)
+	}
+	return nil
+}
+
 func (s *store) finishAttempt(ctx context.Context, job *collectionJob, attemptID int64, completedAt time.Time) error {
+	contractVersion, err := s.currentContractVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if contractVersion >= 2 {
+		return s.finishAttemptV2(ctx, job, attemptID, completedAt)
+	}
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin completion transaction: %w", err)

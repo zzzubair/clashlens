@@ -42,13 +42,15 @@ func (s *store) beginEndpointRequestV2(
 		WHERE endpoint_result.attempt_id = $1
 			AND endpoint_result.endpoint = $2
 			AND job.id = $5
+			AND job.lease_owner = $12
 			AND job.lease_token = $3
+			AND job.lease_generation = $11
 			AND job.status = 'leased'
 			AND job.lease_expires_at > clock_timestamp()
 		RETURNING endpoint_result.request_count
 	`, attemptID, string(endpoint), job.leaseToken, startedAt, job.id,
 		provenance.method, provenance.path, provenance.query, pagingState,
-		provenance.sourceAdapterVersion).Scan(&requestCount)
+		provenance.sourceAdapterVersion, job.leaseGeneration, job.leaseOwner).Scan(&requestCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, errLeaseLost
 	}
@@ -87,11 +89,13 @@ func (s *store) commitObservationV2(
 		SELECT true
 		FROM collector_jobs
 		WHERE id = $1
+			AND lease_owner = $3
 			AND lease_token = $2
+			AND lease_generation = $4
 			AND status = 'leased'
 			AND lease_expires_at > clock_timestamp()
 		FOR UPDATE
-	`, job.id, job.leaseToken).Scan(&leaseCurrent); err != nil {
+	`, job.id, job.leaseToken, job.leaseOwner, job.leaseGeneration).Scan(&leaseCurrent); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errLeaseLost
 		}
@@ -112,18 +116,27 @@ func (s *store) commitObservationV2(
 			archive_reference, paging_envelope_state, collector_version,
 			source_adapter_version, key_label, evidence_headers
 		)
-		VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
 			$11, $12, $13, $14, $15, $16, $17, $18, $19, $20
-		)
+		FROM collector_jobs AS current_job
+		WHERE current_job.id = $2
+			AND current_job.lease_owner = $21
+			AND current_job.lease_token = $22
+			AND current_job.lease_generation = $23
+			AND current_job.status = 'leased'
+			AND current_job.lease_expires_at > clock_timestamp()
 		ON CONFLICT (occurrence_key) DO NOTHING
 		RETURNING id
 	`, occurrenceKey, job.id, attemptID, job.scope, job.playerID, normalizedTag,
 		string(endpoint), response.request.method, response.request.path,
 		response.request.query, response.requestStartedAt, response.responseCompletedAt,
 		response.statusCode, hash, archiveReference, response.pagingEnvelopeState,
-		collectorVersion, response.request.sourceAdapterVersion, keyLabel, headers).Scan(&observationID)
+		collectorVersion, response.request.sourceAdapterVersion, keyLabel, headers,
+		job.leaseOwner, job.leaseToken, job.leaseGeneration).Scan(&observationID)
 	if errors.Is(err, pgx.ErrNoRows) {
+		if leaseErr := lockCurrentLeaseV2(ctx, transaction, job); leaseErr != nil {
+			return leaseErr
+		}
 		err = transaction.QueryRow(ctx, `
 			SELECT id FROM collector_observations WHERE occurrence_key = $1
 		`, occurrenceKey).Scan(&observationID)
@@ -139,14 +152,27 @@ func (s *store) commitObservationV2(
 	if endpoint == globalPlayerRankingsEndpoint {
 		parserVersion = "global-player-rankings-parser-v1"
 	}
-	if _, err := transaction.Exec(ctx, `
+	command, err := transaction.Exec(ctx, `
 		INSERT INTO python_processing_jobs (observation_id, parser_version)
-		VALUES ($1, $2)
+		SELECT $1, $2
+		FROM collector_jobs AS current_job
+		WHERE current_job.id = $3
+			AND current_job.lease_owner = $4
+			AND current_job.lease_token = $5
+			AND current_job.lease_generation = $6
+			AND current_job.status = 'leased'
+			AND current_job.lease_expires_at > clock_timestamp()
 		ON CONFLICT (observation_id) DO NOTHING
-	`, observationID, parserVersion); err != nil {
+	`, observationID, parserVersion, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration)
+	if err != nil {
 		return fmt.Errorf("insert version-two Python processing job: %w", err)
 	}
-	command, err := transaction.Exec(ctx, `
+	if command.RowsAffected() == 0 {
+		if err := lockCurrentLeaseV2(ctx, transaction, job); err != nil {
+			return err
+		}
+	}
+	command, err = transaction.Exec(ctx, `
 		UPDATE collector_endpoint_results
 		SET outcome = $4,
 			next_retry_at = $5,
@@ -170,15 +196,19 @@ func (s *store) commitObservationV2(
 				SELECT 1
 				FROM collector_jobs AS current_job
 				WHERE current_job.id = $13
+					AND current_job.lease_owner = $19
 					AND current_job.lease_token = $3
+					AND current_job.lease_generation = $20
 					AND current_job.status = 'leased'
 					AND current_job.lease_expires_at > clock_timestamp()
+					AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
 			)
 	`, attemptID, string(endpoint), job.leaseToken, outcome, nextRetryAt,
 		response.requestStartedAt, response.responseCompletedAt, response.statusCode,
 		hash, archiveReference, observationID, keyLabel, job.id,
 		response.request.method, response.request.path, response.request.query,
-		response.pagingEnvelopeState, response.request.sourceAdapterVersion)
+		response.pagingEnvelopeState, response.request.sourceAdapterVersion,
+		job.leaseOwner, job.leaseGeneration)
 	if err != nil {
 		return fmt.Errorf("update version-two endpoint result: %w", err)
 	}
@@ -211,29 +241,41 @@ func (s *store) recordTransportFailureV2(
 		return fmt.Errorf("begin version-two transport failure transaction: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
-	if err := lockCurrentLease(ctx, transaction, job); err != nil {
+	if err := lockCurrentLeaseV2(ctx, transaction, job); err != nil {
 		return err
 	}
 	var normalizedTag any = job.normalizedTag
 	if job.scope == "global" {
 		normalizedTag = nil
 	}
-	if _, err := transaction.Exec(ctx, `
+	command, err := transaction.Exec(ctx, `
 		INSERT INTO collector_transport_failures (
 			collection_job_id, attempt_id, scope, player_id, normalized_tag,
 			endpoint, request_method, request_path, request_query,
 			paging_envelope_state, source_adapter_version, request_started_at,
 			failed_at, failure_category, retry_state, key_label
-		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9,
-			'unknown_no_response', $10, $11, $12, $13, 'retryable', $14
 		)
+		SELECT $1, $2, $3, $4, $5, $6, $8, $9, $10,
+			'unknown_no_response', $11, $12, $13, $14, 'retryable', $15
+		FROM collector_jobs AS current_job
+		WHERE current_job.id = $1
+			AND current_job.lease_owner = $16
+			AND current_job.lease_token = $7
+			AND current_job.lease_generation = $17
+			AND current_job.status = 'leased'
+			AND current_job.lease_expires_at > clock_timestamp()
+			AND (current_job.result_attempt_id = $2 OR current_job.parent_attempt_id = $2)
 	`, job.id, attemptID, job.scope, job.playerID, normalizedTag, string(endpoint),
-		provenance.method, provenance.path, provenance.query,
-		provenance.sourceAdapterVersion, startedAt, failedAt, category, keyLabel); err != nil {
+		job.leaseToken, provenance.method, provenance.path, provenance.query,
+		provenance.sourceAdapterVersion, startedAt, failedAt, category, keyLabel,
+		job.leaseOwner, job.leaseGeneration)
+	if err != nil {
 		return fmt.Errorf("insert version-two transport failure: %w", err)
 	}
-	command, err := transaction.Exec(ctx, `
+	if command.RowsAffected() != 1 {
+		return errLeaseLost
+	}
+	command, err = transaction.Exec(ctx, `
 		UPDATE collector_endpoint_results AS endpoint_result
 		SET outcome = 'transport_failed',
 			request_started_at = $3,
@@ -255,12 +297,16 @@ func (s *store) recordTransportFailureV2(
 			AND endpoint_result.endpoint = $2
 			AND endpoint_result.execution_token = $7
 			AND current_job.id = $8
+			AND current_job.lease_owner = $13
 			AND current_job.lease_token = $7
+			AND current_job.lease_generation = $14
 			AND current_job.status = 'leased'
 			AND current_job.lease_expires_at > clock_timestamp()
+			AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
 	`, attemptID, string(endpoint), startedAt, nextRetryAt, category, keyLabel,
 		job.leaseToken, job.id, provenance.method, provenance.path,
-		provenance.query, provenance.sourceAdapterVersion)
+		provenance.query, provenance.sourceAdapterVersion,
+		job.leaseOwner, job.leaseGeneration)
 	if err != nil {
 		return fmt.Errorf("update version-two transport-failed endpoint: %w", err)
 	}
@@ -282,7 +328,15 @@ func (s *store) recordStorageFailureV2(
 	category string,
 	keyLabel string,
 ) error {
-	command, err := s.pool.Exec(ctx, `
+	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin version-two storage failure transaction: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+	if err := lockCurrentLeaseV2(ctx, transaction, job); err != nil {
+		return err
+	}
+	command, err := transaction.Exec(ctx, `
 		UPDATE collector_endpoint_results AS endpoint_result
 		SET outcome = 'storage_failed',
 			request_started_at = $4,
@@ -303,18 +357,25 @@ func (s *store) recordStorageFailureV2(
 			AND endpoint_result.endpoint = $2
 			AND endpoint_result.execution_token = $3
 			AND current_job.id = $9
+			AND current_job.lease_owner = $15
 			AND current_job.lease_token = $3
+			AND current_job.lease_generation = $16
 			AND current_job.status = 'leased'
 			AND current_job.lease_expires_at > clock_timestamp()
+			AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
 	`, attemptID, string(endpoint), job.leaseToken, response.requestStartedAt,
 		response.responseCompletedAt, response.statusCode, category, keyLabel,
 		job.id, response.request.method, response.request.path, response.request.query,
-		response.pagingEnvelopeState, response.request.sourceAdapterVersion)
+		response.pagingEnvelopeState, response.request.sourceAdapterVersion,
+		job.leaseOwner, job.leaseGeneration)
 	if err != nil {
 		return fmt.Errorf("record version-two storage-failed endpoint: %w", err)
 	}
 	if command.RowsAffected() != 1 {
 		return errLeaseLost
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("commit version-two storage failure: %w", err)
 	}
 	return nil
 }

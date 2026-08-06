@@ -28,7 +28,8 @@ ALTER TABLE collector_jobs
     DROP CONSTRAINT IF EXISTS collector_jobs_required_endpoint_v2_check,
     DROP CONSTRAINT IF EXISTS collector_jobs_scope_v2_check,
     DROP CONSTRAINT IF EXISTS collector_jobs_work_scope_v2_check,
-    DROP CONSTRAINT IF EXISTS collector_jobs_reset_identity_v2_check;
+    DROP CONSTRAINT IF EXISTS collector_jobs_reset_identity_v2_check,
+    DROP CONSTRAINT IF EXISTS collector_jobs_lease_generation_v2_check;
 ALTER TABLE collector_endpoint_results
     DROP CONSTRAINT IF EXISTS collector_endpoint_results_endpoint_check,
     DROP CONSTRAINT IF EXISTS collector_endpoint_results_endpoint_v2_check;
@@ -48,7 +49,8 @@ ALTER TABLE collector_transport_failures
 ALTER TABLE collector_jobs
     ALTER COLUMN normalized_tag DROP NOT NULL,
     ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'player',
-    ADD COLUMN IF NOT EXISTS reset_baseline_sweep_id bigint;
+    ADD COLUMN IF NOT EXISTS reset_baseline_sweep_id bigint,
+    ADD COLUMN IF NOT EXISTS lease_generation bigint NOT NULL DEFAULT 0;
 
 INSERT INTO players (normalized_tag, active)
 SELECT DISTINCT normalized_tag, false
@@ -165,7 +167,51 @@ ALTER TABLE collector_jobs
             AND sweep_id IS NOT NULL
             AND reset_baseline_sweep_id IS NOT NULL)
         OR work_type NOT IN ('legacy_reset_profile', 'reset_baseline')
+    ),
+    ADD CONSTRAINT collector_jobs_lease_generation_v2_check CHECK (
+        lease_generation >= 0
     );
+
+ALTER TABLE collector_attempts
+    ADD COLUMN IF NOT EXISTS attempt_number integer NOT NULL DEFAULT 1,
+    ADD COLUMN IF NOT EXISTS lease_owner text,
+    ADD COLUMN IF NOT EXISTS lease_token text,
+    ADD COLUMN IF NOT EXISTS lease_generation bigint NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS failure_category text,
+    DROP CONSTRAINT IF EXISTS collector_attempts_attempt_number_v2_check,
+    DROP CONSTRAINT IF EXISTS collector_attempts_lease_generation_v2_check,
+    DROP CONSTRAINT IF EXISTS collector_attempts_failure_category_v2_check,
+    ADD CONSTRAINT collector_attempts_attempt_number_v2_check CHECK (attempt_number > 0),
+    ADD CONSTRAINT collector_attempts_lease_generation_v2_check CHECK (lease_generation >= 0),
+    ADD CONSTRAINT collector_attempts_failure_category_v2_check CHECK (
+        length(COALESCE(failure_category, '')) <= 128
+        AND COALESCE(failure_category, '') !~ '[\r\n]'
+    );
+
+CREATE UNIQUE INDEX IF NOT EXISTS collector_attempts_job_attempt_number_v2
+    ON collector_attempts (job_id, attempt_number);
+
+CREATE TABLE IF NOT EXISTS collector_attempt_events (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    job_id bigint NOT NULL REFERENCES collector_jobs (id),
+    attempt_id bigint NOT NULL REFERENCES collector_attempts (id),
+    event_type text NOT NULL CHECK (event_type IN (
+        'claimed', 'lease_expired', 'retry_scheduled', 'completed',
+        'failed', 'cancelled'
+    )),
+    from_status text,
+    to_status text,
+    lease_owner text,
+    lease_token text,
+    lease_generation bigint NOT NULL DEFAULT 0 CHECK (lease_generation >= 0),
+    failure_category text,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CHECK (length(COALESCE(failure_category, '')) <= 128),
+    CHECK (COALESCE(failure_category, '') !~ '[\r\n]'),
+    UNIQUE (attempt_id, event_type, lease_generation)
+);
+CREATE INDEX IF NOT EXISTS collector_attempt_events_job_order_v2
+    ON collector_attempt_events (job_id, id);
 
 CREATE OR REPLACE FUNCTION clashlens_validate_reset_baseline_job()
 RETURNS trigger
