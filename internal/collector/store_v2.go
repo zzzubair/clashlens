@@ -78,6 +78,15 @@ func (s *store) commitObservationV2(
 	if err != nil {
 		return fmt.Errorf("encode version-two evidence headers: %w", err)
 	}
+	intent := newObservationCommitIntent(
+		job, attemptID, endpoint, requestCount, response, headers, hash,
+		archiveReference, collectorVersion, keyLabel, outcome, nextRetryAt,
+	)
+	if proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+		return s.proveObservationCommit(proofCtx, connection, intent)
+	}); proofErr == nil && proofOutcome == commitProofCommitted {
+		return nil
+	}
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin version-two observation transaction: %w", err)
@@ -145,13 +154,6 @@ func (s *store) commitObservationV2(
 		return fmt.Errorf("insert version-two observation occurrence: %w", err)
 	}
 
-	parserVersion := "profile-parser-v1"
-	if endpoint == battleLogEndpoint {
-		parserVersion = "battle-log-parser-v1"
-	}
-	if endpoint == globalPlayerRankingsEndpoint {
-		parserVersion = "global-player-rankings-parser-v1"
-	}
 	command, err := transaction.Exec(ctx, `
 		INSERT INTO python_processing_jobs (observation_id, parser_version)
 		SELECT $1, $2
@@ -163,7 +165,7 @@ func (s *store) commitObservationV2(
 			AND current_job.status = 'leased'
 			AND current_job.lease_expires_at > clock_timestamp()
 		ON CONFLICT (observation_id) DO NOTHING
-	`, observationID, parserVersion, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration)
+	`, observationID, intent.parserVersion, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration)
 	if err != nil {
 		return fmt.Errorf("insert version-two Python processing job: %w", err)
 	}
@@ -215,8 +217,10 @@ func (s *store) commitObservationV2(
 	if command.RowsAffected() != 1 {
 		return errLeaseLost
 	}
-	if err := transaction.Commit(ctx); err != nil {
-		return fmt.Errorf("commit version-two observation transaction: %w", err)
+	if err := s.commitTransaction(ctx, transaction); err != nil {
+		return s.reconcileCommitError(ctx, err, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+			return s.proveObservationCommit(proofCtx, connection, intent)
+		})
 	}
 	return nil
 }
@@ -236,6 +240,41 @@ func (s *store) recordTransportFailureV2(
 	if err != nil {
 		return err
 	}
+	requestCount, err := s.readEndpointRequestCount(ctx, job, attemptID, endpoint)
+	if err != nil {
+		return err
+	}
+	failureCategory := category
+	keyLabelValue := keyLabel
+	intent := endpointMutationIntent{
+		job:                  *job,
+		jobID:                job.id,
+		attemptID:            attemptID,
+		scope:                job.scope,
+		playerID:             job.playerID,
+		normalizedTag:        job.normalizedTag,
+		leaseOwner:           job.leaseOwner,
+		leaseToken:           job.leaseToken,
+		leaseGeneration:      job.leaseGeneration,
+		endpoint:             endpoint,
+		requestCount:         requestCount,
+		requestMethod:        provenance.method,
+		requestPath:          provenance.path,
+		requestQuery:         provenance.query,
+		pagingEnvelopeState:  "unknown_no_response",
+		sourceAdapterVersion: provenance.sourceAdapterVersion,
+		requestStartedAt:     startedAt,
+		outcome:              "transport_failed",
+		nextRetryAt:          &nextRetryAt,
+		failureCategory:      &failureCategory,
+		keyLabel:             &keyLabelValue,
+	}
+	evidenceKey := fmt.Sprintf("transport-v2:%d:%s:%d", attemptID, endpoint, requestCount)
+	if proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+		return s.proveTransportFailureCommit(proofCtx, connection, intent, evidenceKey, failedAt, "retryable")
+	}); proofErr == nil && proofOutcome == commitProofCommitted {
+		return nil
+	}
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin version-two transport failure transaction: %w", err)
@@ -253,10 +292,10 @@ func (s *store) recordTransportFailureV2(
 			collection_job_id, attempt_id, scope, player_id, normalized_tag,
 			endpoint, request_method, request_path, request_query,
 			paging_envelope_state, source_adapter_version, request_started_at,
-			failed_at, failure_category, retry_state, key_label
+			failed_at, failure_category, retry_state, key_label, evidence_key
 		)
 		SELECT $1, $2, $3, $4, $5, $6, $8, $9, $10,
-			'unknown_no_response', $11, $12, $13, $14, 'retryable', $15
+			'unknown_no_response', $11, $12, $13, $14, 'retryable', $15, $18
 		FROM collector_jobs AS current_job
 		WHERE current_job.id = $1
 			AND current_job.lease_owner = $16
@@ -265,15 +304,13 @@ func (s *store) recordTransportFailureV2(
 			AND current_job.status = 'leased'
 			AND current_job.lease_expires_at > clock_timestamp()
 			AND (current_job.result_attempt_id = $2 OR current_job.parent_attempt_id = $2)
+		ON CONFLICT (evidence_key) DO NOTHING
 	`, job.id, attemptID, job.scope, job.playerID, normalizedTag, string(endpoint),
 		job.leaseToken, provenance.method, provenance.path, provenance.query,
 		provenance.sourceAdapterVersion, startedAt, failedAt, category, keyLabel,
-		job.leaseOwner, job.leaseGeneration)
+		job.leaseOwner, job.leaseGeneration, evidenceKey)
 	if err != nil {
 		return fmt.Errorf("insert version-two transport failure: %w", err)
-	}
-	if command.RowsAffected() != 1 {
-		return errLeaseLost
 	}
 	command, err = transaction.Exec(ctx, `
 		UPDATE collector_endpoint_results AS endpoint_result
@@ -303,18 +340,21 @@ func (s *store) recordTransportFailureV2(
 			AND current_job.status = 'leased'
 			AND current_job.lease_expires_at > clock_timestamp()
 			AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
+			AND endpoint_result.request_count = $15
 	`, attemptID, string(endpoint), startedAt, nextRetryAt, category, keyLabel,
 		job.leaseToken, job.id, provenance.method, provenance.path,
 		provenance.query, provenance.sourceAdapterVersion,
-		job.leaseOwner, job.leaseGeneration)
+		job.leaseOwner, job.leaseGeneration, intent.requestCount)
 	if err != nil {
 		return fmt.Errorf("update version-two transport-failed endpoint: %w", err)
 	}
 	if command.RowsAffected() != 1 {
 		return errLeaseLost
 	}
-	if err := transaction.Commit(ctx); err != nil {
-		return fmt.Errorf("commit version-two transport failure: %w", err)
+	if err := s.commitTransaction(ctx, transaction); err != nil {
+		return s.reconcileCommitError(ctx, err, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+			return s.proveTransportFailureCommit(proofCtx, connection, intent, evidenceKey, failedAt, "retryable")
+		})
 	}
 	return nil
 }
@@ -328,6 +368,42 @@ func (s *store) recordStorageFailureV2(
 	category string,
 	keyLabel string,
 ) error {
+	requestCount, err := s.readEndpointRequestCount(ctx, job, attemptID, endpoint)
+	if err != nil {
+		return err
+	}
+	failureCategory := category
+	keyLabelValue := keyLabel
+	statusCode := response.statusCode
+	intent := endpointMutationIntent{
+		job:                  *job,
+		jobID:                job.id,
+		attemptID:            attemptID,
+		scope:                job.scope,
+		playerID:             job.playerID,
+		normalizedTag:        job.normalizedTag,
+		leaseOwner:           job.leaseOwner,
+		leaseToken:           job.leaseToken,
+		leaseGeneration:      job.leaseGeneration,
+		endpoint:             endpoint,
+		requestCount:         requestCount,
+		requestMethod:        response.request.method,
+		requestPath:          response.request.path,
+		requestQuery:         response.request.query,
+		pagingEnvelopeState:  response.pagingEnvelopeState,
+		sourceAdapterVersion: response.request.sourceAdapterVersion,
+		requestStartedAt:     response.requestStartedAt,
+		responseCompletedAt:  &response.responseCompletedAt,
+		httpStatus:           &statusCode,
+		outcome:              "storage_failed",
+		failureCategory:      &failureCategory,
+		keyLabel:             &keyLabelValue,
+	}
+	if proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+		return s.proveStorageFailureCommit(proofCtx, connection, intent)
+	}); proofErr == nil && proofOutcome == commitProofCommitted {
+		return nil
+	}
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin version-two storage failure transaction: %w", err)
@@ -363,19 +439,22 @@ func (s *store) recordStorageFailureV2(
 			AND current_job.status = 'leased'
 			AND current_job.lease_expires_at > clock_timestamp()
 			AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
+			AND endpoint_result.request_count = $17
 	`, attemptID, string(endpoint), job.leaseToken, response.requestStartedAt,
 		response.responseCompletedAt, response.statusCode, category, keyLabel,
 		job.id, response.request.method, response.request.path, response.request.query,
 		response.pagingEnvelopeState, response.request.sourceAdapterVersion,
-		job.leaseOwner, job.leaseGeneration)
+		job.leaseOwner, job.leaseGeneration, intent.requestCount)
 	if err != nil {
 		return fmt.Errorf("record version-two storage-failed endpoint: %w", err)
 	}
 	if command.RowsAffected() != 1 {
 		return errLeaseLost
 	}
-	if err := transaction.Commit(ctx); err != nil {
-		return fmt.Errorf("commit version-two storage failure: %w", err)
+	if err := s.commitTransaction(ctx, transaction); err != nil {
+		return s.reconcileCommitError(ctx, err, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+			return s.proveStorageFailureCommit(proofCtx, connection, intent)
+		})
 	}
 	return nil
 }

@@ -481,6 +481,18 @@ func (s *store) resolveAttemptV2(
 	now time.Time,
 	maximumRetries int,
 ) error {
+	preflightIntent := attemptCommitIntent{
+		job:            *job,
+		attemptID:      attemptID,
+		now:            now,
+		maximumRetries: maximumRetries,
+	}
+	if proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+		return s.proveAttemptResolutionCommit(proofCtx, connection, preflightIntent)
+	}); proofErr == nil && proofOutcome == commitProofCommitted {
+		return nil
+	}
+
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin version-two attempt resolution transaction: %w", err)
@@ -498,6 +510,23 @@ func (s *store) resolveAttemptV2(
 		FOR UPDATE
 	`, attemptID).Scan(&rootJobID); err != nil {
 		return fmt.Errorf("lock version-two collection attempt: %w", err)
+	}
+	preCommitSnapshot, snapshotPresent, err := readAttemptResolutionSnapshot(
+		ctx, transaction, job.id, attemptID, rootJobID,
+	)
+	if err != nil {
+		return fmt.Errorf("read version-two attempt resolution state: %w", err)
+	}
+	if !snapshotPresent {
+		return errors.New("version-two attempt resolution state is missing")
+	}
+	commitIntent := attemptCommitIntent{
+		job:               *job,
+		attemptID:         attemptID,
+		rootJobID:         rootJobID,
+		now:               now,
+		maximumRetries:    maximumRetries,
+		preCommitSnapshot: &preCommitSnapshot,
 	}
 
 	rows, err := transaction.Query(ctx, `
@@ -641,11 +670,33 @@ func (s *store) resolveAttemptV2(
 		`, rootJobID, now, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration, attemptID); err != nil {
 			return fmt.Errorf("complete version-two reset baseline: %w", err)
 		}
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO collector_attempt_events (
+				job_id, attempt_id, event_type, from_status, to_status,
+				lease_owner, lease_token, lease_generation
+			)
+			SELECT current_job.id, $1, 'completed', $2, 'complete',
+				current_job.lease_owner, current_job.lease_token, current_job.lease_generation
+			FROM collector_jobs AS current_job
+			WHERE current_job.id = $3
+				AND current_job.lease_owner = $4
+				AND current_job.lease_token = $5
+				AND current_job.lease_generation = $6
+				AND current_job.status = 'leased'
+				AND current_job.lease_expires_at > clock_timestamp()
+				AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
+			ON CONFLICT (attempt_id, event_type, lease_generation) DO NOTHING
+		`, attemptID, preCommitSnapshot.attempt.status, job.id, job.leaseOwner,
+			job.leaseToken, job.leaseGeneration); err != nil {
+			return fmt.Errorf("record completed version-two attempt event: %w", err)
+		}
 		if err := setJobStatuses("complete", "complete"); err != nil {
 			return err
 		}
-		if err := transaction.Commit(ctx); err != nil {
-			return fmt.Errorf("commit completed version-two attempt: %w", err)
+		if err := s.commitTransaction(ctx, transaction); err != nil {
+			return s.reconcileCommitError(ctx, err, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+				return s.proveAttemptResolutionCommit(proofCtx, connection, commitIntent)
+			})
 		}
 		return nil
 	}
@@ -788,6 +839,33 @@ func (s *store) resolveAttemptV2(
 		return fmt.Errorf("update version-two reset baseline state: %w", err)
 	}
 
+	eventType := "retry_scheduled"
+	eventToStatus := "incomplete"
+	if terminal {
+		eventType = "failed"
+		eventToStatus = "failed"
+	}
+	if _, err := transaction.Exec(ctx, `
+		INSERT INTO collector_attempt_events (
+			job_id, attempt_id, event_type, from_status, to_status,
+			lease_owner, lease_token, lease_generation
+		)
+		SELECT current_job.id, $1, $2, $3, $4,
+			current_job.lease_owner, current_job.lease_token, current_job.lease_generation
+		FROM collector_jobs AS current_job
+		WHERE current_job.id = $5
+			AND current_job.lease_owner = $6
+			AND current_job.lease_token = $7
+			AND current_job.lease_generation = $8
+			AND current_job.status = 'leased'
+			AND current_job.lease_expires_at > clock_timestamp()
+			AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
+		ON CONFLICT (attempt_id, event_type, lease_generation) DO NOTHING
+	`, attemptID, eventType, preCommitSnapshot.attempt.status, eventToStatus, job.id,
+		job.leaseOwner, job.leaseToken, job.leaseGeneration); err != nil {
+		return fmt.Errorf("record version-two attempt resolution event: %w", err)
+	}
+
 	if terminal {
 		if _, err := transaction.Exec(ctx, `
 			UPDATE collector_jobs AS sibling
@@ -823,8 +901,10 @@ func (s *store) resolveAttemptV2(
 		}
 	}
 
-	if err := transaction.Commit(ctx); err != nil {
-		return fmt.Errorf("commit version-two attempt resolution: %w", err)
+	if err := s.commitTransaction(ctx, transaction); err != nil {
+		return s.reconcileCommitError(ctx, err, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+			return s.proveAttemptResolutionCommit(proofCtx, connection, commitIntent)
+		})
 	}
 	return nil
 }

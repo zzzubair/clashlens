@@ -398,6 +398,16 @@ ALTER TABLE collector_transport_failures
         AND paging_envelope_state = 'unknown_no_response'
     );
 
+ALTER TABLE collector_transport_failures
+    ADD COLUMN IF NOT EXISTS evidence_key text;
+UPDATE collector_transport_failures
+SET evidence_key = 'legacy-transport:' || id::text
+WHERE evidence_key IS NULL;
+ALTER TABLE collector_transport_failures
+    ALTER COLUMN evidence_key SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS collector_transport_failures_evidence_key_v2
+    ON collector_transport_failures (evidence_key);
+
 CREATE OR REPLACE FUNCTION clashlens_fill_collector_provenance_v2()
 RETURNS trigger
 LANGUAGE plpgsql

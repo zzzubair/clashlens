@@ -17,6 +17,7 @@ type store struct {
 	pool               *pgxpool.Pool
 	contractVersion    int
 	maxContractVersion int
+	commitTx           func(context.Context, pgx.Tx) error
 }
 
 func openStore(ctx context.Context, databaseURL string, expectedContractVersion int) (*store, error) {
