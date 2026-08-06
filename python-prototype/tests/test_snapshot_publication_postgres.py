@@ -102,6 +102,97 @@ def _seed_snapshot_job(
     return int(job_id)
 
 
+def _process_snapshot_and_analytics(
+    connection_info: str,
+    database: Database,
+    processor: ObservationProcessor,
+    snapshot_job_id: int,
+    *,
+    owner_prefix: str,
+) -> tuple[int, int]:
+    snapshot_result = processor.process_job(
+        snapshot_job_id,
+        owner=f"{owner_prefix}-snapshot",
+    )
+    assert snapshot_result is not None
+    assert snapshot_result.outcome == "processed"
+
+    with database.pool.connection() as connection:
+        snapshot = connection.execute(
+            """
+            SELECT id, version, input_hash, state
+            FROM leaderboard_snapshots
+            WHERE snapshot_kind = 'frozen'
+              AND source_ranked_day_version_id = (
+                  SELECT (input_json->>'ranked_day_version_id')::bigint
+                  FROM python_processing_jobs
+                  WHERE id = %s
+              )
+              AND state = 'building'
+            ORDER BY version DESC, id DESC
+            LIMIT 1
+            """,
+            (snapshot_job_id,),
+        ).fetchone()
+        assert snapshot is not None
+        analytics_jobs = connection.execute(
+            """
+            SELECT id, input_json, deduplication_key, status
+            FROM python_processing_jobs
+            WHERE work_type = 'build_analytics'
+              AND status = 'pending'
+              AND input_json->>'snapshot_id' = %s
+              AND input_json->>'snapshot_version' = %s
+            ORDER BY id
+            """,
+            (str(snapshot[0]), str(snapshot[1])),
+        ).fetchall()
+
+    assert len(analytics_jobs) == 1
+    analytics_job_id, analytics_input, analytics_key, analytics_status = analytics_jobs[0]
+    assert text(analytics_status) == "pending"
+    assert analytics_input["snapshot_id"] == snapshot[0]
+    assert analytics_input["snapshot_version"] == snapshot[1]
+    assert text(analytics_input["snapshot_input_hash"]) == text(snapshot[2])
+    assert text(analytics_key).startswith("build_analytics:snapshot:")
+
+    analytics_result = processor.process_job(
+        int(analytics_job_id),
+        owner=f"{owner_prefix}-analytics",
+    )
+    assert analytics_result is not None
+    assert analytics_result.outcome == "processed"
+
+    with database.pool.connection() as connection:
+        published = connection.execute(
+            """
+            SELECT state
+            FROM leaderboard_snapshots
+            WHERE id = %s
+            """,
+            (snapshot[0],),
+        ).fetchone()
+        summaries = connection.execute(
+            """
+            SELECT s.lens, count(*), count(b.summary_id)
+            FROM analytics_summaries AS s
+            LEFT JOIN analytics_breakdowns AS b
+              ON b.summary_id = s.id
+             AND b.army_archetype = 'Unclassified'
+            WHERE s.snapshot_id = %s
+            GROUP BY s.lens
+            ORDER BY s.lens
+            """,
+            (snapshot[0],),
+        ).fetchall()
+    assert published is not None and text(published[0]) == "published"
+    assert [(text(row[0]), row[1], row[2]) for row in summaries] == [
+        ("defense", 1, 1),
+        ("offense", 1, 1),
+    ]
+    return int(snapshot[0]), int(analytics_job_id)
+
+
 def _process_profile(
     connection_info: str,
     archive_server,
@@ -235,9 +326,13 @@ def test_snapshot_uses_only_profile_evidence_observed_at_or_before_boundary(
                 boundary_at=boundary,
             )
 
-            result = processor.process_job(snapshot_job_id, owner="snapshot-as-of-builder")
-
-            assert result is not None and result.outcome == "processed"
+            _process_snapshot_and_analytics(
+                connection_info,
+                database,
+                processor,
+                snapshot_job_id,
+                owner_prefix="snapshot-as-of-builder",
+            )
             with database.pool.connection() as connection:
                 entry = connection.execute(
                     """
@@ -310,8 +405,13 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
         )
         database, processor = _processor(connection_info, archive_server)
         try:
-            first = processor.process_job(snapshot_job_id, owner="snapshot-provenance")
-            assert first is not None and first.outcome == "processed"
+            first_snapshot_id, first_analytics_job_id = _process_snapshot_and_analytics(
+                connection_info,
+                database,
+                processor,
+                snapshot_job_id,
+                owner_prefix="snapshot-provenance",
+            )
             with database.pool.connection() as connection:
                 ranked_day_version_id = connection.execute(
                     """
@@ -457,8 +557,15 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
                 observed_at=boundary - timedelta(seconds=1),
             )
             database.requeue_completed_job(snapshot_job_id)
-            corrected = processor.process_job(snapshot_job_id, owner="snapshot-correction")
-            assert corrected is not None and corrected.outcome == "processed"
+            corrected_snapshot_id, corrected_analytics_job_id = (
+                _process_snapshot_and_analytics(
+                    connection_info,
+                    database,
+                    processor,
+                    snapshot_job_id,
+                    owner_prefix="snapshot-correction",
+                )
+            )
             with database.pool.connection() as connection:
                 corrected_rows = connection.execute(
                     """
@@ -480,6 +587,11 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
             assert database.scalar(
                 "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_snapshot'"
             ) == 1
+            assert database.scalar(
+                "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_analytics'"
+            ) == 2
+            assert corrected_snapshot_id != first_snapshot_id
+            assert corrected_analytics_job_id != first_analytics_job_id
         finally:
             database.close()
 
@@ -553,8 +665,13 @@ def test_snapshot_quality_counts_and_reader_ignore_building_candidate(
         )
         database, processor = _processor(connection_info, archive_server)
         try:
-            result = processor.process_job(snapshot_job_id, owner="snapshot-quality")
-            assert result is not None and result.outcome == "processed"
+            _process_snapshot_and_analytics(
+                connection_info,
+                database,
+                processor,
+                snapshot_job_id,
+                owner_prefix="snapshot-quality",
+            )
             with database.pool.connection() as connection:
                 quality = connection.execute(
                     """
@@ -579,26 +696,35 @@ def test_snapshot_quality_counts_and_reader_ignore_building_candidate(
                     """
                 ).fetchone()
                 assert old_snapshot is not None
-                connection.execute(
-                    """
-                    INSERT INTO leaderboard_snapshots (
-                        snapshot_kind, boundary_at, version, correction_of_id,
-                        ordering_rule_version, freshness_rule_version, state,
-                        source_ranked_day_version_id, input_hash,
-                        eligible_population_count, included_entry_count,
-                        stale_entry_count, fresh_entry_count,
-                        excluded_missing_count, excluded_invalid_count,
-                        excluded_malformed_count, excluded_conflicting_count,
-                        measured_coverage
-                    ) VALUES (
-                        'frozen', %s, 99, %s, 'tracked-player-order-v1',
-                        'profile-freshness-10m-v1', 'building', NULL,
-                        repeat('c', 64), 0, 0, 0, 0, 0, 0, 0, 0, 0
-                    )
-                    """,
-                    (boundary + timedelta(hours=1), old_snapshot[0]),
-                )
                 connection.commit()
+            _process_profile(
+                connection_info,
+                archive_server,
+                occurrence_key="snapshot-quality-late-correction",
+                tag="#28",
+                trophies=6101,
+                observed_at=boundary - timedelta(seconds=30),
+            )
+            database.requeue_completed_job(snapshot_job_id)
+            correction = processor.process_job(
+                snapshot_job_id,
+                owner="snapshot-quality-correction",
+            )
+            assert correction is not None and correction.outcome == "processed"
+            with database.pool.connection() as connection:
+                candidates = connection.execute(
+                    """
+                    SELECT version, state, correction_of_id
+                    FROM leaderboard_snapshots
+                    WHERE snapshot_kind = 'frozen' AND boundary_at = %s
+                    ORDER BY version
+                    """,
+                    (boundary,),
+                ).fetchall()
+            assert len(candidates) == 2
+            assert text(candidates[0][1]) == "published"
+            assert text(candidates[1][1]) == "building"
+            assert candidates[1][2] == old_snapshot[0]
             api = ApiDatabase(connection_info)
             try:
                 frozen = api.get_frozen_leaderboard(limit=10)

@@ -10,6 +10,7 @@ from clashlens_prototype.archive import S3ArchiveReader
 from clashlens_prototype.db import Database
 from clashlens_prototype.worker import ObservationProcessor
 from domain_test_support import domain_database, store_observation, text
+from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
@@ -256,7 +257,8 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     """
                     SELECT id, work_type, deduplication_key, input_json
                     FROM python_processing_jobs
-                    WHERE input_json->>'ranked_day_version_id' = (
+                    WHERE work_type = 'build_snapshot'
+                      AND input_json->>'ranked_day_version_id' = (
                         SELECT id::text FROM ranked_day_versions WHERE version = 1
                     )
                     ORDER BY id
@@ -266,7 +268,6 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 (text(row[1]), text(row[2])) for row in first_dependent_jobs
             ] == [
                 ("build_snapshot", "build_snapshot:ranked-day-version:1"),
-                ("build_analytics", "build_analytics:ranked-day-version:1"),
             ]
             assert [row[3] for row in first_dependent_jobs] == [
                 {
@@ -275,18 +276,37 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     "ranked_day_start": "2026-08-04T05:00:00Z",
                     "ranked_day_version_id": 1,
                 },
-                {
-                    "player_id": 1,
-                    "ranked_day_start": "2026-08-04T05:00:00Z",
-                    "ranked_day_version_id": 1,
-                    "selection": {"ranked_day_version_id": 1},
-                },
             ]
-            for dependent_job_id, _work_type, _deduplication_key, _input_json in first_dependent_jobs:
-                result = processor.process_job(
-                    int(dependent_job_id), owner=f"dependent-{dependent_job_id}"
-                )
-                assert result is not None and result.outcome == "processed"
+            first_snapshot_id, first_analytics_job_id = _process_snapshot_and_analytics(
+                connection_info,
+                database,
+                processor,
+                int(first_dependent_jobs[0][0]),
+                owner_prefix="dependent-first",
+            )
+            with database.pool.connection() as connection:
+                first_analytics = connection.execute(
+                    """
+                    SELECT input_json, deduplication_key, status
+                    FROM python_processing_jobs
+                    WHERE id = %s AND work_type = 'build_analytics'
+                    """,
+                    (first_analytics_job_id,),
+                ).fetchone()
+                first_publication = connection.execute(
+                    """
+                    SELECT snapshot_kind, state
+                    FROM leaderboard_snapshots
+                    WHERE id IN (%s, %s)
+                    ORDER BY snapshot_kind
+                    """,
+                    (first_snapshot_id, first_snapshot_id + 1),
+                ).fetchall()
+            assert first_analytics is not None
+            assert text(first_analytics[2]) == "complete"
+            assert first_analytics[0]["snapshot_id"] == first_snapshot_id
+            assert text(first_analytics[1]).startswith("build_analytics:snapshot:")
+            assert [text(row[1]) for row in first_publication] == ["published", "published"]
 
             (
                 corrected_profile,
@@ -328,17 +348,29 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 second_dependent_jobs = connection.execute(
                     """
                     SELECT id, work_type FROM python_processing_jobs
-                    WHERE input_json->>'ranked_day_version_id' = (
+                    WHERE work_type = 'build_snapshot'
+                      AND input_json->>'ranked_day_version_id' = (
                         SELECT id::text FROM ranked_day_versions WHERE version = 2
                     )
                     ORDER BY id
                     """
                 ).fetchall()
-            for dependent_job_id, _work_type in second_dependent_jobs:
-                result = processor.process_job(
-                    int(dependent_job_id), owner=f"dependent-{dependent_job_id}"
-                )
-                assert result is not None and result.outcome == "processed"
+            assert len(second_dependent_jobs) == 1
+            assert text(second_dependent_jobs[0][1]) == "build_snapshot"
+            second_snapshot_id, second_analytics_job_id = _process_snapshot_and_analytics(
+                connection_info,
+                database,
+                processor,
+                int(second_dependent_jobs[0][0]),
+                owner_prefix="dependent-second",
+            )
+            database.requeue_completed_job(second_analytics_job_id)
+            replayed_analytics = processor.process_job(
+                second_analytics_job_id,
+                owner="analytics-idempotent",
+            )
+            assert replayed_analytics is not None
+            assert replayed_analytics.outcome == "processed"
             database.requeue_completed_job(second_job)
             replayed = processor.process_job(second_job, owner="reconcile-idempotent")
             assert replayed is not None and replayed.outcome == "processed"
@@ -398,13 +430,22 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     ORDER BY work_type
                     """
                 ).fetchall()
-                dependent_sets = connection.execute(
+                snapshot_job_sets = connection.execute(
                     """
                     SELECT input_json->>'ranked_day_version_id', work_type, count(*)
                     FROM python_processing_jobs
-                    WHERE work_type IN ('build_snapshot', 'build_analytics')
+                    WHERE work_type = 'build_snapshot'
                     GROUP BY input_json->>'ranked_day_version_id', work_type
                     ORDER BY input_json->>'ranked_day_version_id', work_type
+                    """
+                ).fetchall()
+                analytics_job_sets = connection.execute(
+                    """
+                    SELECT input_json->>'snapshot_id', work_type, count(*)
+                    FROM python_processing_jobs
+                    WHERE work_type = 'build_analytics'
+                    GROUP BY input_json->>'snapshot_id', work_type
+                    ORDER BY input_json->>'snapshot_id', work_type
                     """
                 ).fetchall()
                 snapshots = connection.execute(
@@ -541,13 +582,15 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             assert first_version["start_baseline_id"] is not None
             assert first_version["end_baseline_id"] is not None
             assert second_version["end_baseline_id"] != first_version["end_baseline_id"]
+            assert [(text(row[0]), text(row[1]), row[2]) for row in snapshot_job_sets] == [
+                ("1", "build_snapshot", 1),
+                ("2", "build_snapshot", 1),
+            ]
             assert [
-                (int(row[0]), text(row[1]), row[2]) for row in dependent_sets
+                (int(row[0]), text(row[1]), row[2]) for row in analytics_job_sets
             ] == [
-                (first_version["id"], "build_analytics", 1),
-                (first_version["id"], "build_snapshot", 1),
-                (second_version["id"], "build_analytics", 1),
-                (second_version["id"], "build_snapshot", 1),
+                (first_snapshot_id, "build_analytics", 1),
+                (second_snapshot_id, "build_analytics", 1),
             ]
             assert [(text(row[0]), row[1]) for row in dependent_jobs] == [
                 ("build_analytics", 2),

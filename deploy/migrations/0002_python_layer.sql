@@ -640,12 +640,41 @@ ALTER TABLE python_processing_jobs
                 AND (input_json ->> 'player_id')::bigint > 0
                 AND input_json ->> 'ranked_day_start'
                     ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T05:00:00Z$'
-            WHEN 'build_snapshot' THEN input_json ->> 'boundary_at'
-                ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T05:00:00Z$'
+            WHEN 'build_snapshot' THEN
+                input_json ->> 'boundary_at'
+                    ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T05:00:00Z$'
+                AND (
+                    jsonb_typeof(input_json -> 'ranked_day_version_id') = 'number'
+                    AND (input_json ->> 'ranked_day_version_id')::bigint > 0
+                    OR NOT (input_json ? 'ranked_day_version_id')
+                )
             WHEN 'build_analytics' THEN
-                (jsonb_typeof(input_json -> 'snapshot_id') = 'number'
-                        AND (input_json ->> 'snapshot_id')::bigint > 0)
-                OR jsonb_typeof(input_json -> 'selection') = 'object'
+                (
+                    jsonb_typeof(input_json -> 'snapshot_id') = 'number'
+                    AND (input_json ->> 'snapshot_id')::bigint > 0
+                    AND jsonb_typeof(input_json -> 'snapshot_version') = 'number'
+                    AND (input_json ->> 'snapshot_version')::integer > 0
+                    AND input_json ->> 'snapshot_input_hash'
+                        ~ '^[0-9a-f]{64}$'
+                    AND jsonb_typeof(input_json -> 'source_ranked_day_version_id') = 'number'
+                    AND (input_json ->> 'source_ranked_day_version_id')::bigint > 0
+                )
+                OR (
+                    jsonb_typeof(input_json -> 'selection') = 'object'
+                    AND jsonb_typeof(input_json -> 'selection' -> 'ranked_day_version_id') = 'number'
+                    AND (input_json -> 'selection' ->> 'ranked_day_version_id')::bigint > 0
+                )
+                OR (
+                    -- Keep populated v1 analytics work readable. New v2
+                    -- publishers use the exact snapshot input above.
+                    analytics_rule_version IN ('analytics-v1', 'legend-analytics-v1')
+                    AND deduplication_key LIKE 'analytics:%'
+                    AND jsonb_typeof(input_json -> 'snapshot_id') = 'number'
+                    AND (input_json ->> 'snapshot_id')::bigint > 0
+                    AND NOT (input_json ? 'snapshot_version')
+                    AND NOT (input_json ? 'snapshot_input_hash')
+                    AND NOT (input_json ? 'source_ranked_day_version_id')
+                )
             WHEN 'build_export' THEN
                 jsonb_typeof(input_json -> 'export_request_id') = 'number'
                 AND (input_json ->> 'export_request_id')::bigint > 0
@@ -2046,6 +2075,9 @@ CREATE TABLE IF NOT EXISTS leaderboard_snapshot_entries (
 CREATE TABLE IF NOT EXISTS analytics_summaries (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     snapshot_id bigint REFERENCES leaderboard_snapshots (id),
+    snapshot_version integer NOT NULL DEFAULT 0,
+    source_ranked_day_version_id bigint REFERENCES ranked_day_versions (id),
+    correction_of_id bigint REFERENCES analytics_summaries (id),
     lens text NOT NULL CHECK (lens IN ('offense', 'defense')),
     population_filter jsonb NOT NULL,
     period_start timestamptz NOT NULL,
@@ -2057,7 +2089,10 @@ CREATE TABLE IF NOT EXISTS analytics_summaries (
     classification_confidence text NOT NULL,
     unclassified_count integer NOT NULL CHECK (unclassified_count >= 0),
     disagreement_count integer NOT NULL CHECK (disagreement_count >= 0),
+    missing_code_count integer NOT NULL DEFAULT 0 CHECK (missing_code_count >= 0),
+    malformed_code_count integer NOT NULL DEFAULT 0 CHECK (malformed_code_count >= 0),
     analytics_rule_version text NOT NULL,
+    input_hash text NOT NULL DEFAULT repeat('0', 64),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     UNIQUE (snapshot_id, lens, population_filter, period_start, period_end, analytics_rule_version)
 );
@@ -2069,6 +2104,7 @@ CREATE TABLE IF NOT EXISTS analytics_breakdowns (
     three_star_count integer NOT NULL CHECK (three_star_count >= 0),
     usage_rate numeric(8,7),
     three_star_rate numeric(8,7),
+    evidence_json jsonb NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (summary_id, army_archetype)
 );
 
@@ -2311,6 +2347,52 @@ ALTER TABLE leaderboard_snapshot_entries
     ADD COLUMN IF NOT EXISTS profile_freshness text,
     ADD COLUMN IF NOT EXISTS profile_confidence text;
 
+-- Analytics publication v2 records the exact frozen source and the evidence
+-- quality counters. Defaults keep populated v1 summaries readable while new
+-- writers fill the complete provenance.
+ALTER TABLE analytics_summaries
+    ADD COLUMN IF NOT EXISTS snapshot_version integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS source_ranked_day_version_id bigint
+        REFERENCES ranked_day_versions (id),
+    ADD COLUMN IF NOT EXISTS correction_of_id bigint
+        REFERENCES analytics_summaries (id),
+    ADD COLUMN IF NOT EXISTS missing_code_count integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS malformed_code_count integer NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS input_hash text NOT NULL DEFAULT repeat('0', 64);
+
+ALTER TABLE analytics_breakdowns
+    ADD COLUMN IF NOT EXISTS evidence_json jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+DROP TRIGGER IF EXISTS analytics_summaries_immutable_v2
+    ON analytics_summaries;
+DROP TRIGGER IF EXISTS analytics_breakdowns_immutable_v2
+    ON analytics_breakdowns;
+
+UPDATE analytics_summaries AS summary
+SET snapshot_version = snapshot.version,
+    source_ranked_day_version_id = snapshot.source_ranked_day_version_id,
+    input_hash = snapshot.input_hash
+FROM leaderboard_snapshots AS snapshot
+WHERE summary.snapshot_id = snapshot.id
+  AND (
+      summary.snapshot_version = 0
+      OR summary.source_ranked_day_version_id IS NULL
+      OR summary.input_hash = repeat('0', 64)
+  );
+
+ALTER TABLE analytics_summaries
+    DROP CONSTRAINT IF EXISTS analytics_summaries_publication_v2_check,
+    ADD CONSTRAINT analytics_summaries_publication_v2_check CHECK (
+        snapshot_version >= 0
+        AND sample_size >= 0
+        AND unclassified_count >= 0
+        AND unclassified_count <= sample_size
+        AND disagreement_count >= 0
+        AND missing_code_count >= 0
+        AND malformed_code_count >= 0
+        AND input_hash ~ '^[0-9a-f]{64}$'
+    );
+
 -- v1 named these fields trophy_*; retain them and backfill the exact profile
 -- aliases for populated v1 rows. New rows must write both names consistently.
 UPDATE leaderboard_snapshot_entries
@@ -2525,6 +2607,32 @@ DROP TRIGGER IF EXISTS leaderboard_snapshot_entries_immutable_v2
 CREATE TRIGGER leaderboard_snapshot_entries_immutable_v2
 BEFORE UPDATE OR DELETE ON leaderboard_snapshot_entries
 FOR EACH ROW EXECUTE FUNCTION clashlens_guard_snapshot_entry_immutable_v2();
+
+CREATE OR REPLACE FUNCTION clashlens_guard_analytics_immutable_v2()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'published analytics are immutable';
+END
+$$;
+
+CREATE OR REPLACE FUNCTION clashlens_guard_analytics_breakdown_immutable_v2()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'published analytics breakdowns are immutable';
+END
+$$;
+
+CREATE TRIGGER analytics_summaries_immutable_v2
+BEFORE UPDATE OR DELETE ON analytics_summaries
+FOR EACH ROW EXECUTE FUNCTION clashlens_guard_analytics_immutable_v2();
+
+CREATE TRIGGER analytics_breakdowns_immutable_v2
+BEFORE UPDATE OR DELETE ON analytics_breakdowns
+FOR EACH ROW EXECUTE FUNCTION clashlens_guard_analytics_breakdown_immutable_v2();
 
 CREATE OR REPLACE FUNCTION clashlens_enqueue_interactive(
     requested_type text,

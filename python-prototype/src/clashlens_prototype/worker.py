@@ -103,6 +103,13 @@ class ObservationProcessor:
                     self.database.complete_analytics(claim)
             except LeaseLost:
                 return ProcessResult(claim.job_id, "lease_lost")
+            except (KeyError, TypeError, ValueError) as error:
+                return self._fail(
+                    claim,
+                    "dependency_not_ready" if "dependency" in str(error) else "invalid_work_input",
+                    detail=str(error),
+                    retryable=False,
+                )
             return ProcessResult(claim.job_id, "processed")
         if claim.work_type not in {"process_observation", "replay_observation"}:
             return self._fail(claim, "unsupported_work_type", retryable=False)

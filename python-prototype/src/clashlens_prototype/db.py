@@ -1535,7 +1535,7 @@ class Database:
                 job = self._lock_live_claim(connection, claim)
                 ranked_day = connection.execute(
                     """
-                    SELECT ranked_day_start, ranked_day_end
+                    SELECT ranked_day_start, ranked_day_end, input_hash, version
                     FROM ranked_day_versions WHERE id = %s
                     """,
                     (ranked_day_version_id,),
@@ -1799,6 +1799,9 @@ class Database:
                 ]
                 hash_payload = {
                     "boundary_at": boundary_at.astimezone(UTC).isoformat(),
+                    "source_ranked_day_version_id": ranked_day_version_id,
+                    "source_ranked_day_version": int(ranked_day[3]),
+                    "source_ranked_day_input_hash": _text_value(ranked_day[2]),
                     "ordering_rule_version": SNAPSHOT_ORDERING_RULE_VERSION,
                     "freshness_rule_version": FRESHNESS_RULE_VERSION,
                     "entries": hash_entries,
@@ -1811,54 +1814,163 @@ class Database:
                         separators=(",", ":"),
                     ).encode("utf-8")
                 ).hexdigest()
-                for snapshot_kind in ("frozen", "live"):
-                    self._publish_snapshot_kind(
-                        connection,
-                        snapshot_kind=snapshot_kind,
-                        boundary_at=boundary_at,
-                        ranked_day_version_id=ranked_day_version_id,
-                        entries=entries,
-                        coverage=coverage,
-                        quality=quality,
-                        input_hash=input_hash,
-                    )
+                frozen_snapshot_id, frozen_snapshot_version = self._publish_snapshot_kind(
+                    connection,
+                    snapshot_kind="frozen",
+                    boundary_at=boundary_at,
+                    ranked_day_version_id=ranked_day_version_id,
+                    entries=entries,
+                    coverage=coverage,
+                    quality=quality,
+                    input_hash=input_hash,
+                    publish=False,
+                )
+                self._publish_snapshot_kind(
+                    connection,
+                    snapshot_kind="live",
+                    boundary_at=boundary_at,
+                    ranked_day_version_id=ranked_day_version_id,
+                    entries=entries,
+                    coverage=coverage,
+                    quality=quality,
+                    input_hash=input_hash,
+                    publish=True,
+                )
+                self._enqueue_snapshot_analytics(
+                    connection,
+                    snapshot_id=frozen_snapshot_id,
+                    snapshot_version=frozen_snapshot_version,
+                    snapshot_input_hash=input_hash,
+                    ranked_day_version_id=ranked_day_version_id,
+                    period_start=ranked_day[0],
+                    period_end=ranked_day[1],
+                )
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
                 )
 
     def complete_analytics(self, claim: Claim) -> None:
-        ranked_day_version_id = int(claim.input_json["ranked_day_version_id"])
+        snapshot_id = _positive_int_input(claim.input_json, "snapshot_id")
+        snapshot_version = _positive_int_input(claim.input_json, "snapshot_version")
+        source_ranked_day_version_id = _positive_int_input(
+            claim.input_json, "source_ranked_day_version_id"
+        )
+        snapshot_input_hash = _hash_input(
+            claim.input_json.get("snapshot_input_hash"), "snapshot_input_hash"
+        )
         with self.pool.connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
+                connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (
+                        "leaderboard-snapshot-v2:frozen:analytics:"
+                        + str(snapshot_id),
+                    ),
+                )
                 snapshot = connection.execute(
                     """
-                    SELECT id, boundary_at, measured_coverage, stale_entry_count
+                    SELECT id, boundary_at, version, correction_of_id, state,
+                           source_ranked_day_version_id, input_hash,
+                           measured_coverage, stale_entry_count,
+                           fresh_entry_count, included_entry_count
                     FROM leaderboard_snapshots
-                    WHERE source_ranked_day_version_id = %s
-                      AND snapshot_kind = 'frozen'
+                    WHERE id = %s AND snapshot_kind = 'frozen'
+                    FOR UPDATE
                     """,
-                    (ranked_day_version_id,),
+                    (snapshot_id,),
                 ).fetchone()
+                if snapshot is None:
+                    raise ValueError("frozen snapshot dependency is not complete")
+                if int(snapshot[2]) != snapshot_version:
+                    raise ValueError("analytics snapshot version does not match its input")
+                if int(snapshot[5]) != source_ranked_day_version_id:
+                    raise ValueError("analytics ranked-day source does not match its snapshot")
+                if _text_value(snapshot[6]) != snapshot_input_hash:
+                    raise ValueError("analytics snapshot input hash does not match its input")
+
+                existing_summary_count = connection.execute(
+                    """
+                    SELECT count(DISTINCT s.lens), count(*),
+                           count(*) FILTER (WHERE b.summary_id IS NOT NULL)
+                    FROM analytics_summaries AS s
+                    LEFT JOIN analytics_breakdowns AS b
+                      ON b.summary_id = s.id
+                     AND b.army_archetype = 'Unclassified'
+                    WHERE s.snapshot_id = %s
+                    """,
+                    (snapshot_id,),
+                ).fetchone()
+                assert existing_summary_count is not None
+                if _text_value(snapshot[4]) == "published":
+                    if tuple(int(value) for value in existing_summary_count) != (2, 2, 2):
+                        raise ValueError("published frozen snapshot has incomplete analytics")
+                    self._finish_claim(
+                        connection, claim, job, state="complete", outcome="processed"
+                    )
+                    return
+                if _text_value(snapshot[4]) != "building":
+                    raise ValueError("frozen snapshot is not available for analytics")
+
                 ranked_day = connection.execute(
                     """
                     SELECT ranked_day_start, ranked_day_end
-                    FROM ranked_day_versions WHERE id = %s
+                    FROM ranked_day_versions
+                    WHERE id = %s
                     """,
-                    (ranked_day_version_id,),
+                    (source_ranked_day_version_id,),
                 ).fetchone()
-                if snapshot is None or ranked_day is None:
-                    raise ValueError("frozen snapshot dependency is not complete")
+                if ranked_day is None:
+                    raise ValueError("ranked-day version for analytics does not exist")
+                period_start = ranked_day[0]
+                period_end = ranked_day[1]
+                input_period_start = claim.input_json.get("period_start")
+                input_period_end = claim.input_json.get("period_end")
+                if input_period_start is not None and _parse_utc(input_period_start) != period_start:
+                    raise ValueError("analytics period start does not match ranked day")
+                if input_period_end is not None and _parse_utc(input_period_end) != period_end:
+                    raise ValueError("analytics period end does not match ranked day")
+                population_filter = claim.input_json.get(
+                    "population_filter", {"population": "tracked_players"}
+                )
+                if population_filter != {"population": "tracked_players"}:
+                    raise ValueError("analytics population filter is not the tracked population")
+                entry_count = connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM leaderboard_snapshot_entries
+                    WHERE snapshot_id = %s
+                    """,
+                    (snapshot_id,),
+                ).fetchone()
+                assert entry_count is not None
+                if int(entry_count[0]) != int(snapshot[10]):
+                    raise ValueError("frozen snapshot entries are incomplete")
+
+                freshness = _snapshot_freshness(
+                    included_count=int(snapshot[10]),
+                    fresh_count=int(snapshot[9]),
+                    stale_count=int(snapshot[8]),
+                )
+                prior_snapshot_id = (
+                    int(snapshot[3]) if snapshot[3] is not None else None
+                )
                 for lens, perspective in (
                     ("offense", "attacker"),
                     ("defense", "defender"),
                 ):
                     sample_rows = connection.execute(
                         """
-                        SELECT b.id, b.disagreement_state, e.stars
+                        SELECT DISTINCT ON (b.id)
+                               b.id, b.disagreement_state, e.stars,
+                               e.army_share_code, e.id, e.source_row_id,
+                               e.observation_id, e.source_observed_at,
+                               e.battle_timestamp
                         FROM battle_perspectives AS p
                         JOIN legend_battles AS b ON b.id = p.battle_id
                         JOIN battle_evidence AS e ON e.id = p.evidence_id
+                        JOIN battle_source_rows AS source_row
+                          ON source_row.id = e.source_row_id
                         JOIN leaderboard_snapshot_entries AS se
                           ON se.snapshot_id = %s
                          AND se.player_id = CASE
@@ -1867,79 +1979,249 @@ class Database:
                              ELSE b.defender_player_id
                          END
                         WHERE p.perspective = %s
+                          AND e.reporting_player_id = CASE
+                             WHEN p.perspective = 'attacker'
+                                 THEN b.attacker_player_id
+                             ELSE b.defender_player_id
+                          END
+                          AND source_row.outcome = 'valid_legend'
                           AND e.battle_timestamp >= %s
                           AND e.battle_timestamp < %s
-                        ORDER BY b.id
+                        ORDER BY b.id, p.source_observed_at DESC, e.id DESC
                         """,
-                        (snapshot[0], perspective, ranked_day[0], ranked_day[1]),
+                        (snapshot_id, perspective, period_start, period_end),
                     ).fetchall()
+                    quality = connection.execute(
+                        """
+                        SELECT
+                            count(*) FILTER (
+                                WHERE source_row.failure_category = 'missing_army_share_code'
+                            ),
+                            count(*) FILTER (
+                                WHERE source_row.outcome = 'malformed_legend_row'
+                                  AND source_row.failure_category <> 'missing_army_share_code'
+                            )
+                        FROM battle_log_observations AS log
+                        JOIN battle_source_rows AS source_row
+                          ON source_row.battle_log_observation_id = log.id
+                        JOIN leaderboard_snapshot_entries AS se
+                          ON se.snapshot_id = %s AND se.player_id = log.player_id
+                        WHERE log.observed_at >= %s
+                          AND log.observed_at < %s
+                          AND (
+                              source_row.source_json ->> 'attackOrDefense' = %s
+                              OR source_row.outcome <> 'valid_legend'
+                          )
+                        """,
+                        (
+                            snapshot_id,
+                            period_start,
+                            period_end,
+                            "attack" if perspective == "attacker" else "defense",
+                        ),
+                    ).fetchone()
+                    assert quality is not None
+                    missing_code_count = int(quality[0])
+                    malformed_code_count = int(quality[1])
                     sample_size = len(sample_rows)
                     three_star_count = sum(int(row[2]) == 3 for row in sample_rows)
                     disagreement_count = sum(
                         _text_value(row[1]) == "disagreement" for row in sample_rows
                     )
-                    freshness = "fresh" if int(snapshot[3]) == 0 else "mixed"
+                    sample_payload = [
+                        {
+                            "battle_id": int(row[0]),
+                            "evidence_id": int(row[4]),
+                            "source_row_id": int(row[5]),
+                            "observation_id": int(row[6]),
+                            "source_observed_at": row[7].astimezone(UTC).isoformat(),
+                            "battle_timestamp": row[8].astimezone(UTC).isoformat(),
+                            "stars": int(row[2]),
+                            "army_share_code": _text_value(row[3]),
+                            "disagreement": _text_value(row[1]) == "disagreement",
+                        }
+                        for row in sample_rows
+                    ]
+                    analytics_input = {
+                        "snapshot_id": snapshot_id,
+                        "snapshot_version": snapshot_version,
+                        "snapshot_input_hash": snapshot_input_hash,
+                        "source_ranked_day_version_id": source_ranked_day_version_id,
+                        "lens": lens,
+                        "population_filter": population_filter,
+                        "period_start": period_start.astimezone(UTC).isoformat(),
+                        "period_end": period_end.astimezone(UTC).isoformat(),
+                        "sample": sample_payload,
+                        "missing_code_count": missing_code_count,
+                        "malformed_code_count": malformed_code_count,
+                        "analytics_rule_version": ANALYTICS_RULE_VERSION,
+                        "classification_version": CLASSIFICATION_VERSION,
+                    }
+                    analytics_input_hash = hashlib.sha256(
+                        json.dumps(
+                            analytics_input,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    correction_of_id = None
+                    if prior_snapshot_id is not None:
+                        correction = connection.execute(
+                            """
+                            SELECT id
+                            FROM analytics_summaries
+                            WHERE snapshot_id = %s
+                              AND lens = %s
+                              AND population_filter = %s
+                              AND period_start = %s
+                              AND period_end = %s
+                              AND analytics_rule_version = %s
+                            ORDER BY id DESC
+                            LIMIT 1
+                            """,
+                            (
+                                prior_snapshot_id,
+                                lens,
+                                Jsonb(population_filter),
+                                period_start,
+                                period_end,
+                                ANALYTICS_RULE_VERSION,
+                            ),
+                        ).fetchone()
+                        if correction is not None:
+                            correction_of_id = int(correction[0])
                     summary = connection.execute(
                         """
                         INSERT INTO analytics_summaries (
-                            snapshot_id, lens, population_filter,
+                            snapshot_id, snapshot_version,
+                            source_ranked_day_version_id, correction_of_id,
+                            lens, population_filter,
                             period_start, period_end, sample_size,
                             measured_coverage, freshness, classification_version,
                             classification_confidence, unclassified_count,
-                            disagreement_count, analytics_rule_version
+                            disagreement_count, missing_code_count,
+                            malformed_code_count, analytics_rule_version, input_hash
                         ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         ON CONFLICT (
                             snapshot_id, lens, population_filter,
                             period_start, period_end, analytics_rule_version
-                        ) DO UPDATE SET sample_size = EXCLUDED.sample_size
+                        ) DO NOTHING
                         RETURNING id
                         """,
                         (
-                            snapshot[0],
+                            snapshot_id,
+                            snapshot_version,
+                            source_ranked_day_version_id,
+                            correction_of_id,
                             lens,
-                            Jsonb({"population": "tracked_players"}),
-                            ranked_day[0],
-                            ranked_day[1],
+                            Jsonb(population_filter),
+                            period_start,
+                            period_end,
                             sample_size,
-                            snapshot[2],
+                            snapshot[7],
                             freshness,
                             CLASSIFICATION_VERSION,
                             CLASSIFICATION_CONFIDENCE,
                             sample_size,
                             disagreement_count,
+                            missing_code_count,
+                            malformed_code_count,
                             ANALYTICS_RULE_VERSION,
+                            analytics_input_hash,
                         ),
                     ).fetchone()
-                    assert summary is not None
+                    if summary is None:
+                        summary = connection.execute(
+                            """
+                            SELECT id, input_hash
+                            FROM analytics_summaries
+                            WHERE snapshot_id = %s
+                              AND lens = %s
+                              AND population_filter = %s
+                              AND period_start = %s
+                              AND period_end = %s
+                              AND analytics_rule_version = %s
+                            """,
+                            (
+                                snapshot_id,
+                                lens,
+                                Jsonb(population_filter),
+                                period_start,
+                                period_end,
+                                ANALYTICS_RULE_VERSION,
+                            ),
+                        ).fetchone()
+                        if summary is None or _text_value(summary[1]) != analytics_input_hash:
+                            raise ValueError("analytics replay has an immutable input conflict")
+                    summary_id = int(summary[0])
+                    evidence_json = {
+                        "army_share_codes": [_text_value(row[3]) for row in sample_rows],
+                        "battle_ids": [int(row[0]) for row in sample_rows],
+                        "evidence_ids": [int(row[4]) for row in sample_rows],
+                        "source_row_ids": [int(row[5]) for row in sample_rows],
+                    }
                     connection.execute(
                         """
                         INSERT INTO analytics_breakdowns (
                             summary_id, army_archetype, attack_count,
-                            three_star_count, usage_rate, three_star_rate
-                        ) VALUES (%s, 'Unclassified', %s, %s, %s, %s)
-                        ON CONFLICT (summary_id, army_archetype) DO UPDATE SET
-                            attack_count = EXCLUDED.attack_count,
-                            three_star_count = EXCLUDED.three_star_count,
-                            usage_rate = EXCLUDED.usage_rate,
-                            three_star_rate = EXCLUDED.three_star_rate
+                            three_star_count, usage_rate, three_star_rate,
+                            evidence_json
+                        ) VALUES (%s, 'Unclassified', %s, %s, %s, %s, %s)
+                        ON CONFLICT (summary_id, army_archetype) DO NOTHING
                         """,
                         (
-                            summary[0],
+                            summary_id,
                             sample_size,
                             three_star_count,
-                            1 if sample_size else None,
-                            (
-                                three_star_count / sample_size
-                                if sample_size
-                                else None
-                            ),
+                            1.0 if sample_size else None,
+                            three_star_count / sample_size if sample_size else None,
+                            Jsonb(evidence_json),
                         ),
                     )
+
+                complete = connection.execute(
+                    """
+                    SELECT count(DISTINCT s.lens), count(*),
+                           count(*) FILTER (WHERE b.summary_id IS NOT NULL)
+                    FROM analytics_summaries AS s
+                    LEFT JOIN analytics_breakdowns AS b
+                      ON b.summary_id = s.id
+                     AND b.army_archetype = 'Unclassified'
+                    WHERE s.snapshot_id = %s
+                    """,
+                    (snapshot_id,),
+                ).fetchone()
+                assert complete is not None
+                if tuple(int(value) for value in complete) != (2, 2, 2):
+                    raise ValueError("analytics publication is incomplete")
+                published = connection.execute(
+                    """
+                    UPDATE leaderboard_snapshots
+                    SET state = 'published', published_at = clock_timestamp()
+                    WHERE id = %s AND state = 'building'
+                    """,
+                    (snapshot_id,),
+                )
+                if published.rowcount != 1:
+                    raise ValueError("frozen snapshot publication fence was lost")
+                connection.execute(
+                    """
+                    UPDATE leaderboard_snapshots
+                    SET state = 'superseded'
+                    WHERE snapshot_kind = 'frozen'
+                      AND boundary_at = %s
+                      AND id <> %s
+                      AND state = 'published'
+                    """,
+                    (snapshot[1], snapshot_id),
+                )
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
                 )
+
 
     def complete_classified(self, claim: Claim, *, outcome: str) -> None:
         with self.pool.connection() as connection:
@@ -2723,9 +3005,14 @@ class Database:
         coverage: float,
         quality: dict[str, int],
         input_hash: str,
-    ) -> None:
-        # Serialize versions for one kind and boundary. A correction marks the
-        # earlier publication superseded without changing its immutable data.
+        publish: bool,
+    ) -> tuple[int, int]:
+        """Assemble one immutable snapshot version.
+
+        Frozen snapshots stop at ``building``. The analytics transaction is the
+        only writer that changes a frozen snapshot to ``published``. Live
+        snapshots keep their independent publication path.
+        """
         connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (
@@ -2734,7 +3021,7 @@ class Database:
         )
         existing = connection.execute(
             """
-            SELECT id, state
+            SELECT id, version, state
             FROM leaderboard_snapshots
             WHERE snapshot_kind = %s
               AND boundary_at = %s
@@ -2745,10 +3032,8 @@ class Database:
             """,
             (snapshot_kind, boundary_at, input_hash),
         ).fetchone()
-        if existing is not None and _text_value(existing[1]) != "building":
-            # The input identity is the replay key. Entries and dependent work
-            # remain one immutable set for this hash.
-            return
+        if existing is not None and _text_value(existing[2]) != "building":
+            return int(existing[0]), int(existing[1])
 
         prior = connection.execute(
             """
@@ -2764,6 +3049,7 @@ class Database:
         ).fetchone()
         if existing is not None:
             snapshot_id = int(existing[0])
+            snapshot_version = int(existing[1])
         else:
             next_version_row = connection.execute(
                 """
@@ -2774,7 +3060,7 @@ class Database:
                 (snapshot_kind, boundary_at),
             ).fetchone()
             assert next_version_row is not None
-            next_version = int(next_version_row[0])
+            snapshot_version = int(next_version_row[0])
             snapshot = connection.execute(
                 """
                 INSERT INTO leaderboard_snapshots (
@@ -2795,7 +3081,7 @@ class Database:
                 (
                     snapshot_kind,
                     boundary_at,
-                    next_version,
+                    snapshot_version,
                     prior[0] if prior is not None else None,
                     SNAPSHOT_ORDERING_RULE_VERSION,
                     FRESHNESS_RULE_VERSION,
@@ -2853,23 +3139,73 @@ class Database:
                     official[2] if official is not None else None,
                 ),
             )
-        connection.execute(
-            """
-            UPDATE leaderboard_snapshots
-            SET state = 'published', published_at = clock_timestamp()
-            WHERE id = %s AND state = 'building'
-            """,
-            (snapshot_id,),
-        )
-        if prior is not None and int(prior[0]) != snapshot_id:
+        if publish:
             connection.execute(
                 """
                 UPDATE leaderboard_snapshots
-                SET state = 'superseded'
-                WHERE id = %s AND state = 'published'
+                SET state = 'published', published_at = clock_timestamp()
+                WHERE id = %s AND state = 'building'
                 """,
-                (prior[0],),
+                (snapshot_id,),
             )
+            if prior is not None and int(prior[0]) != snapshot_id:
+                connection.execute(
+                    """
+                    UPDATE leaderboard_snapshots
+                    SET state = 'superseded'
+                    WHERE id = %s AND state = 'published'
+                    """,
+                    (prior[0],),
+                )
+        return snapshot_id, snapshot_version
+
+    @staticmethod
+    def _enqueue_snapshot_analytics(
+        connection: Any,
+        *,
+        snapshot_id: int,
+        snapshot_version: int,
+        snapshot_input_hash: str,
+        ranked_day_version_id: int,
+        period_start: datetime,
+        period_end: datetime,
+    ) -> None:
+        deduplication_key = (
+            f"build_analytics:snapshot:{int(snapshot_id)}:v{int(snapshot_version)}:"
+            f"input:{snapshot_input_hash}"
+        )
+        connection.execute(
+            """
+            INSERT INTO python_processing_jobs (
+                observation_id, work_type, deduplication_key, input_json,
+                status, due_at, parser_version, processing_version,
+                domain_rule_version, analytics_rule_version
+            ) VALUES (NULL, 'build_analytics', %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)
+            ON CONFLICT (deduplication_key) DO NOTHING
+            """,
+            (
+                deduplication_key,
+                Jsonb(
+                    {
+                        "snapshot_id": int(snapshot_id),
+                        "snapshot_version": int(snapshot_version),
+                        "snapshot_input_hash": snapshot_input_hash,
+                        "source_ranked_day_version_id": int(ranked_day_version_id),
+                        "period_start": period_start.astimezone(UTC).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        ),
+                        "period_end": period_end.astimezone(UTC).strftime(
+                            "%Y-%m-%dT%H:%M:%SZ"
+                        ),
+                        "population_filter": {"population": "tracked_players"},
+                    }
+                ),
+                DEFAULT_PARSER_VERSION,
+                PROCESSING_VERSION,
+                DOMAIN_RULE_VERSION,
+                ANALYTICS_RULE_VERSION,
+            ),
+        )
 
     @staticmethod
     def _store_ranked_day_adjustments(
@@ -2930,42 +3266,31 @@ class Database:
         boundary_at_text = boundary_at.astimezone(UTC).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
-        common_input = {
+        input_json = {
             "player_id": player_id,
             "ranked_day_start": ranked_day_start_text,
             "ranked_day_version_id": ranked_day_version_id,
+            "boundary_at": boundary_at_text,
         }
-        input_by_work_type = {
-            "build_snapshot": {
-                **common_input,
-                "boundary_at": boundary_at_text,
-            },
-            "build_analytics": {
-                **common_input,
-                "selection": {"ranked_day_version_id": ranked_day_version_id},
-            },
-        }
-        for work_type in ("build_snapshot", "build_analytics"):
-            deduplication_key = f"{work_type}:ranked-day-version:{ranked_day_version_id}"
-            connection.execute(
-                """
-                INSERT INTO python_processing_jobs (
-                    observation_id, work_type, deduplication_key, input_json,
-                    status, due_at, parser_version, processing_version,
-                    domain_rule_version, analytics_rule_version
-                ) VALUES (NULL, %s, %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)
-                ON CONFLICT (deduplication_key) DO NOTHING
-                """,
-                (
-                    work_type,
-                    deduplication_key,
-                    Jsonb(input_by_work_type[work_type]),
-                    DEFAULT_PARSER_VERSION,
-                    PROCESSING_VERSION,
-                    DOMAIN_RULE_VERSION,
-                    ANALYTICS_RULE_VERSION,
-                ),
-            )
+        deduplication_key = f"build_snapshot:ranked-day-version:{ranked_day_version_id}"
+        connection.execute(
+            """
+            INSERT INTO python_processing_jobs (
+                observation_id, work_type, deduplication_key, input_json,
+                status, due_at, parser_version, processing_version,
+                domain_rule_version, analytics_rule_version
+            ) VALUES (NULL, 'build_snapshot', %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)
+            ON CONFLICT (deduplication_key) DO NOTHING
+            """,
+            (
+                deduplication_key,
+                Jsonb(input_json),
+                DEFAULT_PARSER_VERSION,
+                PROCESSING_VERSION,
+                DOMAIN_RULE_VERSION,
+                ANALYTICS_RULE_VERSION,
+            ),
+        )
 
     @staticmethod
     def _observation_source(
@@ -3360,6 +3685,41 @@ class Database:
         )
         if completed.rowcount != 1:
             raise LeaseLost("job completion fence was lost")
+
+
+def _positive_int_input(values: dict[str, Any], name: str) -> int:
+    value = values.get(name)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer")
+    return int(value)
+
+
+def _hash_input(value: Any, name: str) -> str:
+    value = _text_value(value)
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise ValueError(f"{name} must be a lowercase SHA-256 hash")
+    return value
+
+
+def _parse_utc(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("analytics timestamps must be text")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("analytics timestamps must include an offset")
+    return parsed.astimezone(UTC)
+
+
+def _snapshot_freshness(*, included_count: int, fresh_count: int, stale_count: int) -> str:
+    if included_count == 0 or stale_count == 0:
+        return "fresh"
+    if fresh_count == 0:
+        return "stale"
+    return "mixed"
 
 
 def _text_value(value: Any) -> Any:
