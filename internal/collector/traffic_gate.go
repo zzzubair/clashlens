@@ -11,6 +11,13 @@ import (
 
 var errSharedCredentialConflict = errors.New("shared API credential registration conflicts with the durable gate")
 
+type trafficGateMode string
+
+const (
+	bridgeTrafficGateMode   trafficGateMode = "bridge"
+	requiredTrafficGateMode trafficGateMode = "required"
+)
+
 type sharedPermit struct {
 	granted        bool
 	databaseTime   time.Time
@@ -38,6 +45,26 @@ func parseBearerTokenBytes(contents []byte) (string, error) {
 func bearerTokenFingerprint(secret string) string {
 	digest := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(digest[:])
+}
+
+func (s *store) validateTrafficGateMode(ctx context.Context, mode trafficGateMode) error {
+	var expectedVersion int
+	switch mode {
+	case bridgeTrafficGateMode:
+		expectedVersion = 1
+	case requiredTrafficGateMode:
+		expectedVersion = 2
+	default:
+		return fmt.Errorf("unknown shared traffic-gate mode %q", mode)
+	}
+	version, err := s.currentContractVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("read contract for shared traffic gate: %w", err)
+	}
+	if version != expectedVersion {
+		return fmt.Errorf("%s shared traffic gate needs contract version %d, found %d", mode, expectedVersion, version)
+	}
+	return nil
 }
 
 func (s *store) registerSharedCredential(

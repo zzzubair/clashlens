@@ -34,6 +34,10 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 	if err != nil {
 		return nil, err
 	}
+	if err := store.validateTrafficGateMode(ctx, config.trafficGateMode); err != nil {
+		store.close()
+		return nil, fmt.Errorf("validate shared traffic gate: %w", err)
+	}
 	archive, err := newS3Archive(
 		config.archiveEndpoint,
 		config.archiveSecure,
@@ -48,7 +52,7 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 	keys, err := newKeyPool(
 		config.keys,
 		config.requestsPerSecondPerKey,
-		config.allowInteractiveForNormal,
+		false,
 	)
 	if err != nil {
 		store.close()
@@ -76,7 +80,7 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 		store.close()
 		return nil, err
 	}
-	if config.schemaVersion >= 2 {
+	if config.trafficGateMode == requiredTrafficGateMode {
 		interactiveKey, keyError := onlyInteractiveKey(config.keys)
 		if keyError != nil {
 			store.close()

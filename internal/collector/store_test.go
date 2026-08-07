@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,5 +138,32 @@ func TestScheduleDueRegularCreatesOneCurrentPollAndAdvancesDueTime(t *testing.T)
 	cycleStart := now.Truncate(5 * time.Minute).Add(5 * time.Minute)
 	if nextDue.Before(cycleStart) || !nextDue.Before(cycleStart.Add(5*time.Minute)) {
 		t.Fatalf("next due time %s is outside next cycle [%s, %s)", nextDue, cycleStart, cycleStart.Add(5*time.Minute))
+	}
+}
+
+func TestRequiredTrafficGateRejectsVersionOneContract(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	store, err := openStore(context.Background(), databaseURL, 2)
+	if err != nil {
+		t.Fatalf("open bridge store: %v", err)
+	}
+	t.Cleanup(store.close)
+
+	err = store.validateTrafficGateMode(context.Background(), requiredTrafficGateMode)
+	if err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("required traffic-gate validation error = %v, want version-one rejection", err)
+	}
+}
+
+func TestBridgeTrafficGateAllowsVersionOneContract(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	store, err := openStore(context.Background(), databaseURL, 2)
+	if err != nil {
+		t.Fatalf("open bridge store: %v", err)
+	}
+	t.Cleanup(store.close)
+
+	if err := store.validateTrafficGateMode(context.Background(), bridgeTrafficGateMode); err != nil {
+		t.Fatalf("bridge traffic-gate validation error = %v, want version-one acceptance", err)
 	}
 }

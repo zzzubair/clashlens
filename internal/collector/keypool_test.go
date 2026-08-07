@@ -128,27 +128,15 @@ func TestKeyPoolRejectsNormalFallbackToInteractiveByDefault(t *testing.T) {
 	}
 }
 
-func TestKeyPoolReadinessUsesExplicitDegradedNormalCapacity(t *testing.T) {
+func TestKeyPoolRejectsUnsafeNormalFallback(t *testing.T) {
 	t.Parallel()
 
-	pool, err := newKeyPool([]APIKey{
+	_, err := newKeyPool([]APIKey{
 		{Label: "normal", Secret: "n", Pool: normalPool},
 		{Label: "interactive", Secret: "i", Pool: interactivePool},
 	}, 30, true)
-	if err != nil {
-		t.Fatalf("newKeyPool returned an error: %v", err)
-	}
-	if err := pool.quarantine("normal"); err != nil {
-		t.Fatalf("quarantine normal key: %v", err)
-	}
-	if err := pool.ready(); err != nil {
-		t.Fatalf("degraded key pool readiness returned an error: %v", err)
-	}
-	if err := pool.quarantine("interactive"); err != nil {
-		t.Fatalf("quarantine interactive key: %v", err)
-	}
-	if err := pool.ready(); !errors.Is(err, errNoHealthyKey) {
-		t.Fatalf("empty degraded key pool readiness error = %v, want errNoHealthyKey", err)
+	if err == nil || !strings.Contains(err.Error(), "interactive") {
+		t.Fatalf("newKeyPool error = %v, want unsafe fallback rejection", err)
 	}
 }
 

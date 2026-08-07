@@ -343,6 +343,33 @@ func TestStartupGuardRequiresArchiveWriteCapability(t *testing.T) {
 	}
 }
 
+func TestApplicationRequiredTrafficGateFailsClosedBeforeMigration(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	archive, _ := newFakeS3Server(t)
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(api.Close)
+	environment := runtimeTestEnvironment(databaseURL, archive.URL, api.URL)
+	environment["CLASHLENS_SCHEMA_VERSION"] = "2"
+	environment["CLASHLENS_SHARED_TRAFFIC_GATE_MODE"] = "required"
+	config, err := loadConfig(func(name string) string { return environment[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+
+	app, err := newApplication(ctx, config, nil)
+	if app != nil {
+		app.close()
+		t.Fatal("newApplication returned an app before migration")
+	}
+	if err == nil || !strings.Contains(err.Error(), "required shared traffic gate needs contract version 2") {
+		t.Fatalf("newApplication error = %v, want required traffic-gate startup rejection", err)
+	}
+}
+
 func runtimeTestEnvironment(databaseURL, archiveURL, apiURL string) map[string]string {
 	return map[string]string{
 		"CLASHLENS_DATABASE_URL":               databaseURL,

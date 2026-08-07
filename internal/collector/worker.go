@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -171,15 +172,21 @@ func (w *worker) collectEndpoint(
 	endpoint endpointName,
 ) error {
 	for {
-		key, err := w.keys.acquire(ctx, job.pool)
-		if err != nil {
-			return err
+		var key APIKey
+		var err error
+		if job.pool == interactivePool {
+			key, err = w.keys.sharedInteractiveKey()
+		} else {
+			key, err = w.keys.acquire(ctx, job.pool)
 		}
-		requestCount, err := w.store.beginEndpointRequest(ctx, job, attemptID, endpoint, time.Now().UTC())
 		if err != nil {
 			return err
 		}
 		if err := w.acquireSharedPermitForRequest(ctx, key); err != nil {
+			return err
+		}
+		requestCount, err := w.store.beginEndpointRequest(ctx, job, attemptID, endpoint, time.Now().UTC())
+		if err != nil {
 			return err
 		}
 		w.config.metrics.recordAPIRequest(string(endpoint), string(job.pool))
@@ -226,6 +233,9 @@ func (w *worker) collectEndpoint(
 		}
 		w.config.metrics.recordAPIOutcome(string(endpoint), HTTPStatusClass(response.statusCode))
 		authenticationFailure := authenticationFailureStatus(response.statusCode)
+		if key.Pool == interactivePool {
+			authenticationFailure = sharedCredentialAuthenticationFailure(response)
+		}
 		if authenticationFailure {
 			if key.Pool == interactivePool {
 				if err := w.store.quarantineSharedCredential(
@@ -424,6 +434,18 @@ func retryableHTTPStatus(statusCode int) bool {
 
 func authenticationFailureStatus(statusCode int) bool {
 	return statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden
+}
+
+func sharedCredentialAuthenticationFailure(response officialResponse) bool {
+	if !authenticationFailureStatus(response.statusCode) {
+		return false
+	}
+	var body map[string]string
+	if err := json.Unmarshal(response.body, &body); err != nil || len(body) != 2 {
+		return false
+	}
+	return (body["reason"] == "accessDenied" && body["message"] == "Invalid authorization") ||
+		(body["reason"] == "accessDenied.invalidIp" && body["message"] == "Invalid IP address")
 }
 
 func HTTPStatusClass(statusCode int) string {

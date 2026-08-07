@@ -46,6 +46,35 @@ func TestLoadConfigSeparatesNormalAndInteractiveKeys(t *testing.T) {
 	}
 }
 
+func TestLoadConfigUsesRequiredSharedTrafficGateForVersionTwo(t *testing.T) {
+	t.Parallel()
+	environment := validConfigEnvironment()
+	environment["CLASHLENS_SCHEMA_VERSION"] = "2"
+
+	config, err := loadConfig(func(name string) string { return environment[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+	if config.trafficGateMode != requiredTrafficGateMode {
+		t.Fatalf("traffic gate mode = %q, want required for contract version two", config.trafficGateMode)
+	}
+}
+
+func TestLoadConfigAllowsExplicitBridgeTrafficGateForMigration(t *testing.T) {
+	t.Parallel()
+	environment := validConfigEnvironment()
+	environment["CLASHLENS_SCHEMA_VERSION"] = "2"
+	environment["CLASHLENS_SHARED_TRAFFIC_GATE_MODE"] = "bridge"
+
+	config, err := loadConfig(func(name string) string { return environment[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+	if config.trafficGateMode != bridgeTrafficGateMode {
+		t.Fatalf("traffic gate mode = %q, want explicit bridge", config.trafficGateMode)
+	}
+}
+
 func TestLoadConfigDisablesGlobalRankingsByDefault(t *testing.T) {
 	t.Parallel()
 
@@ -101,17 +130,14 @@ func TestLoadConfigRejectsOfficialAPIProxyWithCredentialsOrPath(t *testing.T) {
 	}
 }
 
-func TestLoadConfigCanExplicitlyAllowInteractiveCapacityForNormalWork(t *testing.T) {
+func TestLoadConfigRejectsInteractiveCapacityForNormalWork(t *testing.T) {
 	t.Parallel()
 	environment := validConfigEnvironment()
 	environment["CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL"] = "true"
 
-	config, err := loadConfig(func(name string) string { return environment[name] })
-	if err != nil {
-		t.Fatalf("loadConfig returned an error: %v", err)
-	}
-	if !config.allowInteractiveForNormal {
-		t.Fatal("allowInteractiveForNormal = false, want true")
+	_, err := loadConfig(func(name string) string { return environment[name] })
+	if err == nil || !strings.Contains(err.Error(), "CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL") {
+		t.Fatalf("loadConfig error = %v, want unsafe interactive fallback rejection", err)
 	}
 }
 

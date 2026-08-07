@@ -13,37 +13,37 @@ import (
 )
 
 type collectorConfig struct {
-	databaseURL               string
-	schemaVersion             int
-	archiveEndpoint           string
-	archiveSecure             bool
-	archiveBucket             string
-	archiveAccessKey          string
-	archiveSecretKey          string
-	officialAPIOrigin         string
-	officialAPIProxyURL       string
-	allowInsecureTestHTTP     bool
-	enableGlobalRankings      bool
-	keys                      []APIKey
-	allowInteractiveForNormal bool
-	requestsPerSecondPerKey   int
-	workersPerKey             int
-	pollCycle                 time.Duration
-	scheduleBatchSize         int
-	leaseDuration             time.Duration
-	maximumRetries            int
-	retryBaseDelay            time.Duration
-	retryMaximumDelay         time.Duration
-	retryJitterFraction       float64
-	interactiveCooldown       time.Duration
-	schedulerInterval         time.Duration
-	workerIdleInterval        time.Duration
-	connectionTimeout         time.Duration
-	responseHeaderTimeout     time.Duration
-	totalRequestTimeout       time.Duration
-	maximumResponseBytes      int64
-	healthListenAddress       string
-	collectorVersion          string
+	databaseURL             string
+	schemaVersion           int
+	trafficGateMode         trafficGateMode
+	archiveEndpoint         string
+	archiveSecure           bool
+	archiveBucket           string
+	archiveAccessKey        string
+	archiveSecretKey        string
+	officialAPIOrigin       string
+	officialAPIProxyURL     string
+	allowInsecureTestHTTP   bool
+	enableGlobalRankings    bool
+	keys                    []APIKey
+	requestsPerSecondPerKey int
+	workersPerKey           int
+	pollCycle               time.Duration
+	scheduleBatchSize       int
+	leaseDuration           time.Duration
+	maximumRetries          int
+	retryBaseDelay          time.Duration
+	retryMaximumDelay       time.Duration
+	retryJitterFraction     float64
+	interactiveCooldown     time.Duration
+	schedulerInterval       time.Duration
+	workerIdleInterval      time.Duration
+	connectionTimeout       time.Duration
+	responseHeaderTimeout   time.Duration
+	totalRequestTimeout     time.Duration
+	maximumResponseBytes    int64
+	healthListenAddress     string
+	collectorVersion        string
 }
 
 type maintenanceConfig struct {
@@ -85,6 +85,7 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	config := collectorConfig{
 		databaseURL:             databaseURL,
 		schemaVersion:           1,
+		trafficGateMode:         bridgeTrafficGateMode,
 		archiveEndpoint:         strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_ENDPOINT")),
 		archiveBucket:           strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_BUCKET")),
 		archiveAccessKey:        archiveAccessKey,
@@ -130,12 +131,8 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	if err != nil {
 		return collectorConfig{}, err
 	}
-	if config.allowInteractiveForNormal, err = optionalBool(
-		getenv,
-		"CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL",
-		false,
-	); err != nil {
-		return collectorConfig{}, err
+	if strings.TrimSpace(getenv("CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL")) != "" {
+		return collectorConfig{}, errors.New("CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL is not supported")
 	}
 
 	for _, setting := range []struct {
@@ -163,6 +160,16 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	}
 	if err := optionalInt(getenv, "CLASHLENS_SCHEMA_VERSION", &config.schemaVersion); err != nil {
 		return collectorConfig{}, err
+	}
+	if config.schemaVersion >= 2 {
+		config.trafficGateMode = requiredTrafficGateMode
+	}
+	if value := strings.TrimSpace(getenv("CLASHLENS_SHARED_TRAFFIC_GATE_MODE")); value != "" {
+		mode := trafficGateMode(value)
+		if mode != bridgeTrafficGateMode && mode != requiredTrafficGateMode {
+			return collectorConfig{}, errors.New("CLASHLENS_SHARED_TRAFFIC_GATE_MODE must be bridge or required")
+		}
+		config.trafficGateMode = mode
 	}
 	if err := optionalInt(getenv, "CLASHLENS_SCHEDULE_BATCH_SIZE", &config.scheduleBatchSize); err != nil {
 		return collectorConfig{}, err
