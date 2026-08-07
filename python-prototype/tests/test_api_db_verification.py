@@ -5,13 +5,57 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from uuid import uuid4
 
+import psycopg
 import pytest
+from test_api_migration import migrated_production_database
 
 from clashlens_prototype.api_db import ApiDatabase, RequestBinding
 from clashlens_prototype.verification import KeyAction, VerificationOutcome
-from test_api_migration import migrated_production_database
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
+SUPPORT_ROLE = "clashlens_support_transfer"
+
+
+def support_connection(connection_info: str) -> psycopg.Connection:
+    connection = psycopg.connect(connection_info, autocommit=True)
+    try:
+        connection.execute("SET SESSION AUTHORIZATION clashlens_support_transfer")
+    except psycopg.errors.InsufficientPrivilege:
+        connection.close()
+        pytest.skip("support transfer integration requires SET SESSION AUTHORIZATION")
+    return connection
+
+
+def call_support_transfer(
+    connection: psycopg.Connection,
+    *,
+    verification_request_id: str,
+    player_tag: str,
+    from_account_public_id: str,
+    to_account_public_id: str,
+    operator_identity: str,
+    reason: str,
+) -> tuple[str, str | None]:
+    row = connection.execute(
+        """
+        SELECT status, tag
+        FROM clashlens_support_transfer(%s, %s, %s, %s, %s, %s)
+        """,
+        (
+            verification_request_id,
+            player_tag,
+            from_account_public_id,
+            to_account_public_id,
+            operator_identity,
+            reason,
+        ),
+    ).fetchone()
+    assert row is not None
+    status = row[0].decode("utf-8") if isinstance(row[0], bytes) else str(row[0])
+    tag = None if row[1] is None else (
+        row[1].decode("utf-8") if isinstance(row[1], bytes) else str(row[1])
+    )
+    return status, tag
 
 
 def create_account(database: ApiDatabase, subject: str, username: str) -> int:
@@ -177,19 +221,174 @@ def test_concurrent_verified_links_never_transfer_between_accounts_automatically
             support_result = next(
                 result for result in results if result.payload["status"] == "support_required"
             )
-            transferred = database.apply_support_player_link_transfer(
-                verification_request_id=support_result.payload["verification_request_id"],
-                operator_identity="support-operator",
-                reason="Fresh proof reviewed with the account owner.",
-                now=NOW + timedelta(minutes=1),
+            candidate = database.scalar(
+                """
+                SELECT state
+                FROM support_player_link_transfer_candidates
+                WHERE verification_request_id = %s
+                """,
+                (support_result.payload["verification_request_id"],),
             )
-            owner_after = database.scalar("SELECT account_id FROM verified_player_links")
 
-            assert transferred.payload == {"status": "transferred", "tag": "#2PP"}
-            assert owner_after != owner_before
+            assert candidate == "pending"
+            assert database.scalar("SELECT account_id FROM verified_player_links") == owner_before
             assert database.scalar(
                 "SELECT count(*) FROM support_player_link_transfer_audits"
-            ) == 1
+            ) == 0
+        finally:
+            database.close()
+
+
+def test_support_transfer_is_atomic_restricted_and_idempotent(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info, max_size=8)
+        try:
+            assert not hasattr(database, "apply_support_player_link_transfer")
+            first_account = create_account(database, "google-support-first", "supportfirst")
+            second_account = create_account(database, "google-support-second", "supportsecond")
+            first_context = database.resolve_account("google", "google-support-first")
+            second_context = database.resolve_account("google", "google-support-second")
+            assert first_context is not None and second_context is not None
+            completed_at = datetime.now(UTC)
+            first_binding = verification_binding(
+                first_account, "google-support-first", "#2PP"
+            )
+            assert database.reserve_verification(first_binding, normalized_tag="#2PP").fresh
+            assert database.complete_verification(
+                first_binding,
+                normalized_tag="#2PP",
+                outcome=VerificationOutcome.VERIFIED,
+                account_id=first_account,
+                completed_at=completed_at,
+            ).payload == {"status": "linked", "tag": "#2PP"}
+            second_binding = verification_binding(
+                second_account, "google-support-second", "#2PP"
+            )
+            assert database.reserve_verification(second_binding, normalized_tag="#2PP").fresh
+            support_required = database.complete_verification(
+                second_binding,
+                normalized_tag="#2PP",
+                outcome=VerificationOutcome.VERIFIED,
+                account_id=second_account,
+                completed_at=completed_at,
+            )
+            assert support_required.payload["status"] == "support_required"
+            candidate_id = support_required.payload["verification_request_id"]
+            assert database.scalar("SELECT account_id FROM verified_player_links") == first_account
+            assert database.scalar(
+                """
+                SELECT expires_at - verified_at = interval '15 minutes'
+                FROM support_player_link_transfer_candidates
+                WHERE verification_request_id = %s
+                """,
+                (candidate_id,),
+            ) is True
+
+            with support_connection(connection_info) as support:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    support.execute("SELECT account_id FROM verified_player_links")
+                assert call_support_transfer(
+                    support,
+                    verification_request_id=candidate_id,
+                    player_tag="#8PY",
+                    from_account_public_id=first_context.public_id,
+                    to_account_public_id=second_context.public_id,
+                    operator_identity="sudo:operator:1000",
+                    reason="Fresh verification was reviewed.",
+                ) == ("transfer_conflict", None)
+
+            def transfer_once() -> tuple[str, str | None]:
+                with support_connection(connection_info) as support:
+                    return call_support_transfer(
+                        support,
+                        verification_request_id=candidate_id,
+                        player_tag="#2PP",
+                        from_account_public_id=first_context.public_id,
+                        to_account_public_id=second_context.public_id,
+                        operator_identity="sudo:operator:1000",
+                        reason="Fresh verification was reviewed.",
+                    )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                transfer_results = list(executor.map(lambda _item: transfer_once(), range(2)))
+            assert transfer_results == [("transferred", "#2PP"), ("transferred", "#2PP")]
+            assert database.scalar("SELECT account_id FROM verified_player_links") == second_account
+            assert database.scalar(
+                "SELECT state FROM support_player_link_transfer_candidates WHERE verification_request_id = %s",
+                (candidate_id,),
+            ) == "consumed"
+            with database.pool.connection() as connection:
+                audit = connection.execute(
+                    """
+                    SELECT operator_identity, reason
+                    FROM support_player_link_transfer_audits
+                    WHERE verification_request_id = %s
+                    """,
+                    (candidate_id,),
+                ).fetchone()
+            assert audit is not None
+            assert tuple(
+                value.decode("utf-8") if isinstance(value, bytes) else value
+                for value in audit
+            ) == ("sudo:operator:1000", "Fresh verification was reviewed.")
+            assert transfer_once() == ("transferred", "#2PP")
+            with support_connection(connection_info) as support:
+                assert call_support_transfer(
+                    support,
+                    verification_request_id=candidate_id,
+                    player_tag="#2PP",
+                    from_account_public_id=first_context.public_id,
+                    to_account_public_id=second_context.public_id,
+                    operator_identity="sudo:operator:1000",
+                    reason="A different reason must not replay the transfer.",
+                ) == ("transfer_conflict", None)
+
+            third_account = create_account(database, "google-support-third", "supportthird")
+            third_context = database.resolve_account("google", "google-support-third")
+            assert third_context is not None
+            third_binding = verification_binding(
+                third_account, "google-support-third", "#2PP"
+            )
+            assert database.reserve_verification(third_binding, normalized_tag="#2PP").fresh
+            expired_support = database.complete_verification(
+                third_binding,
+                normalized_tag="#2PP",
+                outcome=VerificationOutcome.VERIFIED,
+                account_id=third_account,
+                completed_at=datetime.now(UTC),
+            )
+            expired_candidate_id = expired_support.payload["verification_request_id"]
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE support_player_link_transfer_candidates
+                    SET verified_at = clock_timestamp() - interval '16 minutes',
+                        expires_at = clock_timestamp() - interval '1 second'
+                    WHERE verification_request_id = %s
+                    """,
+                    (expired_candidate_id,),
+                )
+                connection.commit()
+            with support_connection(connection_info) as support:
+                assert call_support_transfer(
+                    support,
+                    verification_request_id=expired_candidate_id,
+                    player_tag="#2PP",
+                    from_account_public_id=second_context.public_id,
+                    to_account_public_id=third_context.public_id,
+                    operator_identity="sudo:operator:1000",
+                    reason="Fresh verification was reviewed.",
+                ) == ("fresh_verification_required", None)
+            assert database.scalar("SELECT account_id FROM verified_player_links") == second_account
+            assert database.scalar(
+                """
+                SELECT state FROM support_player_link_transfer_candidates
+                WHERE verification_request_id = %s
+                """,
+                (expired_candidate_id,),
+            ) == "expired"
         finally:
             database.close()
 
@@ -227,6 +426,14 @@ def test_verification_request_replay_never_binds_or_persists_a_new_token(
                     SELECT response_json::text FROM private_api_requests
                     UNION ALL
                     SELECT outcome FROM player_link_verification_audits
+                UNION ALL
+                SELECT state FROM support_player_link_transfer_candidates
+                UNION ALL
+                SELECT operator_identity FROM support_player_link_transfer_audits
+                UNION ALL
+                SELECT reason FROM support_player_link_transfer_audits
+                UNION ALL
+                SELECT input_json::text FROM python_processing_jobs
                 ) AS safe_surfaces
                 """
             )
@@ -247,5 +454,49 @@ def test_verification_request_replay_never_binds_or_persists_a_new_token(
                 "SELECT total_budget FROM shared_api_credentials WHERE credential_fingerprint = %s",
                 (fingerprint,),
             ) == 30
+        finally:
+            database.close()
+
+
+def test_verification_reservation_has_recovery_state_and_stale_reuse_fails_closed(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            account_id = create_account(database, "google-crash", "crashowner")
+            request = verification_binding(account_id, "google-crash", "#9PY")
+            reservation = database.reserve_verification(request, normalized_tag="#9PY")
+
+            assert reservation.fresh is True
+            assert database.scalar(
+                "SELECT state FROM private_api_requests WHERE request_id = %s",
+                (request.request_id,),
+            ) == "in_progress"
+
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE private_api_requests
+                    SET in_progress_until = %s, created_at = %s
+                    WHERE request_id = %s
+                    """,
+                    (NOW - timedelta(seconds=1), NOW - timedelta(minutes=5), request.request_id),
+                )
+                connection.commit()
+
+            reused = database.reserve_verification(request, normalized_tag="#9PY")
+
+            assert reused.fresh is False
+            assert reused.result is not None
+            assert reused.result.status_code == 503
+            assert reused.result.payload == {
+                "status": "verification_unavailable",
+                "tag": "#9PY",
+            }
+            assert database.scalar(
+                "SELECT outcome FROM player_link_verification_audits WHERE request_id = %s",
+                (request.request_id,),
+            ) == "verification_unavailable"
         finally:
             database.close()

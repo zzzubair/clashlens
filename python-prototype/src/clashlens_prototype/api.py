@@ -45,8 +45,6 @@ _TYPESCRIPT_ACCOUNT_OPERATIONS = frozenset(
         "account.create",
         "account.read",
         "account.update",
-        "exports.read",
-        "exports.submit",
         "groups.read",
         "groups.write",
         "player_links.verify",
@@ -219,7 +217,7 @@ def create_app(
             is_ready = api_database.is_ready(
                 expected_contract_version=PROTOTYPE_CONTRACT_VERSION
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - readiness fails closed without disclosure.
             is_ready = False
         return JSONResponse(
             status_code=200 if is_ready else 503,
@@ -538,16 +536,20 @@ def create_app(
             "player_links.verify",
             {"tag": normalized_tag},
         )
-        existing = production_database.lookup_request(binding)
-        if existing is not None:
-            return _operation_response(existing)
-        token = _strict_verification_token(await request.body(), request.headers)
         reservation = production_database.reserve_verification(
             binding, normalized_tag=normalized_tag
         )
         if not reservation.fresh:
             assert reservation.result is not None
             return _operation_response(reservation.result)
+        try:
+            token = _strict_verification_token(await request.body(), request.headers)
+        except ApiError:
+            result = production_database.complete_invalid_verification_request(
+                binding,
+                completed_at=current_time(),
+            )
+            return _operation_response(result)
         if verification_client is None or official_credential_fingerprint is None:
             result = production_database.complete_verification(
                 binding,
@@ -578,11 +580,23 @@ def create_app(
             )
         except VerificationTransportError:
             classification = classify_transport_ambiguity()
-        production_database.apply_official_key_action(
-            official_credential_fingerprint,
-            classification.key_action,
-            cooldown_seconds=verification_cooldown_seconds,
-        )
+        except Exception:  # noqa: BLE001 - never repeat an ambiguous source call.
+            classification = classify_transport_ambiguity()
+        try:
+            production_database.apply_official_key_action(
+                official_credential_fingerprint,
+                classification.key_action,
+                cooldown_seconds=verification_cooldown_seconds,
+            )
+        except Exception:  # noqa: BLE001 - close the durable reservation safely.
+            result = production_database.complete_verification(
+                binding,
+                normalized_tag=normalized_tag,
+                outcome=VerificationOutcome.UNAVAILABLE,
+                account_id=context.account.internal_id,
+                completed_at=current_time(),
+            )
+            return _operation_response(result)
         result = production_database.complete_verification(
             binding,
             normalized_tag=normalized_tag,
@@ -596,7 +610,7 @@ def create_app(
 
 
 class _AuthorizationContext:
-    __slots__ = ("proof", "account")
+    __slots__ = ("account", "proof")
 
     def __init__(self, proof: VerifiedProof, account: AccountContext | None) -> None:
         self.proof = proof
@@ -612,11 +626,10 @@ def _authorize(
 ) -> _AuthorizationContext:
     proof: VerifiedProof = request.state.proof
     if operation in _PUBLIC_OPERATIONS:
-        if proof.caller not in {"typescript-website", "discord-bot"}:
+        if proof.caller != "typescript-website":
             raise ApiError(403, "caller_operation_not_authorized")
-        if proof.provider or proof.provider_subject:
-            if proof.caller != "typescript-website" or proof.provider != "google":
-                raise ApiError(403, "caller_operation_not_authorized")
+        if (proof.provider or proof.provider_subject) and proof.provider != "google":
+            raise ApiError(403, "caller_operation_not_authorized")
         account = (
             database.resolve_account(proof.provider, proof.provider_subject)
             if database is not None and proof.provider == "google"
@@ -732,7 +745,7 @@ async def _read_limited_body(request: Request, limit: int) -> bytes:
         if len(body) + len(chunk) > limit:
             raise RequestBodyTooLarge
         body.extend(chunk)
-    request._body = bytes(body)  # noqa: SLF001 - preserve the verified bounded body.
+    request._body = bytes(body)
     return bytes(body)
 
 

@@ -13,6 +13,7 @@ from psycopg_pool import ConnectionPool
 from .verification import KeyAction, VerificationOutcome
 
 API_CONTRACT_VERSION = 2
+VERIFICATION_RESERVATION_SECONDS = 45
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,7 +256,11 @@ class ApiDatabase:
     ) -> VerificationReservation:
         with self.pool.connection() as connection:
             with connection.transaction():
-                existing = self._reserve_request(connection, binding)
+                existing = self._reserve_request(
+                    connection,
+                    binding,
+                    recover_expired_verification=True,
+                )
                 if existing is not None:
                     return VerificationReservation(False, existing)
                 player_id = self._ensure_player(connection, normalized_tag)
@@ -313,6 +318,7 @@ class ApiDatabase:
     ) -> OperationResult:
         with self.pool.connection() as connection:
             with connection.transaction():
+                self._assert_request_binding(connection, binding)
                 player = connection.execute(
                     """
                     SELECT id FROM players WHERE normalized_tag = %s FOR UPDATE
@@ -422,97 +428,30 @@ class ApiDatabase:
                 self._complete_request(connection, binding.request_id, result)
                 return result
 
-    def apply_support_player_link_transfer(
+    def complete_invalid_verification_request(
         self,
+        binding: RequestBinding,
         *,
-        verification_request_id: str,
-        operator_identity: str,
-        reason: str,
-        now: datetime,
+        completed_at: datetime,
     ) -> OperationResult:
-        if not operator_identity or len(operator_identity) > 255:
-            raise ValueError("support operator identity is invalid")
-        if not 8 <= len(reason) <= 500:
-            raise ValueError("support transfer reason is invalid")
+        """Close a reserved request after safe body validation fails."""
         with self.pool.connection() as connection:
             with connection.transaction():
-                candidate = connection.execute(
+                self._assert_request_binding(connection, binding)
+                result = OperationResult(422, {"error": "invalid_request"})
+                updated = connection.execute(
                     """
-                    SELECT candidate.player_id, candidate.from_account_id,
-                           candidate.to_account_id, candidate.expires_at,
-                           candidate.state, player.normalized_tag
-                    FROM support_player_link_transfer_candidates AS candidate
-                    JOIN players AS player ON player.id = candidate.player_id
-                    WHERE candidate.verification_request_id = %s
-                    FOR UPDATE OF candidate
+                    UPDATE player_link_verification_audits
+                    SET outcome = 'invalid_request', completed_at = %s
+                    WHERE request_id = %s AND outcome = 'pending'
                     """,
-                    (verification_request_id,),
-                ).fetchone()
-                if candidate is None:
-                    return OperationResult(404, {"error": "transfer_not_found"})
-                if _text(candidate[4]) != "pending":
-                    return OperationResult(409, {"error": "transfer_not_pending"})
-                if now.astimezone(UTC) > candidate[3].astimezone(UTC):
-                    connection.execute(
-                        """
-                        UPDATE support_player_link_transfer_candidates
-                        SET state = 'expired'
-                        WHERE verification_request_id = %s
-                        """,
-                        (verification_request_id,),
-                    )
-                    return OperationResult(409, {"error": "fresh_verification_required"})
-                link = connection.execute(
-                    """
-                    SELECT account_id FROM verified_player_links
-                    WHERE player_id = %s FOR UPDATE
-                    """,
-                    (candidate[0],),
-                ).fetchone()
-                if link is None or int(link[0]) != int(candidate[1]):
-                    return OperationResult(409, {"error": "link_owner_changed"})
-                connection.execute(
-                    """
-                    UPDATE verified_player_links
-                    SET account_id = %s, verification_request_id = %s,
-                        verified_at = %s, updated_at = clock_timestamp()
-                    WHERE player_id = %s
-                    """,
-                    (
-                        candidate[2],
-                        verification_request_id,
-                        now,
-                        candidate[0],
-                    ),
+                    (completed_at, binding.request_id),
                 )
-                connection.execute(
-                    """
-                    UPDATE support_player_link_transfer_candidates
-                    SET state = 'completed', completed_at = clock_timestamp()
-                    WHERE verification_request_id = %s
-                    """,
-                    (verification_request_id,),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO support_player_link_transfer_audits (
-                        verification_request_id, player_id, from_account_id,
-                        to_account_id, operator_identity, reason
-                    ) VALUES (%s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        verification_request_id,
-                        candidate[0],
-                        candidate[1],
-                        candidate[2],
-                        operator_identity,
-                        reason,
-                    ),
-                )
-                return OperationResult(
-                    200,
-                    {"status": "transferred", "tag": _text(candidate[5])},
-                )
+                if updated.rowcount != 1:
+                    raise RuntimeError("verification audit reservation was lost")
+                self._complete_request(connection, binding.request_id, result)
+                return result
+
 
     def create_account(
         self,
@@ -1416,13 +1355,19 @@ class ApiDatabase:
         self,
         connection: Any,
         binding: RequestBinding,
+        *,
+        recover_expired_verification: bool = False,
     ) -> OperationResult | None:
         inserted = connection.execute(
             """
             INSERT INTO private_api_requests (
                 request_id, caller, provider, provider_subject, account_id,
-                operation, method, request_target, identity_json, state
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'reserved')
+                operation, method, request_target, identity_json, state,
+                in_progress_until
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, 'in_progress',
+                clock_timestamp() + make_interval(secs => %s)
+            )
             ON CONFLICT (request_id) DO NOTHING
             RETURNING request_id
             """,
@@ -1436,6 +1381,7 @@ class ApiDatabase:
                 binding.method,
                 binding.request_target,
                 Jsonb(binding.identity),
+                VERIFICATION_RESERVATION_SECONDS,
             ),
         ).fetchone()
         if inserted is not None:
@@ -1444,7 +1390,7 @@ class ApiDatabase:
             """
             SELECT caller, provider, provider_subject, account_id, operation,
                    method, request_target, identity_json, state,
-                   response_status, response_json
+                   response_status, response_json, in_progress_until
             FROM private_api_requests
             WHERE request_id = %s
             FOR UPDATE
@@ -1466,12 +1412,76 @@ class ApiDatabase:
         if actual != expected:
             return OperationResult(409, {"error": "request_id_conflict"}, replayed=True)
         if _text(row[8]) != "complete":
+            if (
+                recover_expired_verification
+                and _text(row[8]) == "in_progress"
+                and row[11] is not None
+                and row[11] <= connection.execute("SELECT clock_timestamp()").fetchone()[0]
+            ):
+                tag_row = connection.execute(
+                    """
+                    SELECT player.normalized_tag
+                    FROM player_link_verification_audits AS audit
+                    JOIN players AS player ON player.id = audit.player_id
+                    WHERE audit.request_id = %s AND audit.outcome = 'pending'
+                    FOR UPDATE OF audit
+                    """,
+                    (binding.request_id,),
+                ).fetchone()
+                if tag_row is not None:
+                    result = OperationResult(
+                        503,
+                        {
+                            "status": "verification_unavailable",
+                            "tag": _text(tag_row[0]),
+                        },
+                    )
+                    updated = connection.execute(
+                        """
+                        UPDATE player_link_verification_audits
+                        SET outcome = 'verification_unavailable',
+                            completed_at = clock_timestamp()
+                        WHERE request_id = %s AND outcome = 'pending'
+                        """,
+                        (binding.request_id,),
+                    )
+                    if updated.rowcount == 1:
+                        self._complete_request(connection, binding.request_id, result)
+                        return result
             return OperationResult(202, {"status": "in_progress"}, replayed=True)
         return OperationResult(
             int(row[9]),
             dict(row[10]),
             replayed=True,
         )
+
+    @staticmethod
+    def _assert_request_binding(connection: Any, binding: RequestBinding) -> None:
+        row = connection.execute(
+            """
+            SELECT caller, provider, provider_subject, account_id, operation,
+                   method, request_target, identity_json, state
+            FROM private_api_requests
+            WHERE request_id = %s
+            FOR UPDATE
+            """,
+            (binding.request_id,),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("private API request reservation is missing")
+        expected = (
+            binding.caller,
+            binding.provider,
+            binding.provider_subject,
+            binding.account_id,
+            binding.operation,
+            binding.method,
+            binding.request_target,
+            binding.identity,
+        )
+        actual = tuple(_text(value) for value in row[:8])
+        if actual != expected or _text(row[8]) != "in_progress":
+            raise RuntimeError("private API request binding is not active")
 
     @staticmethod
     def _complete_request(
@@ -1483,8 +1493,8 @@ class ApiDatabase:
             """
             UPDATE private_api_requests
             SET state = 'complete', response_status = %s, response_json = %s,
-                completed_at = clock_timestamp()
-            WHERE request_id = %s AND state = 'reserved'
+                in_progress_until = NULL, completed_at = clock_timestamp()
+            WHERE request_id = %s AND state = 'in_progress'
             """,
             (result.status_code, Jsonb(result.payload), request_id),
         )

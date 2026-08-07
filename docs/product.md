@@ -21,6 +21,10 @@ Phase 1 supports Legend I. Its north star is that a Legend I player should not n
 
 The scope is final. The implementation-level details that remain open are listed in [Open specification work](#open-specification-work).
 
+### Functional beta restrictions
+
+The functional beta accepts Google authentication only. Discord login, the Discord bot, and exports are disabled by default. A player link already owned by another account does not move automatically. It requires fresh verification and a restricted audited support action.
+
 ## Primary user
 
 The primary user is an individual competitive rank pusher. The same public data supports creators, players with several accounts, clans, friends, and followers.
@@ -36,7 +40,7 @@ The primary user is an individual competitive rank pusher. The same public data 
 - A **saved player tag** is a public player tag added to a Clash Lens account for convenience. Saving a tag does not prove ownership of the game account.
 - A **linked player account** is a player tag verified through the official `POST /players/{playerTag}/verifytoken` endpoint with the one-time player API token from the game. The link records verified control at the time of verification.
 - Every linked player account is public on the account's user page. Phase 1 has no per-account visibility controls.
-- One player tag can link to only one Clash Lens account at a time. Moving it to another Clash Lens account requires fresh player-token verification.
+- One player tag can link to only one Clash Lens account at a time. During beta, moving it requires fresh player-token verification and a restricted audited support action.
 - Clash Lens never requests a player's game login credentials. It does not retain or log the one-time player API token after its verification request finishes.
 - A **multi-account view** summarizes the verified player accounts linked to one Clash Lens account and links to each player page.
 - A **group** is a named set of player tags organized by a Clash Lens account.
@@ -108,7 +112,7 @@ The primary user is an individual competitive rank pusher. The same public data 
 - Let one Clash Lens account link both a Discord identity and a Google identity. Each provider identity can belong to only one Clash Lens account.
 - Let one Clash Lens account save multiple player tags.
 - Provide one multi-account summary page for verified linked player accounts, with links to each public player page.
-- Link player accounts only after successful official player-token verification. One player tag can link to only one Clash Lens account at a time, and moving it requires fresh verification.
+- Link player accounts only after successful official player-token verification. One player tag can link to only one Clash Lens account at a time. During beta, moving it requires fresh verification and a restricted audited support action.
 - Let users modify only their own saved tags, linked player accounts, groups, and preferences.
 - Let account users create named groups of player tags for easy tracking.
 - Use authentication to organize public data and preferences. It does not unlock hidden player data.
@@ -116,8 +120,8 @@ The primary user is an individual competitive rank pusher. The same public data 
 ### Product surfaces
 
 - Use the website as the primary product surface.
-- Provide minimal, easy Discord access. The exact Discord workflow remains a later specification decision.
-- Provide Google Sheets exports for analysis and sharing.
+- Keep Discord access disabled during beta. The exact Discord workflow remains a later specification decision.
+- Keep Google Sheets exports disabled during beta. Define export formats and enablement after beta.
 - Provide an OBS browser overlay as a creator-facing growth and publicity surface.
 - Keep shared data meanings, confidence states, and freshness consistent across applicable surfaces.
 

@@ -131,4 +131,14 @@ The deployment does not configure backups, point-in-time recovery, systemd linge
 
 Do not apply migration 2 or start future Python roles from this runbook. [Architecture](architecture.md#3-deployment-and-resource-limits) owns the required version-1-and-2 bridge order and application rollback contract. [The replay contract](architecture.md#replay) owns replay authorization.
 
+## Future beta support transfer boundary
+
+Do not install or run `deploy/support-transfer` from this collector-only runbook. When the beta Python roles are deployed, install that wrapper as `root:root` with mode `0700` in a root-owned non-writable directory. Use a narrow `NOSETENV` sudoers rule with environment reset that permits only this wrapper for each approved host operator.
+
+Create `/etc/clashlens/support-transfer-operators` as a `root:root` mode-`0600` allowlist. Create `/etc/clashlens/support-transfer.pg_service.conf` as a `root:root` mode-`0600` PostgreSQL service file. The service file must use the dedicated `clashlens_support_transfer` database role and its credential. Do not give that credential to a container or application role.
+
+The wrapper requires the exact opaque verification candidate UUID, player tag, source account public UUID, destination account public UUID, and a non-secret reason. It derives the operator from the sudo audit context. It prints only a sanitized status. It does not accept a player token.
+
+Completion: the wrapper, allowlist, and service file have the required owner and mode. The support role can execute only the transfer function. Application, worker, bot, collector, and public roles cannot execute that function or update its tables directly.
+
 Completion: the PostgreSQL volume and immutable archive remain intact, and the selected collector image is compatible with the current schema before restart.

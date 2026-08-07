@@ -2178,18 +2178,56 @@ CREATE TABLE IF NOT EXISTS private_api_requests (
         jsonb_typeof(identity_json) = 'object'
         AND octet_length(identity_json::text) <= 4096
     ),
-    state text NOT NULL CHECK (state IN ('reserved', 'complete')),
+    state text NOT NULL CHECK (state IN ('in_progress', 'complete')),
     response_status integer,
     response_json jsonb,
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    in_progress_until timestamptz,
     completed_at timestamptz,
     CHECK (
-        (state = 'reserved' AND response_status IS NULL AND response_json IS NULL)
-        OR (state = 'complete' AND response_status IS NOT NULL AND response_json IS NOT NULL)
+        (state = 'in_progress'
+         AND response_status IS NULL
+         AND response_json IS NULL
+         AND in_progress_until IS NOT NULL)
+        OR (state = 'complete'
+            AND response_status IS NOT NULL
+            AND response_json IS NOT NULL
+            AND in_progress_until IS NULL)
     )
 );
 CREATE INDEX IF NOT EXISTS private_api_requests_account_time_v2
     ON private_api_requests (account_id, created_at DESC);
+
+-- A reservation survives a process failure. The next reuse after the bounded
+-- source-call window closes it as unavailable. Keep this repair repeatable for
+-- databases that already contain the first API-layer shape.
+ALTER TABLE private_api_requests
+    ADD COLUMN IF NOT EXISTS in_progress_until timestamptz;
+ALTER TABLE private_api_requests
+    DROP CONSTRAINT IF EXISTS private_api_requests_state_check,
+    DROP CONSTRAINT IF EXISTS private_api_requests_check,
+    DROP CONSTRAINT IF EXISTS private_api_requests_state_v2_check,
+    DROP CONSTRAINT IF EXISTS private_api_requests_result_v2_check;
+UPDATE private_api_requests
+SET state = 'in_progress'
+WHERE state = 'reserved';
+UPDATE private_api_requests
+SET in_progress_until = created_at + interval '45 seconds'
+WHERE state = 'in_progress' AND in_progress_until IS NULL;
+ALTER TABLE private_api_requests
+    ADD CONSTRAINT private_api_requests_state_v2_check CHECK (
+        state IN ('in_progress', 'complete')
+    ),
+    ADD CONSTRAINT private_api_requests_result_v2_check CHECK (
+        (state = 'in_progress'
+         AND response_status IS NULL
+         AND response_json IS NULL
+         AND in_progress_until IS NOT NULL)
+        OR (state = 'complete'
+            AND response_status IS NOT NULL
+            AND response_json IS NOT NULL
+            AND in_progress_until IS NULL)
+    );
 
 CREATE TABLE IF NOT EXISTS api_refresh_requests (
     public_id uuid PRIMARY KEY,
@@ -2223,12 +2261,24 @@ CREATE TABLE IF NOT EXISTS player_link_verification_audits (
             'already_linked',
             'support_required',
             'invalid_token',
-            'verification_unavailable'
+            'verification_unavailable',
+            'invalid_request'
         )
     ),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     completed_at timestamptz
 );
+ALTER TABLE player_link_verification_audits
+    DROP CONSTRAINT IF EXISTS player_link_verification_audits_outcome_check,
+    DROP CONSTRAINT IF EXISTS player_link_verification_audits_outcome_v2_check;
+ALTER TABLE player_link_verification_audits
+    ADD CONSTRAINT player_link_verification_audits_outcome_v2_check CHECK (
+        outcome IN (
+            'pending', 'verified', 'linked', 'already_linked',
+            'support_required', 'invalid_token', 'verification_unavailable',
+            'invalid_request'
+        )
+    );
 CREATE INDEX IF NOT EXISTS player_link_verification_audits_account_time_v2
     ON player_link_verification_audits (account_id, created_at DESC);
 
@@ -2240,11 +2290,20 @@ CREATE TABLE IF NOT EXISTS support_player_link_transfer_candidates (
     to_account_id bigint NOT NULL REFERENCES clash_lens_accounts (id),
     verified_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL,
-    state text NOT NULL CHECK (state IN ('pending', 'completed', 'expired')),
+    state text NOT NULL CHECK (state IN ('pending', 'consumed', 'completed', 'expired')),
     completed_at timestamptz,
+    consumed_at timestamptz,
     CHECK (from_account_id <> to_account_id),
     CHECK (expires_at > verified_at)
 );
+ALTER TABLE support_player_link_transfer_candidates
+    ADD COLUMN IF NOT EXISTS consumed_at timestamptz;
+ALTER TABLE support_player_link_transfer_candidates
+    DROP CONSTRAINT IF EXISTS support_player_link_transfer_candidates_state_check,
+    DROP CONSTRAINT IF EXISTS support_player_link_transfer_candidates_state_v2_check;
+ALTER TABLE support_player_link_transfer_candidates
+    ADD CONSTRAINT support_player_link_transfer_candidates_state_v2_check
+    CHECK (state IN ('pending', 'consumed', 'completed', 'expired'));
 
 CREATE TABLE IF NOT EXISTS support_player_link_transfer_audits (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -2257,6 +2316,179 @@ CREATE TABLE IF NOT EXISTS support_player_link_transfer_audits (
     reason text NOT NULL CHECK (char_length(reason) BETWEEN 8 AND 500),
     transferred_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
+
+-- Support transfer is a host-only action. The role has no inherited login
+-- privileges from application roles. The wrapper connects with this role
+-- after sudo has authenticated and allowlisted the operator.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'clashlens_support_transfer'
+    ) THEN
+        CREATE ROLE clashlens_support_transfer
+            LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+    END IF;
+END
+$$;
+ALTER ROLE clashlens_support_transfer
+    NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+
+CREATE OR REPLACE FUNCTION clashlens_support_transfer(
+    requested_verification_request_id uuid,
+    requested_player_tag text,
+    requested_from_account_public_id uuid,
+    requested_to_account_public_id uuid,
+    requested_operator_identity text,
+    requested_reason text
+)
+RETURNS TABLE (status text, tag text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    candidate_row record;
+    current_link bigint;
+BEGIN
+    IF session_user <> 'clashlens_support_transfer' THEN
+        RAISE EXCEPTION 'support role required' USING ERRCODE = '42501';
+    END IF;
+    IF requested_player_tag !~ '^#[0289PYLQGRJCUV]{3,15}$'
+       OR requested_from_account_public_id IS NULL
+       OR requested_to_account_public_id IS NULL
+       OR requested_from_account_public_id = requested_to_account_public_id
+       OR char_length(requested_operator_identity) NOT BETWEEN 1 AND 255
+       OR char_length(requested_reason) NOT BETWEEN 8 AND 500
+       OR requested_operator_identity ~ '[[:cntrl:]]'
+       OR requested_reason ~ '[[:cntrl:]]'
+    THEN
+        RAISE EXCEPTION 'invalid support transfer request' USING ERRCODE = '22023';
+    END IF;
+
+    SELECT candidate.player_id,
+           candidate.from_account_id,
+           candidate.to_account_id,
+           candidate.verified_at,
+           candidate.expires_at,
+           candidate.state,
+           player.normalized_tag,
+           from_account.public_id AS from_public_id,
+           to_account.public_id AS to_public_id
+    INTO candidate_row
+    FROM support_player_link_transfer_candidates AS candidate
+    JOIN players AS player ON player.id = candidate.player_id
+    JOIN clash_lens_accounts AS from_account
+      ON from_account.id = candidate.from_account_id
+    JOIN clash_lens_accounts AS to_account
+      ON to_account.id = candidate.to_account_id
+    WHERE candidate.verification_request_id = requested_verification_request_id
+    FOR UPDATE OF candidate;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT 'transfer_not_found'::text, NULL::text;
+        RETURN;
+    END IF;
+    IF candidate_row.normalized_tag <> requested_player_tag
+       OR candidate_row.from_public_id <> requested_from_account_public_id
+       OR candidate_row.to_public_id <> requested_to_account_public_id
+    THEN
+        RETURN QUERY SELECT 'transfer_conflict'::text, NULL::text;
+        RETURN;
+    END IF;
+
+    IF candidate_row.state IN ('consumed', 'completed') THEN
+        IF EXISTS (
+            SELECT 1
+            FROM support_player_link_transfer_audits AS audit
+            WHERE audit.verification_request_id = requested_verification_request_id
+              AND audit.operator_identity = requested_operator_identity
+              AND audit.reason = requested_reason
+        ) THEN
+            RETURN QUERY SELECT 'transferred'::text, candidate_row.normalized_tag;
+        ELSE
+            RETURN QUERY SELECT 'transfer_conflict'::text, NULL::text;
+        END IF;
+        RETURN;
+    END IF;
+    IF candidate_row.state = 'expired' THEN
+        RETURN QUERY SELECT 'fresh_verification_required'::text, NULL::text;
+        RETURN;
+    END IF;
+    IF candidate_row.state <> 'pending' THEN
+        RETURN QUERY SELECT 'transfer_not_pending'::text, NULL::text;
+        RETURN;
+    END IF;
+    IF clock_timestamp() >= candidate_row.expires_at THEN
+        UPDATE support_player_link_transfer_candidates
+        SET state = 'expired'
+        WHERE verification_request_id = requested_verification_request_id;
+        RETURN QUERY SELECT 'fresh_verification_required'::text, NULL::text;
+        RETURN;
+    END IF;
+
+    SELECT account_id INTO current_link
+    FROM verified_player_links
+    WHERE player_id = candidate_row.player_id
+    FOR UPDATE;
+    IF NOT FOUND OR current_link <> candidate_row.from_account_id THEN
+        RETURN QUERY SELECT 'link_owner_changed'::text, NULL::text;
+        RETURN;
+    END IF;
+
+    UPDATE verified_player_links
+    SET account_id = candidate_row.to_account_id,
+        verification_request_id = requested_verification_request_id,
+        verified_at = candidate_row.verified_at,
+        updated_at = clock_timestamp()
+    WHERE player_id = candidate_row.player_id;
+    UPDATE support_player_link_transfer_candidates
+    SET state = 'consumed', consumed_at = clock_timestamp(), completed_at = clock_timestamp()
+    WHERE verification_request_id = requested_verification_request_id;
+    INSERT INTO support_player_link_transfer_audits (
+        verification_request_id, player_id, from_account_id, to_account_id,
+        operator_identity, reason
+    ) VALUES (
+        requested_verification_request_id, candidate_row.player_id,
+        candidate_row.from_account_id, candidate_row.to_account_id,
+        requested_operator_identity, requested_reason
+    );
+    RETURN QUERY SELECT 'transferred'::text, candidate_row.normalized_tag;
+END
+$$;
+
+DO $$
+DECLARE
+    support_schema_name text := current_schema();
+BEGIN
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_support_transfer(uuid, text, uuid, uuid, text, text) SET search_path TO pg_catalog, %I',
+        support_schema_name,
+        support_schema_name
+    );
+END
+$$;
+
+REVOKE ALL ON FUNCTION clashlens_support_transfer(uuid, text, uuid, uuid, text, text)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION clashlens_support_transfer(uuid, text, uuid, uuid, text, text)
+    TO clashlens_support_transfer;
+DO $$
+DECLARE
+    schema_name text := current_schema();
+BEGIN
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO clashlens_support_transfer', schema_name);
+    EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON TABLE %I.players, %I.clash_lens_accounts, '
+        || '%I.verified_player_links, %I.support_player_link_transfer_candidates, '
+        || '%I.support_player_link_transfer_audits FROM clashlens_support_transfer',
+        schema_name, schema_name, schema_name, schema_name, schema_name
+    );
+    EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON SEQUENCE %I.support_player_link_transfer_audits_id_seq '
+        || 'FROM clashlens_support_transfer',
+        schema_name
+    );
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS account_export_requests (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
