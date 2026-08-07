@@ -16,7 +16,7 @@ Clash Lens has a confirmed Phase 1 architecture shape and runtime split. Postgre
 
 The accepted shape is one repository and one logical product with independently running roles, a separate raw-evidence archive, durable staggered ingestion, and versioned precomputed analytics. Technology choices must preserve the product and domain rules rather than redefine them.
 
-The `python-prototype/` directory is a throwaway prototype slice. Its README says that it does not define the production Python application or a production database migration. Use it as implementation evidence for its stated seam only, not as a production contract.
+The `python/` directory is a throwaway prototype slice. Its README says that it does not define the production Python application or a production database migration. Use it as implementation evidence for its stated seam only, not as a production contract.
 
 ## Product and domain constraints
 

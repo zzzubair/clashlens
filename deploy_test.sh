@@ -307,7 +307,7 @@ for specification in \
   '--memory 384m' \
   '--pids-limit 256' \
   '--cpus 1.0' \
-  '--health-cmd python -m clashlens_prototype.cli ready --expected-contract-version 2' \
+  '--health-cmd python -m clashlens.cli ready --expected-contract-version 2' \
   'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --run-forever'; do
   [[ "$normalized_python_worker_run" == *"$specification"* ]] || {
     printf 'production Python worker is missing runtime setting %s\n' "$specification" >&2

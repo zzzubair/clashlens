@@ -312,9 +312,9 @@ build_collector_image() {
 build_python_worker_image() {
   "$PODMAN_BIN" build \
     --pull=missing \
-    --file "$ROOT_DIR/python-prototype/Containerfile" \
+    --file "$ROOT_DIR/python/Containerfile" \
     --tag "$PYTHON_WORKER_IMAGE" \
-    "$ROOT_DIR/python-prototype"
+    "$ROOT_DIR/python"
 }
 
 require_python_worker_runtime() {
@@ -358,7 +358,7 @@ start_python_worker() {
     --memory 384m \
     --pids-limit 256 \
     --cpus 1.0 \
-    --health-cmd "python -m clashlens_prototype.cli ready --expected-contract-version 2" \
+    --health-cmd "python -m clashlens.cli ready --expected-contract-version 2" \
     --health-interval 30s \
     --health-timeout 20s \
     --health-retries 3 \
