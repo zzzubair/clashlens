@@ -438,12 +438,17 @@ class FixtureHandler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         path = unquote(parsed.path)
         query = parse_qs(parsed.query, keep_blank_values=True)
-        if path == "/v1/leaderboards/tracked":
+        if path in {
+            "/v1/leaderboards/tracked",
+            "/v1/leaderboards/live",
+            "/v1/leaderboards/frozen",
+        }:
             try:
                 limit = int(query.get("limit", ["25"])[0])
             except ValueError:
                 limit = 25
-            self.send_json(200, leaderboard(limit, query.get("view", ["live"])[0]))
+            view = "daily" if path == "/v1/leaderboards/frozen" else query.get("view", ["live"])[0]
+            self.send_json(200, leaderboard(limit, view))
             return
         if path == "/v1/players/search":
             self.send_json(200, search_players(query.get("q", [""])[0]))
@@ -456,8 +461,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json(200, page)
             return
-        if path.startswith("/v1/refresh/"):
-            work_id = path[len("/v1/refresh/") :]
+        if path.startswith("/v1/refresh/") or path.startswith("/v1/refreshes/"):
+            prefix = "/v1/refreshes/" if path.startswith("/v1/refreshes/") else "/v1/refresh/"
+            work_id = path[len(prefix) :]
             with STATE["lock"]:
                 job = STATE["jobs"].get(work_id)
                 status_unavailable = job is not None and job["tag"] == "#2PY"
@@ -487,12 +493,14 @@ class FixtureHandler(BaseHTTPRequestHandler):
             if tag == "#2PV" or os.environ.get("CLASHLENS_FIXTURE_REFRESH_MODE") == "unavailable":
                 self.send_json(503, {"error": "unavailable"})
                 return
-            try:
-                payload = json.loads(self.verified_body.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                self.send_json(400, {"error": "invalid_input"})
-                return
-            idempotency_key = payload.get("idempotency_key") if isinstance(payload, dict) else None
+            idempotency_key = self.headers.get("X-ClashLens-Request-Id")
+            if self.verified_body:
+                try:
+                    payload = json.loads(self.verified_body.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    self.send_json(400, {"error": "invalid_input"})
+                    return
+                idempotency_key = payload.get("idempotency_key") if isinstance(payload, dict) else None
             if not isinstance(idempotency_key, str) or not UUID_PATTERN.fullmatch(idempotency_key):
                 self.send_json(400, {"error": "invalid_input"})
                 return

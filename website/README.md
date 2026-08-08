@@ -1,6 +1,6 @@
-# Clash Lens website prototype
+# Clash Lens website
 
-This directory contains the first self-hosted TypeScript website slice for issue #30.
+This directory contains the self-hosted Phase 1 TypeScript website.
 
 The app uses React Router 8 Framework Mode with standard SSR. It has one Node
 application process and one server-only Python client boundary. The Python server
@@ -77,10 +77,9 @@ starts the built Node app, and tests the HTTP and browser seam:
 npm run test:e2e
 ```
 
-The tests do not call the real Python application. The same route client can later
-point to the approved private API after issue #29 fixes its account-transfer
-contract. The website must not connect to that account integration before the
-contract gate is resolved.
+The acceptance tests do not call the real Python application. They use the
+deterministic fixture through the same signed route client that production uses
+for the private Python API.
 
 ## Podman
 

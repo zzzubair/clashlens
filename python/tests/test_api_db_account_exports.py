@@ -68,23 +68,42 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                 )
                 connection.commit()
 
-            frozen = database.get_frozen_leaderboard(limit=100)
+            frozen = database.get_frozen_leaderboard(limit=100, now=NOW)
             assert frozen == {
                 "kind": "frozen",
                 "snapshot_id": str(snapshot_public_id),
                 "boundary_at": "2026-08-06T05:00:00+00:00",
                 "version": 1,
                 "ordering_rule_version": "frozen-position-v1",
-                "coverage": {"state": "complete", "tracked_players": 1},
+                "generated_at": "2026-08-06T05:00:00+00:00",
+                "tracked_population": 1,
+                "coverage": {
+                    "state": "partial",
+                    "tracked_players": 1,
+                    "measured_percent": 0.0,
+                    "note": "Published frozen snapshot coverage is measured from its accepted population.",
+                },
+                "provenance": {
+                    "source": "published frozen leaderboard snapshot",
+                    "observed_at": "2026-08-06T05:00:00+00:00",
+                    "freshness": "fresh",
+                    "confidence": "partial",
+                    "coverage": "partial",
+                    "version": "frozen-position-v1",
+                },
+                "quality_states": ["partial"],
                 "entries": [
                     {
                         "position": 1,
                         "tag": "#2PP",
                         "name": "Player #2PP",
+                        "clan": None,
                         "trophies": 6001,
                         "observed_at": NOW.isoformat(),
+                        "age_seconds": 0,
                         "freshness": "fresh",
                         "confidence": "exact",
+                        "public_confidence": "high",
                         "official_rank": 42,
                     }
                 ],

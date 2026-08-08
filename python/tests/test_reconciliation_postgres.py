@@ -699,9 +699,20 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             assert player_page["daily_logs"] == [
                 {
                     "ranked_day_start": DAY_START.isoformat(),
+                    "ranked_day_end": DAY_END.isoformat(),
+                    "official_season_id": "1783918800",
+                    "season_day_number": 23,
                     "version": 2,
                     "state": "Partial",
                     "coverage": "complete",
+                    "confidence": "uncertain",
+                    "attack_count": 1,
+                    "attack_three_star_count": 1,
+                    "attack_gain": 40,
+                    "defense_count": 0,
+                    "defense_three_star_count": 0,
+                    "defense_loss": 0,
+                    "net_trophy_change": 40,
                     "adjustments": [],
                     "battles": daily_logs[1][4],
                     "partial_reasons": [

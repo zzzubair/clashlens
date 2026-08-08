@@ -2808,6 +2808,35 @@ CREATE TABLE IF NOT EXISTS api_player_daily_logs (
 CREATE INDEX IF NOT EXISTS api_player_daily_logs_current_v2
     ON api_player_daily_logs (player_id, ranked_day_start DESC, version DESC);
 
+-- The public API reads this immutable publication, not ranked_day_versions.
+-- All added values are nullable because a populated v1 row can lack the
+-- evidence needed to establish a value. Do not turn an unknown into zero.
+ALTER TABLE api_player_daily_logs
+    ADD COLUMN IF NOT EXISTS ranked_day_end timestamptz,
+    ADD COLUMN IF NOT EXISTS official_season_id text,
+    ADD COLUMN IF NOT EXISTS season_day_number integer,
+    ADD COLUMN IF NOT EXISTS confidence text,
+    ADD COLUMN IF NOT EXISTS attack_count integer,
+    ADD COLUMN IF NOT EXISTS attack_three_star_count integer,
+    ADD COLUMN IF NOT EXISTS attack_gain integer,
+    ADD COLUMN IF NOT EXISTS defense_count integer,
+    ADD COLUMN IF NOT EXISTS defense_three_star_count integer,
+    ADD COLUMN IF NOT EXISTS defense_loss integer,
+    ADD COLUMN IF NOT EXISTS net_trophy_change integer;
+ALTER TABLE api_player_daily_logs
+    DROP CONSTRAINT IF EXISTS api_player_daily_logs_screen_ready_v1_check,
+    ADD CONSTRAINT api_player_daily_logs_screen_ready_v1_check CHECK (
+        (ranked_day_end IS NULL OR ranked_day_end > ranked_day_start)
+        AND (season_day_number IS NULL OR season_day_number > 0)
+        AND (confidence IS NULL OR confidence IN ('exact', 'inferred', 'partial', 'uncertain'))
+        AND (attack_count IS NULL OR attack_count >= 0)
+        AND (attack_three_star_count IS NULL OR attack_three_star_count >= 0)
+        AND (attack_count IS NULL OR attack_three_star_count IS NULL OR attack_three_star_count <= attack_count)
+        AND (defense_count IS NULL OR defense_count >= 0)
+        AND (defense_three_star_count IS NULL OR defense_three_star_count >= 0)
+        AND (defense_count IS NULL OR defense_three_star_count IS NULL OR defense_three_star_count <= defense_count)
+    );
+
 CREATE TABLE IF NOT EXISTS api_frozen_leaderboards (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     public_id uuid NOT NULL UNIQUE,

@@ -102,21 +102,21 @@ export interface PlayerProfile {
 }
 
 export interface RankedDaySummary {
-  dayNumber: number;
+  dayNumber: number | null;
   label: string;
   period: string;
   state: "Live" | "Complete" | "Partial" | "Uncertain";
   offense: {
-    attacks: number;
-    threeStars: number;
-    trophyGain: number;
+    attacks: number | null;
+    threeStars: number | null;
+    trophyGain: number | null;
   };
   defense: {
-    defenses: number;
-    threeStarsAgainst: number;
-    trophyLoss: number;
+    defenses: number | null;
+    threeStarsAgainst: number | null;
+    trophyLoss: number | null;
   };
-  trophyChange: number;
+  trophyChange: number | null;
   completeness: {
     state: "complete" | "partial" | "uncertain";
     reason: string;
@@ -133,8 +133,8 @@ export interface PlayerPage {
     anchor: string;
     currentDayNumber: number;
     dayCount: number;
-  };
-  currentDay: RankedDaySummary;
+  } | null;
+  currentDay: RankedDaySummary | null;
   recentDays: RankedDaySummary[];
   dataQuality: Array<{
     code:

@@ -228,6 +228,29 @@ def create_app(
             content={"ready": is_ready},
         )
 
+    @app.get("/v1/players/search")
+    def search_players(
+        request: Request,
+        q: str = Query(min_length=1, max_length=80),
+        limit: int = Query(default=50, ge=1, le=50),
+    ) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        if production_database is None:
+            raise ApiError(503, "operation_unavailable")
+        return JSONResponse(
+            status_code=200,
+            content={
+                "query": q,
+                "known_only": True,
+                "results": production_database.search_known_players(
+                    q,
+                    now=current_time(),
+                    freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
+                    limit=limit,
+                ),
+            },
+        )
+
     @app.get("/v1/players/{tag}")
     def player(tag: str, request: Request) -> JSONResponse:
         _authorize(request, "player.read", production_database)
@@ -304,7 +327,11 @@ def create_app(
                 freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
             )
         else:
-            result = production_database.get_frozen_leaderboard(limit=limit)
+            result = production_database.get_frozen_leaderboard(
+                limit=limit,
+                now=current_time(),
+                freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
+            )
             if result is None:
                 raise ApiError(404, "leaderboard_not_found")
         return JSONResponse(status_code=200, content=result)

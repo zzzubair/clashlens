@@ -621,11 +621,13 @@ class ApiDatabase:
                 SELECT player.normalized_tag, player.active, player.eligibility_state,
                        profile.name, profile.trophies, profile.observed_at,
                        profile.source_http_status, profile.endpoint_version,
-                       profile.schema_version, profile.parser_version
+                       profile.schema_version, profile.parser_version,
+                       profile.profile_json -> 'clan' ->> 'name'
                 FROM players AS player
                 JOIN player_profile_versions AS profile
                     ON profile.id = player.current_profile_version_id
                 WHERE player.normalized_tag = %s
+                  AND profile.source_contract_state = 'accepted'
                 """,
                 (normalized_tag,),
             ).fetchone()
@@ -637,12 +639,18 @@ class ApiDatabase:
             )
             daily_rows = connection.execute(
                 """
-                SELECT ranked_day_start, version, state, coverage,
-                       adjustments, battles, partial_reasons
+                SELECT ranked_day_start, ranked_day_end, official_season_id,
+                       season_day_number, version, state, coverage, confidence,
+                       attack_count, attack_three_star_count, attack_gain,
+                       defense_count, defense_three_star_count, defense_loss,
+                       net_trophy_change, adjustments, battles, partial_reasons
                 FROM (
                     SELECT DISTINCT ON (ranked_day_start)
-                           ranked_day_start, version, state, coverage,
-                           adjustments, battles, partial_reasons
+                           ranked_day_start, ranked_day_end, official_season_id,
+                           season_day_number, version, state, coverage, confidence,
+                           attack_count, attack_three_star_count, attack_gain,
+                           defense_count, defense_three_star_count, defense_loss,
+                           net_trophy_change, adjustments, battles, partial_reasons
                     FROM api_player_daily_logs
                     WHERE player_id = (
                         SELECT id FROM players WHERE normalized_tag = %s
@@ -654,6 +662,48 @@ class ApiDatabase:
                 """,
                 (normalized_tag,),
             ).fetchall()
+            public_confidence = _public_confidence(bool(row[1]), _text(row[2]))
+            daily_logs = [_daily_log(day) for day in daily_rows]
+            screen_days = [
+                _screen_daily_log(day, public_confidence) for day in daily_logs
+            ]
+            now_utc = now.astimezone(UTC)
+            current_day = next(
+                (
+                    screen_day
+                    for raw_day, screen_day in zip(daily_rows, screen_days, strict=True)
+                    if raw_day[1] is not None
+                    and raw_day[0].astimezone(UTC)
+                    <= now_utc
+                    < raw_day[1].astimezone(UTC)
+                ),
+                None,
+            )
+            data_quality = []
+            if age_seconds > freshness_seconds:
+                data_quality.append(
+                    {
+                        "code": "stale",
+                        "label": "Stale saved profile",
+                        "detail": "The accepted player profile is older than the current freshness limit.",
+                    }
+                )
+            if current_day is None:
+                data_quality.append(
+                    {
+                        "code": "unavailable",
+                        "label": "Missing current ranked-day data",
+                        "detail": "No ranked-day publication covers the current UTC time.",
+                    }
+                )
+            elif current_day["completeness"]["state"] != "complete":
+                data_quality.append(
+                    {
+                        "code": current_day["completeness"]["state"],
+                        "label": "Incomplete ranked-day data",
+                        "detail": current_day["completeness"]["reason"],
+                    }
+                )
             return {
                 "tag": _text(row[0]),
                 "name": _text(row[3]),
@@ -668,19 +718,92 @@ class ApiDatabase:
                 "endpoint_version": _text(row[7]),
                 "schema_version": _text(row[8]),
                 "parser_version": _text(row[9]),
-                "daily_logs": [
-                    {
-                        "ranked_day_start": day[0].astimezone(UTC).isoformat(),
-                        "version": int(day[1]),
-                        "state": _text(day[2]),
-                        "coverage": _text(day[3]),
-                        "adjustments": list(day[4]),
-                        "battles": list(day[5]),
-                        "partial_reasons": list(day[6]),
-                    }
-                    for day in daily_rows
-                ],
+                "clan": None if row[10] is None else _text(row[10]),
+                "public_confidence": public_confidence,
+                "daily_logs": daily_logs,
+                "screen_ready": {
+                    "current_day": current_day,
+                    "recent_days": screen_days,
+                    "season": None
+                    if (
+                        current_day is None
+                        or current_day["official_season_id"] is None
+                        or current_day["season_day_number"] is None
+                    )
+                    else {
+                        "id": current_day["official_season_id"],
+                        "current_day_number": current_day["season_day_number"],
+                        "start": current_day["ranked_day_start"],
+                        "end": current_day["ranked_day_end"],
+                    },
+                    "data_quality": data_quality,
+                    "provenance": {
+                        "source": "api_player_daily_logs",
+                        "observed_at": observed_at.isoformat(),
+                        "freshness": "fresh"
+                        if age_seconds <= freshness_seconds
+                        else "stale",
+                        "confidence": public_confidence,
+                        "coverage": (
+                            current_day["completeness"]["state"]
+                            if current_day is not None
+                            else "missing"
+                        ),
+                        "version": "api-player-daily-log-v2",
+                    },
+                },
             }
+
+    def search_known_players(
+        self,
+        query: str,
+        *,
+        now: datetime,
+        freshness_seconds: int,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 50:
+            raise ValueError("known player search limit is outside the supported range")
+        escaped_query = (
+            query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        with self.pool.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT player.normalized_tag, profile.name, profile.trophies,
+                       profile.observed_at, player.eligibility_state,
+                       profile.profile_json -> 'clan' ->> 'name'
+                FROM players AS player
+                JOIN player_profile_versions AS profile
+                    ON profile.id = player.current_profile_version_id
+                WHERE profile.name ILIKE %s ESCAPE '\\'
+                  AND profile.source_contract_state = 'accepted'
+                ORDER BY lower(profile.name), player.normalized_tag
+                LIMIT %s
+                """,
+                (f"%{escaped_query}%", limit),
+            ).fetchall()
+            results = []
+            for row in rows:
+                observed_at = row[3].astimezone(UTC)
+                age_seconds = max(
+                    0, int((now.astimezone(UTC) - observed_at).total_seconds())
+                )
+                results.append(
+                    {
+                        "tag": _text(row[0]),
+                        "name": _text(row[1]),
+                        "clan": None if row[5] is None else _text(row[5]),
+                        "trophies": int(row[2]),
+                        "freshness": (
+                            "fresh" if age_seconds <= freshness_seconds else "stale"
+                        ),
+                        "age_seconds": age_seconds,
+                        "observed_at": observed_at.isoformat(),
+                        "public_confidence": _public_confidence(True, _text(row[4])),
+                    }
+                )
+            return results
 
     def get_live_leaderboard(
         self,
@@ -693,11 +816,12 @@ class ApiDatabase:
             rows = connection.execute(
                 """
                 SELECT player.normalized_tag, profile.name, profile.trophies,
-                       profile.observed_at, player.eligibility_state
+                       profile.observed_at, player.eligibility_state,
+                       profile.profile_json -> 'clan' ->> 'name'
                 FROM players AS player
                 JOIN player_profile_versions AS profile
                     ON profile.id = player.current_profile_version_id
-                WHERE player.active = true
+                WHERE player.active = true AND profile.source_contract_state = 'accepted'
                 ORDER BY profile.trophies DESC, md5(player.normalized_tag),
                          player.normalized_tag
                 LIMIT %s
@@ -723,26 +847,64 @@ class ApiDatabase:
                         "age_seconds": age_seconds,
                         "freshness": freshness,
                         "confidence": _text(row[4]),
+                        "public_confidence": _public_confidence(True, _text(row[4])),
+                        "clan": None if row[5] is None else _text(row[5]),
                         "official_rank": None,
                     }
                 )
+            tracked_row = connection.execute(
+                "SELECT count(*) FROM players WHERE active = true"
+            ).fetchone()
+            measured_row = connection.execute(
+                """
+                SELECT count(*)
+                FROM players AS player
+                JOIN player_profile_versions AS profile
+                    ON profile.id = player.current_profile_version_id
+                WHERE player.active = true
+                  AND profile.source_contract_state = 'accepted'
+                """
+            ).fetchone()
+            assert tracked_row is not None
+            assert measured_row is not None
+            tracked_population = int(tracked_row[0])
+            measured_population = int(measured_row[0])
+            measured_percent = (
+                100.0 * measured_population / tracked_population
+                if tracked_population
+                else 0.0
+            )
             return {
                 "kind": "live",
                 "ordering_rule_version": "tracked-trophies-md5-v1",
                 "generated_at": now.astimezone(UTC).isoformat(),
-                "tracked_population": int(
-                    connection.execute(
-                        "SELECT count(*) FROM players WHERE active = true"
-                    ).fetchone()[0]
-                ),
+                "tracked_population": tracked_population,
                 "coverage": {
-                    "returned": len(entries),
-                    "stale_entries": stale_count,
+                    "state": "partial",
+                    "tracked_players": tracked_population,
+                    "measured_percent": measured_percent,
+                    "note": "Tracked-player publication; complete Legend I coverage is not claimed.",
                 },
+                "provenance": {
+                    "source": "current accepted player profiles",
+                    "observed_at": now.astimezone(UTC).isoformat(),
+                    "freshness": "stale" if stale_count else "fresh",
+                    "confidence": "partial",
+                    "coverage": "partial",
+                    "version": "tracked-trophies-md5-v1",
+                },
+                "quality_states": ["partial"] + (["stale"] if stale_count else []),
                 "entries": entries,
             }
 
-    def get_frozen_leaderboard(self, *, limit: int) -> dict[str, Any] | None:
+    def get_frozen_leaderboard(
+        self,
+        *,
+        limit: int,
+        now: datetime | None = None,
+        freshness_seconds: int = 900,
+    ) -> dict[str, Any] | None:
+        now = datetime.now(UTC) if now is None else now
         with self.pool.connection() as connection:
             # The domain snapshot is the immutable publication source. A
             # building candidate is never current; the newest published version
@@ -762,6 +924,7 @@ class ApiDatabase:
                 """
             ).fetchone()
             if snapshot is not None:
+                assert snapshot is not None
                 rows = connection.execute(
                     """
                     SELECT entry.position, player.normalized_tag,
@@ -769,11 +932,12 @@ class ApiDatabase:
                            entry.profile_observed_at,
                            entry.profile_freshness,
                            entry.profile_confidence,
-                           entry.official_rank
+                           entry.official_rank, profile.clan
                     FROM leaderboard_snapshot_entries AS entry
                     JOIN players AS player ON player.id = entry.player_id
                     LEFT JOIN LATERAL (
-                        SELECT version.name
+                        SELECT version.name,
+                               version.profile_json -> 'clan' ->> 'name' AS clan
                         FROM player_profile_versions AS version
                         WHERE version.observation_id = entry.profile_observation_id
                         ORDER BY version.id DESC
@@ -785,23 +949,34 @@ class ApiDatabase:
                     """,
                     (snapshot[0], limit),
                 ).fetchall()
+                boundary_at = snapshot[1].astimezone(UTC)
+                measured = float(snapshot[5])
+                measured_percent = measured * 100 if measured <= 1 else measured
+                snapshot_is_stale = int(snapshot[8]) > 0
                 return {
                     "kind": "frozen",
                     "snapshot_id": str(snapshot[0]),
-                    "boundary_at": snapshot[1].astimezone(UTC).isoformat(),
+                    "boundary_at": boundary_at.isoformat(),
+                    "generated_at": boundary_at.isoformat(),
                     "version": int(snapshot[2]),
                     "ordering_rule_version": _text(snapshot[3]),
                     "coverage": {
-                        "measured": float(snapshot[5]),
-                        "eligible_population": int(snapshot[6]),
-                        "included_entries": int(snapshot[7]),
-                        "stale_entries": int(snapshot[8]),
-                        "fresh_entries": int(snapshot[9]),
-                        "excluded_missing": int(snapshot[10]),
-                        "excluded_invalid": int(snapshot[11]),
-                        "excluded_malformed": int(snapshot[12]),
-                        "excluded_conflicting": int(snapshot[13]),
+                        "state": "partial",
+                        "tracked_players": int(snapshot[6]),
+                        "measured_percent": measured_percent,
+                        "note": "Published frozen snapshot coverage is measured from its accepted population.",
                     },
+                    "tracked_population": int(snapshot[6]),
+                    "provenance": {
+                        "source": "published frozen leaderboard snapshot",
+                        "observed_at": boundary_at.isoformat(),
+                        "freshness": "stale" if snapshot_is_stale else "fresh",
+                        "confidence": "partial",
+                        "coverage": "partial",
+                        "version": _text(snapshot[3]),
+                    },
+                    "quality_states": ["partial"]
+                    + (["stale"] if snapshot_is_stale else []),
                     "entries": [
                         {
                             "position": int(row[0]),
@@ -809,9 +984,21 @@ class ApiDatabase:
                             "name": None if row[2] is None else _text(row[2]),
                             "trophies": int(row[3]),
                             "observed_at": row[4].astimezone(UTC).isoformat(),
+                            "age_seconds": max(
+                                0,
+                                int(
+                                    (
+                                        now.astimezone(UTC) - row[4].astimezone(UTC)
+                                    ).total_seconds()
+                                ),
+                            ),
                             "freshness": _text(row[5]),
                             "confidence": _text(row[6]),
+                            "public_confidence": _public_snapshot_confidence(
+                                _text(row[6])
+                            ),
                             "official_rank": None if row[7] is None else int(row[7]),
+                            "clan": None if row[8] is None else _text(row[8]),
                         }
                         for row in rows
                     ],
@@ -833,6 +1020,7 @@ class ApiDatabase:
             rows = connection.execute(
                 """
                 SELECT entry.position, player.normalized_tag, profile.name,
+                       profile.profile_json -> 'clan' ->> 'name',
                        entry.trophies, entry.observed_at, entry.freshness,
                        entry.confidence, entry.official_rank
                 FROM api_frozen_leaderboard_entries AS entry
@@ -845,23 +1033,56 @@ class ApiDatabase:
                 """,
                 (snapshot[0], limit),
             ).fetchall()
+            boundary_at = snapshot[2].astimezone(UTC)
+            coverage = dict(snapshot[5])
+            measured = float(coverage.get("measured", 0))
+            measured_percent = measured * 100 if measured <= 1 else measured
+            population = int(coverage.get("eligible_population", len(rows)))
+            snapshot_is_stale = any(_text(row[6]) == "stale" for row in rows)
             return {
                 "kind": "frozen",
                 "snapshot_id": str(snapshot[1]),
                 "boundary_at": snapshot[2].astimezone(UTC).isoformat(),
                 "version": int(snapshot[3]),
                 "ordering_rule_version": _text(snapshot[4]),
-                "coverage": dict(snapshot[5]),
+                "generated_at": boundary_at.isoformat(),
+                "tracked_population": population,
+                "coverage": {
+                    "state": "partial",
+                    "tracked_players": population,
+                    "measured_percent": measured_percent,
+                    "note": "Published frozen snapshot coverage is measured from its accepted population.",
+                },
+                "provenance": {
+                    "source": "published frozen leaderboard snapshot",
+                    "observed_at": boundary_at.isoformat(),
+                    "freshness": "stale" if snapshot_is_stale else "fresh",
+                    "confidence": "partial",
+                    "coverage": "partial",
+                    "version": _text(snapshot[4]),
+                },
+                "quality_states": ["partial"]
+                + (["stale"] if snapshot_is_stale else []),
                 "entries": [
                     {
                         "position": int(row[0]),
                         "tag": _text(row[1]),
                         "name": None if row[2] is None else _text(row[2]),
-                        "trophies": int(row[3]),
-                        "observed_at": row[4].astimezone(UTC).isoformat(),
-                        "freshness": _text(row[5]),
-                        "confidence": _text(row[6]),
-                        "official_rank": None if row[7] is None else int(row[7]),
+                        "clan": None if row[3] is None else _text(row[3]),
+                        "trophies": int(row[4]),
+                        "observed_at": row[5].astimezone(UTC).isoformat(),
+                        "age_seconds": max(
+                            0,
+                            int(
+                                (
+                                    now.astimezone(UTC) - row[5].astimezone(UTC)
+                                ).total_seconds()
+                            ),
+                        ),
+                        "freshness": _text(row[6]),
+                        "confidence": _text(row[7]),
+                        "public_confidence": _public_snapshot_confidence(_text(row[7])),
+                        "official_rank": None if row[8] is None else int(row[8]),
                     }
                     for row in rows
                 ],
@@ -1526,3 +1747,71 @@ def _account_context(row: Any) -> AccountContext:
 
 def _text(value: Any) -> Any:
     return value.decode("utf-8") if isinstance(value, bytes) else value
+
+
+def _public_confidence(active: bool, eligibility_state: str) -> str:
+    if eligibility_state == "eligible":
+        return "high"
+    if eligibility_state == "uncertain":
+        return "uncertain"
+    return "partial" if active else "uncertain"
+
+
+def _public_snapshot_confidence(value: str) -> str:
+    if value in {"exact", "confirmed", "high"}:
+        return "high"
+    if value in {"inferred", "partial"}:
+        return "partial"
+    return "uncertain"
+
+
+def _screen_daily_log(day: dict[str, Any], profile_confidence: str) -> dict[str, Any]:
+    coverage = day["coverage"]
+    reasons = [reason for reason in day["partial_reasons"] if isinstance(reason, str)]
+    if day["confidence"] == "uncertain":
+        completeness = "uncertain"
+    elif day["state"] == "Complete" and coverage == "complete" and not reasons:
+        completeness = "complete"
+    else:
+        completeness = "partial"
+    default_reason = {
+        "complete": "Published ranked-day evidence is complete.",
+        "partial": "Published ranked-day evidence is partial.",
+        "uncertain": "Published ranked-day evidence has unresolved uncertainty.",
+    }[completeness]
+    return {
+        **day,
+        "completeness": {
+            "state": completeness,
+            "reason": "; ".join(reasons) if reasons else default_reason,
+        },
+        "public_confidence": _public_snapshot_confidence(
+            day["confidence"] if day["confidence"] is not None else profile_confidence
+        ),
+        "uncertainty_reasons": reasons,
+    }
+
+
+def _daily_log(day: Any) -> dict[str, Any]:
+    return {
+        "ranked_day_start": day[0].astimezone(UTC).isoformat(),
+        "ranked_day_end": None
+        if day[1] is None
+        else day[1].astimezone(UTC).isoformat(),
+        "official_season_id": None if day[2] is None else _text(day[2]),
+        "season_day_number": None if day[3] is None else int(day[3]),
+        "version": int(day[4]),
+        "state": _text(day[5]),
+        "coverage": _text(day[6]),
+        "confidence": None if day[7] is None else _text(day[7]),
+        "attack_count": None if day[8] is None else int(day[8]),
+        "attack_three_star_count": None if day[9] is None else int(day[9]),
+        "attack_gain": None if day[10] is None else int(day[10]),
+        "defense_count": None if day[11] is None else int(day[11]),
+        "defense_three_star_count": None if day[12] is None else int(day[12]),
+        "defense_loss": None if day[13] is None else int(day[13]),
+        "net_trophy_change": None if day[14] is None else int(day[14]),
+        "adjustments": list(day[15]),
+        "battles": list(day[16]),
+        "partial_reasons": list(day[17]),
+    }

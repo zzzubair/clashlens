@@ -121,6 +121,15 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
                 player_target,
                 headers=signed_headers(player_target, caller="discord-bot"),
             )
+            search_target = "/v1/players/search?q=Player"
+            search = client.get(
+                search_target,
+                headers=signed_headers(search_target),
+            )
+            discord_search = client.get(
+                search_target,
+                headers=signed_headers(search_target, caller="discord-bot"),
+            )
             leaderboard_target = "/v1/leaderboards/live?limit=100"
             leaderboard = client.get(
                 leaderboard_target,
@@ -153,6 +162,25 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
             assert player.status_code == 200
             assert discord_player.status_code == 403
             assert discord_player.json() == {"error": "caller_operation_not_authorized"}
+            assert search.status_code == 200
+            assert search.json() == {
+                "query": "Player",
+                "known_only": True,
+                "results": [
+                    {
+                        "tag": "#2PP",
+                        "name": "Player #2PP",
+                        "clan": None,
+                        "trophies": 6000,
+                        "freshness": "stale",
+                        "age_seconds": 20_982_400,
+                        "observed_at": "2026-08-06T12:00:00+00:00",
+                        "public_confidence": "high",
+                    }
+                ],
+            }
+            assert discord_search.status_code == 403
+            assert discord_search.json() == {"error": "caller_operation_not_authorized"}
             assert leaderboard.status_code == 200
             assert analytics.status_code == 200
             assert public_user.status_code == 404

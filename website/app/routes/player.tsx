@@ -288,75 +288,103 @@ export default function PlayerRoute() {
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {visibleStatus ? <RefreshProgress status={visibleStatus} /> : null}
 
-      <section className="data-section" aria-labelledby="current-day-title">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Season {player.season.id}</p>
-            <h2 id="current-day-title">Current Legend day</h2>
+      {player.currentDay === null ? (
+        <section className="data-section" aria-labelledby="current-day-title">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Ranked-day data quality</p>
+              <h2 id="current-day-title">Current Legend day</h2>
+            </div>
+            <StateBadge state="unavailable" />
           </div>
-          <StateBadge state={dayStateBadge(player.currentDay.state)} />
-        </div>
-        <p className="section-note">
-          Ranked day {player.currentDay.dayNumber} · {player.currentDay.period} · day
-          state is <strong>{player.currentDay.state}</strong> until it can be reconciled.
-        </p>
-        <div className="metric-grid">
-          <MetricCard title="Offense">
-            <Metric
-              label="Attacks observed"
-              value={String(player.currentDay.offense.attacks)}
-            />
-            <Metric
-              label="Three-stars"
-              value={`${player.currentDay.offense.threeStars} / ${player.currentDay.offense.attacks}`}
-            />
-            <Metric
-              label="Trophy gain"
-              value={formatSigned(player.currentDay.offense.trophyGain)}
-            />
-          </MetricCard>
-          <MetricCard title="Defense">
-            <Metric
-              label="Defenses observed"
-              value={String(player.currentDay.defense.defenses)}
-            />
-            <Metric
-              label="Three-stars against"
-              value={String(player.currentDay.defense.threeStarsAgainst)}
-            />
-            <Metric
-              label="Trophy loss"
-              value={formatSigned(-player.currentDay.defense.trophyLoss)}
-            />
-          </MetricCard>
-          <MetricCard title="Trophy change">
-            <Metric
-              label="Net change"
-              value={formatSigned(player.currentDay.trophyChange)}
-            />
-            <Metric
-              label="Completeness"
-              value={capitalize(player.currentDay.completeness.state)}
-            />
-            <Metric
-              label="Season day"
-              value={`${player.season.currentDayNumber} / ${player.season.dayCount}`}
-            />
-          </MetricCard>
-        </div>
-        <div className="quality-panel">
-          <h3>Completeness and uncertainty</h3>
-          <p>
-            Completeness: <StateBadge state={player.currentDay.completeness.state} />{" "}
-            {player.currentDay.completeness.reason}
+          <p className="section-note">
+            No ranked-day publication is available for this accepted profile. Clash Lens
+            does not fabricate a day.
           </p>
-          <ul>
-            {player.currentDay.uncertainty.map((item) => (
-              <li key={item}>{item}</li>
-            ))}
-          </ul>
-        </div>
-      </section>
+        </section>
+      ) : (
+        <section className="data-section" aria-labelledby="current-day-title">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Season {player.season?.id ?? "Unknown"}</p>
+              <h2 id="current-day-title">Current Legend day</h2>
+            </div>
+            <StateBadge state={dayStateBadge(player.currentDay!.state)} />
+          </div>
+          <p className="section-note">
+            Ranked day {player.currentDay!.dayNumber ?? "Unknown"} ·{" "}
+            {player.currentDay!.period} · day state is{" "}
+            <strong>{player.currentDay!.state}</strong> until it can be reconciled.
+          </p>
+          <div className="metric-grid">
+            <MetricCard title="Offense">
+              <Metric
+                label="Attacks observed"
+                value={formatCount(player.currentDay!.offense.attacks)}
+              />
+              <Metric
+                label="Three-stars"
+                value={formatFraction(
+                  player.currentDay!.offense.threeStars,
+                  player.currentDay!.offense.attacks,
+                )}
+              />
+              <Metric
+                label="Trophy gain"
+                value={formatSigned(player.currentDay!.offense.trophyGain)}
+              />
+            </MetricCard>
+            <MetricCard title="Defense">
+              <Metric
+                label="Defenses observed"
+                value={formatCount(player.currentDay!.defense.defenses)}
+              />
+              <Metric
+                label="Three-stars against"
+                value={formatCount(player.currentDay!.defense.threeStarsAgainst)}
+              />
+              <Metric
+                label="Trophy loss"
+                value={
+                  player.currentDay!.defense.trophyLoss === null
+                    ? "Unknown"
+                    : formatSigned(-player.currentDay!.defense.trophyLoss)
+                }
+              />
+            </MetricCard>
+            <MetricCard title="Trophy change">
+              <Metric
+                label="Net change"
+                value={formatSigned(player.currentDay!.trophyChange)}
+              />
+              <Metric
+                label="Completeness"
+                value={capitalize(player.currentDay!.completeness.state)}
+              />
+              <Metric
+                label="Season day"
+                value={
+                  player.season
+                    ? `${player.season.currentDayNumber} / ${player.season.dayCount}`
+                    : "Unknown"
+                }
+              />
+            </MetricCard>
+          </div>
+          <div className="quality-panel">
+            <h3>Completeness and uncertainty</h3>
+            <p>
+              Completeness: <StateBadge state={player.currentDay!.completeness.state} />{" "}
+              {player.currentDay!.completeness.reason}
+            </p>
+            <ul>
+              {player.currentDay!.uncertainty.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      )}
 
       <section className="data-section" aria-labelledby="quality-title">
         <div className="section-heading">
@@ -395,13 +423,21 @@ export default function PlayerRoute() {
             </thead>
             <tbody>
               {player.recentDays.map((day) => (
-                <tr key={day.dayNumber}>
-                  <th scope="row">{day.dayNumber}</th>
+                <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
+                  <th scope="row">{day.dayNumber ?? "Unknown"}</th>
                   <td>
                     <StateBadge state={dayStateBadge(day.state)} />
                   </td>
-                  <td>{day.offense.attacks} attacks</td>
-                  <td>{day.defense.defenses} defenses</td>
+                  <td>
+                    {day.offense.attacks === null
+                      ? "Unknown"
+                      : `${day.offense.attacks} attacks`}
+                  </td>
+                  <td>
+                    {day.defense.defenses === null
+                      ? "Unknown"
+                      : `${day.defense.defenses} defenses`}
+                  </td>
                   <td>{formatSigned(day.trophyChange)}</td>
                 </tr>
               ))}
@@ -450,15 +486,28 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function formatSigned(value: number): string {
+function formatSigned(value: number | null): string {
+  if (value === null) return "Unknown";
   return value > 0 ? `+${value}` : String(value);
+}
+
+function formatCount(value: number | null): string {
+  return value === null ? "Unknown" : String(value);
+}
+
+function formatFraction(numerator: number | null, denominator: number | null): string {
+  return numerator === null || denominator === null
+    ? "Unknown"
+    : `${numerator} / ${denominator}`;
 }
 
 function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function dayStateBadge(value: PlayerPage["currentDay"]["state"]): StateValue {
+function dayStateBadge(
+  value: NonNullable<PlayerPage["currentDay"]>["state"],
+): StateValue {
   switch (value) {
     case "Live":
       return "live";

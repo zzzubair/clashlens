@@ -319,7 +319,7 @@ func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
 	if _, err := connection.Exec(ctx, `SET ROLE `+apiRole); err != nil {
 		t.Fatalf("set api role: %v", err)
 	}
-	if _, err := connection.Exec(ctx, `SELECT state FROM api_player_daily_logs WHERE id = $1`, dailyLogID); err != nil {
+	if _, err := connection.Exec(ctx, `SELECT state, ranked_day_end, attack_count, defense_loss FROM api_player_daily_logs WHERE id = $1`, dailyLogID); err != nil {
 		t.Fatalf("api read derived row: %v", err)
 	}
 	if err := connection.QueryRow(ctx, `
@@ -361,6 +361,7 @@ func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("api enqueue export job: %v", err)
 	}
+	expectInsufficientPrivilege(t, ctx, connection, `SELECT count(*) FROM ranked_day_versions`, "api reading ranked-day rows")
 	expectInsufficientPrivilege(t, ctx, connection, `UPDATE ranked_day_versions SET state = 'Malformed' WHERE id = 1`, "api mutating ranked-day rows")
 	expectInsufficientPrivilege(t, ctx, connection, `UPDATE player_profile_versions SET trophies = 0 WHERE id = 1`, "api mutating profile rows")
 	expectInsufficientPrivilege(t, ctx, connection, `UPDATE players SET current_profile_version_id = NULL WHERE id = $1`, "api mutating current profile", playerID)
