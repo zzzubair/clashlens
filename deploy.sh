@@ -603,21 +603,29 @@ collector_secret_args() {
   done
 }
 
-# The required collector uses its own database role and its own read-write
-# archive credentials. The worker's read-only archive pair never reaches it.
+# Both collector modes need the collector's read-write archive credentials.
+# The worker's read-only archive pair never reaches either collector.
+collector_archive_secret_args() {
+  local -n secret_result=$1
+  local -n env_result=$2
+
+  replace_secret_value clashlens-collector-archive-access-key "$CLASHLENS_ARCHIVE_ACCESS_KEY"
+  replace_secret_value clashlens-collector-archive-secret-key "$CLASHLENS_ARCHIVE_SECRET_KEY"
+  secret_result+=(--secret "clashlens-collector-archive-access-key,type=mount,target=/run/secrets/archive-access-key,uid=10001,gid=10001,mode=0400")
+  secret_result+=(--secret "clashlens-collector-archive-secret-key,type=mount,target=/run/secrets/archive-secret-key,uid=10001,gid=10001,mode=0400")
+  env_result+=(--env "CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key")
+  env_result+=(--env "CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key")
+}
+
+# The required collector additionally uses its least-privilege database role.
 collector_credential_secret_args() {
   local -n secret_result=$1
   local -n env_result=$2
 
   replace_secret_value clashlens-collector-database-url "$(role_database_url "$COLLECTOR_ROLE" "$CLASHLENS_COLLECTOR_DB_PASSWORD")"
-  replace_secret_value clashlens-collector-archive-access-key "$CLASHLENS_ARCHIVE_ACCESS_KEY"
-  replace_secret_value clashlens-collector-archive-secret-key "$CLASHLENS_ARCHIVE_SECRET_KEY"
   secret_result+=(--secret "clashlens-collector-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400")
-  secret_result+=(--secret "clashlens-collector-archive-access-key,type=mount,target=/run/secrets/archive-access-key,uid=10001,gid=10001,mode=0400")
-  secret_result+=(--secret "clashlens-collector-archive-secret-key,type=mount,target=/run/secrets/archive-secret-key,uid=10001,gid=10001,mode=0400")
   env_result+=(--env "CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url")
-  env_result+=(--env "CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key")
-  env_result+=(--env "CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key")
+  collector_archive_secret_args "$1" "$2"
 }
 
 # The bridge accepts contract version 1 only and therefore receives the admin
@@ -636,6 +644,7 @@ collector_run() {
     replace_secret_value clashlens-bridge-database-url "$(admin_database_url)"
     secrets+=(--secret "clashlens-bridge-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400")
     env_args+=(--env "CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url")
+    collector_archive_secret_args secrets env_args
   else
     collector_credential_secret_args secrets env_args
   fi

@@ -534,6 +534,14 @@ bridge_normalized=$(norm_log <<<"$bridge_run")
   fail 'bridge did not receive the normal API key file list'
 [[ "$bridge_normalized" == *'--env CLASHLENS_INTERACTIVE_API_KEY_FILES=interactive-1=/run/secrets/interactive-1'* ]] || \
   fail 'bridge did not receive the interactive API key file list'
+[[ "$bridge_normalized" == *'clashlens-collector-archive-access-key,type=mount,target=/run/secrets/archive-access-key'* ]] || \
+  fail 'bridge archive access secret was not mounted'
+[[ "$bridge_normalized" == *'clashlens-collector-archive-secret-key,type=mount,target=/run/secrets/archive-secret-key'* ]] || \
+  fail 'bridge archive secret was not mounted'
+[[ "$bridge_normalized" == *'--env CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key'* ]] || \
+  fail 'bridge archive access key file setting is missing'
+[[ "$bridge_normalized" == *'--env CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key'* ]] || \
+  fail 'bridge archive secret key file setting is missing'
 
 required_normalized=$required_run
 [[ "$required_normalized" == *'clashlens-collector-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400'* ]] || \
