@@ -19,9 +19,11 @@ COLLECTOR_CONTAINER=clashlens-collector
 COLLECTOR_BRIDGE_CONTAINER=clashlens-collector-bridge
 PYTHON_WORKER_CONTAINER=clashlens-python-worker
 PYTHON_API_CONTAINER=clashlens-python-api
+WEBSITE_CONTAINER=clashlens-website
 POSTGRES_IMAGE=docker.io/library/postgres:17-alpine
 COLLECTOR_IMAGE=localhost/clashlens-collector:deployment
 PYTHON_IMAGE=localhost/clashlens-python:deployment
+WEBSITE_IMAGE=localhost/clashlens-website:deployment
 HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8081
 
@@ -56,21 +58,25 @@ Commands:
                                stack: never builds and never runs SQL.
   build-collector              Build the immutable collector image only.
   build-python                 Build the immutable Python image only.
+  build-website                Build the immutable website image only.
   python-up                    Build the Python image, then start the private
                                API and the production worker.
   python-start                 Start-only path for the private API and worker.
   api-start                    Start-only path for the private Python API.
   worker-start                 Start-only path for the production worker.
+  website-up                   Build, replace, start, and wait for the website.
+  website-start                Start-only path for the website container.
   status                       Show safe container, network, and volume status.
-  logs [collector|postgres|python-api|python-worker]
+  logs [collector|postgres|python-api|python-worker|website]
                                Show logs for one private container.
   down                         Gracefully stop and remove all containers; keep
                                the data volume.
   stack-down                   Gracefully stop and remove only collector and
                                PostgreSQL.
-  python-down                  Gracefully stop and remove API and worker.
-  api-down                     Gracefully stop and remove only the API.
+  python-down                  Gracefully stop and remove website, API, and worker.
+  api-down                     Gracefully stop website, then remove only the API.
   worker-down                  Gracefully stop and remove only the worker.
+  website-down                 Gracefully stop and remove only the website.
   enqueue [collector args]     Enqueue work, or pass a tag as the only argument.
   maintenance <collector args> Run a collector maintenance command.
   queue-status                 Show the Python worker queue status.
@@ -175,7 +181,7 @@ validate_resource_setting() {
 
 validate_resource_budgets() {
   local component kind
-  for component in POSTGRES COLLECTOR API WORKER; do
+  for component in POSTGRES COLLECTOR API WORKER WEBSITE; do
     for kind in MEMORY CPUS PIDS; do
       case "$kind" in
         MEMORY) validate_resource_setting "CLASHLENS_${component}_${kind}" memory ;;
@@ -232,6 +238,8 @@ validate_common_settings() {
     CLASHLENS_HMAC_CALLER
     CLASHLENS_HMAC_KEY_ID
     CLASHLENS_HMAC_SECRET_FILE
+    CLASHLENS_WEBSITE_HOST
+    CLASHLENS_WEBSITE_PORT
     CLASHLENS_WORKER_LEASE_SECONDS
   )
   local name
@@ -309,6 +317,21 @@ validate_common_settings() {
     [[ "$CLASHLENS_HMAC_PREVIOUS_SECRET_FILE" =~ ^/run/secrets/[^/]+$ ]] || \
       die "CLASHLENS_HMAC_PREVIOUS_SECRET_FILE must be a direct file path under /run/secrets"
   fi
+
+  [[ "$CLASHLENS_WEBSITE_HOST" == "127.0.0.1" || "$CLASHLENS_WEBSITE_HOST" == "0.0.0.0" || \
+    "$CLASHLENS_WEBSITE_HOST" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || \
+    die "CLASHLENS_WEBSITE_HOST must be 127.0.0.1, 0.0.0.0, or a plain IPv4 address"
+  if [[ "$CLASHLENS_WEBSITE_HOST" != "127.0.0.1" && "$CLASHLENS_WEBSITE_HOST" != "0.0.0.0" ]]; then
+    local octet
+    local -a octets=()
+    IFS='.' read -r -a octets <<< "$CLASHLENS_WEBSITE_HOST"
+    for octet in "${octets[@]}"; do
+      (( 10#$octet <= 255 )) || die "CLASHLENS_WEBSITE_HOST must be a valid IPv4 address"
+    done
+  fi
+  [[ "$CLASHLENS_WEBSITE_PORT" =~ ^[0-9]+$ ]] && \
+    (( CLASHLENS_WEBSITE_PORT >= 1 && CLASHLENS_WEBSITE_PORT <= 65535 )) || \
+    die "CLASHLENS_WEBSITE_PORT is outside the valid range"
 
   validate_resource_budgets
 }
@@ -520,12 +543,24 @@ build_python_image() {
     "$ROOT_DIR/python"
 }
 
+build_website_image() {
+  "$PODMAN_BIN" build \
+    --pull=missing \
+    --file "$ROOT_DIR/website/Containerfile" \
+    --tag "$WEBSITE_IMAGE" \
+    "$ROOT_DIR/website"
+}
+
 image_exists() {
   "$PODMAN_BIN" image exists "$COLLECTOR_IMAGE" >/dev/null 2>&1
 }
 
 python_image_exists() {
   "$PODMAN_BIN" image exists "$PYTHON_IMAGE" >/dev/null 2>&1
+}
+
+website_image_exists() {
+  "$PODMAN_BIN" image exists "$WEBSITE_IMAGE" >/dev/null 2>&1
 }
 
 # Forward only non-secret collector settings. Secret-bearing and deployment
@@ -536,7 +571,7 @@ collector_env_args() {
 
   for name in "${!ENV_PRESENT[@]}"; do
     case "$name" in
-      CLASHLENS_DATABASE_URL|CLASHLENS_DATABASE_URL_FILE|CLASHLENS_*_DB_PASSWORD|CLASHLENS_ARCHIVE_ACCESS_KEY|CLASHLENS_ARCHIVE_SECRET_KEY|CLASHLENS_WORKER_ARCHIVE_*|CLASHLENS_NORMAL_API_KEYS|CLASHLENS_INTERACTIVE_API_KEYS|CLASHLENS_NORMAL_API_KEY_FILES|CLASHLENS_INTERACTIVE_API_KEY_FILES|CLASHLENS_API_KEY_HOST_DIR|CLASHLENS_HEALTH_HOST|CLASHLENS_HEALTH_PORT|CLASHLENS_PODMAN_*|CLASHLENS_POSTGRES_CONTAINER|CLASHLENS_POSTGRES_IMAGE|CLASHLENS_COLLECTOR_CONTAINER|CLASHLENS_COLLECTOR_IMAGE|CLASHLENS_PYTHON_*|CLASHLENS_HMAC_*|CLASHLENS_INTERACTIVE_API_KEY_FILE|CLASHLENS_OFFICIAL_KEY_FILE|CLASHLENS_OFFICIAL_PROXY_URL|CLASHLENS_API_HOST|CLASHLENS_API_PORT|CLASHLENS_SCHEMA_VERSION|CLASHLENS_SHARED_TRAFFIC_GATE_MODE|CLASHLENS_WORKER_LEASE_SECONDS|CLASHLENS_POSTGRES_MEMORY|CLASHLENS_POSTGRES_CPUS|CLASHLENS_POSTGRES_PIDS|CLASHLENS_COLLECTOR_MEMORY|CLASHLENS_COLLECTOR_CPUS|CLASHLENS_COLLECTOR_PIDS|CLASHLENS_API_MEMORY|CLASHLENS_API_CPUS|CLASHLENS_API_PIDS|CLASHLENS_WORKER_MEMORY|CLASHLENS_WORKER_CPUS|CLASHLENS_WORKER_PIDS)
+      CLASHLENS_DATABASE_URL|CLASHLENS_DATABASE_URL_FILE|CLASHLENS_*_DB_PASSWORD|CLASHLENS_ARCHIVE_ACCESS_KEY|CLASHLENS_ARCHIVE_SECRET_KEY|CLASHLENS_WORKER_ARCHIVE_*|CLASHLENS_NORMAL_API_KEYS|CLASHLENS_INTERACTIVE_API_KEYS|CLASHLENS_NORMAL_API_KEY_FILES|CLASHLENS_INTERACTIVE_API_KEY_FILES|CLASHLENS_API_KEY_HOST_DIR|CLASHLENS_HEALTH_HOST|CLASHLENS_HEALTH_PORT|CLASHLENS_PODMAN_*|CLASHLENS_POSTGRES_CONTAINER|CLASHLENS_POSTGRES_IMAGE|CLASHLENS_COLLECTOR_CONTAINER|CLASHLENS_COLLECTOR_IMAGE|CLASHLENS_PYTHON_*|CLASHLENS_HMAC_*|CLASHLENS_INTERACTIVE_API_KEY_FILE|CLASHLENS_OFFICIAL_API_ORIGIN|CLASHLENS_OFFICIAL_API_PROXY_URL|CLASHLENS_OFFICIAL_KEY_FILE|CLASHLENS_OFFICIAL_PROXY_URL|CLASHLENS_API_HOST|CLASHLENS_API_PORT|CLASHLENS_SCHEMA_VERSION|CLASHLENS_SHARED_TRAFFIC_GATE_MODE|CLASHLENS_WORKER_LEASE_SECONDS|CLASHLENS_POSTGRES_MEMORY|CLASHLENS_POSTGRES_CPUS|CLASHLENS_POSTGRES_PIDS|CLASHLENS_COLLECTOR_MEMORY|CLASHLENS_COLLECTOR_CPUS|CLASHLENS_COLLECTOR_PIDS|CLASHLENS_API_MEMORY|CLASHLENS_API_CPUS|CLASHLENS_API_PIDS|CLASHLENS_WORKER_MEMORY|CLASHLENS_WORKER_CPUS|CLASHLENS_WORKER_PIDS)
         ;;
       CLASHLENS_*)
         result+=(--env "$name")
@@ -544,6 +579,8 @@ collector_env_args() {
     esac
   done
 
+  result+=(--env "CLASHLENS_API_BASE_URL=$CLASHLENS_OFFICIAL_API_ORIGIN")
+  result+=(--env "CLASHLENS_API_PROXY_URL=$CLASHLENS_OFFICIAL_API_PROXY_URL")
   result+=(--env "CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081")
 }
 
@@ -751,6 +788,56 @@ wait_for_python_api() {
   die "private Python API did not become healthy"
 }
 
+require_website_runtime() {
+  "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1 || die "private network is missing; run up first"
+  local version
+  version=$(contract_version)
+  [[ "$version" == "2" ]] || die "production contract version 2 is required (found $version)"
+  container_running "$PYTHON_API_CONTAINER" || die "private Python API is not running; run python-up first"
+  "$PODMAN_BIN" healthcheck run "$PYTHON_API_CONTAINER" >/dev/null 2>&1 || die "private Python API is not healthy; run python-up first"
+  website_image_exists || die "website image is missing; run website-up first"
+}
+
+start_website() {
+  create_secret_from_file clashlens-python-api-hmac-current "$CLASHLENS_API_KEY_HOST_DIR/${CLASHLENS_HMAC_SECRET_FILE##*/}"
+  if container_exists "$WEBSITE_CONTAINER"; then
+    stop_and_remove "$WEBSITE_CONTAINER" "$API_STOP_GRACE"
+  fi
+  "$PODMAN_BIN" run \
+    --detach --name "$WEBSITE_CONTAINER" --network "$NETWORK_NAME" \
+    --publish "$CLASHLENS_WEBSITE_HOST:$CLASHLENS_WEBSITE_PORT:3000/tcp" \
+    --env NODE_ENV=production --env CLASHLENS_PYTHON_API_URL=http://python-api:8000 \
+    --env "CLASHLENS_PYTHON_HMAC_CALLER=$CLASHLENS_HMAC_CALLER" \
+    --env "CLASHLENS_PYTHON_HMAC_KEY_ID=$CLASHLENS_HMAC_KEY_ID" \
+    --env CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-python-hmac \
+    --env CLASHLENS_TRUST_PROXY=false \
+    --secret clashlens-python-api-hmac-current,type=mount,target=/run/secrets/clashlens-python-hmac,uid=1000,gid=1000,mode=0400 \
+    --read-only --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m --cap-drop all --security-opt no-new-privileges \
+    --memory "$CLASHLENS_WEBSITE_MEMORY" --pids-limit "$CLASHLENS_WEBSITE_PIDS" --cpus "$CLASHLENS_WEBSITE_CPUS" \
+    --health-cmd "node -e \"require('http').get('http://127.0.0.1:3000/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\"" \
+    --health-interval 10s --health-timeout 3s --health-retries 12 --restart unless-stopped \
+    --label org.clashlens.component=website "$WEBSITE_IMAGE" >/dev/null
+}
+
+wait_for_website() {
+  local attempt
+  for ((attempt = 1; attempt <= 60; attempt++)); do
+    if container_running "$WEBSITE_CONTAINER" && "$PODMAN_BIN" healthcheck run "$WEBSITE_CONTAINER" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+  die "website did not become healthy"
+}
+
+website_start() {
+  require_website_runtime
+  validate_single_key_file CLASHLENS_HMAC_SECRET_FILE
+  start_website
+  wait_for_website
+  printf 'website is healthy at http://%s:%s/healthz\n' "$CLASHLENS_WEBSITE_HOST" "$CLASHLENS_WEBSITE_PORT"
+}
+
 # The worker receives its own database role and a read-only archive
 # credential. It never receives official API keys, HMAC keys, or the API role.
 worker_secret_args() {
@@ -855,6 +942,7 @@ show_status() {
   status_of_container collector "$COLLECTOR_CONTAINER"
   status_of_container python-api "$PYTHON_API_CONTAINER"
   status_of_container python-worker "$PYTHON_WORKER_CONTAINER"
+  status_of_container website "$WEBSITE_CONTAINER"
   if container_running "$PYTHON_WORKER_CONTAINER"; then
     if queue_output=$("$PODMAN_BIN" exec "$PYTHON_WORKER_CONTAINER" python -m clashlens.cli queue-status 2>/dev/null); then
       printf 'python queue: %s\n' "$(printf '%s' "$queue_output" | head -n 1)"
@@ -895,11 +983,11 @@ shift
 
 full_configuration=false
 case "$command" in
-  init|up|restart|build-collector|build-python|python-up|python-start|api-start|worker-start)
+  init|up|restart|build-collector|build-python|build-website|python-up|python-start|api-start|worker-start|website-up|website-start)
     load_env_file
     full_configuration=true
     ;;
-  status|logs|down|stack-down|enqueue|maintenance|queue-status|python-down|api-down|worker-down)
+  status|logs|down|stack-down|enqueue|maintenance|queue-status|python-down|api-down|worker-down|website-down)
     if [[ -f "$ENV_FILE" ]]; then
       load_env_file
     fi
@@ -914,9 +1002,11 @@ POSTGRES_CONTAINER=${CLASHLENS_POSTGRES_CONTAINER:-$POSTGRES_CONTAINER}
 COLLECTOR_CONTAINER=${CLASHLENS_COLLECTOR_CONTAINER:-$COLLECTOR_CONTAINER}
 PYTHON_WORKER_CONTAINER=${CLASHLENS_PYTHON_WORKER_CONTAINER:-$PYTHON_WORKER_CONTAINER}
 PYTHON_API_CONTAINER=${CLASHLENS_PYTHON_API_CONTAINER:-$PYTHON_API_CONTAINER}
+WEBSITE_CONTAINER=${CLASHLENS_WEBSITE_CONTAINER:-$WEBSITE_CONTAINER}
 POSTGRES_IMAGE=${CLASHLENS_POSTGRES_IMAGE:-$POSTGRES_IMAGE}
 COLLECTOR_IMAGE=${CLASHLENS_COLLECTOR_IMAGE:-$COLLECTOR_IMAGE}
 PYTHON_IMAGE=${CLASHLENS_PYTHON_IMAGE:-$PYTHON_IMAGE}
+WEBSITE_IMAGE=${CLASHLENS_WEBSITE_IMAGE:-$WEBSITE_IMAGE}
 CLASHLENS_ARCHIVE_SECURE=${CLASHLENS_ARCHIVE_SECURE:-true}
 CLASHLENS_HEALTH_HOST=${CLASHLENS_HEALTH_HOST:-$HEALTH_HOST}
 CLASHLENS_HEALTH_PORT=${CLASHLENS_HEALTH_PORT:-$HEALTH_PORT}
@@ -1018,6 +1108,12 @@ case "$command" in
     require_rootless_podman
     build_python_image
     ;;
+  build-website)
+    [[ $# == 0 ]] || die "build-website accepts no arguments"
+    require_podman
+    require_rootless_podman
+    build_website_image
+    ;;
   python-up)
     [[ $# == 0 ]] || die "python-up accepts no arguments"
     require_podman
@@ -1049,6 +1145,19 @@ case "$command" in
     wait_for_python_worker
     printf 'production Python worker is healthy\n'
     ;;
+  website-up)
+    [[ $# == 0 ]] || die "website-up accepts no arguments"
+    require_podman
+    require_rootless_podman
+    build_website_image
+    website_start
+    ;;
+  website-start)
+    [[ $# == 0 ]] || die "website-start accepts no arguments"
+    require_podman
+    require_rootless_podman
+    website_start
+    ;;
   status)
     [[ $# == 0 ]] || die "status accepts no arguments"
     show_status
@@ -1063,8 +1172,10 @@ case "$command" in
       target=$PYTHON_API_CONTAINER
     elif [[ "$component" == "python-worker" ]]; then
       target=$PYTHON_WORKER_CONTAINER
+    elif [[ "$component" == "website" ]]; then
+      target=$WEBSITE_CONTAINER
     else
-      die "logs target must be collector, postgres, python-api, or python-worker"
+      die "logs target must be collector, postgres, python-api, python-worker, or website"
     fi
     shift || true
     container_exists "$target" || die "$component container does not exist"
@@ -1073,6 +1184,7 @@ case "$command" in
   down)
     [[ $# == 0 ]] || die "down accepts no arguments"
     require_podman
+    stop_and_remove "$WEBSITE_CONTAINER" "$API_STOP_GRACE"
     stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
     stop_and_remove "$PYTHON_API_CONTAINER" "$API_STOP_GRACE"
     stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
@@ -1084,6 +1196,7 @@ case "$command" in
   stack-down)
     [[ $# == 0 ]] || die "stack-down accepts no arguments"
     require_podman
+    stop_and_remove "$WEBSITE_CONTAINER" "$API_STOP_GRACE"
     stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
     stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
     stop_and_remove "$POSTGRES_CONTAINER" "$POSTGRES_STOP_GRACE"
@@ -1093,6 +1206,7 @@ case "$command" in
   python-down)
     [[ $# == 0 ]] || die "python-down accepts no arguments"
     require_podman
+    stop_and_remove "$WEBSITE_CONTAINER" "$API_STOP_GRACE"
     stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
     stop_and_remove "$PYTHON_API_CONTAINER" "$API_STOP_GRACE"
     printf 'production Python containers removed\n'
@@ -1100,6 +1214,7 @@ case "$command" in
   api-down)
     [[ $# == 0 ]] || die "api-down accepts no arguments"
     require_podman
+    stop_and_remove "$WEBSITE_CONTAINER" "$API_STOP_GRACE"
     stop_and_remove "$PYTHON_API_CONTAINER" "$API_STOP_GRACE"
     printf 'private Python API container removed\n'
     ;;
@@ -1108,6 +1223,12 @@ case "$command" in
     require_podman
     stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
     printf 'production Python worker container removed\n'
+    ;;
+  website-down)
+    [[ $# == 0 ]] || die "website-down accepts no arguments"
+    require_podman
+    stop_and_remove "$WEBSITE_CONTAINER" "$API_STOP_GRACE"
+    printf 'website container removed\n'
     ;;
   enqueue)
     if [[ $# == 1 && "$1" != -* ]]; then

@@ -270,6 +270,11 @@ CLASHLENS_API_PIDS=128
 CLASHLENS_WORKER_MEMORY=384m
 CLASHLENS_WORKER_CPUS=1.0
 CLASHLENS_WORKER_PIDS=256
+CLASHLENS_WEBSITE_HOST=127.0.0.1
+CLASHLENS_WEBSITE_PORT=13000
+CLASHLENS_WEBSITE_MEMORY=128m
+CLASHLENS_WEBSITE_CPUS=0.5
+CLASHLENS_WEBSITE_PIDS=128
 CLASHLENS_WORKER_LEASE_SECONDS=60
 EOF
   chmod 0600 "$envfile"
@@ -541,6 +546,13 @@ required_normalized=$required_run
   fail 'collector archive secret key file setting is missing'
 [[ "$required_normalized" == *'--env CLASHLENS_SCHEMA_VERSION=2'* ]] || fail 'required collector schema version is missing'
 [[ "$required_normalized" == *'--env CLASHLENS_SHARED_TRAFFIC_GATE_MODE=required'* ]] || fail 'required collector mode is missing'
+[[ "$required_normalized" == *'--env CLASHLENS_API_BASE_URL=https://api.clashofclans.com'* ]] || \
+  fail 'collector did not receive the official API origin through its runtime setting'
+[[ "$required_normalized" == *'--env CLASHLENS_API_PROXY_URL=http://100.108.3.103:3128'* ]] || \
+  fail 'collector did not receive the fixed-egress proxy through its runtime setting'
+[[ "$required_normalized" != *'--env CLASHLENS_OFFICIAL_API_ORIGIN='* \
+  && "$required_normalized" != *'--env CLASHLENS_OFFICIAL_API_PROXY_URL='* ]] || \
+  fail 'collector received deployment-only official API setting names'
 
 postgres_run=$(grep '^run ' "$FRESH_NORM" | grep 'postgres:17-alpine')
 postgres_normalized=$(norm_log <<<"$postgres_run")
@@ -770,19 +782,81 @@ log_has "$ROLLBACK_DIR/podman.log" 'clashlens-python:previous-release' \
 printf 'ok: rollback selects an existing image tag through start-only commands\n'
 
 # ---------------------------------------------------------------------------
-# Scenario H: lifecycle stops are graceful and ordered.
+# Scenario H: website deployment is private except for its configured ingress,
+# receives only the HMAC file, and has a start-only recovery path.
+# ---------------------------------------------------------------------------
+WEBSITE_DIR=$(new_scenario)
+WEBSITE_ENV="$WEBSITE_DIR/app.env"
+write_scenario_env "$WEBSITE_ENV" "$WEBSITE_DIR/keys"
+deploy "$WEBSITE_DIR" "$WEBSITE_ENV" -- up >/dev/null
+deploy "$WEBSITE_DIR" "$WEBSITE_ENV" -- python-up >/dev/null
+deploy "$WEBSITE_DIR" "$WEBSITE_ENV" -- website-up >/dev/null
+WEBSITE_LOG="$WEBSITE_DIR/podman.log"
+WEBSITE_NORM="$WEBSITE_DIR/podman.norm.log"
+norm_log "$WEBSITE_LOG" >"$WEBSITE_NORM"
+website_build=$(grep '^build ' "$WEBSITE_NORM" | grep 'clashlens-website:deployment')
+[[ "$website_build" == *"--file $ROOT_DIR/website/Containerfile"* && "$website_build" == *"$ROOT_DIR/website"* ]] || \
+  fail 'website image build did not use website/Containerfile and website context'
+website_run=$(grep '^run ' "$WEBSITE_NORM" | grep 'clashlens-website:deployment')
+[[ -n "$website_run" ]] || fail 'website container was not started'
+[[ "$website_run" == *'--network clashlens-private'* ]] || fail 'website did not use the private network'
+[[ "$website_run" == *'--publish 127.0.0.1:13000:3000/tcp'* ]] || fail 'website did not publish only the configured ingress'
+for setting in 'NODE_ENV=production' 'CLASHLENS_PYTHON_API_URL=http://python-api:8000' \
+  'CLASHLENS_PYTHON_HMAC_CALLER=typescript-website' 'CLASHLENS_PYTHON_HMAC_KEY_ID=current' \
+  'CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-python-hmac' \
+  'CLASHLENS_TRUST_PROXY=false'; do
+  [[ "$website_run" == *"--env $setting"* ]] || fail "website is missing $setting"
+done
+[[ "$website_run" == *'clashlens-python-api-hmac-current,type=mount,target=/run/secrets/clashlens-python-hmac,uid=1000,gid=1000,mode=0400'* ]] || \
+  fail 'website HMAC secret mount is missing or has unsafe ownership'
+[[ "$(grep -o -- '--secret [^ ]*' <<<"$website_run" | wc -l)" == '1' ]] || fail 'website received more than one secret'
+for forbidden in database archive official interactive collector worker admin postgres; do
+  [[ "$website_run" != *"$forbidden"* ]] || fail "website received forbidden $forbidden metadata"
+done
+[[ "$website_run" == *'--read-only'* && "$website_run" == *'--tmpfs /tmp:rw,noexec,nosuid,nodev'* \
+  && "$website_run" == *'--cap-drop all'* && "$website_run" == *'--security-opt no-new-privileges'* ]] || \
+  fail 'website hardening is incomplete'
+[[ "$website_run" == *'--memory 128m'* && "$website_run" == *'--pids-limit 128'* && "$website_run" == *'--cpus 0.5'* ]] || \
+  fail 'website did not receive its explicit resource budget'
+[[ "$website_run" == *'--health-cmd'* && "$website_run" == *'node'* && "$website_run" == *'127.0.0.1:3000/healthz'* \
+  && "$website_run" == *'--health-interval 10s'* && "$website_run" == *'--health-timeout 3s'* && "$website_run" == *'--health-retries 12'* ]] || \
+  fail 'website health check is not bounded and Node-based'
+assert_no_sentinel_in_log "$WEBSITE_LOG"
+build_count_before=$(grep -c '^build ' "$WEBSITE_LOG")
+sql_count_before=$(grep -c '^exec --interactive ' "$WEBSITE_LOG" || true)
+deploy "$WEBSITE_DIR" "$WEBSITE_ENV" -- website-start >/dev/null
+[[ "$(grep -c '^build ' "$WEBSITE_LOG")" == "$build_count_before" ]] || fail 'website-start rebuilt an image'
+[[ "$(grep -c '^exec --interactive ' "$WEBSITE_LOG" || true)" == "$sql_count_before" ]] || fail 'website-start ran SQL'
+deploy "$WEBSITE_DIR" "$WEBSITE_ENV" -- logs website >/dev/null
+grep -q '^logs clashlens-website' "$WEBSITE_LOG" || fail 'website logs did not target the website container'
+output=$(deploy "$WEBSITE_DIR" "$WEBSITE_ENV" -- status)
+[[ "$output" == *'website: running'* ]] || fail 'status did not show the website'
+website_down_before=$(wc -l <"$WEBSITE_LOG")
+deploy "$WEBSITE_DIR" "$WEBSITE_ENV" -- website-down >/dev/null
+website_down_log=$(tail -n +"$((website_down_before + 1))" "$WEBSITE_LOG")
+grep -q '^stop --time 30 clashlens-website' <<<"$website_down_log" || fail 'website-down was not graceful'
+grep -q '^rm clashlens-website *$' <<<"$website_down_log" || fail 'website-down did not remove the website'
+printf 'ok: website build, start-only recovery, ingress, secrets, and hardening are scoped\n'
+
+# ---------------------------------------------------------------------------
+# Scenario I: lifecycle stops are graceful and ordered.
 # ---------------------------------------------------------------------------
 LIFE_DIR=$(new_scenario)
 LIFE_ENV="$LIFE_DIR/app.env"
 write_scenario_env "$LIFE_ENV" "$LIFE_DIR/keys"
 deploy "$LIFE_DIR" "$LIFE_ENV" -- up >/dev/null
 deploy "$LIFE_DIR" "$LIFE_ENV" -- python-up >/dev/null
+deploy "$LIFE_DIR" "$LIFE_ENV" -- website-up >/dev/null
 LIFE_LOG="$LIFE_DIR/podman.log"
 
 segment_before=$(wc -l <"$LIFE_LOG")
 deploy "$LIFE_DIR" "$LIFE_ENV" -- api-down >/dev/null
 api_down_segment=$(tail -n +"$((segment_before + 1))" "$LIFE_LOG")
+grep -q '^stop --time 30 clashlens-website' <<<"$api_down_segment" || fail 'api-down did not stop website first'
 grep -q '^stop --time 30 clashlens-python-api' <<<"$api_down_segment" || fail 'api-down was not graceful'
+website_stop_line=$(grep -n '^stop --time 30 clashlens-website' <<<"$api_down_segment" | head -n1 | cut -d: -f1)
+api_stop_line=$(grep -n '^stop --time 30 clashlens-python-api' <<<"$api_down_segment" | head -n1 | cut -d: -f1)
+(( website_stop_line < api_stop_line )) || fail 'api-down did not stop website before API'
 grep -q '^rm clashlens-python-api *$' <<<"$api_down_segment" || fail 'api-down did not remove the API container'
 grep -q 'clashlens-python-worker' <<<"$api_down_segment" && fail 'api-down touched the worker'
 grep -q 'clashlens-postgres' <<<"$api_down_segment" && fail 'api-down touched PostgreSQL'
@@ -795,17 +869,20 @@ grep -q '^stop --time 70 clashlens-python-worker' <<<"$worker_down_segment" || \
 grep -q '^rm clashlens-python-worker *$' <<<"$worker_down_segment" || fail 'worker-down did not remove the worker'
 
 deploy "$LIFE_DIR" "$LIFE_ENV" -- python-up >/dev/null
+deploy "$LIFE_DIR" "$LIFE_ENV" -- website-up >/dev/null
 down_before=$(wc -l <"$LIFE_LOG")
 deploy "$LIFE_DIR" "$LIFE_ENV" -- down >/dev/null
 down_log=$(tail -n +"$((down_before + 1))" "$LIFE_LOG")
+grep -q '^stop --time 30 clashlens-website' <<<"$down_log" || fail 'down did not stop the website first'
 grep -q '^stop --time 70 clashlens-python-worker' <<<"$down_log" || fail 'down did not stop the worker first'
+website_stop_line=$(grep -n '^stop --time 30 clashlens-website' <<<"$down_log" | head -n1 | cut -d: -f1)
 worker_stop_line=$(grep -n '^stop --time 70 clashlens-python-worker' <<<"$down_log" | head -n1 | cut -d: -f1)
 api_stop_line=$(grep -n '^stop --time 30 clashlens-python-api' <<<"$down_log" | head -n1 | cut -d: -f1)
 collector_stop_line=$(grep -n '^stop --time 30 clashlens-collector' <<<"$down_log" | head -n1 | cut -d: -f1)
 postgres_stop_line=$(grep -n '^stop --time 60 clashlens-postgres' <<<"$down_log" | head -n1 | cut -d: -f1)
-[[ -n "$worker_stop_line" && -n "$api_stop_line" && -n "$collector_stop_line" && -n "$postgres_stop_line" ]] || \
+[[ -n "$website_stop_line" && -n "$worker_stop_line" && -n "$api_stop_line" && -n "$collector_stop_line" && -n "$postgres_stop_line" ]] || \
   fail 'down did not stop every container'
-(( worker_stop_line < api_stop_line && api_stop_line < collector_stop_line && collector_stop_line < postgres_stop_line )) || \
+(( website_stop_line < worker_stop_line && worker_stop_line < api_stop_line && api_stop_line < collector_stop_line && collector_stop_line < postgres_stop_line )) || \
   fail 'down did not stop dependents before PostgreSQL'
 grep -q 'rm --force' "$LIFE_LOG" && fail 'a lifecycle stop used rm --force'
 printf 'ok: lifecycle stops are graceful, ordered, and preserve the data volume\n'
@@ -837,6 +914,10 @@ printf 'ok: status shows health and queue status without loading unrelated secre
 stack_unit=$(<"$ROOT_DIR/deploy/systemd/clashlens.service")
 worker_unit=$(<"$ROOT_DIR/deploy/systemd/clashlens-python-worker.service")
 api_unit=$(<"$ROOT_DIR/deploy/systemd/clashlens-python-api.service")
+website_unit=$(<"$ROOT_DIR/deploy/systemd/clashlens-website.service")
+[[ "$website_unit" == *'Requires=clashlens-python-api.service clashlens.service'* ]] || fail 'website unit does not require the API and stack'
+[[ "$website_unit" == *'ExecStart=%h/clashlens/deploy.sh website-start'* && "$website_unit" == *'ExecStop=%h/clashlens/deploy.sh website-down'* ]] || \
+  fail 'website unit is not start-only and scoped'
 [[ "$stack_unit" == *'ExecStart=%h/clashlens/deploy.sh restart'* ]] || \
   fail 'collector stack unit does not use the start-only restart command'
 [[ "$stack_unit" == *'ExecStop=%h/clashlens/deploy.sh stack-down'* ]] || \
@@ -882,7 +963,9 @@ for setting in POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD \
   CLASHLENS_POSTGRES_MEMORY CLASHLENS_POSTGRES_CPUS CLASHLENS_POSTGRES_PIDS \
   CLASHLENS_COLLECTOR_MEMORY CLASHLENS_COLLECTOR_CPUS CLASHLENS_COLLECTOR_PIDS \
   CLASHLENS_API_MEMORY CLASHLENS_API_CPUS CLASHLENS_API_PIDS \
-  CLASHLENS_WORKER_MEMORY CLASHLENS_WORKER_CPUS CLASHLENS_WORKER_PIDS; do
+  CLASHLENS_WORKER_MEMORY CLASHLENS_WORKER_CPUS CLASHLENS_WORKER_PIDS \
+  CLASHLENS_WEBSITE_HOST CLASHLENS_WEBSITE_PORT \
+  CLASHLENS_WEBSITE_MEMORY CLASHLENS_WEBSITE_CPUS CLASHLENS_WEBSITE_PIDS; do
   [[ "$env_example" == *"$setting="* ]] || fail "app.env.example is missing $setting"
 done
 for rejected in CLASHLENS_DATABASE_URL= CLASHLENS_PYTHON_WORKER_IMAGE \

@@ -1,11 +1,6 @@
 # Fedora deployment
 
-**Status:** executable runbook for the Go collector, PostgreSQL, the
-production Python worker, and the private Python API. Discord bot, Google
-Sheets exports, the OBS overlay, the TypeScript website backend, and global
-Top-200 collection remain future roles and stay disabled or deferred under
-[Issue 31](https://github.com/zzzubair/ClashLens/issues/31). This runbook
-does not deploy them.
+**Status:** executable runbook for the Go collector, PostgreSQL, the production Python worker, the private Python API, and the website deployment foundation. Website authentication and remaining website surfaces, Discord bot, Google Sheets exports, OBS overlay, and global Top-200 collection remain future roles or features under [Issue 31](https://github.com/zzzubair/ClashLens/issues/31). This runbook does not deploy a hosted service.
 
 This runbook uses direct rootless Podman commands. It does not use Compose.
 The deployment scripts are verified against a simulated Podman environment;
@@ -79,7 +74,8 @@ The script creates one named rootless Podman network and one PostgreSQL
 volume. The network has outbound access for the official API and external
 archive. It is private because no database or archive service port is
 published. PostgreSQL has no published port. The archive has no container or
-host port. Only `/readyz` is published on `127.0.0.1:8081` by default.
+host port. The collector publishes `/readyz` on `127.0.0.1:8081` by default.
+The website publishes only its configured beta ingress host and port.
 
 The repository includes `deploy/egress-proxy/` for the narrow `ser5ver`
 CONNECT proxy. Its policy accepts only the Fedora Tailscale address and only
@@ -164,7 +160,25 @@ container. `status` includes the same summary line when the worker runs.
 Completion: `status` shows the API and worker as healthy, and `queue-status`
 prints the queue summary without secrets.
 
-## 5. Install the user services
+## 5. Website foundation
+
+After `python-up` reports a healthy private API, run:
+
+```bash
+./deploy.sh website-up
+./deploy.sh status
+curl --fail http://127.0.0.1:3000/healthz
+```
+
+`website-up` builds the website image, then replaces, starts, and waits for the website. `website-start` is the recovery path. It never builds an image or runs SQL. Both require contract version 2, the private network, a running healthy Python API, and the website image for start-only recovery.
+
+The website connects only to `http://python-api:8000` on the private Podman network. It mounts only `clashlens-python-api-hmac-current` as `/run/secrets/clashlens-python-hmac`. It gets no database, official API, archive, worker, collector, or admin secret. It uses the image `node` user, a read-only root filesystem, a hardened `/tmp` tmpfs, dropped capabilities, no new privileges, explicit resource budgets, and a bounded Node health check.
+
+The beta ingress initially uses `CLASHLENS_WEBSITE_HOST` and `CLASHLENS_WEBSITE_PORT`. The host accepts `127.0.0.1`, `0.0.0.0`, or a plain IPv4 address. No hosted service is configured. Authentication and remaining website surfaces remain future work. Keep ingress and hosted-service choices open.
+
+Completion: `status` shows `website: running (healthy)`, and the configured host and port return `/healthz`.
+
+## 6. Install the user services
 
 Install the tracked rootless user services after the first successful `up`
 and `python-up`:
@@ -176,9 +190,11 @@ install -D -m 0644 deploy/systemd/clashlens-python-api.service \
   ~/.config/systemd/user/clashlens-python-api.service
 install -D -m 0644 deploy/systemd/clashlens-python-worker.service \
   ~/.config/systemd/user/clashlens-python-worker.service
+install -D -m 0644 deploy/systemd/clashlens-website.service \
+  ~/.config/systemd/user/clashlens-website.service
 systemctl --user daemon-reload
 systemctl --user enable --now clashlens.service \
-  clashlens-python-api.service clashlens-python-worker.service
+  clashlens-python-api.service clashlens-python-worker.service clashlens-website.service
 ```
 
 The host must enable lingering for the `clashlens` account so these user
@@ -186,17 +202,17 @@ services start without an interactive login.
 
 Boot is start-only. The collector stack unit runs `deploy.sh restart`; the
 API unit runs `deploy.sh api-start`; the worker unit runs
-`deploy.sh worker-start`. No unit builds an image or runs SQL at boot. The
-API and worker units require the collector stack unit and start after it,
-so PostgreSQL and the collector come up first. On shutdown, systemd stops
-the API and worker units before the collector stack, which drains
+`deploy.sh worker-start`; and the website unit runs `deploy.sh website-start`.
+No unit builds an image or runs SQL at boot. The website unit requires the API
+and collector stack units, and starts after them. On shutdown, systemd stops
+the website and Python units before the collector stack, which drains
 dependents before PostgreSQL stops.
 
 Completion: `systemctl --user status clashlens.service`,
-`systemctl --user status clashlens-python-api.service`, and
-`systemctl --user status clashlens-python-worker.service` show active
-services, and all three services start after a host restart without an
-interactive login.
+`systemctl --user status clashlens-python-api.service`,
+`systemctl --user status clashlens-python-worker.service`, and
+`systemctl --user status clashlens-website.service` show active services, and
+all services start after a host restart without an interactive login.
 
 ## 6. Operate the current stack
 
@@ -207,11 +223,14 @@ Use only the supported lifecycle commands:
 ./deploy.sh logs postgres
 ./deploy.sh logs python-api
 ./deploy.sh logs python-worker
+./deploy.sh logs website
 ./deploy.sh restart
 ./deploy.sh python-start
+./deploy.sh website-start
 ./deploy.sh api-start
 ./deploy.sh worker-start
 ./deploy.sh queue-status
+./deploy.sh website-down
 ./deploy.sh api-down
 ./deploy.sh worker-down
 ./deploy.sh python-down
