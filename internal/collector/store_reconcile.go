@@ -149,14 +149,7 @@ func newObservationCommitIntent(
 }
 
 func parserVersionForEndpoint(endpoint endpointName) string {
-	switch endpoint {
-	case battleLogEndpoint:
-		return "battle-log-parser-v1"
-	case globalPlayerRankingsEndpoint:
-		return "global-player-rankings-parser-v1"
-	default:
-		return "profile-parser-v1"
-	}
+	return "supercell-source-parser-v1"
 }
 
 type endpointResultRow struct {
