@@ -88,3 +88,29 @@ jobs:
       - uses: actions/checkout@v4
       - name: Deployment command seam
         run: bash deploy_test.sh
+
+  website:
+    name: Website Node 24 checks and Chromium E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install locked dependencies
+        working-directory: website
+        run: npm ci
+      - name: Test
+        working-directory: website
+        run: npm test
+      - name: Verify production build
+        working-directory: website
+        run: npm run build:verify
+      - name: Install Playwright Chromium
+        working-directory: website
+        run: npx playwright install --with-deps chromium
+      - name: End-to-end tests
+        working-directory: website
+        run: npm run test:e2e

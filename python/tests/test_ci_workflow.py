@@ -6,7 +6,7 @@ import yaml
 
 CI_WORKFLOW = Path(__file__).parents[2] / ".github" / "workflows" / "ci.yml"
 LOCKED_ENVIRONMENT = "/tmp/clashlens-ci-venv"
-EXPECTED_JOBS = {"go", "python", "postgres", "deploy-shell"}
+EXPECTED_JOBS = {"go", "python", "postgres", "deploy-shell", "website"}
 
 
 def _workflow() -> dict:
@@ -47,3 +47,31 @@ def test_python_job_uses_one_locked_environment_for_every_uv_step() -> None:
     for step in uv_steps:
         # A step-level override would fragment the locked environment.
         assert "UV_PROJECT_ENVIRONMENT" not in step.get("env", {})
+
+
+def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate() -> None:
+    job = _workflow()["jobs"]["website"]
+    setup_node = next(
+        step for step in job["steps"] if step.get("uses") == "actions/setup-node@v4"
+    )
+    assert setup_node["with"] == {
+        "node-version": "24",
+        "cache": "npm",
+        "cache-dependency-path": "website/package-lock.json",
+    }
+
+    commands = [
+        step["run"] for step in job["steps"] if isinstance(step, dict) and "run" in step
+    ]
+    assert commands == [
+        "npm ci",
+        "npm test",
+        "npm run build:verify",
+        "npx playwright install --with-deps chromium",
+        "npm run test:e2e",
+    ]
+    assert all(
+        step.get("working-directory") == "website"
+        for step in job["steps"]
+        if isinstance(step, dict) and "run" in step
+    )

@@ -37,4 +37,4 @@ These roles are parts of one product, not independently designed microservices. 
 
 ## Related non-decisions
 
-This ADR does not confirm the raw archive product, detailed internal module boundaries, production Go collector libraries and packaging, private HTTP/JSON routes or schema details, the TypeScript framework, authentication integration, Discord commands, Google Sheets integration, OBS delivery, image construction, process or memory budgets, cloud provider, monitoring products, or backup and recovery policy. Those choices remain open in [`docs/architecture.md`](../architecture.md) until trade-offs are presented and the maintainer approves them.
+This ADR does not decide the raw archive product, detailed internal module boundaries, production Go collector libraries and packaging, private HTTP/JSON routes or schema details, the TypeScript framework, authentication integration, Discord commands, Google Sheets integration, OBS delivery, image construction, process or memory budgets, cloud provider, monitoring products, or backup and recovery policy. [`docs/architecture.md`](../architecture.md) records the current status of those separate choices.

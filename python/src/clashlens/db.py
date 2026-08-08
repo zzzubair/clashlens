@@ -1831,6 +1831,9 @@ class Database:
                     connection,
                     player_id=player_id,
                     ranked_day_start=ranked_day.start,
+                    ranked_day_end=ranked_day.end,
+                    official_season_id=official_season_id,
+                    season_day_number=season_day_number,
                     version_number=version_number,
                     ranked_day_version_id=version_id,
                     result=result,
@@ -3599,6 +3602,9 @@ class Database:
         *,
         player_id: int,
         ranked_day_start: datetime,
+        ranked_day_end: datetime,
+        official_season_id: str,
+        season_day_number: int,
         version_number: int,
         ranked_day_version_id: int,
         result: ReconciliationResult,
@@ -3625,6 +3631,21 @@ class Database:
             for row in adjustment_rows
         ]
         battles = [item for item in contribution_evidence if item.get("included")]
+        attack_three_star_count = sum(
+            item.get("lens") == "offense" and item.get("stars") == 3 for item in battles
+        )
+        defense_three_star_count = sum(
+            item.get("lens") == "defense" and item.get("stars") == 3 for item in battles
+        )
+        defense_loss = (
+            result.observed_defense_loss
+            if result.automatic_defense_evidence_state == "not_applicable"
+            else (
+                result.observed_defense_loss + result.automatic_defense_loss
+                if result.automatic_defense_loss is not None
+                else None
+            )
+        )
         public_state = (
             result.state
             if result.state in {"Live", "Complete", "Partial"}
@@ -3637,8 +3658,12 @@ class Database:
             """
             INSERT INTO api_player_daily_logs (
                 player_id, ranked_day_start, version, state, coverage,
-                adjustments, battles, partial_reasons
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                adjustments, battles, partial_reasons, ranked_day_end,
+                official_season_id, season_day_number, confidence,
+                attack_count, attack_three_star_count, attack_gain,
+                defense_count, defense_three_star_count, defense_loss,
+                net_trophy_change
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (player_id, ranked_day_start, version) DO NOTHING
             """,
             (
@@ -3650,6 +3675,17 @@ class Database:
                 Jsonb(adjustments),
                 Jsonb(battles),
                 Jsonb(partial_reasons),
+                ranked_day_end,
+                official_season_id,
+                season_day_number,
+                result.confidence,
+                result.attack_count,
+                attack_three_star_count,
+                result.attack_trophy_gain,
+                result.defense_count,
+                defense_three_star_count,
+                defense_loss,
+                result.net_trophy_change,
             ),
         )
 

@@ -164,7 +164,7 @@ The primary user is an individual competitive rank pusher. The same public data 
 - Prescriptive “use this army” or “use this base” recommendations.
 - Paid access to player data or analytics.
 - Competitor-service scraping to seed player tags or copy player data.
-- The TypeScript framework and the remaining infrastructure-product, cloud-provider, and implementation choices that remain open in [`docs/architecture.md`](architecture.md).
+- The remaining infrastructure-product, cloud-provider, and implementation choices that remain open in [`docs/architecture.md`](architecture.md).
 
 ## Open specification work
 

@@ -12,7 +12,7 @@ Report a conflict between these sources. Keep an open technology choice open unt
 
 ## Status
 
-Clash Lens has a confirmed Phase 1 architecture shape and runtime split. PostgreSQL is the primary structured database, Go owns official API collection, Python owns domain processing, analytics, accounts, integrations, and a private service API, and TypeScript owns the public website and its backend. The Phase 1 Python stack is confirmed. The TypeScript framework, remaining infrastructure products, and cloud providers remain open.
+Clash Lens has a confirmed Phase 1 architecture shape and runtime split. PostgreSQL is the primary structured database, Go owns official API collection, Python owns domain processing, analytics, accounts, integrations, and a private service API, and TypeScript owns the public website and its backend. The Phase 1 Python stack is confirmed. The website uses React Router 8 Framework Mode with server-side rendering on Node.js 24. Remaining infrastructure products and cloud providers remain open.
 
 The accepted shape is one repository and one logical product with independently running roles, a separate raw-evidence archive, durable staggered ingestion, and versioned precomputed analytics. Technology choices must preserve the product and domain rules rather than redefine them.
 

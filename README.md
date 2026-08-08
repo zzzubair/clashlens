@@ -17,9 +17,9 @@ Clash Lens provides data and analysis. Users make the decisions. Phase 1 does no
 
 ## Status
 
-The Phase 1 product scope and accepted architecture shape are confirmed. PostgreSQL stores structured data. Go collects official API evidence. One Python codebase owns domain processing and the private service API. TypeScript owns the public website and its backend. The Phase 1 Python stack is confirmed.
+The Phase 1 product scope and accepted architecture shape are confirmed. PostgreSQL stores structured data. Go collects official API evidence. One Python codebase owns domain processing and the private service API. TypeScript owns the public website and its backend. The Phase 1 Python stack and the React Router 8 SSR website on Node.js 24 are confirmed.
 
-Remaining detailed specifications, most implementation, the TypeScript framework, the raw-archive product, other infrastructure products, the complete Phase 1 deployment, and cloud providers remain open. See [Product scope](docs/product.md) and [Architecture](docs/architecture.md) for the authoritative lists.
+Remaining detailed specifications, most implementation, the raw-archive product, other infrastructure products, the complete Phase 1 deployment, and cloud providers remain open. See [Product scope](docs/product.md) and [Architecture](docs/architecture.md) for the authoritative lists.
 
 ## Documentation
 

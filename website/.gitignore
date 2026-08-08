@@ -1,0 +1,9 @@
+node_modules/
+build/
+.react-router/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example
+__pycache__/

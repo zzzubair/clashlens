@@ -1,0 +1,16 @@
+[Unit]
+Description=Clash Lens website
+Requires=clashlens-python-api.service clashlens.service
+After=network-online.target clashlens-python-api.service clashlens.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/clashlens
+ExecStart=%h/clashlens/deploy.sh website-start
+ExecStop=%h/clashlens/deploy.sh website-down
+TimeoutStartSec=10min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=default.target
