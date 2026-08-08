@@ -1623,9 +1623,12 @@ class Database:
                         separators=(",", ":"),
                     ).encode("utf-8")
                 ).hexdigest()
+                input_evidence = result.input_evidence
+                coverage_evidence = input_evidence.get("coverage_observations", [])
+                contribution_evidence = input_evidence.get("contributions", [])
                 existing = connection.execute(
                     """
-                    SELECT id FROM ranked_day_versions
+                    SELECT id, version FROM ranked_day_versions
                     WHERE player_id = %s AND ranked_day_start = %s
                       AND reconciliation_rule_version = %s AND result_hash = %s
                     """,
@@ -1652,9 +1655,6 @@ class Database:
                         if previous_version is not None
                         else 1
                     )
-                    input_evidence = result.input_evidence
-                    coverage_evidence = input_evidence.get("coverage_observations", [])
-                    contribution_evidence = input_evidence.get("contributions", [])
                     evidence_complete = bool(
                         result.coverage_complete
                         and start_baseline is not None
@@ -1753,6 +1753,19 @@ class Database:
                     assert version is not None
                     version_id = int(version[0])
                     self._store_ranked_day_adjustments(connection, version_id, result)
+                else:
+                    version_id = int(existing[0])
+                    version_number = int(existing[1])
+                self._publish_player_daily_log(
+                    connection,
+                    player_id=player_id,
+                    ranked_day_start=ranked_day.start,
+                    version_number=version_number,
+                    ranked_day_version_id=version_id,
+                    result=result,
+                    contribution_evidence=contribution_evidence,
+                )
+                if existing is None:
                     self._enqueue_ranked_day_dependents(
                         connection,
                         version_id,
@@ -3508,6 +3521,66 @@ class Database:
                     RECONCILIATION_RULE_VERSION,
                 ),
             )
+
+    @staticmethod
+    def _publish_player_daily_log(
+        connection: Any,
+        *,
+        player_id: int,
+        ranked_day_start: datetime,
+        version_number: int,
+        ranked_day_version_id: int,
+        result: ReconciliationResult,
+        contribution_evidence: list[dict[str, Any]],
+    ) -> None:
+        adjustment_rows = connection.execute(
+            """
+            SELECT adjustment_type, amount, evidence_state, rule_version,
+                   evidence_json
+            FROM ranked_day_adjustments
+            WHERE ranked_day_version_id = %s
+            ORDER BY id
+            """,
+            (ranked_day_version_id,),
+        ).fetchall()
+        adjustments = [
+            {
+                "type": _text_value(row[0]),
+                "amount": int(row[1]),
+                "evidence_state": _text_value(row[2]),
+                "rule_version": _text_value(row[3]),
+                "evidence": row[4],
+            }
+            for row in adjustment_rows
+        ]
+        battles = [item for item in contribution_evidence if item.get("included")]
+        public_state = (
+            result.state
+            if result.state in {"Live", "Complete", "Partial"}
+            else "Partial"
+        )
+        partial_reasons = list(result.failure_reasons)
+        if public_state != result.state:
+            partial_reasons.append(f"ranked_day_state:{result.state}")
+        connection.execute(
+            """
+            INSERT INTO api_player_daily_logs (
+                player_id, ranked_day_start, version, state, coverage,
+                adjustments, battles, partial_reasons
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (player_id, ranked_day_start, version) DO NOTHING
+            """,
+            (
+                player_id,
+                ranked_day_start,
+                version_number,
+                public_state,
+                "complete" if result.coverage_complete else "partial",
+                Jsonb(adjustments),
+                Jsonb(battles),
+                Jsonb(partial_reasons),
+            ),
+        )
 
     @staticmethod
     def _enqueue_ranked_day_dependents(

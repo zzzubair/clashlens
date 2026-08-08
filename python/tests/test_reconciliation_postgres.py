@@ -8,6 +8,7 @@ import psycopg
 from domain_test_support import domain_database, store_observation, text
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
+from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
@@ -480,6 +481,19 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 breakdowns = connection.execute(
                     "SELECT army_archetype FROM analytics_breakdowns ORDER BY summary_id"
                 ).fetchall()
+                daily_logs = connection.execute(
+                    """
+                    SELECT version, state, coverage, adjustments, battles,
+                           partial_reasons
+                    FROM api_player_daily_logs
+                    WHERE player_id = (
+                        SELECT id FROM players WHERE normalized_tag = '#2PP'
+                    )
+                      AND ranked_day_start = %s
+                    ORDER BY version
+                    """,
+                    (DAY_START,),
+                ).fetchall()
 
             assert [(row[0], text(row[1])) for row in versions] == [
                 (1, "Complete"),
@@ -627,6 +641,47 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             )
             assert all(text(row[4]) == "legend-analytics-v1" for row in summaries)
             assert [text(row[0]) for row in breakdowns] == ["Unclassified"] * 4
+            assert [(row[0], text(row[1]), text(row[2])) for row in daily_logs] == [
+                (1, "Complete", "complete"),
+                (2, "Partial", "complete"),
+            ]
+            assert daily_logs[0][3] == []
+            assert daily_logs[1][3] == []
+            assert len(daily_logs[0][4]) == 1
+            assert len(daily_logs[1][4]) == 1
+            assert daily_logs[0][4][0]["included"] is True
+            assert daily_logs[1][4][0]["included"] is True
+            assert daily_logs[0][5] == []
+            assert daily_logs[1][5] == [
+                "trophy_equation_mismatch",
+                "ranked_day_state:Inconsistent",
+            ]
+
+            api_database = ApiDatabase(connection_info)
+            try:
+                player_page = api_database.get_player_page(
+                    "#2PP",
+                    now=DAY_END + timedelta(minutes=10),
+                    freshness_seconds=900,
+                )
+            finally:
+                api_database.close()
+            assert player_page is not None
+            assert player_page["coverage"] == "ranked_days"
+            assert player_page["daily_logs"] == [
+                {
+                    "ranked_day_start": DAY_START.isoformat(),
+                    "version": 2,
+                    "state": "Partial",
+                    "coverage": "complete",
+                    "adjustments": [],
+                    "battles": daily_logs[1][4],
+                    "partial_reasons": [
+                        "trophy_equation_mismatch",
+                        "ranked_day_state:Inconsistent",
+                    ],
+                }
+            ]
         finally:
             database.close()
 
