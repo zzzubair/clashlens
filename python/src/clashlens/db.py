@@ -1221,10 +1221,12 @@ class Database:
     def complete_reconciliation(self, claim: Claim) -> None:
         player_id = int(claim.input_json["player_id"])
         day_start = datetime.fromisoformat(str(claim.input_json["ranked_day_start"]))
-        now = datetime.now(UTC)
         ranked_day = ranked_day_for(day_start)
         with self.pool.connection() as connection:
             with connection.transaction():
+                now_row = connection.execute("SELECT clock_timestamp()").fetchone()
+                assert now_row is not None
+                now = now_row[0]
                 job = self._lock_live_claim(connection, claim)
                 player = connection.execute(
                     "SELECT id, normalized_tag FROM players WHERE id = %s",
