@@ -1195,8 +1195,8 @@ BEGIN
     FOR replay_role_name IN SELECT unnest(ARRAY[
         'clashlens_support_transfer',
         'clashlens_collector',
-        'clashlens_worker',
-        'clashlens_api'
+        'clashlens_python_worker',
+        'clashlens_python_api'
     ])
     LOOP
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = replay_role_name) THEN
@@ -3286,6 +3286,286 @@ BEGIN
 
     RETURN QUERY SELECT
         selected_job_id, selected_attempt_id, selected_outcome, selected_reused;
+END
+$$;
+
+-- Runtime least-privilege role boundaries. The Go collector, the Python
+-- worker, and the Python API connect with fixed NOLOGIN roles that hold only
+-- the explicit object grants below. Nothing rides PUBLIC, future-object
+-- wildcards, or ownership changes; reapplying this section is stable.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'clashlens_collector') THEN
+        CREATE ROLE clashlens_collector NOLOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'clashlens_python_worker') THEN
+        CREATE ROLE clashlens_python_worker NOLOGIN;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'clashlens_python_api') THEN
+        CREATE ROLE clashlens_python_api NOLOGIN;
+    END IF;
+END
+$$;
+ALTER ROLE clashlens_collector
+    NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE clashlens_python_worker
+    NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER ROLE clashlens_python_api
+    NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+
+-- The permit gate and the interactive enqueue run as their owner so the
+-- runtime roles need only EXECUTE; every function keeps a fixed search_path.
+ALTER FUNCTION clashlens_acquire_shared_api_permit(text, text) SECURITY DEFINER;
+ALTER FUNCTION clashlens_cleanup_shared_api_permits(integer) SECURITY DEFINER;
+ALTER FUNCTION clashlens_enqueue_interactive(text, text, integer) SECURITY DEFINER;
+DO $$
+DECLARE
+    enqueue_schema_name text := current_schema();
+BEGIN
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_enqueue_interactive(text, text, integer) SET search_path TO pg_catalog, %I',
+        enqueue_schema_name, enqueue_schema_name
+    );
+END
+$$;
+
+-- Application objects in the current schema carry no PUBLIC privileges;
+-- every table, view, sequence, and function grant below is explicit.
+DO $$
+DECLARE
+    runtime_object record;
+    runtime_schema_name text := current_schema();
+BEGIN
+    FOR runtime_object IN
+        SELECT c.relname, c.relkind
+        FROM pg_class AS c
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = runtime_schema_name
+          AND c.relkind IN ('r', 'S', 'v')
+    LOOP
+        IF runtime_object.relkind = 'S' THEN
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON SEQUENCE %I.%I FROM PUBLIC',
+                runtime_schema_name, runtime_object.relname
+            );
+        ELSE
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM PUBLIC',
+                runtime_schema_name, runtime_object.relname
+            );
+        END IF;
+    END LOOP;
+    FOR runtime_object IN
+        SELECT p.oid, p.proname
+        FROM pg_proc AS p
+        JOIN pg_namespace AS n ON n.oid = p.pronamespace
+        WHERE n.nspname = runtime_schema_name
+          AND p.prokind = 'f'
+    LOOP
+        EXECUTE format(
+            'REVOKE ALL ON FUNCTION %I.%I(%s) FROM PUBLIC',
+            runtime_schema_name,
+            runtime_object.proname,
+            pg_get_function_identity_arguments(runtime_object.oid)
+        );
+    END LOOP;
+END
+$$;
+
+DO $$
+DECLARE
+    runtime_schema_name text := current_schema();
+BEGIN
+    EXECUTE format(
+        'GRANT USAGE ON SCHEMA %I TO clashlens_collector, clashlens_python_worker, clashlens_python_api',
+        runtime_schema_name
+    );
+END
+$$;
+
+-- Support, replay, and operator-reset seams stay host-only: no runtime role
+-- can execute them, and operator reset is additionally closed to PUBLIC.
+REVOKE ALL ON FUNCTION clashlens_support_transfer(uuid, text, uuid, uuid, text, text)
+    FROM clashlens_collector, clashlens_python_worker, clashlens_python_api;
+REVOKE ALL ON FUNCTION clashlens_request_python_replay_v2(bigint, text, text, text, text, text, text)
+    FROM clashlens_collector, clashlens_python_worker, clashlens_python_api;
+REVOKE ALL ON FUNCTION clashlens_operator_reset_python_job(bigint, text, text)
+    FROM PUBLIC, clashlens_collector, clashlens_python_worker, clashlens_python_api;
+
+GRANT EXECUTE ON FUNCTION clashlens_acquire_shared_api_permit(text, text)
+    TO clashlens_collector, clashlens_python_api;
+GRANT EXECUTE ON FUNCTION clashlens_cleanup_shared_api_permits(integer)
+    TO clashlens_collector;
+GRANT EXECUTE ON FUNCTION clashlens_enqueue_interactive(text, text, integer)
+    TO clashlens_python_api;
+
+-- Collector (Go): collector evidence and control rows, contract reads,
+-- credential registration, and the shared permit gate. No account, support,
+-- replay, canonical-profile, or derived-table access.
+GRANT SELECT, INSERT, UPDATE ON TABLE
+    collector_reset_sweeps,
+    collector_reset_sweep_members,
+    collector_jobs,
+    collector_attempts,
+    collector_endpoint_results,
+    collector_observations,
+    collector_transport_failures,
+    collector_interactive_intent_events,
+    collector_reset_baseline_sweeps,
+    collector_attempt_events,
+    shared_api_credentials,
+    shared_api_credential_events,
+    shared_api_permits,
+    python_processing_jobs
+    TO clashlens_collector;
+GRANT SELECT ON TABLE players TO clashlens_collector;
+GRANT INSERT (normalized_tag, active), UPDATE (next_due_at)
+    ON TABLE players TO clashlens_collector;
+GRANT SELECT ON TABLE clash_lens_contract TO clashlens_collector;
+
+-- Worker (Python db.py): the durable processing queue (including the worker
+-- claim view), Python-owned domain writes, and read-only collector evidence.
+-- No account, credential, support, replay, or operator-reset access.
+GRANT SELECT, INSERT, UPDATE ON TABLE
+    python_processing_jobs,
+    python_processing_attempts,
+    python_processing_job_events,
+    player_profile_versions,
+    player_profile_effects,
+    battle_log_observations,
+    battle_source_rows,
+    legend_battles,
+    battle_evidence,
+    battle_perspectives,
+    official_top200_attempts,
+    official_top200_versions,
+    official_top200_entries,
+    leaderboard_snapshots,
+    leaderboard_snapshot_entries,
+    analytics_summaries,
+    analytics_breakdowns,
+    ranked_day_versions,
+    ranked_day_adjustments,
+    reset_baseline_evidence,
+    observation_processing_outcomes,
+    parsed_source_payloads,
+    season_anchor_evidence,
+    legend_season_anchors,
+    known_player_discoveries,
+    api_player_daily_logs
+    TO clashlens_python_worker;
+GRANT SELECT, INSERT, UPDATE ON TABLE python_processing_jobs_worker
+    TO clashlens_python_worker;
+GRANT SELECT ON TABLE
+    players,
+    collector_observations,
+    collector_jobs,
+    collector_attempts,
+    collector_endpoint_results,
+    collector_reset_sweeps,
+    collector_reset_baseline_sweeps,
+    clash_lens_contract
+    TO clashlens_python_worker;
+GRANT INSERT (normalized_tag, active, eligibility_state),
+      UPDATE (
+          active, next_due_at, eligibility_state,
+          current_profile_version_id, current_observed_at, updated_at
+      )
+    ON TABLE players TO clashlens_python_worker;
+
+-- API (Python api_db.py): public derived and read-model rows, the account
+-- domain, credential registration and quarantine, candidate creation, and
+-- the permit gate plus interactive enqueue. No collector evidence writes,
+-- canonical derived-table writes, worker lease writes, support, or replay.
+GRANT SELECT ON TABLE
+    players,
+    player_profile_versions,
+    leaderboard_snapshots,
+    leaderboard_snapshot_entries,
+    api_player_daily_logs,
+    api_frozen_leaderboards,
+    api_frozen_leaderboard_entries,
+    shared_api_permits,
+    collector_jobs,
+    clash_lens_contract,
+    account_export_requests
+    TO clashlens_python_api;
+GRANT SELECT, INSERT, UPDATE ON TABLE
+    clash_lens_accounts,
+    account_provider_identities,
+    account_saved_players,
+    account_groups,
+    account_group_players,
+    private_api_requests,
+    api_refresh_requests,
+    verified_player_links,
+    player_link_verification_audits,
+    account_export_requests,
+    shared_api_credentials
+    TO clashlens_python_api;
+GRANT SELECT, INSERT ON TABLE python_processing_jobs
+    TO clashlens_python_api;
+GRANT INSERT (normalized_tag, active), UPDATE (normalized_tag)
+    ON TABLE players TO clashlens_python_api;
+GRANT INSERT ON TABLE support_player_link_transfer_candidates
+    TO clashlens_python_api;
+
+-- Identity sequence USAGE follows the exact insert-capable table lists above;
+-- tables without an identity column contribute no sequence.
+DO $$
+DECLARE
+    runtime_schema_name text := current_schema();
+    target_table text;
+    target_sequence regclass;
+BEGIN
+    FOREACH target_table IN ARRAY ARRAY[
+        'players', 'collector_reset_sweeps', 'collector_reset_sweep_members',
+        'collector_jobs', 'collector_attempts', 'collector_endpoint_results',
+        'collector_observations', 'collector_transport_failures',
+        'collector_interactive_intent_events', 'collector_reset_baseline_sweeps',
+        'collector_attempt_events', 'shared_api_credential_events',
+        'python_processing_jobs'
+    ]
+    LOOP
+        target_sequence := to_regclass(format('%I.%I', runtime_schema_name, target_table || '_id_seq'));
+        IF target_sequence IS NOT NULL THEN
+            EXECUTE format('GRANT USAGE ON SEQUENCE %I.%I TO clashlens_collector',
+                runtime_schema_name, target_table || '_id_seq');
+        END IF;
+    END LOOP;
+    FOREACH target_table IN ARRAY ARRAY[
+        'python_processing_jobs', 'python_processing_attempts',
+        'python_processing_job_events', 'player_profile_versions',
+        'player_profile_effects', 'battle_log_observations', 'battle_source_rows',
+        'legend_battles', 'battle_evidence', 'battle_perspectives',
+        'official_top200_attempts', 'official_top200_versions',
+        'official_top200_entries', 'leaderboard_snapshots',
+        'leaderboard_snapshot_entries', 'analytics_summaries',
+        'analytics_breakdowns', 'ranked_day_versions', 'ranked_day_adjustments',
+        'reset_baseline_evidence', 'observation_processing_outcomes',
+        'parsed_source_payloads', 'season_anchor_evidence',
+        'legend_season_anchors', 'known_player_discoveries',
+        'api_player_daily_logs', 'players'
+    ]
+    LOOP
+        target_sequence := to_regclass(format('%I.%I', runtime_schema_name, target_table || '_id_seq'));
+        IF target_sequence IS NOT NULL THEN
+            EXECUTE format('GRANT USAGE ON SEQUENCE %I.%I TO clashlens_python_worker',
+                runtime_schema_name, target_table || '_id_seq');
+        END IF;
+    END LOOP;
+    FOREACH target_table IN ARRAY ARRAY[
+        'clash_lens_accounts', 'account_provider_identities', 'account_groups',
+        'api_refresh_requests', 'verified_player_links', 'account_export_requests',
+        'python_processing_jobs', 'players'
+    ]
+    LOOP
+        target_sequence := to_regclass(format('%I.%I', runtime_schema_name, target_table || '_id_seq'));
+        IF target_sequence IS NOT NULL THEN
+            EXECUTE format('GRANT USAGE ON SEQUENCE %I.%I TO clashlens_python_api',
+                runtime_schema_name, target_table || '_id_seq');
+        END IF;
+    END LOOP;
 END
 $$;
 
