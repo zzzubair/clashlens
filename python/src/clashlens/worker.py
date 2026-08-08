@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Event
 
@@ -52,7 +51,7 @@ class ObservationProcessor:
         claim = self.database.claim_job(owner=owner, lease_seconds=lease_seconds)
         if claim is None:
             return None
-        return self._process_claim(claim)
+        return self._process_claim(claim, lease_seconds=lease_seconds)
 
     def process_job(
         self,
@@ -66,9 +65,9 @@ class ObservationProcessor:
         )
         if claim is None:
             return None
-        return self._process_claim(claim)
+        return self._process_claim(claim, lease_seconds=lease_seconds)
 
-    def _process_claim(self, claim: Claim) -> ProcessResult:
+    def _process_claim(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:
         if claim.work_type == "reconcile_ranked_day":
             if claim.processing_version != PROCESSING_VERSION:
                 return self._fail(
@@ -79,6 +78,7 @@ class ObservationProcessor:
                     claim, "unsupported_domain_rule_version", retryable=False
                 )
             try:
+                self.database.renew_claim(claim, lease_seconds=lease_seconds)
                 self.database.complete_reconciliation(claim)
             except LeaseLost:
                 return ProcessResult(claim.job_id, "lease_lost")
@@ -97,6 +97,7 @@ class ObservationProcessor:
                     claim, "unsupported_analytics_rule_version", retryable=False
                 )
             try:
+                self.database.renew_claim(claim, lease_seconds=lease_seconds)
                 if claim.work_type == "build_snapshot":
                     self.database.complete_snapshot(claim)
                 else:
@@ -152,9 +153,11 @@ class ObservationProcessor:
             return self._fail(claim, "missing_archive_metadata", retryable=False)
 
         try:
+            self.database.renew_claim(claim, lease_seconds=lease_seconds)
             archived = self.archive.read_verified(
                 claim.archive_reference, claim.response_hash
             )
+            self.database.renew_claim(claim, lease_seconds=lease_seconds)
         except ArchiveReadError as error:
             try:
                 state = self.database.fail_claim(
@@ -170,6 +173,8 @@ class ObservationProcessor:
                 "retrying" if state == "waiting_retry" else "failed",
                 error.category,
             )
+        except LeaseLost:
+            return ProcessResult(claim.job_id, "lease_lost")
 
         if claim.http_status is None:
             return self._fail(claim, "missing_http_status", retryable=False)
@@ -254,11 +259,8 @@ class ObservationProcessor:
         max_jobs: int = 100,
         lease_seconds: int = 30,
         stop_requested: Event | None = None,
-        readiness_check: Callable[[], bool] | None = None,
     ) -> list[ProcessResult]:
         results: list[ProcessResult] = []
-        if readiness_check is not None and not readiness_check():
-            return results
         for _ in range(max_jobs):
             if stop_requested is not None and stop_requested.is_set():
                 break

@@ -242,6 +242,33 @@ class Database:
             ).fetchone()
             return row is not None and int(row[0]) == expected_contract_version
 
+    def queue_health(self) -> dict[str, int | float | None]:
+        with self.pool.connection() as connection:
+            row = connection.execute(
+                f"""
+                SELECT
+                    count(*) FILTER (WHERE state = 'pending'),
+                    count(*) FILTER (WHERE state = 'waiting_retry'),
+                    count(*) FILTER (WHERE state = 'leased'),
+                    count(*) FILTER (WHERE state = 'failed'),
+                    extract(
+                        epoch FROM clock_timestamp() - min(due_at) FILTER (
+                            WHERE state IN ('pending', 'waiting_retry')
+                              AND due_at <= clock_timestamp()
+                        )
+                    )
+                FROM {self._jobs_relation}
+                """
+            ).fetchone()
+        assert row is not None
+        return {
+            "pending": int(row[0]),
+            "waiting_retry": int(row[1]),
+            "leased": int(row[2]),
+            "failed": int(row[3]),
+            "oldest_due_seconds": None if row[4] is None else max(0.0, float(row[4])),
+        }
+
     def apply_schema(self) -> None:
         root = Path(__file__).parents[3]
         migration_0001 = (
@@ -677,6 +704,48 @@ class Database:
                     analytics_rule_version=_text_value(data["analytics_rule_version"]),
                     max_attempts=int(data["max_attempts"]),
                 )
+
+    def renew_claim(self, claim: Claim, *, lease_seconds: int) -> None:
+        if lease_seconds <= 0:
+            raise ValueError("lease duration must be positive")
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                renewed = connection.execute(
+                    f"""
+                    UPDATE {self._jobs_relation}
+                    SET lease_expires_at = clock_timestamp() + (%s * interval '1 second'),
+                        updated_at = clock_timestamp()
+                    WHERE id = %s AND state = 'leased'
+                      AND lease_owner = %s AND lease_token = %s
+                      AND lease_expires_at > clock_timestamp()
+                    RETURNING lease_expires_at
+                    """,
+                    (
+                        lease_seconds,
+                        claim.job_id,
+                        claim.lease_owner,
+                        claim.lease_token,
+                    ),
+                ).fetchone()
+                if renewed is None:
+                    raise LeaseLost("job lease could not be renewed")
+                attempt = connection.execute(
+                    """
+                    UPDATE python_processing_attempts
+                    SET lease_expires_at = %s
+                    WHERE id = %s AND job_id = %s AND state = 'running'
+                      AND lease_owner = %s AND lease_token = %s
+                    """,
+                    (
+                        renewed[0],
+                        claim.attempt_id,
+                        claim.job_id,
+                        claim.lease_owner,
+                        claim.lease_token,
+                    ),
+                )
+                if attempt.rowcount != 1:
+                    raise LeaseLost("processing attempt lease could not be renewed")
 
     def complete_profile(self, claim: Claim, profile: ParsedProfile) -> None:
         (

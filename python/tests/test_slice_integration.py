@@ -249,6 +249,38 @@ def test_expired_or_wrong_lease_cannot_write_product_effects_or_complete(
     db.close()
 
 
+def test_live_claim_renews_job_and_attempt_with_the_same_fence(
+    database_url: str, archive_server
+) -> None:
+    db = Database(database_url)
+    db.apply_schema()
+    db.clear_prototype_data()
+    job_id, _reference = _seed(db, archive_server)
+    claim = db.claim_job(owner="renewing-worker", lease_seconds=30)
+    assert claim is not None and claim.job_id == job_id
+
+    db.renew_claim(claim, lease_seconds=120)
+
+    with db.pool.connection() as connection:
+        renewed = connection.execute(
+            """
+            SELECT job.lease_expires_at, attempt.lease_expires_at
+            FROM python_processing_jobs AS job
+            JOIN python_processing_attempts AS attempt ON attempt.id = %s
+            WHERE job.id = %s
+            """,
+            (claim.attempt_id, claim.job_id),
+        ).fetchone()
+    assert renewed is not None
+    assert renewed[0] == renewed[1]
+    assert renewed[0] > claim.lease_expires_at
+
+    db.expire_lease(job_id)
+    with pytest.raises(LeaseLost):
+        db.renew_claim(claim, lease_seconds=120)
+    db.close()
+
+
 def test_expired_lease_stops_after_the_configured_attempt_limit(
     database_url: str,
     archive_server,

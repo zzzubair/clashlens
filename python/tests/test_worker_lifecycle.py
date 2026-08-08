@@ -32,19 +32,6 @@ def test_worker_does_not_claim_after_shutdown_is_requested() -> None:
     assert database.claim_calls == 0
 
 
-def test_worker_does_not_claim_when_archive_readiness_is_false() -> None:
-    database = NoClaimDatabase()
-    processor = ObservationProcessor(database, archive=object())
-
-    results = processor.process_until_idle(
-        owner="archive-down-worker",
-        readiness_check=lambda: False,
-    )
-
-    assert results == []
-    assert database.claim_calls == 0
-
-
 def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None:
     class FakeDatabase:
         closed = False
@@ -66,6 +53,7 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
             return
 
         def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
+            assert "readiness_check" not in kwargs
             stop_requested = kwargs["stop_requested"]
             assert isinstance(stop_requested, Event)
             stop_requested.set()
@@ -89,9 +77,13 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
     )
 
     result = cli._run_worker(arguments)
-    output = json.loads(capsys.readouterr().out)
+    output_lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    output = output_lines[-1]
 
     assert result == 0
     assert output["processed_count"] == cli.MAX_REPORTED_RESULTS + 1
     assert len(output["results"]) == cli.MAX_REPORTED_RESULTS
+    assert [line["event"] for line in output_lines[:-1]] == [
+        "job_result"
+    ] * (cli.MAX_REPORTED_RESULTS + 1)
     assert database.closed is True

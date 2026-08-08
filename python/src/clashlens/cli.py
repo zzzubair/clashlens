@@ -14,7 +14,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
-from time import time
+from time import monotonic, time
 from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -211,7 +211,6 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 max_jobs=arguments.max_jobs,
                 lease_seconds=arguments.lease_seconds,
                 stop_requested=stop_requested,
-                readiness_check=archive.check_ready,
             )
             print(
                 json.dumps(
@@ -224,17 +223,31 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             return 0
         recent_results: deque[ProcessResult] = deque(maxlen=MAX_REPORTED_RESULTS)
         processed_count = 0
+        last_health_report = float("-inf")
         while not stop_requested.is_set():
             results = processor.process_until_idle(
                 owner=arguments.owner,
                 max_jobs=arguments.max_jobs,
                 lease_seconds=arguments.lease_seconds,
                 stop_requested=stop_requested,
-                readiness_check=archive.check_ready,
             )
             processed_count += len(results)
             recent_results.extend(results)
+            for result in results:
+                print(
+                    json.dumps({"event": "job_result", **asdict(result)}),
+                    flush=True,
+                )
             if not results:
+                current_time = monotonic()
+                if current_time - last_health_report >= 60:
+                    print(
+                        json.dumps(
+                            {"event": "queue_health", **database.queue_health()}
+                        ),
+                        flush=True,
+                    )
+                    last_health_report = current_time
                 stop_requested.wait(arguments.poll_interval_seconds)
         print(
             json.dumps(
