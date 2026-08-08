@@ -3191,10 +3191,13 @@ CREATE TRIGGER analytics_breakdowns_immutable_v2
 BEFORE UPDATE OR DELETE ON analytics_breakdowns
 FOR EACH ROW EXECUTE FUNCTION clashlens_guard_analytics_breakdown_immutable_v2();
 
-CREATE OR REPLACE FUNCTION clashlens_enqueue_interactive(
+DROP FUNCTION IF EXISTS clashlens_enqueue_interactive(text, text, integer);
+DROP FUNCTION IF EXISTS clashlens_enqueue_interactive(text, text, integer, boolean);
+CREATE FUNCTION clashlens_enqueue_interactive(
     requested_type text,
     requested_tag text,
-    cooldown_seconds integer DEFAULT 300
+    cooldown_seconds integer DEFAULT 300,
+    bypass_cooldown boolean DEFAULT false
 )
 RETURNS TABLE (job_id bigint, attempt_id bigint, outcome text, reused boolean)
 LANGUAGE plpgsql
@@ -3206,6 +3209,9 @@ DECLARE
     selected_outcome text;
     selected_reused boolean;
     selected_key text;
+    missing_endpoint text;
+    prior_attempt_id bigint;
+    prior_job_id bigint;
 BEGIN
     IF requested_type NOT IN ('initial_collection', 'live_refresh') THEN
         RAISE EXCEPTION 'unsupported interactive work type';
@@ -3217,6 +3223,8 @@ BEGIN
         RAISE EXCEPTION 'interactive cooldown is outside the supported range';
     END IF;
 
+    PERFORM pg_advisory_xact_lock(hashtextextended(requested_tag, 0));
+
     INSERT INTO players (normalized_tag, active)
     VALUES (requested_tag, false)
     ON CONFLICT (normalized_tag) DO NOTHING;
@@ -3224,13 +3232,13 @@ BEGIN
     FROM players
     WHERE normalized_tag = requested_tag;
 
-    selected_key := requested_type || ':' || requested_tag;
     SELECT j.id, j.result_attempt_id
     INTO selected_job_id, selected_attempt_id
     FROM collector_jobs AS j
-    WHERE j.coalescing_key = selected_key
+    WHERE j.normalized_tag = requested_tag
+      AND j.capacity_pool = 'interactive'
       AND j.status IN ('pending', 'leased', 'waiting_retry')
-    ORDER BY j.id DESC
+    ORDER BY j.created_at DESC, j.id DESC
     LIMIT 1
     FOR UPDATE;
 
@@ -3238,41 +3246,77 @@ BEGIN
         selected_outcome := 'coalesced';
         selected_reused := true;
     ELSE
-        SELECT j.id, j.result_attempt_id
-        INTO selected_job_id, selected_attempt_id
-        FROM collector_jobs AS j
-        WHERE j.coalescing_key = selected_key
-          AND j.status = 'complete'
-          AND j.updated_at >= clock_timestamp() - make_interval(secs => cooldown_seconds)
-        ORDER BY j.updated_at DESC, j.id DESC
-        LIMIT 1;
+        IF NOT bypass_cooldown THEN
+            SELECT j.id, a.id
+            INTO selected_job_id, selected_attempt_id
+            FROM collector_attempts AS a
+            JOIN collector_jobs AS j ON j.id = a.job_id
+            WHERE j.normalized_tag = requested_tag
+              AND j.work_type IN ('initial_collection', 'live_refresh')
+              AND a.status = 'complete'
+              AND a.completed_at >= clock_timestamp() - make_interval(secs => cooldown_seconds)
+            ORDER BY a.completed_at DESC, a.id DESC
+            LIMIT 1;
+        END IF;
         IF selected_job_id IS NOT NULL THEN
             selected_outcome := 'cooldown_hit';
             selected_reused := true;
         ELSE
-            BEGIN
+            SELECT a.id, a.job_id,
+                   max(r.endpoint) FILTER (WHERE r.outcome <> 'observed')
+            INTO prior_attempt_id, prior_job_id, missing_endpoint
+            FROM collector_attempts AS a
+            JOIN collector_jobs AS j ON j.id = a.job_id
+            JOIN collector_endpoint_results AS r ON r.attempt_id = a.id
+            WHERE j.normalized_tag = requested_tag
+              AND j.work_type IN ('initial_collection', 'live_refresh')
+              AND a.status = 'incomplete'
+            GROUP BY a.id, a.job_id
+            HAVING count(*) FILTER (WHERE r.outcome = 'observed') = 1
+               AND count(*) FILTER (WHERE r.outcome <> 'observed') = 1
+            ORDER BY a.started_at DESC, a.id DESC
+            LIMIT 1;
+
+            IF prior_attempt_id IS NOT NULL AND missing_endpoint IS NOT NULL THEN
+                selected_key := 'retry:' || prior_attempt_id::text || ':' || missing_endpoint || ':intent';
+                INSERT INTO collector_jobs (
+                    work_type, player_id, normalized_tag, capacity_pool,
+                    priority, due_at, coalescing_key, parent_attempt_id,
+                    required_endpoint, status
+                ) VALUES (
+                    'endpoint_retry', selected_player_id, requested_tag, 'interactive',
+                    300, clock_timestamp(), selected_key, prior_attempt_id,
+                    missing_endpoint, 'pending'
+                )
+                ON CONFLICT DO NOTHING
+                RETURNING id INTO selected_job_id;
+                IF selected_job_id IS NULL THEN
+                    SELECT id INTO selected_job_id
+                    FROM collector_jobs
+                    WHERE coalescing_key = selected_key
+                      AND status IN ('pending', 'leased', 'waiting_retry')
+                    ORDER BY id DESC
+                    LIMIT 1;
+                    selected_reused := true;
+                ELSE
+                    selected_reused := false;
+                END IF;
+                selected_attempt_id := prior_attempt_id;
+                selected_outcome := 'partial_retry';
+            ELSE
+                selected_key := 'interactive:' || requested_tag;
                 INSERT INTO collector_jobs (
                     work_type, player_id, normalized_tag, capacity_pool,
                     priority, due_at, coalescing_key, status
                 ) VALUES (
                     requested_type, selected_player_id, requested_tag, 'interactive',
-                    300, clock_timestamp(), selected_key, 'pending'
+                    250, clock_timestamp(), selected_key, 'pending'
                 )
                 RETURNING id INTO selected_job_id;
                 selected_attempt_id := NULL;
                 selected_outcome := 'created';
                 selected_reused := false;
-            EXCEPTION WHEN unique_violation THEN
-                SELECT j.id, j.result_attempt_id
-                INTO selected_job_id, selected_attempt_id
-                FROM collector_jobs AS j
-                WHERE j.coalescing_key = selected_key
-                  AND j.status IN ('pending', 'leased', 'waiting_retry')
-                ORDER BY j.id DESC
-                LIMIT 1;
-                selected_outcome := 'coalesced';
-                selected_reused := true;
-            END;
+            END IF;
         END IF;
     END IF;
 
@@ -3317,13 +3361,13 @@ ALTER ROLE clashlens_python_api
 -- runtime roles need only EXECUTE; every function keeps a fixed search_path.
 ALTER FUNCTION clashlens_acquire_shared_api_permit(text, text) SECURITY DEFINER;
 ALTER FUNCTION clashlens_cleanup_shared_api_permits(integer) SECURITY DEFINER;
-ALTER FUNCTION clashlens_enqueue_interactive(text, text, integer) SECURITY DEFINER;
+ALTER FUNCTION clashlens_enqueue_interactive(text, text, integer, boolean) SECURITY DEFINER;
 DO $$
 DECLARE
     enqueue_schema_name text := current_schema();
 BEGIN
     EXECUTE format(
-        'ALTER FUNCTION %I.clashlens_enqueue_interactive(text, text, integer) SET search_path TO pg_catalog, %I',
+        'ALTER FUNCTION %I.clashlens_enqueue_interactive(text, text, integer, boolean) SET search_path TO pg_catalog, %I',
         enqueue_schema_name, enqueue_schema_name
     );
 END
@@ -3396,8 +3440,8 @@ GRANT EXECUTE ON FUNCTION clashlens_acquire_shared_api_permit(text, text)
     TO clashlens_collector, clashlens_python_api;
 GRANT EXECUTE ON FUNCTION clashlens_cleanup_shared_api_permits(integer)
     TO clashlens_collector;
-GRANT EXECUTE ON FUNCTION clashlens_enqueue_interactive(text, text, integer)
-    TO clashlens_python_api;
+GRANT EXECUTE ON FUNCTION clashlens_enqueue_interactive(text, text, integer, boolean)
+    TO clashlens_collector, clashlens_python_api;
 
 -- Collector (Go): collector evidence and control rows, contract reads,
 -- credential registration, and the shared permit gate. No account, support,

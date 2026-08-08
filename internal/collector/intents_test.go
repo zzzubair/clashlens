@@ -235,3 +235,70 @@ func TestVersionTwoResetSweepRetryRepairsLateOrMissingPairedWork(t *testing.T) {
 		t.Fatalf("duplicate reset job groups = %d, want 0", duplicateGroups)
 	}
 }
+
+func TestVersionTwoGoAndPrivateAPIIntentsShareOneCanonicalEnqueue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	connection := migratedVersionTwoConnection(t, ctx)
+	store, err := openStore(ctx, connection.Config().ConnString(), 2)
+	if err != nil {
+		t.Fatalf("open version-two store: %v", err)
+	}
+	t.Cleanup(store.close)
+
+	start := make(chan struct{})
+	var wait sync.WaitGroup
+	var goResult interactiveIntentResult
+	var goError error
+	var apiJobID int64
+	var apiError error
+	wait.Add(2)
+	go func() {
+		defer wait.Done()
+		<-start
+		goResult, goError = store.enqueueInteractive(
+			ctx,
+			"initial_collection",
+			"#2PP",
+			time.Now().UTC(),
+			300*time.Second,
+			false,
+		)
+	}()
+	go func() {
+		defer wait.Done()
+		<-start
+		apiError = connection.QueryRow(ctx, `
+			SELECT job_id
+			FROM clashlens_enqueue_interactive('live_refresh', '#2PP', 300)
+		`).Scan(&apiJobID)
+	}()
+	close(start)
+	wait.Wait()
+
+	if goError != nil {
+		t.Fatalf("Go version-two enqueue: %v", goError)
+	}
+	if apiError != nil {
+		t.Fatalf("private API enqueue: %v", apiError)
+	}
+	if goResult.jobID != apiJobID {
+		t.Fatalf("cross-runtime enqueue job ids differ: Go=%d API=%d", goResult.jobID, apiJobID)
+	}
+	var activeJobs, intentEvents int
+	if err := connection.QueryRow(ctx, `
+		SELECT
+			count(*) FILTER (
+				WHERE capacity_pool = 'interactive'
+				  AND status IN ('pending', 'leased', 'waiting_retry')
+			),
+			(SELECT count(*) FROM collector_interactive_intent_events WHERE normalized_tag = '#2PP')
+		FROM collector_jobs
+		WHERE normalized_tag = '#2PP'
+	`).Scan(&activeJobs, &intentEvents); err != nil {
+		t.Fatalf("read canonical enqueue results: %v", err)
+	}
+	if activeJobs != 1 || intentEvents != 2 {
+		t.Fatalf("canonical enqueue produced active_jobs=%d intent_events=%d, want 1 and 2", activeJobs, intentEvents)
+	}
+}

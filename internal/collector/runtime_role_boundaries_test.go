@@ -125,8 +125,9 @@ func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
 		t.Fatalf("seed role-boundary credential: %v", err)
 	}
 
-	// Collector: evidence and job rows, contract reads, permit gate, identity
-	// sequences; no account, canonical-profile, support, replay, or enqueue use.
+	// Collector: evidence and job rows, contract reads, permit gate, canonical
+	// interactive enqueue, and identity sequences; no account,
+	// canonical-profile, support, or replay use.
 	if _, err := connection.Exec(ctx, `BEGIN`); err != nil {
 		t.Fatalf("begin collector probe transaction: %v", err)
 	}
@@ -209,9 +210,11 @@ func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
 		SELECT * FROM clashlens_request_python_replay_v2(
 			$1, 'operator:x', 'reason text', 'parser-v1', 'proc-v1', 'rules-v1', 'analytics-v1')
 	`, "collector executing replay request", observationID)
-	expectInsufficientPrivilege(t, ctx, connection, `
-		SELECT * FROM clashlens_enqueue_interactive('live_refresh', '#9PL', 300)
-	`, "collector executing interactive enqueue")
+	if _, err := connection.Exec(ctx, `
+		SELECT * FROM clashlens_enqueue_interactive('live_refresh', '#9PL', 300, true)
+	`); err != nil {
+		t.Fatalf("collector execute shared interactive enqueue: %v", err)
+	}
 	if _, err := connection.Exec(ctx, `RESET ROLE`); err != nil {
 		t.Fatalf("reset collector role: %v", err)
 	}

@@ -33,6 +33,27 @@ func (s *store) enqueueInteractive(
 	if cooldown < 0 {
 		return interactiveIntentResult{}, errors.New("interactive cooldown must not be negative")
 	}
+	if s.contractVersion >= 2 {
+		var result interactiveIntentResult
+		var attemptID pgtype.Int8
+		var outcome string
+		if err := s.pool.QueryRow(ctx, `
+			SELECT job_id, attempt_id, outcome, reused
+			FROM clashlens_enqueue_interactive($1, $2, $3, $4)
+		`, workType, normalizedTag, int(cooldown/time.Second), bypassCooldown).Scan(
+			&result.jobID,
+			&attemptID,
+			&outcome,
+			&result.reused,
+		); err != nil {
+			return interactiveIntentResult{}, fmt.Errorf("enqueue shared interactive intent: %w", err)
+		}
+		_ = outcome
+		if attemptID.Valid {
+			result.attemptID = attemptID.Int64
+		}
+		return result, nil
+	}
 
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
