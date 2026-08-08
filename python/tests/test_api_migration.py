@@ -110,8 +110,22 @@ def migrated_populated_v1_production_database(database_url: str) -> Iterator[str
                 )
                 RETURNING id
                 """,
-                (job_id, attempt_id, player_id, "a" * 64),
+                (job_id, attempt_id, None, "a" * 64),
             ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO collector_transport_failures (
+                    collection_job_id, attempt_id, player_id, normalized_tag,
+                    endpoint, request_started_at, failed_at, failure_category,
+                    retry_state, key_label
+                ) VALUES (
+                    %s, %s, NULL, '#2PP', 'profile',
+                    '2026-08-06T05:00:00Z', '2026-08-06T05:00:01Z',
+                    'transport', 'waiting_retry', 'key-v1'
+                )
+                """,
+                (job_id, attempt_id),
+            )
             connection.execute(
                 "INSERT INTO python_processing_jobs (observation_id) VALUES (%s)",
                 (observation_id,),
@@ -351,7 +365,7 @@ def test_python_migration_repeats_after_populated_version_one_rows(
             )
             job = connection.execute(
                 """
-                SELECT work_type, scope, reset_baseline_sweep_id
+                SELECT work_type, scope, reset_baseline_sweep_id, player_id
                 FROM collector_jobs
                 WHERE coalescing_key = 'populated-v1-reset-profile'
                 """
@@ -359,6 +373,22 @@ def test_python_migration_repeats_after_populated_version_one_rows(
             assert job is not None
             assert (text(job[0]), text(job[1])) == ("legacy_reset_profile", "player")
             assert job[2] is not None
+            observation_player_id = connection.execute(
+                """
+                SELECT player_id
+                FROM collector_observations
+                WHERE occurrence_key = 'populated-v1-observation'
+                """
+            ).fetchone()[0]
+            failure_player_id = connection.execute(
+                """
+                SELECT player_id
+                FROM collector_transport_failures
+                WHERE normalized_tag = '#2PP'
+                """
+            ).fetchone()[0]
+            assert observation_player_id == job[3]
+            assert failure_player_id == observation_player_id
             processing = connection.execute(
                 """
                 SELECT work_type, deduplication_key, input_json

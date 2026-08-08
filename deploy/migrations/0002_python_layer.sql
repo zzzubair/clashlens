@@ -299,6 +299,22 @@ ALTER TABLE collector_transport_failures
     ADD COLUMN IF NOT EXISTS paging_envelope_state text,
     ADD COLUMN IF NOT EXISTS source_adapter_version text;
 
+-- Contract v1 allowed player_id to be null even when normalized_tag identified
+-- an existing player. Restore that identity before enforcing v2 player scope.
+UPDATE collector_observations AS observation
+SET player_id = player.id
+FROM players AS player
+WHERE observation.scope = 'player'
+  AND observation.player_id IS NULL
+  AND observation.normalized_tag = player.normalized_tag;
+
+UPDATE collector_transport_failures AS failure
+SET player_id = player.id
+FROM players AS player
+WHERE failure.scope = 'player'
+  AND failure.player_id IS NULL
+  AND failure.normalized_tag = player.normalized_tag;
+
 UPDATE collector_endpoint_results AS endpoint_result
 SET request_method = COALESCE(endpoint_result.request_method, 'GET'),
     request_path = COALESCE(
