@@ -1,8 +1,13 @@
-# Fedora collector deployment
+# Fedora deployment
 
-**Status:** executable runbook for the current Go collector and PostgreSQL deployment. It is not the complete Phase 1 deployment.
+**Status:** executable runbook for the Go collector, PostgreSQL, and the
+production Python worker. Discord bot, Google Sheets exports, the OBS
+overlay, and the TypeScript website backend remain future roles. This
+runbook does not deploy them.
 
-This runbook uses direct rootless Podman commands. It does not use Compose. The private Python API, Python worker, Discord bot, and TypeScript website backend are accepted future roles but are not deployed by this script. [Architecture](architecture.md) owns their boundaries, migration order, and open deployment choices.
+This runbook uses direct rootless Podman commands. It does not use Compose.
+[Architecture](architecture.md) owns runtime boundaries, migration order,
+and open deployment choices.
 
 ## 1. Prepare the host and credentials
 
@@ -18,7 +23,7 @@ Use:
 
 The deployment does not create or print credentials. Keep `app.env` and all credential files outside version control. It imports the database password, database URL, archive credentials, and API keys into rootless Podman file secrets. Container metadata contains only secret names and mounted paths.
 
-Use separate archive credentials for the Go collector and the future Python worker. Give the current collector only its write and immediate integrity-verification access. [Architecture](architecture.md#postgresql-and-archive-ownership) owns the complete credential boundary.
+Use separate archive credentials for the Go collector and the Python worker. Give the collector only its write and immediate integrity-verification access. Give the worker its own read-only archive credential. [Architecture](architecture.md#postgresql-and-archive-ownership) owns the complete credential boundary.
 
 Completion: the service account can run rootless Podman, every required credential file exists with private permissions, and no credential value is in the repository.
 
@@ -52,39 +57,79 @@ Completion: `app.env` has no `CHANGE_ME` value, every key path resolves to a mod
 curl --fail http://127.0.0.1:8081/readyz
 ```
 
-`init` starts PostgreSQL, waits for readiness, and applies the deployment-owned initial migration. The migration is safe to apply again. `up` builds the multi-stage collector image, starts one collector container, and checks that `/readyz` reports `"ready":true`.
+`init` starts PostgreSQL, waits for readiness, and applies migration 0001
+only. The migration is safe to apply again. `up` builds the multi-stage
+collector image, starts the bridge collector against contract version 1,
+applies migration 0002 to advance the contract to version 2, and checks that
+`/readyz` reports `"ready":true`. The bridge-before-migration order keeps
+the collector's version-1 observation-job insert valid while the schema
+advances. `status` shows the network, volume, collector, and PostgreSQL
+containers.
 
-Completion: all four commands exit with status `0`, `status` shows the collector and PostgreSQL containers, and `/readyz` reports `"ready":true`.
+Completion: all four commands exit with status `0`, `status` shows the
+collector and PostgreSQL containers, and `/readyz` reports `"ready":true`.
 
-## 4. Install the user service
+## 4. Start the production Python worker
 
-Install the tracked rootless user service after the first successful `up`:
+After `up` has advanced the contract to version 2, start the production
+Python worker:
+
+```bash
+./deploy.sh python-up
+./deploy.sh python-status
+```
+
+`python-up` verifies that the contract is version 2, builds the Python
+worker image, starts the worker with read-only root filesystem, dropped
+capabilities, memory and PID limits, and file-backed secrets, and waits for
+its health command to pass. The worker claims leased Python jobs in bounded
+batches and writes product data only inside fenced transactions.
+
+Completion: `python-status` shows the worker running, and the worker health
+command exits with status `0` against the deployed contract.
+
+## 5. Install the user services
+
+Install the tracked rootless user services after the first successful `up`
+and `python-up`:
 
 ```bash
 install -D -m 0644 deploy/systemd/clashlens.service \
   ~/.config/systemd/user/clashlens.service
+install -D -m 0644 deploy/systemd/clashlens-python-worker.service \
+  ~/.config/systemd/user/clashlens-python-worker.service
 systemctl --user daemon-reload
-systemctl --user enable --now clashlens.service
+systemctl --user enable --now clashlens.service clashlens-python-worker.service
 ```
 
-The host must enable lingering for the `clashlens` account so this user service starts without an interactive login.
+The host must enable lingering for the `clashlens` account so these user
+services start without an interactive login. The Python worker service
+requires the collector stack service and starts after it.
 
-Completion: `systemctl --user status clashlens.service` shows an active service, and the service starts after a host restart without an interactive login.
+Completion: `systemctl --user status clashlens.service` and
+`systemctl --user status clashlens-python-worker.service` show active
+services, and both services start after a host restart without an
+interactive login.
 
-## 5. Operate the current stack
+## 6. Operate the current stack
 
 Use only the supported lifecycle commands:
 
 ```bash
 ./deploy.sh logs collector
 ./deploy.sh logs postgres
+./deploy.sh logs python-worker
 ./deploy.sh restart
+./deploy.sh python-down
 ./deploy.sh down
 ```
 
-`down` removes the two containers but keeps the network and data volume. It does not delete evidence or database data.
+`down` removes the Python worker, collector, and PostgreSQL containers but
+keeps the network and data volume. It does not delete evidence or database
+data. `restart` restarts the collector only; it does not rebuild or restart
+the Python worker.
 
-## 6. Run a one-tag live test
+## 7. Run a one-tag live test
 
 Use one known tag only after `up` reports ready. The command submits a durable interactive refresh and prints its job result. It does not print API keys.
 
@@ -98,7 +143,7 @@ Check the collector log for the job result and check the external archive for ne
 
 Completion: the job reaches an inspectable terminal result, `/readyz` remains ready, and the archive contains the new immutable response objects without a credential appearing in output.
 
-## 7. Inspect failures
+## 8. Inspect failures
 
 Run these commands while the collector container is running. The wrapper enters
 that container, and the maintenance command uses the database URL and optional
@@ -116,7 +161,7 @@ Maintenance output contains safe IDs, states, categories, and times. It does not
 Completion: each inspection command returns safe JSON-lines output, and each
 recovery command changes only the requested durable job state.
 
-## 8. Preserve data during rollback
+## 9. Preserve data during rollback
 
 The deployment does not perform automatic database rollback.
 Migrations are forward-only in this first deployment.
@@ -124,16 +169,29 @@ A previous collector image can be selected with
 `CLASHLENS_COLLECTOR_IMAGE`, then started with `./deploy.sh restart`, only when
 that image is compatible with the current schema.
 
-For an incompatible schema change, stop the collector, keep the volume, and
-restore a tested PostgreSQL backup before starting the old image.
+The production Python worker does not run down-migrations. To roll back
+application code, stop the current worker image and start the previous
+schema-compatible image with `./deploy.sh python-up` after changing
+`CLASHLENS_PYTHON_WORKER_IMAGE`. Keep the schema at version 2; the previous
+Python image must be compatible with contract version 2.
+
+For an incompatible schema change, stop the collector and worker, keep the
+volume, and restore a tested PostgreSQL backup before starting the old image.
 Immutable archive objects are not removed by `down` and are not rolled back.
 The deployment does not configure backups, point-in-time recovery, systemd lingering, or monitoring. Operators must provide and test them before production use.
 
-Do not apply migration 2 or start future Python roles from this runbook. [Architecture](architecture.md#3-deployment-and-resource-limits) owns the required version-1-and-2 bridge order and application rollback contract. [The replay contract](architecture.md#replay) owns replay authorization.
+The replay contract is owned by [Architecture](architecture.md#replay).
+Replay requests require an allowlisted authenticated host operator through
+the root-owned wrapper; no application role can insert replay requests.
 
-## Future beta support transfer boundary
+## 10. Beta support transfer boundary
 
-Do not install or run `deploy/support-transfer` from this collector-only runbook. When the beta Python roles are deployed, install that wrapper as `root:root` with mode `0700` in a root-owned non-writable directory. Use a narrow `NOSETENV` sudoers rule with environment reset that permits only this wrapper for each approved host operator.
+Install `deploy/support-transfer` as `root:root` with mode `0700` in a
+root-owned non-writable directory. Use a narrow `NOSETENV` sudoers rule with
+environment reset that permits only this wrapper for each approved host
+operator. The support wrapper is the only audited path that transfers a
+verified player link between Clash Lens accounts; no application role
+transfers links automatically.
 
 Create `/etc/clashlens/support-transfer-operators` as a `root:root` mode-`0600` allowlist. Create `/etc/clashlens/support-transfer.pg_service.conf` as a `root:root` mode-`0600` PostgreSQL service file. The service file must use the dedicated `clashlens_support_transfer` database role and its credential. Do not give that credential to a container or application role.
 
