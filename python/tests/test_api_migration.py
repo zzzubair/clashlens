@@ -203,14 +203,17 @@ def test_python_production_migration_is_reentrant_and_enforces_identity_uniquene
             ).fetchone()
             assert support_function_row is not None
             support_function = text(support_function_row[0])
-            assert connection.execute(
-                """
+            assert (
+                connection.execute(
+                    """
                 SELECT has_function_privilege(
                     'public', %s::regprocedure, 'EXECUTE'
                 )
                 """,
-                (support_function,),
-            ).fetchone()[0] is False
+                    (support_function,),
+                ).fetchone()[0]
+                is False
+            )
             support_privileges = connection.execute(
                 """
                 SELECT p.prosecdef,
@@ -340,9 +343,12 @@ def test_python_migration_repeats_after_populated_version_one_rows(
 ) -> None:
     with migrated_populated_v1_production_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
-            assert connection.execute(
-                "SELECT version FROM clash_lens_contract WHERE singleton"
-            ).fetchone()[0] == 2
+            assert (
+                connection.execute(
+                    "SELECT version FROM clash_lens_contract WHERE singleton"
+                ).fetchone()[0]
+                == 2
+            )
             job = connection.execute(
                 """
                 SELECT work_type, scope, reset_baseline_sweep_id

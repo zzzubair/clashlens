@@ -182,9 +182,13 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     )
     malformed_evidence = malformed_evidence or coverage_malformed
 
-    contributions, contribution_evidence, contribution_reasons, contribution_malformed, contribution_inconsistent = (
-        _deduplicate_contributions(data.contributions)
-    )
+    (
+        contributions,
+        contribution_evidence,
+        contribution_reasons,
+        contribution_malformed,
+        contribution_inconsistent,
+    ) = _deduplicate_contributions(data.contributions)
     failures.extend(contribution_reasons)
     malformed_evidence = malformed_evidence or contribution_malformed
     inconsistent_evidence = inconsistent_evidence or contribution_inconsistent
@@ -242,10 +246,7 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
     if start_available and automatic_value_known:
         assert data.start_trophies is not None
         final_trophies = (
-            data.start_trophies
-            + attack_gain
-            - defense_loss
-            - (automatic_loss or 0)
+            data.start_trophies + attack_gain - defense_loss - (automatic_loss or 0)
         )
         net_trophy_change = final_trophies - data.start_trophies
         if data.next_start_trophies is not None:
@@ -344,7 +345,9 @@ def reconcile_ranked_day(data: ReconciliationInput) -> ReconciliationResult:
         state = "Malformed"
     elif inconsistent_evidence or "trophy_equation_mismatch" in unique_failures:
         state = "Inconsistent"
-    elif not unique_failures and coverage_complete and start_available and end_available:
+    elif (
+        not unique_failures and coverage_complete and start_available and end_available
+    ):
         state = "Complete"
 
     confidence = "exact" if state == "Complete" else "partial"
@@ -588,14 +591,20 @@ def _coverage_is_continuous(
         if observation.row_count < 0 or observation.row_count > BATTLE_LOG_MAX_ROWS:
             failures.append("battle_log_row_count_exceeds_fifty")
             malformed = True
-        if not observation.valid or observation.has_row_gap or observation.malformed_row_count:
+        if (
+            not observation.valid
+            or observation.has_row_gap
+            or observation.malformed_row_count
+        ):
             failures.append("battle_log_row_gap")
             malformed = True
         if observation.unclassified_row_count:
             failures.append("unclassified_rows")
         if observation.stale_window:
             failures.append("battle_log_stale_window")
-        if len(set(observation.battle_identities)) != len(observation.battle_identities):
+        if len(set(observation.battle_identities)) != len(
+            observation.battle_identities
+        ):
             failures.append("duplicate_battle_identity_in_observation")
             malformed = True
 

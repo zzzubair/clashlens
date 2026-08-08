@@ -68,7 +68,9 @@ class OfficialVerificationClient:
         ):
             raise ValueError("a non-credentialed fixed-egress proxy URL is required")
         if not 0 < timeout_seconds <= 30:
-            raise ValueError("official verification timeout is outside the supported range")
+            raise ValueError(
+                "official verification timeout is outside the supported range"
+            )
         try:
             authorization = "Bearer " + api_key.decode("ascii")
         except UnicodeDecodeError as error:
@@ -78,7 +80,9 @@ class OfficialVerificationClient:
         self._timeout_seconds = timeout_seconds
         self._transport = transport or _urllib_transport
 
-    def verify(self, normalized_tag: str, player_token: str) -> OfficialVerificationResponse:
+    def verify(
+        self, normalized_tag: str, player_token: str
+    ) -> OfficialVerificationResponse:
         request = OfficialVerificationRequest(
             method="POST",
             url=(
@@ -115,11 +119,17 @@ def classify_official_response(
     if http_status == 200 and decoded == _VALID_BODY:
         return VerificationClassification(VerificationOutcome.VERIFIED, KeyAction.NONE)
     if http_status == 200 and decoded == _INVALID_BODY:
-        return VerificationClassification(VerificationOutcome.INVALID_TOKEN, KeyAction.NONE)
+        return VerificationClassification(
+            VerificationOutcome.INVALID_TOKEN, KeyAction.NONE
+        )
     if http_status in (401, 403) and decoded in _AUTH_FAILURE_BODIES:
-        return VerificationClassification(VerificationOutcome.UNAVAILABLE, KeyAction.QUARANTINE)
+        return VerificationClassification(
+            VerificationOutcome.UNAVAILABLE, KeyAction.QUARANTINE
+        )
     if http_status == 429:
-        return VerificationClassification(VerificationOutcome.UNAVAILABLE, KeyAction.COOLDOWN)
+        return VerificationClassification(
+            VerificationOutcome.UNAVAILABLE, KeyAction.COOLDOWN
+        )
     return VerificationClassification(VerificationOutcome.UNAVAILABLE, KeyAction.NONE)
 
 
@@ -150,7 +160,9 @@ def load_official_api_key_file(path: str | Path) -> bytes:
     return raw
 
 
-def _urllib_transport(request: OfficialVerificationRequest) -> OfficialVerificationResponse:
+def _urllib_transport(
+    request: OfficialVerificationRequest,
+) -> OfficialVerificationResponse:
     proxy = urllib.request.ProxyHandler(
         {"http": request.proxy_url, "https": request.proxy_url}
     )
@@ -169,12 +181,18 @@ def _urllib_transport(request: OfficialVerificationRequest) -> OfficialVerificat
         with opener.open(http_request, timeout=request.timeout_seconds) as response:
             body = response.read(8193)
             if len(body) > 8192:
-                raise VerificationTransportError("official verification response is too large")
+                raise VerificationTransportError(
+                    "official verification response is too large"
+                )
             return OfficialVerificationResponse(int(response.status), body)
     except urllib.error.HTTPError as error:
         body = error.read(8193)
         if len(body) > 8192:
-            raise VerificationTransportError("official verification response is too large") from None
+            raise VerificationTransportError(
+                "official verification response is too large"
+            ) from None
         return OfficialVerificationResponse(int(error.code), body)
     except (OSError, urllib.error.URLError) as error:
-        raise VerificationTransportError("official verification transport is unavailable") from error
+        raise VerificationTransportError(
+            "official verification transport is unavailable"
+        ) from error

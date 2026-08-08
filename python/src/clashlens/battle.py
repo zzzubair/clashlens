@@ -98,11 +98,12 @@ def parse_battle_log(
     try:
         reporting_tag = normalize_player_tag(expected_tag)
     except ProfileParseError as error:
-        raise BattleLogParseError(error.category, "observation player tag is invalid") from error
+        raise BattleLogParseError(
+            error.category, "observation player tag is invalid"
+        ) from error
 
     rows = tuple(
-        _parse_row(index, item, reporting_tag)
-        for index, item in enumerate(items)
+        _parse_row(index, item, reporting_tag) for index, item in enumerate(items)
     )
     return ParsedBattleLog(
         normalized_tag=reporting_tag,
@@ -118,7 +119,9 @@ def parse_battle_log(
 
 def _parse_row(index: int, source: Any, reporting_tag: str) -> ParsedBattleRow:
     if not isinstance(source, dict):
-        return _gap(index, source, "unsupported_legend_row", "battle row is not an object")
+        return _gap(
+            index, source, "unsupported_legend_row", "battle row is not an object"
+        )
     if source.get("battleType") != "legend":
         return ParsedBattleRow(
             source_row_index=index,
@@ -229,9 +232,7 @@ def _parse_battle_timestamp(value: Any) -> datetime:
 def _required_int(source: dict[str, Any], key: str) -> int:
     value = source[key]
     if isinstance(value, bool) or not isinstance(value, int):
-        raise BattleLogParseError(
-            "unsupported_legend_row", f"{key} must be an integer"
-        )
+        raise BattleLogParseError("unsupported_legend_row", f"{key} must be an integer")
     return value
 
 

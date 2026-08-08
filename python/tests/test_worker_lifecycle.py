@@ -83,7 +83,7 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
     assert result == 0
     assert output["processed_count"] == cli.MAX_REPORTED_RESULTS + 1
     assert len(output["results"]) == cli.MAX_REPORTED_RESULTS
-    assert [line["event"] for line in output_lines[:-1]] == [
-        "job_result"
-    ] * (cli.MAX_REPORTED_RESULTS + 1)
+    assert [line["event"] for line in output_lines[:-1]] == ["job_result"] * (
+        cli.MAX_REPORTED_RESULTS + 1
+    )
     assert database.closed is True

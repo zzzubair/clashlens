@@ -60,7 +60,9 @@ def store_observation(
     archive_server[3].objects[key] = body
     reference = f"s3://evidence/{key}"
     global_scope = endpoint == "global_player_rankings"
-    collector_work_type = "global_player_rankings" if global_scope else "initial_collection"
+    collector_work_type = (
+        "global_player_rankings" if global_scope else "initial_collection"
+    )
     scope = "global" if global_scope else "player"
     with psycopg.connect(connection_info) as connection:
         player_id = None

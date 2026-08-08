@@ -107,11 +107,17 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                 "status": "pending",
             }
             assert database.get_export_status(account_id, export_id) == export.payload
-            assert database.scalar(
-                "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_export'"
-            ) == 1
-            assert database.scalar(
-                "SELECT count(*) FROM python_processing_jobs WHERE observation_id IS NULL"
-            ) == 1
+            assert (
+                database.scalar(
+                    "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_export'"
+                )
+                == 1
+            )
+            assert (
+                database.scalar(
+                    "SELECT count(*) FROM python_processing_jobs WHERE observation_id IS NULL"
+                )
+                == 1
+            )
         finally:
             database.close()

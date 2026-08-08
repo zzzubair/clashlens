@@ -80,7 +80,9 @@ class ApiDatabase:
     def close(self) -> None:
         self.pool.close()
 
-    def is_ready(self, *, expected_contract_version: int = API_CONTRACT_VERSION) -> bool:
+    def is_ready(
+        self, *, expected_contract_version: int = API_CONTRACT_VERSION
+    ) -> bool:
         with self.pool.connection() as connection:
             row = connection.execute(
                 """
@@ -105,7 +107,9 @@ class ApiDatabase:
             row = connection.execute(query, tuple(params)).fetchone()
             return None if row is None else _text(row[0])
 
-    def resolve_account(self, provider: str, provider_subject: str) -> AccountContext | None:
+    def resolve_account(
+        self, provider: str, provider_subject: str
+    ) -> AccountContext | None:
         with self.pool.connection() as connection:
             row = connection.execute(
                 """
@@ -214,7 +218,9 @@ class ApiDatabase:
         cooldown_seconds: int,
     ) -> None:
         if not 1 <= cooldown_seconds <= 300:
-            raise ValueError("official credential cooldown is outside the supported range")
+            raise ValueError(
+                "official credential cooldown is outside the supported range"
+            )
         if action is KeyAction.NONE:
             return
         with self.pool.connection() as connection:
@@ -452,7 +458,6 @@ class ApiDatabase:
                 self._complete_request(connection, binding.request_id, result)
                 return result
 
-
     def create_account(
         self,
         binding: RequestBinding,
@@ -627,7 +632,9 @@ class ApiDatabase:
             if row is None:
                 return None
             observed_at = row[5].astimezone(UTC)
-            age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
+            age_seconds = max(
+                0, int((now.astimezone(UTC) - observed_at).total_seconds())
+            )
             daily_rows = connection.execute(
                 """
                 SELECT ranked_day_start, version, state, coverage,
@@ -1114,7 +1121,10 @@ class ApiDatabase:
                 (account_id,),
             ).fetchall()
             return [
-                {"tag": _text(row[0]), "name": None if row[1] is None else _text(row[1])}
+                {
+                    "tag": _text(row[0]),
+                    "name": None if row[1] is None else _text(row[1]),
+                }
                 for row in rows
             ]
 
@@ -1229,7 +1239,9 @@ class ApiDatabase:
                     (group_id, binding.account_id),
                 )
                 if deleted.rowcount == 1:
-                    result = OperationResult(200, {"deleted": True, "group_id": group_id})
+                    result = OperationResult(
+                        200, {"deleted": True, "group_id": group_id}
+                    )
                 else:
                     result = OperationResult(404, {"error": "group_not_found"})
                 self._complete_request(connection, binding.request_id, result)
@@ -1416,7 +1428,8 @@ class ApiDatabase:
                 recover_expired_verification
                 and _text(row[8]) == "in_progress"
                 and row[11] is not None
-                and row[11] <= connection.execute("SELECT clock_timestamp()").fetchone()[0]
+                and row[11]
+                <= connection.execute("SELECT clock_timestamp()").fetchone()[0]
             ):
                 tag_row = connection.execute(
                     """

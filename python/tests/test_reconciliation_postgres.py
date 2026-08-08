@@ -31,7 +31,9 @@ def _battle_log(*, empty: bool = False) -> bytes:
     return json.dumps(payload).encode()
 
 
-def _processor(connection_info: str, archive_server) -> tuple[Database, ObservationProcessor]:
+def _processor(
+    connection_info: str, archive_server
+) -> tuple[Database, ObservationProcessor]:
     database = Database(connection_info)
     return database, ObservationProcessor(
         database,
@@ -100,7 +102,13 @@ def _seed_reset_collection_identity(
             )
             RETURNING id
             """,
-            (player_id, boundary, f"reset-baseline-{key}", reset_sweep_id, baseline_sweep_id),
+            (
+                player_id,
+                boundary,
+                f"reset-baseline-{key}",
+                reset_sweep_id,
+                baseline_sweep_id,
+            ),
         ).fetchone()[0]
         root_attempt_id = connection.execute(
             """
@@ -121,7 +129,12 @@ def _seed_reset_collection_identity(
             SET collection_job_id = %s, attempt_id = %s
             WHERE id IN (%s, %s)
             """,
-            (root_job_id, root_attempt_id, profile_observation_id, battle_observation_id),
+            (
+                root_job_id,
+                root_attempt_id,
+                profile_observation_id,
+                battle_observation_id,
+            ),
         )
         for endpoint, observation_id in (
             ("profile", profile_observation_id),
@@ -215,15 +228,13 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             observed_at=DAY_START + timedelta(hours=7),
             normalized_tag="#2PP",
         )
-        end_profile, end_battle, end_profile_job, end_battle_job = (
-            _store_baseline_pair(
-                connection_info,
-                archive_server,
-                key="end",
-                boundary=DAY_END,
-                trophies=6040,
-                empty_battle_log=False,
-            )
+        end_profile, end_battle, end_profile_job, end_battle_job = _store_baseline_pair(
+            connection_info,
+            archive_server,
+            key="end",
+            boundary=DAY_END,
+            trophies=6040,
+            empty_battle_log=False,
         )
         database, processor = _processor(connection_info, archive_server)
         try:
@@ -269,9 +280,7 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     ORDER BY id
                     """
                 ).fetchall()
-            assert [
-                (text(row[1]), text(row[2])) for row in first_dependent_jobs
-            ] == [
+            assert [(text(row[1]), text(row[2])) for row in first_dependent_jobs] == [
                 ("build_snapshot", "build_snapshot:ranked-day-version:1"),
             ]
             assert [row[3] for row in first_dependent_jobs] == [
@@ -311,7 +320,10 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             assert text(first_analytics[2]) == "complete"
             assert first_analytics[0]["snapshot_id"] == first_snapshot_id
             assert text(first_analytics[1]).startswith("build_analytics:snapshot:")
-            assert [text(row[1]) for row in first_publication] == ["published", "published"]
+            assert [text(row[1]) for row in first_publication] == [
+                "published",
+                "published",
+            ]
 
             (
                 corrected_profile,
@@ -362,12 +374,14 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 ).fetchall()
             assert len(second_dependent_jobs) == 1
             assert text(second_dependent_jobs[0][1]) == "build_snapshot"
-            second_snapshot_id, second_analytics_job_id = _process_snapshot_and_analytics(
-                connection_info,
-                database,
-                processor,
-                int(second_dependent_jobs[0][0]),
-                owner_prefix="dependent-second",
+            second_snapshot_id, second_analytics_job_id = (
+                _process_snapshot_and_analytics(
+                    connection_info,
+                    database,
+                    processor,
+                    int(second_dependent_jobs[0][0]),
+                    owner_prefix="dependent-second",
+                )
             )
             database.requeue_completed_job(second_analytics_job_id)
             replayed_analytics = processor.process_job(
@@ -518,10 +532,21 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             assert first_version["coverage_complete"] is True
             assert second_version["coverage_complete"] is True
             assert text(first_version["parser_version"]) == "supercell-source-parser-v1"
-            assert text(first_version["processing_version"]) == "clashlens-domain-processing-v1"
-            assert text(first_version["domain_rule_version"]) == "clashlens-domain-rules-v1"
-            assert text(first_version["analytics_rule_version"]) == "legend-analytics-v1"
-            assert text(first_version["season_anchor_rule_version"]) == "legend-season-anchor-v1"
+            assert (
+                text(first_version["processing_version"])
+                == "clashlens-domain-processing-v1"
+            )
+            assert (
+                text(first_version["domain_rule_version"])
+                == "clashlens-domain-rules-v1"
+            )
+            assert (
+                text(first_version["analytics_rule_version"]) == "legend-analytics-v1"
+            )
+            assert (
+                text(first_version["season_anchor_rule_version"])
+                == "legend-season-anchor-v1"
+            )
             assert text(first_version["reconciliation_rule_version"]) == (
                 "legend-ranked-day-reconciliation-v2"
             )
@@ -571,11 +596,13 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             assert first_version["formula_components"]["observed_defense_loss"] == 0
             assert first_version["formula_components"]["automatic_defense_loss"] is None
             assert first_version["input_evidence"]["player_eligible"] is True
-            assert first_version["input_evidence"]["coverage_observations"] == (
-                first_version["coverage_evidence"]
+            assert (
+                first_version["input_evidence"]["coverage_observations"]
+                == (first_version["coverage_evidence"])
             )
-            assert first_version["input_evidence"]["contributions"] == (
-                first_version["contribution_evidence"]
+            assert (
+                first_version["input_evidence"]["contributions"]
+                == (first_version["contribution_evidence"])
             )
             assert isinstance(first_version["coverage_evidence"], list)
             assert isinstance(first_version["contribution_evidence"], list)
@@ -600,7 +627,9 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             assert first_version["start_baseline_id"] is not None
             assert first_version["end_baseline_id"] is not None
             assert second_version["end_baseline_id"] != first_version["end_baseline_id"]
-            assert [(text(row[0]), text(row[1]), row[2]) for row in snapshot_job_sets] == [
+            assert [
+                (text(row[0]), text(row[1]), row[2]) for row in snapshot_job_sets
+            ] == [
                 ("1", "build_snapshot", 1),
                 ("2", "build_snapshot", 1),
             ]
@@ -636,8 +665,7 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             assert {int(row[1]) for row in summaries} == {0, 1}
             assert all(row[1] == row[2] for row in summaries)
             assert all(
-                text(row[3]) == "army-classifier-unavailable-v1"
-                for row in summaries
+                text(row[3]) == "army-classifier-unavailable-v1" for row in summaries
             )
             assert all(text(row[4]) == "legend-analytics-v1" for row in summaries)
             assert [text(row[0]) for row in breakdowns] == ["Unclassified"] * 4

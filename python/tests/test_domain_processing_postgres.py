@@ -16,7 +16,9 @@ BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v
 RANKING_FIXTURE = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
 
 
-def _processor(connection_info: str, archive_server) -> tuple[Database, ObservationProcessor]:
+def _processor(
+    connection_info: str, archive_server
+) -> tuple[Database, ObservationProcessor]:
     database = Database(connection_info)
     processor = ObservationProcessor(
         database,
@@ -54,7 +56,9 @@ def _prepare_reset_baseline_pair(
         archive_server,
         occurrence_key="reset-pair-battle",
         endpoint="battle_log",
-        body=battle_body if battle_body is not None else json.dumps({"items": []}).encode(),
+        body=battle_body
+        if battle_body is not None
+        else json.dumps({"items": []}).encode(),
         observed_at=boundary,
         normalized_tag="#2PP",
     )
@@ -194,13 +198,16 @@ def test_reset_baseline_evidence_is_created_from_one_go_attempt_and_is_versioned
                 (profile_observation_id, battle_observation_id, True, False, False)
             ]
             with database.pool.connection() as connection:
-                assert connection.execute(
-                    """
+                assert (
+                    connection.execute(
+                        """
                     SELECT count(*)
                     FROM python_processing_jobs
                     WHERE work_type = 'reconcile_ranked_day'
                     """
-                ).fetchone()[0] == 0
+                    ).fetchone()[0]
+                    == 0
+                )
 
             battle_result = processor.process_job(
                 battle_job_id,
@@ -236,13 +243,16 @@ def test_reset_baseline_evidence_is_created_from_one_go_attempt_and_is_versioned
                 versions = connection.execute(
                     "SELECT version, state FROM reset_baseline_evidence ORDER BY version"
                 ).fetchall()
-                assert connection.execute(
-                    """
+                assert (
+                    connection.execute(
+                        """
                     SELECT count(*)
                     FROM python_processing_jobs
                     WHERE work_type = 'reconcile_ranked_day'
                     """
-                ).fetchone()[0] == 1
+                    ).fetchone()[0]
+                    == 1
+                )
             assert [(row[0], text(row[1])) for row in versions] == [
                 (1, "partial"),
                 (2, "complete"),
@@ -267,7 +277,9 @@ def test_malformed_reset_evidence_is_failed_without_reconciliation_enqueue(
         )
         database, processor = _processor(connection_info, archive_server)
         try:
-            profile_result = processor.process_job(profile_job, owner="malformed-profile")
+            profile_result = processor.process_job(
+                profile_job, owner="malformed-profile"
+            )
             assert profile_result is not None and profile_result.outcome == "processed"
             battle_result = processor.process_job(battle_job, owner="malformed-battle")
             assert battle_result is not None
@@ -307,9 +319,13 @@ def test_wrong_attempt_reset_evidence_is_failed_without_reconciliation_enqueue(
         )
         database, processor = _processor(connection_info, archive_server)
         try:
-            profile_result = processor.process_job(profile_job, owner="wrong-attempt-profile")
+            profile_result = processor.process_job(
+                profile_job, owner="wrong-attempt-profile"
+            )
             assert profile_result is not None and profile_result.outcome == "processed"
-            battle_result = processor.process_job(battle_job, owner="wrong-attempt-battle")
+            battle_result = processor.process_job(
+                battle_job, owner="wrong-attempt-battle"
+            )
             assert battle_result is not None and battle_result.outcome == "processed"
             with database.pool.connection() as connection:
                 state, reasons = connection.execute(
@@ -423,7 +439,9 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
                 normalized_tag="#8PP",
             )
             defender_result = processor.process_once(owner="battle-defender")
-            assert defender_result is not None and defender_result.outcome == "processed"
+            assert (
+                defender_result is not None and defender_result.outcome == "processed"
+            )
 
             with database.pool.connection() as connection:
                 counts = connection.execute(
@@ -740,8 +758,12 @@ def test_canonical_battle_keeps_detail_disagreement_for_both_perspectives(
                 defender_job_id,
                 owner="disagreement-defender",
             )
-            assert attacker_result is not None and attacker_result.outcome == "processed"
-            assert defender_result is not None and defender_result.outcome == "processed"
+            assert (
+                attacker_result is not None and attacker_result.outcome == "processed"
+            )
+            assert (
+                defender_result is not None and defender_result.outcome == "processed"
+            )
             with database.pool.connection() as connection:
                 state, disagreement_fields = connection.execute(
                     "SELECT disagreement_state, disagreement_fields FROM legend_battles"
@@ -757,9 +779,7 @@ def test_canonical_battle_keeps_detail_disagreement_for_both_perspectives(
             assert text(state) == "disagreement"
             assert {text(row[0]) for row in perspectives} == {"attacker", "defender"}
             assert len({row[1] for row in perspectives}) == 2
-            assert [text(field) for field in disagreement_fields] == [
-                "army_share_code"
-            ]
+            assert [text(field) for field in disagreement_fields] == ["army_share_code"]
         finally:
             database.close()
 
@@ -782,7 +802,9 @@ def test_official_top_200_publishes_only_complete_atomic_versions(
         database, processor = _processor(connection_info, archive_server)
         try:
             complete_result = processor.process_once(owner="official-complete")
-            assert complete_result is not None and complete_result.outcome == "processed"
+            assert (
+                complete_result is not None and complete_result.outcome == "processed"
+            )
 
             partial = json.loads(RANKING_FIXTURE.read_bytes())
             partial["items"].pop()

@@ -127,7 +127,9 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             seed_profile(database, "#8PY", 6100)
 
             player = database.get_player_page("#2PP", now=NOW, freshness_seconds=900)
-            live = database.get_live_leaderboard(limit=100, now=NOW, freshness_seconds=900)
+            live = database.get_live_leaderboard(
+                limit=100, now=NOW, freshness_seconds=900
+            )
             analytics = database.get_basic_analytics(now=NOW, freshness_seconds=900)
 
             assert player is not None
@@ -161,6 +163,7 @@ def test_concurrent_refreshes_share_one_collector_job_and_public_refresh_identit
     with migrated_production_database(database_url) as connection_info:
         database = ApiDatabase(connection_info, max_size=12)
         try:
+
             def submit(_index: int):
                 return database.submit_refresh(
                     anonymous_binding(
@@ -179,9 +182,12 @@ def test_concurrent_refreshes_share_one_collector_job_and_public_refresh_identit
             assert len(refresh_ids) == 1
             assert database.scalar("SELECT count(*) FROM collector_jobs") == 1
             assert database.scalar("SELECT count(*) FROM api_refresh_requests") == 1
-            assert database.scalar(
-                "SELECT count(*) FROM collector_interactive_intent_events"
-            ) == 10
+            assert (
+                database.scalar(
+                    "SELECT count(*) FROM collector_interactive_intent_events"
+                )
+                == 10
+            )
             status = database.get_refresh_status(next(iter(refresh_ids)))
             assert status == {
                 "refresh_id": next(iter(refresh_ids)),

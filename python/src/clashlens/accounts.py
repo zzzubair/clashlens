@@ -26,10 +26,7 @@ _MAX_NAME_LENGTH = 80
 
 def normalize_username(value: str) -> str:
     normalized = value.strip().lower()
-    if (
-        not _USERNAME_RE.fullmatch(normalized)
-        or normalized in _RESERVED_USERNAMES
-    ):
+    if not _USERNAME_RE.fullmatch(normalized) or normalized in _RESERVED_USERNAMES:
         raise ValueError("username must be a safe non-reserved ASCII name")
     return normalized
 
@@ -45,7 +42,9 @@ def normalize_group_name(value: str) -> str:
 def _normalize_name(value: str, label: str) -> str:
     normalized = unicodedata.normalize("NFC", value).strip()
     if not normalized or len(normalized) > _MAX_NAME_LENGTH:
-        raise ValueError(f"{label} must contain between 1 and {_MAX_NAME_LENGTH} characters")
+        raise ValueError(
+            f"{label} must contain between 1 and {_MAX_NAME_LENGTH} characters"
+        )
     if any(unicodedata.category(character).startswith("C") for character in normalized):
         raise ValueError(f"{label} must not contain control characters")
     return normalized

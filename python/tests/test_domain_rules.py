@@ -50,7 +50,9 @@ def test_trophy_allocation_uses_last_boundary_not_greater_than_destruction() -> 
     ("stars", "destruction"),
     [(-1, 50), (4, 50), (0, -1), (1, 0), (2, 49), (3, 99), (3, 101)],
 )
-def test_trophy_allocation_rejects_impossible_values(stars: int, destruction: int) -> None:
+def test_trophy_allocation_rejects_impossible_values(
+    stars: int, destruction: int
+) -> None:
     with pytest.raises(DomainRuleError, match="impossible_trophy_allocation"):
         allocate_trophies(stars, destruction)
 

@@ -14,7 +14,9 @@ from clashlens.rankings import (
 FIXTURE = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
 
 
-def test_complete_official_top_200_fixture_is_accepted_without_season_provenance() -> None:
+def test_complete_official_top_200_fixture_is_accepted_without_season_provenance() -> (
+    None
+):
     parsed = parse_global_player_rankings(FIXTURE.read_bytes())
 
     assert parsed.outcome == "official_observed"

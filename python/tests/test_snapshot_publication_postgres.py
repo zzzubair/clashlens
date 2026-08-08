@@ -18,7 +18,9 @@ from clashlens.worker import ObservationProcessor
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 
 
-def _processor(connection_info: str, archive_server) -> tuple[Database, ObservationProcessor]:
+def _processor(
+    connection_info: str, archive_server
+) -> tuple[Database, ObservationProcessor]:
     database = Database(connection_info)
     processor = ObservationProcessor(
         database,
@@ -148,7 +150,9 @@ def _process_snapshot_and_analytics(
         ).fetchall()
 
     assert len(analytics_jobs) == 1
-    analytics_job_id, analytics_input, analytics_key, analytics_status = analytics_jobs[0]
+    analytics_job_id, analytics_input, analytics_key, analytics_status = analytics_jobs[
+        0
+    ]
     assert text(analytics_status) == "pending"
     assert analytics_input["snapshot_id"] == snapshot[0]
     assert analytics_input["snapshot_version"] == snapshot[1]
@@ -313,8 +317,14 @@ def test_snapshot_uses_only_profile_evidence_observed_at_or_before_boundary(
         )
         database, processor = _processor(connection_info, archive_server)
         try:
-            assert processor.process_job(old_job_id, owner="snapshot-as-of-old") is not None
-            assert processor.process_job(future_job_id, owner="snapshot-as-of-future") is not None
+            assert (
+                processor.process_job(old_job_id, owner="snapshot-as-of-old")
+                is not None
+            )
+            assert (
+                processor.process_job(future_job_id, owner="snapshot-as-of-future")
+                is not None
+            )
             with database.pool.connection() as connection:
                 player_id = connection.execute(
                     "SELECT id FROM players WHERE normalized_tag = '#2PP'"
@@ -576,12 +586,18 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
             assert corrected_rows[3][3] == corrected_rows[2][0]
             assert corrected_rows[3][4] != corrected_rows[2][4]
             assert all(text(row[1]) in {"frozen", "live"} for row in corrected_rows)
-            assert database.scalar(
-                "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_snapshot'"
-            ) == 1
-            assert database.scalar(
-                "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_analytics'"
-            ) == 2
+            assert (
+                database.scalar(
+                    "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_snapshot'"
+                )
+                == 1
+            )
+            assert (
+                database.scalar(
+                    "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_analytics'"
+                )
+                == 2
+            )
             assert corrected_snapshot_id != first_snapshot_id
             assert corrected_analytics_job_id != first_analytics_job_id
         finally:

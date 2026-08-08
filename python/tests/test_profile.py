@@ -62,7 +62,9 @@ def test_profile_parser_keeps_missing_or_conflicting_tier_as_uncertain() -> None
     assert conflicting.eligibility_reason == "known_tier_name_conflict"
 
 
-def test_profile_parser_deactivates_only_an_adapter_recognized_non_legend_tier() -> None:
+def test_profile_parser_deactivates_only_an_adapter_recognized_non_legend_tier() -> (
+    None
+):
     tier_id, tier_name = next(iter(RECOGNIZED_NON_LEGEND_TIERS_V1.items()))
     payload = json.loads(FIXTURE.read_bytes())
     payload["leagueTier"] = {"id": tier_id, "name": tier_name}

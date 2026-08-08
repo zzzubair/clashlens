@@ -52,8 +52,10 @@ def call_support_transfer(
     ).fetchone()
     assert row is not None
     status = row[0].decode("utf-8") if isinstance(row[0], bytes) else str(row[0])
-    tag = None if row[1] is None else (
-        row[1].decode("utf-8") if isinstance(row[1], bytes) else str(row[1])
+    tag = (
+        None
+        if row[1] is None
+        else (row[1].decode("utf-8") if isinstance(row[1], bytes) else str(row[1]))
     )
     return status, tag
 
@@ -129,9 +131,7 @@ def test_shared_traffic_gate_enforces_non_borrowing_and_combined_budgets(
             assert python_first.granted is True
             assert python_second.granted is False
             assert python_second.reason == "python_budget_exhausted"
-            assert database.scalar(
-                "SELECT count(*) FROM shared_api_permits"
-            ) == 30
+            assert database.scalar("SELECT count(*) FROM shared_api_permits") == 30
         finally:
             database.close()
 
@@ -165,9 +165,10 @@ def test_gate_cooldown_and_quarantine_persist_and_fail_closed(
             assert cooldown.reason == "credential_cooldown"
             assert quarantined.granted is False
             assert quarantined.reason == "credential_quarantined"
-            assert database.scalar(
-                "SELECT quarantine_reason FROM shared_api_credentials"
-            ) == "verified_authentication_failure"
+            assert (
+                database.scalar("SELECT quarantine_reason FROM shared_api_credentials")
+                == "verified_authentication_failure"
+            )
         finally:
             database.close()
 
@@ -180,14 +181,16 @@ def test_concurrent_verified_links_never_transfer_between_accounts_automatically
         try:
             first_account = create_account(database, "google-first", "firstowner")
             second_account = create_account(database, "google-second", "secondowner")
-            first_binding = verification_binding(
-                first_account, "google-first", "#2PP"
-            )
+            first_binding = verification_binding(first_account, "google-first", "#2PP")
             second_binding = verification_binding(
                 second_account, "google-second", "#2PP"
             )
-            assert database.reserve_verification(first_binding, normalized_tag="#2PP").fresh
-            assert database.reserve_verification(second_binding, normalized_tag="#2PP").fresh
+            assert database.reserve_verification(
+                first_binding, normalized_tag="#2PP"
+            ).fresh
+            assert database.reserve_verification(
+                second_binding, normalized_tag="#2PP"
+            ).fresh
 
             def complete(item: tuple[RequestBinding, int]):
                 request, account_id = item
@@ -203,7 +206,10 @@ def test_concurrent_verified_links_never_transfer_between_accounts_automatically
                 results = list(
                     executor.map(
                         complete,
-                        [(first_binding, first_account), (second_binding, second_account)],
+                        [
+                            (first_binding, first_account),
+                            (second_binding, second_account),
+                        ],
                     )
                 )
 
@@ -212,14 +218,19 @@ def test_concurrent_verified_links_never_transfer_between_accounts_automatically
                 "support_required",
             }
             assert database.scalar("SELECT count(*) FROM verified_player_links") == 1
-            assert database.scalar(
-                "SELECT count(*) FROM support_player_link_transfer_candidates"
-            ) == 1
+            assert (
+                database.scalar(
+                    "SELECT count(*) FROM support_player_link_transfer_candidates"
+                )
+                == 1
+            )
             owner_before = database.scalar(
                 "SELECT account_id FROM verified_player_links"
             )
             support_result = next(
-                result for result in results if result.payload["status"] == "support_required"
+                result
+                for result in results
+                if result.payload["status"] == "support_required"
             )
             candidate = database.scalar(
                 """
@@ -231,10 +242,16 @@ def test_concurrent_verified_links_never_transfer_between_accounts_automatically
             )
 
             assert candidate == "pending"
-            assert database.scalar("SELECT account_id FROM verified_player_links") == owner_before
-            assert database.scalar(
-                "SELECT count(*) FROM support_player_link_transfer_audits"
-            ) == 0
+            assert (
+                database.scalar("SELECT account_id FROM verified_player_links")
+                == owner_before
+            )
+            assert (
+                database.scalar(
+                    "SELECT count(*) FROM support_player_link_transfer_audits"
+                )
+                == 0
+            )
         finally:
             database.close()
 
@@ -246,8 +263,12 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
         database = ApiDatabase(connection_info, max_size=8)
         try:
             assert not hasattr(database, "apply_support_player_link_transfer")
-            first_account = create_account(database, "google-support-first", "supportfirst")
-            second_account = create_account(database, "google-support-second", "supportsecond")
+            first_account = create_account(
+                database, "google-support-first", "supportfirst"
+            )
+            second_account = create_account(
+                database, "google-support-second", "supportsecond"
+            )
             first_context = database.resolve_account("google", "google-support-first")
             second_context = database.resolve_account("google", "google-support-second")
             assert first_context is not None and second_context is not None
@@ -255,7 +276,9 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
             first_binding = verification_binding(
                 first_account, "google-support-first", "#2PP"
             )
-            assert database.reserve_verification(first_binding, normalized_tag="#2PP").fresh
+            assert database.reserve_verification(
+                first_binding, normalized_tag="#2PP"
+            ).fresh
             assert database.complete_verification(
                 first_binding,
                 normalized_tag="#2PP",
@@ -266,7 +289,9 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
             second_binding = verification_binding(
                 second_account, "google-support-second", "#2PP"
             )
-            assert database.reserve_verification(second_binding, normalized_tag="#2PP").fresh
+            assert database.reserve_verification(
+                second_binding, normalized_tag="#2PP"
+            ).fresh
             support_required = database.complete_verification(
                 second_binding,
                 normalized_tag="#2PP",
@@ -276,15 +301,21 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
             )
             assert support_required.payload["status"] == "support_required"
             candidate_id = support_required.payload["verification_request_id"]
-            assert database.scalar("SELECT account_id FROM verified_player_links") == first_account
-            assert database.scalar(
-                """
+            assert (
+                database.scalar("SELECT account_id FROM verified_player_links")
+                == first_account
+            )
+            assert (
+                database.scalar(
+                    """
                 SELECT expires_at - verified_at = interval '15 minutes'
                 FROM support_player_link_transfer_candidates
                 WHERE verification_request_id = %s
                 """,
-                (candidate_id,),
-            ) is True
+                    (candidate_id,),
+                )
+                is True
+            )
 
             with support_connection(connection_info) as support:
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
@@ -312,13 +343,24 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
                     )
 
             with ThreadPoolExecutor(max_workers=2) as executor:
-                transfer_results = list(executor.map(lambda _item: transfer_once(), range(2)))
-            assert transfer_results == [("transferred", "#2PP"), ("transferred", "#2PP")]
-            assert database.scalar("SELECT account_id FROM verified_player_links") == second_account
-            assert database.scalar(
-                "SELECT state FROM support_player_link_transfer_candidates WHERE verification_request_id = %s",
-                (candidate_id,),
-            ) == "consumed"
+                transfer_results = list(
+                    executor.map(lambda _item: transfer_once(), range(2))
+                )
+            assert transfer_results == [
+                ("transferred", "#2PP"),
+                ("transferred", "#2PP"),
+            ]
+            assert (
+                database.scalar("SELECT account_id FROM verified_player_links")
+                == second_account
+            )
+            assert (
+                database.scalar(
+                    "SELECT state FROM support_player_link_transfer_candidates WHERE verification_request_id = %s",
+                    (candidate_id,),
+                )
+                == "consumed"
+            )
             with database.pool.connection() as connection:
                 audit = connection.execute(
                     """
@@ -345,13 +387,17 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
                     reason="A different reason must not replay the transfer.",
                 ) == ("transfer_conflict", None)
 
-            third_account = create_account(database, "google-support-third", "supportthird")
+            third_account = create_account(
+                database, "google-support-third", "supportthird"
+            )
             third_context = database.resolve_account("google", "google-support-third")
             assert third_context is not None
             third_binding = verification_binding(
                 third_account, "google-support-third", "#2PP"
             )
-            assert database.reserve_verification(third_binding, normalized_tag="#2PP").fresh
+            assert database.reserve_verification(
+                third_binding, normalized_tag="#2PP"
+            ).fresh
             expired_support = database.complete_verification(
                 third_binding,
                 normalized_tag="#2PP",
@@ -381,14 +427,20 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
                     operator_identity="sudo:operator:1000",
                     reason="Fresh verification was reviewed.",
                 ) == ("fresh_verification_required", None)
-            assert database.scalar("SELECT account_id FROM verified_player_links") == second_account
-            assert database.scalar(
-                """
+            assert (
+                database.scalar("SELECT account_id FROM verified_player_links")
+                == second_account
+            )
+            assert (
+                database.scalar(
+                    """
                 SELECT state FROM support_player_link_transfer_candidates
                 WHERE verification_request_id = %s
                 """,
-                (expired_candidate_id,),
-            ) == "expired"
+                    (expired_candidate_id,),
+                )
+                == "expired"
+            )
         finally:
             database.close()
 
@@ -450,10 +502,13 @@ def test_verification_request_replay_never_binds_or_persists_a_new_token(
                 )
                 connection.commit()
             database.register_official_credential(fingerprint)
-            assert database.scalar(
-                "SELECT total_budget FROM shared_api_credentials WHERE credential_fingerprint = %s",
-                (fingerprint,),
-            ) == 30
+            assert (
+                database.scalar(
+                    "SELECT total_budget FROM shared_api_credentials WHERE credential_fingerprint = %s",
+                    (fingerprint,),
+                )
+                == 30
+            )
         finally:
             database.close()
 
@@ -469,10 +524,13 @@ def test_verification_reservation_has_recovery_state_and_stale_reuse_fails_close
             reservation = database.reserve_verification(request, normalized_tag="#9PY")
 
             assert reservation.fresh is True
-            assert database.scalar(
-                "SELECT state FROM private_api_requests WHERE request_id = %s",
-                (request.request_id,),
-            ) == "in_progress"
+            assert (
+                database.scalar(
+                    "SELECT state FROM private_api_requests WHERE request_id = %s",
+                    (request.request_id,),
+                )
+                == "in_progress"
+            )
 
             with database.pool.connection() as connection:
                 connection.execute(
@@ -481,7 +539,11 @@ def test_verification_reservation_has_recovery_state_and_stale_reuse_fails_close
                     SET in_progress_until = %s, created_at = %s
                     WHERE request_id = %s
                     """,
-                    (NOW - timedelta(seconds=1), NOW - timedelta(minutes=5), request.request_id),
+                    (
+                        NOW - timedelta(seconds=1),
+                        NOW - timedelta(minutes=5),
+                        request.request_id,
+                    ),
                 )
                 connection.commit()
 
@@ -494,9 +556,12 @@ def test_verification_reservation_has_recovery_state_and_stale_reuse_fails_close
                 "status": "verification_unavailable",
                 "tag": "#9PY",
             }
-            assert database.scalar(
-                "SELECT outcome FROM player_link_verification_audits WHERE request_id = %s",
-                (request.request_id,),
-            ) == "verification_unavailable"
+            assert (
+                database.scalar(
+                    "SELECT outcome FROM player_link_verification_audits WHERE request_id = %s",
+                    (request.request_id,),
+                )
+                == "verification_unavailable"
+            )
         finally:
             database.close()

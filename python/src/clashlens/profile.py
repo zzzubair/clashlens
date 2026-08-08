@@ -13,9 +13,7 @@ from .domain import DomainRuleError, validate_season_anchor
 ENDPOINT_VERSION = "profile-v1"
 SCHEMA_VERSION = "profile-schema-v1"
 PARSER_VERSION = "supercell-source-parser-v1"
-SUPPORTED_PARSER_VERSIONS = frozenset(
-    {PARSER_VERSION, "supercell-source-parser-v2"}
-)
+SUPPORTED_PARSER_VERSIONS = frozenset({PARSER_VERSION, "supercell-source-parser-v2"})
 LEGEND_I_TIER_ID = 105000036
 LEGEND_I_TIER_NAME = "Legend I"
 RECOGNIZED_NON_LEGEND_TIERS_V1 = {105000035: "Legend II"}
@@ -133,7 +131,8 @@ def parse_profile(
     try:
         if current_season is None or previous_season is None:
             raise DomainRuleError(
-                "invalid_season_anchor", "profile season values are missing or malformed"
+                "invalid_season_anchor",
+                "profile season values are missing or malformed",
             )
         validate_season_anchor(current_season, previous_season)
     except DomainRuleError:

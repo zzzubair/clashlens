@@ -83,7 +83,9 @@ def test_active_ranked_day_is_live_without_claiming_complete_evidence() -> None:
     assert result.reconciliation_rule_version == RECONCILIATION_RULE_VERSION
 
 
-def test_complete_ranked_day_requires_paired_baselines_continuous_coverage_and_equation() -> None:
+def test_complete_ranked_day_requires_paired_baselines_continuous_coverage_and_equation() -> (
+    None
+):
     result = reconcile_ranked_day(_input())
 
     assert result.state == "Complete"
@@ -96,7 +98,9 @@ def test_complete_ranked_day_requires_paired_baselines_continuous_coverage_and_e
     assert result.failure_reasons == ()
 
 
-def test_automatic_defense_adjustment_can_be_calculated_without_end_confirmation() -> None:
+def test_automatic_defense_adjustment_can_be_calculated_without_end_confirmation() -> (
+    None
+):
     result = reconcile_ranked_day(
         _input(end_baseline_id=None, next_start_trophies=None)
     )
@@ -107,7 +111,9 @@ def test_automatic_defense_adjustment_can_be_calculated_without_end_confirmation
     assert "missing_end_baseline" in result.failure_reasons
 
 
-def test_zero_defenses_does_not_apply_automatic_adjustment_and_has_uncertain_shield_rules() -> None:
+def test_zero_defenses_does_not_apply_automatic_adjustment_and_has_uncertain_shield_rules() -> (
+    None
+):
     first = reconcile_ranked_day(
         _input(
             next_start_trophies=6000,
@@ -257,7 +263,9 @@ def test_reconciliation_exposes_net_change_boundary_and_unexplained_residual() -
     assert "trophy_equation_mismatch" in result.failure_reasons
 
 
-def test_malformed_battle_log_evidence_is_not_reported_as_a_normal_partial_day() -> None:
+def test_malformed_battle_log_evidence_is_not_reported_as_a_normal_partial_day() -> (
+    None
+):
     result = reconcile_ranked_day(
         _input(
             coverage_observations=_coverage(gap=True),
@@ -302,14 +310,10 @@ def test_repeated_and_two_sided_contributions_count_once_per_own_perspective() -
     assert result.attack_trophy_gain == 20
     assert result.observed_defense_loss == 10
     included = [
-        item
-        for item in result.input_evidence["contributions"]
-        if item["included"]
+        item for item in result.input_evidence["contributions"] if item["included"]
     ]
     excluded = [
-        item
-        for item in result.input_evidence["contributions"]
-        if not item["included"]
+        item for item in result.input_evidence["contributions"] if not item["included"]
     ]
     assert {(item["lens"], item["included"]) for item in included} == {
         ("offense", True),

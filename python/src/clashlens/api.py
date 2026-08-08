@@ -134,7 +134,9 @@ def create_app(
             raise ValueError("a caller may have only current and previous HMAC keys")
 
     api_database = database if database is not None else Database(str(database_url))
-    production_database = api_database if isinstance(api_database, ApiDatabase) else None
+    production_database = (
+        api_database if isinstance(api_database, ApiDatabase) else None
+    )
     current_time = now or (lambda: datetime.fromtimestamp(int(clock()), tz=UTC))
 
     @asynccontextmanager
@@ -147,7 +149,9 @@ def create_app(
 
     @app.exception_handler(ApiError)
     async def api_error_handler(_request: Request, error: ApiError) -> JSONResponse:
-        return JSONResponse(status_code=error.status_code, content={"error": error.code})
+        return JSONResponse(
+            status_code=error.status_code, content={"error": error.code}
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -427,9 +431,7 @@ def create_app(
         assert production_database is not None
         normalized_tag = _safe_tag(tag)
         result = production_database.remove_saved_player(
-            _binding(
-                request, context, "saved_tags.remove", {"tag": normalized_tag}
-            ),
+            _binding(request, context, "saved_tags.remove", {"tag": normalized_tag}),
             normalized_tag=normalized_tag,
         )
         return _operation_response(result)
@@ -498,7 +500,9 @@ def create_app(
     def summary(request: Request) -> JSONResponse:
         context = _authorize(request, "summary.read", production_database)
         assert production_database is not None and context.account is not None
-        result = production_database.get_multi_account_summary(context.account.internal_id)
+        result = production_database.get_multi_account_summary(
+            context.account.internal_id
+        )
         if result is None:
             raise ApiError(404, "account_not_found")
         return JSONResponse(status_code=200, content=result)
@@ -636,7 +640,10 @@ def _authorize(
             else None
         )
         return _AuthorizationContext(proof, account)
-    if proof.caller != "typescript-website" or operation not in _TYPESCRIPT_ACCOUNT_OPERATIONS:
+    if (
+        proof.caller != "typescript-website"
+        or operation not in _TYPESCRIPT_ACCOUNT_OPERATIONS
+    ):
         raise ApiError(403, "caller_operation_not_authorized")
     if database is None or proof.provider != "google" or not proof.provider_subject:
         raise ApiError(403, "caller_operation_not_authorized")
@@ -666,7 +673,9 @@ def _binding(
 
 
 def _operation_response(result: OperationResult) -> JSONResponse:
-    return JSONResponse(status_code=result.status_code, content=_json_safe(result.payload))
+    return JSONResponse(
+        status_code=result.status_code, content=_json_safe(result.payload)
+    )
 
 
 def _group_values(body: GroupBody) -> tuple[str, str, list[str]]:
@@ -719,7 +728,9 @@ def _strict_verification_token(body: bytes, headers: Mapping[str, str]) -> str:
         not isinstance(token, str)
         or not 1 <= len(token) <= 512
         or not token.isascii()
-        or any(character.isspace() or not character.isprintable() for character in token)
+        or any(
+            character.isspace() or not character.isprintable() for character in token
+        )
     ):
         raise ApiError(422, "invalid_request")
     return token

@@ -17,7 +17,9 @@ from clashlens.domain import TROPHY_ALLOCATION_RULE_VERSION
 FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 
 
-def test_battle_log_parser_retains_legend_evidence_and_ignores_other_battle_types() -> None:
+def test_battle_log_parser_retains_legend_evidence_and_ignores_other_battle_types() -> (
+    None
+):
     parsed = parse_battle_log(
         FIXTURE.read_bytes(),
         expected_tag="#2PP",
@@ -64,7 +66,9 @@ def test_defender_report_uses_the_same_canonical_identity() -> None:
     assert battle.perspective == "defender"
 
 
-def test_invalid_legend_row_is_visible_as_a_coverage_gap_without_losing_valid_rows() -> None:
+def test_invalid_legend_row_is_visible_as_a_coverage_gap_without_losing_valid_rows() -> (
+    None
+):
     payload = json.loads(FIXTURE.read_bytes())
     invalid = dict(payload["items"][0])
     invalid["stars"] = 3
@@ -88,7 +92,9 @@ def test_invalid_legend_row_is_visible_as_a_coverage_gap_without_losing_valid_ro
 def test_battle_log_parser_distinguishes_malformed_json_from_unsupported_schema(
     body: bytes,
 ) -> None:
-    expected = "malformed_json" if body == b"not-json" else "unsupported_battle_log_schema"
+    expected = (
+        "malformed_json" if body == b"not-json" else "unsupported_battle_log_schema"
+    )
 
     with pytest.raises(BattleLogParseError, match=expected):
         parse_battle_log(

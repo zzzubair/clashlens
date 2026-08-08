@@ -96,11 +96,15 @@ def test_frozen_snapshot_waits_for_complete_analytics_publication(
             assert text(by_kind["frozen"][2]) == "building"
             assert text(by_kind["live"][2]) == "published"
             assert len(analytics_jobs) == 1
-            analytics_job_id, analytics_input, analytics_key, analytics_status = analytics_jobs[0]
+            analytics_job_id, analytics_input, analytics_key, analytics_status = (
+                analytics_jobs[0]
+            )
             assert text(analytics_status) == "pending"
             assert analytics_input["snapshot_id"] == by_kind["frozen"][0]
             assert analytics_input["snapshot_version"] == 1
-            assert text(analytics_input["snapshot_input_hash"]) == text(by_kind["frozen"][3])
+            assert text(analytics_input["snapshot_input_hash"]) == text(
+                by_kind["frozen"][3]
+            )
             assert text(analytics_key).startswith("build_analytics:snapshot:")
 
             api = ApiDatabase(connection_info)
@@ -357,7 +361,9 @@ def test_canonical_analytics_keeps_owned_perspectives_and_raw_evidence(
             ]
             assert all(float(row[7]) == 1.0 for row in summaries)
             assert all(text(row[8]) == "fresh" for row in summaries)
-            assert all(text(row[9]) == "army-classifier-unavailable-v1" for row in summaries)
+            assert all(
+                text(row[9]) == "army-classifier-unavailable-v1" for row in summaries
+            )
             assert all(text(row[10]) == "legend-analytics-v1" for row in summaries)
             assert all(row[11] is None for row in summaries)
             assert [
@@ -381,35 +387,43 @@ def test_canonical_analytics_keeps_owned_perspectives_and_raw_evidence(
                 "attacker-share-exact",
                 "zero-trophy-share-exact",
             ]
-            assert [(text(row[0]), text(row[1]), text(row[2])) for row in evidence_owners] == [
+            assert [
+                (text(row[0]), text(row[1]), text(row[2])) for row in evidence_owners
+            ] == [
                 ("attacker", "attacker-share-exact", "#2PP"),
                 ("attacker", "zero-trophy-share-exact", "#2PP"),
                 ("defender", "defender-share-conflicting", "#8PP"),
             ]
             assert adjustment_count == 2
 
-            before_replay = database.scalar(
-                """
+            before_replay = (
+                database.scalar(
+                    """
                 SELECT count(*)
                 FROM leaderboard_snapshots
                 """
-            ), database.scalar("SELECT count(*) FROM leaderboard_snapshot_entries"), database.scalar(
-                "SELECT count(*) FROM analytics_summaries"
-            ), database.scalar("SELECT count(*) FROM analytics_breakdowns"), database.scalar(
-                "SELECT count(*) FROM python_processing_jobs"
+                ),
+                database.scalar("SELECT count(*) FROM leaderboard_snapshot_entries"),
+                database.scalar("SELECT count(*) FROM analytics_summaries"),
+                database.scalar("SELECT count(*) FROM analytics_breakdowns"),
+                database.scalar("SELECT count(*) FROM python_processing_jobs"),
             )
             database.requeue_completed_job(snapshot_job_id)
             snapshot_replay = processor.process_job(
                 snapshot_job_id,
                 owner="canonical-snapshot-replay",
             )
-            assert snapshot_replay is not None and snapshot_replay.outcome == "processed"
+            assert (
+                snapshot_replay is not None and snapshot_replay.outcome == "processed"
+            )
             database.requeue_completed_job(analytics_job_id)
             analytics_replay = processor.process_job(
                 analytics_job_id,
                 owner="canonical-analytics-replay",
             )
-            assert analytics_replay is not None and analytics_replay.outcome == "processed"
+            assert (
+                analytics_replay is not None and analytics_replay.outcome == "processed"
+            )
             after_replay = (
                 database.scalar("SELECT count(*) FROM leaderboard_snapshots"),
                 database.scalar("SELECT count(*) FROM leaderboard_snapshot_entries"),
@@ -426,12 +440,14 @@ def test_canonical_analytics_keeps_owned_perspectives_and_raw_evidence(
                 boundary_at=empty_boundary,
                 deduplication_key="build_snapshot:canonical-analytics-empty",
             )
-            empty_snapshot_id, _empty_analytics_job_id = _process_snapshot_and_analytics(
-                connection_info,
-                database,
-                processor,
-                empty_snapshot_job_id,
-                owner_prefix="canonical-analytics-empty",
+            empty_snapshot_id, _empty_analytics_job_id = (
+                _process_snapshot_and_analytics(
+                    connection_info,
+                    database,
+                    processor,
+                    empty_snapshot_job_id,
+                    owner_prefix="canonical-analytics-empty",
+                )
             )
             with database.pool.connection() as connection:
                 empty_breakdowns = connection.execute(
@@ -445,7 +461,9 @@ def test_canonical_analytics_keeps_owned_perspectives_and_raw_evidence(
                     """,
                     (empty_snapshot_id,),
                 ).fetchall()
-            assert [(text(row[0]), row[1], row[2], row[3]) for row in empty_breakdowns] == [
+            assert [
+                (text(row[0]), row[1], row[2], row[3]) for row in empty_breakdowns
+            ] == [
                 ("defense", 0, None, None),
                 ("offense", 0, None, None),
             ]

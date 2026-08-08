@@ -107,7 +107,9 @@ class ObservationProcessor:
             except (KeyError, TypeError, ValueError) as error:
                 return self._fail(
                     claim,
-                    "dependency_not_ready" if "dependency" in str(error) else "invalid_work_input",
+                    "dependency_not_ready"
+                    if "dependency" in str(error)
+                    else "invalid_work_input",
                     detail=str(error),
                     retryable=False,
                 )

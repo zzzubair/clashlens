@@ -80,7 +80,9 @@ def json_body(value: object) -> bytes:
 class FakeOfficialVerifier:
     calls: int = 0
 
-    def verify(self, normalized_tag: str, player_token: str) -> OfficialVerificationResponse:
+    def verify(
+        self, normalized_tag: str, player_token: str
+    ) -> OfficialVerificationResponse:
         assert normalized_tag == "#2PP"
         assert player_token
         self.calls += 1
@@ -156,7 +158,9 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
             assert public_user.status_code == 404
             assert anonymous_account.status_code == 403
             assert discord_identity.status_code == 403
-            assert discord_identity.json() == {"error": "caller_operation_not_authorized"}
+            assert discord_identity.json() == {
+                "error": "caller_operation_not_authorized"
+            }
 
             create_target = "/v1/account"
             create_data = json_body(
@@ -249,9 +253,12 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
             assert export.status_code == 403
             assert export.json() == {"error": "caller_operation_not_authorized"}
             assert database.scalar("SELECT count(*) FROM account_export_requests") == 0
-            assert database.scalar(
-                "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_export'"
-            ) == 0
+            assert (
+                database.scalar(
+                    "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_export'"
+                )
+                == 0
+            )
 
             token_request_id = str(uuid4())
             verify_target = "/v1/players/%232PP/verifytoken"
@@ -509,10 +516,14 @@ def test_linked_elsewhere_requires_one_bounded_support_candidate(
                 }
                 assert support_required["status"] == "support_required"
                 assert support_required["tag"] == "#2PP"
-                assert str(UUID(support_required["verification_request_id"])) == support_required[
-                    "verification_request_id"
-                ]
-                assert database.scalar("SELECT account_id FROM verified_player_links") == first.internal_id
+                assert (
+                    str(UUID(support_required["verification_request_id"]))
+                    == support_required["verification_request_id"]
+                )
+                assert (
+                    database.scalar("SELECT account_id FROM verified_player_links")
+                    == first.internal_id
+                )
                 with database.pool.connection() as connection:
                     candidate = connection.execute(
                         """
