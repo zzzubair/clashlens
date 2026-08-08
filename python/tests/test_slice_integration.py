@@ -399,17 +399,17 @@ def test_malformed_success_and_non_success_are_distinct_classified_outcomes(
 
 
 @pytest.mark.parametrize(
-    ("column", "category"),
+    "column",
     [
-        ("parser_version", "unsupported_parser_version"),
-        ("processing_version", "unsupported_processing_version"),
+        "parser_version",
+        "processing_version",
+        "domain_rule_version",
     ],
 )
-def test_worker_rejects_unsupported_mutable_versions_before_archive_read(
+def test_worker_leaves_jobs_with_unsupported_mutable_versions_unclaimed(
     database_url: str,
     archive_server,
     column: str,
-    category: str,
 ) -> None:
     db = Database(database_url)
     db.apply_schema()
@@ -436,12 +436,10 @@ def test_worker_rejects_unsupported_mutable_versions_before_archive_read(
 
     result = processor.process_once(owner="worker-version-check")
 
-    assert result is not None
-    assert result.outcome == "failed"
-    assert result.category == category
+    assert result is None
     assert (
         db.scalar("SELECT status FROM python_processing_jobs WHERE id = %s", (job_id,))
-        == "failed"
+        == "pending"
     )
     assert db.scalar("SELECT count(*) FROM player_profile_effects") == 0
     assert archive_server[3].get_count == before_archive_reads

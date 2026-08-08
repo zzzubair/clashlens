@@ -15,15 +15,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
 from time import time
+from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
 import uvicorn
 
 from .api import create_app
+from .api_db import ApiDatabase
 from .archive import S3ArchiveReader
 from .db import Database
 from .hmac_proof import SigningInput, load_secret_file, sign
+from .verification import OfficialVerificationClient, load_official_api_key_file
 from .worker import ObservationProcessor, ProcessResult
 
 MAX_REPORTED_RESULTS = 100
@@ -105,6 +108,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=int(os.environ.get("CLASHLENS_API_MAX_BODY_BYTES", "1048576")),
     )
+    serve.add_argument(
+        "--official-key-file",
+        default=os.environ.get("CLASHLENS_OFFICIAL_KEY_FILE", ""),
+    )
+    serve.add_argument(
+        "--official-proxy-url",
+        default=os.environ.get("CLASHLENS_OFFICIAL_PROXY_URL", ""),
+    )
     serve.add_argument("--log-level", default="warning")
 
     probe = subparsers.add_parser(
@@ -165,11 +176,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "ready":
             return _run_ready(arguments)
         if arguments.command == "serve":
-            app = create_app(
-                _database_url(arguments),
-                keys=_load_hmac_keys(arguments),
-                max_body_bytes=arguments.max_body_bytes,
-            )
+            app, _database = _serve_app(arguments)
             uvicorn.run(
                 app,
                 host=arguments.host,
@@ -414,6 +421,50 @@ def _load_hmac_keys(arguments: argparse.Namespace) -> dict[tuple[str, str], byte
             arguments.previous_secret_file
         )
     return keys
+
+
+def _serve_app(arguments: argparse.Namespace) -> tuple[Any, ApiDatabase]:
+    """Build the production private API app and its database.
+
+    The returned ApiDatabase is owned by the app lifespan, which closes it on
+    shutdown. If any startup step raises after the pool opens, the pool is
+    closed here before the error propagates. The official key is required and
+    must be file-backed so the shared traffic gate fingerprint is derived from
+    the exact ASCII token bytes, never from a command line or environment
+    value.
+    """
+    if not arguments.official_key_file:
+        raise ValueError("official API key file is required")
+    official_key = load_official_api_key_file(arguments.official_key_file)
+    if not arguments.official_proxy_url:
+        raise ValueError("fixed-egress proxy URL is required")
+    api_database = ApiDatabase(_database_url(arguments))
+    try:
+        fingerprint = _official_credential_fingerprint(official_key)
+        api_database.register_official_credential(fingerprint)
+        verification_client = OfficialVerificationClient(
+            api_key=official_key,
+            proxy_url=arguments.official_proxy_url,
+        )
+        app = create_app(
+            database=api_database,
+            keys=_load_hmac_keys(arguments),
+            max_body_bytes=arguments.max_body_bytes,
+            verification_client=verification_client,
+            official_credential_fingerprint=fingerprint,
+        )
+    except BaseException:
+        # Startup failed after the pool opened; the app never reached its
+        # lifespan, so ownership never transferred. Close the pool and
+        # re-raise without exposing key material.
+        api_database.close()
+        raise
+    return app, api_database
+
+
+def _official_credential_fingerprint(key_bytes: bytes) -> str:
+    """Full SHA-256 fingerprint of the exact ASCII bearer-token bytes."""
+    return hashlib.sha256(key_bytes).hexdigest()
 
 
 def _probe(arguments: argparse.Namespace) -> str:

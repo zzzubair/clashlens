@@ -20,15 +20,31 @@ from .analytics import (
     SNAPSHOT_ORDERING_RULE_VERSION,
     deterministic_tag_hash,
 )
-from .battle import SOURCE_PARSER_VERSION, ParsedBattleLog
+from .battle import (
+    BATTLE_LOG_ENDPOINT_VERSION,
+    BATTLE_LOG_SCHEMA_VERSION,
+    SOURCE_PARSER_VERSION,
+    SUPPORTED_SOURCE_PARSER_VERSIONS,
+    ParsedBattleLog,
+)
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
     DomainRuleError,
     ranked_day_for,
     validate_season_anchor,
 )
-from .profile import ParsedProfile, normalize_player_tag
-from .rankings import ParsedOfficialRankings
+from .profile import (
+    ENDPOINT_VERSION,
+    SCHEMA_VERSION,
+    SUPPORTED_PARSER_VERSIONS,
+    ParsedProfile,
+    normalize_player_tag,
+)
+from .rankings import (
+    GLOBAL_RANKING_ENDPOINT_VERSION,
+    GLOBAL_RANKING_SCHEMA_VERSION,
+    ParsedOfficialRankings,
+)
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
     BattleContribution,
@@ -47,6 +63,122 @@ CONTRACT_VERSION = 2
 # Compatibility alias for the API/account integration worker. Domain code uses
 # CONTRACT_VERSION and the integration owner can remove this alias when api.py moves.
 PROTOTYPE_CONTRACT_VERSION = CONTRACT_VERSION
+
+# Work types this worker image may claim. Unsupported work types (for example
+# build_export) and unknown or future contracts stay pending and unclaimed so a
+# later image that supports them can pick them up.
+SUPPORTED_WORK_TYPES = (
+    "process_observation",
+    "replay_observation",
+    "reconcile_ranked_day",
+    "build_snapshot",
+    "build_analytics",
+)
+_SOURCE_ENDPOINT_CONTRACTS = (
+    (
+        "profile",
+        ENDPOINT_VERSION,
+        SCHEMA_VERSION,
+        tuple(sorted(SUPPORTED_PARSER_VERSIONS)),
+    ),
+    (
+        "battle_log",
+        BATTLE_LOG_ENDPOINT_VERSION,
+        BATTLE_LOG_SCHEMA_VERSION,
+        tuple(sorted(SUPPORTED_SOURCE_PARSER_VERSIONS)),
+    ),
+    (
+        "global_player_rankings",
+        GLOBAL_RANKING_ENDPOINT_VERSION,
+        GLOBAL_RANKING_SCHEMA_VERSION,
+        tuple(sorted(SUPPORTED_SOURCE_PARSER_VERSIONS)),
+    ),
+)
+
+
+def _supported_job_filter(alias: str) -> tuple[str, list[Any]]:
+    """Parameterized SQL predicate for jobs this worker image may claim.
+
+    Source jobs require an exact supported endpoint/schema contract and a
+    parser version installed by the corresponding parser; unknown or future
+    contracts stay unclaimed. All supported work types require the current
+    processing and domain rule versions. Reconciliation and analytics work
+    additionally require the current analytics rule version, and analytics
+    builds also require the complete current input shape so migration-style
+    legacy analytics jobs stay pending and unclaimed.
+    """
+    source_clauses: list[str] = []
+    params: list[Any] = []
+    for (
+        endpoint,
+        endpoint_version,
+        schema_version,
+        parser_versions,
+    ) in _SOURCE_ENDPOINT_CONTRACTS:
+        source_clauses.append(
+            f"""(
+                {alias}.parser_version = ANY(%s::text[])
+                AND EXISTS (
+                    SELECT 1 FROM collector_observations AS source_observation
+                    WHERE source_observation.id = COALESCE(
+                        {alias}.observation_id, {alias}.replay_observation_id
+                    )
+                    AND source_observation.endpoint = %s
+                    AND source_observation.endpoint_version = %s
+                    AND source_observation.schema_version = %s
+                )
+            )"""
+        )
+        params.extend(
+            (list(parser_versions), endpoint, endpoint_version, schema_version)
+        )
+    source_contract = " OR ".join(source_clauses)
+    analytics_input_shape = f"""{alias}.input_json ? 'snapshot_id'
+        AND {alias}.input_json ? 'snapshot_version'
+        AND {alias}.input_json ? 'snapshot_input_hash'
+        AND {alias}.input_json ? 'source_ranked_day_version_id'
+        AND ({alias}.input_json->>'snapshot_id') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'snapshot_version') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'source_ranked_day_version_id')
+            ~ '^[1-9][0-9]*$'
+        AND length({alias}.input_json->>'snapshot_input_hash') > 0"""
+    return (
+        f"""(
+            ({alias}.work_type = ANY(%s::text[])
+                AND {alias}.processing_version = %s
+                AND {alias}.domain_rule_version = %s
+                AND ({source_contract}))
+            OR ({alias}.work_type = ANY(%s::text[])
+                AND {alias}.processing_version = %s
+                AND {alias}.domain_rule_version = %s
+                AND {alias}.analytics_rule_version = %s)
+            OR ({alias}.work_type = ANY(%s::text[])
+                AND {alias}.processing_version = %s
+                AND {alias}.domain_rule_version = %s
+                AND {alias}.analytics_rule_version = %s
+                AND (
+                    {alias}.work_type = 'build_snapshot'
+                    OR (
+                        {alias}.work_type = 'build_analytics'
+                        AND {analytics_input_shape}
+                    )
+                ))
+        )""",
+        [
+            list(SUPPORTED_WORK_TYPES[:2]),
+            PROCESSING_VERSION,
+            DOMAIN_RULE_VERSION,
+            *params,
+            ["reconcile_ranked_day"],
+            PROCESSING_VERSION,
+            DOMAIN_RULE_VERSION,
+            ANALYTICS_RULE_VERSION,
+            ["build_snapshot", "build_analytics"],
+            PROCESSING_VERSION,
+            DOMAIN_RULE_VERSION,
+            ANALYTICS_RULE_VERSION,
+        ],
+    )
 
 
 class LeaseLost(RuntimeError):
@@ -112,12 +244,12 @@ class Database:
 
     def apply_schema(self) -> None:
         root = Path(__file__).parents[3]
-        migration_0001 = (root / "deploy" / "migrations" / "0001_collector.sql").read_text(
-            encoding="utf-8"
-        )
-        migration_0002 = (root / "deploy" / "migrations" / "0002_python_layer.sql").read_text(
-            encoding="utf-8"
-        )
+        migration_0001 = (
+            root / "deploy" / "migrations" / "0001_collector.sql"
+        ).read_text(encoding="utf-8")
+        migration_0002 = (
+            root / "deploy" / "migrations" / "0002_python_layer.sql"
+        ).read_text(encoding="utf-8")
         with self.pool.connection() as connection:
             relation = connection.execute(
                 "SELECT to_regclass('clash_lens_contract')"
@@ -171,7 +303,9 @@ class Database:
     ) -> tuple[int, int]:
         del endpoint_version, schema_version
         global_scope = endpoint == "global_player_rankings"
-        collector_work_type = "global_player_rankings" if global_scope else "initial_collection"
+        collector_work_type = (
+            "global_player_rankings" if global_scope else "initial_collection"
+        )
         job_scope = "global" if global_scope else "player"
         job_tag = None if global_scope else normalized_tag
         with self.pool.connection() as connection:
@@ -344,6 +478,7 @@ class Database:
             raise ValueError("lease owner is required")
         if lease_seconds <= 0:
             raise ValueError("lease duration must be positive")
+        supported_filter, supported_params = _supported_job_filter("j")
         with self.pool.connection() as connection:
             with connection.transaction():
                 connection.execute(
@@ -360,16 +495,29 @@ class Database:
                 )
                 connection.execute(
                     f"""
-                    UPDATE {self._jobs_relation}
+                    UPDATE {self._jobs_relation} AS j
                     SET state = 'failed', outcome = 'durable_failure',
                         failure_category = 'lease_expired_max_attempts',
                         failure_detail = 'lease expired after the configured attempt limit',
                         lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
                         completed_at = clock_timestamp(), updated_at = clock_timestamp()
-                    WHERE state = 'leased'
-                      AND lease_expires_at <= clock_timestamp()
-                      AND attempt_count >= max_attempts
-                    """
+                    WHERE j.state = 'leased'
+                      AND j.lease_expires_at <= clock_timestamp()
+                      AND j.attempt_count >= j.max_attempts
+                      AND {supported_filter}
+                    """,
+                    tuple(supported_params),
+                )
+                connection.execute(
+                    f"""
+                    UPDATE {self._jobs_relation} AS j
+                    SET state = 'pending', lease_owner = NULL, lease_token = NULL,
+                        lease_expires_at = NULL, updated_at = clock_timestamp()
+                    WHERE j.state = 'leased'
+                      AND j.lease_expires_at <= clock_timestamp()
+                      AND NOT ({supported_filter})
+                    """,
+                    tuple(supported_params),
                 )
                 where = """
                     (
@@ -382,20 +530,28 @@ class Database:
                 if job_id is not None:
                     where += " AND j.id = %s"
                     params.append(job_id)
+                params.extend(supported_params)
                 row = connection.execute(
                     f"""
                     SELECT
                         j.id AS job_id, j.work_type, j.deduplication_key,
-                        j.input_json, j.observation_id, j.parser_version,
+                        j.input_json,
+                        COALESCE(j.observation_id, j.replay_observation_id) AS observation_id,
+                        j.parser_version,
                         j.processing_version, j.domain_rule_version,
                         j.analytics_rule_version, j.attempt_count, j.max_attempts,
                         o.normalized_tag, o.endpoint, o.endpoint_version,
                         o.schema_version, o.response_observed_at, o.http_status,
                         o.response_hash, o.archive_reference
                     FROM {self._jobs_relation} AS j
-                    LEFT JOIN collector_observations AS o ON o.id = j.observation_id
+                    LEFT JOIN collector_observations AS o
+                        ON o.id = COALESCE(j.observation_id, j.replay_observation_id)
                     WHERE {where}
-                    ORDER BY j.due_at, j.id
+                      AND {supported_filter}
+                    ORDER BY (
+                        j.priority
+                        + floor(extract(epoch FROM (clock_timestamp() - j.created_at)) / 60)::integer * 10
+                    ) DESC, j.due_at, j.id
                     FOR UPDATE OF j SKIP LOCKED
                     LIMIT 1
                     """,
@@ -523,9 +679,14 @@ class Database:
                 )
 
     def complete_profile(self, claim: Claim, profile: ParsedProfile) -> None:
-        observation_id, http_status, response_hash, _observed_at, endpoint, schema_version = (
-            self._observation_source(claim)
-        )
+        (
+            observation_id,
+            http_status,
+            response_hash,
+            _observed_at,
+            endpoint,
+            schema_version,
+        ) = self._observation_source(claim)
         with self.pool.connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
@@ -656,7 +817,9 @@ class Database:
                     claim,
                     outcome="processed",
                     failure_category=(
-                        "season_anchor_conflict" if anchor_outcome == "conflict" else None
+                        "season_anchor_conflict"
+                        if anchor_outcome == "conflict"
+                        else None
                     ),
                 )
                 self._refresh_reset_baseline_evidence(connection, claim)
@@ -665,9 +828,14 @@ class Database:
                 )
 
     def complete_battle_log(self, claim: Claim, battle_log: ParsedBattleLog) -> None:
-        observation_id, _http_status, response_hash, _observed_at, endpoint, schema_version = (
-            self._observation_source(claim)
-        )
+        (
+            observation_id,
+            _http_status,
+            response_hash,
+            _observed_at,
+            endpoint,
+            schema_version,
+        ) = self._observation_source(claim)
         with self.pool.connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
@@ -732,7 +900,9 @@ class Database:
                         battle.defender_tag,
                         active=False,
                     )
-                    opponent_id = defender_id if battle.perspective == "attacker" else attacker_id
+                    opponent_id = (
+                        defender_id if battle.perspective == "attacker" else attacker_id
+                    )
                     connection.execute(
                         """
                         INSERT INTO known_player_discoveries (
@@ -847,9 +1017,14 @@ class Database:
         claim: Claim,
         rankings: ParsedOfficialRankings,
     ) -> None:
-        observation_id, _http_status, response_hash, observed_at, endpoint, schema_version = (
-            self._observation_source(claim)
-        )
+        (
+            observation_id,
+            _http_status,
+            response_hash,
+            observed_at,
+            endpoint,
+            schema_version,
+        ) = self._observation_source(claim)
         with self.pool.connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
@@ -1228,12 +1403,10 @@ class Database:
                     value == "eligible" for value in baseline_eligibility
                 )
                 malformed_evidence = any(
-                    observation.malformed_row_count > 0
-                    for observation in coverage
+                    observation.malformed_row_count > 0 for observation in coverage
                 )
                 unclassified_evidence = any(
-                    observation.unclassified_row_count > 0
-                    for observation in coverage
+                    observation.unclassified_row_count > 0 for observation in coverage
                 )
                 perspective_disagreement = any(
                     contribution.disagreement for contribution in contributions
@@ -1289,9 +1462,7 @@ class Database:
                             else {}
                         ),
                         end_baseline_evidence=(
-                            end_baseline["evidence"]
-                            if end_baseline is not None
-                            else {}
+                            end_baseline["evidence"] if end_baseline is not None else {}
                         ),
                         parser_version=claim.parser_version,
                         processing_version=claim.processing_version,
@@ -1407,12 +1578,8 @@ class Database:
                         else 1
                     )
                     input_evidence = result.input_evidence
-                    coverage_evidence = input_evidence.get(
-                        "coverage_observations", []
-                    )
-                    contribution_evidence = input_evidence.get(
-                        "contributions", []
-                    )
+                    coverage_evidence = input_evidence.get("coverage_observations", [])
+                    contribution_evidence = input_evidence.get("contributions", [])
                     evidence_complete = bool(
                         result.coverage_complete
                         and start_baseline is not None
@@ -1468,7 +1635,9 @@ class Database:
                             claim.analytics_rule_version,
                             Jsonb(trophy_rule_versions),
                             version_number,
-                            previous_version[0] if previous_version is not None else None,
+                            previous_version[0]
+                            if previous_version is not None
+                            else None,
                             result.state,
                             result.confidence,
                             Jsonb(list(result.failure_reasons)),
@@ -1503,11 +1672,7 @@ class Database:
                                 if start_baseline is not None
                                 else None
                             ),
-                            (
-                                end_baseline["id"]
-                                if end_baseline is not None
-                                else None
-                            ),
+                            (end_baseline["id"] if end_baseline is not None else None),
                         ),
                     ).fetchone()
                     assert version is not None
@@ -1541,9 +1706,13 @@ class Database:
                 boundary_at = ranked_day[1]
                 boundary_text = claim.input_json.get("boundary_at")
                 if boundary_text is not None:
-                    boundary_at = datetime.fromisoformat(str(boundary_text)).astimezone(UTC)
+                    boundary_at = datetime.fromisoformat(str(boundary_text)).astimezone(
+                        UTC
+                    )
                 if boundary_at != ranked_day[1]:
-                    raise ValueError("snapshot boundary does not match ranked-day boundary")
+                    raise ValueError(
+                        "snapshot boundary does not match ranked-day boundary"
+                    )
 
                 # Select the newest accepted profile version first, then test its
                 # historical eligibility. A newer ineligible version therefore
@@ -1609,9 +1778,7 @@ class Database:
                     if age_seconds < 0:
                         raise ValueError("snapshot selected future profile evidence")
                     freshness = (
-                        "fresh"
-                        if age_seconds <= PROFILE_FRESHNESS_SECONDS
-                        else "stale"
+                        "fresh" if age_seconds <= PROFILE_FRESHNESS_SECONDS else "stale"
                     )
                     entries.append(
                         {
@@ -1768,7 +1935,9 @@ class Database:
                         "tag": entry["tag"],
                         "trophies": entry["trophies"],
                         "profile_observation_id": entry["observation_id"],
-                        "profile_observed_at": entry["observed_at"].astimezone(UTC).isoformat(),
+                        "profile_observed_at": entry["observed_at"]
+                        .astimezone(UTC)
+                        .isoformat(),
                         "profile_age_seconds": entry["age_seconds"],
                         "profile_freshness": entry["freshness"],
                         "profile_confidence": entry["confidence"],
@@ -1808,16 +1977,18 @@ class Database:
                         separators=(",", ":"),
                     ).encode("utf-8")
                 ).hexdigest()
-                frozen_snapshot_id, frozen_snapshot_version = self._publish_snapshot_kind(
-                    connection,
-                    snapshot_kind="frozen",
-                    boundary_at=boundary_at,
-                    ranked_day_version_id=ranked_day_version_id,
-                    entries=entries,
-                    coverage=coverage,
-                    quality=quality,
-                    input_hash=input_hash,
-                    publish=False,
+                frozen_snapshot_id, frozen_snapshot_version = (
+                    self._publish_snapshot_kind(
+                        connection,
+                        snapshot_kind="frozen",
+                        boundary_at=boundary_at,
+                        ranked_day_version_id=ranked_day_version_id,
+                        entries=entries,
+                        coverage=coverage,
+                        quality=quality,
+                        input_hash=input_hash,
+                        publish=False,
+                    )
                 )
                 self._publish_snapshot_kind(
                     connection,
@@ -1857,10 +2028,7 @@ class Database:
                 job = self._lock_live_claim(connection, claim)
                 connection.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (
-                        "leaderboard-snapshot-v2:frozen:analytics:"
-                        + str(snapshot_id),
-                    ),
+                    ("leaderboard-snapshot-v2:frozen:analytics:" + str(snapshot_id),),
                 )
                 snapshot = connection.execute(
                     """
@@ -1877,11 +2045,17 @@ class Database:
                 if snapshot is None:
                     raise ValueError("frozen snapshot dependency is not complete")
                 if int(snapshot[2]) != snapshot_version:
-                    raise ValueError("analytics snapshot version does not match its input")
+                    raise ValueError(
+                        "analytics snapshot version does not match its input"
+                    )
                 if int(snapshot[5]) != source_ranked_day_version_id:
-                    raise ValueError("analytics ranked-day source does not match its snapshot")
+                    raise ValueError(
+                        "analytics ranked-day source does not match its snapshot"
+                    )
                 if _text_value(snapshot[6]) != snapshot_input_hash:
-                    raise ValueError("analytics snapshot input hash does not match its input")
+                    raise ValueError(
+                        "analytics snapshot input hash does not match its input"
+                    )
 
                 existing_summary_count = connection.execute(
                     """
@@ -1897,8 +2071,14 @@ class Database:
                 ).fetchone()
                 assert existing_summary_count is not None
                 if _text_value(snapshot[4]) == "published":
-                    if tuple(int(value) for value in existing_summary_count) != (2, 2, 2):
-                        raise ValueError("published frozen snapshot has incomplete analytics")
+                    if tuple(int(value) for value in existing_summary_count) != (
+                        2,
+                        2,
+                        2,
+                    ):
+                        raise ValueError(
+                            "published frozen snapshot has incomplete analytics"
+                        )
                     self._finish_claim(
                         connection, claim, job, state="complete", outcome="processed"
                     )
@@ -1920,15 +2100,23 @@ class Database:
                 period_end = ranked_day[1]
                 input_period_start = claim.input_json.get("period_start")
                 input_period_end = claim.input_json.get("period_end")
-                if input_period_start is not None and _parse_utc(input_period_start) != period_start:
+                if (
+                    input_period_start is not None
+                    and _parse_utc(input_period_start) != period_start
+                ):
                     raise ValueError("analytics period start does not match ranked day")
-                if input_period_end is not None and _parse_utc(input_period_end) != period_end:
+                if (
+                    input_period_end is not None
+                    and _parse_utc(input_period_end) != period_end
+                ):
                     raise ValueError("analytics period end does not match ranked day")
                 population_filter = claim.input_json.get(
                     "population_filter", {"population": "tracked_players"}
                 )
                 if population_filter != {"population": "tracked_players"}:
-                    raise ValueError("analytics population filter is not the tracked population")
+                    raise ValueError(
+                        "analytics population filter is not the tracked population"
+                    )
                 entry_count = connection.execute(
                     """
                     SELECT count(*)
@@ -2148,11 +2336,18 @@ class Database:
                                 ANALYTICS_RULE_VERSION,
                             ),
                         ).fetchone()
-                        if summary is None or _text_value(summary[1]) != analytics_input_hash:
-                            raise ValueError("analytics replay has an immutable input conflict")
+                        if (
+                            summary is None
+                            or _text_value(summary[1]) != analytics_input_hash
+                        ):
+                            raise ValueError(
+                                "analytics replay has an immutable input conflict"
+                            )
                     summary_id = int(summary[0])
                     evidence_json = {
-                        "army_share_codes": [_text_value(row[3]) for row in sample_rows],
+                        "army_share_codes": [
+                            _text_value(row[3]) for row in sample_rows
+                        ],
                         "battle_ids": [int(row[0]) for row in sample_rows],
                         "evidence_ids": [int(row[4]) for row in sample_rows],
                         "source_row_ids": [int(row[5]) for row in sample_rows],
@@ -2216,7 +2411,6 @@ class Database:
                     connection, claim, job, state="complete", outcome="processed"
                 )
 
-
     def complete_classified(self, claim: Claim, *, outcome: str) -> None:
         with self.pool.connection() as connection:
             with connection.transaction():
@@ -2224,7 +2418,9 @@ class Database:
                 self._record_processing_outcome(
                     connection,
                     claim,
-                    outcome="non_success" if outcome == "source_non_success" else outcome,
+                    outcome="non_success"
+                    if outcome == "source_non_success"
+                    else outcome,
                 )
                 self._refresh_reset_baseline_evidence(connection, claim)
                 if claim.endpoint == "global_player_rankings":
@@ -2436,7 +2632,10 @@ class Database:
         hard_failure = bool(
             root_work_type != "reset_baseline"
             or evidence_kind != "paired_v2"
-            or any(endpoint_details[endpoint]["hard_failure"] for endpoint in endpoint_details)
+            or any(
+                endpoint_details[endpoint]["hard_failure"]
+                for endpoint in endpoint_details
+            )
         )
         if profile_valid and battle_log_valid and not hard_failure:
             state = "complete"
@@ -2660,7 +2859,9 @@ class Database:
         observation_id = int(row[1]) if row is not None and row[1] is not None else None
         processing_id = int(row[8]) if row is not None and row[8] is not None else None
         collector_outcome = _text_value(row[0]) if row is not None else None
-        processing_outcome = _text_value(row[9]) if row is not None and row[9] is not None else None
+        processing_outcome = (
+            _text_value(row[9]) if row is not None and row[9] is not None else None
+        )
         reasons: list[str] = []
         hard_failure = False
         missing = False
@@ -2901,9 +3102,7 @@ class Database:
             and _text_value(row[22]) is not None
         )
         profile_eligible = _text_value(row[21]) == "eligible"
-        battle_log_valid_evidence = (
-            row[24] is not None and not bool(row[26])
-        )
+        battle_log_valid_evidence = row[24] is not None and not bool(row[26])
         complete = bool(
             state == "complete"
             and profile_valid
@@ -2924,19 +3123,11 @@ class Database:
             "version": int(row[1]),
             "state": state,
             "sweep_id": int(row[3]) if row[3] is not None else None,
-            "reset_baseline_sweep_id": (
-                int(row[4]) if row[4] is not None else None
-            ),
-            "collection_job_id": (
-                int(row[5]) if row[5] is not None else None
-            ),
+            "reset_baseline_sweep_id": (int(row[4]) if row[4] is not None else None),
+            "collection_job_id": (int(row[5]) if row[5] is not None else None),
             "attempt_id": int(row[6]) if row[6] is not None else None,
-            "profile_observation_id": (
-                int(row[7]) if row[7] is not None else None
-            ),
-            "battle_log_observation_id": (
-                int(row[8]) if row[8] is not None else None
-            ),
+            "profile_observation_id": (int(row[7]) if row[7] is not None else None),
+            "battle_log_observation_id": (int(row[8]) if row[8] is not None else None),
             "profile_processing_outcome_id": (
                 int(row[9]) if row[9] is not None else None
             ),
@@ -2949,9 +3140,7 @@ class Database:
             "failure_reasons": list(failure_reasons),
             "evidence_key": _text_value(row[16]),
             "boundary_at": row[17].astimezone(UTC).isoformat(),
-            "evidence_kind": (
-                _text_value(row[18]) if row[18] is not None else None
-            ),
+            "evidence_kind": (_text_value(row[18]) if row[18] is not None else None),
             "profile": {
                 "id": int(row[19]) if row[19] is not None else None,
                 "trophies": int(row[20]) if row[20] is not None else None,
@@ -2962,9 +3151,7 @@ class Database:
                     _text_value(row[22]) if row[22] is not None else None
                 ),
                 "observed_at": (
-                    row[23].astimezone(UTC).isoformat()
-                    if row[23] is not None
-                    else None
+                    row[23].astimezone(UTC).isoformat() if row[23] is not None else None
                 ),
                 "response_hash": _text_value(row[27]),
             },
@@ -3010,7 +3197,10 @@ class Database:
         connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (
-                "leaderboard-snapshot-v2:" + snapshot_kind + ":" + boundary_at.isoformat(),
+                "leaderboard-snapshot-v2:"
+                + snapshot_kind
+                + ":"
+                + boundary_at.isoformat(),
             ),
         )
         existing = connection.execute(
@@ -3257,9 +3447,7 @@ class Database:
         ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         )
-        boundary_at_text = boundary_at.astimezone(UTC).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
+        boundary_at_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         input_json = {
             "player_id": player_id,
             "ranked_day_start": ranked_day_start_text,
@@ -3707,7 +3895,9 @@ def _parse_utc(value: Any) -> datetime:
     return parsed.astimezone(UTC)
 
 
-def _snapshot_freshness(*, included_count: int, fresh_count: int, stale_count: int) -> str:
+def _snapshot_freshness(
+    *, included_count: int, fresh_count: int, stale_count: int
+) -> str:
     if included_count == 0 or stale_count == 0:
         return "fresh"
     if fresh_count == 0:
