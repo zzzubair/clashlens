@@ -585,6 +585,18 @@ V1_DIR=$(new_scenario)
 V1_ENV="$V1_DIR/app.env"
 write_scenario_env "$V1_ENV" "$V1_DIR/keys"
 printf '1' >"$V1_DIR/state/contract_version"
+FAKE_STATE="$V1_DIR/state" FAKE_PODMAN_LOG="$V1_DIR/podman.log" \
+  "$FAKE_BIN/podman" run --detach --name clashlens-collector \
+  localhost/clashlens-collector:previous >/dev/null
+FAKE_STATE="$V1_DIR/state" FAKE_PODMAN_LOG="$V1_DIR/podman.log" \
+  "$FAKE_BIN/podman" container exists clashlens-collector || \
+  fail 'populated-v1 scenario did not create the existing collector'
+v1_existing_state=$(
+  FAKE_STATE="$V1_DIR/state" FAKE_PODMAN_LOG="$V1_DIR/podman.log" \
+    "$FAKE_BIN/podman" container inspect --format '{{.State.Running}}' clashlens-collector
+)
+[[ "$v1_existing_state" == "true" ]] || \
+  fail 'populated-v1 scenario collector is not running'
 deploy "$V1_DIR" "$V1_ENV" -- up >/dev/null
 if grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$V1_DIR/state/stdin"/exec-* 2>/dev/null; then
   fail 'migration 0001 was reapplied on a populated v1 database'
@@ -595,8 +607,17 @@ grep -lq 'ALTER ROLE clashlens_collector' "$V1_DIR/state/stdin"/exec-* 2>/dev/nu
   fail 'roles were not configured on a v1 database'
 log_has "$V1_DIR/podman.log" 'clashlens-collector-bridge' 'bridge was not used on a v1 database'
 log_has "$V1_DIR/podman.log" 'clashlens-collector:deployment' 'required collector was not started on a v1 database'
+v1_stop_line=$(first_line "$V1_DIR/podman.log" '^stop --time 30 clashlens-collector ' || true)
+v1_remove_line=$(first_line "$V1_DIR/podman.log" '^rm clashlens-collector ' || true)
+v1_bridge_line=$(first_line "$V1_DIR/podman.log" '^run .*--name clashlens-collector-bridge ' || true)
+[[ -n "$v1_stop_line" && -n "$v1_remove_line" && -n "$v1_bridge_line" ]] || \
+  fail 'could not locate the populated-v1 collector stop, removal, and bridge start'
+(( v1_stop_line < v1_remove_line )) || \
+  fail 'populated-v1 collector was not stopped before removal'
+(( v1_remove_line < v1_bridge_line )) || \
+  fail 'populated-v1 collector was not removed before the bridge started'
 assert_no_sentinel_in_log "$V1_DIR/podman.log"
-printf 'ok: up on a v1 database applies only 0002 through the bridge path\n'
+printf 'ok: up on v1 stops the existing collector before applying 0002 through the bridge\n'
 
 # ---------------------------------------------------------------------------
 # Scenario C: up on v2 reapplies only 0002 and never runs a bridge.

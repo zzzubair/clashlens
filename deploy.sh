@@ -1060,6 +1060,9 @@ case "$command" in
         ;;
     esac
     if [[ "$version" == "1" ]]; then
+      # A deployed v1 collector already owns the health port. Stop it before
+      # the contract-v1 bridge starts, or the bridge cannot bind that port.
+      stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
       start_bridge_collector
       wait_for_collector
       advance_contract
