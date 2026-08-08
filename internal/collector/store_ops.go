@@ -52,8 +52,8 @@ func (s *store) ready(ctx context.Context) error {
 	if err := s.pool.QueryRow(ctx, `SELECT version FROM clash_lens_contract WHERE singleton`).Scan(&version); err != nil {
 		return fmt.Errorf("read shared schema contract during readiness check: %w", err)
 	}
-	if version != s.contractVersion {
-		return fmt.Errorf("%w: got %d, want %d", errIncompatibleContract, version, s.contractVersion)
+	if !supportsContractVersion(version, s.maxContractVersion) {
+		return fmt.Errorf("%w: got %d, support through %d", errIncompatibleContract, version, s.maxContractVersion)
 	}
 	return nil
 }
@@ -120,7 +120,7 @@ func (s *store) queueStatistics(ctx context.Context) (queueStatistics, error) {
 		LEFT JOIN collector_jobs AS job
 			ON job.sweep_id = sweep.id
 			AND job.player_id = member.player_id
-			AND job.work_type = 'reset_profile'
+			AND job.work_type IN ('reset_baseline', 'legacy_reset_profile')
 		GROUP BY sweep.id, sweep.created_at
 	`).Scan(&statistics.resetCreatedAt, &statistics.resetMembers, &statistics.resetObserved)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {

@@ -32,8 +32,7 @@ Read the document that matches the question:
 - [Runtime-boundary ADR](docs/adr/0001-separate-collection-from-domain-processing.md) — rationale for separate collection and domain processing.
 - [Collector prototype runbook](docs/collector-prototype.md) — current collector behavior and prototype path.
 - [Fedora deployment runbook](docs/deployment.md) — deployment procedure and host assumptions.
-- [Python prototype](python-prototype/README.md) — result, test commands, and production gaps for the throwaway Python seam.
-- [Python prototype deployment](python-prototype/deployment.md) — isolated rootless Podman runbook for that seam.
+- [Python application](python/README.md) — the Phase 1 Python application layer: test commands and package layout.
 
 ## Product principles
 

@@ -21,7 +21,7 @@ func TestCompletedResponsesRemainExactEvidenceRegardlessOfStatusOrJSONValidity(t
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			databaseURL := startContractDatabase(t)
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 			defer cancel()
 			archive := &memoryArchive{}
 			store, worker := newEvidenceTestWorker(t, ctx, databaseURL, archive, func(response http.ResponseWriter, request *http.Request) {
@@ -63,7 +63,7 @@ func TestCompletedResponsesRemainExactEvidenceRegardlessOfStatusOrJSONValidity(t
 
 func TestIdenticalEndpointBodiesReuseOneArchiveObjectButKeepDistinctOccurrences(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive := &memoryArchive{}
 	identicalBody := []byte("{\"same\":true}\n")

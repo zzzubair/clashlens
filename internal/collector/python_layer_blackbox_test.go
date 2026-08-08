@@ -29,7 +29,7 @@ func TestPythonPrototypeSuiteEmbeddedPostgres(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	projectRoot := filepath.Join(repositoryRootForTest(t), "python-prototype")
+	projectRoot := filepath.Join(repositoryRootForTest(t), "python")
 	environment := map[string]string{
 		"CLASHLENS_TEST_DATABASE_URL": testsupport.StartPostgres(t),
 		"UV_LINK_MODE":                "copy",
@@ -54,7 +54,7 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 
 	databaseURL := testsupport.StartPostgres(t)
 	archive, backend := newFakeS3Server(t)
-	profileBody, err := os.ReadFile(filepath.Join(repositoryRootForTest(t), "python-prototype", "testdata", "legend_i_profile_v1.json"))
+	profileBody, err := os.ReadFile(filepath.Join(repositoryRootForTest(t), "python", "testdata", "legend_i_profile_v1.json"))
 	if err != nil {
 		t.Fatalf("read synthetic profile fixture: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 		"CLASHLENS_ARCHIVE_BUCKET":     "evidence",
 		"CLASHLENS_ARCHIVE_ACCESS_KEY": "prototype-access",
 		"CLASHLENS_ARCHIVE_SECRET_KEY": "prototype-secret",
-		"PYTHONPATH":                   filepath.Join(repositoryRootForTest(t), "python-prototype", "src"),
+		"PYTHONPATH":                   filepath.Join(repositoryRootForTest(t), "python", "src"),
 		"UV_LINK_MODE":                 "copy",
 	}
 	pythonEnvironment := filepath.Join(t.TempDir(), "venv")
@@ -110,7 +110,7 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 	}
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })
 	var state string
-	if err := connection.QueryRow(ctx, "SELECT state FROM python_processing_jobs").Scan(&state); err != nil {
+	if err := connection.QueryRow(ctx, "SELECT status FROM python_processing_jobs").Scan(&state); err != nil {
 		t.Fatalf("read Python job state: %v", err)
 	}
 	if state != "complete" {
@@ -130,7 +130,20 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 	if err := os.WriteFile(secretFile, []byte(base64.RawURLEncoding.EncodeToString(key)+"\n"), 0o600); err != nil {
 		t.Fatalf("write Python API HMAC secret fixture: %v", err)
 	}
-	serve := exec.CommandContext(ctx, filepath.Join(pythonEnvironment, "bin", "python"), "-m", "clashlens_prototype.cli", "serve", "--host", "127.0.0.1", "--port", fmt.Sprint(port), "--secret-file", secretFile)
+	officialKeyFile := filepath.Join(t.TempDir(), "official-api.key")
+	if err := os.WriteFile(officialKeyFile, []byte("synthetic-official-api-key\n"), 0o600); err != nil {
+		t.Fatalf("write Python API official key fixture: %v", err)
+	}
+	serve := exec.CommandContext(
+		ctx,
+		filepath.Join(pythonEnvironment, "bin", "python"),
+		"-m", "clashlens.cli", "serve",
+		"--host", "127.0.0.1",
+		"--port", fmt.Sprint(port),
+		"--secret-file", secretFile,
+		"--official-key-file", officialKeyFile,
+		"--official-proxy-url", "http://127.0.0.1:9",
+	)
 	serve.Dir = repositoryRootForTest(t)
 	serve.Env = pythonPrototypeEnvironment(environment)
 	serve.Stdout = io.Discard
@@ -194,7 +207,7 @@ func stopPythonPrototypeProcess(t *testing.T, command *exec.Cmd) {
 
 func runPythonPrototype(t *testing.T, ctx context.Context, environment map[string]string, arguments ...string) (string, string) {
 	t.Helper()
-	commandArguments := append([]string{"run", "--locked", "--project", "python-prototype", "python", "-m", "clashlens_prototype.cli"}, arguments...)
+	commandArguments := append([]string{"run", "--locked", "--project", "python", "python", "-m", "clashlens.cli"}, arguments...)
 	command := exec.CommandContext(ctx, "uv", commandArguments...)
 	command.Dir = repositoryRootForTest(t)
 	command.Env = pythonPrototypeEnvironment(environment)

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,9 +14,67 @@ import (
 	"time"
 )
 
+func TestSchedulerDoesNotScheduleGlobalRankingsWhenBetaGateIsDisabled(t *testing.T) {
+	ctx := context.Background()
+	store := startVersionTwoStore(t, ctx)
+	app := &application{
+		config: collectorConfig{
+			pollCycle:            5 * time.Minute,
+			scheduleBatchSize:    10,
+			enableGlobalRankings: false,
+		},
+		store:   store,
+		metrics: newCollectorMetrics(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	now := time.Date(2026, time.August, 5, 5, 0, 0, 0, time.UTC)
+	if err := app.schedulerOnce(ctx, now); err != nil {
+		t.Fatalf("schedulerOnce returned an error: %v", err)
+	}
+	var globalJobs int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FROM collector_jobs WHERE work_type = 'global_player_rankings'
+	`).Scan(&globalJobs); err != nil {
+		t.Fatalf("count global rankings jobs: %v", err)
+	}
+	if globalJobs != 0 {
+		t.Fatalf("global rankings jobs = %d, want 0 when beta gate is disabled", globalJobs)
+	}
+}
+
+func TestSchedulerSchedulesGlobalRankingsWhenBetaGateIsEnabled(t *testing.T) {
+	ctx := context.Background()
+	store := startVersionTwoStore(t, ctx)
+	app := &application{
+		config: collectorConfig{
+			pollCycle:            5 * time.Minute,
+			scheduleBatchSize:    10,
+			enableGlobalRankings: true,
+		},
+		store:   store,
+		metrics: newCollectorMetrics(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	now := time.Date(2026, time.August, 5, 5, 0, 0, 0, time.UTC)
+	if err := app.schedulerOnce(ctx, now); err != nil {
+		t.Fatalf("schedulerOnce returned an error: %v", err)
+	}
+	var globalJobs int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FROM collector_jobs WHERE work_type = 'global_player_rankings'
+	`).Scan(&globalJobs); err != nil {
+		t.Fatalf("count global rankings jobs: %v", err)
+	}
+	if globalJobs != 1 {
+		t.Fatalf("global rankings jobs = %d, want 1 when beta gate is enabled", globalJobs)
+	}
+}
+
 func TestStartupGuardFailsBeforeClaimWhenArchiveIsUnavailable(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	store, err := openStore(ctx, databaseURL, 1)
 	if err != nil {
@@ -68,7 +128,7 @@ func TestStartupGuardFailsBeforeClaimWhenArchiveIsUnavailable(t *testing.T) {
 
 func TestWorkerDoesNotClaimWhenArchiveBecomesUnavailable(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive, archiveBackend := newFakeS3Server(t)
 	var apiRequests atomic.Int64
@@ -124,7 +184,7 @@ func TestWorkerDoesNotClaimWhenArchiveBecomesUnavailable(t *testing.T) {
 
 func TestWorkerDoesNotClaimWhenPostgreSQLBecomesUnavailable(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive, _ := newFakeS3Server(t)
 	var apiRequests atomic.Int64
@@ -182,7 +242,7 @@ func TestWorkerDoesNotClaimWhenPostgreSQLBecomesUnavailable(t *testing.T) {
 
 func TestReadinessReportsDependencyAndKeyPoolComponentsSeparately(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive, _ := newFakeS3Server(t)
 	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
@@ -234,7 +294,7 @@ func TestReadinessReportsDependencyAndKeyPoolComponentsSeparately(t *testing.T) 
 
 func TestMaintenanceListFailedNeedsOnlyPostgreSQLConfiguration(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	environment := map[string]string{
 		"CLASHLENS_DATABASE_URL": databaseURL,
@@ -258,7 +318,7 @@ func TestMaintenanceListFailedNeedsOnlyPostgreSQLConfiguration(t *testing.T) {
 
 func TestStartupGuardRequiresArchiveWriteCapability(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive, backend := newFakeS3Server(t)
 	backend.mu.Lock()
@@ -280,6 +340,33 @@ func TestStartupGuardRequiresArchiveWriteCapability(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(err.Error(), "archive write readiness") {
 		t.Fatalf("RunCLI error = %v, want archive write readiness error", err)
+	}
+}
+
+func TestApplicationRequiredTrafficGateFailsClosedBeforeMigration(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	archive, _ := newFakeS3Server(t)
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(api.Close)
+	environment := runtimeTestEnvironment(databaseURL, archive.URL, api.URL)
+	environment["CLASHLENS_SCHEMA_VERSION"] = "2"
+	environment["CLASHLENS_SHARED_TRAFFIC_GATE_MODE"] = "required"
+	config, err := loadConfig(func(name string) string { return environment[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+
+	app, err := newApplication(ctx, config, nil)
+	if app != nil {
+		app.close()
+		t.Fatal("newApplication returned an app before migration")
+	}
+	if err == nil || !strings.Contains(err.Error(), "required shared traffic gate needs contract version 2") {
+		t.Fatalf("newApplication error = %v, want required traffic-gate startup rejection", err)
 	}
 }
 

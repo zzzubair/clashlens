@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -171,8 +172,17 @@ func (w *worker) collectEndpoint(
 	endpoint endpointName,
 ) error {
 	for {
-		key, err := w.keys.acquire(ctx, job.pool)
+		var key APIKey
+		var err error
+		if job.pool == interactivePool {
+			key, err = w.keys.sharedInteractiveKey()
+		} else {
+			key, err = w.keys.acquire(ctx, job.pool)
+		}
 		if err != nil {
+			return err
+		}
+		if err := w.acquireSharedPermitForRequest(ctx, key); err != nil {
 			return err
 		}
 		requestCount, err := w.store.beginEndpointRequest(ctx, job, attemptID, endpoint, time.Now().UTC())
@@ -223,11 +233,39 @@ func (w *worker) collectEndpoint(
 		}
 		w.config.metrics.recordAPIOutcome(string(endpoint), HTTPStatusClass(response.statusCode))
 		authenticationFailure := authenticationFailureStatus(response.statusCode)
+		if key.Pool == interactivePool {
+			authenticationFailure = sharedCredentialAuthenticationFailure(response)
+		}
 		if authenticationFailure {
+			if key.Pool == interactivePool {
+				if err := w.store.quarantineSharedCredential(
+					ctx,
+					bearerTokenFingerprint(key.Secret),
+					"collector:worker",
+					"official_api_authentication_failure",
+				); err != nil {
+					return err
+				}
+			}
 			if err := w.keys.quarantine(key.Label); err != nil {
 				return err
 			}
 			w.config.metrics.recordQuarantine(key.Label, string(key.Pool))
+		}
+		if response.statusCode == http.StatusTooManyRequests && key.Pool == interactivePool {
+			cooldown := time.Second
+			if parsed, ok := parseRetryAfter(response.responseCompletedAt, response.headers["Retry-After"]); ok && parsed > 0 {
+				cooldown = parsed
+			}
+			if err := w.store.cooldownSharedCredential(
+				ctx,
+				bearerTokenFingerprint(key.Secret),
+				cooldown,
+				"collector:worker",
+				"official_api_429",
+			); err != nil {
+				return err
+			}
 		}
 		digest := sha256.Sum256(response.body)
 		hash := hex.EncodeToString(digest[:])
@@ -344,12 +382,70 @@ func (w *worker) collectEndpoint(
 	}
 }
 
+func (w *worker) acquireSharedPermitForRequest(ctx context.Context, key APIKey) error {
+	if key.Pool != interactivePool {
+		return nil
+	}
+	contractVersion, err := w.store.currentContractVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if contractVersion < 2 {
+		return nil
+	}
+	fingerprint := bearerTokenFingerprint(key.Secret)
+	if err := w.store.registerSharedCredential(ctx, fingerprint, 29, 1, 30, "collector:worker"); err != nil {
+		return err
+	}
+	for {
+		permit, err := w.store.acquireSharedPermit(ctx, fingerprint, "go")
+		if err != nil {
+			return err
+		}
+		if permit.granted {
+			return nil
+		}
+		if permit.state == "quarantined" || permit.state == "retired" {
+			_ = w.keys.quarantine(key.Label)
+			return fmt.Errorf("%w: shared interactive credential is %s", errNoHealthyKey, permit.state)
+		}
+		wait := 10 * time.Millisecond
+		if permit.nextEligibleAt != nil {
+			wait = permit.nextEligibleAt.Sub(permit.databaseTime)
+			if wait < 10*time.Millisecond {
+				wait = 10 * time.Millisecond
+			}
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func retryableHTTPStatus(statusCode int) bool {
 	return statusCode == http.StatusTooManyRequests || statusCode >= 500
 }
 
 func authenticationFailureStatus(statusCode int) bool {
 	return statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden
+}
+
+func sharedCredentialAuthenticationFailure(response officialResponse) bool {
+	if !authenticationFailureStatus(response.statusCode) {
+		return false
+	}
+	var body map[string]string
+	if err := json.Unmarshal(response.body, &body); err != nil || len(body) != 2 {
+		return false
+	}
+	return (body["reason"] == "accessDenied" && body["message"] == "Invalid authorization") ||
+		(body["reason"] == "accessDenied.invalidIp" && body["message"] == "Invalid IP address")
 }
 
 func HTTPStatusClass(statusCode int) string {

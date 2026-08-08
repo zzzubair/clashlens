@@ -1,0 +1,6 @@
+{
+  "http_status": 200,
+  "body_text": "{malformed",
+  "expected_outcome": "verification_unavailable",
+  "expected_key_action": "none"
+}

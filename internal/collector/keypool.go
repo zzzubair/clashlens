@@ -33,11 +33,10 @@ type keyState struct {
 }
 
 type keyPool struct {
-	mu                  sync.Mutex
-	keys                []*keyState
-	requestsPerSecond   int
-	allowDegradedNormal bool
-	next                int
+	mu                sync.Mutex
+	keys              []*keyState
+	requestsPerSecond int
+	next              int
 }
 
 type APIKeyStatus struct {
@@ -48,7 +47,10 @@ type APIKeyStatus struct {
 	Cooldown             time.Duration
 }
 
-func newKeyPool(keys []APIKey, requestsPerSecond int, allowDegradedNormal bool) (*keyPool, error) {
+func newKeyPool(keys []APIKey, requestsPerSecond int, unsafeNormalFallback bool) (*keyPool, error) {
+	if unsafeNormalFallback {
+		return nil, errors.New("interactive API keys cannot be used for normal work")
+	}
 	if requestsPerSecond < 1 || requestsPerSecond > 30 {
 		return nil, errors.New("requests per second per key must be between 1 and 30")
 	}
@@ -74,9 +76,8 @@ func newKeyPool(keys []APIKey, requestsPerSecond int, allowDegradedNormal bool) 
 		states = append(states, &keyState{APIKey: key})
 	}
 	return &keyPool{
-		keys:                states,
-		requestsPerSecond:   requestsPerSecond,
-		allowDegradedNormal: allowDegradedNormal,
+		keys:              states,
+		requestsPerSecond: requestsPerSecond,
 	}, nil
 }
 
@@ -113,6 +114,20 @@ func (p *keyPool) tryAcquire(now time.Time, requestedPool capacityPool) (APIKey,
 		return APIKey{}, 0, errNoHealthyKey
 	}
 	return APIKey{}, minimumWait, errRateLimited
+}
+
+// sharedInteractiveKey selects the configured shared key without applying the
+// local limiter. PostgreSQL is the only rate authority for this key.
+func (p *keyPool) sharedInteractiveKey() (APIKey, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, state := range p.keys {
+		if state.Pool == interactivePool && !state.quarantined {
+			return state.APIKey, nil
+		}
+	}
+	return APIKey{}, fmt.Errorf("%w for %s pool", errNoHealthyKey, interactivePool)
 }
 
 func (p *keyPool) quarantine(label string) error {
@@ -173,10 +188,7 @@ func (p *keyPool) readyForPool(requestedPool capacityPool) error {
 }
 
 func (p *keyPool) matchesPool(keyPool, requestedPool capacityPool) bool {
-	if keyPool == requestedPool {
-		return true
-	}
-	return requestedPool == normalPool && keyPool == interactivePool && p.allowDegradedNormal
+	return keyPool == requestedPool
 }
 
 func trimRequestWindow(requests []time.Time, now time.Time) []time.Time {

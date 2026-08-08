@@ -1,0 +1,6 @@
+{
+  "http_status": 503,
+  "body": {"reason": "serviceUnavailable", "message": "Service unavailable"},
+  "expected_outcome": "verification_unavailable",
+  "expected_key_action": "none"
+}

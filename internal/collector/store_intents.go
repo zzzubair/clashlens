@@ -33,6 +33,27 @@ func (s *store) enqueueInteractive(
 	if cooldown < 0 {
 		return interactiveIntentResult{}, errors.New("interactive cooldown must not be negative")
 	}
+	if s.contractVersion >= 2 {
+		var result interactiveIntentResult
+		var attemptID pgtype.Int8
+		var outcome string
+		if err := s.pool.QueryRow(ctx, `
+			SELECT job_id, attempt_id, outcome, reused
+			FROM clashlens_enqueue_interactive($1, $2, $3, $4)
+		`, workType, normalizedTag, int(cooldown/time.Second), bypassCooldown).Scan(
+			&result.jobID,
+			&attemptID,
+			&outcome,
+			&result.reused,
+		); err != nil {
+			return interactiveIntentResult{}, fmt.Errorf("enqueue shared interactive intent: %w", err)
+		}
+		_ = outcome
+		if attemptID.Valid {
+			result.attemptID = attemptID.Int64
+		}
+		return result, nil
+	}
 
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -42,6 +63,13 @@ func (s *store) enqueueInteractive(
 
 	if _, err := transaction.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, normalizedTag); err != nil {
 		return interactiveIntentResult{}, fmt.Errorf("lock interactive tag: %w", err)
+	}
+	if _, err := transaction.Exec(ctx, `
+		INSERT INTO players (normalized_tag, active)
+		VALUES ($1, false)
+		ON CONFLICT (normalized_tag) DO NOTHING
+	`, normalizedTag); err != nil {
+		return interactiveIntentResult{}, fmt.Errorf("register submitted player tag: %w", err)
 	}
 
 	var result interactiveIntentResult
@@ -214,6 +242,10 @@ func (s *store) scheduleResetSweep(ctx context.Context, boundary time.Time) (int
 	if boundary.Hour() != 5 || boundary.Minute() != 0 || boundary.Second() != 0 || boundary.Nanosecond() != 0 {
 		return 0, false, errors.New("reset sweep boundary must be exactly 05:00 UTC")
 	}
+	contractVersion, err := s.currentContractVersion(ctx)
+	if err != nil {
+		return 0, false, err
+	}
 
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -222,6 +254,7 @@ func (s *store) scheduleResetSweep(ctx context.Context, boundary time.Time) (int
 	defer func() { _ = transaction.Rollback(ctx) }()
 
 	var sweepID int64
+	created := true
 	err = transaction.QueryRow(ctx, `
 		INSERT INTO collector_reset_sweeps (boundary_at)
 		VALUES ($1)
@@ -229,59 +262,149 @@ func (s *store) scheduleResetSweep(ctx context.Context, boundary time.Time) (int
 		RETURNING id
 	`, boundary).Scan(&sweepID)
 	if errors.Is(err, pgx.ErrNoRows) {
+		created = false
 		if err := transaction.QueryRow(ctx, `
-			SELECT id FROM collector_reset_sweeps WHERE boundary_at = $1
+			SELECT id FROM collector_reset_sweeps
+			WHERE boundary_at = $1
+			FOR UPDATE
 		`, boundary).Scan(&sweepID); err != nil {
 			return 0, false, fmt.Errorf("find existing reset sweep: %w", err)
 		}
-		if err := transaction.Commit(ctx); err != nil {
-			return 0, false, fmt.Errorf("commit existing reset sweep lookup: %w", err)
-		}
-		return sweepID, false, nil
-	}
-	if err != nil {
+	} else if err != nil {
 		return 0, false, fmt.Errorf("create reset sweep: %w", err)
 	}
 
-	if _, err := transaction.Exec(ctx, `
-		INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
-		SELECT $1, id FROM players WHERE active
-	`, sweepID); err != nil {
-		return 0, false, fmt.Errorf("fix reset sweep membership: %w", err)
-	}
-	if _, err := transaction.Exec(ctx, `
-		INSERT INTO collector_jobs (
-			work_type,
-			player_id,
-			normalized_tag,
-			capacity_pool,
-			priority,
-			due_at,
-			coalescing_key,
-			sweep_id,
-			status
-		)
-		SELECT
-			'reset_profile',
-			player.id,
-			player.normalized_tag,
-			'normal',
-			400,
-			$2,
-			'reset:' || $1::bigint::text || ':' || player.id::text,
-			$1::bigint,
-			'pending'
-		FROM collector_reset_sweep_members AS member
-		JOIN players AS player ON player.id = member.player_id
-		WHERE member.sweep_id = $1::bigint
-	`, sweepID, boundary); err != nil {
-		return 0, false, fmt.Errorf("create reset profile jobs: %w", err)
+	if contractVersion >= 2 {
+		// A retry repairs work that was not committed before a scheduler restart.
+		// The sweep ID and each baseline identity remain stable across retries.
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
+			SELECT $1, id FROM players WHERE active
+			ON CONFLICT (sweep_id, player_id) DO NOTHING
+		`, sweepID); err != nil {
+			return 0, false, fmt.Errorf("fix paired reset sweep membership: %w", err)
+		}
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO collector_reset_baseline_sweeps (
+				reset_sweep_id, player_id, boundary_at, evidence_kind, state
+			)
+			SELECT $1, member.player_id, $2, 'paired_v2', 'pending'
+			FROM collector_reset_sweep_members AS member
+			WHERE member.sweep_id = $1
+			ON CONFLICT (reset_sweep_id, player_id) DO NOTHING
+		`, sweepID, boundary); err != nil {
+			return 0, false, fmt.Errorf("create paired reset baselines: %w", err)
+		}
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO collector_jobs (
+				work_type, scope, player_id, normalized_tag, capacity_pool,
+				priority, due_at, coalescing_key, sweep_id,
+				reset_baseline_sweep_id, status
+			)
+			SELECT 'reset_baseline',
+				'player',
+				player.id,
+				player.normalized_tag,
+				'normal',
+				400,
+				$2,
+				'reset-baseline:' || $1::bigint::text || ':' || player.id::text,
+				$1,
+				baseline.id,
+				'pending'
+			FROM collector_reset_sweep_members AS member
+			JOIN players AS player ON player.id = member.player_id
+			JOIN collector_reset_baseline_sweeps AS baseline
+			  ON baseline.reset_sweep_id = member.sweep_id
+			 AND baseline.player_id = member.player_id
+			WHERE member.sweep_id = $1
+			  AND baseline.evidence_kind = 'paired_v2'
+			  AND NOT EXISTS (
+				  SELECT 1
+				  FROM collector_jobs AS existing
+				  WHERE existing.sweep_id = $1
+				    AND existing.reset_baseline_sweep_id = baseline.id
+				    AND existing.work_type = 'reset_baseline'
+			  )
+			ON CONFLICT DO NOTHING
+		`, sweepID, boundary); err != nil {
+			return 0, false, fmt.Errorf("create paired reset jobs: %w", err)
+		}
+	} else if created {
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
+			SELECT $1, id FROM players WHERE active
+		`, sweepID); err != nil {
+			return 0, false, fmt.Errorf("create reset sweep membership: %w", err)
+		}
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO collector_jobs (
+				work_type, player_id, normalized_tag, capacity_pool, priority,
+				due_at, coalescing_key, sweep_id, status
+			)
+			SELECT 'reset_profile',
+				player.id,
+				player.normalized_tag,
+				'normal',
+				400,
+				$2,
+				'reset:' || $1::bigint::text || ':' || player.id::text,
+				$1,
+				'pending'
+			FROM collector_reset_sweep_members AS member
+			JOIN players AS player ON player.id = member.player_id
+			WHERE member.sweep_id = $1
+		`, sweepID, boundary); err != nil {
+			return 0, false, fmt.Errorf("create legacy reset profile jobs: %w", err)
+		}
 	}
 
 	if err := transaction.Commit(ctx); err != nil {
 		return 0, false, fmt.Errorf("commit reset sweep: %w", err)
 	}
-	return sweepID, true, nil
+	return sweepID, created, nil
+}
+
+func (s *store) currentContractVersion(ctx context.Context) (int, error) {
+	var version int
+	if err := s.pool.QueryRow(ctx, `
+		SELECT version FROM clash_lens_contract WHERE singleton
+	`).Scan(&version); err != nil {
+		return 0, fmt.Errorf("read current contract version: %w", err)
+	}
+	return version, nil
+}
+
+func (s *store) scheduleGlobalRankings(ctx context.Context, now time.Time, cycle time.Duration) (bool, error) {
+	if cycle != 5*time.Minute {
+		return false, errors.New("global rankings cycle must be exactly five minutes")
+	}
+	contractVersion, err := s.currentContractVersion(ctx)
+	if err != nil {
+		return false, err
+	}
+	if contractVersion < 2 {
+		return false, nil
+	}
+	cycleStart := now.UTC().Truncate(cycle)
+	priority := 300
+	if cycleStart.Hour() == 5 && cycleStart.Minute() == 0 {
+		priority = 400
+	}
+	command, err := s.pool.Exec(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, scope, player_id, normalized_tag, capacity_pool,
+			priority, due_at, coalescing_key, required_endpoint, status
+		) VALUES (
+			'global_player_rankings', 'global', NULL, NULL, 'normal',
+			$1, $2, $3, 'global_player_rankings', 'pending'
+		)
+		ON CONFLICT DO NOTHING
+	`, priority, cycleStart, "global-player-rankings:"+cycleStart.Format(time.RFC3339))
+	if err != nil {
+		return false, fmt.Errorf("schedule global player rankings: %w", err)
+	}
+	return command.RowsAffected() == 1, nil
 }
 
 func resetBoundaryAtOrBefore(now time.Time) time.Time {

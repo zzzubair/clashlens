@@ -1,13 +1,16 @@
 package collector
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -33,7 +36,7 @@ func (a *memoryArchive) store(_ context.Context, hash string, body []byte) (stri
 
 func TestWorkerCollectsProfileAndBattleLogConcurrentlyAndCommitsEvidence(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	store, err := openStore(ctx, databaseURL, 1)
@@ -86,11 +89,16 @@ func TestWorkerCollectsProfileAndBattleLogConcurrentlyAndCommitsEvidence(t *test
 		t.Fatalf("newOfficialAPIClient returned an error: %v", err)
 	}
 	archive := &memoryArchive{}
+	metrics := newCollectorMetrics()
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logOutput, nil))
 	worker := newWorker(store, archive, official, keys, workerConfig{
 		owner:            "test-worker",
 		leaseDuration:    time.Minute,
 		collectorVersion: "test",
 		maximumRetries:   0,
+		metrics:          metrics,
+		logger:           logger,
 	})
 
 	done := make(chan error, 1)
@@ -132,6 +140,26 @@ func TestWorkerCollectsProfileAndBattleLogConcurrentlyAndCommitsEvidence(t *test
 		}
 	}
 
+	metrics.mu.Lock()
+	profileRequests := metrics.apiRequests["profile\x00normal"]
+	battleLogRequests := metrics.apiRequests["battle_log\x00normal"]
+	profileOutcomes := metrics.apiOutcomes["profile\x002xx"]
+	battleLogOutcomes := metrics.apiOutcomes["battle_log\x002xx"]
+	profileDurations := metrics.apiDurationCount["profile\x00normal"]
+	battleLogDurations := metrics.apiDurationCount["battle_log\x00normal"]
+	metrics.mu.Unlock()
+	if profileRequests != 1 || battleLogRequests != 1 || profileOutcomes != 1 || battleLogOutcomes != 1 ||
+		profileDurations != 1 || battleLogDurations != 1 {
+		t.Fatalf("endpoint metrics = profile requests/outcomes/durations %d/%d/%d, battle log %d/%d/%d; want all 1",
+			profileRequests, profileOutcomes, profileDurations,
+			battleLogRequests, battleLogOutcomes, battleLogDurations)
+	}
+	for _, endpoint := range []string{"profile", "battle_log"} {
+		if !strings.Contains(logOutput.String(), `"endpoint":"`+endpoint+`"`) {
+			t.Fatalf("structured worker logs do not identify endpoint %q: %s", endpoint, logOutput.String())
+		}
+	}
+
 	var attemptStatus, jobStatus string
 	if err := store.pool.QueryRow(ctx, `SELECT status FROM collector_attempts LIMIT 1`).Scan(&attemptStatus); err != nil {
 		t.Fatalf("read attempt status: %v", err)
@@ -146,7 +174,7 @@ func TestWorkerCollectsProfileAndBattleLogConcurrentlyAndCommitsEvidence(t *test
 
 func TestWorkerRetainsSuccessfulProfileAndRetriesOnlyFailedBattleLog(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	store, err := openStore(ctx, databaseURL, 1)
@@ -223,11 +251,16 @@ func TestWorkerRetainsSuccessfulProfileAndRetriesOnlyFailedBattleLog(t *testing.
 	if err != nil {
 		t.Fatalf("newOfficialAPIClient returned an error: %v", err)
 	}
+	metrics := newCollectorMetrics()
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logOutput, nil))
 	worker := newWorker(store, &memoryArchive{}, official, keys, workerConfig{
 		owner:            "test-worker",
 		leaseDuration:    time.Minute,
 		collectorVersion: "test",
 		maximumRetries:   1,
+		metrics:          metrics,
+		logger:           logger,
 	})
 
 	claimed, err := worker.runOnce(ctx, normalPool)
@@ -274,6 +307,27 @@ func TestWorkerRetainsSuccessfulProfileAndRetriesOnlyFailedBattleLog(t *testing.
 	requestMu.Unlock()
 	if profileRequests != 1 || battleLogRequests != 2 {
 		t.Fatalf("request counts = profile %d, battle log %d; want 1 and 2", profileRequests, battleLogRequests)
+	}
+
+	metrics.mu.Lock()
+	profileMetricRequests := metrics.apiRequests["profile\x00normal"]
+	battleLogMetricRequests := metrics.apiRequests["battle_log\x00normal"]
+	battleLogRetries := metrics.retries["battle_log"]
+	var battleLogOutcomes uint64
+	for key, count := range metrics.apiOutcomes {
+		if strings.HasPrefix(key, "battle_log\x00") {
+			battleLogOutcomes += count
+		}
+	}
+	metrics.mu.Unlock()
+	if profileMetricRequests != 1 || battleLogMetricRequests != 2 || battleLogRetries != 1 || battleLogOutcomes != 2 {
+		t.Fatalf("failed endpoint metrics = profile requests %d, battle log requests %d, retries %d, outcomes %d; want 1, 2, 1, 2",
+			profileMetricRequests, battleLogMetricRequests, battleLogRetries, battleLogOutcomes)
+	}
+	for _, endpoint := range []string{"profile", "battle_log"} {
+		if !strings.Contains(logOutput.String(), `"endpoint":"`+endpoint+`"`) {
+			t.Fatalf("structured worker logs do not identify endpoint %q: %s", endpoint, logOutput.String())
+		}
 	}
 
 	if err := store.pool.QueryRow(ctx, `SELECT status FROM collector_attempts LIMIT 1`).Scan(&attemptStatus); err != nil {

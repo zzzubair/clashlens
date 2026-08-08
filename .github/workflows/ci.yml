@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go build, vet, and short tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.embedded-postgres-go
+          key: embedded-postgres-go-${{ runner.os }}
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      # Short mode skips the embedded-PostgreSQL and uv subprocess suites;
+      # the postgres job below owns those and installs uv there.
+      - name: Test
+        run: go test -short -count=1 ./...
+
+  python:
+    name: Python lint, compile, and unit tests
+    runs-on: ubuntu-latest
+    # One locked environment for every uv step in this job: sync, Ruff,
+    # compile, and the unit tests must all resolve the same environment.
+    env:
+      UV_PROJECT_ENVIRONMENT: /tmp/clashlens-ci-venv
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Sync locked dependencies
+        working-directory: python
+        run: uv sync --locked
+      - name: Ruff
+        working-directory: python
+        run: uv run ruff check .
+      - name: Compile
+        working-directory: python
+        run: uv run python -m compileall -q src
+      - name: Unit tests
+        working-directory: python
+        run: uv run pytest -q
+
+  postgres:
+    name: Go collector suite on embedded PostgreSQL (includes uv Python suites)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.embedded-postgres-go
+          key: embedded-postgres-go-${{ runner.os }}
+      - name: Go collector suite with embedded PostgreSQL
+        run: go test ./internal/collector -count=1 -v -timeout=1200s
+
+  deploy-shell:
+    name: Deployment shell seam
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deployment command seam
+        run: bash deploy_test.sh

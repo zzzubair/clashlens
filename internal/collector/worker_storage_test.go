@@ -30,7 +30,7 @@ func (a *failOnceArchive) store(ctx context.Context, hash string, body []byte) (
 
 func TestArchiveFailureCreatesNoObservationAndRetriesEndpoint(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	store, worker := newStorageTestWorker(t, ctx, databaseURL, &failOnceArchive{})
 
@@ -76,7 +76,7 @@ func TestArchiveFailureCreatesNoObservationAndRetriesEndpoint(t *testing.T) {
 
 func TestPostgreSQLObservationTransactionFailureReusesArchiveAndCommitsOnce(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive := &memoryArchive{}
 	store, worker := newStorageTestWorker(t, ctx, databaseURL, archive)

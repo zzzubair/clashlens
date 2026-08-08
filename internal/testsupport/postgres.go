@@ -4,6 +4,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
@@ -35,7 +36,7 @@ func StartPostgres(t testing.TB) string {
 			t.Errorf("stop embedded PostgreSQL: %v", err)
 		}
 	})
-	return config.GetConnectionURL()
+	return strings.Replace(config.GetConnectionURL(), "localhost", "127.0.0.1", 1)
 }
 
 func unusedPort(t testing.TB) int {

@@ -16,7 +16,7 @@ Clash Lens has a confirmed Phase 1 architecture shape and runtime split. Postgre
 
 The accepted shape is one repository and one logical product with independently running roles, a separate raw-evidence archive, durable staggered ingestion, and versioned precomputed analytics. Technology choices must preserve the product and domain rules rather than redefine them.
 
-The `python-prototype/` directory is a throwaway prototype slice. Its README says that it does not define the production Python application or a production database migration. Use it as implementation evidence for its stated seam only, not as a production contract.
+The `python/` directory is a throwaway prototype slice. Its README says that it does not define the production Python application or a production database migration. Use it as implementation evidence for its stated seam only, not as a production contract.
 
 ## Product and domain constraints
 
@@ -88,10 +88,10 @@ provider-subject:<provider-subject-b64url-or-empty>
 
 ### Caller and operation authorization
 
-- For a request made for a signed-in user, Python must resolve the proof's Discord or Google provider and provider user ID to the Python-owned Clash Lens account and enforce the operation there. Do not accept a caller-supplied Clash Lens account ID as proof of ownership.
+- For a request made for a signed-in beta user, Python must resolve only a Google provider user ID to the Python-owned Clash Lens account and enforce the operation there. Do not accept a caller-supplied Clash Lens account ID as proof of ownership.
 - Deny every caller-operation pair unless this Phase 1 matrix allows it. A valid signature never widens the row.
-- The TypeScript backend without a user may use public player and user pages, leaderboards, analytics, and tag or refresh submission and status. With a resolved user, it may also manage only that user's account, saved tags, groups, verified player links, and exports.
-- The Discord bot may use public reads and tag or refresh submission and status; with a resolved Discord user it may also read that user's account summary, saved tags, and groups, but it may not mutate accounts, verify player links, or create exports.
+- During beta, the TypeScript backend without a user may use public player and user pages, leaderboards, analytics, and tag or refresh submission and status. With a resolved Google user, it may also manage only that user's account, saved tags, groups, and verified player links. Exports are disabled.
+- Discord login and the Discord bot are disabled during beta. They have no private-API operations.
 - Future integrations start with no operations until an explicit reviewed row is added.
 - Operator maintenance has no private-API operation and uses the host-local boundary below.
 
@@ -104,6 +104,15 @@ Consume each request ID once for account changes, player-account verification, r
 - Before the official call, atomically reserve the request ID with the trusted caller and user identity, method, request target, and player tag. A reserved verification request ID permanently names that non-secret operation, not the submitted token bytes.
 - A matching reuse returns the stored sanitized result or an `in_progress` or `verification_unavailable` status without parsing or using a newly supplied token and without calling Supercell again. A caller that wants to submit a different token must use a new request ID.
 - A crash after reservation or an ambiguous official result becomes `verification_unavailable`; it is never retried with that token. Reuse with a different non-secret binding is a conflict and changes nothing.
+- During beta, a valid verification for a player tag already linked to another account does not move the link. Preserve the current owner and return `support_required` with one bounded opaque candidate identity. Do not return an internal numeric ID.
+
+### Support transfer
+
+- A support transfer is a separate fresh host action. It requires the exact opaque candidate identity, player tag, source and destination account public UUIDs, and a non-secret reason.
+- Allow it only through the root-owned `deploy/support-transfer` wrapper. The wrapper must run through a narrow `sudo` rule, derive the operator identity from `SUDO_USER` and `SUDO_UID`, verify a root-owned operator allowlist, and return only a sanitized status.
+- The wrapper uses a root-only PostgreSQL service file with the dedicated `clashlens_support_transfer` role. It calls only the transfer function. It does not receive a player token, API role credential, worker role credential, bot role credential, or collector role credential.
+- The transfer function locks the candidate and current link, checks the exact candidate binding and expiry, moves the link once, consumes the candidate, and writes one audit row with the operator identity and reason. The same operator and reason may repeat safely. A changed operator or reason is a conflict.
+- Grant the support role only schema usage and execute access to the security-definer transfer function. Do not grant it direct table or sequence access. Do not grant the function to application, worker, bot, collector, browser, or public roles.
 
 Use FastAPI for the private HTTP API, Pydantic for request and response validation, psycopg 3 with direct SQL for PostgreSQL access, discord.py for the bot, pytest for tests, and uv for dependency locking. Do not add Django, Celery, Redis, or an SQLAlchemy ORM in Phase 1.
 

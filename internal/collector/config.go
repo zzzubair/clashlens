@@ -1,8 +1,10 @@
 package collector
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"strconv"
@@ -11,36 +13,37 @@ import (
 )
 
 type collectorConfig struct {
-	databaseURL               string
-	schemaVersion             int
-	archiveEndpoint           string
-	archiveSecure             bool
-	archiveBucket             string
-	archiveAccessKey          string
-	archiveSecretKey          string
-	officialAPIOrigin         string
-	officialAPIProxyURL       string
-	allowInsecureTestHTTP     bool
-	keys                      []APIKey
-	allowInteractiveForNormal bool
-	requestsPerSecondPerKey   int
-	workersPerKey             int
-	pollCycle                 time.Duration
-	scheduleBatchSize         int
-	leaseDuration             time.Duration
-	maximumRetries            int
-	retryBaseDelay            time.Duration
-	retryMaximumDelay         time.Duration
-	retryJitterFraction       float64
-	interactiveCooldown       time.Duration
-	schedulerInterval         time.Duration
-	workerIdleInterval        time.Duration
-	connectionTimeout         time.Duration
-	responseHeaderTimeout     time.Duration
-	totalRequestTimeout       time.Duration
-	maximumResponseBytes      int64
-	healthListenAddress       string
-	collectorVersion          string
+	databaseURL             string
+	schemaVersion           int
+	trafficGateMode         trafficGateMode
+	archiveEndpoint         string
+	archiveSecure           bool
+	archiveBucket           string
+	archiveAccessKey        string
+	archiveSecretKey        string
+	officialAPIOrigin       string
+	officialAPIProxyURL     string
+	allowInsecureTestHTTP   bool
+	enableGlobalRankings    bool
+	keys                    []APIKey
+	requestsPerSecondPerKey int
+	workersPerKey           int
+	pollCycle               time.Duration
+	scheduleBatchSize       int
+	leaseDuration           time.Duration
+	maximumRetries          int
+	retryBaseDelay          time.Duration
+	retryMaximumDelay       time.Duration
+	retryJitterFraction     float64
+	interactiveCooldown     time.Duration
+	schedulerInterval       time.Duration
+	workerIdleInterval      time.Duration
+	connectionTimeout       time.Duration
+	responseHeaderTimeout   time.Duration
+	totalRequestTimeout     time.Duration
+	maximumResponseBytes    int64
+	healthListenAddress     string
+	collectorVersion        string
 }
 
 type maintenanceConfig struct {
@@ -82,6 +85,7 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	config := collectorConfig{
 		databaseURL:             databaseURL,
 		schemaVersion:           1,
+		trafficGateMode:         bridgeTrafficGateMode,
 		archiveEndpoint:         strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_ENDPOINT")),
 		archiveBucket:           strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_BUCKET")),
 		archiveAccessKey:        archiveAccessKey,
@@ -120,16 +124,15 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	if config.allowInsecureTestHTTP, err = optionalBool(getenv, "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN", false); err != nil {
 		return collectorConfig{}, err
 	}
+	if config.enableGlobalRankings, err = optionalBool(getenv, "CLASHLENS_ENABLE_GLOBAL_RANKINGS", false); err != nil {
+		return collectorConfig{}, err
+	}
 	allowReducedPools, err := optionalBool(getenv, "CLASHLENS_ALLOW_REDUCED_KEY_POOLS", false)
 	if err != nil {
 		return collectorConfig{}, err
 	}
-	if config.allowInteractiveForNormal, err = optionalBool(
-		getenv,
-		"CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL",
-		false,
-	); err != nil {
-		return collectorConfig{}, err
+	if strings.TrimSpace(getenv("CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL")) != "" {
+		return collectorConfig{}, errors.New("CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL is not supported")
 	}
 
 	for _, setting := range []struct {
@@ -157,6 +160,16 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	}
 	if err := optionalInt(getenv, "CLASHLENS_SCHEMA_VERSION", &config.schemaVersion); err != nil {
 		return collectorConfig{}, err
+	}
+	if config.schemaVersion >= 2 {
+		config.trafficGateMode = requiredTrafficGateMode
+	}
+	if value := strings.TrimSpace(getenv("CLASHLENS_SHARED_TRAFFIC_GATE_MODE")); value != "" {
+		mode := trafficGateMode(value)
+		if mode != bridgeTrafficGateMode && mode != requiredTrafficGateMode {
+			return collectorConfig{}, errors.New("CLASHLENS_SHARED_TRAFFIC_GATE_MODE must be bridge or required")
+		}
+		config.trafficGateMode = mode
 	}
 	if err := optionalInt(getenv, "CLASHLENS_SCHEDULE_BATCH_SIZE", &config.scheduleBatchSize); err != nil {
 		return collectorConfig{}, err
@@ -206,6 +219,9 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	if !allowReducedPools && len(interactiveKeys) != 1 {
 		return collectorConfig{}, errors.New("configure exactly one interactive API key or explicitly allow reduced key pools")
 	}
+	if len(interactiveKeys) != 1 {
+		return collectorConfig{}, errors.New("configure exactly one shared interactive API key")
+	}
 	if len(normalKeys) == 0 || len(interactiveKeys) == 0 {
 		return collectorConfig{}, errors.New("normal and interactive API key pools must each contain at least one key")
 	}
@@ -242,6 +258,17 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 		return collectorConfig{}, errors.New("retry maximum delay must not be less than retry base delay")
 	}
 	return config, nil
+}
+
+func logConfigState(ctx context.Context, logger *slog.Logger, config collectorConfig) {
+	if logger == nil {
+		return
+	}
+	logger.InfoContext(
+		ctx,
+		"collector configuration loaded",
+		"global_rankings_enabled", config.enableGlobalRankings,
+	)
 }
 
 func secretSetting(getenv func(string) string, name string) (string, error) {
@@ -282,9 +309,9 @@ func parseConfiguredKeys(inline, fileSpecs string, pool capacityPool) ([]APIKey,
 		if err != nil {
 			return nil, fmt.Errorf("read API key file for label %q: %w", label, err)
 		}
-		secret := strings.TrimSpace(string(contents))
-		if secret == "" {
-			return nil, fmt.Errorf("API key file for label %q is empty", label)
+		secret, parseError := parseBearerTokenBytes(contents)
+		if parseError != nil {
+			return nil, fmt.Errorf("API key file for label %q: %w", label, parseError)
 		}
 		keys = append(keys, APIKey{Label: label, Secret: secret, Pool: pool})
 	}

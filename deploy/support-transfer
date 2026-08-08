@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+# Run through a sudo rule that permits only this root-owned wrapper.
+set -euo pipefail
+
+PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+umask 077
+
+readonly SUPPORT_SERVICE_FILE='/etc/clashlens/support-transfer.pg_service.conf'
+readonly OPERATOR_ALLOWLIST='/etc/clashlens/support-transfer-operators'
+readonly PSQL='/usr/bin/psql'
+
+status_denied() {
+    printf '%s\n' 'support_transfer_status=denied'
+    exit 1
+}
+
+status_unavailable() {
+    printf '%s\n' 'support_transfer_status=unavailable'
+    exit 1
+}
+
+protected_root_file() {
+    local path=$1
+    local owner
+    local mode
+
+    [[ -f "$path" && -r "$path" ]] || return 1
+    owner=$(/usr/bin/stat -c '%u' -- "$path") || return 1
+    mode=$(/usr/bin/stat -c '%a' -- "$path") || return 1
+    [[ "$owner" == '0' && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0077) == 0 ))
+}
+
+protected_root_directory() {
+    local path=$1
+    local owner
+    local mode
+
+    [[ -d "$path" && -x "$path" ]] || return 1
+    owner=$(/usr/bin/stat -c '%u' -- "$path") || return 1
+    mode=$(/usr/bin/stat -c '%a' -- "$path") || return 1
+    [[ "$owner" == '0' && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0022) == 0 ))
+}
+
+script_path=$(/usr/bin/readlink -f -- "${BASH_SOURCE[0]}") || status_denied
+[[ "$(/usr/bin/id -u)" == '0' ]] || status_denied
+protected_root_file "$script_path" || status_denied
+protected_root_directory "${SUPPORT_SERVICE_FILE%/*}" || status_denied
+protected_root_file "$SUPPORT_SERVICE_FILE" || status_denied
+protected_root_file "$OPERATOR_ALLOWLIST" || status_denied
+[[ -x "$PSQL" ]] || status_unavailable
+
+[[ -n "${SUDO_USER:-}" && -n "${SUDO_UID:-}" ]] || status_denied
+[[ "$SUDO_UID" =~ ^[1-9][0-9]*$ ]] || status_denied
+[[ "$SUDO_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || status_denied
+
+sudo_passwd_entry=$(/usr/bin/getent passwd "$SUDO_UID") || status_denied
+IFS=: read -r sudo_passwd_name _ sudo_passwd_uid _ <<<"$sudo_passwd_entry"
+[[ "$sudo_passwd_name" == "$SUDO_USER" && "$sudo_passwd_uid" == "$SUDO_UID" ]] || status_denied
+/usr/bin/grep -Fqx -- "$SUDO_USER" "$OPERATOR_ALLOWLIST" || status_denied
+
+verification_request_id=''
+player_tag=''
+from_account_public_id=''
+to_account_public_id=''
+reason=''
+while (( $# > 0 )); do
+    case "$1" in
+        --verification-request-id)
+            (( $# == 2 )) || status_denied
+            [[ -z "$verification_request_id" ]] || status_denied
+            verification_request_id=$2
+            shift 2
+            ;;
+        --player-tag)
+            (( $# == 2 )) || status_denied
+            [[ -z "$player_tag" ]] || status_denied
+            player_tag=$2
+            shift 2
+            ;;
+        --from-account-public-id)
+            (( $# == 2 )) || status_denied
+            [[ -z "$from_account_public_id" ]] || status_denied
+            from_account_public_id=$2
+            shift 2
+            ;;
+        --to-account-public-id)
+            (( $# == 2 )) || status_denied
+            [[ -z "$to_account_public_id" ]] || status_denied
+            to_account_public_id=$2
+            shift 2
+            ;;
+        --reason)
+            (( $# == 2 )) || status_denied
+            [[ -z "$reason" ]] || status_denied
+            reason=$2
+            shift 2
+            ;;
+        *)
+            status_denied
+            ;;
+    esac
+done
+
+uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+player_tag_pattern='^#[0289PYLQGRJCUV]{3,15}$'
+[[ "$verification_request_id" =~ $uuid_pattern ]] || status_denied
+[[ "$from_account_public_id" =~ $uuid_pattern ]] || status_denied
+[[ "$to_account_public_id" =~ $uuid_pattern ]] || status_denied
+[[ "$from_account_public_id" != "$to_account_public_id" ]] || status_denied
+[[ "$player_tag" =~ $player_tag_pattern ]] || status_denied
+[[ ${#reason} -ge 8 && ${#reason} -le 500 ]] || status_denied
+[[ "$reason" =~ ^[[:print:]]+$ ]] || status_denied
+
+operator_identity="sudo:${SUDO_USER}:${SUDO_UID}"
+if ! transfer_status=$(
+    /usr/bin/env -i \
+        PATH='/usr/bin:/bin' \
+        PGSERVICEFILE="$SUPPORT_SERVICE_FILE" \
+        PGSERVICE=clashlens_support_transfer \
+        PGCONNECT_TIMEOUT=5 \
+        "$PSQL" \
+        --no-psqlrc \
+        --no-align \
+        --quiet \
+        --tuples-only \
+        --set=ON_ERROR_STOP=1 \
+        --set=verification_request_id="$verification_request_id" \
+        --set=player_tag="$player_tag" \
+        --set=from_account_public_id="$from_account_public_id" \
+        --set=to_account_public_id="$to_account_public_id" \
+        --set=operator_identity="$operator_identity" \
+        --set=reason="$reason" \
+        --command "SELECT status FROM clashlens_support_transfer(
+            :'verification_request_id'::uuid,
+            :'player_tag',
+            :'from_account_public_id'::uuid,
+            :'to_account_public_id'::uuid,
+            :'operator_identity',
+            :'reason'
+        );" \
+        2>/dev/null
+); then
+    status_unavailable
+fi
+
+case "$transfer_status" in
+    transferred)
+        printf '%s\n' 'support_transfer_status=transferred'
+        exit 0
+        ;;
+    transfer_not_found|transfer_conflict|transfer_not_pending|fresh_verification_required|link_owner_changed)
+        printf '%s\n' "support_transfer_status=$transfer_status"
+        exit 1
+        ;;
+    *)
+        status_unavailable
+        ;;
+esac

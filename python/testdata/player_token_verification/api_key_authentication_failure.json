@@ -1,0 +1,6 @@
+{
+  "http_status": 403,
+  "body": {"reason": "accessDenied", "message": "Invalid authorization"},
+  "expected_outcome": "verification_unavailable",
+  "expected_key_action": "quarantine"
+}

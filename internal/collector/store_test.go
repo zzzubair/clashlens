@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,15 +34,57 @@ func startContractDatabase(t *testing.T) string {
 	return databaseURL
 }
 
-func TestStoreRejectsIncompatibleContractVersion(t *testing.T) {
+func TestStoreBridgeAcceptsContractVersionOneWhenConfiguredForVersionTwo(t *testing.T) {
 	databaseURL := startContractDatabase(t)
 
 	store, err := openStore(context.Background(), databaseURL, 2)
+	if err != nil {
+		t.Fatalf("openStore returned an error for supported contract version one: %v", err)
+	}
+	t.Cleanup(store.close)
+	if store.contractVersion != 1 {
+		t.Fatalf("store contract version = %d, want actual version 1", store.contractVersion)
+	}
+}
+
+func TestStoreBridgeRemainsReadyAcrossContractUpgradeToVersionTwo(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx := context.Background()
+	store, err := openStore(ctx, databaseURL, 2)
+	if err != nil {
+		t.Fatalf("openStore returned an error: %v", err)
+	}
+	t.Cleanup(store.close)
+
+	if _, err := store.pool.Exec(ctx, `UPDATE clash_lens_contract SET version = 2 WHERE singleton`); err != nil {
+		t.Fatalf("upgrade contract version: %v", err)
+	}
+	if err := store.ready(ctx); err != nil {
+		t.Fatalf("bridge readiness failed after supported live upgrade: %v", err)
+	}
+}
+
+func TestStoreBridgeRejectsContractVersionThree(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx := context.Background()
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect to test PostgreSQL: %v", err)
+	}
+	if _, err := connection.Exec(ctx, `UPDATE clash_lens_contract SET version = 3 WHERE singleton`); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("set incompatible contract version: %v", err)
+	}
+	if err := connection.Close(ctx); err != nil {
+		t.Fatalf("close test PostgreSQL connection: %v", err)
+	}
+
+	store, err := openStore(ctx, databaseURL, 2)
 	if !errors.Is(err, errIncompatibleContract) {
 		t.Fatalf("openStore error = %v, want errIncompatibleContract", err)
 	}
 	if store != nil {
-		t.Fatal("openStore returned a store for an incompatible contract")
+		t.Fatal("openStore returned a store for contract version three")
 	}
 }
 
@@ -95,5 +138,32 @@ func TestScheduleDueRegularCreatesOneCurrentPollAndAdvancesDueTime(t *testing.T)
 	cycleStart := now.Truncate(5 * time.Minute).Add(5 * time.Minute)
 	if nextDue.Before(cycleStart) || !nextDue.Before(cycleStart.Add(5*time.Minute)) {
 		t.Fatalf("next due time %s is outside next cycle [%s, %s)", nextDue, cycleStart, cycleStart.Add(5*time.Minute))
+	}
+}
+
+func TestRequiredTrafficGateRejectsVersionOneContract(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	store, err := openStore(context.Background(), databaseURL, 2)
+	if err != nil {
+		t.Fatalf("open bridge store: %v", err)
+	}
+	t.Cleanup(store.close)
+
+	err = store.validateTrafficGateMode(context.Background(), requiredTrafficGateMode)
+	if err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("required traffic-gate validation error = %v, want version-one rejection", err)
+	}
+}
+
+func TestBridgeTrafficGateAllowsVersionOneContract(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	store, err := openStore(context.Background(), databaseURL, 2)
+	if err != nil {
+		t.Fatalf("open bridge store: %v", err)
+	}
+	t.Cleanup(store.close)
+
+	if err := store.validateTrafficGateMode(context.Background(), bridgeTrafficGateMode); err != nil {
+		t.Fatalf("bridge traffic-gate validation error = %v, want version-one acceptance", err)
 	}
 }

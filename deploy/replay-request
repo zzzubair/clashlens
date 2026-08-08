@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# Run through a sudo rule that permits only this root-owned wrapper.
+set -euo pipefail
+
+PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+umask 077
+
+readonly REPLAY_SERVICE_FILE='/etc/clashlens/replay-request.pg_service.conf'
+readonly OPERATOR_ALLOWLIST='/etc/clashlens/replay-request-operators'
+readonly PSQL='/usr/bin/psql'
+
+# Target versions are pinned to the exact versions the installed Python
+# runtime supports; operators cannot select versions.
+readonly REPLAY_PARSER_VERSION='supercell-source-parser-v1'
+readonly REPLAY_PROCESSING_VERSION='clashlens-domain-processing-v1'
+readonly REPLAY_DOMAIN_RULE_VERSION='clashlens-domain-rules-v1'
+readonly REPLAY_ANALYTICS_RULE_VERSION='legend-analytics-v1'
+
+status_denied() {
+    printf '%s\n' 'replay_request_status=denied'
+    exit 1
+}
+
+status_unavailable() {
+    printf '%s\n' 'replay_request_status=unavailable'
+    exit 1
+}
+
+protected_root_file() {
+    local path=$1
+    local owner
+    local mode
+
+    [[ -f "$path" && -r "$path" ]] || return 1
+    owner=$(/usr/bin/stat -c '%u' -- "$path") || return 1
+    mode=$(/usr/bin/stat -c '%a' -- "$path") || return 1
+    [[ "$owner" == '0' && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0077) == 0 ))
+}
+
+protected_root_directory() {
+    local path=$1
+    local owner
+    local mode
+
+    [[ -d "$path" && -x "$path" ]] || return 1
+    owner=$(/usr/bin/stat -c '%u' -- "$path") || return 1
+    mode=$(/usr/bin/stat -c '%a' -- "$path") || return 1
+    [[ "$owner" == '0' && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0022) == 0 ))
+}
+
+script_path=$(/usr/bin/readlink -f -- "${BASH_SOURCE[0]}") || status_denied
+[[ "$(/usr/bin/id -u)" == '0' ]] || status_denied
+protected_root_file "$script_path" || status_denied
+protected_root_directory "${REPLAY_SERVICE_FILE%/*}" || status_denied
+protected_root_file "$REPLAY_SERVICE_FILE" || status_denied
+protected_root_file "$OPERATOR_ALLOWLIST" || status_denied
+[[ -x "$PSQL" ]] || status_unavailable
+
+[[ -n "${SUDO_USER:-}" && -n "${SUDO_UID:-}" ]] || status_denied
+[[ "$SUDO_UID" =~ ^[1-9][0-9]*$ ]] || status_denied
+[[ "$SUDO_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || status_denied
+
+sudo_passwd_entry=$(/usr/bin/getent passwd "$SUDO_UID") || status_denied
+IFS=: read -r sudo_passwd_name _ sudo_passwd_uid _ <<<"$sudo_passwd_entry"
+[[ "$sudo_passwd_name" == "$SUDO_USER" && "$sudo_passwd_uid" == "$SUDO_UID" ]] || status_denied
+/usr/bin/grep -Fqx -- "$SUDO_USER" "$OPERATOR_ALLOWLIST" || status_denied
+
+observation_id=''
+reason=''
+while (( $# > 0 )); do
+    case "$1" in
+        --observation-id)
+            (( $# == 2 )) || status_denied
+            [[ -z "$observation_id" ]] || status_denied
+            observation_id=$2
+            shift 2
+            ;;
+        --reason)
+            (( $# == 2 )) || status_denied
+            [[ -z "$reason" ]] || status_denied
+            reason=$2
+            shift 2
+            ;;
+        *)
+            status_denied
+            ;;
+    esac
+done
+
+positive_bigint_pattern='^[1-9][0-9]{0,17}$'
+[[ "$observation_id" =~ $positive_bigint_pattern ]] || status_denied
+[[ ${#reason} -ge 8 && ${#reason} -le 500 ]] || status_denied
+[[ "$reason" =~ ^[[:print:]]+$ ]] || status_denied
+
+operator_identity="sudo:${SUDO_USER}:${SUDO_UID}"
+if ! replay_row=$(
+    /usr/bin/env -i \
+        PATH='/usr/bin:/bin' \
+        PGSERVICEFILE="$REPLAY_SERVICE_FILE" \
+        PGSERVICE=clashlens_replay_request \
+        PGCONNECT_TIMEOUT=5 \
+        PGOPTIONS='-c statement_timeout=10000 -c lock_timeout=10000' \
+        "$PSQL" \
+        --no-psqlrc \
+        --no-align \
+        --quiet \
+        --tuples-only \
+        --set=ON_ERROR_STOP=1 \
+        --set=observation_id="$observation_id" \
+        --set=operator_identity="$operator_identity" \
+        --set=reason="$reason" \
+        --command "SELECT request_id, job_id, request_status
+FROM clashlens_request_python_replay_v2(
+    :'observation_id'::bigint,
+    :'operator_identity',
+    :'reason',
+    '$REPLAY_PARSER_VERSION',
+    '$REPLAY_PROCESSING_VERSION',
+    '$REPLAY_DOMAIN_RULE_VERSION',
+    '$REPLAY_ANALYTICS_RULE_VERSION'
+);" \
+        2>/dev/null
+); then
+    status_unavailable
+fi
+[[ -n "$replay_row" ]] || status_unavailable
+
+read -r replay_request_id replay_job_id replay_request_status <<<"$replay_row"
+case "$replay_request_status" in
+    enqueued)
+        printf 'replay_request_status=enqueued request_id=%s job_id=%s\n' \
+            "$replay_request_id" "$replay_job_id"
+        exit 0
+        ;;
+    requested|complete|failed|cancelled)
+        printf 'replay_request_status=%s request_id=%s job_id=%s\n' \
+            "$replay_request_status" "$replay_request_id" "$replay_job_id"
+        exit 1
+        ;;
+    *)
+        status_unavailable
+        ;;
+esac

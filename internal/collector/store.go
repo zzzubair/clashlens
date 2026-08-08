@@ -14,8 +14,10 @@ import (
 var errIncompatibleContract = errors.New("incompatible shared contract version")
 
 type store struct {
-	pool            *pgxpool.Pool
-	contractVersion int
+	pool               *pgxpool.Pool
+	contractVersion    int
+	maxContractVersion int
+	commitTx           func(context.Context, pgx.Tx) error
 }
 
 func openStore(ctx context.Context, databaseURL string, expectedContractVersion int) (*store, error) {
@@ -33,11 +35,22 @@ func openStore(ctx context.Context, databaseURL string, expectedContractVersion 
 		pool.Close()
 		return nil, fmt.Errorf("read shared contract version: %w", err)
 	}
-	if actualVersion != expectedContractVersion {
+	if !supportsContractVersion(actualVersion, expectedContractVersion) {
 		pool.Close()
-		return nil, fmt.Errorf("%w: got %d, want %d", errIncompatibleContract, actualVersion, expectedContractVersion)
+		return nil, fmt.Errorf("%w: got %d, support through %d", errIncompatibleContract, actualVersion, expectedContractVersion)
 	}
-	return &store{pool: pool, contractVersion: expectedContractVersion}, nil
+	return &store{
+		pool:               pool,
+		contractVersion:    actualVersion,
+		maxContractVersion: expectedContractVersion,
+	}, nil
+}
+
+func supportsContractVersion(actualVersion, maxContractVersion int) bool {
+	if maxContractVersion == 2 {
+		return actualVersion == 1 || actualVersion == 2
+	}
+	return actualVersion == maxContractVersion
 }
 
 func (s *store) close() {

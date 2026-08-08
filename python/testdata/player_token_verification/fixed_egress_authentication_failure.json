@@ -1,0 +1,6 @@
+{
+  "http_status": 403,
+  "body": {"reason": "accessDenied.invalidIp", "message": "Invalid IP address"},
+  "expected_outcome": "verification_unavailable",
+  "expected_key_action": "quarantine"
+}

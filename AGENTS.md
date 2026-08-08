@@ -20,7 +20,7 @@ Read the source that matches the branch of work:
 - **Product** — [`docs/product.md`](docs/product.md): mission, Phase 1 scope, user and account terms, capabilities, access, surfaces, policy, out-of-scope work, and product specifications.
 - **Domain** — [`docs/domain.md`](docs/domain.md): time, players, observations, battles, ranked days, snapshots, cohorts, analytics, and confidence states.
 - **Architecture** — [`docs/architecture.md`](docs/architecture.md): runtime ownership, private API security, jobs, storage, collection, deployment, recovery, observability, verification, and open technology choices.
-- **Runbooks** — [`docs/collector-prototype.md`](docs/collector-prototype.md) and [`docs/deployment.md`](docs/deployment.md) for the current Go deployment; [`python-prototype/README.md`](python-prototype/README.md) and [`python-prototype/deployment.md`](python-prototype/deployment.md) for the throwaway Python seam.
+- **Runbooks** — [`docs/collector-prototype.md`](docs/collector-prototype.md) and [`docs/deployment.md`](docs/deployment.md) for the current Go deployment; [`python/README.md`](python/README.md) for the production Python application package.
 - **Overview** — [`README.md`](README.md): public orientation and links to the detailed sources.
 
 Report conflicts with exact locations. Keep open decisions open; do not choose silently.

@@ -1,0 +1,2207 @@
+{
+  "items": [
+    {
+      "tag": "#22",
+      "name": "Synthetic Ranked Player 001",
+      "rank": 1,
+      "previousRank": 1,
+      "trophies": 7000,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28",
+      "name": "Synthetic Ranked Player 002",
+      "rank": 2,
+      "previousRank": 2,
+      "trophies": 6999,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29",
+      "name": "Synthetic Ranked Player 003",
+      "rank": 3,
+      "previousRank": 3,
+      "trophies": 6998,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2P",
+      "name": "Synthetic Ranked Player 004",
+      "rank": 4,
+      "previousRank": 4,
+      "trophies": 6997,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2Y",
+      "name": "Synthetic Ranked Player 005",
+      "rank": 5,
+      "previousRank": 5,
+      "trophies": 6996,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2L",
+      "name": "Synthetic Ranked Player 006",
+      "rank": 6,
+      "previousRank": 6,
+      "trophies": 6995,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2Q",
+      "name": "Synthetic Ranked Player 007",
+      "rank": 7,
+      "previousRank": 7,
+      "trophies": 6994,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2G",
+      "name": "Synthetic Ranked Player 008",
+      "rank": 8,
+      "previousRank": 8,
+      "trophies": 6993,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2R",
+      "name": "Synthetic Ranked Player 009",
+      "rank": 9,
+      "previousRank": 9,
+      "trophies": 6992,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2J",
+      "name": "Synthetic Ranked Player 010",
+      "rank": 10,
+      "previousRank": 10,
+      "trophies": 6991,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2C",
+      "name": "Synthetic Ranked Player 011",
+      "rank": 11,
+      "previousRank": 11,
+      "trophies": 6990,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2U",
+      "name": "Synthetic Ranked Player 012",
+      "rank": 12,
+      "previousRank": 12,
+      "trophies": 6989,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2V",
+      "name": "Synthetic Ranked Player 013",
+      "rank": 13,
+      "previousRank": 13,
+      "trophies": 6988,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#220",
+      "name": "Synthetic Ranked Player 014",
+      "rank": 14,
+      "previousRank": 14,
+      "trophies": 6987,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#222",
+      "name": "Synthetic Ranked Player 015",
+      "rank": 15,
+      "previousRank": 15,
+      "trophies": 6986,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#228",
+      "name": "Synthetic Ranked Player 016",
+      "rank": 16,
+      "previousRank": 16,
+      "trophies": 6985,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#229",
+      "name": "Synthetic Ranked Player 017",
+      "rank": 17,
+      "previousRank": 17,
+      "trophies": 6984,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#22P",
+      "name": "Synthetic Ranked Player 018",
+      "rank": 18,
+      "previousRank": 18,
+      "trophies": 6983,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#22Y",
+      "name": "Synthetic Ranked Player 019",
+      "rank": 19,
+      "previousRank": 19,
+      "trophies": 6982,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#22L",
+      "name": "Synthetic Ranked Player 020",
+      "rank": 20,
+      "previousRank": 20,
+      "trophies": 6981,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#22Q",
+      "name": "Synthetic Ranked Player 021",
+      "rank": 21,
+      "previousRank": 21,
+      "trophies": 6980,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#22G",
+      "name": "Synthetic Ranked Player 022",
+      "rank": 22,
+      "previousRank": 22,
+      "trophies": 6979,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#22R",
+      "name": "Synthetic Ranked Player 023",
+      "rank": 23,
+      "previousRank": 23,
+      "trophies": 6978,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#22J",
+      "name": "Synthetic Ranked Player 024",
+      "rank": 24,
+      "previousRank": 24,
+      "trophies": 6977,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#22C",
+      "name": "Synthetic Ranked Player 025",
+      "rank": 25,
+      "previousRank": 25,
+      "trophies": 6976,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#22U",
+      "name": "Synthetic Ranked Player 026",
+      "rank": 26,
+      "previousRank": 26,
+      "trophies": 6975,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#22V",
+      "name": "Synthetic Ranked Player 027",
+      "rank": 27,
+      "previousRank": 27,
+      "trophies": 6974,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#280",
+      "name": "Synthetic Ranked Player 028",
+      "rank": 28,
+      "previousRank": 28,
+      "trophies": 6973,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#282",
+      "name": "Synthetic Ranked Player 029",
+      "rank": 29,
+      "previousRank": 29,
+      "trophies": 6972,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#288",
+      "name": "Synthetic Ranked Player 030",
+      "rank": 30,
+      "previousRank": 30,
+      "trophies": 6971,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#289",
+      "name": "Synthetic Ranked Player 031",
+      "rank": 31,
+      "previousRank": 31,
+      "trophies": 6970,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28P",
+      "name": "Synthetic Ranked Player 032",
+      "rank": 32,
+      "previousRank": 32,
+      "trophies": 6969,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28Y",
+      "name": "Synthetic Ranked Player 033",
+      "rank": 33,
+      "previousRank": 33,
+      "trophies": 6968,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28L",
+      "name": "Synthetic Ranked Player 034",
+      "rank": 34,
+      "previousRank": 34,
+      "trophies": 6967,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28Q",
+      "name": "Synthetic Ranked Player 035",
+      "rank": 35,
+      "previousRank": 35,
+      "trophies": 6966,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28G",
+      "name": "Synthetic Ranked Player 036",
+      "rank": 36,
+      "previousRank": 36,
+      "trophies": 6965,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28R",
+      "name": "Synthetic Ranked Player 037",
+      "rank": 37,
+      "previousRank": 37,
+      "trophies": 6964,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28J",
+      "name": "Synthetic Ranked Player 038",
+      "rank": 38,
+      "previousRank": 38,
+      "trophies": 6963,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28C",
+      "name": "Synthetic Ranked Player 039",
+      "rank": 39,
+      "previousRank": 39,
+      "trophies": 6962,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28U",
+      "name": "Synthetic Ranked Player 040",
+      "rank": 40,
+      "previousRank": 40,
+      "trophies": 6961,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#28V",
+      "name": "Synthetic Ranked Player 041",
+      "rank": 41,
+      "previousRank": 41,
+      "trophies": 6960,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#290",
+      "name": "Synthetic Ranked Player 042",
+      "rank": 42,
+      "previousRank": 42,
+      "trophies": 6959,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#292",
+      "name": "Synthetic Ranked Player 043",
+      "rank": 43,
+      "previousRank": 43,
+      "trophies": 6958,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#298",
+      "name": "Synthetic Ranked Player 044",
+      "rank": 44,
+      "previousRank": 44,
+      "trophies": 6957,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#299",
+      "name": "Synthetic Ranked Player 045",
+      "rank": 45,
+      "previousRank": 45,
+      "trophies": 6956,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29P",
+      "name": "Synthetic Ranked Player 046",
+      "rank": 46,
+      "previousRank": 46,
+      "trophies": 6955,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29Y",
+      "name": "Synthetic Ranked Player 047",
+      "rank": 47,
+      "previousRank": 47,
+      "trophies": 6954,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29L",
+      "name": "Synthetic Ranked Player 048",
+      "rank": 48,
+      "previousRank": 48,
+      "trophies": 6953,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29Q",
+      "name": "Synthetic Ranked Player 049",
+      "rank": 49,
+      "previousRank": 49,
+      "trophies": 6952,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29G",
+      "name": "Synthetic Ranked Player 050",
+      "rank": 50,
+      "previousRank": 50,
+      "trophies": 6951,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29R",
+      "name": "Synthetic Ranked Player 051",
+      "rank": 51,
+      "previousRank": 51,
+      "trophies": 6950,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29J",
+      "name": "Synthetic Ranked Player 052",
+      "rank": 52,
+      "previousRank": 52,
+      "trophies": 6949,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29C",
+      "name": "Synthetic Ranked Player 053",
+      "rank": 53,
+      "previousRank": 53,
+      "trophies": 6948,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29U",
+      "name": "Synthetic Ranked Player 054",
+      "rank": 54,
+      "previousRank": 54,
+      "trophies": 6947,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#29V",
+      "name": "Synthetic Ranked Player 055",
+      "rank": 55,
+      "previousRank": 55,
+      "trophies": 6946,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2P0",
+      "name": "Synthetic Ranked Player 056",
+      "rank": 56,
+      "previousRank": 56,
+      "trophies": 6945,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2P2",
+      "name": "Synthetic Ranked Player 057",
+      "rank": 57,
+      "previousRank": 57,
+      "trophies": 6944,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2P8",
+      "name": "Synthetic Ranked Player 058",
+      "rank": 58,
+      "previousRank": 58,
+      "trophies": 6943,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2P9",
+      "name": "Synthetic Ranked Player 059",
+      "rank": 59,
+      "previousRank": 59,
+      "trophies": 6942,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2PP",
+      "name": "Synthetic Ranked Player 060",
+      "rank": 60,
+      "previousRank": 60,
+      "trophies": 6941,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2PY",
+      "name": "Synthetic Ranked Player 061",
+      "rank": 61,
+      "previousRank": 61,
+      "trophies": 6940,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2PL",
+      "name": "Synthetic Ranked Player 062",
+      "rank": 62,
+      "previousRank": 62,
+      "trophies": 6939,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2PQ",
+      "name": "Synthetic Ranked Player 063",
+      "rank": 63,
+      "previousRank": 63,
+      "trophies": 6938,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2PG",
+      "name": "Synthetic Ranked Player 064",
+      "rank": 64,
+      "previousRank": 64,
+      "trophies": 6937,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2PR",
+      "name": "Synthetic Ranked Player 065",
+      "rank": 65,
+      "previousRank": 65,
+      "trophies": 6936,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2PJ",
+      "name": "Synthetic Ranked Player 066",
+      "rank": 66,
+      "previousRank": 66,
+      "trophies": 6935,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2PC",
+      "name": "Synthetic Ranked Player 067",
+      "rank": 67,
+      "previousRank": 67,
+      "trophies": 6934,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2PU",
+      "name": "Synthetic Ranked Player 068",
+      "rank": 68,
+      "previousRank": 68,
+      "trophies": 6933,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2PV",
+      "name": "Synthetic Ranked Player 069",
+      "rank": 69,
+      "previousRank": 69,
+      "trophies": 6932,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2Y0",
+      "name": "Synthetic Ranked Player 070",
+      "rank": 70,
+      "previousRank": 70,
+      "trophies": 6931,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2Y2",
+      "name": "Synthetic Ranked Player 071",
+      "rank": 71,
+      "previousRank": 71,
+      "trophies": 6930,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2Y8",
+      "name": "Synthetic Ranked Player 072",
+      "rank": 72,
+      "previousRank": 72,
+      "trophies": 6929,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2Y9",
+      "name": "Synthetic Ranked Player 073",
+      "rank": 73,
+      "previousRank": 73,
+      "trophies": 6928,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2YP",
+      "name": "Synthetic Ranked Player 074",
+      "rank": 74,
+      "previousRank": 74,
+      "trophies": 6927,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2YY",
+      "name": "Synthetic Ranked Player 075",
+      "rank": 75,
+      "previousRank": 75,
+      "trophies": 6926,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2YL",
+      "name": "Synthetic Ranked Player 076",
+      "rank": 76,
+      "previousRank": 76,
+      "trophies": 6925,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2YQ",
+      "name": "Synthetic Ranked Player 077",
+      "rank": 77,
+      "previousRank": 77,
+      "trophies": 6924,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2YG",
+      "name": "Synthetic Ranked Player 078",
+      "rank": 78,
+      "previousRank": 78,
+      "trophies": 6923,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2YR",
+      "name": "Synthetic Ranked Player 079",
+      "rank": 79,
+      "previousRank": 79,
+      "trophies": 6922,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2YJ",
+      "name": "Synthetic Ranked Player 080",
+      "rank": 80,
+      "previousRank": 80,
+      "trophies": 6921,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2YC",
+      "name": "Synthetic Ranked Player 081",
+      "rank": 81,
+      "previousRank": 81,
+      "trophies": 6920,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2YU",
+      "name": "Synthetic Ranked Player 082",
+      "rank": 82,
+      "previousRank": 82,
+      "trophies": 6919,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2YV",
+      "name": "Synthetic Ranked Player 083",
+      "rank": 83,
+      "previousRank": 83,
+      "trophies": 6918,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2L0",
+      "name": "Synthetic Ranked Player 084",
+      "rank": 84,
+      "previousRank": 84,
+      "trophies": 6917,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2L2",
+      "name": "Synthetic Ranked Player 085",
+      "rank": 85,
+      "previousRank": 85,
+      "trophies": 6916,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2L8",
+      "name": "Synthetic Ranked Player 086",
+      "rank": 86,
+      "previousRank": 86,
+      "trophies": 6915,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2L9",
+      "name": "Synthetic Ranked Player 087",
+      "rank": 87,
+      "previousRank": 87,
+      "trophies": 6914,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2LP",
+      "name": "Synthetic Ranked Player 088",
+      "rank": 88,
+      "previousRank": 88,
+      "trophies": 6913,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2LY",
+      "name": "Synthetic Ranked Player 089",
+      "rank": 89,
+      "previousRank": 89,
+      "trophies": 6912,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2LL",
+      "name": "Synthetic Ranked Player 090",
+      "rank": 90,
+      "previousRank": 90,
+      "trophies": 6911,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2LQ",
+      "name": "Synthetic Ranked Player 091",
+      "rank": 91,
+      "previousRank": 91,
+      "trophies": 6910,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2LG",
+      "name": "Synthetic Ranked Player 092",
+      "rank": 92,
+      "previousRank": 92,
+      "trophies": 6909,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2LR",
+      "name": "Synthetic Ranked Player 093",
+      "rank": 93,
+      "previousRank": 93,
+      "trophies": 6908,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2LJ",
+      "name": "Synthetic Ranked Player 094",
+      "rank": 94,
+      "previousRank": 94,
+      "trophies": 6907,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2LC",
+      "name": "Synthetic Ranked Player 095",
+      "rank": 95,
+      "previousRank": 95,
+      "trophies": 6906,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2LU",
+      "name": "Synthetic Ranked Player 096",
+      "rank": 96,
+      "previousRank": 96,
+      "trophies": 6905,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2LV",
+      "name": "Synthetic Ranked Player 097",
+      "rank": 97,
+      "previousRank": 97,
+      "trophies": 6904,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2Q0",
+      "name": "Synthetic Ranked Player 098",
+      "rank": 98,
+      "previousRank": 98,
+      "trophies": 6903,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2Q2",
+      "name": "Synthetic Ranked Player 099",
+      "rank": 99,
+      "previousRank": 99,
+      "trophies": 6902,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2Q8",
+      "name": "Synthetic Ranked Player 100",
+      "rank": 100,
+      "previousRank": 100,
+      "trophies": 6901,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2Q9",
+      "name": "Synthetic Ranked Player 101",
+      "rank": 101,
+      "previousRank": 101,
+      "trophies": 6900,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2QP",
+      "name": "Synthetic Ranked Player 102",
+      "rank": 102,
+      "previousRank": 102,
+      "trophies": 6899,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2QY",
+      "name": "Synthetic Ranked Player 103",
+      "rank": 103,
+      "previousRank": 103,
+      "trophies": 6898,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2QL",
+      "name": "Synthetic Ranked Player 104",
+      "rank": 104,
+      "previousRank": 104,
+      "trophies": 6897,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2QQ",
+      "name": "Synthetic Ranked Player 105",
+      "rank": 105,
+      "previousRank": 105,
+      "trophies": 6896,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2QG",
+      "name": "Synthetic Ranked Player 106",
+      "rank": 106,
+      "previousRank": 106,
+      "trophies": 6895,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2QR",
+      "name": "Synthetic Ranked Player 107",
+      "rank": 107,
+      "previousRank": 107,
+      "trophies": 6894,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2QJ",
+      "name": "Synthetic Ranked Player 108",
+      "rank": 108,
+      "previousRank": 108,
+      "trophies": 6893,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2QC",
+      "name": "Synthetic Ranked Player 109",
+      "rank": 109,
+      "previousRank": 109,
+      "trophies": 6892,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2QU",
+      "name": "Synthetic Ranked Player 110",
+      "rank": 110,
+      "previousRank": 110,
+      "trophies": 6891,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2QV",
+      "name": "Synthetic Ranked Player 111",
+      "rank": 111,
+      "previousRank": 111,
+      "trophies": 6890,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2G0",
+      "name": "Synthetic Ranked Player 112",
+      "rank": 112,
+      "previousRank": 112,
+      "trophies": 6889,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2G2",
+      "name": "Synthetic Ranked Player 113",
+      "rank": 113,
+      "previousRank": 113,
+      "trophies": 6888,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2G8",
+      "name": "Synthetic Ranked Player 114",
+      "rank": 114,
+      "previousRank": 114,
+      "trophies": 6887,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2G9",
+      "name": "Synthetic Ranked Player 115",
+      "rank": 115,
+      "previousRank": 115,
+      "trophies": 6886,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2GP",
+      "name": "Synthetic Ranked Player 116",
+      "rank": 116,
+      "previousRank": 116,
+      "trophies": 6885,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2GY",
+      "name": "Synthetic Ranked Player 117",
+      "rank": 117,
+      "previousRank": 117,
+      "trophies": 6884,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2GL",
+      "name": "Synthetic Ranked Player 118",
+      "rank": 118,
+      "previousRank": 118,
+      "trophies": 6883,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2GQ",
+      "name": "Synthetic Ranked Player 119",
+      "rank": 119,
+      "previousRank": 119,
+      "trophies": 6882,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2GG",
+      "name": "Synthetic Ranked Player 120",
+      "rank": 120,
+      "previousRank": 120,
+      "trophies": 6881,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2GR",
+      "name": "Synthetic Ranked Player 121",
+      "rank": 121,
+      "previousRank": 121,
+      "trophies": 6880,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2GJ",
+      "name": "Synthetic Ranked Player 122",
+      "rank": 122,
+      "previousRank": 122,
+      "trophies": 6879,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2GC",
+      "name": "Synthetic Ranked Player 123",
+      "rank": 123,
+      "previousRank": 123,
+      "trophies": 6878,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2GU",
+      "name": "Synthetic Ranked Player 124",
+      "rank": 124,
+      "previousRank": 124,
+      "trophies": 6877,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2GV",
+      "name": "Synthetic Ranked Player 125",
+      "rank": 125,
+      "previousRank": 125,
+      "trophies": 6876,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2R0",
+      "name": "Synthetic Ranked Player 126",
+      "rank": 126,
+      "previousRank": 126,
+      "trophies": 6875,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2R2",
+      "name": "Synthetic Ranked Player 127",
+      "rank": 127,
+      "previousRank": 127,
+      "trophies": 6874,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2R8",
+      "name": "Synthetic Ranked Player 128",
+      "rank": 128,
+      "previousRank": 128,
+      "trophies": 6873,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2R9",
+      "name": "Synthetic Ranked Player 129",
+      "rank": 129,
+      "previousRank": 129,
+      "trophies": 6872,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2RP",
+      "name": "Synthetic Ranked Player 130",
+      "rank": 130,
+      "previousRank": 130,
+      "trophies": 6871,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2RY",
+      "name": "Synthetic Ranked Player 131",
+      "rank": 131,
+      "previousRank": 131,
+      "trophies": 6870,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2RL",
+      "name": "Synthetic Ranked Player 132",
+      "rank": 132,
+      "previousRank": 132,
+      "trophies": 6869,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2RQ",
+      "name": "Synthetic Ranked Player 133",
+      "rank": 133,
+      "previousRank": 133,
+      "trophies": 6868,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2RG",
+      "name": "Synthetic Ranked Player 134",
+      "rank": 134,
+      "previousRank": 134,
+      "trophies": 6867,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2RR",
+      "name": "Synthetic Ranked Player 135",
+      "rank": 135,
+      "previousRank": 135,
+      "trophies": 6866,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2RJ",
+      "name": "Synthetic Ranked Player 136",
+      "rank": 136,
+      "previousRank": 136,
+      "trophies": 6865,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2RC",
+      "name": "Synthetic Ranked Player 137",
+      "rank": 137,
+      "previousRank": 137,
+      "trophies": 6864,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2RU",
+      "name": "Synthetic Ranked Player 138",
+      "rank": 138,
+      "previousRank": 138,
+      "trophies": 6863,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2RV",
+      "name": "Synthetic Ranked Player 139",
+      "rank": 139,
+      "previousRank": 139,
+      "trophies": 6862,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2J0",
+      "name": "Synthetic Ranked Player 140",
+      "rank": 140,
+      "previousRank": 140,
+      "trophies": 6861,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2J2",
+      "name": "Synthetic Ranked Player 141",
+      "rank": 141,
+      "previousRank": 141,
+      "trophies": 6860,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2J8",
+      "name": "Synthetic Ranked Player 142",
+      "rank": 142,
+      "previousRank": 142,
+      "trophies": 6859,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2J9",
+      "name": "Synthetic Ranked Player 143",
+      "rank": 143,
+      "previousRank": 143,
+      "trophies": 6858,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2JP",
+      "name": "Synthetic Ranked Player 144",
+      "rank": 144,
+      "previousRank": 144,
+      "trophies": 6857,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2JY",
+      "name": "Synthetic Ranked Player 145",
+      "rank": 145,
+      "previousRank": 145,
+      "trophies": 6856,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2JL",
+      "name": "Synthetic Ranked Player 146",
+      "rank": 146,
+      "previousRank": 146,
+      "trophies": 6855,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2JQ",
+      "name": "Synthetic Ranked Player 147",
+      "rank": 147,
+      "previousRank": 147,
+      "trophies": 6854,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2JG",
+      "name": "Synthetic Ranked Player 148",
+      "rank": 148,
+      "previousRank": 148,
+      "trophies": 6853,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2JR",
+      "name": "Synthetic Ranked Player 149",
+      "rank": 149,
+      "previousRank": 149,
+      "trophies": 6852,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2JJ",
+      "name": "Synthetic Ranked Player 150",
+      "rank": 150,
+      "previousRank": 150,
+      "trophies": 6851,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2JC",
+      "name": "Synthetic Ranked Player 151",
+      "rank": 151,
+      "previousRank": 151,
+      "trophies": 6850,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2JU",
+      "name": "Synthetic Ranked Player 152",
+      "rank": 152,
+      "previousRank": 152,
+      "trophies": 6849,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2JV",
+      "name": "Synthetic Ranked Player 153",
+      "rank": 153,
+      "previousRank": 153,
+      "trophies": 6848,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2C0",
+      "name": "Synthetic Ranked Player 154",
+      "rank": 154,
+      "previousRank": 154,
+      "trophies": 6847,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2C2",
+      "name": "Synthetic Ranked Player 155",
+      "rank": 155,
+      "previousRank": 155,
+      "trophies": 6846,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2C8",
+      "name": "Synthetic Ranked Player 156",
+      "rank": 156,
+      "previousRank": 156,
+      "trophies": 6845,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2C9",
+      "name": "Synthetic Ranked Player 157",
+      "rank": 157,
+      "previousRank": 157,
+      "trophies": 6844,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2CP",
+      "name": "Synthetic Ranked Player 158",
+      "rank": 158,
+      "previousRank": 158,
+      "trophies": 6843,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2CY",
+      "name": "Synthetic Ranked Player 159",
+      "rank": 159,
+      "previousRank": 159,
+      "trophies": 6842,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2CL",
+      "name": "Synthetic Ranked Player 160",
+      "rank": 160,
+      "previousRank": 160,
+      "trophies": 6841,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2CQ",
+      "name": "Synthetic Ranked Player 161",
+      "rank": 161,
+      "previousRank": 161,
+      "trophies": 6840,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2CG",
+      "name": "Synthetic Ranked Player 162",
+      "rank": 162,
+      "previousRank": 162,
+      "trophies": 6839,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2CR",
+      "name": "Synthetic Ranked Player 163",
+      "rank": 163,
+      "previousRank": 163,
+      "trophies": 6838,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2CJ",
+      "name": "Synthetic Ranked Player 164",
+      "rank": 164,
+      "previousRank": 164,
+      "trophies": 6837,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2CC",
+      "name": "Synthetic Ranked Player 165",
+      "rank": 165,
+      "previousRank": 165,
+      "trophies": 6836,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2CU",
+      "name": "Synthetic Ranked Player 166",
+      "rank": 166,
+      "previousRank": 166,
+      "trophies": 6835,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2CV",
+      "name": "Synthetic Ranked Player 167",
+      "rank": 167,
+      "previousRank": 167,
+      "trophies": 6834,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2U0",
+      "name": "Synthetic Ranked Player 168",
+      "rank": 168,
+      "previousRank": 168,
+      "trophies": 6833,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2U2",
+      "name": "Synthetic Ranked Player 169",
+      "rank": 169,
+      "previousRank": 169,
+      "trophies": 6832,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2U8",
+      "name": "Synthetic Ranked Player 170",
+      "rank": 170,
+      "previousRank": 170,
+      "trophies": 6831,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2U9",
+      "name": "Synthetic Ranked Player 171",
+      "rank": 171,
+      "previousRank": 171,
+      "trophies": 6830,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2UP",
+      "name": "Synthetic Ranked Player 172",
+      "rank": 172,
+      "previousRank": 172,
+      "trophies": 6829,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2UY",
+      "name": "Synthetic Ranked Player 173",
+      "rank": 173,
+      "previousRank": 173,
+      "trophies": 6828,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2UL",
+      "name": "Synthetic Ranked Player 174",
+      "rank": 174,
+      "previousRank": 174,
+      "trophies": 6827,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2UQ",
+      "name": "Synthetic Ranked Player 175",
+      "rank": 175,
+      "previousRank": 175,
+      "trophies": 6826,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2UG",
+      "name": "Synthetic Ranked Player 176",
+      "rank": 176,
+      "previousRank": 176,
+      "trophies": 6825,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2UR",
+      "name": "Synthetic Ranked Player 177",
+      "rank": 177,
+      "previousRank": 177,
+      "trophies": 6824,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2UJ",
+      "name": "Synthetic Ranked Player 178",
+      "rank": 178,
+      "previousRank": 178,
+      "trophies": 6823,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2UC",
+      "name": "Synthetic Ranked Player 179",
+      "rank": 179,
+      "previousRank": 179,
+      "trophies": 6822,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2UU",
+      "name": "Synthetic Ranked Player 180",
+      "rank": 180,
+      "previousRank": 180,
+      "trophies": 6821,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2UV",
+      "name": "Synthetic Ranked Player 181",
+      "rank": 181,
+      "previousRank": 181,
+      "trophies": 6820,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2V0",
+      "name": "Synthetic Ranked Player 182",
+      "rank": 182,
+      "previousRank": 182,
+      "trophies": 6819,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2V2",
+      "name": "Synthetic Ranked Player 183",
+      "rank": 183,
+      "previousRank": 183,
+      "trophies": 6818,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2V8",
+      "name": "Synthetic Ranked Player 184",
+      "rank": 184,
+      "previousRank": 184,
+      "trophies": 6817,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2V9",
+      "name": "Synthetic Ranked Player 185",
+      "rank": 185,
+      "previousRank": 185,
+      "trophies": 6816,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2VP",
+      "name": "Synthetic Ranked Player 186",
+      "rank": 186,
+      "previousRank": 186,
+      "trophies": 6815,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2VY",
+      "name": "Synthetic Ranked Player 187",
+      "rank": 187,
+      "previousRank": 187,
+      "trophies": 6814,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2VL",
+      "name": "Synthetic Ranked Player 188",
+      "rank": 188,
+      "previousRank": 188,
+      "trophies": 6813,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2VQ",
+      "name": "Synthetic Ranked Player 189",
+      "rank": 189,
+      "previousRank": 189,
+      "trophies": 6812,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2VG",
+      "name": "Synthetic Ranked Player 190",
+      "rank": 190,
+      "previousRank": 190,
+      "trophies": 6811,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2VR",
+      "name": "Synthetic Ranked Player 191",
+      "rank": 191,
+      "previousRank": 191,
+      "trophies": 6810,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2VJ",
+      "name": "Synthetic Ranked Player 192",
+      "rank": 192,
+      "previousRank": 192,
+      "trophies": 6809,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2VC",
+      "name": "Synthetic Ranked Player 193",
+      "rank": 193,
+      "previousRank": 193,
+      "trophies": 6808,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2VU",
+      "name": "Synthetic Ranked Player 194",
+      "rank": 194,
+      "previousRank": 194,
+      "trophies": 6807,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2VV",
+      "name": "Synthetic Ranked Player 195",
+      "rank": 195,
+      "previousRank": 195,
+      "trophies": 6806,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2200",
+      "name": "Synthetic Ranked Player 196",
+      "rank": 196,
+      "previousRank": 196,
+      "trophies": 6805,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2202",
+      "name": "Synthetic Ranked Player 197",
+      "rank": 197,
+      "previousRank": 197,
+      "trophies": 6804,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2208",
+      "name": "Synthetic Ranked Player 198",
+      "rank": 198,
+      "previousRank": 198,
+      "trophies": 6803,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#2209",
+      "name": "Synthetic Ranked Player 199",
+      "rank": 199,
+      "previousRank": 199,
+      "trophies": 6802,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    },
+    {
+      "tag": "#220P",
+      "name": "Synthetic Ranked Player 200",
+      "rank": 200,
+      "previousRank": 200,
+      "trophies": 6801,
+      "leagueTier": {
+        "id": 105000036,
+        "name": "Legend I"
+      }
+    }
+  ],
+  "paging": {
+    "cursors": {}
+  }
+}
