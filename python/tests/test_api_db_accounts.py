@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from clashlens.api_db import ApiDatabase, RequestBinding
 from test_api_migration import migrated_production_database
+
+from clashlens.api_db import ApiDatabase, RequestBinding
 
 
 def binding(

@@ -5,12 +5,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
+from domain_test_support import domain_database, store_observation, text
+from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
-from domain_test_support import domain_database, store_observation, text
-from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
@@ -191,7 +191,7 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
     archive_server,
 ) -> None:
     with domain_database(database_url) as connection_info:
-        start_profile, start_battle, start_profile_job, start_battle_job = (
+        _start_profile, _start_battle, start_profile_job, start_battle_job = (
             _store_baseline_pair(
                 connection_info,
                 archive_server,

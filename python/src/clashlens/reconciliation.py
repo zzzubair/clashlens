@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import pairwise
 from typing import Any
 
 from .domain import RankedDay
@@ -583,7 +584,7 @@ def _coverage_is_continuous(
             failures.append("duplicate_battle_identity_in_observation")
             malformed = True
 
-    for previous, current in zip(observations, observations[1:], strict=False):
+    for previous, current in pairwise(observations):
         if current.row_count >= BATTLE_LOG_MAX_ROWS and not (
             set(previous.battle_identities) & set(current.battle_identities)
         ):

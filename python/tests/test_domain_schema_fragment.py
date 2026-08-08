@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import psycopg
-
 from domain_test_support import domain_database, text
 
 

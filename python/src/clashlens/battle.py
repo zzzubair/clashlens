@@ -214,7 +214,7 @@ def _parse_battle_timestamp(value: Any) -> datetime:
         if value.endswith("Z") and "-" not in value:
             parsed = datetime.strptime(value, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=UTC)
         else:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(value)
     except ValueError as error:
         raise BattleLogParseError(
             "invalid_battle_timestamp", "battleTimestamp is not accepted by adapter v1"

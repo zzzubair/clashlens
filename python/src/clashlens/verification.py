@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from collections.abc import Callable
 from typing import Final
 from urllib.parse import quote, urlsplit
 

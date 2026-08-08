@@ -81,9 +81,7 @@ def parse_global_player_rankings(
         reasons.add("rank_set")
 
     cursors = payload["paging"].get("cursors")
-    if not isinstance(cursors, dict):
-        reasons.add("unexpected_cursor")
-    elif any(value not in (None, "") for value in cursors.values()):
+    if not isinstance(cursors, dict) or any(value not in (None, "") for value in cursors.values()):
         reasons.add("unexpected_cursor")
 
     contract_change_reasons = {"malformed_entry", "unexpected_cursor"}

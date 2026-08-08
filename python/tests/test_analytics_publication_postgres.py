@@ -5,16 +5,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
-from psycopg.types.json import Jsonb
-
-from clashlens.api_db import ApiDatabase
 from domain_test_support import domain_database, store_observation, text
+from psycopg.types.json import Jsonb
 from test_snapshot_publication_postgres import (
     _process_profile,
     _process_snapshot_and_analytics,
     _processor,
     _seed_snapshot_job,
 )
+
+from clashlens.api_db import ApiDatabase
 
 BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 

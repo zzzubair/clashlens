@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
 import pytest
+from domain_test_support import domain_database, store_observation, text
 from psycopg.types.json import Jsonb
 
 from clashlens.analytics import deterministic_tag_hash
@@ -14,7 +14,6 @@ from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
-from domain_test_support import domain_database, store_observation, text
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 
@@ -413,13 +412,6 @@ def test_snapshot_orders_with_stable_hash_and_persists_temporal_provenance(
                 owner_prefix="snapshot-provenance",
             )
             with database.pool.connection() as connection:
-                ranked_day_version_id = connection.execute(
-                    """
-                    SELECT (input_json->>'ranked_day_version_id')::bigint
-                    FROM python_processing_jobs WHERE id = %s
-                    """,
-                    (snapshot_job_id,),
-                ).fetchone()[0]
                 snapshots = connection.execute(
                     """
                     SELECT id, snapshot_kind, boundary_at, version,

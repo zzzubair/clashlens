@@ -5,11 +5,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
+from domain_test_support import domain_database, store_observation, text
 
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
-from domain_test_support import domain_database, store_observation, text
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"

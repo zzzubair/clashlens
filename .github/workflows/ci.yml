@@ -1,0 +1,81 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go build, vet, and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -count=1 ./...
+
+  python:
+    name: Python lint, compile, and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Sync locked dependencies
+        working-directory: python
+        run: uv sync --locked
+      - name: Ruff
+        working-directory: python
+        run: uv run ruff check .
+      - name: Compile
+        working-directory: python
+        run: uv run python -m compileall -q src
+      - name: Unit tests
+        working-directory: python
+        run: uv run pytest -q
+        env:
+          UV_PROJECT_ENVIRONMENT: /tmp/clashlens-ci-venv
+
+  postgres:
+    name: Python suite on embedded PostgreSQL
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Cache embedded PostgreSQL binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.embedded-postgres-go
+          key: embedded-postgres-go-${{ runner.os }}
+      - name: Python suite with embedded PostgreSQL
+        run: go test ./internal/collector -run '^TestPythonPrototypeSuiteEmbeddedPostgres$' -count=1 -v -timeout=600s
+
+  deploy-shell:
+    name: Deployment shell seam
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deployment command seam
+        run: bash deploy_test.sh

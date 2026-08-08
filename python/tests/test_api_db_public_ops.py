@@ -4,8 +4,9 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from clashlens.api_db import ApiDatabase, RequestBinding
 from test_api_migration import migrated_production_database
+
+from clashlens.api_db import ApiDatabase, RequestBinding
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
 

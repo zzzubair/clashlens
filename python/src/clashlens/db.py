@@ -20,11 +20,10 @@ from .analytics import (
     SNAPSHOT_ORDERING_RULE_VERSION,
     deterministic_tag_hash,
 )
-from .battle import ParsedBattleLog, SOURCE_PARSER_VERSION
+from .battle import SOURCE_PARSER_VERSION, ParsedBattleLog
 from .domain import (
-    DomainRuleError,
     SEASON_ANCHOR_RULE_VERSION,
-    TROPHY_ALLOCATION_RULE_VERSION,
+    DomainRuleError,
     ranked_day_for,
     validate_season_anchor,
 )
@@ -524,7 +523,7 @@ class Database:
                 )
 
     def complete_profile(self, claim: Claim, profile: ParsedProfile) -> None:
-        observation_id, http_status, response_hash, observed_at, endpoint, schema_version = (
+        observation_id, http_status, response_hash, _observed_at, endpoint, schema_version = (
             self._observation_source(claim)
         )
         with self.pool.connection() as connection:
@@ -961,9 +960,7 @@ class Database:
 
     def complete_reconciliation(self, claim: Claim) -> None:
         player_id = int(claim.input_json["player_id"])
-        day_start = datetime.fromisoformat(
-            str(claim.input_json["ranked_day_start"]).replace("Z", "+00:00")
-        )
+        day_start = datetime.fromisoformat(str(claim.input_json["ranked_day_start"]))
         now = datetime.now(UTC)
         ranked_day = ranked_day_for(day_start)
         with self.pool.connection() as connection:
@@ -975,7 +972,6 @@ class Database:
                 ).fetchone()
                 if player is None:
                     raise ValueError(f"unknown reconciliation player id {player_id}")
-                player_tag = _text_value(player[1])
 
                 start_baseline = self._load_reset_baseline(
                     connection,
@@ -1545,9 +1541,7 @@ class Database:
                 boundary_at = ranked_day[1]
                 boundary_text = claim.input_json.get("boundary_at")
                 if boundary_text is not None:
-                    boundary_at = datetime.fromisoformat(
-                        str(boundary_text).replace("Z", "+00:00")
-                    ).astimezone(UTC)
+                    boundary_at = datetime.fromisoformat(str(boundary_text)).astimezone(UTC)
                 if boundary_at != ranked_day[1]:
                     raise ValueError("snapshot boundary does not match ranked-day boundary")
 
@@ -3377,9 +3371,10 @@ class Database:
                 left, right = rows[0][index], rows[1][index]
                 # A missing absolute trophy value is unknown evidence, not a
                 # disagreement with a value reported by the other perspective.
-                if field_name in {"attacker_trophies", "defender_trophies"}:
-                    if left is None or right is None:
-                        continue
+                if field_name in {"attacker_trophies", "defender_trophies"} and (
+                    left is None or right is None
+                ):
+                    continue
                 if left != right:
                     disagreement_fields.append(field_name)
             state = "agreed" if not disagreement_fields else "disagreement"
@@ -3561,9 +3556,7 @@ class Database:
             elif (
                 _text_value(current[1]) == anchor.current_id
                 and _text_value(current[2]) == anchor.previous_id
-            ):
-                pass
-            elif profile.observed_at <= current[4]:
+            ) or profile.observed_at <= current[4]:
                 pass
             elif anchor.current_start > current[3]:
                 connection.execute(
@@ -3707,8 +3700,8 @@ def _hash_input(value: Any, name: str) -> str:
 
 def _parse_utc(value: Any) -> datetime:
     if not isinstance(value, str):
-        raise ValueError("analytics timestamps must be text")
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        raise TypeError("analytics timestamps must be text")
+    parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("analytics timestamps must include an offset")
     return parsed.astimezone(UTC)
