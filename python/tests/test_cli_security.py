@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from argparse import Namespace
 from pathlib import Path
 
@@ -83,3 +84,36 @@ def test_archive_requires_file_backed_credentials() -> None:
 
     with pytest.raises(ValueError, match="archive access and secret key are required"):
         _archive(arguments)
+
+
+def test_queue_status_reports_existing_queue_health(monkeypatch, capsys) -> None:
+    expected = {
+        "pending": 3,
+        "waiting_retry": 2,
+        "leased": 1,
+        "failed": 0,
+        "oldest_due_seconds": 4.5,
+    }
+
+    class FakeDatabase:
+        def __init__(self, database_url: str) -> None:
+            assert database_url == "postgresql://worker@postgres/clashlens"
+
+        def queue_health(self) -> dict[str, int | float | None]:
+            return expected
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("clashlens.cli.Database", FakeDatabase)
+
+    result = main(
+        [
+            "queue-status",
+            "--database-url",
+            "postgresql://worker@postgres/clashlens",
+        ]
+    )
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out) == expected

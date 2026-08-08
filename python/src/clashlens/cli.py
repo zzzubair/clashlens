@@ -75,6 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
     _archive_arguments(ready)
     ready.add_argument("--expected-contract-version", type=int, default=2)
 
+    queue_status = subparsers.add_parser(
+        "queue-status", help="report aggregate production worker queue health"
+    )
+    _database_argument(queue_status)
+
     serve = subparsers.add_parser(
         "serve", help="run the signed saved-data FastAPI route"
     )
@@ -175,6 +180,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_worker(arguments)
         if arguments.command == "ready":
             return _run_ready(arguments)
+        if arguments.command == "queue-status":
+            database = Database(_database_url(arguments))
+            try:
+                print(json.dumps(database.queue_health(), sort_keys=True))
+            finally:
+                database.close()
+            return 0
         if arguments.command == "serve":
             app, _database = _serve_app(arguments)
             uvicorn.run(
