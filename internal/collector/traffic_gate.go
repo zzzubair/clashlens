@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 var errSharedCredentialConflict = errors.New("shared API credential registration conflicts with the durable gate")
@@ -163,8 +165,16 @@ func (s *store) cooldownSharedCredential(
 			quarantine_reason = NULL,
 			updated_at = clock_timestamp()
 		WHERE credential_fingerprint = $1
+		  AND state IN ('active', 'cooldown')
 		RETURNING cooldown_until
 	`, fingerprint, duration.Microseconds()).Scan(&cooldownUntil); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// A quarantine or terminal operator state won the race.
+			// Quarantine precedence is monotonic, so the losing cooldown
+			// is a valid no-op: leave the durable state untouched and do
+			// not record a misleading cooldown event.
+			return nil
+		}
 		return fmt.Errorf("cool down shared credential: %w", err)
 	}
 	if _, err := transaction.Exec(ctx, `

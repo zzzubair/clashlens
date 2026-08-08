@@ -136,6 +136,139 @@ func TestSharedTrafficGatePersistsCooldownAndQuarantine(t *testing.T) {
 	}
 }
 
+// TestSharedTrafficGateLateCooldownDoesNotOverwriteQuarantine proves
+// quarantine has monotonic precedence over cooldown: a successful-call
+// cooldown that lands after a quarantine committed must not rewrite the
+// durable state, clear the quarantine reason, bump the row timestamp, or
+// insert a misleading cooldown event. The losing update is a valid no-op,
+// not an error. The same guard must also leave terminal operator states
+// such as retired untouched.
+func TestSharedTrafficGateLateCooldownDoesNotOverwriteQuarantine(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("quarantined wins over a late cooldown", func(t *testing.T) {
+		store := startVersionTwoStore(t, ctx)
+		fingerprint := bearerTokenFingerprint("late-cooldown-shared-secret")
+		if err := store.registerSharedCredential(ctx, fingerprint, 29, 1, 30, "collector:test"); err != nil {
+			t.Fatalf("register shared credential: %v", err)
+		}
+		if err := store.quarantineSharedCredential(ctx, fingerprint, "collector:test", "official_api_authentication_failure"); err != nil {
+			t.Fatalf("quarantine shared credential: %v", err)
+		}
+		var updatedAt time.Time
+		if err := store.pool.QueryRow(ctx, `
+			SELECT updated_at FROM shared_api_credentials
+			WHERE credential_fingerprint = $1
+		`, fingerprint).Scan(&updatedAt); err != nil {
+			t.Fatalf("read quarantine timestamp: %v", err)
+		}
+
+		// The successful call's cooldown lands after the quarantine won.
+		if err := store.cooldownSharedCredential(ctx, fingerprint, 30*time.Second, "collector:test", "official_api_429"); err != nil {
+			t.Fatalf("late cooldown must be a valid no-op, got error: %v", err)
+		}
+
+		var state string
+		var quarantineReason *string
+		var cooldownUntil *time.Time
+		if err := store.pool.QueryRow(ctx, `
+			SELECT state, quarantine_reason, cooldown_until
+			FROM shared_api_credentials
+			WHERE credential_fingerprint = $1
+		`, fingerprint).Scan(&state, &quarantineReason, &cooldownUntil); err != nil {
+			t.Fatalf("read shared credential state: %v", err)
+		}
+		if state != "quarantined" {
+			t.Fatalf("late cooldown changed state to %q, want quarantined", state)
+		}
+		if quarantineReason == nil || *quarantineReason != "official_api_authentication_failure" {
+			t.Fatalf("late cooldown changed quarantine reason to %v", quarantineReason)
+		}
+		if cooldownUntil != nil {
+			t.Fatalf("late cooldown set cooldown_until = %v on a quarantined credential", *cooldownUntil)
+		}
+		var updatedAfter time.Time
+		if err := store.pool.QueryRow(ctx, `
+			SELECT updated_at FROM shared_api_credentials
+			WHERE credential_fingerprint = $1
+		`, fingerprint).Scan(&updatedAfter); err != nil {
+			t.Fatalf("read updated timestamp: %v", err)
+		}
+		if !updatedAfter.Equal(updatedAt) {
+			t.Fatalf("late cooldown bumped updated_at from %v to %v", updatedAt, updatedAfter)
+		}
+
+		permit, err := store.acquireSharedPermit(ctx, fingerprint, "go")
+		if err != nil {
+			t.Fatalf("read post-cooldown gate decision: %v", err)
+		}
+		if permit.granted || permit.state != "quarantined" || permit.nextEligibleAt != nil {
+			t.Fatalf("post-cooldown permit = %+v, want denied quarantined", permit)
+		}
+
+		var cooldownEvents int
+		if err := store.pool.QueryRow(ctx, `
+			SELECT count(*) FROM shared_api_credential_events
+			WHERE credential_fingerprint = $1 AND event_type = 'cooldown'
+		`, fingerprint).Scan(&cooldownEvents); err != nil {
+			t.Fatalf("count cooldown events: %v", err)
+		}
+		if cooldownEvents != 0 {
+			t.Fatalf("late cooldown inserted %d cooldown events, want 0", cooldownEvents)
+		}
+		var totalEvents int
+		if err := store.pool.QueryRow(ctx, `
+			SELECT count(*) FROM shared_api_credential_events
+			WHERE credential_fingerprint = $1
+		`, fingerprint).Scan(&totalEvents); err != nil {
+			t.Fatalf("count credential events: %v", err)
+		}
+		if totalEvents != 2 {
+			t.Fatalf("credential events = %d, want registration and quarantine only", totalEvents)
+		}
+	})
+
+	t.Run("retired terminal state wins over a late cooldown", func(t *testing.T) {
+		store := startVersionTwoStore(t, ctx)
+		fingerprint := bearerTokenFingerprint("retired-late-cooldown-secret")
+		if err := store.registerSharedCredential(ctx, fingerprint, 29, 1, 30, "collector:test"); err != nil {
+			t.Fatalf("register shared credential: %v", err)
+		}
+		if _, err := store.pool.Exec(ctx, `
+			UPDATE shared_api_credentials
+			SET state = 'retired', updated_at = clock_timestamp()
+			WHERE credential_fingerprint = $1
+		`, fingerprint); err != nil {
+			t.Fatalf("retire shared credential: %v", err)
+		}
+
+		if err := store.cooldownSharedCredential(ctx, fingerprint, 30*time.Second, "collector:test", "official_api_429"); err != nil {
+			t.Fatalf("late cooldown must be a valid no-op on retired, got error: %v", err)
+		}
+
+		var state string
+		if err := store.pool.QueryRow(ctx, `
+			SELECT state FROM shared_api_credentials
+			WHERE credential_fingerprint = $1
+		`, fingerprint).Scan(&state); err != nil {
+			t.Fatalf("read retired credential state: %v", err)
+		}
+		if state != "retired" {
+			t.Fatalf("late cooldown changed retired state to %q", state)
+		}
+		var cooldownEvents int
+		if err := store.pool.QueryRow(ctx, `
+			SELECT count(*) FROM shared_api_credential_events
+			WHERE credential_fingerprint = $1 AND event_type = 'cooldown'
+		`, fingerprint).Scan(&cooldownEvents); err != nil {
+			t.Fatalf("count cooldown events: %v", err)
+		}
+		if cooldownEvents != 0 {
+			t.Fatalf("late cooldown inserted %d cooldown events on retired, want 0", cooldownEvents)
+		}
+	})
+}
+
 func TestSharedTrafficGateCleanupIsBounded(t *testing.T) {
 	ctx := context.Background()
 	store := startVersionTwoStore(t, ctx)
