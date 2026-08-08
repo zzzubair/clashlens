@@ -480,24 +480,26 @@ contract_version() {
 }
 
 admin_database_url() {
-  printf 'postgresql://%s:%s@postgres:5432/%s?sslmode=disable' \
-    "$POSTGRES_USER" "$POSTGRES_PASSWORD" "$POSTGRES_DB"
+  printf 'postgresql://%s:' "$POSTGRES_USER"
+  printf '%s' "$POSTGRES_PASSWORD"
+  printf '@postgres:5432/%s?sslmode=disable' "$POSTGRES_DB"
 }
 
 role_database_url() {
   local role=$1
   local password=$2
-  printf 'postgresql://%s:%s@postgres:5432/%s?sslmode=disable' \
-    "$role" "$password" "$POSTGRES_DB"
+  printf 'postgresql://%s:' "$role"
+  printf '%s' "$password"
+  printf '@postgres:5432/%s?sslmode=disable' "$POSTGRES_DB"
 }
 
 # Set and rotate the three runtime role passwords through admin psql stdin.
 # The SQL text, including the passwords, never appears in process arguments.
 configure_runtime_roles() {
   local sql
-  sql="ALTER ROLE $COLLECTOR_ROLE WITH PASSWORD '$CLASHLENS_COLLECTOR_DB_PASSWORD';"
-  sql+=" ALTER ROLE $WORKER_ROLE WITH PASSWORD '$CLASHLENS_WORKER_DB_PASSWORD';"
-  sql+=" ALTER ROLE $API_ROLE WITH PASSWORD '$CLASHLENS_API_DB_PASSWORD';"
+  sql="ALTER ROLE $COLLECTOR_ROLE WITH LOGIN PASSWORD '$CLASHLENS_COLLECTOR_DB_PASSWORD';"
+  sql+=" ALTER ROLE $WORKER_ROLE WITH LOGIN PASSWORD '$CLASHLENS_WORKER_DB_PASSWORD';"
+  sql+=" ALTER ROLE $API_ROLE WITH LOGIN PASSWORD '$CLASHLENS_API_DB_PASSWORD';"
   printf '%s\n' "$sql" | "$PODMAN_BIN" exec --interactive "$POSTGRES_CONTAINER" \
     psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"
 }

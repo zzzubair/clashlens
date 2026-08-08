@@ -143,7 +143,7 @@ case "$verb" in
     if [[ "$interactive" == true ]]; then
       n=$(find "$FAKE_STATE/stdin" -maxdepth 1 -type f 2>/dev/null | wc -l)
       cat >"$FAKE_STATE/stdin/exec-$n"
-      if grep -q 'collector_reset_sweep_members' "$FAKE_STATE/stdin/exec-$n"; then
+      if grep -Fq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$FAKE_STATE/stdin/exec-$n"; then
         printf '1' >"$FAKE_STATE/contract_version"
       fi
       if grep -q 'collector_reset_baseline_sweeps' "$FAKE_STATE/stdin/exec-$n"; then
@@ -461,7 +461,7 @@ log_has "$FRESH_LOG" '^build ' 'collector image was not built'
 log_has "$FRESH_LOG" '^exec --interactive clashlens-postgres psql ' 'migration psql execution is missing'
 
 [[ -n "$(find "$FRESH_DIR/state/stdin" -maxdepth 1 -type f)" ]] || fail 'no psql stdin was captured'
-grep -lq 'collector_reset_sweep_members' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
+grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'migration 0001 was not applied on an absent database'
 grep -lq 'collector_reset_baseline_sweeps' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'migration 0002 was not applied on a fresh database'
@@ -471,7 +471,7 @@ grep -lq 'ALTER ROLE clashlens_python_worker' "$FRESH_DIR/state/stdin"/exec-* 2>
   fail 'worker role password was not configured through psql stdin'
 grep -lq 'ALTER ROLE clashlens_python_api' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'api role password was not configured through psql stdin'
-role_stdin=$(grep -l 'ALTER ROLE clashlens_collector' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null | head -n 1)
+role_stdin=$(grep -l 'ALTER ROLE clashlens_collector WITH LOGIN PASSWORD' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null | head -n 1)
 [[ -n "$role_stdin" ]] || fail 'could not locate the role configuration psql stdin'
 grep -q 'collector-role-password-0123456789' "$role_stdin" || \
   fail 'collector role password did not reach psql stdin'
@@ -574,7 +574,7 @@ V1_ENV="$V1_DIR/app.env"
 write_scenario_env "$V1_ENV" "$V1_DIR/keys"
 printf '1' >"$V1_DIR/state/contract_version"
 deploy "$V1_DIR" "$V1_ENV" -- up >/dev/null
-if grep -lq 'collector_reset_sweep_members' "$V1_DIR/state/stdin"/exec-* 2>/dev/null; then
+if grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$V1_DIR/state/stdin"/exec-* 2>/dev/null; then
   fail 'migration 0001 was reapplied on a populated v1 database'
 fi
 grep -lq 'collector_reset_baseline_sweeps' "$V1_DIR/state/stdin"/exec-* 2>/dev/null || \
@@ -595,7 +595,7 @@ write_scenario_env "$V2_ENV" "$V2_DIR/keys"
 printf '2' >"$V2_DIR/state/contract_version"
 deploy "$V2_DIR" "$V2_ENV" -- up >/dev/null
 [[ -n "$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f)" ]] || fail 'no psql stdin was captured on a v2 database'
-if grep -lq 'collector_reset_sweep_members' "$V2_DIR/state/stdin"/exec-* 2>/dev/null; then
+if grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$V2_DIR/state/stdin"/exec-* 2>/dev/null; then
   fail 'migration 0001 was applied on a v2 database'
 fi
 [[ "$(grep -l 'collector_reset_baseline_sweeps' "$V2_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
@@ -614,7 +614,7 @@ INIT_DIR=$(new_scenario)
 INIT_ENV="$INIT_DIR/app.env"
 write_scenario_env "$INIT_ENV" "$INIT_DIR/keys"
 deploy "$INIT_DIR" "$INIT_ENV" -- init >/dev/null
-grep -lq 'collector_reset_sweep_members' "$INIT_DIR/state/stdin"/exec-* || \
+grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$INIT_DIR/state/stdin"/exec-* || \
   fail 'init did not apply migration 0001 on an absent database'
 if grep -lq 'collector_reset_baseline_sweeps' "$INIT_DIR/state/stdin"/exec-*; then
   fail 'init applied migration 0002'

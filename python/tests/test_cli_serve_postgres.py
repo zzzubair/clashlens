@@ -139,7 +139,12 @@ def test_serve_app_uses_api_database_and_wires_official_verification(
                 ).fetchone()
                 assert fingerprint is not None
                 expected = hashlib.sha256(OFFICIAL_KEY_BYTES.rstrip(b"\n")).hexdigest()
-                assert fingerprint[0] == expected
+                actual_fingerprint = (
+                    fingerprint[0].decode("ascii")
+                    if isinstance(fingerprint[0], bytes)
+                    else fingerprint[0]
+                )
+                assert actual_fingerprint == expected
                 leaked = connection.execute(
                     """
                     SELECT count(*)

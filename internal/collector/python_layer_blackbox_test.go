@@ -130,7 +130,20 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 	if err := os.WriteFile(secretFile, []byte(base64.RawURLEncoding.EncodeToString(key)+"\n"), 0o600); err != nil {
 		t.Fatalf("write Python API HMAC secret fixture: %v", err)
 	}
-	serve := exec.CommandContext(ctx, filepath.Join(pythonEnvironment, "bin", "python"), "-m", "clashlens.cli", "serve", "--host", "127.0.0.1", "--port", fmt.Sprint(port), "--secret-file", secretFile)
+	officialKeyFile := filepath.Join(t.TempDir(), "official-api.key")
+	if err := os.WriteFile(officialKeyFile, []byte("synthetic-official-api-key\n"), 0o600); err != nil {
+		t.Fatalf("write Python API official key fixture: %v", err)
+	}
+	serve := exec.CommandContext(
+		ctx,
+		filepath.Join(pythonEnvironment, "bin", "python"),
+		"-m", "clashlens.cli", "serve",
+		"--host", "127.0.0.1",
+		"--port", fmt.Sprint(port),
+		"--secret-file", secretFile,
+		"--official-key-file", officialKeyFile,
+		"--official-proxy-url", "http://127.0.0.1:9",
+	)
 	serve.Dir = repositoryRootForTest(t)
 	serve.Env = pythonPrototypeEnvironment(environment)
 	serve.Stdout = io.Discard
