@@ -16,24 +16,31 @@ DAY = ranked_day_for(datetime(2026, 8, 4, 12, tzinfo=UTC))
 
 
 def _coverage(*, gap: bool = False) -> tuple[CoverageObservation, ...]:
+    # Reset-baseline sweeps request their endpoints after the 05:00 UTC
+    # boundary, so the chain head and tail are observed strictly after the
+    # ranked-day boundary timestamps and are identified by their observation
+    # ids rather than by boundary-time equality.
     return (
         CoverageObservation(
-            observed_at=DAY.start,
+            observed_at=DAY.start + timedelta(seconds=5),
             row_count=50,
             battle_identities=("older", "shared"),
             has_row_gap=False,
+            observation_id=101,
         ),
         CoverageObservation(
             observed_at=DAY.start + timedelta(hours=12),
             row_count=50,
             battle_identities=("shared", "daily"),
             has_row_gap=gap,
+            observation_id=102,
         ),
         CoverageObservation(
-            observed_at=DAY.end,
+            observed_at=DAY.end + timedelta(seconds=5),
             row_count=2,
             battle_identities=("daily",),
             has_row_gap=False,
+            observation_id=103,
         ),
     )
 
@@ -46,6 +53,8 @@ def _input(**overrides) -> ReconciliationInput:
         "end_baseline_id": 11,
         "start_trophies": 6000,
         "next_start_trophies": 5940,
+        "start_baseline_battle_log_observation_id": 101,
+        "end_baseline_battle_log_observation_id": 103,
         "coverage_observations": _coverage(),
         "contributions": (
             BattleContribution("attack-1", "offense", 20),
@@ -322,6 +331,49 @@ def test_incomplete_coverage_keeps_one_to_seven_defense_adjustment_unknown() -> 
     assert result.automatic_defense_evidence_state == "unknown"
     assert result.state == "Malformed"
     assert "automatic_defense_basis_unavailable" in result.failure_reasons
+
+
+def test_post_boundary_baseline_battle_log_responses_can_form_a_complete_chain() -> (
+    None
+):
+    # A reset-baseline sweep requests its endpoints after the 05:00 UTC
+    # boundary, so both baseline battle-log responses are observed strictly
+    # after the ranked-day boundary timestamps. The chain must be bound to the
+    # exact battle-log observations that the start and end sweeps selected,
+    # not to impossible boundary-time observations.
+    result = reconcile_ranked_day(
+        _input(
+            coverage_observations=(
+                CoverageObservation(
+                    observed_at=DAY.start + timedelta(seconds=5),
+                    row_count=50,
+                    battle_identities=("older", "shared"),
+                    has_row_gap=False,
+                    observation_id=101,
+                ),
+                CoverageObservation(
+                    observed_at=DAY.start + timedelta(hours=12),
+                    row_count=50,
+                    battle_identities=("shared", "daily"),
+                    has_row_gap=False,
+                    observation_id=102,
+                ),
+                CoverageObservation(
+                    observed_at=DAY.end + timedelta(seconds=5),
+                    row_count=2,
+                    battle_identities=("daily",),
+                    has_row_gap=False,
+                    observation_id=103,
+                ),
+            ),
+            start_baseline_battle_log_observation_id=101,
+            end_baseline_battle_log_observation_id=103,
+        )
+    )
+
+    assert result.state == "Complete"
+    assert result.coverage_complete is True
+    assert result.failure_reasons == ()
 
 
 def test_more_than_eight_defenses_is_a_visible_partial_anomaly() -> None:

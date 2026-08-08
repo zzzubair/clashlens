@@ -102,6 +102,13 @@ class ReconciliationInput:
     previous_day: PreviousRankedDay | None
     boundary_kind: str | None
     season_anchor_valid: bool
+    # The battle-log responses that the start and end reset-baseline sweeps
+    # selected. A sweep requests its endpoints after the 05:00 UTC boundary,
+    # so these observations are normally observed after the ranked-day
+    # boundary timestamps; the continuity chain is bound to these exact
+    # observation identities, not to boundary-time comparisons.
+    start_baseline_battle_log_observation_id: int | None = None
+    end_baseline_battle_log_observation_id: int | None = None
     # None preserves the original seam's meaning: an existing baseline ID is
     # accepted. False is explicit incomplete reset evidence.
     start_baseline_complete: bool | None = None
@@ -564,9 +571,17 @@ def _coverage_is_continuous(
             ["missing_start_battle_log_baseline", "missing_end_battle_log_baseline"]
         )
         return False, evidence, malformed
-    if observations[0].observed_at > data.ranked_day.start:
+    if (
+        data.start_baseline_battle_log_observation_id is None
+        or observations[0].observation_id
+        != data.start_baseline_battle_log_observation_id
+    ):
         failures.append("missing_start_battle_log_baseline")
-    if observations[-1].observed_at < data.ranked_day.end:
+    if (
+        data.end_baseline_battle_log_observation_id is None
+        or observations[-1].observation_id
+        != data.end_baseline_battle_log_observation_id
+    ):
         failures.append("missing_end_battle_log_baseline")
 
     for observation in observations:
@@ -737,6 +752,12 @@ def _input_evidence(
         "ranked_day_end": data.ranked_day.end.isoformat(),
         "start_baseline_id": data.start_baseline_id,
         "end_baseline_id": data.end_baseline_id,
+        "start_baseline_battle_log_observation_id": (
+            data.start_baseline_battle_log_observation_id
+        ),
+        "end_baseline_battle_log_observation_id": (
+            data.end_baseline_battle_log_observation_id
+        ),
         "start_baseline_complete": data.start_baseline_complete,
         "end_baseline_complete": data.end_baseline_complete,
         "start_trophies": data.start_trophies,

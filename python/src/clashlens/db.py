@@ -1162,6 +1162,20 @@ class Database:
                     claim.parser_version,
                     claim.processing_version,
                 )
+                start_battle_log_observation_id = (
+                    int(start_baseline["evidence"]["battle_log_observation_id"])
+                    if start_baseline is not None
+                    and start_baseline["evidence"]["battle_log_observation_id"]
+                    is not None
+                    else None
+                )
+                end_battle_log_observation_id = (
+                    int(end_baseline["evidence"]["battle_log_observation_id"])
+                    if end_baseline is not None
+                    and end_baseline["evidence"]["battle_log_observation_id"]
+                    is not None
+                    else None
+                )
                 coverage_rows = connection.execute(
                     """
                     SELECT
@@ -1211,11 +1225,50 @@ class Database:
                         WHERE sr.battle_log_observation_id = blo.id
                     ) AS row_flags ON true
                     WHERE blo.player_id = %s
-                      AND blo.observed_at BETWEEN %s AND %s
+                      AND blo.observed_at >= COALESCE(
+                          (SELECT start_blo.observed_at
+                             FROM battle_log_observations AS start_blo
+                            WHERE start_blo.observation_id = %s),
+                          %s
+                      )
+                      AND blo.observed_at <= COALESCE(
+                          (SELECT end_blo.observed_at
+                             FROM battle_log_observations AS end_blo
+                            WHERE end_blo.observation_id = %s),
+                          %s
+                      )
                     ORDER BY blo.observed_at, blo.id
                     """,
-                    (player_id, ranked_day.start, ranked_day.end),
+                    (
+                        player_id,
+                        start_battle_log_observation_id,
+                        ranked_day.start,
+                        end_battle_log_observation_id,
+                        ranked_day.end,
+                    ),
                 ).fetchall()
+                if start_battle_log_observation_id is not None:
+                    start_index = next(
+                        (
+                            index
+                            for index, row in enumerate(coverage_rows)
+                            if int(row[0]) == start_battle_log_observation_id
+                        ),
+                        None,
+                    )
+                    if start_index is not None:
+                        coverage_rows = coverage_rows[start_index:]
+                if end_battle_log_observation_id is not None:
+                    end_index = next(
+                        (
+                            index
+                            for index, row in enumerate(coverage_rows)
+                            if int(row[0]) == end_battle_log_observation_id
+                        ),
+                        None,
+                    )
+                    if end_index is not None:
+                        coverage_rows = coverage_rows[: end_index + 1]
                 coverage = tuple(
                     CoverageObservation(
                         observation_id=int(row[0]),
@@ -1436,6 +1489,12 @@ class Database:
                             if end_baseline is not None
                             and end_baseline["trophies"] is not None
                             else None
+                        ),
+                        start_baseline_battle_log_observation_id=(
+                            start_battle_log_observation_id
+                        ),
+                        end_baseline_battle_log_observation_id=(
+                            end_battle_log_observation_id
                         ),
                         coverage_observations=coverage,
                         contributions=contributions,

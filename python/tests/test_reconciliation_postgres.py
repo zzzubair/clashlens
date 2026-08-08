@@ -157,14 +157,18 @@ def _store_baseline_pair(
     boundary: datetime,
     trophies: int,
     empty_battle_log: bool,
+    observed_at: datetime | None = None,
 ) -> tuple[int, int, int, int]:
+    # A reset-baseline sweep requests its endpoints after the boundary, so the
+    # stored observations may complete after ``boundary`` itself.
+    observed_at = boundary if observed_at is None else observed_at
     profile_observation, profile_job = store_observation(
         connection_info,
         archive_server,
         occurrence_key=f"{key}-profile",
         endpoint="profile",
         body=_profile(trophies),
-        observed_at=boundary,
+        observed_at=observed_at,
         normalized_tag="#2PP",
     )
     battle_observation, battle_job = store_observation(
@@ -173,7 +177,7 @@ def _store_baseline_pair(
         occurrence_key=f"{key}-battle",
         endpoint="battle_log",
         body=_battle_log(empty=empty_battle_log),
-        observed_at=boundary,
+        observed_at=observed_at,
         normalized_tag="#2PP",
     )
     _seed_reset_collection_identity(
@@ -722,5 +726,148 @@ def test_postgres_persists_complete_inferred_shield_evidence(
             assert row[20] is True
             assert text(row[21]) == "inferred_shielded"
             assert row[22] == 1
+        finally:
+            database.close()
+
+
+def test_completion_binds_coverage_chain_to_sweep_battle_log_observation_ids(
+    database_url: str,
+    archive_server,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        _start_profile, start_battle, start_profile_job, start_battle_job = (
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key="identity-start",
+                boundary=DAY_START,
+                trophies=6000,
+                empty_battle_log=True,
+                observed_at=DAY_START + timedelta(seconds=5),
+            )
+        )
+        # A normal poll observed before the start sweep response must not
+        # become the chain head.
+        _pre_start_poll, pre_start_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="identity-pre-start-poll",
+            endpoint="battle_log",
+            body=_battle_log(empty=True),
+            observed_at=DAY_START + timedelta(seconds=2),
+            normalized_tag="#2PP",
+        )
+        middle_observation, middle_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="identity-middle",
+            endpoint="battle_log",
+            body=_battle_log(),
+            observed_at=DAY_START + timedelta(hours=7),
+            normalized_tag="#2PP",
+        )
+        _end_profile, end_battle, end_profile_job, end_battle_job = (
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key="identity-end",
+                boundary=DAY_END,
+                trophies=6040,
+                empty_battle_log=True,
+                observed_at=DAY_END + timedelta(seconds=5),
+            )
+        )
+        # A normal poll observed after the end sweep response must not become
+        # the chain tail.
+        _post_end_poll, post_end_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="identity-post-end-poll",
+            endpoint="battle_log",
+            body=_battle_log(empty=True),
+            observed_at=DAY_END + timedelta(seconds=30),
+            normalized_tag="#2PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for job_id in (
+                start_profile_job,
+                start_battle_job,
+                pre_start_job,
+                middle_job,
+                end_profile_job,
+                end_battle_job,
+                post_end_job,
+            ):
+                result = processor.process_job(
+                    job_id, owner=f"identity-source-{job_id}"
+                )
+                assert result is not None and result.outcome == "processed"
+            ranked_day_start_text = DAY_START.strftime("%Y-%m-%dT%H:%M:%SZ")
+            with database.pool.connection() as connection:
+                reconcile_job = connection.execute(
+                    """
+                    SELECT id
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                      AND input_json->>'ranked_day_start' = %s
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    (ranked_day_start_text,),
+                ).fetchone()
+            assert reconcile_job is not None
+            result = processor.process_job(
+                int(reconcile_job[0]), owner="identity-reconcile"
+            )
+            assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT state, confidence, failure_reasons, coverage_complete,
+                           coverage_evidence, input_evidence
+                    FROM ranked_day_versions
+                    WHERE ranked_day_start = %s
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """,
+                    (DAY_START,),
+                ).fetchone()
+                sweep_rows = connection.execute(
+                    """
+                    SELECT DISTINCT ON (boundary_at) boundary_at,
+                           battle_log_observation_id
+                    FROM reset_baseline_evidence
+                    WHERE player_id = %s AND boundary_at IN (%s, %s)
+                    ORDER BY boundary_at, version DESC
+                    """,
+                    (1, DAY_START, DAY_END),
+                ).fetchall()
+            assert row is not None
+            assert len(sweep_rows) == 2
+            assert int(sweep_rows[0][1]) == start_battle
+            assert int(sweep_rows[1][1]) == end_battle
+            # This test asserts coverage identity only: the coverage chain is
+            # bound to the exact battle-log observations the start and end
+            # reset-baseline sweeps selected. The fixture does not supply all
+            # unrelated automatic-defense/adjustment evidence, so the overall
+            # state or confidence must not be asserted here.
+            assert row[3] is True
+            assert "missing_start_battle_log_baseline" not in row[2]
+            assert "missing_end_battle_log_baseline" not in row[2]
+            coverage_evidence = row[4]
+            assert isinstance(coverage_evidence, list)
+            coverage_ids = [item["observation_id"] for item in coverage_evidence]
+            assert coverage_ids[0] == int(sweep_rows[0][1])
+            assert coverage_ids[-1] == int(sweep_rows[1][1])
+            assert middle_observation in coverage_ids
+            assert _pre_start_poll not in coverage_ids
+            assert _post_end_poll not in coverage_ids
+            assert row[5]["start_baseline_battle_log_observation_id"] == int(
+                sweep_rows[0][1]
+            )
+            assert row[5]["end_baseline_battle_log_observation_id"] == int(
+                sweep_rows[1][1]
+            )
         finally:
             database.close()
