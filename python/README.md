@@ -50,20 +50,26 @@ Completion check: each selected command exits with status `0`. A test that
 skips because PostgreSQL or `uv` is unavailable is not a passing integration
 result; record the skipped prerequisite.
 
-## 2. Production worker
+## 2. Production worker and private API
 
 The root deployment script owns the production lifecycle:
 
 ```sh
 ../deploy.sh python-up
-../deploy.sh python-status
+../deploy.sh status
+../deploy.sh queue-status
+../deploy.sh python-start
+../deploy.sh api-start
+../deploy.sh worker-start
 ../deploy.sh python-down
 ```
 
-The worker image is built from this package's `Containerfile`. The worker
-reads archive objects only through its own archive-read credential, claims
-leased work in bounded batches, and never requests a new Supercell source
-request during replay.
+`python-up` builds the Python image and starts the private API and the
+production worker; the `*-start` commands start roles without building.
+The worker reads archive objects only through its own archive-read
+credential, claims leased work in bounded batches, and never requests a
+new Supercell source request during replay. The private API listens on the
+private Podman network alias `python-api:8000` with no published host port.
 
 ## 3. Fixed production contract
 

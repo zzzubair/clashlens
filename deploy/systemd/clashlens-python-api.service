@@ -1,5 +1,5 @@
 [Unit]
-Description=Clash Lens production Python worker
+Description=Clash Lens private Python API
 Requires=clashlens.service
 After=network-online.target clashlens.service
 
@@ -7,9 +7,9 @@ After=network-online.target clashlens.service
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=%h/clashlens
-ExecStart=%h/clashlens/deploy.sh worker-start
-ExecStop=%h/clashlens/deploy.sh worker-down
-TimeoutStartSec=15min
+ExecStart=%h/clashlens/deploy.sh api-start
+ExecStop=%h/clashlens/deploy.sh api-down
+TimeoutStartSec=10min
 TimeoutStopSec=2min
 
 [Install]

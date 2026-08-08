@@ -16,15 +16,30 @@ NETWORK_NAME=clashlens-private
 POSTGRES_VOLUME=clashlens-postgres-data
 POSTGRES_CONTAINER=clashlens-postgres
 COLLECTOR_CONTAINER=clashlens-collector
+COLLECTOR_BRIDGE_CONTAINER=clashlens-collector-bridge
 PYTHON_WORKER_CONTAINER=clashlens-python-worker
+PYTHON_API_CONTAINER=clashlens-python-api
 POSTGRES_IMAGE=docker.io/library/postgres:17-alpine
 COLLECTOR_IMAGE=localhost/clashlens-collector:deployment
-PYTHON_WORKER_IMAGE=localhost/clashlens-python-worker:deployment
+PYTHON_IMAGE=localhost/clashlens-python:deployment
 HEALTH_HOST=127.0.0.1
 HEALTH_PORT=8081
 
-# app.env is parsed without evaluating shell syntax. This prevents a typo in the
-# file from running a command and keeps credentials out of diagnostic output.
+# Fixed PostgreSQL runtime roles. Their passwords are set and rotated through
+# admin psql stdin; the admin role remains POSTGRES_USER.
+COLLECTOR_ROLE=clashlens_collector
+WORKER_ROLE=clashlens_python_worker
+API_ROLE=clashlens_python_api
+API_NETWORK_ALIAS=python-api
+API_LISTEN_PORT=8000
+
+COLLECTOR_STOP_GRACE=30
+API_STOP_GRACE=30
+POSTGRES_STOP_GRACE=60
+
+# app.env is parsed without evaluating shell syntax. This prevents a typo in
+# the file from running a command and keeps credentials out of diagnostic
+# output.
 declare -Ag ENV_PRESENT=()
 
 usage() {
@@ -32,18 +47,33 @@ usage() {
 Usage: ./deploy.sh <command> [arguments]
 
 Commands:
-  init                         Create private Podman resources and apply SQL.
-  up                           Initialize, build, start, and verify the collector.
-  restart                      Restart the collector without rebuilding its image.
+  init                         Create private Podman resources; apply migration
+                               0001 only on an absent database.
+  up                           Build the collector image, migrate the contract
+                               to version 2 (bridge -> 0002 -> runtime roles),
+                               and start the required collector.
+  restart                      Start-only recovery for an existing version-2
+                               stack: never builds and never runs SQL.
+  build-collector              Build the immutable collector image only.
+  build-python                 Build the immutable Python image only.
+  python-up                    Build the Python image, then start the private
+                               API and the production worker.
+  python-start                 Start-only path for the private API and worker.
+  api-start                    Start-only path for the private Python API.
+  worker-start                 Start-only path for the production worker.
   status                       Show safe container, network, and volume status.
-  logs [collector|postgres]    Show logs for one private container.
-  down                         Stop and remove containers; keep the data volume.
+  logs [collector|postgres|python-api|python-worker]
+                               Show logs for one private container.
+  down                         Gracefully stop and remove all containers; keep
+                               the data volume.
+  stack-down                   Gracefully stop and remove only collector and
+                               PostgreSQL.
+  python-down                  Gracefully stop and remove API and worker.
+  api-down                     Gracefully stop and remove only the API.
+  worker-down                  Gracefully stop and remove only the worker.
   enqueue [collector args]     Enqueue work, or pass a tag as the only argument.
-  maintenance <collector args>
-                               Run a collector maintenance command.
-  python-up                    Build, start, and verify the production Python worker.
-  python-down                  Remove only the production Python worker container.
-  python-status                Show the production Python worker container status.
+  maintenance <collector args> Run a collector maintenance command.
+  queue-status                 Show the Python worker queue status.
 EOF
 }
 
@@ -104,6 +134,58 @@ not_placeholder() {
   esac
 }
 
+# A database password must be high-entropy and restricted to URL-safe
+# unreserved bytes so it can appear unescaped inside a PostgreSQL URL.
+url_safe_password() {
+  local name=$1
+  local value=${!name:-}
+  [[ -n "$value" ]] || die "$name is required in app.env"
+  case "$value" in
+    ""|CHANGE_ME|REPLACE_ME|replace-me|change-me)
+      die "$name must contain a deployment value"
+      ;;
+  esac
+  [[ "$value" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || \
+    die "$name must contain 32-128 URL-safe unreserved characters (A-Za-z0-9_-)"
+}
+
+validate_resource_setting() {
+  local name=$1
+  local kind=$2
+  local value=${!name:-}
+  [[ -n "$value" ]] || die "$name is required in app.env"
+  case "$value" in
+    ""|CHANGE_ME|REPLACE_ME|replace-me|change-me)
+      die "$name must contain a deployment value"
+      ;;
+  esac
+  case "$kind" in
+    memory)
+      [[ "$value" =~ ^[0-9]+[bkmgt]?$ ]] || \
+        die "$name must be a byte count with an optional b/k/m/g/t suffix"
+      ;;
+    cpus)
+      [[ "$value" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "$name must be a CPU count"
+      ;;
+    pids)
+      [[ "$value" =~ ^[0-9]+$ ]] || die "$name must be a PID count"
+      ;;
+  esac
+}
+
+validate_resource_budgets() {
+  local component kind
+  for component in POSTGRES COLLECTOR API WORKER; do
+    for kind in MEMORY CPUS PIDS; do
+      case "$kind" in
+        MEMORY) validate_resource_setting "CLASHLENS_${component}_${kind}" memory ;;
+        CPUS) validate_resource_setting "CLASHLENS_${component}_${kind}" cpus ;;
+        PIDS) validate_resource_setting "CLASHLENS_${component}_${kind}" pids ;;
+      esac
+    done
+  done
+}
+
 validate_key_specs() {
   local name=$1
   local specs=$2
@@ -132,24 +214,40 @@ validate_common_settings() {
     POSTGRES_DB
     POSTGRES_USER
     POSTGRES_PASSWORD
-    CLASHLENS_DATABASE_URL
+    CLASHLENS_COLLECTOR_DB_PASSWORD
+    CLASHLENS_WORKER_DB_PASSWORD
+    CLASHLENS_API_DB_PASSWORD
     CLASHLENS_ARCHIVE_ENDPOINT
     CLASHLENS_ARCHIVE_BUCKET
     CLASHLENS_ARCHIVE_ACCESS_KEY
     CLASHLENS_ARCHIVE_SECRET_KEY
+    CLASHLENS_WORKER_ARCHIVE_ACCESS_KEY
+    CLASHLENS_WORKER_ARCHIVE_SECRET_KEY
     CLASHLENS_OFFICIAL_API_ORIGIN
+    CLASHLENS_OFFICIAL_API_PROXY_URL
     CLASHLENS_NORMAL_API_KEY_FILES
     CLASHLENS_INTERACTIVE_API_KEY_FILES
     CLASHLENS_API_KEY_HOST_DIR
+    CLASHLENS_INTERACTIVE_API_KEY_FILE
+    CLASHLENS_HMAC_CALLER
+    CLASHLENS_HMAC_KEY_ID
+    CLASHLENS_HMAC_SECRET_FILE
+    CLASHLENS_WORKER_LEASE_SECONDS
   )
   local name
   for name in "${required[@]}"; do
     required_setting "$name"
   done
 
-  for name in POSTGRES_PASSWORD CLASHLENS_DATABASE_URL CLASHLENS_ARCHIVE_ACCESS_KEY CLASHLENS_ARCHIVE_SECRET_KEY; do
-    not_placeholder "$name"
-  done
+  url_safe_password POSTGRES_PASSWORD
+  url_safe_password CLASHLENS_COLLECTOR_DB_PASSWORD
+  url_safe_password CLASHLENS_WORKER_DB_PASSWORD
+  url_safe_password CLASHLENS_API_DB_PASSWORD
+  not_placeholder CLASHLENS_ARCHIVE_ACCESS_KEY
+  not_placeholder CLASHLENS_ARCHIVE_SECRET_KEY
+  not_placeholder CLASHLENS_WORKER_ARCHIVE_ACCESS_KEY
+  not_placeholder CLASHLENS_WORKER_ARCHIVE_SECRET_KEY
+  not_placeholder CLASHLENS_OFFICIAL_API_PROXY_URL
 
   [[ "$CLASHLENS_ARCHIVE_SECURE" == "true" ]] || die "CLASHLENS_ARCHIVE_SECURE must be true"
   [[ -z "${CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN:-}" ]] || die "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN must not be set"
@@ -163,22 +261,68 @@ validate_common_settings() {
     [[ -z "${ENV_PRESENT[$inline_key_setting]+present}" ]] || die "inline API keys must not be set; use API key files"
   done
 
+  # The admin URL is derived from POSTGRES_USER and POSTGRES_PASSWORD and is
+  # used only by the migration bridge and role setup. No runtime container
+  # receives it, so it must not be configured as a shared setting.
+  [[ -z "${CLASHLENS_DATABASE_URL:-}" ]] || die "CLASHLENS_DATABASE_URL must not be set; role URLs are derived from role passwords"
+  [[ -z "${ENV_PRESENT[CLASHLENS_DATABASE_URL]+present}" ]] || die "CLASHLENS_DATABASE_URL must not be set; role URLs are derived from role passwords"
+  # The API container receives the official key file and proxy URL under the
+  # CLI serve env names. The deployment derives them from the shared
+  # interactive key file and proxy settings, so app.env must not set them.
+  [[ -z "${CLASHLENS_OFFICIAL_KEY_FILE:-}" ]] || die "CLASHLENS_OFFICIAL_KEY_FILE is derived from CLASHLENS_INTERACTIVE_API_KEY_FILE; do not set it in app.env"
+  [[ -z "${ENV_PRESENT[CLASHLENS_OFFICIAL_KEY_FILE]+present}" ]] || die "CLASHLENS_OFFICIAL_KEY_FILE is derived from CLASHLENS_INTERACTIVE_API_KEY_FILE; do not set it in app.env"
+  [[ -z "${CLASHLENS_OFFICIAL_PROXY_URL:-}" ]] || die "CLASHLENS_OFFICIAL_PROXY_URL is derived from CLASHLENS_OFFICIAL_API_PROXY_URL; do not set it in app.env"
+  [[ -z "${ENV_PRESENT[CLASHLENS_OFFICIAL_PROXY_URL]+present}" ]] || die "CLASHLENS_OFFICIAL_PROXY_URL is derived from CLASHLENS_OFFICIAL_API_PROXY_URL; do not set it in app.env"
+  [[ -z "${CLASHLENS_PYTHON_WORKER_IMAGE:-}" ]] || die "CLASHLENS_PYTHON_WORKER_IMAGE was renamed to CLASHLENS_PYTHON_IMAGE"
+  [[ -z "${CLASHLENS_ENABLE_GLOBAL_RANKINGS:-}" || "$CLASHLENS_ENABLE_GLOBAL_RANKINGS" == "false" ]] || \
+    die "global Top-200 collection must stay default-off for the beta"
+
+  [[ "$POSTGRES_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "POSTGRES_DB must be a valid PostgreSQL database name"
+  [[ "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "POSTGRES_USER must be a valid PostgreSQL role name"
   [[ "$CLASHLENS_OFFICIAL_API_ORIGIN" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || \
     die "CLASHLENS_OFFICIAL_API_ORIGIN must be an HTTPS origin without a path"
+  [[ "$CLASHLENS_OFFICIAL_API_PROXY_URL" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || \
+    die "CLASHLENS_OFFICIAL_API_PROXY_URL must be an HTTP(S) origin with a plain host and optional port, without credentials or a path"
   [[ "$CLASHLENS_ARCHIVE_ENDPOINT" != *"://"* ]] || die "CLASHLENS_ARCHIVE_ENDPOINT must be a host:port endpoint"
   [[ "$CLASHLENS_ARCHIVE_ENDPOINT" != */* ]] || die "CLASHLENS_ARCHIVE_ENDPOINT must not contain a path"
-  [[ "$CLASHLENS_DATABASE_URL" == postgresql://* || "$CLASHLENS_DATABASE_URL" == postgres://* ]] || \
-    die "CLASHLENS_DATABASE_URL must be a PostgreSQL URL"
-  [[ "$CLASHLENS_DATABASE_URL" == *"@postgres:"* || "$CLASHLENS_DATABASE_URL" == *"@postgres/"* ]] || \
-    die "CLASHLENS_DATABASE_URL must use the private postgres service"
 
   [[ "$CLASHLENS_API_KEY_HOST_DIR" == /* ]] || die "CLASHLENS_API_KEY_HOST_DIR must be an absolute directory"
   [[ "$CLASHLENS_HEALTH_HOST" == "127.0.0.1" ]] || die "CLASHLENS_HEALTH_HOST must be 127.0.0.1"
   [[ "$CLASHLENS_HEALTH_PORT" =~ ^[0-9]+$ ]] || die "CLASHLENS_HEALTH_PORT must be a number"
   (( CLASHLENS_HEALTH_PORT >= 1 && CLASHLENS_HEALTH_PORT <= 65535 )) || die "CLASHLENS_HEALTH_PORT is outside the valid range"
 
+  [[ "$CLASHLENS_WORKER_LEASE_SECONDS" =~ ^[0-9]+$ ]] && (( CLASHLENS_WORKER_LEASE_SECONDS >= 1 )) || \
+    die "CLASHLENS_WORKER_LEASE_SECONDS must be a positive integer"
+
   validate_key_specs CLASHLENS_NORMAL_API_KEY_FILES "$CLASHLENS_NORMAL_API_KEY_FILES" 4
   validate_key_specs CLASHLENS_INTERACTIVE_API_KEY_FILES "$CLASHLENS_INTERACTIVE_API_KEY_FILES" 1
+
+  [[ "$CLASHLENS_INTERACTIVE_API_KEY_FILE" =~ ^/run/secrets/[^/]+$ ]] || \
+    die "CLASHLENS_INTERACTIVE_API_KEY_FILE must be a direct file path under /run/secrets"
+  [[ "$CLASHLENS_HMAC_SECRET_FILE" =~ ^/run/secrets/[^/]+$ ]] || \
+    die "CLASHLENS_HMAC_SECRET_FILE must be a direct file path under /run/secrets"
+  if [[ -n "${CLASHLENS_HMAC_PREVIOUS_KEY_ID:-}" || -n "${CLASHLENS_HMAC_PREVIOUS_SECRET_FILE:-}" ]]; then
+    [[ -n "${CLASHLENS_HMAC_PREVIOUS_KEY_ID:-}" && -n "${CLASHLENS_HMAC_PREVIOUS_SECRET_FILE:-}" ]] || \
+      die "CLASHLENS_HMAC_PREVIOUS_KEY_ID and CLASHLENS_HMAC_PREVIOUS_SECRET_FILE must be configured together"
+    [[ "$CLASHLENS_HMAC_PREVIOUS_KEY_ID" != "$CLASHLENS_HMAC_KEY_ID" ]] || \
+      die "current and previous HMAC key IDs must differ"
+    [[ "$CLASHLENS_HMAC_PREVIOUS_SECRET_FILE" =~ ^/run/secrets/[^/]+$ ]] || \
+      die "CLASHLENS_HMAC_PREVIOUS_SECRET_FILE must be a direct file path under /run/secrets"
+  fi
+
+  validate_resource_budgets
+}
+
+# A single key file setting names an in-container /run/secrets path; the host
+# file is the basename inside CLASHLENS_API_KEY_HOST_DIR.
+validate_single_key_file() {
+  local name=$1
+  local path=${!name:-}
+  local source
+  source="$CLASHLENS_API_KEY_HOST_DIR/${path##*/}"
+  [[ -f "$source" ]] || die "key file for $name is missing"
+  [[ -r "$source" ]] || die "key file for $name is not readable"
+  [[ "$(stat -c '%a' "$source")" == "600" ]] || die "key file for $name must have mode 600"
 }
 
 validate_key_files() {
@@ -229,6 +373,16 @@ replace_secret_value() {
   printf '%s' "$value" | "$PODMAN_BIN" secret create --replace "$name" - >/dev/null
 }
 
+create_secret_from_file() {
+  local name=$1
+  local source=$2
+  "$PODMAN_BIN" secret create --replace "$name" "$source" >/dev/null
+}
+
+secret_rm() {
+  "$PODMAN_BIN" secret rm "$1" >/dev/null 2>&1 || true
+}
+
 ensure_network() {
   if ! "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1; then
     # The named network is private to this rootless Podman project. It must
@@ -262,6 +416,9 @@ ensure_postgres() {
     --env POSTGRES_USER \
     --env POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password \
     --secret clashlens-postgres-password,type=mount,target=/run/secrets/postgres-password,uid=70,gid=70,mode=0400 \
+    --memory "$CLASHLENS_POSTGRES_MEMORY" \
+    --pids-limit "$CLASHLENS_POSTGRES_PIDS" \
+    --cpus "$CLASHLENS_POSTGRES_CPUS" \
     --health-cmd "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB" \
     --health-interval 10s \
     --health-timeout 5s \
@@ -301,6 +458,50 @@ advance_contract() {
   done
 }
 
+# Detect the deployed contract explicitly. An empty or failing read means the
+# database has no contract yet; anything outside 1 or 2 is unsupported.
+contract_version() {
+  local version
+  version=$("$PODMAN_BIN" exec "$POSTGRES_CONTAINER" \
+    psql --tuples-only --no-align --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+    --command 'SELECT version FROM clash_lens_contract WHERE singleton' 2>/dev/null || true)
+  version=$(trim "$version")
+  case "$version" in
+    "")
+      printf 'absent\n'
+      ;;
+    1|2)
+      printf '%s\n' "$version"
+      ;;
+    *)
+      printf 'unknown\n'
+      ;;
+  esac
+}
+
+admin_database_url() {
+  printf 'postgresql://%s:%s@postgres:5432/%s?sslmode=disable' \
+    "$POSTGRES_USER" "$POSTGRES_PASSWORD" "$POSTGRES_DB"
+}
+
+role_database_url() {
+  local role=$1
+  local password=$2
+  printf 'postgresql://%s:%s@postgres:5432/%s?sslmode=disable' \
+    "$role" "$password" "$POSTGRES_DB"
+}
+
+# Set and rotate the three runtime role passwords through admin psql stdin.
+# The SQL text, including the passwords, never appears in process arguments.
+configure_runtime_roles() {
+  local sql
+  sql="ALTER ROLE $COLLECTOR_ROLE WITH PASSWORD '$CLASHLENS_COLLECTOR_DB_PASSWORD';"
+  sql+=" ALTER ROLE $WORKER_ROLE WITH PASSWORD '$CLASHLENS_WORKER_DB_PASSWORD';"
+  sql+=" ALTER ROLE $API_ROLE WITH PASSWORD '$CLASHLENS_API_DB_PASSWORD';"
+  printf '%s\n' "$sql" | "$PODMAN_BIN" exec --interactive "$POSTGRES_CONTAINER" \
+    psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"
+}
+
 build_collector_image() {
   "$PODMAN_BIN" build \
     --pull=missing \
@@ -309,75 +510,39 @@ build_collector_image() {
     "$ROOT_DIR"
 }
 
-build_python_worker_image() {
+build_python_image() {
   "$PODMAN_BIN" build \
     --pull=missing \
     --file "$ROOT_DIR/python/Containerfile" \
-    --tag "$PYTHON_WORKER_IMAGE" \
+    --tag "$PYTHON_IMAGE" \
     "$ROOT_DIR/python"
 }
 
-require_python_worker_runtime() {
-  "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1 || \
-    die "private network is missing; run up first"
-  container_running "$POSTGRES_CONTAINER" || die "PostgreSQL is not running; run up first"
-
-  local version
-  version=$("$PODMAN_BIN" exec "$POSTGRES_CONTAINER" \
-    psql --tuples-only --no-align --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
-    --command 'SELECT version FROM clash_lens_contract' 2>/dev/null || true)
-  version=$(trim "$version")
-  [[ "$version" == "2" ]] || die "production contract version 2 is required"
+image_exists() {
+  "$PODMAN_BIN" image exists "$COLLECTOR_IMAGE" >/dev/null 2>&1
 }
 
-start_python_worker() {
-  if container_exists "$PYTHON_WORKER_CONTAINER"; then
-    "$PODMAN_BIN" rm --force "$PYTHON_WORKER_CONTAINER" >/dev/null
-  fi
-
-  replace_secret_value clashlens-python-worker-database-url "$CLASHLENS_DATABASE_URL"
-  replace_secret_value clashlens-python-worker-archive-access-key "$CLASHLENS_ARCHIVE_ACCESS_KEY"
-  replace_secret_value clashlens-python-worker-archive-secret-key "$CLASHLENS_ARCHIVE_SECRET_KEY"
-
-  "$PODMAN_BIN" run \
-    --detach \
-    --name "$PYTHON_WORKER_CONTAINER" \
-    --network "$NETWORK_NAME" \
-    --env "CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url" \
-    --env CLASHLENS_ARCHIVE_ENDPOINT \
-    --env CLASHLENS_ARCHIVE_BUCKET \
-    --env "CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key" \
-    --env "CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key" \
-    --secret clashlens-python-worker-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400 \
-    --secret clashlens-python-worker-archive-access-key,type=mount,target=/run/secrets/archive-access-key,uid=10001,gid=10001,mode=0400 \
-    --secret clashlens-python-worker-archive-secret-key,type=mount,target=/run/secrets/archive-secret-key,uid=10001,gid=10001,mode=0400 \
-    --read-only \
-    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
-    --cap-drop all \
-    --security-opt no-new-privileges \
-    --memory 384m \
-    --pids-limit 256 \
-    --cpus 1.0 \
-    --health-cmd "python -m clashlens.cli ready --expected-contract-version 2" \
-    --health-interval 30s \
-    --health-timeout 20s \
-    --health-retries 3 \
-    --restart unless-stopped \
-    --label org.clashlens.component=python-worker \
-    "$PYTHON_WORKER_IMAGE" \
-    worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --run-forever >/dev/null
+python_image_exists() {
+  "$PODMAN_BIN" image exists "$PYTHON_IMAGE" >/dev/null 2>&1
 }
 
-wait_for_python_worker() {
-  local attempt
-  for ((attempt = 1; attempt <= 60; attempt++)); do
-    if container_running "$PYTHON_WORKER_CONTAINER" && \
-      "$PODMAN_BIN" healthcheck run "$PYTHON_WORKER_CONTAINER" >/dev/null 2>&1; then
-      return
-    fi
-    sleep 1
+# Forward only non-secret collector settings. Secret-bearing and deployment
+# metadata names are excluded; role credentials travel as mounted file paths.
+collector_env_args() {
+  local -n result=$1
+  local name
+
+  for name in "${!ENV_PRESENT[@]}"; do
+    case "$name" in
+      CLASHLENS_DATABASE_URL|CLASHLENS_DATABASE_URL_FILE|CLASHLENS_*_DB_PASSWORD|CLASHLENS_ARCHIVE_ACCESS_KEY|CLASHLENS_ARCHIVE_SECRET_KEY|CLASHLENS_WORKER_ARCHIVE_*|CLASHLENS_NORMAL_API_KEYS|CLASHLENS_INTERACTIVE_API_KEYS|CLASHLENS_NORMAL_API_KEY_FILES|CLASHLENS_INTERACTIVE_API_KEY_FILES|CLASHLENS_API_KEY_HOST_DIR|CLASHLENS_HEALTH_HOST|CLASHLENS_HEALTH_PORT|CLASHLENS_PODMAN_*|CLASHLENS_POSTGRES_CONTAINER|CLASHLENS_POSTGRES_IMAGE|CLASHLENS_COLLECTOR_CONTAINER|CLASHLENS_COLLECTOR_IMAGE|CLASHLENS_PYTHON_*|CLASHLENS_HMAC_*|CLASHLENS_INTERACTIVE_API_KEY_FILE|CLASHLENS_OFFICIAL_KEY_FILE|CLASHLENS_OFFICIAL_PROXY_URL|CLASHLENS_API_HOST|CLASHLENS_API_PORT|CLASHLENS_SCHEMA_VERSION|CLASHLENS_SHARED_TRAFFIC_GATE_MODE|CLASHLENS_WORKER_LEASE_SECONDS|CLASHLENS_POSTGRES_MEMORY|CLASHLENS_POSTGRES_CPUS|CLASHLENS_POSTGRES_PIDS|CLASHLENS_COLLECTOR_MEMORY|CLASHLENS_COLLECTOR_CPUS|CLASHLENS_COLLECTOR_PIDS|CLASHLENS_API_MEMORY|CLASHLENS_API_CPUS|CLASHLENS_API_PIDS|CLASHLENS_WORKER_MEMORY|CLASHLENS_WORKER_CPUS|CLASHLENS_WORKER_PIDS)
+        ;;
+      CLASHLENS_*)
+        result+=(--env "$name")
+        ;;
+    esac
   done
-  die "production Python worker did not become healthy"
+
+  result+=(--env "CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081")
 }
 
 collector_secret_args() {
@@ -392,64 +557,57 @@ collector_secret_args() {
     path=$(trim "${spec#*=}")
     source="$CLASHLENS_API_KEY_HOST_DIR/${path##*/}"
     secret_name="clashlens-${path##*/}"
-    "$PODMAN_BIN" secret create --replace "$secret_name" "$source" >/dev/null
+    create_secret_from_file "$secret_name" "$source"
     result+=(--secret "$secret_name,type=mount,target=$path,uid=10001,gid=10001,mode=0400")
   done
 }
 
+# The required collector uses its own database role and its own read-write
+# archive credentials. The worker's read-only archive pair never reaches it.
 collector_credential_secret_args() {
   local -n secret_result=$1
   local -n env_result=$2
-  local index secret_name setting value
-  local -a secret_names=(database-url archive-access-key archive-secret-key)
-  local -a settings=(
-    CLASHLENS_DATABASE_URL
-    CLASHLENS_ARCHIVE_ACCESS_KEY
-    CLASHLENS_ARCHIVE_SECRET_KEY
-  )
 
-  for index in "${!secret_names[@]}"; do
-    secret_name=${secret_names[$index]}
-    setting=${settings[$index]}
-    value=${!setting}
-    replace_secret_value "clashlens-$secret_name" "$value"
-    secret_result+=(--secret "clashlens-$secret_name,type=mount,target=/run/secrets/$secret_name,uid=10001,gid=10001,mode=0400")
-    env_result+=(--env "${setting}_FILE=/run/secrets/$secret_name")
-  done
+  replace_secret_value clashlens-collector-database-url "$(role_database_url "$COLLECTOR_ROLE" "$CLASHLENS_COLLECTOR_DB_PASSWORD")"
+  replace_secret_value clashlens-collector-archive-access-key "$CLASHLENS_ARCHIVE_ACCESS_KEY"
+  replace_secret_value clashlens-collector-archive-secret-key "$CLASHLENS_ARCHIVE_SECRET_KEY"
+  secret_result+=(--secret "clashlens-collector-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400")
+  secret_result+=(--secret "clashlens-collector-archive-access-key,type=mount,target=/run/secrets/archive-access-key,uid=10001,gid=10001,mode=0400")
+  secret_result+=(--secret "clashlens-collector-archive-secret-key,type=mount,target=/run/secrets/archive-secret-key,uid=10001,gid=10001,mode=0400")
+  env_result+=(--env "CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url")
+  env_result+=(--env "CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key")
+  env_result+=(--env "CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key")
 }
 
-collector_env_args() {
-  local -n result=$1
-  local name
+# The bridge accepts contract version 1 only and therefore receives the admin
+# URL. It is replaced and its admin secret is removed immediately after the
+# contract advances, so no long-lived runtime container holds the admin URL.
+collector_run() {
+  local container=$1
+  local schema_version=$2
+  local traffic_mode=$3
+  local -a secrets=() env_args=()
 
-  for name in "${!ENV_PRESENT[@]}"; do
-    case "$name" in
-      CLASHLENS_DATABASE_URL|CLASHLENS_ARCHIVE_ACCESS_KEY|CLASHLENS_ARCHIVE_SECRET_KEY|CLASHLENS_NORMAL_API_KEYS|CLASHLENS_INTERACTIVE_API_KEYS|CLASHLENS_API_KEY_HOST_DIR|CLASHLENS_HEALTH_HOST|CLASHLENS_HEALTH_PORT|CLASHLENS_PODMAN_*|CLASHLENS_POSTGRES_CONTAINER|CLASHLENS_POSTGRES_IMAGE|CLASHLENS_COLLECTOR_CONTAINER|CLASHLENS_COLLECTOR_IMAGE)
-        ;;
-      CLASHLENS_*)
-        result+=(--env "$name")
-        ;;
-    esac
-  done
-
-  result+=(--env "CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081")
-}
-
-start_collector() {
-  local -a secrets=()
-  local -a env_args=()
   collector_secret_args secrets "$CLASHLENS_NORMAL_API_KEY_FILES"
   collector_secret_args secrets "$CLASHLENS_INTERACTIVE_API_KEY_FILES"
   collector_env_args env_args
-  collector_credential_secret_args secrets env_args
+  if [[ "$container" == "$COLLECTOR_BRIDGE_CONTAINER" ]]; then
+    replace_secret_value clashlens-bridge-database-url "$(admin_database_url)"
+    secrets+=(--secret "clashlens-bridge-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400")
+    env_args+=(--env "CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url")
+  else
+    collector_credential_secret_args secrets env_args
+  fi
+  env_args+=(--env "CLASHLENS_SCHEMA_VERSION=$schema_version")
+  env_args+=(--env "CLASHLENS_SHARED_TRAFFIC_GATE_MODE=$traffic_mode")
 
-  if container_exists "$COLLECTOR_CONTAINER"; then
-    "$PODMAN_BIN" rm --force "$COLLECTOR_CONTAINER" >/dev/null
+  if container_exists "$container"; then
+    stop_and_remove "$container" "$COLLECTOR_STOP_GRACE"
   fi
 
   "$PODMAN_BIN" run \
     --detach \
-    --name "$COLLECTOR_CONTAINER" \
+    --name "$container" \
     --network "$NETWORK_NAME" \
     "${env_args[@]}" \
     --publish "$CLASHLENS_HEALTH_HOST:$CLASHLENS_HEALTH_PORT:8081/tcp" \
@@ -457,10 +615,25 @@ start_collector() {
     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
     --cap-drop all \
     --security-opt no-new-privileges \
+    --memory "$CLASHLENS_COLLECTOR_MEMORY" \
+    --pids-limit "$CLASHLENS_COLLECTOR_PIDS" \
+    --cpus "$CLASHLENS_COLLECTOR_CPUS" \
+    --health-cmd "wget -qO- http://127.0.0.1:8081/readyz | grep -q '\"ready\":true'" \
+    --health-interval 30s \
+    --health-timeout 10s \
+    --health-retries 3 \
     --restart unless-stopped \
     --label org.clashlens.component=collector \
     "${secrets[@]}" \
     "$COLLECTOR_IMAGE" run --role both >/dev/null
+}
+
+start_bridge_collector() {
+  collector_run "$COLLECTOR_BRIDGE_CONTAINER" 1 bridge
+}
+
+start_required_collector() {
+  collector_run "$COLLECTOR_CONTAINER" 2 required
 }
 
 wait_for_collector() {
@@ -482,11 +655,168 @@ initialize_runtime() {
   ensure_volume
   ensure_postgres
   wait_for_postgres
-  apply_initial_contract
 }
 
-image_exists() {
-  "$PODMAN_BIN" image exists "$COLLECTOR_IMAGE" >/dev/null 2>&1
+require_python_runtime() {
+  "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1 || \
+    die "private network is missing; run up first"
+  container_running "$POSTGRES_CONTAINER" || die "PostgreSQL is not running; run up first"
+
+  local version
+  version=$(contract_version)
+  [[ "$version" == "2" ]] || die "production contract version 2 is required (found $version)"
+
+  python_image_exists || die "python image is missing; run python-up first"
+}
+
+# The private API receives only its database role, its HMAC caller proof
+# files, one interactive official key file, and the fixed-egress proxy URL.
+api_secret_args() {
+  local -n secret_result=$1
+  local -n env_result=$2
+
+  replace_secret_value clashlens-python-api-database-url "$(role_database_url "$API_ROLE" "$CLASHLENS_API_DB_PASSWORD")"
+  create_secret_from_file clashlens-python-api-hmac-current \
+    "$CLASHLENS_API_KEY_HOST_DIR/${CLASHLENS_HMAC_SECRET_FILE##*/}"
+  create_secret_from_file clashlens-python-api-interactive-key \
+    "$CLASHLENS_API_KEY_HOST_DIR/${CLASHLENS_INTERACTIVE_API_KEY_FILE##*/}"
+  secret_result+=(--secret "clashlens-python-api-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400")
+  secret_result+=(--secret "clashlens-python-api-hmac-current,type=mount,target=$CLASHLENS_HMAC_SECRET_FILE,uid=10001,gid=10001,mode=0400")
+  secret_result+=(--secret "clashlens-python-api-interactive-key,type=mount,target=$CLASHLENS_INTERACTIVE_API_KEY_FILE,uid=10001,gid=10001,mode=0400")
+  env_result+=(--env "CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url")
+  env_result+=(--env "CLASHLENS_HMAC_SECRET_FILE=$CLASHLENS_HMAC_SECRET_FILE")
+  # The CLI serve seam reads the interactive official key through the
+  # official-key-file setting and the fixed-egress proxy through the
+  # official-proxy-url setting. The deployment keeps secret values out of
+  # command arguments; only the in-container file path is an environment
+  # value, and the proxy URL is non-secret deployment metadata.
+  env_result+=(--env "CLASHLENS_OFFICIAL_KEY_FILE=$CLASHLENS_INTERACTIVE_API_KEY_FILE")
+  env_result+=(--env "CLASHLENS_OFFICIAL_PROXY_URL=$CLASHLENS_OFFICIAL_API_PROXY_URL")
+  if [[ -n "${CLASHLENS_HMAC_PREVIOUS_SECRET_FILE:-}" ]]; then
+    create_secret_from_file clashlens-python-api-hmac-previous \
+      "$CLASHLENS_API_KEY_HOST_DIR/${CLASHLENS_HMAC_PREVIOUS_SECRET_FILE##*/}"
+    secret_result+=(--secret "clashlens-python-api-hmac-previous,type=mount,target=$CLASHLENS_HMAC_PREVIOUS_SECRET_FILE,uid=10001,gid=10001,mode=0400")
+    env_result+=(--env "CLASHLENS_HMAC_PREVIOUS_SECRET_FILE=$CLASHLENS_HMAC_PREVIOUS_SECRET_FILE")
+    env_result+=(--env "CLASHLENS_HMAC_PREVIOUS_KEY_ID=$CLASHLENS_HMAC_PREVIOUS_KEY_ID")
+  fi
+}
+
+start_python_api() {
+  local -a secrets=() env_args=()
+  api_secret_args secrets env_args
+
+  if container_exists "$PYTHON_API_CONTAINER"; then
+    stop_and_remove "$PYTHON_API_CONTAINER" "$API_STOP_GRACE"
+  fi
+
+  "$PODMAN_BIN" run \
+    --detach \
+    --name "$PYTHON_API_CONTAINER" \
+    --network "$NETWORK_NAME" \
+    --network-alias "$API_NETWORK_ALIAS" \
+    "${env_args[@]}" \
+    --env "CLASHLENS_API_HOST=0.0.0.0" \
+    --env "CLASHLENS_API_PORT=$API_LISTEN_PORT" \
+    --env "CLASHLENS_HMAC_CALLER=$CLASHLENS_HMAC_CALLER" \
+    --env "CLASHLENS_HMAC_KEY_ID=$CLASHLENS_HMAC_KEY_ID" \
+    --env "CLASHLENS_OFFICIAL_PROXY_URL=$CLASHLENS_OFFICIAL_API_PROXY_URL" \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+    --cap-drop all \
+    --security-opt no-new-privileges \
+    --memory "$CLASHLENS_API_MEMORY" \
+    --pids-limit "$CLASHLENS_API_PIDS" \
+    --cpus "$CLASHLENS_API_CPUS" \
+    --health-cmd "python -m clashlens.cli probe --url http://127.0.0.1:$API_LISTEN_PORT/readyz --secret-file $CLASHLENS_HMAC_SECRET_FILE --timeout-seconds 3 >/dev/null 2>&1" \
+    --health-interval 30s \
+    --health-timeout 20s \
+    --health-retries 3 \
+    --restart unless-stopped \
+    --label org.clashlens.component=python-api \
+    "${secrets[@]}" \
+    "$PYTHON_IMAGE" serve --host 0.0.0.0 --port "$API_LISTEN_PORT" >/dev/null
+}
+
+wait_for_python_api() {
+  local attempt
+  for ((attempt = 1; attempt <= 60; attempt++)); do
+    if container_running "$PYTHON_API_CONTAINER" && \
+      "$PODMAN_BIN" healthcheck run "$PYTHON_API_CONTAINER" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+  die "private Python API did not become healthy"
+}
+
+# The worker receives its own database role and a read-only archive
+# credential. It never receives official API keys, HMAC keys, or the API role.
+worker_secret_args() {
+  local -n secret_result=$1
+  local -n env_result=$2
+
+  replace_secret_value clashlens-python-worker-database-url "$(role_database_url "$WORKER_ROLE" "$CLASHLENS_WORKER_DB_PASSWORD")"
+  replace_secret_value clashlens-python-worker-archive-access-key "$CLASHLENS_WORKER_ARCHIVE_ACCESS_KEY"
+  replace_secret_value clashlens-python-worker-archive-secret-key "$CLASHLENS_WORKER_ARCHIVE_SECRET_KEY"
+  secret_result+=(--secret "clashlens-python-worker-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400")
+  secret_result+=(--secret "clashlens-python-worker-archive-access-key,type=mount,target=/run/secrets/archive-access-key,uid=10001,gid=10001,mode=0400")
+  secret_result+=(--secret "clashlens-python-worker-archive-secret-key,type=mount,target=/run/secrets/archive-secret-key,uid=10001,gid=10001,mode=0400")
+  env_result+=(--env "CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url")
+  env_result+=(--env "CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key")
+  env_result+=(--env "CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key")
+}
+
+start_python_worker() {
+  local -a secrets=() env_args=()
+  worker_secret_args secrets env_args
+
+  if container_exists "$PYTHON_WORKER_CONTAINER"; then
+    stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
+  fi
+
+  "$PODMAN_BIN" run \
+    --detach \
+    --name "$PYTHON_WORKER_CONTAINER" \
+    --network "$NETWORK_NAME" \
+    "${env_args[@]}" \
+    --env CLASHLENS_ARCHIVE_ENDPOINT \
+    --env CLASHLENS_ARCHIVE_BUCKET \
+    --read-only \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+    --cap-drop all \
+    --security-opt no-new-privileges \
+    --memory "$CLASHLENS_WORKER_MEMORY" \
+    --pids-limit "$CLASHLENS_WORKER_PIDS" \
+    --cpus "$CLASHLENS_WORKER_CPUS" \
+    --health-cmd "python -m clashlens.cli ready --expected-contract-version 2" \
+    --health-interval 30s \
+    --health-timeout 20s \
+    --health-retries 3 \
+    --restart unless-stopped \
+    --label org.clashlens.component=python-worker \
+    "${secrets[@]}" \
+    "$PYTHON_IMAGE" worker --owner production-python-1 --max-jobs 100 --lease-seconds "$CLASHLENS_WORKER_LEASE_SECONDS" --run-forever >/dev/null
+}
+
+wait_for_python_worker() {
+  local attempt
+  for ((attempt = 1; attempt <= 60; attempt++)); do
+    if container_running "$PYTHON_WORKER_CONTAINER" && \
+      "$PODMAN_BIN" healthcheck run "$PYTHON_WORKER_CONTAINER" >/dev/null 2>&1; then
+      return
+    fi
+    sleep 1
+  done
+  die "production Python worker did not become healthy"
+}
+
+python_start() {
+  require_python_runtime
+  start_python_api
+  wait_for_python_api
+  start_python_worker
+  wait_for_python_worker
+  printf 'production Python API and worker are healthy\n'
 }
 
 status_of_container() {
@@ -495,7 +825,13 @@ status_of_container() {
   if ! container_exists "$name"; then
     printf '%s: absent\n' "$label"
   elif container_running "$name"; then
-    printf '%s: running\n' "$label"
+    local health
+    health=$("$PODMAN_BIN" container inspect --format '{{.State.Health.Status}}' "$name" 2>/dev/null || true)
+    if [[ -n "$health" && "$health" != "unknown" && "$health" != "<nil>" ]]; then
+      printf '%s: running (%s)\n' "$label" "$health"
+    else
+      printf '%s: running\n' "$label"
+    fi
   else
     printf '%s: stopped\n' "$label"
   fi
@@ -515,13 +851,30 @@ show_status() {
   fi
   status_of_container postgres "$POSTGRES_CONTAINER"
   status_of_container collector "$COLLECTOR_CONTAINER"
+  status_of_container python-api "$PYTHON_API_CONTAINER"
   status_of_container python-worker "$PYTHON_WORKER_CONTAINER"
+  if container_running "$PYTHON_WORKER_CONTAINER"; then
+    if queue_output=$("$PODMAN_BIN" exec "$PYTHON_WORKER_CONTAINER" python -m clashlens.cli queue-status 2>/dev/null); then
+      printf 'python queue: %s\n' "$(printf '%s' "$queue_output" | head -n 1)"
+    else
+      printf 'python queue: unavailable\n'
+    fi
+  else
+    printf 'python queue: worker not running\n'
+  fi
 }
 
+# Graceful lifecycle stop: SIGTERM with a grace period, then removal. The
+# worker grace is the configured job lease plus margin so a leased job can
+# drain, and stays below the systemd TimeoutStopSec stop timeout.
 stop_and_remove() {
   local name=$1
+  local grace=$2
   if container_exists "$name"; then
-    "$PODMAN_BIN" rm --force "$name" >/dev/null
+    if container_running "$name"; then
+      "$PODMAN_BIN" stop --time "$grace" "$name" >/dev/null
+    fi
+    "$PODMAN_BIN" rm "$name" >/dev/null
   fi
 }
 
@@ -540,11 +893,11 @@ shift
 
 full_configuration=false
 case "$command" in
-  init|up|restart|python-up)
+  init|up|restart|build-collector|build-python|python-up|python-start|api-start|worker-start)
     load_env_file
     full_configuration=true
     ;;
-  status|logs|down|enqueue|maintenance|python-down|python-status)
+  status|logs|down|stack-down|enqueue|maintenance|queue-status|python-down|api-down|worker-down)
     if [[ -f "$ENV_FILE" ]]; then
       load_env_file
     fi
@@ -558,16 +911,18 @@ POSTGRES_VOLUME=${CLASHLENS_PODMAN_VOLUME:-$POSTGRES_VOLUME}
 POSTGRES_CONTAINER=${CLASHLENS_POSTGRES_CONTAINER:-$POSTGRES_CONTAINER}
 COLLECTOR_CONTAINER=${CLASHLENS_COLLECTOR_CONTAINER:-$COLLECTOR_CONTAINER}
 PYTHON_WORKER_CONTAINER=${CLASHLENS_PYTHON_WORKER_CONTAINER:-$PYTHON_WORKER_CONTAINER}
+PYTHON_API_CONTAINER=${CLASHLENS_PYTHON_API_CONTAINER:-$PYTHON_API_CONTAINER}
 POSTGRES_IMAGE=${CLASHLENS_POSTGRES_IMAGE:-$POSTGRES_IMAGE}
 COLLECTOR_IMAGE=${CLASHLENS_COLLECTOR_IMAGE:-$COLLECTOR_IMAGE}
-PYTHON_WORKER_IMAGE=${CLASHLENS_PYTHON_WORKER_IMAGE:-$PYTHON_WORKER_IMAGE}
+PYTHON_IMAGE=${CLASHLENS_PYTHON_IMAGE:-$PYTHON_IMAGE}
 CLASHLENS_ARCHIVE_SECURE=${CLASHLENS_ARCHIVE_SECURE:-true}
 CLASHLENS_HEALTH_HOST=${CLASHLENS_HEALTH_HOST:-$HEALTH_HOST}
 CLASHLENS_HEALTH_PORT=${CLASHLENS_HEALTH_PORT:-$HEALTH_PORT}
+CLASHLENS_WORKER_LEASE_SECONDS=${CLASHLENS_WORKER_LEASE_SECONDS:-60}
 HEALTH_HOST=$CLASHLENS_HEALTH_HOST
 HEALTH_PORT=$CLASHLENS_HEALTH_PORT
+WORKER_STOP_GRACE=$((CLASHLENS_WORKER_LEASE_SECONDS + 10))
 
-# Keep the names above in sync with the values passed to the collector.
 if [[ "$full_configuration" == "true" ]]; then
   validate_common_settings
 fi
@@ -576,17 +931,54 @@ case "$command" in
   init)
     [[ $# == 0 ]] || die "init accepts no arguments"
     initialize_runtime
-    printf 'database initialized; data volume is %s\n' "$POSTGRES_VOLUME"
+    version=$(contract_version)
+    case "$version" in
+      absent)
+        apply_initial_contract
+        printf 'database initialized; data volume is %s\n' "$POSTGRES_VOLUME"
+        ;;
+      1|2)
+        die "database is already initialized at contract version $version; use up or restart"
+        ;;
+      *)
+        die "unsupported contract version $version"
+        ;;
+    esac
     ;;
   up)
     [[ $# == 0 ]] || die "up accepts no arguments"
     validate_key_files "$CLASHLENS_NORMAL_API_KEY_FILES"
     validate_key_files "$CLASHLENS_INTERACTIVE_API_KEY_FILES"
+    validate_single_key_file CLASHLENS_HMAC_SECRET_FILE
+    validate_single_key_file CLASHLENS_INTERACTIVE_API_KEY_FILE
+    if [[ -n "${CLASHLENS_HMAC_PREVIOUS_SECRET_FILE:-}" ]]; then
+      validate_single_key_file CLASHLENS_HMAC_PREVIOUS_SECRET_FILE
+    fi
     build_collector_image
     initialize_runtime
-    start_collector
-    wait_for_collector
-    advance_contract
+    version=$(contract_version)
+    case "$version" in
+      absent)
+        apply_initial_contract
+        version=1
+        ;;
+      1|2) ;;
+      *)
+        die "unsupported contract version $version"
+        ;;
+    esac
+    if [[ "$version" == "1" ]]; then
+      start_bridge_collector
+      wait_for_collector
+      advance_contract
+      configure_runtime_roles
+      stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
+      secret_rm clashlens-bridge-database-url
+    else
+      advance_contract
+      configure_runtime_roles
+    fi
+    start_required_collector
     wait_for_collector
     printf 'collector is ready at http://%s:%s/readyz\n' "$HEALTH_HOST" "$HEALTH_PORT"
     ;;
@@ -594,13 +986,66 @@ case "$command" in
     [[ $# == 0 ]] || die "restart accepts no arguments"
     validate_key_files "$CLASHLENS_NORMAL_API_KEY_FILES"
     validate_key_files "$CLASHLENS_INTERACTIVE_API_KEY_FILES"
-    initialize_runtime
+    validate_single_key_file CLASHLENS_HMAC_SECRET_FILE
+    validate_single_key_file CLASHLENS_INTERACTIVE_API_KEY_FILE
+    if [[ -n "${CLASHLENS_HMAC_PREVIOUS_SECRET_FILE:-}" ]]; then
+      validate_single_key_file CLASHLENS_HMAC_PREVIOUS_SECRET_FILE
+    fi
+    require_podman
+    require_rootless_podman
+    ensure_network
+    ensure_volume
+    ensure_postgres
+    wait_for_postgres
+    version=$(contract_version)
+    [[ "$version" == "2" ]] || die "restart requires contract version 2 (found $version); run up first"
     image_exists || die "collector image is missing; run up first"
-    start_collector
-    wait_for_collector
-    advance_contract
+    start_required_collector
     wait_for_collector
     printf 'collector restarted and is ready at http://%s:%s/readyz\n' "$HEALTH_HOST" "$HEALTH_PORT"
+    ;;
+  build-collector)
+    [[ $# == 0 ]] || die "build-collector accepts no arguments"
+    require_podman
+    require_rootless_podman
+    build_collector_image
+    ;;
+  build-python)
+    [[ $# == 0 ]] || die "build-python accepts no arguments"
+    require_podman
+    require_rootless_podman
+    build_python_image
+    ;;
+  python-up)
+    [[ $# == 0 ]] || die "python-up accepts no arguments"
+    require_podman
+    require_rootless_podman
+    build_python_image
+    python_start
+    ;;
+  python-start)
+    [[ $# == 0 ]] || die "python-start accepts no arguments"
+    require_podman
+    require_rootless_podman
+    python_start
+    ;;
+  api-start)
+    [[ $# == 0 ]] || die "api-start accepts no arguments"
+    require_podman
+    require_rootless_podman
+    require_python_runtime
+    start_python_api
+    wait_for_python_api
+    printf 'private Python API is healthy\n'
+    ;;
+  worker-start)
+    [[ $# == 0 ]] || die "worker-start accepts no arguments"
+    require_podman
+    require_rootless_podman
+    require_python_runtime
+    start_python_worker
+    wait_for_python_worker
+    printf 'production Python worker is healthy\n'
     ;;
   status)
     [[ $# == 0 ]] || die "status accepts no arguments"
@@ -612,10 +1057,12 @@ case "$command" in
       target=$COLLECTOR_CONTAINER
     elif [[ "$component" == "postgres" ]]; then
       target=$POSTGRES_CONTAINER
+    elif [[ "$component" == "python-api" ]]; then
+      target=$PYTHON_API_CONTAINER
     elif [[ "$component" == "python-worker" ]]; then
       target=$PYTHON_WORKER_CONTAINER
     else
-      die "logs target must be collector, postgres, or python-worker"
+      die "logs target must be collector, postgres, python-api, or python-worker"
     fi
     shift || true
     container_exists "$target" || die "$component container does not exist"
@@ -624,10 +1071,41 @@ case "$command" in
   down)
     [[ $# == 0 ]] || die "down accepts no arguments"
     require_podman
-    stop_and_remove "$PYTHON_WORKER_CONTAINER"
-    stop_and_remove "$COLLECTOR_CONTAINER"
-    stop_and_remove "$POSTGRES_CONTAINER"
+    stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
+    stop_and_remove "$PYTHON_API_CONTAINER" "$API_STOP_GRACE"
+    stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
+    stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
+    stop_and_remove "$POSTGRES_CONTAINER" "$POSTGRES_STOP_GRACE"
+    secret_rm clashlens-bridge-database-url
     printf 'containers removed; network and data volume were kept\n'
+    ;;
+  stack-down)
+    [[ $# == 0 ]] || die "stack-down accepts no arguments"
+    require_podman
+    stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
+    stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
+    stop_and_remove "$POSTGRES_CONTAINER" "$POSTGRES_STOP_GRACE"
+    secret_rm clashlens-bridge-database-url
+    printf 'collector stack containers removed; network and data volume were kept\n'
+    ;;
+  python-down)
+    [[ $# == 0 ]] || die "python-down accepts no arguments"
+    require_podman
+    stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
+    stop_and_remove "$PYTHON_API_CONTAINER" "$API_STOP_GRACE"
+    printf 'production Python containers removed\n'
+    ;;
+  api-down)
+    [[ $# == 0 ]] || die "api-down accepts no arguments"
+    require_podman
+    stop_and_remove "$PYTHON_API_CONTAINER" "$API_STOP_GRACE"
+    printf 'private Python API container removed\n'
+    ;;
+  worker-down)
+    [[ $# == 0 ]] || die "worker-down accepts no arguments"
+    require_podman
+    stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
+    printf 'production Python worker container removed\n'
     ;;
   enqueue)
     if [[ $# == 1 && "$1" != -* ]]; then
@@ -640,26 +1118,12 @@ case "$command" in
     [[ $# -gt 0 ]] || die "maintenance requires a collector maintenance command"
     run_collector_command maintenance "$@"
     ;;
-  python-up)
-    [[ $# == 0 ]] || die "python-up accepts no arguments"
+  queue-status)
+    [[ $# == 0 ]] || die "queue-status accepts no arguments"
     require_podman
-    require_rootless_podman
-    require_python_worker_runtime
-    build_python_worker_image
-    start_python_worker
-    wait_for_python_worker
-    printf 'production Python worker is healthy\n'
-    ;;
-  python-down)
-    [[ $# == 0 ]] || die "python-down accepts no arguments"
-    require_podman
-    stop_and_remove "$PYTHON_WORKER_CONTAINER"
-    printf 'production Python worker container removed\n'
-    ;;
-  python-status)
-    [[ $# == 0 ]] || die "python-status accepts no arguments"
-    require_podman
-    status_of_container python-worker "$PYTHON_WORKER_CONTAINER"
+    container_exists "$PYTHON_WORKER_CONTAINER" || die "python worker container does not exist; run python-up first"
+    container_running "$PYTHON_WORKER_CONTAINER" || die "python worker container is not running"
+    "$PODMAN_BIN" exec "$PYTHON_WORKER_CONTAINER" python -m clashlens.cli queue-status
     ;;
   help|-h|--help)
     usage
