@@ -530,6 +530,10 @@ grep -q 'collector-archive-secret-do-not-print' "$(secret_file "$FRESH_DIR" clas
 bridge_normalized=$(norm_log <<<"$bridge_run")
 [[ "$bridge_normalized" == *'--env CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url'* ]] || \
   fail 'bridge did not receive the database URL file setting'
+[[ "$bridge_normalized" == *'--env CLASHLENS_NORMAL_API_KEY_FILES=normal-1=/run/secrets/normal-1,normal-2=/run/secrets/normal-2,normal-3=/run/secrets/normal-3,normal-4=/run/secrets/normal-4'* ]] || \
+  fail 'bridge did not receive the normal API key file list'
+[[ "$bridge_normalized" == *'--env CLASHLENS_INTERACTIVE_API_KEY_FILES=interactive-1=/run/secrets/interactive-1'* ]] || \
+  fail 'bridge did not receive the interactive API key file list'
 
 required_normalized=$required_run
 [[ "$required_normalized" == *'clashlens-collector-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400'* ]] || \
@@ -550,6 +554,10 @@ required_normalized=$required_run
   fail 'collector did not receive the official API origin through its runtime setting'
 [[ "$required_normalized" == *'--env CLASHLENS_API_PROXY_URL=http://100.108.3.103:3128'* ]] || \
   fail 'collector did not receive the fixed-egress proxy through its runtime setting'
+[[ "$required_normalized" == *'--env CLASHLENS_NORMAL_API_KEY_FILES=normal-1=/run/secrets/normal-1,normal-2=/run/secrets/normal-2,normal-3=/run/secrets/normal-3,normal-4=/run/secrets/normal-4'* ]] || \
+  fail 'collector did not receive the normal API key file list'
+[[ "$required_normalized" == *'--env CLASHLENS_INTERACTIVE_API_KEY_FILES=interactive-1=/run/secrets/interactive-1'* ]] || \
+  fail 'collector did not receive the interactive API key file list'
 [[ "$required_normalized" != *'--env CLASHLENS_OFFICIAL_API_ORIGIN='* \
   && "$required_normalized" != *'--env CLASHLENS_OFFICIAL_API_PROXY_URL='* ]] || \
   fail 'collector received deployment-only official API setting names'
