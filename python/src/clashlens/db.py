@@ -769,26 +769,39 @@ class Database:
                 )
                 connection.execute(
                     """
-                    UPDATE players
+                    UPDATE players AS p
                     SET active = CASE
                             WHEN %s = 'eligible' THEN true
                             WHEN %s = 'ineligible' THEN false
-                            ELSE active
+                            ELSE p.active
                         END,
                         next_due_at = CASE
-                            WHEN %s = 'eligible' THEN COALESCE(next_due_at, clock_timestamp())
+                            WHEN %s = 'eligible' THEN COALESCE(p.next_due_at, clock_timestamp())
                             WHEN %s = 'ineligible' THEN NULL
-                            ELSE next_due_at
+                            ELSE p.next_due_at
                         END,
                         eligibility_state = CASE
                             WHEN %s IN ('eligible', 'ineligible') THEN %s
-                            ELSE eligibility_state
+                            ELSE p.eligibility_state
                         END,
                         current_profile_version_id = %s,
                         current_observed_at = %s,
                         updated_at = clock_timestamp()
-                    WHERE id = %s
-                      AND (current_observed_at IS NULL OR current_observed_at < %s)
+                    FROM player_profile_versions AS v
+                    WHERE p.id = %s
+                      AND v.id = %s
+                      AND v.source_contract_state = 'accepted'
+                      AND (
+                          p.current_observed_at IS NULL
+                          OR p.current_observed_at < %s
+                          OR (
+                              p.current_observed_at = %s
+                              AND (
+                                  p.current_profile_version_id IS NULL
+                                  OR p.current_profile_version_id < %s
+                              )
+                          )
+                      )
                     """,
                     (
                         profile.eligibility_state,
@@ -800,7 +813,10 @@ class Database:
                         profile_version_id,
                         profile.observed_at,
                         player[0],
+                        profile_version_id,
                         profile.observed_at,
+                        profile.observed_at,
+                        profile_version_id,
                     ),
                 )
                 self._record_parsed_payload(

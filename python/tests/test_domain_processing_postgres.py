@@ -475,6 +475,227 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
             database.close()
 
 
+def test_conflicting_or_older_profiles_never_replace_last_accepted_current_profile(
+    database_url: str,
+    archive_server,
+) -> None:
+    accepted_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
+    with domain_database(database_url) as connection_info:
+        _accepted_observation_id, accepted_job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="accepted-profile",
+            endpoint="profile",
+            body=PROFILE_FIXTURE.read_bytes(),
+            observed_at=accepted_at,
+            normalized_tag="#2PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            accepted_result = processor.process_job(
+                accepted_job_id, owner="accepted-profile-worker"
+            )
+            assert accepted_result is not None
+            assert accepted_result.outcome == "processed"
+
+            def _profile_rows() -> list[tuple]:
+                with database.pool.connection() as connection:
+                    return connection.execute(
+                        """
+                        SELECT
+                            pv.id, pv.source_contract_state, pv.name, pv.trophies,
+                            pv.league_tier_id, pv.league_tier_name,
+                            pv.eligibility_state, pv.observed_at,
+                            (SELECT count(*) FROM player_profile_effects AS e
+                             WHERE e.profile_version_id = pv.id),
+                            (SELECT outcome FROM observation_processing_outcomes AS o
+                             WHERE o.observation_id = pv.observation_id),
+                            p.current_profile_version_id, p.current_observed_at,
+                            p.active, p.eligibility_state
+                        FROM player_profile_versions AS pv
+                        JOIN players AS p ON p.id = pv.player_id
+                        WHERE p.normalized_tag = '#2PP'
+                        ORDER BY pv.id
+                        """
+                    ).fetchall()
+
+            accepted_rows = _profile_rows()
+            assert len(accepted_rows) == 1
+            accepted_version_id = accepted_rows[0][0]
+            assert tuple(text(v) for v in accepted_rows[0][1:7]) == (
+                "accepted",
+                "Synthetic Legend I",
+                6123,
+                105000036,
+                "Legend I",
+                "eligible",
+            )
+            assert accepted_rows[0][7] == accepted_at
+            assert accepted_rows[0][8] == 1
+            assert text(accepted_rows[0][9]) == "processed"
+            assert accepted_rows[0][10] == accepted_version_id
+            assert accepted_rows[0][11] == accepted_at
+            assert accepted_rows[0][12] is True
+            assert text(accepted_rows[0][13]) == "eligible"
+
+            # Newer conflicting evidence: materially different name, trophies,
+            # league tier, and eligibility. It must stay visible historically
+            # but must not become current product truth.
+            conflicting_payload = json.loads(PROFILE_FIXTURE.read_bytes())
+            conflicting_payload["name"] = "Conflicting Rename"
+            conflicting_payload["trophies"] = 7100
+            conflicting_payload["leagueTier"] = {
+                "id": 999999999,
+                "name": "Unexpected Tier",
+            }
+            _conflict_observation_id, conflict_job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="conflicting-profile",
+                endpoint="profile",
+                body=json.dumps(conflicting_payload).encode(),
+                observed_at=accepted_at + timedelta(hours=1),
+                normalized_tag="#2PP",
+            )
+            conflict_result = processor.process_job(
+                conflict_job_id, owner="conflicting-profile-worker"
+            )
+            assert conflict_result is not None
+            assert conflict_result.outcome == "processed"
+
+            conflict_rows = _profile_rows()
+            assert len(conflict_rows) == 2
+            conflicting_version_id = conflict_rows[1][0]
+            assert tuple(text(v) for v in conflict_rows[1][1:7]) == (
+                "conflict",
+                "Conflicting Rename",
+                7100,
+                999999999,
+                "Unexpected Tier",
+                "uncertain",
+            )
+            assert conflict_rows[1][7] == accepted_at + timedelta(hours=1)
+            assert conflict_rows[1][8] == 1
+            assert text(conflict_rows[1][9]) == "processed"
+            # Current pointer and current fields still point at the accepted
+            # version; the later conflicting version must not win.
+            assert conflict_rows[1][10] == accepted_version_id
+            assert conflict_rows[1][11] == accepted_at
+            assert conflict_rows[1][12] is True
+            assert text(conflict_rows[1][13]) == "eligible"
+            assert conflicting_version_id != accepted_version_id
+
+            # Older accepted evidence arriving later cannot move the current
+            # pointer backward.
+            older_payload = json.loads(PROFILE_FIXTURE.read_bytes())
+            older_payload["name"] = "Older Accepted Name"
+            older_payload["trophies"] = 5555
+            _older_observation_id, older_job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="older-accepted-profile",
+                endpoint="profile",
+                body=json.dumps(older_payload).encode(),
+                observed_at=accepted_at - timedelta(days=1),
+                normalized_tag="#2PP",
+            )
+            older_result = processor.process_job(
+                older_job_id, owner="older-accepted-profile-worker"
+            )
+            assert older_result is not None
+            assert older_result.outcome == "processed"
+
+            older_rows = _profile_rows()
+            assert len(older_rows) == 3
+            assert tuple(text(v) for v in older_rows[2][1:7]) == (
+                "accepted",
+                "Older Accepted Name",
+                5555,
+                105000036,
+                "Legend I",
+                "eligible",
+            )
+            assert older_rows[2][10] == accepted_version_id
+            assert older_rows[2][11] == accepted_at
+            assert older_rows[2][12] is True
+            assert text(older_rows[2][13]) == "eligible"
+
+            # Newer accepted evidence advances the current profile normally.
+            newer_at = accepted_at + timedelta(days=1)
+            newer_payload = json.loads(PROFILE_FIXTURE.read_bytes())
+            newer_payload["name"] = "Newer Accepted Name"
+            newer_payload["trophies"] = 6400
+            _newer_observation_id, newer_job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="newer-accepted-profile",
+                endpoint="profile",
+                body=json.dumps(newer_payload).encode(),
+                observed_at=newer_at,
+                normalized_tag="#2PP",
+            )
+            newer_result = processor.process_job(
+                newer_job_id, owner="newer-accepted-profile-worker"
+            )
+            assert newer_result is not None
+            assert newer_result.outcome == "processed"
+
+            newer_rows = _profile_rows()
+            assert len(newer_rows) == 4
+            newer_version_id = newer_rows[3][0]
+            assert tuple(text(v) for v in newer_rows[3][1:7]) == (
+                "accepted",
+                "Newer Accepted Name",
+                6400,
+                105000036,
+                "Legend I",
+                "eligible",
+            )
+            assert newer_rows[3][10] == newer_version_id
+            assert newer_rows[3][11] == newer_at
+            assert newer_rows[3][12] is True
+            assert text(newer_rows[3][13]) == "eligible"
+
+            # Equal-timestamp accepted evidence resolves deterministically by
+            # immutable version id: the later version wins.
+            equal_payload = json.loads(PROFILE_FIXTURE.read_bytes())
+            equal_payload["name"] = "Equal-Time Accepted Name"
+            equal_payload["trophies"] = 6300
+            _equal_observation_id, equal_job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="equal-time-accepted-profile",
+                endpoint="profile",
+                body=json.dumps(equal_payload).encode(),
+                observed_at=newer_at,
+                normalized_tag="#2PP",
+            )
+            equal_result = processor.process_job(
+                equal_job_id, owner="equal-time-accepted-profile-worker"
+            )
+            assert equal_result is not None
+            assert equal_result.outcome == "processed"
+
+            equal_rows = _profile_rows()
+            assert len(equal_rows) == 5
+            equal_version_id = equal_rows[4][0]
+            assert tuple(text(v) for v in equal_rows[4][1:7]) == (
+                "accepted",
+                "Equal-Time Accepted Name",
+                6300,
+                105000036,
+                "Legend I",
+                "eligible",
+            )
+            assert equal_version_id > newer_version_id
+            assert equal_rows[4][10] == equal_version_id
+            assert equal_rows[4][11] == newer_at
+            assert equal_rows[4][12] is True
+            assert text(equal_rows[4][13]) == "eligible"
+        finally:
+            database.close()
+
+
 def test_canonical_battle_keeps_detail_disagreement_for_both_perspectives(
     database_url: str,
     archive_server,
