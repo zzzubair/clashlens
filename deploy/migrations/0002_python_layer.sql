@@ -555,6 +555,8 @@ ALTER TABLE python_processing_jobs
 UPDATE python_processing_jobs
 SET parser_version = CASE parser_version
         WHEN 'profile-parser-v1' THEN 'supercell-source-parser-v1'
+        WHEN 'battle-log-parser-v1' THEN 'supercell-source-parser-v1'
+        WHEN 'global-player-rankings-parser-v1' THEN 'supercell-source-parser-v1'
         ELSE parser_version
     END,
     processing_version = CASE processing_version
@@ -573,7 +575,12 @@ SET parser_version = CASE parser_version
         WHEN 'export-v1' THEN 'account-export-v1'
         ELSE export_schema_version
     END
-WHERE parser_version IN ('profile-parser-v1', 'supercell-source-parser-v1')
+WHERE parser_version IN (
+       'profile-parser-v1',
+       'battle-log-parser-v1',
+       'global-player-rankings-parser-v1',
+       'supercell-source-parser-v1'
+   )
    OR processing_version IN ('python-processing-prototype-v1', 'clashlens-domain-processing-v1')
    OR domain_rule_version IN ('domain-v1', 'clashlens-domain-rules-v1')
    OR snapshot_rule_version IN ('snapshot-v1', 'tracked-player-order-v1')

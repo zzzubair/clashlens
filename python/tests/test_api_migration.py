@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import LiteralString, cast
 from uuid import uuid4
 
 import psycopg
@@ -400,3 +401,42 @@ def test_python_migration_repeats_after_populated_version_one_rows(
             assert isinstance(text(processing[1]), str)
             assert text(processing[1]).startswith("process-observation:")
             assert processing[2] == {}
+
+
+def test_python_migration_normalizes_all_legacy_source_parser_versions(
+    database_url: str,
+) -> None:
+    legacy_versions = (
+        "profile-parser-v1",
+        "battle-log-parser-v1",
+        "global-player-rankings-parser-v1",
+    )
+    with migrated_production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            for index, parser_version in enumerate(legacy_versions, 1):
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json, parser_version
+                    ) VALUES (
+                        'build_export', %s,
+                        jsonb_build_object('export_request_id', %s::bigint), %s
+                    )
+                    """,
+                    (f"legacy-parser-normalization:{index}", index, parser_version),
+                )
+            migration = (ROOT / "deploy/migrations/0002_python_layer.sql").read_text(
+                encoding="utf-8"
+            )
+            connection.execute(sql.SQL(cast(LiteralString, migration)))
+            normalized_versions = {
+                text(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT parser_version
+                    FROM python_processing_jobs
+                    WHERE deduplication_key LIKE 'legacy-parser-normalization:%'
+                    """
+                )
+            }
+            assert normalized_versions == {"supercell-source-parser-v1"}
