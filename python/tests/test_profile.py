@@ -97,6 +97,22 @@ def test_profile_parser_preserves_invalid_season_values_as_contract_conflict() -
     assert profile.source_contract_state == "conflict"
 
 
+def test_profile_parser_rejects_boolean_season_values_as_contract_conflict() -> None:
+    payload = json.loads(FIXTURE.read_bytes())
+    payload["currentLeagueSeasonId"] = True
+
+    profile = parse_profile(
+        json.dumps(payload).encode(),
+        expected_tag="#2PP",
+        observed_at=datetime.now(UTC),
+        endpoint_version="profile-v1",
+    )
+
+    assert profile.current_league_season_id is None
+    assert profile.season_anchor_state == "conflict"
+    assert profile.source_contract_state == "conflict"
+
+
 def test_profile_parser_rejects_source_identity_mismatch() -> None:
     body = json.dumps(
         {

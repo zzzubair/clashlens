@@ -273,7 +273,7 @@ export default function PlayerRoute() {
             onClick={(event) => {
               event.preventDefault();
               refreshFetcher.submit(
-                { idempotencyKey: globalThis.crypto.randomUUID() },
+                { idempotencyKey: data.noJsIdempotencyKey },
                 { method: "post", action: refreshActionPath },
               );
             }}

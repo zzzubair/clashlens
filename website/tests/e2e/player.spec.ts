@@ -147,6 +147,12 @@ test("a refresh status error is visible and stops polling", async ({ page }) => 
 });
 
 test("refresh can be started from the keyboard", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(Crypto.prototype, "randomUUID", {
+      configurable: true,
+      value: undefined,
+    });
+  });
   await page.goto("/players/%232PL");
   const button = page.getByRole("button", { name: "Refresh public data" });
   await button.focus();

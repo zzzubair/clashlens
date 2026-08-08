@@ -359,8 +359,20 @@ func TestVersionTwoWorkerArchivesGlobalRankingsWithValidationHandoffProvenance(t
 	`).Scan(&jobs, &parserVersion); err != nil {
 		t.Fatalf("read global rankings validation handoff: %v", err)
 	}
-	if jobs != 1 || parserVersion != "global-player-rankings-parser-v1" {
+	if jobs != 1 || parserVersion != "supercell-source-parser-v1" {
 		t.Fatalf("global rankings validation handoff = %d jobs with parser %q", jobs, parserVersion)
+	}
+}
+
+func TestParserVersionForEndpointUsesPythonSourceContract(t *testing.T) {
+	for _, endpoint := range []endpointName{
+		profileEndpoint,
+		battleLogEndpoint,
+		globalPlayerRankingsEndpoint,
+	} {
+		if got := parserVersionForEndpoint(endpoint); got != "supercell-source-parser-v1" {
+			t.Fatalf("parser version for %q = %q", endpoint, got)
+		}
 	}
 }
 

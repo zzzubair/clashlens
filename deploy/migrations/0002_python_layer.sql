@@ -299,6 +299,22 @@ ALTER TABLE collector_transport_failures
     ADD COLUMN IF NOT EXISTS paging_envelope_state text,
     ADD COLUMN IF NOT EXISTS source_adapter_version text;
 
+-- Contract v1 allowed player_id to be null even when normalized_tag identified
+-- an existing player. Restore that identity before enforcing v2 player scope.
+UPDATE collector_observations AS observation
+SET player_id = player.id
+FROM players AS player
+WHERE observation.scope = 'player'
+  AND observation.player_id IS NULL
+  AND observation.normalized_tag = player.normalized_tag;
+
+UPDATE collector_transport_failures AS failure
+SET player_id = player.id
+FROM players AS player
+WHERE failure.scope = 'player'
+  AND failure.player_id IS NULL
+  AND failure.normalized_tag = player.normalized_tag;
+
 UPDATE collector_endpoint_results AS endpoint_result
 SET request_method = COALESCE(endpoint_result.request_method, 'GET'),
     request_path = COALESCE(
@@ -539,6 +555,8 @@ ALTER TABLE python_processing_jobs
 UPDATE python_processing_jobs
 SET parser_version = CASE parser_version
         WHEN 'profile-parser-v1' THEN 'supercell-source-parser-v1'
+        WHEN 'battle-log-parser-v1' THEN 'supercell-source-parser-v1'
+        WHEN 'global-player-rankings-parser-v1' THEN 'supercell-source-parser-v1'
         ELSE parser_version
     END,
     processing_version = CASE processing_version
@@ -557,7 +575,12 @@ SET parser_version = CASE parser_version
         WHEN 'export-v1' THEN 'account-export-v1'
         ELSE export_schema_version
     END
-WHERE parser_version IN ('profile-parser-v1', 'supercell-source-parser-v1')
+WHERE parser_version IN (
+       'profile-parser-v1',
+       'battle-log-parser-v1',
+       'global-player-rankings-parser-v1',
+       'supercell-source-parser-v1'
+   )
    OR processing_version IN ('python-processing-prototype-v1', 'clashlens-domain-processing-v1')
    OR domain_rule_version IN ('domain-v1', 'clashlens-domain-rules-v1')
    OR snapshot_rule_version IN ('snapshot-v1', 'tracked-player-order-v1')
