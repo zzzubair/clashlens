@@ -167,3 +167,66 @@ func TestSharedTrafficGateCleanupIsBounded(t *testing.T) {
 		t.Fatalf("bounded permit cleanup retained %d rows, want 1", remaining)
 	}
 }
+
+func TestSharedTrafficGateAcquisitionCleansUpToOneHundredExpiredPermits(t *testing.T) {
+	ctx := context.Background()
+	store := startVersionTwoStore(t, ctx)
+	fingerprint := bearerTokenFingerprint("cleanup-acquisition-secret")
+	if err := store.registerSharedCredential(ctx, fingerprint, 29, 1, 30, "collector:test"); err != nil {
+		t.Fatalf("register cleanup credential: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO shared_api_permits (credential_fingerprint, caller, permitted_at)
+		SELECT $1, 'go', clock_timestamp() - interval '11 minutes'
+		FROM generate_series(1, 150)
+	`, fingerprint); err != nil {
+		t.Fatalf("insert expired permits: %v", err)
+	}
+
+	countExpired := func() int {
+		t.Helper()
+		var expired int
+		if err := store.pool.QueryRow(ctx, `
+			SELECT count(*) FROM shared_api_permits
+			WHERE credential_fingerprint = $1
+			  AND permitted_at < clock_timestamp() - interval '10 minutes'
+		`, fingerprint).Scan(&expired); err != nil {
+			t.Fatalf("count expired permits: %v", err)
+		}
+		return expired
+	}
+
+	permit, err := store.acquireSharedPermit(ctx, fingerprint, "go")
+	if err != nil {
+		t.Fatalf("acquire permit with expired rows: %v", err)
+	}
+	if !permit.granted {
+		t.Fatalf("permit with expired rows not granted: %+v", permit)
+	}
+	if remaining := countExpired(); remaining != 50 {
+		t.Fatalf("first acquisition removed %d expired permits, want 100", 150-remaining)
+	}
+
+	permit, err = store.acquireSharedPermit(ctx, fingerprint, "go")
+	if err != nil {
+		t.Fatalf("acquire second permit: %v", err)
+	}
+	if !permit.granted {
+		t.Fatalf("second permit not granted: %+v", permit)
+	}
+	if remaining := countExpired(); remaining != 0 {
+		t.Fatalf("second acquisition left %d expired permits", remaining)
+	}
+
+	var fresh int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FROM shared_api_permits
+		WHERE credential_fingerprint = $1
+		  AND permitted_at >= clock_timestamp() - interval '10 minutes'
+	`, fingerprint).Scan(&fresh); err != nil {
+		t.Fatalf("count fresh permits: %v", err)
+	}
+	if fresh != 2 {
+		t.Fatalf("fresh permits = %d, want the two acquisitions", fresh)
+	}
+}

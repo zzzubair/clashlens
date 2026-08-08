@@ -476,6 +476,381 @@ func TestProductionMigrationTwoFencesLeasesAndAuditsOperatorReset(t *testing.T) 
 	}
 }
 
+func TestProductionMigrationTwoReplayRequestSeamBoundaries(t *testing.T) {
+	ctx := context.Background()
+	connection := migratedVersionTwoConnection(t, ctx)
+
+	var roleExists, roleNotInherit bool
+	if err := connection.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'clashlens_replay_request'),
+		       COALESCE((SELECT NOT rolinherit FROM pg_roles WHERE rolname = 'clashlens_replay_request'), false)
+	`).Scan(&roleExists, &roleNotInherit); err != nil {
+		t.Fatalf("inspect replay request role: %v", err)
+	}
+	if !roleExists || !roleNotInherit {
+		t.Fatalf("replay request role exists = %v, no inherit = %v", roleExists, roleNotInherit)
+	}
+
+	var noTrackedPassword bool
+	if err := connection.QueryRow(ctx, `
+		SELECT rolpassword IS NULL
+		FROM pg_authid
+		WHERE rolname = 'clashlens_replay_request'
+	`).Scan(&noTrackedPassword); err != nil {
+		t.Fatalf("inspect replay request role password: %v", err)
+	}
+	if !noTrackedPassword {
+		t.Fatal("replay request role has a tracked password")
+	}
+
+	replayFunction := "clashlens_request_python_replay_v2(bigint, text, text, text, text, text, text)"
+	var replayExecute, publicExecute, supportExecute bool
+	if err := connection.QueryRow(ctx, `
+		SELECT COALESCE(has_function_privilege('clashlens_replay_request', $1, 'EXECUTE'), false),
+		       COALESCE(has_function_privilege('public', $1, 'EXECUTE'), false),
+		       COALESCE(has_function_privilege('clashlens_support_transfer', $1, 'EXECUTE'), false)
+	`, replayFunction).Scan(&replayExecute, &publicExecute, &supportExecute); err != nil {
+		t.Fatalf("inspect replay function privileges: %v", err)
+	}
+	if !replayExecute || publicExecute || supportExecute {
+		t.Fatalf(
+			"replay function privileges = replay %v, public %v, support %v",
+			replayExecute,
+			publicExecute,
+			supportExecute,
+		)
+	}
+
+	var mirrorPublicExecute, cleanupPublicExecute bool
+	if err := connection.QueryRow(ctx, `
+		SELECT COALESCE(has_function_privilege('public', 'clashlens_mirror_replay_request_from_job_v2()', 'EXECUTE'), false),
+		       COALESCE(has_function_privilege('public', 'clashlens_cleanup_shared_api_permits(integer)', 'EXECUTE'), false)
+	`).Scan(&mirrorPublicExecute, &cleanupPublicExecute); err != nil {
+		t.Fatalf("inspect trigger and cleanup function privileges: %v", err)
+	}
+	if mirrorPublicExecute || cleanupPublicExecute {
+		t.Fatalf(
+			"trigger PUBLIC execute = %v, permit cleanup PUBLIC execute = %v",
+			mirrorPublicExecute,
+			cleanupPublicExecute,
+		)
+	}
+
+	for _, functionName := range []string{
+		"clashlens_request_python_replay_v2",
+		"clashlens_mirror_replay_request_from_job_v2",
+		"clashlens_cleanup_shared_api_permits",
+	} {
+		var searchPath string
+		if err := connection.QueryRow(ctx, `
+			SELECT COALESCE((SELECT proconfig::text FROM pg_proc WHERE proname = $1), '')
+		`, functionName).Scan(&searchPath); err != nil {
+			t.Fatalf("inspect search path for %s: %v", functionName, err)
+		}
+		if !strings.Contains(searchPath, "search_path") {
+			t.Fatalf("function %s has no fixed search path: %s", functionName, searchPath)
+		}
+	}
+
+	if _, err := connection.Exec(ctx, `
+		DO $$
+		DECLARE
+			replay_role_name text;
+		BEGIN
+			FOR replay_role_name IN SELECT unnest(ARRAY[
+				'clashlens_support_transfer',
+				'clashlens_collector',
+				'clashlens_worker',
+				'clashlens_api'
+			])
+			LOOP
+				IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = replay_role_name)
+				   AND has_function_privilege(replay_role_name,
+				       'clashlens_request_python_replay_v2(bigint, text, text, text, text, text, text)',
+				       'EXECUTE') THEN
+					RAISE EXCEPTION 'replay function executable by %', replay_role_name;
+				END IF;
+			END LOOP;
+		END
+		$$;
+	`); err != nil {
+		t.Fatalf("runtime roles must not execute the replay function: %v", err)
+	}
+
+	// Migration 0002 must reapply cleanly after the replay seam is present.
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
+	var stillReplayExecute bool
+	if err := connection.QueryRow(ctx, `
+		SELECT COALESCE(has_function_privilege('clashlens_replay_request', $1, 'EXECUTE'), false)
+	`, replayFunction).Scan(&stillReplayExecute); err != nil {
+		t.Fatalf("inspect replay function after reapplication: %v", err)
+	}
+	if !stillReplayExecute {
+		t.Fatal("replay function privileges were lost when migration 0002 reapplied")
+	}
+
+	if _, err := connection.Exec(ctx, `SET ROLE clashlens_support_transfer`); err != nil {
+		t.Fatalf("set support transfer role: %v", err)
+	}
+	defer func() { _, _ = connection.Exec(context.Background(), `RESET ROLE`) }()
+	if _, err := connection.Exec(ctx, `
+		SELECT clashlens_request_python_replay_v2(
+			$1, 'operator:test', 'approved replay',
+			'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
+			'clashlens-domain-rules-v1', 'legend-analytics-v1'
+		)
+	`, int64(1)); err == nil {
+		t.Fatal("support role executed the replay request function")
+	}
+}
+
+func TestProductionMigrationTwoReplayRequestCreatesOneRequestAndOneDeduplicatedJob(t *testing.T) {
+	ctx := context.Background()
+	connection := migratedVersionTwoConnection(t, ctx)
+	observationID := insertVersionTwoProfileObservation(t, ctx, connection)
+
+	requestID, jobID, status, err := requestPythonReplayCall(
+		t, ctx, connection, observationID, "sudo:operator:1000", "adapter correction replay",
+		replayParserVersion, replayProcessingVersion, replayDomainRuleVersion, replayAnalyticsVersion,
+	)
+	if err != nil {
+		t.Fatalf("request python replay: %v", err)
+	}
+	if requestID < 1 || jobID < 1 || status != "enqueued" {
+		t.Fatalf("replay request = id %d job %d status %q", requestID, jobID, status)
+	}
+
+	var requestCount, jobCount int
+	if err := connection.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM python_replay_requests WHERE observation_id = $1),
+			(SELECT count(*) FROM python_processing_jobs
+			 WHERE work_type = 'replay_observation' AND replay_observation_id = $1)
+	`, observationID).Scan(&requestCount, &jobCount); err != nil {
+		t.Fatalf("count replay rows: %v", err)
+	}
+	if requestCount != 1 || jobCount != 1 {
+		t.Fatalf("replay rows = %d requests and %d jobs, want one each", requestCount, jobCount)
+	}
+
+	var workType, dedupKey, replayedRequestID, parserVersion, processingVersion, domainRuleVersion, analyticsRuleVersion string
+	var jobObservationID *int64
+	if err := connection.QueryRow(ctx, `
+		SELECT work_type, deduplication_key, input_json ->> 'replay_request_id',
+		       parser_version, processing_version, domain_rule_version,
+		       analytics_rule_version, observation_id
+		FROM python_processing_jobs
+		WHERE id = $1
+	`, jobID).Scan(
+		&workType, &dedupKey, &replayedRequestID, &parserVersion,
+		&processingVersion, &domainRuleVersion, &analyticsRuleVersion, &jobObservationID,
+	); err != nil {
+		t.Fatalf("read replay job: %v", err)
+	}
+	if workType != "replay_observation" || jobObservationID != nil {
+		t.Fatalf("replay job work = %q with observation %v", workType, jobObservationID)
+	}
+	if dedupKey != "replay-observation:"+int64String(observationID)+":supercell-source-parser-v1:clashlens-domain-rules-v1" {
+		t.Fatalf("replay deduplication key = %q", dedupKey)
+	}
+	if replayedRequestID != int64String(requestID) ||
+		parserVersion != "supercell-source-parser-v1" ||
+		processingVersion != "clashlens-domain-processing-v1" ||
+		domainRuleVersion != "clashlens-domain-rules-v1" ||
+		analyticsRuleVersion != "legend-analytics-v1" {
+		t.Fatalf(
+			"replay job = request %q parser %q processing %q domain %q analytics %q",
+			replayedRequestID, parserVersion, processingVersion, domainRuleVersion, analyticsRuleVersion,
+		)
+	}
+
+	replayedRequestIDValue, replayedJobID, replayedStatus, err := requestPythonReplayCall(
+		t, ctx, connection, observationID, "sudo:operator:1000", "adapter correction replay",
+		replayParserVersion, replayProcessingVersion, replayDomainRuleVersion, replayAnalyticsVersion,
+	)
+	if err != nil {
+		t.Fatalf("replay exact same request: %v", err)
+	}
+	if replayedRequestIDValue != requestID || replayedJobID != jobID || replayedStatus != "enqueued" {
+		t.Fatalf(
+			"idempotent replay = request %d job %d status %q, want %d %d enqueued",
+			replayedRequestIDValue, replayedJobID, replayedStatus, requestID, jobID,
+		)
+	}
+
+	if _, _, _, err := requestPythonReplayCall(
+		t, ctx, connection, observationID, "sudo:other:1001", "adapter correction replay",
+		replayParserVersion, replayProcessingVersion, replayDomainRuleVersion, replayAnalyticsVersion,
+	); err == nil {
+		t.Fatal("replay with a different operator reused the existing request")
+	}
+	if _, _, _, err := requestPythonReplayCall(
+		t, ctx, connection, observationID, "sudo:operator:1000", "different bounded reason",
+		replayParserVersion, replayProcessingVersion, replayDomainRuleVersion, replayAnalyticsVersion,
+	); err == nil {
+		t.Fatal("replay with a different reason reused the existing request")
+	}
+
+	if _, _, _, err := requestPythonReplayCall(
+		t, ctx, connection, 99999999, "sudo:operator:1000", "adapter correction replay",
+		replayParserVersion, replayProcessingVersion, replayDomainRuleVersion, replayAnalyticsVersion,
+	); err == nil {
+		t.Fatal("replay accepted a missing collector observation")
+	}
+
+	for name, versions := range map[string][4]string{
+		"parser":     {"profile-parser-v2", replayProcessingVersion, replayDomainRuleVersion, replayAnalyticsVersion},
+		"processing": {replayParserVersion, "python-processing-prototype-v1", replayDomainRuleVersion, replayAnalyticsVersion},
+		"domain":     {replayParserVersion, replayProcessingVersion, "domain-v2", replayAnalyticsVersion},
+		"analytics":  {replayParserVersion, replayProcessingVersion, replayDomainRuleVersion, "analytics-v2"},
+	} {
+		if _, _, _, err := requestPythonReplayCall(
+			t, ctx, connection, observationID, "sudo:operator:1000", "adapter correction replay",
+			versions[0], versions[1], versions[2], versions[3],
+		); err == nil {
+			t.Fatalf("replay accepted unsupported %s target version", name)
+		}
+	}
+
+	battleLogObservationID := insertVersionTwoBattleLogObservation(t, ctx, connection)
+	battleRequestID, battleJobID, battleStatus, err := requestPythonReplayCall(
+		t, ctx, connection, battleLogObservationID, "sudo:operator:1000", "adapter correction replay",
+		replayParserVersion, replayProcessingVersion, replayDomainRuleVersion, replayAnalyticsVersion,
+	)
+	if err != nil {
+		t.Fatalf("request battle-log replay: %v", err)
+	}
+	if battleRequestID == requestID || battleRequestID < 1 || battleJobID < 1 || battleStatus != "enqueued" {
+		t.Fatalf(
+			"battle-log replay = request %d job %d status %q, first request %d",
+			battleRequestID, battleJobID, battleStatus, requestID,
+		)
+	}
+
+	globalObservationID := insertVersionTwoGlobalObservation(t, ctx, connection)
+	if _, _, _, err := requestPythonReplayCall(
+		t, ctx, connection, globalObservationID, "sudo:operator:1000", "adapter correction replay",
+		replayParserVersion, replayProcessingVersion, replayDomainRuleVersion, replayAnalyticsVersion,
+	); err == nil {
+		t.Fatal("replay accepted a global rankings observation")
+	}
+}
+
+func TestProductionMigrationTwoReplayRequestMirrorFollowsLinkedJobStates(t *testing.T) {
+	ctx := context.Background()
+	connection := migratedVersionTwoConnection(t, ctx)
+	observationID := insertVersionTwoProfileObservation(t, ctx, connection)
+	requestID, jobID, _, err := requestPythonReplayCall(
+		t, ctx, connection, observationID, "sudo:operator:1000", "adapter correction replay",
+		replayParserVersion, replayProcessingVersion, replayDomainRuleVersion, replayAnalyticsVersion,
+	)
+	if err != nil {
+		t.Fatalf("request python replay: %v", err)
+	}
+
+	readRequest := func() (string, *time.Time) {
+		t.Helper()
+		var status string
+		var completedAt *time.Time
+		if err := connection.QueryRow(ctx, `
+			SELECT status, completed_at
+			FROM python_replay_requests
+			WHERE id = $1
+		`, requestID).Scan(&status, &completedAt); err != nil {
+			t.Fatalf("read replay request status: %v", err)
+		}
+		return status, completedAt
+	}
+
+	if _, err := connection.Exec(ctx, `
+		UPDATE python_processing_jobs
+		SET status = 'complete', completed_at = clock_timestamp()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("complete linked replay job: %v", err)
+	}
+	if status, completedAt := readRequest(); status != "complete" || completedAt == nil {
+		t.Fatalf("mirrored complete state = %q completed %v", status, completedAt)
+	}
+
+	if _, err := connection.Exec(ctx, `
+		UPDATE python_processing_jobs
+		SET status = 'failed', completed_at = clock_timestamp(),
+		    failure_category = 'fixture', failure_detail = 'safe fixture failure'
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("fail linked replay job: %v", err)
+	}
+	if status, completedAt := readRequest(); status != "failed" || completedAt == nil {
+		t.Fatalf("mirrored failed state = %q completed %v", status, completedAt)
+	}
+
+	var reset bool
+	if err := connection.QueryRow(ctx, `
+		SELECT clashlens_operator_reset_python_job($1, 'operator:test', 'approved replay')
+	`, jobID).Scan(&reset); err != nil {
+		t.Fatalf("operator reset linked replay job: %v", err)
+	}
+	if !reset {
+		t.Fatal("operator reset returned false")
+	}
+	if status, completedAt := readRequest(); status != "enqueued" || completedAt != nil {
+		t.Fatalf("mirrored reset state = %q completed %v", status, completedAt)
+	}
+
+	if _, err := connection.Exec(ctx, `
+		UPDATE python_processing_jobs
+		SET status = 'cancelled', completed_at = clock_timestamp()
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("cancel linked replay job: %v", err)
+	}
+	if status, _ := readRequest(); status != "cancelled" {
+		t.Fatalf("mirrored cancelled state = %q", status)
+	}
+
+	if _, err := connection.Exec(ctx, `CREATE ROLE clashlens_replay_probe_worker NOINHERIT`); err != nil {
+		t.Fatalf("create replay probe worker role: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = connection.Exec(context.Background(), `DROP ROLE IF EXISTS clashlens_replay_probe_worker`)
+	})
+	if _, err := connection.Exec(ctx, `GRANT USAGE ON SCHEMA public TO clashlens_replay_probe_worker`); err != nil {
+		t.Fatalf("grant probe schema usage: %v", err)
+	}
+	if _, err := connection.Exec(ctx, `GRANT SELECT, UPDATE ON python_processing_jobs TO clashlens_replay_probe_worker`); err != nil {
+		t.Fatalf("grant probe job update: %v", err)
+	}
+	var probeCanUpdateRequest bool
+	if err := connection.QueryRow(ctx, `
+		SELECT COALESCE(has_table_privilege(
+			'clashlens_replay_probe_worker', 'python_replay_requests', 'UPDATE'), false)
+	`).Scan(&probeCanUpdateRequest); err != nil {
+		t.Fatalf("inspect probe request update privilege: %v", err)
+	}
+	if probeCanUpdateRequest {
+		t.Fatal("probe worker role can update python_replay_requests directly")
+	}
+
+	if _, err := connection.Exec(ctx, `SET ROLE clashlens_replay_probe_worker`); err != nil {
+		t.Fatalf("set probe worker role: %v", err)
+	}
+	defer func() { _, _ = connection.Exec(context.Background(), `RESET ROLE`) }()
+	if _, err := connection.Exec(ctx, `
+		UPDATE python_processing_jobs
+		SET status = 'pending'
+		WHERE id = $1
+	`, jobID); err != nil {
+		t.Fatalf("probe worker requeue linked replay job: %v", err)
+	}
+	if _, err := connection.Exec(ctx, `RESET ROLE`); err != nil {
+		t.Fatalf("reset probe worker role: %v", err)
+	}
+	if status, _ := readRequest(); status != "enqueued" {
+		t.Fatalf("probe worker requeue mirrored state = %q", status)
+	}
+}
+
 func migratedVersionTwoConnection(t *testing.T, ctx context.Context) *pgx.Conn {
 	t.Helper()
 	databaseURL := testsupport.StartPostgres(t)
@@ -538,4 +913,120 @@ func assertSQLRejected(t *testing.T, ctx context.Context, connection *pgx.Conn, 
 	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "connection is closed") {
 		t.Fatalf("database check for %s failed for an unrelated reason: %v", description, err)
 	}
+}
+
+const (
+	replayParserVersion     = "supercell-source-parser-v1"
+	replayProcessingVersion = "clashlens-domain-processing-v1"
+	replayDomainRuleVersion = "clashlens-domain-rules-v1"
+	replayAnalyticsVersion  = "legend-analytics-v1"
+)
+
+func requestPythonReplayCall(
+	t *testing.T,
+	ctx context.Context,
+	connection *pgx.Conn,
+	observationID int64,
+	operator string,
+	reason string,
+	parserVersion string,
+	processingVersion string,
+	domainRuleVersion string,
+	analyticsRuleVersion string,
+) (int64, int64, string, error) {
+	t.Helper()
+	if _, err := connection.Exec(ctx, `SET SESSION AUTHORIZATION clashlens_replay_request`); err != nil {
+		t.Fatalf("set replay request session: %v", err)
+	}
+	defer func() { _, _ = connection.Exec(context.Background(), `RESET SESSION AUTHORIZATION`) }()
+	var requestID, jobID int64
+	var status string
+	err := connection.QueryRow(ctx, `
+		SELECT request_id, job_id, request_status
+		FROM clashlens_request_python_replay_v2($1, $2, $3, $4, $5, $6, $7)
+	`, observationID, operator, reason, parserVersion, processingVersion, domainRuleVersion, analyticsRuleVersion).
+		Scan(&requestID, &jobID, &status)
+	return requestID, jobID, status, err
+}
+
+func insertVersionTwoBattleLogObservation(t *testing.T, ctx context.Context, connection *pgx.Conn) int64 {
+	t.Helper()
+	var playerID, jobID, attemptID, observationID int64
+	if err := connection.QueryRow(ctx, `INSERT INTO players (normalized_tag) VALUES ('#2PY') RETURNING id`).Scan(&playerID); err != nil {
+		t.Fatalf("insert battle-log player: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, player_id, normalized_tag, capacity_pool, priority,
+			due_at, coalescing_key, status
+		) VALUES ('initial_collection', $1, '#2PY', 'interactive', 250, clock_timestamp(), 'battle-log-v2', 'complete')
+		RETURNING id
+	`, playerID).Scan(&jobID); err != nil {
+		t.Fatalf("insert battle-log job: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
+		VALUES ($1, 'complete', clock_timestamp(), clock_timestamp())
+		RETURNING id
+	`, jobID).Scan(&attemptID); err != nil {
+		t.Fatalf("insert battle-log attempt: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO collector_observations (
+			occurrence_key, collection_job_id, attempt_id, player_id, normalized_tag,
+			endpoint, request_method, request_path, request_query, request_started_at,
+			response_completed_at, http_status, response_hash, archive_reference,
+			paging_envelope_state, collector_version, source_adapter_version,
+			key_label, evidence_headers
+		) VALUES (
+			'battle-log-v2:1', $1, $2, $3, '#2PY', 'battle_log', 'GET',
+			'/v1/players/%232PY/battlelog', '', clock_timestamp(),
+			clock_timestamp(), 200, repeat('e', 64), 's3://evidence/e',
+			'not_applicable', 'collector-v2', 'battle-log-v1', 'interactive-1', '{}'::jsonb
+		) RETURNING id
+	`, jobID, attemptID, playerID).Scan(&observationID); err != nil {
+		t.Fatalf("insert battle-log observation: %v", err)
+	}
+	return observationID
+}
+
+func insertVersionTwoGlobalObservation(t *testing.T, ctx context.Context, connection *pgx.Conn) int64 {
+	t.Helper()
+	var globalJobID, globalAttemptID, globalObservationID int64
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, scope, player_id, normalized_tag, capacity_pool,
+			priority, due_at, coalescing_key, required_endpoint, status
+		) VALUES (
+			'global_player_rankings', 'global', NULL, NULL, 'normal',
+			300, clock_timestamp(), 'global:replay-probe', 'global_player_rankings', 'complete'
+		) RETURNING id
+	`).Scan(&globalJobID); err != nil {
+		t.Fatalf("insert global rankings job: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
+		VALUES ($1, 'complete', clock_timestamp(), clock_timestamp())
+		RETURNING id
+	`, globalJobID).Scan(&globalAttemptID); err != nil {
+		t.Fatalf("insert global rankings attempt: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO collector_observations (
+			occurrence_key, collection_job_id, attempt_id, scope, player_id,
+			normalized_tag, endpoint, request_method, request_path, request_query,
+			request_started_at, response_completed_at, http_status, response_hash,
+			archive_reference, paging_envelope_state, collector_version,
+			source_adapter_version, key_label, evidence_headers
+		) VALUES (
+			'global:replay-probe:response', $1, $2, 'global', NULL,
+			NULL, 'global_player_rankings', 'GET', '/v1/locations/global/rankings/players', 'limit=200',
+			clock_timestamp(), clock_timestamp(), 200, repeat('f', 64),
+			's3://evidence/f', 'not_present', 'collector-v2',
+			'global-player-rankings-v1', 'normal-1', '{}'::jsonb
+		) RETURNING id
+	`, globalJobID, globalAttemptID).Scan(&globalObservationID); err != nil {
+		t.Fatalf("insert global rankings observation: %v", err)
+	}
+	return globalObservationID
 }

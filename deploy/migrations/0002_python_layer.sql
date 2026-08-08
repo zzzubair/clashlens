@@ -973,6 +973,245 @@ CREATE TABLE IF NOT EXISTS python_replay_requests (
     UNIQUE (observation_id, target_parser_version, target_domain_rule_version)
 );
 
+-- Replay requests are created only through a host-only operator wrapper.
+-- The role has no inherited login privileges and no tracked password; the
+-- wrapper connects with this role after sudo has authenticated and
+-- allowlisted the operator.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'clashlens_replay_request'
+    ) THEN
+        CREATE ROLE clashlens_replay_request
+            LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+    END IF;
+END
+$$;
+ALTER ROLE clashlens_replay_request
+    NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+
+CREATE OR REPLACE FUNCTION clashlens_request_python_replay_v2(
+    requested_observation_id bigint,
+    requested_operator_identity text,
+    requested_reason text,
+    requested_parser_version text,
+    requested_processing_version text,
+    requested_domain_rule_version text,
+    requested_analytics_rule_version text
+)
+RETURNS TABLE (request_id bigint, job_id bigint, request_status text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    observation_scope text;
+    observation_endpoint text;
+    observation_adapter text;
+    existing_request record;
+    created_request_id bigint;
+    created_job_id bigint;
+    created_dedup_key text;
+BEGIN
+    IF session_user <> 'clashlens_replay_request' THEN
+        RAISE EXCEPTION 'replay request role required' USING ERRCODE = '42501';
+    END IF;
+    IF requested_operator_identity !~ '^[A-Za-z0-9._:@-]{1,128}$'
+       OR length(requested_reason) NOT BETWEEN 1 AND 1024
+       OR requested_reason ~ '[\r\n]'
+       OR requested_parser_version <> 'supercell-source-parser-v1'
+       OR requested_processing_version <> 'clashlens-domain-processing-v1'
+       OR requested_domain_rule_version <> 'clashlens-domain-rules-v1'
+       OR requested_analytics_rule_version <> 'legend-analytics-v1'
+    THEN
+        RAISE EXCEPTION 'invalid replay request fields' USING ERRCODE = '22023';
+    END IF;
+
+    SELECT scope, endpoint, source_adapter_version
+    INTO observation_scope, observation_endpoint, observation_adapter
+    FROM collector_observations
+    WHERE id = requested_observation_id
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'collector observation not found' USING ERRCODE = 'P0002';
+    END IF;
+    IF observation_scope <> 'player'
+       OR observation_endpoint NOT IN ('profile', 'battle_log')
+       OR observation_adapter NOT IN ('player-profile-v1', 'battle-log-v1')
+    THEN
+        RAISE EXCEPTION 'collector observation is not replayable' USING ERRCODE = '22023';
+    END IF;
+
+    SELECT request_row.id, request_row.job_id, request_row.status,
+           request_row.operator_identity, request_row.reason
+    INTO existing_request
+    FROM python_replay_requests AS request_row
+    WHERE request_row.observation_id = requested_observation_id
+      AND request_row.target_parser_version = requested_parser_version
+      AND request_row.target_domain_rule_version = requested_domain_rule_version
+    FOR UPDATE;
+
+    IF FOUND THEN
+        IF existing_request.operator_identity <> requested_operator_identity
+           OR existing_request.reason <> requested_reason THEN
+            RAISE EXCEPTION 'replay request exists with different audit fields'
+                USING ERRCODE = '23505';
+        END IF;
+        IF existing_request.job_id IS NULL THEN
+            created_dedup_key := 'replay-observation:'
+                || requested_observation_id::text
+                || ':' || requested_parser_version
+                || ':' || requested_domain_rule_version;
+            INSERT INTO python_processing_jobs (
+                replay_observation_id, work_type, deduplication_key, input_json,
+                parser_version, processing_version, domain_rule_version,
+                analytics_rule_version
+            ) VALUES (
+                requested_observation_id, 'replay_observation', created_dedup_key,
+                jsonb_build_object('replay_request_id', existing_request.id),
+                requested_parser_version, requested_processing_version,
+                requested_domain_rule_version, requested_analytics_rule_version
+            )
+            RETURNING id INTO created_job_id;
+            UPDATE python_replay_requests
+            SET job_id = created_job_id, status = 'enqueued'
+            WHERE id = existing_request.id;
+            RETURN QUERY SELECT
+                existing_request.id, created_job_id, 'enqueued'::text;
+            RETURN;
+        END IF;
+        RETURN QUERY SELECT
+            existing_request.id, existing_request.job_id, existing_request.status;
+        RETURN;
+    END IF;
+
+    INSERT INTO python_replay_requests (
+        observation_id, operator_identity, reason,
+        target_parser_version, target_domain_rule_version
+    ) VALUES (
+        requested_observation_id, requested_operator_identity, requested_reason,
+        requested_parser_version, requested_domain_rule_version
+    )
+    RETURNING id INTO created_request_id;
+
+    created_dedup_key := 'replay-observation:'
+        || requested_observation_id::text
+        || ':' || requested_parser_version
+        || ':' || requested_domain_rule_version;
+    INSERT INTO python_processing_jobs (
+        replay_observation_id, work_type, deduplication_key, input_json,
+        parser_version, processing_version, domain_rule_version,
+        analytics_rule_version
+    ) VALUES (
+        requested_observation_id, 'replay_observation', created_dedup_key,
+        jsonb_build_object('replay_request_id', created_request_id),
+        requested_parser_version, requested_processing_version,
+        requested_domain_rule_version, requested_analytics_rule_version
+    )
+    RETURNING id INTO created_job_id;
+
+    UPDATE python_replay_requests
+    SET job_id = created_job_id, status = 'enqueued'
+    WHERE id = created_request_id;
+
+    RETURN QUERY SELECT
+        created_request_id, created_job_id, 'enqueued'::text;
+END
+$$;
+
+-- The worker updates python_processing_jobs without any right to write the
+-- audited replay requests; this security-definer trigger mirrors terminal,
+-- requeue, and reset states onto the linked request.
+CREATE OR REPLACE FUNCTION clashlens_mirror_replay_request_from_job_v2()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    mirrored_status text;
+BEGIN
+    IF NEW.status = 'complete' THEN
+        mirrored_status := 'complete';
+    ELSIF NEW.status = 'failed' THEN
+        mirrored_status := 'failed';
+    ELSIF NEW.status = 'cancelled' THEN
+        mirrored_status := 'cancelled';
+    ELSE
+        mirrored_status := 'enqueued';
+    END IF;
+    UPDATE python_replay_requests
+    SET status = mirrored_status,
+        completed_at = NEW.completed_at
+    WHERE job_id = NEW.id;
+    RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS python_replay_requests_mirror_job_v2
+    ON python_processing_jobs;
+CREATE TRIGGER python_replay_requests_mirror_job_v2
+AFTER INSERT OR UPDATE OF status, completed_at ON python_processing_jobs
+FOR EACH ROW
+EXECUTE FUNCTION clashlens_mirror_replay_request_from_job_v2();
+
+DO $$
+DECLARE
+    replay_schema_name text := current_schema();
+BEGIN
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_request_python_replay_v2(bigint, text, text, text, text, text, text) SET search_path TO pg_catalog, %I',
+        replay_schema_name, replay_schema_name
+    );
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_mirror_replay_request_from_job_v2() SET search_path TO pg_catalog, %I',
+        replay_schema_name, replay_schema_name
+    );
+END
+$$;
+
+REVOKE ALL ON FUNCTION clashlens_request_python_replay_v2(bigint, text, text, text, text, text, text)
+    FROM PUBLIC;
+REVOKE ALL ON FUNCTION clashlens_mirror_replay_request_from_job_v2()
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION clashlens_request_python_replay_v2(bigint, text, text, text, text, text, text)
+    TO clashlens_replay_request;
+DO $$
+DECLARE
+    replay_role_name text;
+BEGIN
+    FOR replay_role_name IN SELECT unnest(ARRAY[
+        'clashlens_support_transfer',
+        'clashlens_collector',
+        'clashlens_worker',
+        'clashlens_api'
+    ])
+    LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = replay_role_name) THEN
+            EXECUTE format(
+                'REVOKE ALL ON FUNCTION clashlens_request_python_replay_v2(bigint, text, text, text, text, text, text) FROM %I',
+                replay_role_name
+            );
+        END IF;
+    END LOOP;
+END
+$$;
+DO $$
+DECLARE
+    replay_schema_name text := current_schema();
+BEGIN
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO clashlens_replay_request', replay_schema_name);
+    EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON TABLE %I.python_replay_requests, %I.python_processing_jobs, '
+        || '%I.collector_observations FROM clashlens_replay_request',
+        replay_schema_name, replay_schema_name, replay_schema_name
+    );
+    EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON SEQUENCE %I.python_replay_requests_id_seq, '
+        || '%I.python_processing_jobs_id_seq FROM clashlens_replay_request',
+        replay_schema_name, replay_schema_name
+    );
+END
+$$;
+
 -- One shared-key gate is used by Go interactive collection and Python token
 -- verification. Fingerprints are SHA-256 of exact ASCII bearer-token bytes.
 CREATE TABLE IF NOT EXISTS shared_api_credentials (
@@ -1053,6 +1292,10 @@ BEGIN
     IF requested_caller NOT IN ('go', 'python') THEN
         RAISE EXCEPTION 'shared API caller must be go or python';
     END IF;
+
+    -- Bound stale permit growth inside the same transaction: a cleanup
+    -- failure aborts the acquisition and never grants a permit.
+    PERFORM clashlens_cleanup_shared_api_permits(100);
 
     SELECT * INTO credential
     FROM shared_api_credentials
@@ -1151,6 +1394,26 @@ BEGIN
     RETURN deleted_count;
 END
 $$;
+
+-- The permit gate and its bounded cleanup resolve only through a fixed
+-- search path, and cleanup is not executable by PUBLIC. Runtime roles need
+-- no DELETE on shared_api_permits; cleanup rides the acquisition call.
+DO $$
+DECLARE
+    shared_gate_schema_name text := current_schema();
+BEGIN
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_acquire_shared_api_permit(text, text) SET search_path TO pg_catalog, %I',
+        shared_gate_schema_name, shared_gate_schema_name
+    );
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_cleanup_shared_api_permits(integer) SET search_path TO pg_catalog, %I',
+        shared_gate_schema_name, shared_gate_schema_name
+    );
+END
+$$;
+REVOKE ALL ON FUNCTION clashlens_cleanup_shared_api_permits(integer)
+    FROM PUBLIC;
 
 -- Parsed evidence and occurrence processing remain separate so identical bytes
 -- can be parsed once while every source occurrence stays attributable.
