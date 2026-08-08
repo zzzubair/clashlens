@@ -95,7 +95,7 @@ func TestVersionTwoResetSweepCreatesPairedPerPlayerBaselines(t *testing.T) {
 }
 
 func TestVersionTwoResetBaselineCompletesOnlyAfterBothEndpoints(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	store := startVersionTwoStore(t, ctx)
 	if _, err := store.pool.Exec(ctx, `
@@ -284,7 +284,7 @@ func TestVersionTwoGlobalRankingsScheduleIsFiveMinuteAndBoundaryPrioritized(t *t
 }
 
 func TestVersionTwoWorkerArchivesGlobalRankingsWithValidationHandoffProvenance(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	store := startVersionTwoStore(t, ctx)
 	now := time.Now().UTC()
@@ -366,17 +366,22 @@ func TestVersionTwoWorkerArchivesGlobalRankingsWithValidationHandoffProvenance(t
 
 func startVersionTwoStore(t *testing.T, ctx context.Context) *store {
 	t.Helper()
+	// The embedded PostgreSQL bootstrap can take longer under race
+	// instrumentation than the test-body context permits. Bootstrap with a
+	// fresh context so the caller's context bounds the test body only.
+	bootstrapContext, cancelBootstrap := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelBootstrap()
 	databaseURL := testsupport.StartPostgres(t)
-	connection, err := pgx.Connect(ctx, databaseURL)
+	connection, err := pgx.Connect(bootstrapContext, databaseURL)
 	if err != nil {
 		t.Fatalf("connect to version-two PostgreSQL: %v", err)
 	}
-	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0001_collector.sql"))
-	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
-	if err := connection.Close(ctx); err != nil {
+	applySQLFile(t, bootstrapContext, connection, filepath.Join("..", "..", "deploy", "migrations", "0001_collector.sql"))
+	applySQLFile(t, bootstrapContext, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
+	if err := connection.Close(bootstrapContext); err != nil {
 		t.Fatalf("close migration connection: %v", err)
 	}
-	opened, err := openStore(ctx, databaseURL, 2)
+	opened, err := openStore(bootstrapContext, databaseURL, 2)
 	if err != nil {
 		t.Fatalf("open version-two store: %v", err)
 	}

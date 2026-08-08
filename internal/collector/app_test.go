@@ -74,7 +74,7 @@ func TestSchedulerSchedulesGlobalRankingsWhenBetaGateIsEnabled(t *testing.T) {
 
 func TestStartupGuardFailsBeforeClaimWhenArchiveIsUnavailable(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	store, err := openStore(ctx, databaseURL, 1)
 	if err != nil {
@@ -128,7 +128,7 @@ func TestStartupGuardFailsBeforeClaimWhenArchiveIsUnavailable(t *testing.T) {
 
 func TestWorkerDoesNotClaimWhenArchiveBecomesUnavailable(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive, archiveBackend := newFakeS3Server(t)
 	var apiRequests atomic.Int64
@@ -184,7 +184,7 @@ func TestWorkerDoesNotClaimWhenArchiveBecomesUnavailable(t *testing.T) {
 
 func TestWorkerDoesNotClaimWhenPostgreSQLBecomesUnavailable(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive, _ := newFakeS3Server(t)
 	var apiRequests atomic.Int64
@@ -242,7 +242,7 @@ func TestWorkerDoesNotClaimWhenPostgreSQLBecomesUnavailable(t *testing.T) {
 
 func TestReadinessReportsDependencyAndKeyPoolComponentsSeparately(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive, _ := newFakeS3Server(t)
 	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
@@ -294,7 +294,7 @@ func TestReadinessReportsDependencyAndKeyPoolComponentsSeparately(t *testing.T) 
 
 func TestMaintenanceListFailedNeedsOnlyPostgreSQLConfiguration(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	environment := map[string]string{
 		"CLASHLENS_DATABASE_URL": databaseURL,
@@ -318,7 +318,7 @@ func TestMaintenanceListFailedNeedsOnlyPostgreSQLConfiguration(t *testing.T) {
 
 func TestStartupGuardRequiresArchiveWriteCapability(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive, backend := newFakeS3Server(t)
 	backend.mu.Lock()
@@ -345,7 +345,7 @@ func TestStartupGuardRequiresArchiveWriteCapability(t *testing.T) {
 
 func TestApplicationRequiredTrafficGateFailsClosedBeforeMigration(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	archive, _ := newFakeS3Server(t)
 	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {

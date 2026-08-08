@@ -11,7 +11,7 @@ import (
 )
 
 func TestInteractiveGateDenialDoesNotBeginEndpointOrCallOfficialAPI(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	store := startVersionTwoStore(t, ctx)
 	key := APIKey{Label: "interactive-1", Secret: "synthetic-interactive-key", Pool: interactivePool}
@@ -77,7 +77,7 @@ func TestInteractiveGateDenialDoesNotBeginEndpointOrCallOfficialAPI(t *testing.T
 }
 
 func TestInteractiveUnknownAuthenticationResponseDoesNotQuarantineSharedCredential(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	store := startVersionTwoStore(t, ctx)
 	key := APIKey{Label: "interactive-1", Secret: "synthetic-unknown-auth-key", Pool: interactivePool}

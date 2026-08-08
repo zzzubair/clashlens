@@ -36,7 +36,7 @@ func (a *memoryArchive) store(_ context.Context, hash string, body []byte) (stri
 
 func TestWorkerCollectsProfileAndBattleLogConcurrentlyAndCommitsEvidence(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	store, err := openStore(ctx, databaseURL, 1)
@@ -174,7 +174,7 @@ func TestWorkerCollectsProfileAndBattleLogConcurrentlyAndCommitsEvidence(t *test
 
 func TestWorkerRetainsSuccessfulProfileAndRetriesOnlyFailedBattleLog(t *testing.T) {
 	databaseURL := startContractDatabase(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
 	store, err := openStore(ctx, databaseURL, 1)
