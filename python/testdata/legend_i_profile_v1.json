@@ -8,8 +8,8 @@
     "id": 105000036,
     "name": "Legend I"
   },
-  "currentLeagueSeasonId": "1783918800",
-  "previousLeagueSeasonId": "1781499600",
+  "currentLeagueSeasonId": 1783918800,
+  "previousLeagueSeasonId": 1781499600,
   "clan": {
     "tag": "#2CLAN",
     "name": "Synthetic Clan"

@@ -125,8 +125,8 @@ def parse_profile(
         eligibility_reason,
         tier_contract_state,
     ) = _classify_league_tier(profile.league_tier)
-    current_season = _source_string(profile.current_league_season_id)
-    previous_season = _source_string(profile.previous_league_season_id)
+    current_season = _source_season_id(profile.current_league_season_id)
+    previous_season = _source_season_id(profile.previous_league_season_id)
     season_anchor_state = "valid"
     try:
         if current_season is None or previous_season is None:
@@ -187,3 +187,11 @@ def _classify_league_tier(value: Any) -> tuple[int, str, str, str, str]:
 
 def _source_string(value: Any) -> str | None:
     return value if isinstance(value, str) else None
+
+
+def _source_season_id(value: Any) -> str | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    return _source_string(value)
