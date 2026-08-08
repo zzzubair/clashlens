@@ -117,6 +117,23 @@ WHERE job.work_type = 'reset_profile'
   AND baseline.reset_sweep_id = job.sweep_id
   AND baseline.player_id = job.player_id;
 
+-- Version-1 reset rows that still cannot be associated with a real
+-- version-1 reset sweep/baseline (no sweep evidence) must not invent a
+-- domain boundary. Keep them visible as cancelled historical work with a
+-- bounded actionable reason; cancelled rows are never claimed, so they can
+-- never run as current reset work. The conversion is idempotent: only rows
+-- that are still version-1 reset work are touched.
+UPDATE collector_jobs AS job
+SET work_type = 'legacy_unresolved_reset',
+    status = 'cancelled',
+    cancel_reason = 'v1 reset job without reset sweep evidence: requires operator review',
+    lease_owner = NULL,
+    lease_token = NULL,
+    lease_expires_at = NULL,
+    updated_at = clock_timestamp()
+WHERE job.work_type = 'reset_profile'
+  AND job.sweep_id IS NULL;
+
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -139,6 +156,7 @@ ALTER TABLE collector_jobs
         'initial_collection',
         'live_refresh',
         'legacy_reset_profile',
+        'legacy_unresolved_reset',
         'reset_baseline',
         'global_player_rankings',
         'endpoint_retry'
@@ -534,10 +552,6 @@ SET parser_version = CASE parser_version
     snapshot_rule_version = CASE snapshot_rule_version
         WHEN 'snapshot-v1' THEN 'tracked-player-order-v1'
         ELSE snapshot_rule_version
-    END,
-    analytics_rule_version = CASE analytics_rule_version
-        WHEN 'analytics-v1' THEN 'legend-analytics-v1'
-        ELSE analytics_rule_version
     END,
     export_schema_version = CASE export_schema_version
         WHEN 'export-v1' THEN 'account-export-v1'
@@ -2833,6 +2847,54 @@ ALTER TABLE leaderboard_snapshots
     ADD COLUMN IF NOT EXISTS excluded_invalid_count integer NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS excluded_malformed_count integer NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS excluded_conflicting_count integer NOT NULL DEFAULT 0;
+
+-- Version-1 analytics work keeps an explicit legacy rule version unless its
+-- full current input can be derived without assumption from the referenced
+-- leaderboard snapshot (the repeat('0', 64) default is the not-measured
+-- sentinel, never a derived input hash). Rows that cannot be derived stay
+-- visible as cancelled legacy evidence with a bounded event reason; cancelled
+-- rows are never claimed, so the current worker never durably fails them.
+-- Both statements only touch pending legacy rows, so reapplication is a
+-- stable no-op.
+UPDATE python_processing_jobs AS job
+SET input_json = jsonb_build_object(
+        'snapshot_id', job.input_json -> 'snapshot_id',
+        'snapshot_version', snapshot.version,
+        'snapshot_input_hash', snapshot.input_hash,
+        'source_ranked_day_version_id', snapshot.source_ranked_day_version_id
+    ),
+    analytics_rule_version = 'legend-analytics-v1',
+    updated_at = clock_timestamp()
+FROM leaderboard_snapshots AS snapshot
+WHERE job.work_type = 'build_analytics'
+  AND job.analytics_rule_version = 'analytics-v1'
+  AND job.status IN ('pending', 'waiting_retry')
+  AND jsonb_typeof(job.input_json -> 'snapshot_id') = 'number'
+  AND (job.input_json ->> 'snapshot_id')::bigint = snapshot.id
+  AND snapshot.version > 0
+  AND snapshot.input_hash ~ '^[0-9a-f]{64}$'
+  AND snapshot.input_hash <> repeat('0', 64)
+  AND snapshot.source_ranked_day_version_id > 0
+  AND NOT (job.input_json ? 'snapshot_version')
+  AND NOT (job.input_json ? 'snapshot_input_hash')
+  AND NOT (job.input_json ? 'source_ranked_day_version_id');
+
+WITH cancelled_legacy_analytics AS (
+    UPDATE python_processing_jobs AS job
+    SET status = 'cancelled',
+        completed_at = clock_timestamp(),
+        updated_at = clock_timestamp()
+    WHERE job.work_type = 'build_analytics'
+      AND job.analytics_rule_version = 'analytics-v1'
+      AND job.status = 'pending'
+    RETURNING id
+)
+INSERT INTO python_processing_job_events (
+    job_id, event_type, from_state, to_state, reason
+)
+SELECT id, 'cancelled', 'pending', 'cancelled',
+       'legacy analytics-v1 input without derivable snapshot fields: requires operator review'
+FROM cancelled_legacy_analytics;
 
 ALTER TABLE leaderboard_snapshot_entries
     ADD COLUMN IF NOT EXISTS profile_observation_id bigint

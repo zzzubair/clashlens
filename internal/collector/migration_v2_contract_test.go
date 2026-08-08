@@ -393,6 +393,241 @@ func TestProductionMigrationTwoRetainsLegacyResetEvidenceAndSupportsPairedBaseli
 	}
 }
 
+func TestProductionMigrationTwoConvertsNullableResetJobsAndKeepsLegacyAnalyticsVisible(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := testsupport.StartPostgres(t)
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect to test PostgreSQL: %v", err)
+	}
+	t.Cleanup(func() { _ = connection.Close(context.Background()) })
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0001_collector.sql"))
+
+	// Version-1 reset rows cover every nullable shape that migration 0001
+	// validly allows: player-bound, tag-only, with or without a real sweep.
+	var playerID, sweepID int64
+	if err := connection.QueryRow(ctx, `INSERT INTO players (normalized_tag, active) VALUES ('#2PP', false) RETURNING id`).Scan(&playerID); err != nil {
+		t.Fatalf("insert version-one reset player: %v", err)
+	}
+	boundary := time.Date(2026, time.August, 3, 5, 0, 0, 0, time.UTC)
+	if err := connection.QueryRow(ctx, `INSERT INTO collector_reset_sweeps (boundary_at) VALUES ($1) RETURNING id`, boundary).Scan(&sweepID); err != nil {
+		t.Fatalf("insert version-one reset sweep: %v", err)
+	}
+	if _, err := connection.Exec(ctx, `INSERT INTO collector_reset_sweep_members (sweep_id, player_id) VALUES ($1, $2)`, sweepID, playerID); err != nil {
+		t.Fatalf("insert version-one reset member: %v", err)
+	}
+	resetJobs := map[string]int64{}
+	for label, values := range map[string]struct {
+		playerID any
+		sweepID  any
+		tag      string
+		coalesce string
+	}{
+		"normal":              {playerID, sweepID, "#2PP", "v1-reset-normal"},
+		"tag-only-with-sweep": {nil, sweepID, "#TAGONLY", "v1-reset-tag-only-with-sweep"},
+		"player-no-sweep":     {playerID, nil, "#2PP", "v1-reset-player-no-sweep"},
+		"tag-only-no-sweep":   {nil, nil, "#TAGLESS", "v1-reset-tag-only-no-sweep"},
+	} {
+		var jobID int64
+		if err := connection.QueryRow(ctx, `
+			INSERT INTO collector_jobs (
+				work_type, player_id, normalized_tag, capacity_pool, priority,
+				due_at, coalescing_key, sweep_id, status
+			) VALUES ('reset_profile', $1, $2, 'normal', 400, $3, $4, $5, 'pending')
+			RETURNING id
+		`, values.playerID, values.tag, boundary, values.coalesce, values.sweepID).Scan(&jobID); err != nil {
+			t.Fatalf("insert version-one reset job %s: %v", label, err)
+		}
+		resetJobs[label] = jobID
+	}
+
+	// Migration 0002 must convert the nullable version-one reset rows and
+	// reapply cleanly, preserving every row.
+	migrationPath := filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql")
+	applySQLFile(t, ctx, connection, migrationPath)
+
+	// Seed the published snapshot the prototype analytics publisher referenced,
+	// then legacy analytics work exactly as the prototype wrote it: only the
+	// old snapshot_id input shape under the explicit analytics-v1 rule.
+	var rankedDayID, snapshotID int64
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO ranked_day_versions (
+			player_id, ranked_day_start, ranked_day_end, official_season_id,
+			season_day_number, season_anchor_rule_version, reconciliation_rule_version,
+			result_hash, version, state, confidence
+		) VALUES (
+			$1, $2, $3, '2026-08', 1, 'season-anchor-v1',
+			'reconciliation-v1', repeat('a', 64), 1, 'Complete', 'exact'
+		) RETURNING id
+	`, playerID, boundary, boundary.Add(24*time.Hour)).Scan(&rankedDayID); err != nil {
+		t.Fatalf("insert version-two ranked day: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO leaderboard_snapshots (
+			snapshot_kind, boundary_at, version, ordering_rule_version,
+			freshness_rule_version, state, source_ranked_day_version_id,
+			measured_coverage, stale_entry_count, input_hash, published_at
+		) VALUES (
+			'frozen', $1, 3, 'tracked-player-order-v1', 'snapshot-freshness-v1',
+			'published', $2, 0.98, 0, repeat('a', 64), clock_timestamp()
+		) RETURNING id
+	`, boundary, rankedDayID).Scan(&snapshotID); err != nil {
+		t.Fatalf("insert published snapshot: %v", err)
+	}
+	analyticsJobs := map[string]int64{}
+	for label, snapshotReference := range map[string]int64{
+		"resolvable":   snapshotID,
+		"unresolvable": 99999999,
+	} {
+		var jobID int64
+		if err := connection.QueryRow(ctx, `
+			INSERT INTO python_processing_jobs (
+				work_type, deduplication_key, input_json, analytics_rule_version,
+				status
+			) VALUES (
+				'build_analytics', $1, $2, 'analytics-v1', 'pending'
+			) RETURNING id
+		`, "analytics:snapshot:"+int64String(snapshotReference)+":v1",
+			`{"snapshot_id":`+int64String(snapshotReference)+`}`).Scan(&jobID); err != nil {
+			t.Fatalf("insert legacy analytics job %s: %v", label, err)
+		}
+		analyticsJobs[label] = jobID
+	}
+
+	// Reapplication must be stable: no duplicate baselines, players, or events,
+	// and no relabeling of legacy analytics work the current rules cannot run.
+	applySQLFile(t, ctx, connection, migrationPath)
+	applySQLFile(t, ctx, connection, migrationPath)
+
+	var contractVersion int
+	if err := connection.QueryRow(ctx, `SELECT version FROM clash_lens_contract WHERE singleton`).Scan(&contractVersion); err != nil {
+		t.Fatalf("read upgraded contract version: %v", err)
+	}
+	if contractVersion != 2 {
+		t.Fatalf("contract version = %d, want 2", contractVersion)
+	}
+	var jobCount, pythonJobCount, playerCount, baselineCount int
+	if err := connection.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM collector_jobs),
+			(SELECT count(*) FROM python_processing_jobs),
+			(SELECT count(*) FROM players),
+			(SELECT count(*) FROM collector_reset_baseline_sweeps)
+	`).Scan(&jobCount, &pythonJobCount, &playerCount, &baselineCount); err != nil {
+		t.Fatalf("count migrated rows: %v", err)
+	}
+	if jobCount != 4 || pythonJobCount != 2 || playerCount != 3 || baselineCount != 2 {
+		t.Fatalf("migrated rows = %d jobs, %d Python jobs, %d players, %d baselines; want 4, 2, 3, 2",
+			jobCount, pythonJobCount, playerCount, baselineCount)
+	}
+
+	readResetRow := func(jobID int64) (workType string, jobPlayerID int64, status string, cancelReason *string, evidenceKind *string) {
+		t.Helper()
+		if err := connection.QueryRow(ctx, `
+			SELECT job.work_type, job.player_id, job.status, job.cancel_reason,
+			       baseline.evidence_kind
+			FROM collector_jobs AS job
+			LEFT JOIN collector_reset_baseline_sweeps AS baseline
+			  ON baseline.id = job.reset_baseline_sweep_id
+			WHERE job.id = $1
+		`, jobID).Scan(&workType, &jobPlayerID, &status, &cancelReason, &evidenceKind); err != nil {
+			t.Fatalf("read converted reset job %d: %v", jobID, err)
+		}
+		return workType, jobPlayerID, status, cancelReason, evidenceKind
+	}
+	var tagOnlyPlayerID, tagLessPlayerID int64
+	if err := connection.QueryRow(ctx, `SELECT id FROM players WHERE normalized_tag = '#TAGONLY'`).Scan(&tagOnlyPlayerID); err != nil {
+		t.Fatalf("migration did not create the tag-only player: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `SELECT id FROM players WHERE normalized_tag = '#TAGLESS'`).Scan(&tagLessPlayerID); err != nil {
+		t.Fatalf("migration did not create the sweep-less tag player: %v", err)
+	}
+
+	workType, jobPlayerID, status, _, evidenceKind := readResetRow(resetJobs["normal"])
+	if workType != "legacy_reset_profile" || jobPlayerID != playerID || status != "pending" || evidenceKind == nil || *evidenceKind != "legacy_profile_only_v1" {
+		t.Fatalf("normal reset row = work %q player %d status %q evidence %v", workType, jobPlayerID, status, evidenceKind)
+	}
+	workType, jobPlayerID, status, _, evidenceKind = readResetRow(resetJobs["tag-only-with-sweep"])
+	if workType != "legacy_reset_profile" || jobPlayerID != tagOnlyPlayerID || status != "pending" || evidenceKind == nil || *evidenceKind != "legacy_profile_only_v1" {
+		t.Fatalf("tag-only reset row = work %q player %d status %q evidence %v", workType, jobPlayerID, status, evidenceKind)
+	}
+	workType, jobPlayerID, status, cancelReason, evidenceKind := readResetRow(resetJobs["player-no-sweep"])
+	if workType != "legacy_unresolved_reset" || jobPlayerID != playerID || status != "cancelled" || cancelReason == nil || evidenceKind != nil {
+		t.Fatalf("player-bound sweep-less reset row = work %q player %d status %q reason %v evidence %v",
+			workType, jobPlayerID, status, cancelReason, evidenceKind)
+	}
+	if cancelReason == nil || !strings.Contains(*cancelReason, "requires operator review") {
+		t.Fatalf("player-bound sweep-less reset reason = %v", cancelReason)
+	}
+	workType, jobPlayerID, status, cancelReason, evidenceKind = readResetRow(resetJobs["tag-only-no-sweep"])
+	if workType != "legacy_unresolved_reset" || jobPlayerID != tagLessPlayerID || status != "cancelled" || cancelReason == nil || evidenceKind != nil {
+		t.Fatalf("tag-only sweep-less reset row = work %q player %d status %q reason %v evidence %v",
+			workType, jobPlayerID, status, cancelReason, evidenceKind)
+	}
+	if cancelReason == nil || !strings.Contains(*cancelReason, "requires operator review") {
+		t.Fatalf("tag-only sweep-less reset reason = %v", cancelReason)
+	}
+
+	var analyticsVersion, analyticsStatus, snapshotVersion, snapshotInputHash, sourceRankedDay string
+	if err := connection.QueryRow(ctx, `
+		SELECT analytics_rule_version, status,
+		       input_json ->> 'snapshot_version',
+		       input_json ->> 'snapshot_input_hash',
+		       input_json ->> 'source_ranked_day_version_id'
+		FROM python_processing_jobs
+		WHERE id = $1
+	`, analyticsJobs["resolvable"]).Scan(
+		&analyticsVersion, &analyticsStatus, &snapshotVersion, &snapshotInputHash, &sourceRankedDay,
+	); err != nil {
+		t.Fatalf("read resolvable legacy analytics row: %v", err)
+	}
+	if analyticsVersion != "legend-analytics-v1" || analyticsStatus != "pending" ||
+		snapshotVersion != "3" || snapshotInputHash != strings.Repeat("a", 64) ||
+		sourceRankedDay != int64String(rankedDayID) {
+		t.Fatalf(
+			"resolvable legacy analytics row = version %q status %q snapshot %q hash %q ranked day %q",
+			analyticsVersion, analyticsStatus, snapshotVersion, snapshotInputHash, sourceRankedDay,
+		)
+	}
+	var completed bool
+	if err := connection.QueryRow(ctx, `
+		SELECT analytics_rule_version, status, completed_at IS NOT NULL
+		FROM python_processing_jobs
+		WHERE id = $1
+	`, analyticsJobs["unresolvable"]).Scan(&analyticsVersion, &analyticsStatus, &completed); err != nil {
+		t.Fatalf("read unresolvable legacy analytics row: %v", err)
+	}
+	if analyticsVersion != "analytics-v1" || analyticsStatus != "cancelled" || !completed {
+		t.Fatalf("unresolvable legacy analytics row = version %q status %q completed %v",
+			analyticsVersion, analyticsStatus, completed)
+	}
+	var cancelledEvents int
+	if err := connection.QueryRow(ctx, `
+		SELECT count(*)
+		FROM python_processing_job_events
+		WHERE job_id = $1
+		  AND event_type = 'cancelled'
+		  AND to_state = 'cancelled'
+		  AND reason = 'legacy analytics-v1 input without derivable snapshot fields: requires operator review'
+	`, analyticsJobs["unresolvable"]).Scan(&cancelledEvents); err != nil {
+		t.Fatalf("count cancelled legacy analytics event: %v", err)
+	}
+	if cancelledEvents != 1 {
+		t.Fatalf("cancelled legacy analytics events = %d, want 1", cancelledEvents)
+	}
+	var pendingResolvable, cancelledUnresolvable int
+	if err := connection.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM python_processing_jobs WHERE id = $1 AND status = 'pending'),
+			(SELECT count(*) FROM python_processing_jobs WHERE id = $2 AND status = 'cancelled')
+	`, analyticsJobs["resolvable"], analyticsJobs["unresolvable"]).Scan(&pendingResolvable, &cancelledUnresolvable); err != nil {
+		t.Fatalf("read final analytics states: %v", err)
+	}
+	if pendingResolvable != 1 || cancelledUnresolvable != 1 {
+		t.Fatalf("final analytics states = pending %d cancelled %d", pendingResolvable, cancelledUnresolvable)
+	}
+}
+
 func TestProductionMigrationTwoFencesLeasesAndAuditsOperatorReset(t *testing.T) {
 	ctx := context.Background()
 	connection := migratedVersionTwoConnection(t, ctx)
