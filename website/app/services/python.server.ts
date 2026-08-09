@@ -5,8 +5,38 @@ import type {
   SearchResponse,
   TrackedLeaderboard,
 } from "../lib/contracts";
+import type {
+  AccountSummary,
+  ClashLensAccount,
+  GroupDeleteResult,
+  PrivateGroup,
+  PublicUser,
+  SavedPlayer,
+  SavedTagResult,
+  VerificationResult,
+} from "../lib/account-contracts";
+import {
+  mapAccount,
+  mapGroupDeleteResult,
+  mapGroupResult,
+  mapGroups,
+  mapPublicUser,
+  mapSavedTagResult,
+  mapSavedTags,
+  mapSummary,
+  mapVerificationResult,
+} from "../lib/account-contracts";
+import {
+  MAX_VERIFICATION_TOKEN_LENGTH,
+  normalizeDisplayName,
+  normalizeGroupName,
+  normalizeSubmittedPlayerTag,
+  normalizeTagList,
+  normalizeUsername,
+} from "../lib/account-validation";
 import { normalizePlayerTag } from "../lib/player-tag";
 import { isCanonicalUuid, MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
+import { isProviderSubject } from "../server/google-oidc.server";
 import {
   createProofHeaders,
   decodeSecretValue,
@@ -48,15 +78,64 @@ export interface PythonClient {
   getPlayer(tag: string): Promise<PlayerPage>;
   requestRefresh(tag: string, idempotencyKey: string): Promise<RefreshWork>;
   getRefreshStatus(workId: string, tag: string): Promise<RefreshStatus>;
+  createAccount(
+    input: AccountNameInput,
+    idempotencyKey: string,
+  ): Promise<ClashLensAccount>;
+  getAccount(): Promise<ClashLensAccount>;
+  updateAccount(
+    input: AccountNameInput & { preferences: Record<string, unknown> },
+    idempotencyKey: string,
+  ): Promise<ClashLensAccount>;
+  listSavedTags(): Promise<SavedPlayer[]>;
+  addSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
+  removeSavedTag(tag: string, idempotencyKey: string): Promise<SavedTagResult>;
+  listGroups(): Promise<PrivateGroup[]>;
+  createGroup(input: GroupInput, idempotencyKey: string): Promise<PrivateGroup>;
+  updateGroup(
+    groupId: string,
+    input: GroupInput,
+    idempotencyKey: string,
+  ): Promise<PrivateGroup>;
+  deleteGroup(groupId: string, idempotencyKey: string): Promise<GroupDeleteResult>;
+  getAccountSummary(): Promise<AccountSummary>;
+  getPublicUser(username: string): Promise<PublicUser>;
+  verifyPlayerToken(
+    tag: string,
+    token: string,
+    idempotencyKey: string,
+  ): Promise<VerificationResult>;
 }
 
-export function createPythonClient(): PythonClient {
+export interface GoogleAccountIdentity {
+  provider: "google";
+  providerSubject: string;
+}
+
+export interface AccountNameInput {
+  username: string;
+  displayName: string;
+}
+
+export interface GroupInput {
+  name: string;
+  tags: string[];
+}
+
+/**
+ * Create the private Python API client. Pass the validated Google identity
+ * (from the login cookie) when account operations are needed; public
+ * operations stay anonymous either way.
+ */
+export function createPythonClient(identity?: GoogleAccountIdentity): PythonClient {
+  const accountOperations = createAccountOperations(identity);
   return {
     getTrackedLeaderboard,
     searchPlayers,
     getPlayer: getPlayerPage,
     requestRefresh: requestPlayerRefresh,
     getRefreshStatus,
+    ...accountOperations,
   };
 }
 
@@ -137,11 +216,45 @@ async function getRefreshStatus(workId: string, tag: string): Promise<RefreshSta
 
 async function requestJson<T>(
   target: string,
-  method: "GET" | "POST",
+  method: "GET" | "POST" | "PATCH" | "DELETE",
   body: Buffer | undefined,
   expectedKind: string | string[] | undefined,
   requestId?: string,
+  identity?: GoogleAccountIdentity,
+  allowedStatuses?: readonly number[],
 ): Promise<T> {
+  const { status, payload } = await requestJsonRaw(
+    target,
+    method,
+    body,
+    requestId,
+    identity,
+  );
+  if (!(status >= 200 && status < 300) && !allowedStatuses?.includes(status)) {
+    throw new PythonApiError(status, payload);
+  }
+  if (expectedKind === undefined) return payload as T;
+  const acceptedKinds = Array.isArray(expectedKind) ? expectedKind : [expectedKind];
+  if (
+    !isRecord(payload) ||
+    typeof payload.kind !== "string" ||
+    !acceptedKinds.includes(payload.kind)
+  ) {
+    throw new PythonApiError(502, { error: "unavailable" });
+  }
+  if (!isValidResponsePayload(payload)) {
+    throw new PythonApiError(502, { error: "malformed" });
+  }
+  return payload as T;
+}
+
+async function requestJsonRaw(
+  target: string,
+  method: "GET" | "POST" | "PATCH" | "DELETE",
+  body: Buffer | undefined,
+  requestId?: string,
+  identity?: GoogleAccountIdentity,
+): Promise<{ status: number; payload: unknown }> {
   const config = getConfig();
   const proof = createProofHeaders({
     key: config.key,
@@ -150,6 +263,8 @@ async function requestJson<T>(
     method,
     rawTarget: target,
     body,
+    provider: identity?.provider,
+    providerSubject: identity?.providerSubject,
     requestId,
     lifetimeSeconds: 10,
   });
@@ -174,22 +289,7 @@ async function requestJson<T>(
   } catch {
     throw new PythonApiError(502, { error: "malformed" });
   }
-  if (!response.ok) {
-    throw new PythonApiError(response.status, payload);
-  }
-  if (expectedKind === undefined) return payload as T;
-  const acceptedKinds = Array.isArray(expectedKind) ? expectedKind : [expectedKind];
-  if (
-    !isRecord(payload) ||
-    typeof payload.kind !== "string" ||
-    !acceptedKinds.includes(payload.kind)
-  ) {
-    throw new PythonApiError(502, { error: "unavailable" });
-  }
-  if (!isValidResponsePayload(payload)) {
-    throw new PythonApiError(502, { error: "malformed" });
-  }
-  return payload as T;
+  return { status: response.status, payload };
 }
 
 async function readPayload(response: Response): Promise<unknown> {
@@ -857,4 +957,378 @@ function isValidResponsePayload(value: Record<string, unknown>): boolean {
     default:
       return false;
   }
+}
+
+type AccountOperations = Pick<
+  PythonClient,
+  | "createAccount"
+  | "getAccount"
+  | "updateAccount"
+  | "listSavedTags"
+  | "addSavedTag"
+  | "removeSavedTag"
+  | "listGroups"
+  | "createGroup"
+  | "updateGroup"
+  | "deleteGroup"
+  | "getAccountSummary"
+  | "getPublicUser"
+  | "verifyPlayerToken"
+>;
+
+function createAccountOperations(
+  identity: GoogleAccountIdentity | undefined,
+): AccountOperations {
+  if (identity !== undefined) {
+    if (identity.provider !== "google" || !isProviderSubject(identity.providerSubject)) {
+      throw new Error("account client requires a bounded Google identity");
+    }
+  }
+  return {
+    createAccount: (input, idempotencyKey) =>
+      createAccount(input, idempotencyKey, identity),
+    getAccount: () => getAccount(identity),
+    updateAccount: (input, idempotencyKey) =>
+      updateAccount(input, idempotencyKey, identity),
+    listSavedTags: () => listSavedTags(identity),
+    addSavedTag: (tag, idempotencyKey) => addSavedTag(tag, idempotencyKey, identity),
+    removeSavedTag: (tag, idempotencyKey) =>
+      removeSavedTag(tag, idempotencyKey, identity),
+    listGroups: () => listGroups(identity),
+    createGroup: (input, idempotencyKey) => createGroup(input, idempotencyKey, identity),
+    updateGroup: (groupId, input, idempotencyKey) =>
+      updateGroup(groupId, input, idempotencyKey, identity),
+    deleteGroup: (groupId, idempotencyKey) =>
+      deleteGroup(groupId, idempotencyKey, identity),
+    getAccountSummary: () => getAccountSummary(identity),
+    getPublicUser,
+    verifyPlayerToken: (tag, token, idempotencyKey) =>
+      verifyPlayerToken(tag, token, idempotencyKey, identity),
+  };
+}
+
+function requireIdentity(
+  identity: GoogleAccountIdentity | undefined,
+): asserts identity is GoogleAccountIdentity {
+  if (identity === undefined) {
+    throw new PythonApiError(403, { error: "forbidden" });
+  }
+}
+
+function jsonBody(value: unknown): Buffer {
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new PythonApiError(422, { error: "invalid_request" });
+  }
+  if (serialized === undefined) {
+    throw new PythonApiError(422, { error: "invalid_request" });
+  }
+  return Buffer.from(serialized, "utf8");
+}
+
+function mappedOrMalformed<T>(mapped: T | null): T {
+  if (mapped === null) {
+    throw new PythonApiError(502, { error: "malformed" });
+  }
+  return mapped;
+}
+
+async function createAccount(
+  input: AccountNameInput,
+  idempotencyKey: string,
+  identity: GoogleAccountIdentity | undefined,
+): Promise<ClashLensAccount> {
+  requireIdentity(identity);
+  if (!isCanonicalUuid(idempotencyKey)) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
+  const username = normalizeUsername(input.username);
+  const displayName = normalizeDisplayName(input.displayName);
+  if (username === null || displayName === null) {
+    throw new PythonApiError(422, { error: "invalid_request" });
+  }
+  const payload = await requestJson<unknown>(
+    "/v1/account",
+    "POST",
+    jsonBody({ username, display_name: displayName }),
+    undefined,
+    idempotencyKey,
+    identity,
+  );
+  return mappedOrMalformed(mapAccount(payload));
+}
+
+async function getAccount(
+  identity: GoogleAccountIdentity | undefined,
+): Promise<ClashLensAccount> {
+  requireIdentity(identity);
+  const payload = await requestJson<unknown>(
+    "/v1/account",
+    "GET",
+    undefined,
+    undefined,
+    undefined,
+    identity,
+  );
+  return mappedOrMalformed(mapAccount(payload));
+}
+
+async function updateAccount(
+  input: AccountNameInput & { preferences: Record<string, unknown> },
+  idempotencyKey: string,
+  identity: GoogleAccountIdentity | undefined,
+): Promise<ClashLensAccount> {
+  requireIdentity(identity);
+  if (!isCanonicalUuid(idempotencyKey)) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
+  const username = normalizeUsername(input.username);
+  const displayName = normalizeDisplayName(input.displayName);
+  const preferences = input.preferences;
+  if (
+    username === null ||
+    displayName === null ||
+    typeof preferences !== "object" ||
+    preferences === null ||
+    Array.isArray(preferences) ||
+    Buffer.byteLength(JSON.stringify(preferences), "utf8") > 4096
+  ) {
+    throw new PythonApiError(422, { error: "invalid_request" });
+  }
+  const payload = await requestJson<unknown>(
+    "/v1/account",
+    "PATCH",
+    jsonBody({ username, display_name: displayName, preferences }),
+    undefined,
+    idempotencyKey,
+    identity,
+  );
+  return mappedOrMalformed(mapAccount(payload));
+}
+
+async function listSavedTags(
+  identity: GoogleAccountIdentity | undefined,
+): Promise<SavedPlayer[]> {
+  requireIdentity(identity);
+  const payload = await requestJson<unknown>(
+    "/v1/account/saved-tags",
+    "GET",
+    undefined,
+    undefined,
+    undefined,
+    identity,
+  );
+  return mappedOrMalformed(mapSavedTags(payload));
+}
+
+async function addSavedTag(
+  tag: string,
+  idempotencyKey: string,
+  identity: GoogleAccountIdentity | undefined,
+): Promise<SavedTagResult> {
+  requireIdentity(identity);
+  if (!isCanonicalUuid(idempotencyKey)) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
+  const normalized = normalizeSubmittedPlayerTag(tag);
+  if (normalized === null) {
+    throw new PythonApiError(422, { error: "invalid_tag" });
+  }
+  const payload = await requestJson<unknown>(
+    "/v1/account/saved-tags",
+    "POST",
+    jsonBody({ tag: normalized }),
+    undefined,
+    idempotencyKey,
+    identity,
+  );
+  return mappedOrMalformed(mapSavedTagResult(payload));
+}
+
+async function removeSavedTag(
+  tag: string,
+  idempotencyKey: string,
+  identity: GoogleAccountIdentity | undefined,
+): Promise<SavedTagResult> {
+  requireIdentity(identity);
+  if (!isCanonicalUuid(idempotencyKey)) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
+  const normalized = normalizeSubmittedPlayerTag(tag);
+  if (normalized === null) {
+    throw new PythonApiError(422, { error: "invalid_tag" });
+  }
+  const payload = await requestJson<unknown>(
+    `/v1/account/saved-tags/${encodeURIComponent(normalized)}`,
+    "DELETE",
+    undefined,
+    undefined,
+    idempotencyKey,
+    identity,
+  );
+  return mappedOrMalformed(mapSavedTagResult(payload));
+}
+
+async function listGroups(
+  identity: GoogleAccountIdentity | undefined,
+): Promise<PrivateGroup[]> {
+  requireIdentity(identity);
+  const payload = await requestJson<unknown>(
+    "/v1/account/groups",
+    "GET",
+    undefined,
+    undefined,
+    undefined,
+    identity,
+  );
+  return mappedOrMalformed(mapGroups(payload));
+}
+
+async function createGroup(
+  input: GroupInput,
+  idempotencyKey: string,
+  identity: GoogleAccountIdentity | undefined,
+): Promise<PrivateGroup> {
+  requireIdentity(identity);
+  if (!isCanonicalUuid(idempotencyKey)) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
+  const name = normalizeGroupName(input.name);
+  const tags = normalizeTagList(input.tags);
+  if (name === null || tags === null) {
+    throw new PythonApiError(422, { error: "invalid_request" });
+  }
+  const payload = await requestJson<unknown>(
+    "/v1/account/groups",
+    "POST",
+    jsonBody({ name, tags }),
+    undefined,
+    idempotencyKey,
+    identity,
+  );
+  return mappedOrMalformed(mapGroupResult(payload));
+}
+
+async function updateGroup(
+  groupId: string,
+  input: GroupInput,
+  idempotencyKey: string,
+  identity: GoogleAccountIdentity | undefined,
+): Promise<PrivateGroup> {
+  requireIdentity(identity);
+  if (!isCanonicalUuid(idempotencyKey) || !isCanonicalUuid(groupId)) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
+  const name = normalizeGroupName(input.name);
+  const tags = normalizeTagList(input.tags);
+  if (name === null || tags === null) {
+    throw new PythonApiError(422, { error: "invalid_request" });
+  }
+  const payload = await requestJson<unknown>(
+    `/v1/account/groups/${groupId}`,
+    "PATCH",
+    jsonBody({ name, tags }),
+    undefined,
+    idempotencyKey,
+    identity,
+  );
+  return mappedOrMalformed(mapGroupResult(payload));
+}
+
+async function deleteGroup(
+  groupId: string,
+  idempotencyKey: string,
+  identity: GoogleAccountIdentity | undefined,
+): Promise<GroupDeleteResult> {
+  requireIdentity(identity);
+  if (!isCanonicalUuid(idempotencyKey) || !isCanonicalUuid(groupId)) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
+  const payload = await requestJson<unknown>(
+    `/v1/account/groups/${groupId}`,
+    "DELETE",
+    undefined,
+    undefined,
+    idempotencyKey,
+    identity,
+  );
+  return mappedOrMalformed(mapGroupDeleteResult(payload));
+}
+
+async function getAccountSummary(
+  identity: GoogleAccountIdentity | undefined,
+): Promise<AccountSummary> {
+  requireIdentity(identity);
+  const payload = await requestJson<unknown>(
+    "/v1/account/summary",
+    "GET",
+    undefined,
+    undefined,
+    undefined,
+    identity,
+  );
+  return mappedOrMalformed(mapSummary(payload));
+}
+
+async function getPublicUser(username: string): Promise<PublicUser> {
+  const normalized = normalizeUsername(username);
+  if (normalized === null) {
+    throw new PythonApiError(404, { error: "user_not_found" });
+  }
+  const payload = await requestJson<unknown>(
+    `/v1/users/${encodeURIComponent(normalized)}`,
+    "GET",
+    undefined,
+    undefined,
+    undefined,
+  );
+  return mappedOrMalformed(mapPublicUser(payload));
+}
+
+/** Exact Python token rule: 1-512 printable ASCII characters, no whitespace. */
+function isVerificationToken(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= MAX_VERIFICATION_TOKEN_LENGTH &&
+    [...value].every((character) => {
+      const code = character.charCodeAt(0);
+      return code >= 0x21 && code <= 0x7e;
+    })
+  );
+}
+
+async function verifyPlayerToken(
+  tag: string,
+  token: string,
+  idempotencyKey: string,
+  identity: GoogleAccountIdentity | undefined,
+): Promise<VerificationResult> {
+  requireIdentity(identity);
+  if (!isCanonicalUuid(idempotencyKey)) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
+  const normalized = normalizeSubmittedPlayerTag(tag);
+  if (normalized === null) {
+    throw new PythonApiError(422, { error: "invalid_tag" });
+  }
+  if (!isVerificationToken(token)) {
+    throw new PythonApiError(422, { error: "invalid_request" });
+  }
+  const { status, payload } = await requestJsonRaw(
+    `/v1/players/${encodeURIComponent(normalized)}/verifytoken`,
+    "POST",
+    jsonBody({ token }),
+    idempotencyKey,
+    identity,
+  );
+  if (status >= 200 && status < 300) {
+    return mappedOrMalformed(mapVerificationResult(payload));
+  }
+  if (isRecord(payload) && typeof payload.status === "string") {
+    return mappedOrMalformed(mapVerificationResult(payload));
+  }
+  throw new PythonApiError(status, payload);
 }
