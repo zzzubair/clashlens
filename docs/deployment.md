@@ -1,12 +1,23 @@
 # Fedora deployment
 
-**Status:** executable runbook for the Go collector, PostgreSQL, the production Python worker, the private Python API, and the website deployment foundation. Website authentication and remaining website surfaces, Discord bot, Google Sheets exports, OBS overlay, and global Top-200 collection remain future roles or features under [Issue 31](https://github.com/zzzubair/ClashLens/issues/31). This runbook does not deploy a hosted service.
+**Status:** current operator runbook for the merged main deployment: the Go
+collector, PostgreSQL, the production Python worker, the private Python API,
+and the website on one Fedora host. Google login code is merged into main, but
+the root deployment cannot enable login. `deploy.sh` and `app.env.example` do
+not pass `CLASHLENS_LOGIN_ENABLED`, the public origin, the Google client ID,
+the client-secret file, or the login-secret file. Production login stays
+disabled until the deployment passes this configuration and the Python service
+enforces the strict inappropriate-name filter. The global Top-200 collector
+code exists on main, but the deployment validation keeps it default-off during
+beta. The Discord bot, Google Sheets exports, the OBS overlay, public hosted
+ingress, and backups and monitoring remain unfinished under
+[Issue 31](https://github.com/zzzubair/ClashLens/issues/31). This runbook does
+not deploy a hosted service.
 
 This runbook uses direct rootless Podman commands. It does not use Compose.
-The deployment scripts are verified against a simulated Podman environment;
-they have not been exercised on a live rootless Podman host yet. Do not
-treat any command in this runbook as a real host deployment until the
-maintainer has validated it on the target Fedora host.
+This runbook was exercised on a Fedora host. The maintained documents describe
+merged main. Unmerged throughput work and live deployment drift are separate
+and do not redefine this baseline. Reconcile live drift before release.
 
 [Architecture](architecture.md) owns runtime boundaries, migration order,
 and open deployment choices.
@@ -77,10 +88,10 @@ published. PostgreSQL has no published port. The archive has no container or
 host port. The collector publishes `/readyz` on `127.0.0.1:8081` by default.
 The website publishes only its configured beta ingress host and port.
 
-The repository includes `deploy/egress-proxy/` for the narrow `ser5ver`
-CONNECT proxy. Its policy accepts only the Fedora Tailscale address and only
-permits `api.clashofclans.com:443`. The proxy host uses Docker. The Fedora
-collector host continues to use rootless Podman.
+The repository includes `deploy/egress-proxy/` for the narrow CONNECT proxy
+that runs on the `ser5ver` host. Its policy accepts only the Fedora Tailscale
+address and only permits `api.clashofclans.com:443`. The proxy host uses
+Docker. The Fedora collector host continues to use rootless Podman.
 
 Completion: `app.env` has no `CHANGE_ME` value, every key path resolves to a
 mode-`600` file, and the archive and official API origins use the required
@@ -150,9 +161,11 @@ the fixed-egress proxy URL. It never receives archive credentials or the
 normal key pool.
 
 The worker receives its own database role and a read-only archive
-credential. It claims leased Python jobs in bounded batches, writes product
-data only inside fenced transactions, and never receives official API keys,
-HMAC files, or the API role.
+credential. On merged main, it claims and processes one leased Python job at a
+time. Each serial processing pass stops when the queue is idle or the
+configured `--max-jobs` count is reached. It writes product data only inside
+fenced transactions and never receives official API keys, HMAC files, or the
+API role.
 
 `queue-status` prints the worker queue summary from inside the worker
 container. `status` includes the same summary line when the worker runs.
@@ -174,7 +187,7 @@ curl --fail http://127.0.0.1:3000/healthz
 
 The website connects only to `http://python-api:8000` on the private Podman network. It mounts only `clashlens-python-api-hmac-current` as `/run/secrets/clashlens-python-hmac`. It gets no database, official API, archive, worker, collector, or admin secret. It uses the image `node` user, a read-only root filesystem, a hardened `/tmp` tmpfs, dropped capabilities, no new privileges, explicit resource budgets, and a bounded Node health check.
 
-The beta ingress initially uses `CLASHLENS_WEBSITE_HOST` and `CLASHLENS_WEBSITE_PORT`. The host accepts `127.0.0.1`, `0.0.0.0`, or a plain IPv4 address. No hosted service is configured. Authentication and remaining website surfaces remain future work. Keep ingress and hosted-service choices open.
+The beta ingress initially uses `CLASHLENS_WEBSITE_HOST` and `CLASHLENS_WEBSITE_PORT`. The host accepts `127.0.0.1`, `0.0.0.0`, or a plain IPv4 address. No hosted service is configured. The website image contains the Google login and account code, but the deployment does not pass the login configuration: the enable flag, the public origin, the Google client ID, the client-secret file, and the login-secret file. The root deployment cannot enable login, so login stays disabled. Analytics and other remaining website surfaces remain future work. Keep ingress and hosted-service choices open.
 
 Completion: `status` shows `website: running (healthy)`, and the configured host and port return `/healthz`.
 
@@ -214,7 +227,7 @@ Completion: `systemctl --user status clashlens.service`,
 `systemctl --user status clashlens-website.service` show active services, and
 all services start after a host restart without an interactive login.
 
-## 6. Operate the current stack
+## 7. Operate the current stack
 
 Use only the supported lifecycle commands:
 
@@ -250,7 +263,7 @@ data.
 Completion: each down command exits with status `0`, and `status` shows the
 expected remaining containers.
 
-## 7. Run a one-tag live test
+## 8. Run a one-tag live test
 
 Use one known tag only after `up` reports ready. The command submits a
 durable interactive refresh and prints its job result. It does not print
@@ -270,7 +283,7 @@ Completion: the job reaches an inspectable terminal result, `/readyz`
 remains ready, and the archive contains the new immutable response objects
 without a credential appearing in output.
 
-## 8. Inspect failures
+## 9. Inspect failures
 
 Run these commands while the collector container is running. The wrapper
 enters that container, and the maintenance command uses the database URL
@@ -284,14 +297,13 @@ and optional schema version. Use only the supported maintenance commands:
 ```
 
 Maintenance output contains safe IDs, states, categories, and times. It does
-not contain API-key values or raw response bodies. Read [the collector
-runbook](collector-prototype.md#8-inspect-and-recover-durable-failures)
-before you requeue or reset work.
+not contain API-key values or raw response bodies. Before you requeue or reset
+work, inspect the failure category and preserve the evidence that caused it.
 
 Completion: each inspection command returns safe JSON-lines output, and each
 recovery command changes only the requested durable job state.
 
-## 9. Rollback and secret rotation
+## 10. Rollback and secret rotation
 
 The deployment does not perform automatic database rollback. Migrations are
 forward-only in this first deployment.
@@ -332,7 +344,10 @@ The replay contract is owned by [Architecture](architecture.md#replay).
 Replay requests require an allowlisted authenticated host operator through
 the root-owned wrapper; no application role can insert replay requests.
 
-## 10. Beta support transfer boundary
+Completion: the PostgreSQL volume and immutable archive remain intact, and
+the selected image is compatible with the current schema before restart.
+
+## 11. Beta support transfer boundary
 
 Install `deploy/support-transfer` as `root:root` with mode `0700` in a
 root-owned non-writable directory. Use a narrow `NOSETENV` sudoers rule
@@ -357,6 +372,3 @@ Completion: the wrapper, allowlist, and service file have the required
 owner and mode. The support role can execute only the transfer function.
 Application, worker, bot, collector, and public roles cannot execute that
 function or update its tables directly.
-
-Completion: the PostgreSQL volume and immutable archive remain intact, and
-the selected image is compatible with the current schema before restart.

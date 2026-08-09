@@ -16,7 +16,7 @@ Clash Lens has a confirmed Phase 1 architecture shape and runtime split. Postgre
 
 The accepted shape is one repository and one logical product with independently running roles, a separate raw-evidence archive, durable staggered ingestion, and versioned precomputed analytics. Technology choices must preserve the product and domain rules rather than redefine them.
 
-The `python/` directory is a throwaway prototype slice. Its README says that it does not define the production Python application or a production database migration. Use it as implementation evidence for its stated seam only, not as a production contract.
+The `python/` directory is the production functional-beta application layer, not a throwaway prototype. It runs the private API and the general worker from one codebase against the schema in the production migrations. The root deployment applies those migrations. The collector on main accepts contract version 2, and the deployment performs bridge-before-migration. The website on main contains the Google account code. The root deployment does not pass the login configuration, so production login stays disabled. The Discord bot role, exports, the OBS overlay, and hosted ingress remain unfinished.
 
 ## Product and domain constraints
 
@@ -129,7 +129,7 @@ Use FastAPI for the private HTTP API, Pydantic for request and response validati
 - Split a process or move a role to another host only when measured latency, memory pressure, throughput, or failure isolation proves that the single-host model is insufficient.
 - Build one versioned Python container image and run the private API, general worker, and Discord bot from it with different commands.
 - Apply the shared SQL migrations before starting a new application version. Keep schema changes compatible with the previous Python image for at least one release.
-- The current Go collector accepts only contract version 1. Before migration 2, deploy a bridge Go collector that accepts versions 1 and 2 and keeps its version-1 observation-job insert compatible with the expanded table. Then apply migration 2 and start Python. Do not run the current exact-version-1 collector after the contract advances to version 2.
+- The Go collector accepts contract versions 1 and 2. The deployment applies migration 2 with bridge-before-migration: it starts a bridge collector that accepts version 1, applies migration 2, then starts the required collector. Do not run an exact-version-1 collector after the contract advances to version 2.
 - Roll back application code by starting the previous compatible image. Do not automatically reverse database migrations.
 
 ## 4. Structured data and raw evidence
@@ -155,16 +155,16 @@ Use FastAPI for the private HTTP API, Pydantic for request and response validati
 
 ### Migration 2 boundary
 
-Add migration version 2 after the unchanged collector migration 0001. Migration 2 must:
+Migration version 2 follows the unchanged collector migration 0001. The deployment applies it with the bridge-before-migration order. Migration 2 implements:
 
-- extend `python_processing_jobs` as the one Python job list;
-- backfill each existing row as `process_observation`;
-- keep its unique observation handoff so the current and previous compatible Go collector versions can continue to create exactly one initial processing job for each observation;
-- make the observation reference optional only for checked non-observation work types;
-- add a stable deduplication key, type-specific validated input, target versions, full job states, leases, fencing fields, and a separate execution-attempt table;
-- avoid requiring Go to know Python domain rules.
+- extension of `python_processing_jobs` as the one Python job list;
+- backfill of each existing row as `process_observation`;
+- a unique observation handoff so the current and previous compatible Go collector versions continue to create exactly one initial processing job for each observation;
+- an observation reference that is optional only for checked non-observation work types;
+- a stable deduplication key, type-specific validated input, target versions, full job states, leases, fencing fields, and a separate execution-attempt table;
+- no requirement for Go to know Python domain rules.
 
-Migration 2 must also let collector jobs, endpoint results, observations, and transport failures represent a checked `global_player_rankings` endpoint with global scope and no player ID or normalized tag. Player-scoped profile and battle-log rows must still require their player identity. Preserve the exact request method, path, query, response timing, HTTP status, response hash, archive reference, safe paging-envelope state, collector version, and source-adapter version for the global attempt.
+Migration 2 also lets collector jobs, endpoint results, observations, and transport failures represent a checked `global_player_rankings` endpoint with global scope and no player ID or normalized tag. Player-scoped profile and battle-log rows still require their player identity. Migration 2 preserves the exact request method, path, query, response timing, HTTP status, response hash, archive reference, safe paging-envelope state, collector version, and source-adapter version for the global attempt.
 
 ## 5. Python job and replay contract
 
@@ -252,7 +252,7 @@ Migration 2 must also let collector jobs, endpoint results, observations, and tr
 - Continue serving the previously published frozen leaderboard while constructing its replacement.
 - Publish a new leaderboard snapshot and its precomputed summaries atomically so no surface observes a mixture of snapshot versions.
 - Order every Live Leaderboard entry by its newest accepted trophy value, highest first, then use the versioned deterministic player-tag hash defined in `docs/domain.md` for equal-trophy ties. Label this position Rank on the public website. An official Top-200 rank remains separate source evidence, is not a public leaderboard column, and must not change this ordering.
-- Order the official Top-200 data view by the supplied official rank. Join that rank to a Tracked Players entry only from the most recent complete official leaderboard observation. Store that observation identity and time with the joined rank. Never substitute a Tracked Players position for a missing official rank.
+- Order the official Top-200 data view by the supplied official rank. Join that rank to a Live Leaderboard entry only from the most recent complete official leaderboard observation. Store that observation identity and time with the joined rank. Never substitute a Live Leaderboard position for a missing official rank.
 - Record the snapshot's ordering-rule version. Do not use per-snapshot randomness.
 - Target publication at approximately 05:05 UTC on normal days and approximately 05:10 UTC on Mondays.
 - Keep the domain day boundary at exactly 05:00 UTC; delayed publication does not move battle attribution into a different ranked day.

@@ -1,10 +1,18 @@
 # Clash Lens Phase 1 Python application layer
 
-**Status:** production Issue 29 implementation. This package owns domain
-processing, current player state, canonical battles, ranked days, snapshots,
-analytics, replay, exports, accounts, and the private signed API. It does not
-collect official API evidence; the Go collector owns collection and the
-immutable raw archive.
+**Status:** the production functional-beta Python layer on main. It does not
+complete every item of Issue 29. This package owns domain processing, current
+player state, canonical battles, ranked days, snapshots, analytics, replay,
+accounts, and the private signed API. It does not collect official API
+evidence; the Go collector owns collection and the immutable raw archive.
+
+Open scope: the Discord bot role is absent from this package. Export routes and
+database submission scaffolding exist, but beta caller authorization denies
+those operations and the worker does not claim `build_export` jobs. Exports
+stay disabled during beta. Global Top-200 collection stays default-off: the
+deployment refuses to enable it during beta. Production login stays disabled
+until the Python service enforces the strict inappropriate-name filter and the
+root deployment passes the login configuration.
 
 Use [`docs/architecture.md`](../docs/architecture.md) and
 [`docs/domain.md`](../docs/domain.md) for the accepted production boundaries
@@ -67,9 +75,11 @@ The root deployment script owns the production lifecycle:
 `python-up` builds the Python image and starts the private API and the
 production worker; the `*-start` commands start roles without building.
 The worker reads archive objects only through its own archive-read
-credential, claims leased work in bounded batches, and never requests a
-new Supercell source request during replay. The private API listens on the
-private Podman network alias `python-api:8000` with no published host port.
+credential. It claims and processes one leased job at a time. Each serial
+processing pass stops when the queue is idle or the configured `--max-jobs`
+count is reached. The worker never requests a new Supercell source request
+during replay. The private API listens on the private Podman network alias
+`python-api:8000` with no published host port.
 
 ## 3. Fixed production contract
 

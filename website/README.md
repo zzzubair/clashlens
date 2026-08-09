@@ -3,7 +3,9 @@
 This directory contains the self-hosted Phase 1 TypeScript website.
 
 The app uses React Router 8 Framework Mode with standard SSR. It has one Node
-application process and one server-only Python client boundary. The Python server
+application process and one server-only Python client boundary. Main contains
+the Google account experience: login, account setup and management, saved
+players, groups, verified player links, and public user pages. The Python server
 in `fixture_server.py` is deterministic and is for tests only. It is not the real
 private API and it does not call Supercell or PostgreSQL.
 
@@ -87,8 +89,15 @@ enabled production login configuration before it listens.
 
 Keep `CLASHLENS_LOGIN_ENABLED=false` in production until the Python service
 enforces the accepted strict inappropriate-name filter for usernames, display
-names, and group names. The browser and TypeScript checks are early feedback;
-they are not the authoritative release gate.
+names, and group names, and the root deployment passes the login configuration.
+The browser and TypeScript checks are early feedback; they are not the
+authoritative release gate.
+
+The root deployment cannot enable login yet. `deploy.sh` and `app.env.example`
+do not pass `CLASHLENS_LOGIN_ENABLED`, `CLASHLENS_PUBLIC_ORIGIN`,
+`CLASHLENS_GOOGLE_CLIENT_ID`, `CLASHLENS_GOOGLE_CLIENT_SECRET_FILE`, or
+`CLASHLENS_LOGIN_SECRET_FILE`. Do not work around this by injecting secrets
+into a running website container.
 
 ## Account routes
 

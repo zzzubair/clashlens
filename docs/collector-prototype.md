@@ -1,38 +1,41 @@
 # Go collector prototype runbook
 
-**Status:** executable prototype for GitHub issue #2. This is not a
-production deployment specification.
+**Status:** historical executable prototype for the closed GitHub issue #2.
+This runbook records the prototype as it existed. It is not current operator
+guidance and not a production deployment specification. Current operators use
+[the Fedora deployment runbook](deployment.md).
 
 ## 1. Know the boundary before you run it
 
-The prototype performs this collection path:
+The prototype performed this collection path:
 
-1. The Go scheduler creates durable collection work.
-2. Go requests player-profile and battle-log responses from the official Clash
+1. The Go scheduler created durable collection work.
+2. Go requested player-profile and battle-log responses from the official Clash
    of Clans API.
-3. Go hashes and archives each exact response body. It records the PostgreSQL
-   observation only after archive integrity checks pass.
-4. Go creates one durable `python_processing_jobs` row for each observation.
+3. Go hashed and archived each exact response body. It recorded the PostgreSQL
+   observation only after archive integrity checks passed.
+4. Go created one durable `python_processing_jobs` row for each observation.
 
-The collector does not interpret battle meaning. It does not create canonical
+The prototype did not interpret battle meaning. It did not create canonical
 battles, reconcile ranked days, infer shields or automatic defense, classify
 armies, or calculate product analytics. Python owns those rules. See
 [architecture.md](architecture.md), [domain.md](domain.md), and
 [ADR 0001](adr/0001-separate-collection-from-domain-processing.md).
 
-The current prototype has these limits:
+The prototype had these limits:
 
-- `reset_profile` requests only the profile endpoint. It does not create the
+- `reset_profile` requested only the profile endpoint. It did not create the
   paired profile and battle-log reset-baseline sweep needed to prove complete
   ranked-day evidence.
-- The current schema and executable do not collect the official global Top-200
-  response as a player-independent observation.
-- The collector checks the shared contract version. It never applies a
+- The prototype schema and executable did not collect the official global
+  Top-200 response as a player-independent observation.
+- The prototype checked the shared contract version. It never applied a
   migration.
-- [`testdata/contract.sql`](../testdata/contract.sql) is a prototype test
+- [`testdata/contract.sql`](../testdata/contract.sql) was the prototype test
   contract. [`deploy/migrations/0001_collector.sql`](../deploy/migrations/0001_collector.sql)
-  is the current deployment migration. Neither file implements the accepted
-  future version-2 contract.
+  was the deployment migration at that time. Neither file implemented the
+  accepted version-2 contract. The version-2 contract now lives in
+  [`deploy/migrations/0002_python_layer.sql`](../deploy/migrations/0002_python_layer.sql).
 
 Completion check: before a run, you can state whether you are testing raw
 collection and durable handoff, or testing Python-owned domain processing. This
@@ -127,7 +130,7 @@ HTTPS origin without credentials, path, query, or fragment.
 
 The collector also parses scheduler, worker-idle, request-timeout, and schedule
 batch settings. Read `config.go` before changing them. The accepted Phase 1
-shared-key traffic gate is not implemented by this Go-only prototype.
+shared-key traffic gate was not implemented by this Go-only prototype.
 
 `CLASHLENS_ALLOW_REDUCED_KEY_POOLS` and
 `CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN` exist for isolated tests and local
@@ -266,21 +269,22 @@ Keep these rules beside the operation that can fail:
   work uses interactive keys only when
   `CLASHLENS_ALLOW_INTERACTIVE_FOR_NORMAL=true` is explicitly set.
 
-The current prototype uses an in-memory per-key limiter plus PostgreSQL
-advisory ownership. Before Python receives the shared interactive key, Go and
-Python must use the PostgreSQL traffic gate defined in
-[architecture.md](architecture.md). Do not use this prototype's process-local
-counters as proof of the combined Go/Python limit.
+The prototype used an in-memory per-key limiter plus PostgreSQL advisory
+ownership. Its process-local counters were not proof of the combined Go/Python
+limit. Main implements the PostgreSQL traffic gate defined in
+[architecture.md](architecture.md) for the shared interactive key.
 
 Completion check: after shutdown or a dependency failure, durable evidence is
 still present, unfinished work is runnable or inspectably failed, and no late
 worker can publish through an expired lease.
 
-## Production gap
+## How main replaced this prototype
 
-Do not promote this prototype as the production collector contract. The
-accepted architecture still needs the version-1-to-version-2 bridge, the
-paired reset-baseline sweep, the global Top-200 observation, and the shared
-traffic gate. Python must implement the domain interpretations and its durable
-processing contract. Record those changes in the approved source documents
-before changing this runbook.
+Do not promote this prototype as the production collector contract. Main no
+longer runs this prototype as the production collector. The merged collector
+implements the version-1-to-version-2 bridge, the paired reset-baseline
+sweep, the checked `global_player_rankings` observation path, and the shared
+interactive-key traffic gate. The production Python layer implements the
+domain interpretations and its durable processing contract. For current
+operator guidance, use [the Fedora deployment runbook](deployment.md) and the
+collector source configuration in [`internal/collector/config.go`](../internal/collector/config.go).

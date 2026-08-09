@@ -17,9 +17,18 @@ Clash Lens provides data and analysis. Users make the decisions. Phase 1 does no
 
 ## Status
 
-The Phase 1 product scope and accepted architecture shape are confirmed. PostgreSQL stores structured data. Go collects official API evidence. One Python codebase owns domain processing and the private service API. TypeScript owns the public website and its backend. The Phase 1 Python stack and the React Router 8 SSR website on Node.js 24 are confirmed.
+Main contains the merged Phase 1 baseline. The Go collector implements contract version 2 with bridge-before-migration. The production Python worker and the private API run from the Python package. The public website runs on React Router 8 with server-side rendering on Node.js 24. Main also contains the Google account code: login, account setup and management, saved players, groups, verified player links, and public user pages. PostgreSQL stores structured data. The raw-evidence archive keeps untouched official response bodies.
 
-Remaining detailed specifications, most implementation, the raw-archive product, other infrastructure products, the complete Phase 1 deployment, and cloud providers remain open. See [Product scope](docs/product.md) and [Architecture](docs/architecture.md) for the authoritative lists.
+Login stays disabled on the root deployment. These blockers remain open:
+
+- The Python service does not yet enforce the strict inappropriate-name filter for usernames, display names, and group names.
+- The root deployment does not yet pass the login configuration: the enable flag, the public origin, the Google client ID, the client-secret file, and the login-secret file.
+- Battle-log issue [#35](https://github.com/zzzubair/ClashLens/issues/35) is not complete: the player API does not expose complete per-battle offense and defense logs.
+- The public analytics route does not exist yet.
+- Performance issue [#38](https://github.com/zzzubair/ClashLens/issues/38) is open: collector and Python hot-path amplification.
+- A clean merged-main release candidate has not passed the complete live release gate.
+
+Official Top-200 activation and its public view, the raw-archive product, the Discord bot, Google Sheets exports, the OBS overlay, hosted ingress, backups, monitoring, and cloud providers remain open. See [Product scope](docs/product.md) and [Architecture](docs/architecture.md) for the authoritative lists.
 
 ## Documentation
 
@@ -30,9 +39,9 @@ Read the document that matches the question:
 - [Domain rules](docs/domain.md) — exact time, event, battle, ranked-day, snapshot, cohort, analytics, and confidence rules.
 - [Architecture](docs/architecture.md) — accepted runtime boundaries, security, storage, jobs, deployment, recovery, verification, and open technology choices.
 - [Runtime-boundary ADR](docs/adr/0001-separate-collection-from-domain-processing.md) — rationale for separate collection and domain processing.
-- [Collector prototype runbook](docs/collector-prototype.md) — current collector behavior and prototype path.
-- [Fedora deployment runbook](docs/deployment.md) — deployment procedure and host assumptions.
-- [Python application](python/README.md) — the Phase 1 Python application layer: test commands and package layout.
+- [Collector prototype runbook](docs/collector-prototype.md) — historical evidence for the closed Issue #2 prototype; not current operator guidance.
+- [Fedora deployment runbook](docs/deployment.md) — current operator path for the merged main deployment: deployment procedure and host assumptions.
+- [Python application](python/README.md) — the production functional-beta Python layer: test commands and package layout.
 
 ## Product principles
 
