@@ -5,10 +5,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, store_observation, text
+from psycopg import sql
+from psycopg.conninfo import make_conninfo
+from psycopg_pool import ConnectionPool
 
 from clashlens.archive import S3ArchiveReader
-from clashlens.db import Database
+from clashlens.db import DEFAULT_POOL_SIZE, Database
 from clashlens.worker import ObservationProcessor
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
@@ -16,10 +20,56 @@ BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v
 RANKING_FIXTURE = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
 
 
+def _role_configure(role: str):
+    """psycopg_pool per-connection hook: assume a NOLOGIN runtime role.
+
+    The runtime roles are NOLOGIN and carry no password, so pooled
+    connections connect as the migration owner and then SET ROLE, the
+    same pattern the Go role-boundary tests use. The connection must be
+    left idle for psycopg_pool, hence the commit.
+    """
+
+    def configure(connection: psycopg.Connection) -> None:
+        connection.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
+        connection.commit()
+
+    return configure
+
+
+class _WorkerRoleDatabase(Database):
+    """Test database whose complete pool runs as the production worker role."""
+
+    def __init__(self, database_url: str, *, max_size: int = DEFAULT_POOL_SIZE) -> None:
+        self.pool = ConnectionPool(
+            conninfo=database_url,
+            min_size=1,
+            max_size=max_size,
+            open=True,
+            configure=_role_configure("clashlens_python_worker"),
+        )
+        self._jobs_relation = "python_processing_jobs"
+        with self.pool.connection() as connection:
+            worker_view = connection.execute(
+                "SELECT to_regclass('python_processing_jobs_worker')"
+            ).fetchone()
+            if worker_view is not None and worker_view[0] is not None:
+                self._jobs_relation = "python_processing_jobs_worker"
+
+
+def _role_connection(connection_info: str, role: str) -> psycopg.Connection:
+    connection = psycopg.connect(connection_info)
+    connection.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(role)))
+    connection.commit()
+    return connection
+
+
 def _processor(
-    connection_info: str, archive_server
+    connection_info: str,
+    archive_server,
+    *,
+    database_factory=Database,
 ) -> tuple[Database, ObservationProcessor]:
-    database = Database(connection_info)
+    database = database_factory(connection_info)
     processor = ObservationProcessor(
         database,
         S3ArchiveReader(
@@ -714,6 +764,70 @@ def test_conflicting_or_older_profiles_never_replace_last_accepted_current_profi
             database.close()
 
 
+def test_recognized_legend_tier_classifies_player_despite_season_anchor_conflict(
+    database_url: str,
+    archive_server,
+) -> None:
+    observed_at = datetime(2026, 8, 9, 12, 5, tzinfo=UTC)
+    with domain_database(database_url) as connection_info:
+        _anchor_observation_id, anchor_job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="eligibility-anchor-profile",
+            endpoint="profile",
+            body=PROFILE_FIXTURE.read_bytes(),
+            observed_at=observed_at,
+            normalized_tag="#2PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert (
+                processor.process_job(anchor_job_id, owner="eligibility-anchor-worker")
+                is not None
+            )
+
+            payload = json.loads(PROFILE_FIXTURE.read_bytes())
+            payload["tag"] = "#8PP"
+            payload["previousLeagueSeasonId"] = "1782104400"
+            _observation_id, job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="legend-tier-with-anchor-conflict",
+                endpoint="profile",
+                body=json.dumps(payload).encode(),
+                observed_at=observed_at + timedelta(minutes=1),
+                normalized_tag="#8PP",
+            )
+
+            result = processor.process_job(job_id, owner="eligibility-conflict-worker")
+            assert result is not None and result.outcome == "processed"
+
+            with database.pool.connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT p.active, p.eligibility_state,
+                           p.current_profile_version_id,
+                           v.source_contract_state, v.season_anchor_state,
+                           o.failure_category
+                    FROM players AS p
+                    JOIN player_profile_versions AS v ON v.player_id = p.id
+                    JOIN observation_processing_outcomes AS o
+                      ON o.observation_id = v.observation_id
+                    WHERE p.normalized_tag = '#8PP'
+                    """
+                ).fetchone()
+
+            assert row is not None
+            assert row[0] is True
+            assert text(row[1]) == "eligible"
+            assert row[2] is None
+            assert text(row[3]) == "conflict"
+            assert text(row[4]) == "conflict"
+            assert text(row[5]) == "season_anchor_conflict"
+        finally:
+            database.close()
+
+
 def test_canonical_battle_keeps_detail_disagreement_for_both_perspectives(
     database_url: str,
     archive_server,
@@ -859,5 +973,123 @@ def test_official_top_200_publishes_only_complete_atomic_versions(
             ]
             assert published == (complete_observation_id, 200)
             assert active_count == 0
+        finally:
+            database.close()
+
+
+def test_reset_baseline_evidence_worker_role_contract(
+    database_url: str,
+    archive_server,
+) -> None:
+    """The reset-baseline evidence path runs end to end as the worker role:
+    the job-lineage helper and the sweep-lock seam are worker-only, and the
+    worker still cannot reach the collector-owned sweep table directly."""
+    boundary = datetime(2026, 8, 6, 5, tzinfo=UTC)
+    with domain_database(database_url) as connection_info:
+        profile_observation_id, battle_observation_id, profile_job_id, battle_job_id = (
+            _prepare_reset_baseline_pair(
+                connection_info,
+                archive_server,
+                boundary=boundary,
+            )
+        )
+        with psycopg.connect(connection_info) as connection:
+            schema = text(connection.execute("SELECT current_schema()").fetchone()[0])
+            baseline_id, root_job_id = connection.execute(
+                """
+                SELECT baseline.id, root.id
+                FROM collector_reset_baseline_sweeps AS baseline
+                JOIN collector_jobs AS root
+                  ON root.reset_baseline_sweep_id = baseline.id
+                WHERE baseline.boundary_at = %s
+                """,
+                (boundary,),
+            ).fetchone()
+
+        worker_connection_info = make_conninfo(
+            database_url,
+            options=f"-c search_path={schema}",
+        )
+
+        database, processor = _processor(
+            worker_connection_info,
+            archive_server,
+            database_factory=_WorkerRoleDatabase,
+        )
+        try:
+            profile_result = processor.process_job(
+                profile_job_id,
+                owner="reset-role-profile-worker",
+            )
+            assert profile_result is not None and profile_result.outcome == "processed"
+            battle_result = processor.process_job(
+                battle_job_id,
+                owner="reset-role-battle-worker",
+            )
+            assert battle_result is not None and battle_result.outcome == "processed"
+
+            with _role_connection(
+                worker_connection_info, "clashlens_python_worker"
+            ) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT profile_observation_id, battle_log_observation_id,
+                           profile_valid, battle_log_valid
+                    FROM reset_baseline_evidence
+                    ORDER BY id
+                    """
+                ).fetchall()
+                reconciliation_count = connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                    """
+                ).fetchone()[0]
+                locked = connection.execute(
+                    "SELECT clashlens_lock_reset_baseline_v2(%s)",
+                    (baseline_id,),
+                ).fetchone()[0]
+                missing = connection.execute(
+                    "SELECT clashlens_lock_reset_baseline_v2(999999999)"
+                ).fetchone()[0]
+            assert rows == [
+                (profile_observation_id, battle_observation_id, True, False),
+                (profile_observation_id, battle_observation_id, True, True),
+            ]
+            assert reconciliation_count == 1
+            assert locked is True
+            assert missing is False
+
+            # The worker cannot reach the collector-owned sweep table directly.
+            with _role_connection(
+                worker_connection_info, "clashlens_python_worker"
+            ) as connection:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(
+                        """
+                        UPDATE collector_reset_baseline_sweeps
+                        SET state = 'complete'
+                        WHERE id = %s
+                        """,
+                        (baseline_id,),
+                    )
+                connection.rollback()
+
+            # The collector and the API cannot execute either worker seam.
+            for role in ("clashlens_collector", "clashlens_python_api"):
+                with _role_connection(worker_connection_info, role) as connection:
+                    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                        connection.execute(
+                            "SELECT clashlens_lock_reset_baseline_v2(%s)",
+                            (baseline_id,),
+                        )
+                    connection.rollback()
+                    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                        connection.execute(
+                            "SELECT clashlens_reset_job_lineage_v2(%s, %s)",
+                            (root_job_id, root_job_id),
+                        )
+                    connection.rollback()
         finally:
             database.close()

@@ -30,7 +30,7 @@ type readinessReport struct {
 }
 
 func newApplication(ctx context.Context, config collectorConfig, logger *slog.Logger) (*application, error) {
-	store, err := openStore(ctx, config.databaseURL, config.schemaVersion)
+	store, err := openStoreWithPoolSize(ctx, config.databaseURL, config.schemaVersion, config.databasePoolSize)
 	if err != nil {
 		return nil, err
 	}

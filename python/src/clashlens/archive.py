@@ -19,11 +19,13 @@ DEFAULT_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_READ_TIMEOUT_SECONDS = 15.0
 DEFAULT_MAX_RETRIES = 1
 DEFAULT_RETRY_BACKOFF_SECONDS = 0.1
+DEFAULT_ARCHIVE_POOL_SIZE = 4
 MAX_ARCHIVE_BODY_BYTES = 64 * 1024 * 1024
 MAX_CONNECT_TIMEOUT_SECONDS = 60.0
 MAX_READ_TIMEOUT_SECONDS = 300.0
 MAX_ARCHIVE_RETRIES = 5
 MAX_RETRY_BACKOFF_SECONDS = 30.0
+MAX_ARCHIVE_POOL_SIZE = 64
 
 
 class _BoundedResponse:
@@ -90,6 +92,7 @@ class S3ArchiveReader:
         read_timeout_seconds: float = DEFAULT_READ_TIMEOUT_SECONDS,
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
+        pool_size: int = DEFAULT_ARCHIVE_POOL_SIZE,
     ) -> None:
         if not endpoint or "://" in endpoint or "/" in endpoint:
             raise ValueError(
@@ -124,6 +127,10 @@ class S3ArchiveReader:
             raise ValueError(
                 "insecure archive origin requires an explicit test-only override"
             )
+        if pool_size < 1:
+            raise ValueError("archive pool size must be positive")
+        if pool_size > MAX_ARCHIVE_POOL_SIZE:
+            raise ValueError("archive pool size exceeds the supported maximum")
         self.bucket = bucket
         self.secure = secure
         self.max_body_bytes = max_body_bytes
@@ -131,9 +138,10 @@ class S3ArchiveReader:
         self.read_timeout_seconds = read_timeout_seconds
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
+        self.pool_size = pool_size
         self.http_client = _BoundedPoolManager(
             max_body_bytes=max_body_bytes,
-            maxsize=4,
+            maxsize=pool_size,
             block=True,
             timeout=urllib3.Timeout(
                 total=connect_timeout_seconds + read_timeout_seconds,

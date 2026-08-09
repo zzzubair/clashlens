@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -14,14 +15,33 @@ import (
 var errIncompatibleContract = errors.New("incompatible shared contract version")
 
 type store struct {
-	pool               *pgxpool.Pool
-	contractVersion    int
-	maxContractVersion int
-	commitTx           func(context.Context, pgx.Tx) error
+	pool                    *pgxpool.Pool
+	contractVersion         int
+	maxContractVersion      int
+	commitTx                func(context.Context, pgx.Tx) error
+	inactiveCleanupInterval time.Duration
+	lastInactiveCleanupAt   atomic.Int64
 }
 
 func openStore(ctx context.Context, databaseURL string, expectedContractVersion int) (*store, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	return openStoreWithPoolSize(ctx, databaseURL, expectedContractVersion, defaultCollectorDatabasePoolSize)
+}
+
+// openStoreWithPoolSize opens the store with an explicitly bounded PostgreSQL
+// pool. The production collector sets the bound from
+// CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE; without it pgxpool silently caps at
+// max(4, NumCPU) connections, which is 16 on the 16-core host and would starve
+// the planned 48-slot collector stage.
+func openStoreWithPoolSize(ctx context.Context, databaseURL string, expectedContractVersion, maxConns int) (*store, error) {
+	if maxConns < 1 {
+		return nil, errors.New("collector database pool size must be at least 1")
+	}
+	poolConfig, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("configure PostgreSQL pool: %w", err)
+	}
+	poolConfig.MaxConns = int32(maxConns)
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure PostgreSQL pool: %w", err)
 	}
@@ -39,11 +59,14 @@ func openStore(ctx context.Context, databaseURL string, expectedContractVersion 
 		pool.Close()
 		return nil, fmt.Errorf("%w: got %d, support through %d", errIncompatibleContract, actualVersion, expectedContractVersion)
 	}
-	return &store{
-		pool:               pool,
-		contractVersion:    actualVersion,
-		maxContractVersion: expectedContractVersion,
-	}, nil
+	opened := &store{
+		pool:                    pool,
+		contractVersion:         actualVersion,
+		maxContractVersion:      expectedContractVersion,
+		inactiveCleanupInterval: inactivePlayerCleanupInterval,
+	}
+	opened.lastInactiveCleanupAt.Store(time.Now().UnixNano())
+	return opened, nil
 }
 
 func supportsContractVersion(actualVersion, maxContractVersion int) bool {
@@ -76,7 +99,7 @@ func (s *store) scheduleDueRegular(ctx context.Context, now time.Time, cycle tim
 		FROM players
 		WHERE active AND next_due_at <= $1
 		ORDER BY next_due_at, id
-		FOR UPDATE SKIP LOCKED
+		FOR NO KEY UPDATE SKIP LOCKED
 		LIMIT $2
 	`, now, batchSize)
 	if err != nil {

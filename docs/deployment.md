@@ -81,6 +81,45 @@ host and for temporary workload spikes. The worker lease
 (`CLASHLENS_WORKER_LEASE_SECONDS`) sets how long a claimed job may run; the
 deployment derives the worker stop grace from it.
 
+The dedicated 16-core Fedora host uses `CLASHLENS_POSTGRES_MEMORY=8g`,
+`CLASHLENS_POSTGRES_SHM_SIZE=1g`, and `CLASHLENS_POSTGRES_CPUS=8`. The previous
+2 GB / 4 CPU budget constrained the collector's database path while the Go
+process remained mostly idle. A 64 MB container shared-memory mount also
+caused PostgreSQL `DsmAllocate` failures under the 32-connection collector
+stage. Keep the 8 GB / 1 GB / 8 CPU values host-specific; smaller hosts must
+select smaller explicit budgets.
+
+Set `CLASHLENS_WORKER_REPLICAS` to the number of identical Python worker
+containers. The default of 1 is safe for non-production hosts; production
+explicitly sets 6. The valid range is 1 to 16, bounded by the 16-core host
+(at most one replica per core), and the deployment rejects any other value
+before changing runtime state. Every replica claims jobs from the same
+shared queue. The worker resource budgets apply per container, so the
+combined worker budget is the replica count times the per-replica budget.
+
+Each worker replica also runs bounded in-process concurrency.
+`CLASHLENS_WORKER_CONCURRENCY` (1 to 32) sets the parallel job lanes per
+replica; the default 1 preserves the sequential behavior of a single worker.
+`CLASHLENS_WORKER_DATABASE_POOL_SIZE` and `CLASHLENS_WORKER_ARCHIVE_POOL_SIZE`
+(1 to 64 each) size each replica's PostgreSQL and archive HTTP connection
+pools; the defaults 4 and 4 match the sequential worker. The initial
+production settings are 20 lanes, 8 database connections, and 20 archive
+connections per replica on the 16-core host. Production measurement must
+confirm or adjust them. The deployment rejects any out-of-range value before
+changing runtime state. These three settings are worker-only and are never
+forwarded to the collector.
+
+`CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE` (1 to 64) explicitly bounds the
+collector PostgreSQL pool. The default is 16. The initial production stage is
+48 database connections with `CLASHLENS_WORKERS_PER_KEY=12`: four normal keys
+give 48 normal request workers, and the interactive workers share the same
+pool. Keep the six Python replicas at four database connections each for this
+stage. With PostgreSQL `max_connections=100`, this budgets 48 collector and 24
+worker connections and leaves approximately 25 connections for the API,
+administration, and short workload spikes. Production measurement must confirm
+the pool sizes before any further increase; do not increase PostgreSQL
+`max_connections` or CPU limits as part of this stage.
+
 The script creates one named rootless Podman network and one PostgreSQL
 volume. The network has outbound access for the official API and external
 archive. It is private because no database or archive service port is
@@ -90,8 +129,13 @@ The website publishes only its configured beta ingress host and port.
 
 The repository includes `deploy/egress-proxy/` for the narrow CONNECT proxy
 that runs on the `ser5ver` host. Its policy accepts only the Fedora Tailscale
-address and only permits `api.clashofclans.com:443`. The proxy host uses
-Docker. The Fedora collector host continues to use rootless Podman.
+address and only
+permits `api.clashofclans.com:443`. The proxy host uses Docker. The proxy
+container runs with Docker host networking and no published port, so
+Tinyproxy sees the client's real source address and listens on the
+configured `PROXY_LISTEN_IP` and `PROXY_PORT` directly instead of a
+bridge-mapped container port. The Fedora collector host continues to use
+rootless Podman.
 
 Completion: `app.env` has no `CHANGE_ME` value, every key path resolves to a
 mode-`600` file, and the archive and official API origins use the required
@@ -109,6 +153,25 @@ version is rejected without side effects.
 ./deploy.sh status
 curl --fail http://127.0.0.1:8081/readyz
 ```
+
+For the reset-baseline lock-seam release, stop every existing Python worker
+before `up` reapplies migration 0002, then start the new Python image only
+after `up` completes:
+
+```bash
+./deploy.sh worker-down
+./deploy.sh up
+./deploy.sh build-python
+./deploy.sh worker-start
+```
+
+Migration 0002 removes the temporary worker `UPDATE (id)` privilege on the
+collector-owned reset-baseline table. A Python image built before the narrow
+`clashlens_lock_reset_baseline_v2` function was added still uses direct
+`SELECT ... FOR UPDATE` and is not compatible with the migrated privilege
+contract. This order prevents that old image from restarting between the
+migration and the new Python start. It does not stop or rebuild the private
+Python API or website.
 
 - `init` starts PostgreSQL, waits for readiness, and applies migration 0001
   only on an absent database. On a version-1 or version-2 database it fails
@@ -133,7 +196,10 @@ curl --fail http://127.0.0.1:8081/readyz
   `api-start` and `worker-start` start one role each without building.
   They require the Python image to exist.
 - `status` shows the network, volume, every container with its health, and
-  the worker queue line without loading unrelated secrets.
+  the worker queue line without loading unrelated secrets. It shows every
+  configured worker replica (`python-worker-1` through
+  `python-worker-<N>`) and flags any surplus or legacy worker container
+  that a later start or down command will remove.
 
 Completion: `init` and `up` exit with status `0`, `status` shows the
 containers, and `/readyz` reports `"ready":true`.
@@ -149,9 +215,9 @@ After `up` has advanced the contract to version 2:
 ```
 
 `python-up` verifies that the contract is version 2, builds the Python
-image, and starts two containers from the same image with different
-commands. Both run with a read-only root filesystem, dropped capabilities,
-explicit resource budgets, and file-backed secrets.
+image, and starts the private API plus `CLASHLENS_WORKER_REPLICAS` worker
+containers from the same image. All run with a read-only root filesystem,
+dropped capabilities, explicit resource budgets, and file-backed secrets.
 
 The private API listens on `0.0.0.0:8000` inside the private network under
 the stable alias `python-api`. It has no published host port; approved
@@ -160,15 +226,35 @@ database role, its HMAC proof files, one interactive official key file, and
 the fixed-egress proxy URL. It never receives archive credentials or the
 normal key pool.
 
-The worker receives its own database role and a read-only archive
-credential. On merged main, it claims and processes one leased Python job at a
-time. Each serial processing pass stops when the queue is idle or the
-configured `--max-jobs` count is reached. It writes product data only inside
-fenced transactions and never receives official API keys, HMAC files, or the
-API role.
+The worker runs as identical replicas named
+`clashlens-python-worker-1` through `clashlens-python-worker-<N>` (the
+name base comes from `CLASHLENS_PYTHON_WORKER_CONTAINER`). Every replica
+claims any supported Python job from the same shared queue — no replica is
+bound to a job type or endpoint — and each replica has its own container
+name and its own `--owner` value. All replicas share the worker database
+role and the read-only archive credential through the same three
+file-backed secrets. Replicas never receive official API keys, HMAC files,
+or the API role. Every job writes product data only inside its fenced
+transaction.
 
-`queue-status` prints the worker queue summary from inside the worker
-container. `status` includes the same summary line when the worker runs.
+Every replica receives the configured `--concurrency`,
+`--database-pool-size`, and `--archive-pool-size` bounds from
+`CLASHLENS_WORKER_CONCURRENCY`, `CLASHLENS_WORKER_DATABASE_POOL_SIZE`, and
+`CLASHLENS_WORKER_ARCHIVE_POOL_SIZE`. These worker-only settings are never
+forwarded to the collector environment.
+
+The deployment replaces the shared worker secrets only after every worker
+container has stopped, so no running replica ever mounts a replaced
+secret. When the configured count is reduced, surplus replica containers
+are stopped and removed on the next `python-start`, `worker-start`, or
+down command; a legacy single-worker container from before replicas is
+stopped and removed the same way.
+
+`queue-status` prints the shared queue summary from inside replica 1.
+`status` includes the same summary line when a replica runs, shows every
+configured replica with its health, and flags any surplus or legacy worker
+container. `logs python-worker` shows replica 1; `logs python-worker-N`
+shows that specific replica.
 
 Completion: `status` shows the API and worker as healthy, and `queue-status`
 prints the queue summary without secrets.
@@ -236,6 +322,7 @@ Use only the supported lifecycle commands:
 ./deploy.sh logs postgres
 ./deploy.sh logs python-api
 ./deploy.sh logs python-worker
+./deploy.sh logs python-worker-2
 ./deploy.sh logs website
 ./deploy.sh restart
 ./deploy.sh python-start
@@ -253,12 +340,13 @@ Use only the supported lifecycle commands:
 
 Shutdown is graceful and ordered. Every stop sends SIGTERM with a grace
 period before removal: worker `lease + 10` seconds, API and collector 30
-seconds, PostgreSQL 60 seconds. `down` stops the worker, then the API, then
-the collector, then PostgreSQL, and removes all containers while keeping the
-network and the data volume. `stack-down` stops the collector and
-PostgreSQL only. `python-down`, `api-down`, and `worker-down` stop one
-Python scope only. None of the down commands deletes evidence or database
-data.
+seconds, PostgreSQL 60 seconds. `down` stops the website, then every
+worker replica, then the API, then the collector, then PostgreSQL, and
+removes all containers while keeping the network and the data volume.
+`stack-down` stops the collector and PostgreSQL only. `python-down`,
+`api-down`, and `worker-down` stop one Python scope only; `worker-down`
+stops every worker replica, including surplus and legacy worker
+containers. None of the down commands deletes evidence or database data.
 
 Completion: each down command exits with status `0`, and `status` shows the
 expected remaining containers.
@@ -311,8 +399,12 @@ forward-only in this first deployment.
 - Application rollback is start-only. Select a previous compatible image
   tag with `CLASHLENS_COLLECTOR_IMAGE` or `CLASHLENS_PYTHON_IMAGE`, then run
   `./deploy.sh restart` or `./deploy.sh python-start`. These commands never
-  build and never run SQL. The previous image must be compatible with
-  contract version 2.
+  build and never run SQL; `python-start` starts every worker replica from
+  the selected image. The previous image must be compatible with contract
+  version 2. A Python image that directly locks
+  `collector_reset_baseline_sweeps` is not compatible after migration 0002
+  revokes the temporary worker column privilege. Restoring that image also
+  requires the tested pre-migration PostgreSQL backup path below.
 - For an incompatible schema change, stop the collector and Python
   containers, keep the volume, and restore a tested PostgreSQL backup before
   starting the old image. Immutable archive objects are not removed by
@@ -331,7 +423,8 @@ forward-only in this first deployment.
   `restart` so the collector secrets are recreated from the new files.
 - Archive credential rotation: change the archive settings in `app.env`,
   then run `up` and `python-start` so the collector and worker secrets are
-  recreated.
+  recreated. `python-start` stops every worker replica before it replaces
+  the shared worker secrets, so rotation is safe with replicas running.
 
 Secret rotation scope: the deployment replaces every Podman file secret on
 each start (`secret create --replace`). No rotation command prints or logs a

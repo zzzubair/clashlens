@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,6 +17,161 @@ import (
 var (
 	errLeaseLost    = errors.New("collector job lease was lost")
 	errJobCancelled = errors.New("collector job was cancelled")
+)
+
+// inactivePlayerCleanupInterval bounds how often claimNext cancels pending
+// regular-poll jobs of inactive players. The claim path itself cancels a
+// claimed job when its player is inactive, so this cleanup is hygiene, not
+// correctness: throttling it keeps the per-claim cost independent of queue
+// depth. A zero interval restores per-claim cleanup.
+const inactivePlayerCleanupInterval = 10 * time.Second
+
+// collectorExpiredLeaseRecoveryLimit bounds how many expired leases one claim
+// recovers. Claiming workers drain the expired set across claims instead of
+// one claim processing the whole backlog.
+const collectorExpiredLeaseRecoveryLimit = 8
+
+// inactiveCleanupDue reports whether the inactive-player cleanup may run for
+// this claim, and when it may, claims the cleanup window first. A zero
+// interval restores per-claim cleanup. The atomic compare-and-swap lets at
+// most one concurrent claim run the cleanup per interval; the rest skip it
+// because the cleanup is hygiene — the claim path itself cancels a claimed
+// job when its player is inactive.
+func (s *store) inactiveCleanupDue(now time.Time) bool {
+	interval := s.inactiveCleanupInterval
+	if interval == 0 {
+		return true
+	}
+	last := s.lastInactiveCleanupAt.Load()
+	if time.Since(time.Unix(0, last)) < interval {
+		return false
+	}
+	return s.lastInactiveCleanupAt.CompareAndSwap(last, time.Now().UnixNano())
+}
+
+// collectorClaimPriorities enumerates every priority class that can appear
+// in the collector queue: 100 on-time regular polls, 150 bulk initial
+// collection (present in the live production queue), 200 overdue regular
+// polls, 250 interactive refresh work, 300 endpoint retries and global
+// rankings, and 400 reset-baseline work. The claim candidate scan probes one
+// indexed range per priority; a priority outside this list is still claimed
+// through the catch-all probe, so the list is a fast-path declaration, not a
+// claimability gate. Add a new enqueue priority here (and to the partial
+// catch-all index in migration 0002) so its claims stay on the fast path.
+// TestCollectorClaimPrioritiesMatchProductionClasses pins this list to the
+// live production audit.
+const collectorClaimPriorities = "(100), (150), (200), (250), (300), (400)"
+
+// collectorClaimPriorityExclusions is collectorClaimPriorities rewritten as a
+// plain integer list for the catch-all probe's NOT IN predicate. Derived at
+// package init from the same declaration so the two cannot drift.
+var collectorClaimPriorityExclusions = strings.ReplaceAll(
+	strings.ReplaceAll(collectorClaimPriorities, "(", ""),
+	")", "",
+)
+
+// collectorClaimStatement claims the highest-priority due job for one
+// capacity pool in a single statement. The candidate CTE probes the indexed
+// per-priority oldest-due pending jobs (the maximum of priority plus unbounded
+// age is always the oldest job within one priority), adds a catch-all probe
+// for priorities outside the declared classes (scored exactly like the known
+// probes so ordering stays globally correct), adds the indexed expired-lease
+// set restricted to jobs with no stale result attempt (recoverExpiredAttemptsV2
+// alone resolves jobs that still carry an attempt), and locks the best
+// still-available candidate with SKIP LOCKED. The candidate predicate is
+// repeated at lock time so a row claimed by another worker between the probe
+// and the lock is skipped, never double claimed. $1 is the capacity pool, $2
+// the claim time, $3 the lease owner, $4 the lease token, and $5 the lease
+// duration.
+var collectorClaimStatement = `
+WITH candidate AS (
+	SELECT job.id
+	FROM (
+		SELECT claim_id.id
+		FROM (VALUES ` + collectorClaimPriorities + `) AS claim_priority (priority)
+		CROSS JOIN LATERAL (
+			SELECT id
+			FROM collector_jobs
+			WHERE capacity_pool = $1
+				AND status = 'pending'
+				AND priority = claim_priority.priority
+				AND due_at <= $2
+			ORDER BY created_at, id
+			LIMIT 8
+		) AS claim_id
+		UNION ALL
+		(
+			SELECT id
+			FROM collector_jobs
+			WHERE capacity_pool = $1
+				AND status = 'pending'
+				AND priority NOT IN (` + collectorClaimPriorityExclusions + `)
+				AND due_at <= $2
+			ORDER BY (
+				priority + floor(extract(epoch FROM ($2 - created_at)) / 60)::integer * 10
+			) DESC, due_at, id
+			LIMIT 8
+		)
+		UNION ALL
+		(
+			SELECT id
+			FROM collector_jobs
+			WHERE capacity_pool = $1
+				AND status = 'leased'
+				AND lease_expires_at <= $2
+				AND result_attempt_id IS NULL
+			ORDER BY (
+				priority + floor(extract(epoch FROM ($2 - created_at)) / 60)::integer * 10
+			) DESC, due_at, id
+			LIMIT 8
+		)
+	) AS pick
+	JOIN collector_jobs AS job ON job.id = pick.id
+	WHERE (job.status = 'pending' AND job.due_at <= $2)
+		OR (job.status = 'leased' AND job.lease_expires_at <= $2)
+	ORDER BY (
+		job.priority + floor(extract(epoch FROM ($2 - job.created_at)) / 60)::integer * 10
+	) DESC,
+		job.due_at,
+		job.id
+	FOR UPDATE OF job SKIP LOCKED
+	LIMIT 1
+)
+UPDATE collector_jobs AS job
+SET status = 'leased',
+	lease_owner = $3,
+	lease_token = $4,
+	lease_expires_at = $2 + $5,
+	updated_at = $2
+FROM candidate
+WHERE job.id = candidate.id
+RETURNING job.id,
+	job.work_type,
+	COALESCE(to_jsonb(job) ->> 'scope', 'player'),
+	job.player_id,
+	COALESCE(job.normalized_tag, ''),
+	job.capacity_pool,
+	job.parent_attempt_id,
+	job.required_endpoint,
+	job.sweep_id,
+	(to_jsonb(job) ->> 'reset_baseline_sweep_id')::bigint,
+	job.lease_owner,
+	COALESCE((to_jsonb(job) ->> 'lease_generation')::bigint, 0),
+	job.lease_token`
+
+// collectorClaimStatementV1 is the version-one claim statement: it reclaims
+// expired leases directly even when the job still carries a result attempt,
+// because version-one has no bounded attempt recovery and prepareAttempt
+// resumes the existing attempt instead of fencing it. The version-two
+// statement (collectorClaimStatement) drops that direct path so stale
+// attempts are resolved only by recoverExpiredAttemptsV2. The two statements
+// must differ only in the stale-attempt guard;
+// TestClaimStatementsDifferOnlyInStaleAttemptGuard pins that.
+var collectorClaimStatementV1 = strings.Replace(
+	collectorClaimStatement,
+	"				AND result_attempt_id IS NULL\n",
+	"",
+	1,
 )
 
 type collectionJob struct {
@@ -52,73 +208,42 @@ func (s *store) claimNext(
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
-	if _, err := transaction.Exec(ctx, `
-		UPDATE collector_jobs AS job
-		SET status = 'cancelled',
-			cancel_reason = 'player_inactive',
-			lease_owner = NULL,
-			lease_token = NULL,
-			lease_expires_at = NULL,
-			updated_at = $1
-		FROM players AS player
-		WHERE job.player_id = player.id
-			AND job.work_type = 'regular_poll'
-			AND NOT player.active
-			AND (
-				job.status = 'pending'
-				OR (job.status = 'leased' AND job.lease_expires_at <= $1)
-			)
-	`, now); err != nil {
-		return nil, fmt.Errorf("cancel inactive regular jobs: %w", err)
+	if s.inactiveCleanupDue(now) {
+		if _, err := transaction.Exec(ctx, `
+			UPDATE collector_jobs AS job
+			SET status = 'cancelled',
+				cancel_reason = 'player_inactive',
+				lease_owner = NULL,
+				lease_token = NULL,
+				lease_expires_at = NULL,
+				updated_at = $1
+			FROM players AS player
+			WHERE job.player_id = player.id
+				AND job.work_type = 'regular_poll'
+				AND NOT player.active
+				AND (
+					job.status = 'pending'
+					OR (job.status = 'leased' AND job.lease_expires_at <= $1)
+				)
+		`, now); err != nil {
+			return nil, fmt.Errorf("cancel inactive regular jobs: %w", err)
+		}
 	}
 
 	if s.contractVersion >= 2 {
-		if err := s.recoverExpiredAttemptsV2(ctx, transaction, string(pool), now); err != nil {
+		if err := s.recoverExpiredAttemptsV2(ctx, transaction, string(pool), now, collectorExpiredLeaseRecoveryLimit); err != nil {
 			return nil, err
 		}
 	}
 
-	row := transaction.QueryRow(ctx, `
-		WITH candidate AS (
-			SELECT id
-			FROM collector_jobs
-			WHERE capacity_pool = $1
-				AND due_at <= $2
-				AND (
-					status = 'pending'
-					OR (status = 'leased' AND lease_expires_at <= $2)
-				)
-			ORDER BY (
-				priority
-				+ LEAST(1000, floor(extract(epoch FROM ($2 - created_at)) / 60)::integer * 10)
-			) DESC,
-				due_at,
-				id
-			FOR UPDATE SKIP LOCKED
-			LIMIT 1
-		)
-		UPDATE collector_jobs AS job
-		SET status = 'leased',
-			lease_owner = $3,
-			lease_token = $4,
-			lease_expires_at = $2 + $5,
-			updated_at = $2
-		FROM candidate
-		WHERE job.id = candidate.id
-		RETURNING job.id,
-			job.work_type,
-			COALESCE(to_jsonb(job) ->> 'scope', 'player'),
-			job.player_id,
-			COALESCE(job.normalized_tag, ''),
-			job.capacity_pool,
-			job.parent_attempt_id,
-			job.required_endpoint,
-			job.sweep_id,
-			(to_jsonb(job) ->> 'reset_baseline_sweep_id')::bigint,
-			job.lease_owner,
-			COALESCE((to_jsonb(job) ->> 'lease_generation')::bigint, 0),
-			job.lease_token
-	`, string(pool), now, owner, leaseToken, leaseDuration)
+	claimStatement := collectorClaimStatement
+	if s.contractVersion < 2 {
+		// Version one has no bounded attempt recovery, so its statement must
+		// keep the direct expired-lease path for jobs that still carry an
+		// attempt: prepareAttempt resumes the existing attempt there.
+		claimStatement = collectorClaimStatementV1
+	}
+	row := transaction.QueryRow(ctx, claimStatement, string(pool), now, owner, leaseToken, leaseDuration)
 
 	var job collectionJob
 	var poolName string
@@ -183,7 +308,7 @@ func (s *store) claimNext(
 
 const maxCollectorAttemptsV2 = 3
 
-func (s *store) recoverExpiredAttemptsV2(ctx context.Context, transaction pgx.Tx, pool string, now time.Time) error {
+func (s *store) recoverExpiredAttemptsV2(ctx context.Context, transaction pgx.Tx, pool string, now time.Time, limit int) error {
 	rows, err := transaction.Query(ctx, `
 		SELECT job.id, job.lease_owner, job.lease_token, job.lease_generation,
 			job.result_attempt_id
@@ -192,8 +317,9 @@ func (s *store) recoverExpiredAttemptsV2(ctx context.Context, transaction pgx.Tx
 			AND job.status = 'leased'
 			AND job.lease_expires_at <= $2
 		ORDER BY job.id
+		LIMIT $3
 		FOR UPDATE OF job SKIP LOCKED
-	`, pool, now)
+	`, pool, now, limit)
 	if err != nil {
 		return fmt.Errorf("select expired collector leases: %w", err)
 	}
@@ -452,6 +578,65 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 			&eligibilityAttemptID,
 		); err != nil {
 			return 0, nil, fmt.Errorf("load endpoint retry eligibility: %w", err)
+		}
+		// Defensive terminal-state fence: a retry whose parent attempt or
+		// required endpoint is already terminal is legacy debris that
+		// predates the sibling-cancellation resolution path. Resuming it
+		// would re-lock the terminal parent attempt, produce zero endpoint
+		// work, and then fail resolveAttemptV2's lease fence, leaving the
+		// retry leased to churn forever. Cancel only this claimed retry with
+		// the attempt_terminal reason; leave the parent attempt, endpoint
+		// results, observations, and sibling jobs untouched.
+		var parentAttemptStatus string
+		var requiredEndpointOutcome pgtype.Text
+		if err := transaction.QueryRow(ctx, `
+			SELECT attempt.status, endpoint_result.outcome
+			FROM collector_attempts AS attempt
+			LEFT JOIN collector_endpoint_results AS endpoint_result
+				ON endpoint_result.attempt_id = attempt.id
+				AND endpoint_result.endpoint = $2
+			WHERE attempt.id = $1
+			FOR UPDATE OF attempt
+		`, job.parentAttemptID.Int64, job.requiredEndpoint.String).Scan(
+			&parentAttemptStatus,
+			&requiredEndpointOutcome,
+		); err != nil {
+			return 0, nil, fmt.Errorf("lock endpoint retry parent state: %w", err)
+		}
+		parentAttemptTerminal := parentAttemptStatus == "complete" || parentAttemptStatus == "failed"
+		endpointResultTerminal := requiredEndpointOutcome.Valid &&
+			(requiredEndpointOutcome.String == "observed" || requiredEndpointOutcome.String == "failed")
+		if parentAttemptTerminal || endpointResultTerminal {
+			cancelStatement := `
+				UPDATE collector_jobs
+				SET status = 'cancelled',
+					cancel_reason = 'attempt_terminal',
+					lease_owner = NULL,
+					lease_token = NULL,
+					lease_expires_at = NULL,
+					updated_at = $3
+				WHERE id = $1
+					AND lease_token = $2
+					AND status = 'leased'
+					AND lease_expires_at > clock_timestamp()`
+			cancelArgs := []any{job.id, job.leaseToken, now}
+			if s.contractVersion >= 2 {
+				cancelStatement += `
+					AND lease_owner = $4
+					AND lease_generation = $5`
+				cancelArgs = []any{job.id, job.leaseToken, now, job.leaseOwner, job.leaseGeneration}
+			}
+			command, err := transaction.Exec(ctx, cancelStatement, cancelArgs...)
+			if err != nil {
+				return 0, nil, fmt.Errorf("cancel terminal endpoint retry: %w", err)
+			}
+			if command.RowsAffected() != 1 {
+				return 0, nil, errLeaseLost
+			}
+			if err := transaction.Commit(ctx); err != nil {
+				return 0, nil, fmt.Errorf("commit terminal endpoint retry cancellation: %w", err)
+			}
+			return 0, nil, errJobCancelled
 		}
 		requiresActivePlayer = parentWorkType == "regular_poll"
 	}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from threading import Event
 
@@ -23,12 +24,115 @@ from .rankings import (
 )
 from .source_observation_contract import validate_source_observation_contract
 
+MAX_CONCURRENCY = 32
+
 
 @dataclass(frozen=True, slots=True)
 class ProcessResult:
     job_id: int
     outcome: str
     category: str | None = None
+
+
+def lane_owner(owner: str, lane_index: int) -> str:
+    """Stable unique lease owner for one execution lane.
+
+    The lane owner is derived from the configured owner so every concurrent
+    lease in the queue is attributable to one container lane, and the same
+    lane always claims under the same owner for the life of the process.
+    """
+    if not owner:
+        raise ValueError("lease owner is required")
+    if lane_index < 1:
+        raise ValueError("lane index must be positive")
+    return f"{owner}.lane-{lane_index}"
+
+
+def process_concurrently(
+    processor: ObservationProcessor,
+    *,
+    concurrency: int,
+    owner: str,
+    max_jobs: int,
+    lease_seconds: int = 30,
+    stop_requested: Event | None = None,
+) -> list[ProcessResult]:
+    """Process up to ``max_jobs`` jobs across up to ``concurrency`` lanes.
+
+    Lanes are in-process threads that share the processor, the database pool,
+    and the archive pool. The database claim transaction (``FOR UPDATE SKIP
+    LOCKED`` plus lease owner/token fencing) and the archive pool bound the
+    work: at most ``concurrency`` jobs run at once and at most ``max_jobs``
+    jobs are claimed per call. When ``stop_requested`` is set, lanes finish
+    their current job and do not claim another; the call then waits for the
+    bounded in-flight set and returns its results.
+
+    An unexpected exception escaping one lane is isolated: other lanes finish
+    their in-flight job, no further claims are made, and a sanitized
+    ``RuntimeError`` is raised after all lanes have stopped so no job details
+    or credentials cross this boundary.
+    """
+    if concurrency < 1 or concurrency > MAX_CONCURRENCY:
+        raise ValueError(f"concurrency must be between 1 and {MAX_CONCURRENCY}")
+    if not owner:
+        raise ValueError("lease owner is required")
+    if max_jobs < 0:
+        raise ValueError("max jobs must not be negative")
+    if lease_seconds <= 0:
+        raise ValueError("lease duration must be positive")
+    if max_jobs == 0:
+        return []
+    results: list[ProcessResult] = []
+    results_lock = threading.Lock()
+    jobs_remaining = max_jobs
+    jobs_lock = threading.Lock()
+    first_failure: Exception | None = None
+    failure_lock = threading.Lock()
+    stop_claiming = Event()
+
+    def lane(lane_index: int) -> None:
+        nonlocal first_failure, jobs_remaining
+        while True:
+            if stop_claiming.is_set():
+                return
+            if stop_requested is not None and stop_requested.is_set():
+                return
+            with jobs_lock:
+                if jobs_remaining <= 0:
+                    return
+                jobs_remaining -= 1
+            try:
+                result = processor.process_once(
+                    owner=lane_owner(owner, lane_index),
+                    lease_seconds=lease_seconds,
+                )
+            except Exception as error:  # noqa: BLE001 - lane isolation boundary
+                with failure_lock:
+                    if first_failure is None:
+                        first_failure = error
+                stop_claiming.set()
+                return
+            if result is None:
+                return
+            with results_lock:
+                results.append(result)
+
+    threads = [
+        threading.Thread(
+            target=lane,
+            args=(lane_index,),
+            name=f"clashlens-worker-lane-{lane_index}",
+            daemon=True,
+        )
+        for lane_index in range(1, concurrency + 1)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if first_failure is not None:
+        raise RuntimeError("worker lane failed; job details are not available")
+    return results
 
 
 class ObservationProcessor:

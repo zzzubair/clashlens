@@ -39,8 +39,8 @@ write_config() {
   cat >"$PROXY_STATE_DIR/tinyproxy.conf" <<EOF
 User tinyproxy
 Group tinyproxy
-Port 8888
-Listen 0.0.0.0
+Port $PROXY_PORT
+Listen $PROXY_LISTEN_IP
 Timeout 60
 LogFile "/dev/stderr"
 LogLevel Info
@@ -68,7 +68,7 @@ up() {
   "$DOCKER_BIN" run \
     --detach \
     --name "$CONTAINER" \
-    --publish "$PROXY_LISTEN_IP:$PROXY_PORT:8888/tcp" \
+    --network host \
     --mount "type=bind,src=$PROXY_STATE_DIR/tinyproxy.conf,dst=/etc/tinyproxy/tinyproxy.conf,readonly" \
     --read-only \
     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=4m \

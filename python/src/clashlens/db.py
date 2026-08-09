@@ -46,6 +46,9 @@ PROCESSING_VERSION = "clashlens-domain-processing-v1"
 DEFAULT_PARSER_VERSION = SOURCE_PARSER_VERSION
 DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
 ANALYTICS_RULE_VERSION = "legend-analytics-v1"
+CONTRACT_VERSION = 2
+DEFAULT_POOL_SIZE = 4
+MAX_POOL_SIZE = 64
 
 # Work types this worker image may claim. Unsupported work types (for example
 # build_export) and unknown or future contracts stay pending and unclaimed so a
@@ -125,8 +128,8 @@ def _supported_job_filter(alias: str) -> tuple[str, list[Any]]:
                         {alias}.work_type = 'build_analytics'
                         AND {analytics_input_shape}
                     )
-                ))
-        )""",
+                )))
+        """,
         [
             list(SUPPORTED_WORK_TYPES[:2]),
             PROCESSING_VERSION,
@@ -141,6 +144,233 @@ def _supported_job_filter(alias: str) -> tuple[str, list[Any]]:
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
         ],
+    )
+
+
+def _supported_claim_filter(
+    alias: str, observation_alias: str
+) -> tuple[str, dict[str, Any]]:
+    """Parameterized supported-job predicate for the claim SELECT.
+
+    Identical contract to ``_supported_job_filter`` (used by the cleanup
+    UPDATE paths, which have no observation join), except the source-contract
+    EXISTS subqueries are replaced by direct column predicates on the
+    observation the claim SELECT already LEFT JOINs. Source jobs always carry
+    their observation (identity CHECK plus foreign key), so the predicates
+    are equivalent, and the planner no longer scans collector_observations
+    three times per claim. Parameters are named so the claim statement can
+    also bind the claim time and direct job id.
+    """
+    source_clauses: list[str] = []
+    params: dict[str, Any] = {}
+    for index, contract in enumerate(SOURCE_OBSERVATION_CONTRACTS):
+        prefix = f"source_contract_{index}"
+        source_clauses.append(
+            f"""(
+                {alias}.parser_version = ANY(%({prefix}_parsers)s::text[])
+                AND {observation_alias}.endpoint = %({prefix}_endpoint)s
+                AND {observation_alias}.endpoint_version = %({prefix}_endpoint_version)s
+                AND {observation_alias}.schema_version = %({prefix}_schema)s
+            )"""
+        )
+        params.update(
+            {
+                f"{prefix}_parsers": sorted(contract.supported_parser_versions),
+                f"{prefix}_endpoint": contract.endpoint,
+                f"{prefix}_endpoint_version": contract.endpoint_version,
+                f"{prefix}_schema": contract.schema_version,
+            }
+        )
+    source_contract = " OR ".join(source_clauses)
+    analytics_input_shape = f"""{alias}.input_json ? 'snapshot_id'
+        AND {alias}.input_json ? 'snapshot_version'
+        AND {alias}.input_json ? 'snapshot_input_hash'
+        AND {alias}.input_json ? 'source_ranked_day_version_id'
+        AND ({alias}.input_json->>'snapshot_id') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'snapshot_version') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'source_ranked_day_version_id')
+            ~ '^[1-9][0-9]*$'
+        AND length({alias}.input_json->>'snapshot_input_hash') > 0"""
+    return (
+        f"""(
+            ({alias}.work_type = ANY(%(source_work_types)s::text[])
+                AND {alias}.processing_version = %(processing_version)s
+                AND {alias}.domain_rule_version = %(domain_rule_version)s
+                AND ({source_contract}))
+            OR ({alias}.work_type = ANY(%(reconcile_work_types)s::text[])
+                AND {alias}.processing_version = %(processing_version)s
+                AND {alias}.domain_rule_version = %(domain_rule_version)s
+                AND {alias}.analytics_rule_version = %(analytics_rule_version)s)
+            OR ({alias}.work_type = ANY(%(build_work_types)s::text[])
+                AND {alias}.processing_version = %(processing_version)s
+                AND {alias}.domain_rule_version = %(domain_rule_version)s
+                AND {alias}.analytics_rule_version = %(analytics_rule_version)s
+                AND (
+                    {alias}.work_type = 'build_snapshot'
+                    OR (
+                        {alias}.work_type = 'build_analytics'
+                        AND {analytics_input_shape}
+                    )
+                )))
+        """,
+        {
+            "source_work_types": list(SUPPORTED_WORK_TYPES[:2]),
+            "processing_version": PROCESSING_VERSION,
+            "domain_rule_version": DOMAIN_RULE_VERSION,
+            **params,
+            "reconcile_work_types": ["reconcile_ranked_day"],
+            "analytics_rule_version": ANALYTICS_RULE_VERSION,
+            "build_work_types": ["build_snapshot", "build_analytics"],
+        },
+    )
+
+
+# Claim probe candidate count per indexed range. The probes are refreshed on
+# every claim, so a candidate locked by another lane is simply skipped; the
+# next claim re-probes. Bounded like the collector claim statement.
+_CLAIM_CANDIDATE_LIMIT = 8
+
+# Priority classes that can appear in the Python queue, discovered from every
+# enqueue site: db.py and api_db.py inserts, the Go collector handoff, and
+# the migration column default all use priority 100. The claim statement
+# probes one indexed range per declared priority; a priority outside this
+# list is still claimed through the catch-all probe, so this list is a
+# fast-path declaration, not a claimability gate. Add a new enqueue priority
+# here (and to the catch-all partial index in migration 0002) so its claims
+# stay on the fast path. TestDeclaredClaimPrioritiesMatchEnqueueSites pins
+# this list to the enqueue sites.
+_PYTHON_CLAIM_PRIORITIES = "(100)"
+_PYTHON_CLAIM_PRIORITY_EXCLUSIONS = "100"
+
+
+def _claim_select_statement(
+    jobs_relation: str, *, job_id: int | None = None
+) -> tuple[str, dict[str, Any]]:
+    """The bounded claim SELECT and its named parameters.
+
+    The candidate CTE probes one indexed oldest-first range per declared
+    priority, a catch-all probe for priorities outside the declared classes
+    (scored exactly like the known probes so ordering stays globally
+    correct), and the indexed expired-lease set. Every probe applies the full
+    supported claim filter against the already-joined observation, so an
+    unsupported job at the head of a priority range never starves the
+    supported jobs behind it, and locks the best still-available candidate
+    with SKIP LOCKED. The candidate predicate is repeated at lock time so a
+    row claimed by another lane between the probe and the lock is skipped,
+    never double claimed. A direct ``job_id`` claim replaces the probes with
+    a point lookup and still applies the same where and supported filters.
+    """
+    supported_filter, supported_params = _supported_claim_filter(
+        "job", "source_observation"
+    )
+    params: dict[str, Any] = {"now": datetime.now(UTC), **supported_params}
+    if job_id is not None:
+        params["job_id"] = job_id
+    score = """job.priority + floor(extract(epoch FROM (%(now)s - job.created_at))
+        / 60)::integer * 10"""
+    due = """(job.state IN ('pending', 'waiting_retry') AND job.due_at <= %(now)s)
+        OR (job.state = 'leased' AND job.lease_expires_at <= %(now)s)"""
+    job_filter = f"""job.attempt_count < job.max_attempts AND {supported_filter}"""
+    if job_id is not None:
+        probe = f"""
+            SELECT job.id
+            FROM {jobs_relation} AS job
+            LEFT JOIN collector_observations AS source_observation
+                ON source_observation.id = COALESCE(
+                    job.observation_id, job.replay_observation_id
+                )
+            WHERE job.id = %(job_id)s
+              AND ({due})
+              AND {job_filter}
+            ORDER BY ({score}) DESC, job.due_at, job.id
+            FOR UPDATE OF job SKIP LOCKED
+            LIMIT 1
+        """
+    else:
+        probe = f"""
+            SELECT pick.id
+            FROM (
+                SELECT claim_id.id
+                FROM (VALUES {_PYTHON_CLAIM_PRIORITIES}) AS claim_priority (priority)
+                CROSS JOIN LATERAL (
+                    SELECT job.id
+                    FROM {jobs_relation} AS job
+                    LEFT JOIN collector_observations AS source_observation
+                        ON source_observation.id = COALESCE(
+                            job.observation_id, job.replay_observation_id
+                        )
+                    WHERE job.state IN ('pending', 'waiting_retry')
+                      AND job.priority = claim_priority.priority
+                      AND job.due_at <= %(now)s
+                      AND {job_filter}
+                    ORDER BY job.created_at, job.id
+                    LIMIT {_CLAIM_CANDIDATE_LIMIT}
+                ) AS claim_id
+                UNION ALL
+                (
+                    SELECT job.id
+                    FROM {jobs_relation} AS job
+                    LEFT JOIN collector_observations AS source_observation
+                        ON source_observation.id = COALESCE(
+                            job.observation_id, job.replay_observation_id
+                        )
+                    WHERE job.state IN ('pending', 'waiting_retry')
+                      AND job.priority NOT IN ({_PYTHON_CLAIM_PRIORITY_EXCLUSIONS})
+                      AND job.due_at <= %(now)s
+                      AND {job_filter}
+                    ORDER BY ({score}) DESC, job.due_at, job.id
+                    LIMIT {_CLAIM_CANDIDATE_LIMIT}
+                )
+                UNION ALL
+                (
+                    SELECT job.id
+                    FROM {jobs_relation} AS job
+                    LEFT JOIN collector_observations AS source_observation
+                        ON source_observation.id = COALESCE(
+                            job.observation_id, job.replay_observation_id
+                        )
+                    WHERE job.state = 'leased'
+                      AND job.lease_expires_at <= %(now)s
+                      AND {job_filter}
+                    ORDER BY ({score}) DESC, job.due_at, job.id
+                    LIMIT {_CLAIM_CANDIDATE_LIMIT}
+                )
+            ) AS pick
+            JOIN {jobs_relation} AS job ON job.id = pick.id
+            LEFT JOIN collector_observations AS source_observation
+                ON source_observation.id = COALESCE(
+                    job.observation_id, job.replay_observation_id
+                )
+            WHERE ({due})
+              AND {job_filter}
+            ORDER BY ({score}) DESC, job.due_at, job.id
+            FOR UPDATE OF job SKIP LOCKED
+            LIMIT 1
+        """
+    return (
+        f"""
+        WITH candidate AS (
+            {probe}
+        )
+        SELECT
+            job.id AS job_id, job.work_type, job.deduplication_key,
+            job.input_json,
+            COALESCE(job.observation_id, job.replay_observation_id) AS observation_id,
+            job.parser_version,
+            job.processing_version, job.domain_rule_version,
+            job.analytics_rule_version, job.attempt_count, job.max_attempts,
+            source_observation.normalized_tag, source_observation.endpoint,
+            source_observation.endpoint_version, source_observation.schema_version,
+            source_observation.response_observed_at, source_observation.http_status,
+            source_observation.response_hash, source_observation.archive_reference
+        FROM candidate
+        JOIN {jobs_relation} AS job ON job.id = candidate.id
+        LEFT JOIN collector_observations AS source_observation
+            ON source_observation.id = COALESCE(
+                job.observation_id, job.replay_observation_id
+            )
+        """,
+        params,
     )
 
 
@@ -176,7 +406,11 @@ class Claim:
 
 
 class Database:
-    def __init__(self, database_url: str, *, max_size: int = 4) -> None:
+    def __init__(self, database_url: str, *, max_size: int = DEFAULT_POOL_SIZE) -> None:
+        if max_size < 1:
+            raise ValueError("database pool size must be positive")
+        if max_size > MAX_POOL_SIZE:
+            raise ValueError("database pool size exceeds the supported maximum")
         self.pool = ConnectionPool(
             conninfo=database_url,
             min_size=1,
@@ -313,6 +547,7 @@ class Database:
         if lease_seconds <= 0:
             raise ValueError("lease duration must be positive")
         supported_filter, supported_params = _supported_job_filter("j")
+        now = datetime.now(UTC)
         with self.pool.connection() as connection:
             with connection.transaction():
                 connection.execute(
@@ -323,9 +558,10 @@ class Database:
                     FROM {self._jobs_relation} AS j
                     WHERE a.job_id = j.id AND a.state = 'running'
                       AND j.state = 'leased'
-                      AND j.lease_expires_at <= clock_timestamp()
+                      AND j.lease_expires_at <= %s
                       AND j.attempt_count >= j.max_attempts
-                    """
+                    """,
+                    (now,),
                 )
                 connection.execute(
                     f"""
@@ -336,11 +572,11 @@ class Database:
                         lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
                         completed_at = clock_timestamp(), updated_at = clock_timestamp()
                     WHERE j.state = 'leased'
-                      AND j.lease_expires_at <= clock_timestamp()
+                      AND j.lease_expires_at <= %s
                       AND j.attempt_count >= j.max_attempts
                       AND {supported_filter}
                     """,
-                    tuple(supported_params),
+                    (now, *supported_params),
                 )
                 connection.execute(
                     f"""
@@ -348,49 +584,15 @@ class Database:
                     SET state = 'pending', lease_owner = NULL, lease_token = NULL,
                         lease_expires_at = NULL, updated_at = clock_timestamp()
                     WHERE j.state = 'leased'
-                      AND j.lease_expires_at <= clock_timestamp()
+                      AND j.lease_expires_at <= %s
                       AND NOT ({supported_filter})
                     """,
-                    tuple(supported_params),
+                    (now, *supported_params),
                 )
-                where = """
-                    (
-                        (j.state IN ('pending', 'waiting_retry') AND j.due_at <= clock_timestamp())
-                        OR (j.state = 'leased' AND j.lease_expires_at <= clock_timestamp())
-                    )
-                    AND j.attempt_count < j.max_attempts
-                """
-                params: list[Any] = []
-                if job_id is not None:
-                    where += " AND j.id = %s"
-                    params.append(job_id)
-                params.extend(supported_params)
-                row = connection.execute(
-                    f"""
-                    SELECT
-                        j.id AS job_id, j.work_type, j.deduplication_key,
-                        j.input_json,
-                        COALESCE(j.observation_id, j.replay_observation_id) AS observation_id,
-                        j.parser_version,
-                        j.processing_version, j.domain_rule_version,
-                        j.analytics_rule_version, j.attempt_count, j.max_attempts,
-                        o.normalized_tag, o.endpoint, o.endpoint_version,
-                        o.schema_version, o.response_observed_at, o.http_status,
-                        o.response_hash, o.archive_reference
-                    FROM {self._jobs_relation} AS j
-                    LEFT JOIN collector_observations AS o
-                        ON o.id = COALESCE(j.observation_id, j.replay_observation_id)
-                    WHERE {where}
-                      AND {supported_filter}
-                    ORDER BY (
-                        j.priority
-                        + floor(extract(epoch FROM (clock_timestamp() - j.created_at)) / 60)::integer * 10
-                    ) DESC, j.due_at, j.id
-                    FOR UPDATE OF j SKIP LOCKED
-                    LIMIT 1
-                    """,
-                    tuple(params),
-                ).fetchone()
+                claim_statement, claim_params = _claim_select_statement(
+                    self._jobs_relation, job_id=job_id
+                )
+                row = connection.execute(claim_statement, claim_params).fetchone()
                 if row is None:
                     return None
                 data = (
@@ -642,6 +844,36 @@ class Database:
                 )
                 anchor_outcome = self._record_season_anchor(
                     connection, profile_version_id, profile
+                )
+                connection.execute(
+                    """
+                    UPDATE players AS p
+                    SET active = CASE
+                            WHEN v.eligibility_state = 'eligible' THEN true
+                            WHEN v.eligibility_state = 'ineligible' THEN false
+                            ELSE p.active
+                        END,
+                        next_due_at = CASE
+                            WHEN v.eligibility_state = 'eligible'
+                                THEN COALESCE(p.next_due_at, clock_timestamp())
+                            WHEN v.eligibility_state = 'ineligible' THEN NULL
+                            ELSE p.next_due_at
+                        END,
+                        eligibility_state = v.eligibility_state,
+                        updated_at = clock_timestamp()
+                    FROM player_profile_versions AS v
+                    WHERE p.id = %s
+                      AND v.id = %s
+                      AND v.eligibility_state IN ('eligible', 'ineligible')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM player_profile_versions AS newer
+                          WHERE newer.player_id = v.player_id
+                            AND newer.eligibility_state IN ('eligible', 'ineligible')
+                            AND (newer.observed_at, newer.id) > (v.observed_at, v.id)
+                      )
+                    """,
+                    (player[0], profile_version_id),
                 )
                 connection.execute(
                     """
@@ -2658,10 +2890,12 @@ class Database:
             json.dumps(fingerprint_data, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
-        connection.execute(
-            "SELECT id FROM collector_reset_baseline_sweeps WHERE id = %s FOR UPDATE",
+        locked = connection.execute(
+            "SELECT clashlens_lock_reset_baseline_v2(%s)",
             (baseline_id,),
-        )
+        ).fetchone()
+        if locked is None or not locked[0]:
+            raise RuntimeError("reset baseline sweep is unavailable")
         existing = connection.execute(
             """
             SELECT id, version
@@ -3772,19 +4006,42 @@ class Database:
                 failure_reason = error.category
 
         if anchor is not None:
-            current = connection.execute(
-                """
-                SELECT a.id, a.current_league_season_id, a.previous_league_season_id,
-                       a.current_start, v.observed_at
-                FROM legend_season_anchors AS a
-                JOIN player_profile_versions AS v
-                  ON v.id = a.source_profile_version_id
-                WHERE a.state = 'confirmed'
-                  AND a.anchor_rule_version = %s
-                FOR UPDATE OF a
-                """,
-                (SEASON_ANCHOR_RULE_VERSION,),
-            ).fetchone()
+
+            def read_current(*, for_update: bool) -> Any:
+                lock_clause = "FOR UPDATE OF a" if for_update else ""
+                return connection.execute(
+                    f"""
+                    SELECT a.id, a.current_league_season_id,
+                           a.previous_league_season_id, a.current_start,
+                           v.observed_at
+                    FROM legend_season_anchors AS a
+                    JOIN player_profile_versions AS v
+                      ON v.id = a.source_profile_version_id
+                    WHERE a.state = 'confirmed'
+                      AND a.anchor_rule_version = %s
+                    {lock_clause}
+                    """,
+                    (SEASON_ANCHOR_RULE_VERSION,),
+                ).fetchone()
+
+            def matches_or_is_not_newer(current: Any) -> bool:
+                return current is not None and (
+                    (
+                        _text_value(current[1]) == anchor.current_id
+                        and _text_value(current[2]) == anchor.previous_id
+                    )
+                    or profile.observed_at <= current[4]
+                )
+
+            current = read_current(for_update=False)
+            if matches_or_is_not_newer(current):
+                pass
+            else:
+                # A possible transition must re-read under the row lock. The
+                # unlocked read is only an optimization for the common no-op
+                # path and is never used to advance confirmed state.
+                current = read_current(for_update=True)
+
             if current is None:
                 connection.execute(
                     """
@@ -3803,10 +4060,7 @@ class Database:
                         profile_version_id,
                     ),
                 )
-            elif (
-                _text_value(current[1]) == anchor.current_id
-                and _text_value(current[2]) == anchor.previous_id
-            ) or profile.observed_at <= current[4]:
+            elif matches_or_is_not_newer(current):
                 pass
             elif anchor.current_start > current[3]:
                 connection.execute(

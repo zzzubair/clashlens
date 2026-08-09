@@ -141,6 +141,47 @@ func TestLoadConfigRejectsInteractiveCapacityForNormalWork(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDefaultsCollectorDatabasePoolSizeToSixteen(t *testing.T) {
+	t.Parallel()
+
+	config, err := loadConfig(func(name string) string { return validConfigEnvironment()[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+	if config.databasePoolSize != 16 {
+		t.Fatalf("databasePoolSize = %d, want the safe default 16", config.databasePoolSize)
+	}
+}
+
+func TestLoadConfigReadsCollectorDatabasePoolSize(t *testing.T) {
+	t.Parallel()
+	environment := validConfigEnvironment()
+	environment["CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE"] = "48"
+
+	config, err := loadConfig(func(name string) string { return environment[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+	if config.databasePoolSize != 48 {
+		t.Fatalf("databasePoolSize = %d, want the configured 48", config.databasePoolSize)
+	}
+}
+
+func TestLoadConfigRejectsOutOfRangeCollectorDatabasePoolSize(t *testing.T) {
+	t.Parallel()
+	for _, value := range []string{"0", "65", "-2", "abc", "1.5"} {
+		t.Run(value, func(t *testing.T) {
+			environment := validConfigEnvironment()
+			environment["CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE"] = value
+
+			_, err := loadConfig(func(name string) string { return environment[name] })
+			if err == nil || !strings.Contains(err.Error(), "CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE") {
+				t.Fatalf("loadConfig error = %v, want collector pool size rejection", err)
+			}
+		})
+	}
+}
+
 func TestLoadConfigRejectsPerKeyRateAboveOfficialLimit(t *testing.T) {
 	t.Parallel()
 	environment := validConfigEnvironment()

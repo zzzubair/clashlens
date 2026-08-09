@@ -190,6 +190,26 @@ ALTER TABLE collector_jobs
         lease_generation >= 0
     );
 
+-- Indexed claim order for the collector claim statement. The per-priority
+-- pending probe walks (capacity_pool, status, priority, created_at, id) and
+-- filters due_at; the expired-lease probe walks (capacity_pool, status,
+-- lease_expires_at) and sorts the bounded expired set in memory. Both are
+-- bounded index probes: each probe walks at most one per-priority range or
+-- one bounded expired window, never the whole queue. CREATE INDEX IF NOT
+-- EXISTS keeps reapply idempotent.
+CREATE INDEX IF NOT EXISTS collector_jobs_claim_order_v2
+    ON collector_jobs (capacity_pool, status, priority, created_at, id, due_at);
+CREATE INDEX IF NOT EXISTS collector_jobs_expired_leases_v2
+    ON collector_jobs (capacity_pool, status, lease_expires_at, priority, due_at, created_at, id);
+-- Bounded catch-all probe for pending priorities outside the declared
+-- production classes (the claim statement's NOT IN branch). The partial
+-- predicate keeps the normally-empty unknown-priority probe from walking the
+-- known-priority ranges. CREATE INDEX IF NOT EXISTS keeps reapply
+-- idempotent.
+CREATE INDEX IF NOT EXISTS collector_jobs_unknown_priority_v2
+    ON collector_jobs (capacity_pool, status, created_at, id)
+    WHERE status = 'pending' AND priority NOT IN (100, 150, 200, 250, 300, 400);
+
 ALTER TABLE collector_attempts
     ADD COLUMN IF NOT EXISTS attempt_number integer NOT NULL DEFAULT 1,
     ADD COLUMN IF NOT EXISTS lease_owner text,
@@ -748,6 +768,28 @@ CREATE INDEX IF NOT EXISTS python_processing_jobs_supported_claim_v2
         due_at
     )
     WHERE status IN ('pending', 'waiting_retry', 'leased');
+
+-- Indexed claim order for the Python claim statement. The per-priority
+-- pending probe walks (priority, created_at, id) inside the partial active
+-- status set and filters due_at; the expired-lease probe walks
+-- (lease_expires_at) inside the partial leased set and sorts the
+-- bounded expired window in memory; the catch-all probe for priorities
+-- outside the declared production classes walks the normally-empty
+-- (status, created_at) range. All three are bounded index probes: each walks
+-- at most one per-priority range or one bounded expired window, never the
+-- whole queue. CREATE INDEX IF NOT EXISTS keeps reapply idempotent.
+CREATE INDEX IF NOT EXISTS python_processing_jobs_pending_claim_v2
+    ON python_processing_jobs (priority, created_at, id, due_at)
+    WHERE status IN ('pending', 'waiting_retry');
+CREATE INDEX IF NOT EXISTS python_processing_jobs_expired_leases_v2
+    ON python_processing_jobs (lease_expires_at, priority, due_at, created_at, id)
+    WHERE status = 'leased';
+-- The partial predicate keeps the normally-empty unknown-priority probe from
+-- walking the known-priority ranges. Keep the NOT IN list equal to the
+-- claim statement's declared priorities (python/src/clashlens/db.py).
+CREATE INDEX IF NOT EXISTS python_processing_jobs_unknown_priority_v2
+    ON python_processing_jobs (created_at, id, due_at)
+    WHERE status IN ('pending', 'waiting_retry') AND priority NOT IN (100);
 
 CREATE OR REPLACE VIEW python_processing_jobs_worker AS
 SELECT
@@ -1892,6 +1934,19 @@ AS $$
           ON parent_job.id = parent_attempt.job_id
     )
     SELECT EXISTS (SELECT 1 FROM lineage WHERE id = root_job_id)
+$$;
+
+CREATE OR REPLACE FUNCTION clashlens_lock_reset_baseline_v2(baseline_id bigint)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM 1
+    FROM collector_reset_baseline_sweeps
+    WHERE id = baseline_id
+    FOR UPDATE;
+    RETURN FOUND;
+END
 $$;
 
 CREATE OR REPLACE FUNCTION clashlens_validate_reset_baseline_evidence_v2()
@@ -3409,6 +3464,11 @@ ALTER ROLE clashlens_python_worker
 ALTER ROLE clashlens_python_api
     NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 
+-- Remove the temporary incident-mitigation privilege before restoring the
+-- worker-only lock seam. The worker must never update collector-owned sweeps.
+REVOKE UPDATE (id) ON TABLE collector_reset_baseline_sweeps
+    FROM clashlens_python_worker;
+
 -- The permit gate and the interactive enqueue run as their owner so the
 -- runtime roles need only EXECUTE; every function keeps a fixed search_path.
 ALTER FUNCTION clashlens_acquire_shared_api_permit(text, text) SECURITY DEFINER;
@@ -3424,6 +3484,32 @@ BEGIN
     );
 END
 $$;
+
+-- Reset-baseline evidence refresh locks its immutable sweep through a narrow
+-- owner seam because the worker holds only SELECT on the sweep table; the
+-- boolean result tells the caller whether the sweep still exists. The
+-- job-lineage helper stays SECURITY INVOKER and executes under the worker's
+-- read grants on collector_jobs and collector_attempts. Both functions are
+-- worker-only: PUBLIC, the collector, and the API cannot execute them.
+ALTER FUNCTION clashlens_lock_reset_baseline_v2(bigint) SECURITY DEFINER;
+DO $$
+DECLARE
+    lock_schema_name text := current_schema();
+BEGIN
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_lock_reset_baseline_v2(bigint) SET search_path TO pg_catalog, %I',
+        lock_schema_name, lock_schema_name
+    );
+END
+$$;
+REVOKE ALL ON FUNCTION clashlens_lock_reset_baseline_v2(bigint)
+    FROM PUBLIC, clashlens_collector, clashlens_python_api;
+GRANT EXECUTE ON FUNCTION clashlens_lock_reset_baseline_v2(bigint)
+    TO clashlens_python_worker;
+REVOKE ALL ON FUNCTION clashlens_reset_job_lineage_v2(bigint, bigint)
+    FROM PUBLIC, clashlens_collector, clashlens_python_api;
+GRANT EXECUTE ON FUNCTION clashlens_reset_job_lineage_v2(bigint, bigint)
+    TO clashlens_python_worker;
 
 -- Application objects in the current schema carry no PUBLIC privileges;
 -- every table, view, sequence, and function grant below is explicit.
@@ -3598,6 +3684,11 @@ GRANT SELECT, INSERT, UPDATE ON TABLE
     player_link_verification_audits,
     account_export_requests,
     shared_api_credentials
+    TO clashlens_python_api;
+GRANT DELETE ON TABLE
+    account_saved_players,
+    account_groups,
+    account_group_players
     TO clashlens_python_api;
 GRANT SELECT, INSERT ON TABLE python_processing_jobs
     TO clashlens_python_api;

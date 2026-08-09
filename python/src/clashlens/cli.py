@@ -22,13 +22,35 @@ import uvicorn
 
 from .api import create_app
 from .api_db import ApiDatabase
-from .archive import S3ArchiveReader
-from .db import Database
+from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader
+from .db import MAX_POOL_SIZE, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
 from .verification import OfficialVerificationClient, load_official_api_key_file
-from .worker import ObservationProcessor, ProcessResult
+from .worker import (
+    MAX_CONCURRENCY,
+    ObservationProcessor,
+    ProcessResult,
+    process_concurrently,
+)
 
 MAX_REPORTED_RESULTS = 100
+
+
+def _bounded_int(label: str, minimum: int, maximum: int):
+    def parse(value: str) -> int:
+        try:
+            parsed = int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"{label} must be an integer between {minimum} and {maximum}"
+            ) from None
+        if parsed < minimum or parsed > maximum:
+            raise argparse.ArgumentTypeError(
+                f"{label} must be an integer between {minimum} and {maximum}"
+            )
+        return parsed
+
+    return parse
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,6 +67,33 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--lease-seconds", type=int, default=30)
     worker.add_argument("--run-forever", action="store_true")
     worker.add_argument("--poll-interval-seconds", type=float, default=1.0)
+    worker.add_argument(
+        "--concurrency",
+        type=_bounded_int("concurrency", 1, MAX_CONCURRENCY),
+        default=1,
+        help=(
+            "number of bounded in-process execution lanes (1 to 32; "
+            "default 1 preserves sequential behavior)"
+        ),
+    )
+    worker.add_argument(
+        "--database-pool-size",
+        type=_bounded_int("database pool size", 1, MAX_POOL_SIZE),
+        default=None,
+        help=(
+            "PostgreSQL connection pool size (default: 8 with concurrency, "
+            "4 for the sequential worker)"
+        ),
+    )
+    worker.add_argument(
+        "--archive-pool-size",
+        type=_bounded_int("archive pool size", 1, MAX_ARCHIVE_POOL_SIZE),
+        default=None,
+        help=(
+            "archive HTTP connection pool size (default: 20 with concurrency, "
+            "4 for the sequential worker)"
+        ),
+    )
 
     ready = subparsers.add_parser(
         "ready", help="check the production worker database and archive dependencies"
@@ -151,19 +200,43 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _run_worker(arguments: argparse.Namespace) -> int:
-    database = Database(_database_url(arguments))
+    concurrency = arguments.concurrency
+    database_pool_size = (
+        arguments.database_pool_size
+        if arguments.database_pool_size is not None
+        else (8 if concurrency > 1 else 4)
+    )
+    archive_pool_size = (
+        arguments.archive_pool_size
+        if arguments.archive_pool_size is not None
+        else (max(4, concurrency) if concurrency > 1 else 4)
+    )
+    database = Database(_database_url(arguments), max_size=database_pool_size)
     stop_requested = Event()
     _install_shutdown_handlers(stop_requested)
     try:
-        archive = _archive(arguments)
+        archive = _archive(arguments, pool_size=archive_pool_size)
         processor = ObservationProcessor(database, archive)
-        if not arguments.run_forever:
-            results = processor.process_until_idle(
+
+        def process_batch() -> list[ProcessResult]:
+            if concurrency == 1:
+                return processor.process_until_idle(
+                    owner=arguments.owner,
+                    max_jobs=arguments.max_jobs,
+                    lease_seconds=arguments.lease_seconds,
+                    stop_requested=stop_requested,
+                )
+            return process_concurrently(
+                processor,
+                concurrency=concurrency,
                 owner=arguments.owner,
                 max_jobs=arguments.max_jobs,
                 lease_seconds=arguments.lease_seconds,
                 stop_requested=stop_requested,
             )
+
+        if not arguments.run_forever:
+            results = process_batch()
             print(
                 json.dumps(
                     {
@@ -177,12 +250,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         processed_count = 0
         last_health_report = float("-inf")
         while not stop_requested.is_set():
-            results = processor.process_until_idle(
-                owner=arguments.owner,
-                max_jobs=arguments.max_jobs,
-                lease_seconds=arguments.lease_seconds,
-                stop_requested=stop_requested,
-            )
+            results = process_batch()
             processed_count += len(results)
             recent_results.extend(results)
             for result in results:
@@ -302,7 +370,7 @@ def _archive_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _archive(arguments: argparse.Namespace) -> S3ArchiveReader:
+def _archive(arguments: argparse.Namespace, *, pool_size: int = 4) -> S3ArchiveReader:
     if not arguments.archive_endpoint:
         raise ValueError("archive endpoint is required")
     access_key = _file_value(
@@ -329,6 +397,7 @@ def _archive(arguments: argparse.Namespace) -> S3ArchiveReader:
         read_timeout_seconds=arguments.archive_read_timeout_seconds,
         max_retries=arguments.archive_max_retries,
         retry_backoff_seconds=arguments.archive_retry_backoff_seconds,
+        pool_size=pool_size,
     )
 
 
