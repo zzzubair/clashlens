@@ -59,4 +59,12 @@ test("public pages remain usable at a narrow viewport and 200 percent zoom", asy
     document.documentElement.style.zoom = "2";
   });
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
+
+  await page.setViewportSize({ width: 180, height: 450 });
+  await page.goto("/players/%232PP");
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBe(0);
 });

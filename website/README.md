@@ -62,6 +62,7 @@ Google login is optional. Public pages continue to work when
 
 When production login is enabled, configure:
 
+- `CLASHLENS_LOGIN_ENABLED=true`.
 - `CLASHLENS_PUBLIC_ORIGIN`: the exact HTTPS origin, with no path, query, or fragment.
 - `CLASHLENS_GOOGLE_CLIENT_ID`: the Google OpenID Connect client ID.
 - `CLASHLENS_GOOGLE_CLIENT_SECRET_FILE`: a protected file that contains the client secret.
@@ -78,6 +79,34 @@ private subject. It does not request or store email or profile claims. Productio
 rejects HTTP origins, environment-based secrets, and
 `CLASHLENS_GOOGLE_ISSUER_URL`. The issuer override is for local tests only; local
 HTTP overrides must use `localhost`, `127.0.0.1`, or `::1`.
+
+The signed `HttpOnly`, `Secure`, `SameSite=Lax` login cookie contains only the
+Google subject, issue time, and expiry. It expires 24 hours after login and does
+not slide when the user loads a page or submits a mutation. The server validates
+enabled production login configuration before it listens.
+
+Keep `CLASHLENS_LOGIN_ENABLED=false` in production until the Python service
+enforces the accepted strict inappropriate-name filter for usernames, display
+names, and group names. The browser and TypeScript checks are early feedback;
+they are not the authoritative release gate.
+
+## Account routes
+
+- `/login`, `/auth/google`, and `/auth/google/callback` own Google sign-in.
+- `/account/setup` collects the required username and display name on first login.
+- `/account` shows the account summary and verified player links.
+- `/account/profile` updates the username and display name.
+- `/account/saved-players` manages saved public player tags.
+- `/account/verify-player` submits a one-time player verification token.
+- `/account/groups` manages private named groups.
+- `/users/:username` is the public user page and shows only the display name,
+  username, and verified player links.
+- `/logout` accepts same-origin `POST` only.
+
+All account mutations include a fresh UUID idempotency key and work without
+browser JavaScript. Setup and profile forms keep invalid non-secret values visible
+for correction. The one-time player verification token is always cleared and is
+never returned.
 
 ## Build and checks
 

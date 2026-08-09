@@ -167,6 +167,27 @@ describe("server-only Python account client", () => {
     );
   });
 
+  it("uses a shorter bounded timeout for an optional navigation client", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        username: "nova88",
+        display_name: "Nova",
+        preferences: {},
+        providers: ["google"],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockReturnValue(new AbortController().signal);
+    const { createPythonClient } = await import("../../app/services/python.server");
+
+    await createPythonClient(IDENTITY, { accountReadTimeoutMs: 250 }).getAccount();
+
+    expect(timeoutSpy).toHaveBeenCalledWith(250);
+    timeoutSpy.mockRestore();
+  });
+
   it("rejects oversized preferences before contacting the service", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

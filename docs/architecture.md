@@ -52,6 +52,10 @@ The architecture must preserve untouched official evidence, idempotent ingestion
 - Use private HTTP with JSON between the Python API and its approved consumers. Do not publish the Python API outside the private Podman network. The private network is an extra barrier, but it is not caller or user identity.
 - Require the TypeScript website backend, Discord bot, and future product integrations to use the private Python API. They must not access PostgreSQL or the raw archive directly.
 - Let the TypeScript website backend own Discord or Google login and browser sessions. Let Python own Clash Lens account records, unique usernames, display names, saved tags, verified player-account links, groups, permissions, and other account-domain data.
+- During beta, use Google OpenID Connect Authorization Code flow with PKCE S256, `state`, `nonce`, and the `openid` scope only. Use only the validated immutable Google subject. Do not request, store, or forward Google email, profile claims, provider tokens, or a browser-supplied Clash Lens account ID.
+- Keep beta browser login stateless in TypeScript. Store only the Google subject, issue time, and fixed expiry in an HMAC-protected `HttpOnly`, `Secure`, `SameSite=Lax` cookie. Expire it 24 hours after Google login and never extend it through activity. Do not add a TypeScript session row, Redis session, or provider-token store.
+- Require the exact HTTPS public origin and protected Google client-secret and login-secret files when production login is enabled. Validate them before the Node server listens. Keep public pages available when login is disabled.
+- Treat TypeScript name checks as early feedback only. Python must enforce the strict inappropriate-name filter for usernames, display names, and group names before production account creation or name changes are enabled.
 - Design the private API around product operations that return screen-ready data: player pages and daily logs, refresh submission and status, live and frozen leaderboards, analytics, account and group management, verified player links, and exports. The player-page operation must return the current day and every available ranked-day summary in the identified current Legend season; a fixed latest-N window is not a current-season contract. Do not add a generic database-query API.
 
 ## 2. Private Python API contract
@@ -300,9 +304,9 @@ The following choices remain open:
 - Detailed internal module boundaries and dependency rules.
 - Production Go collector libraries and packaging.
 - Exact private HTTP/JSON routes, schema details, dependency versions, and dependency update policy.
-- TypeScript website framework, server rendering details, and packaging.
+- Remaining TypeScript website packaging and deployment details.
 - Discord commands and response formats.
-- Authentication provider integration and session implementation.
+- Post-beta provider integration and provider-link management.
 - Google Sheets integration.
 - OBS delivery model.
 - Exact image construction, process limits, and memory budgets.

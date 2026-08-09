@@ -176,10 +176,12 @@ export function headers() {
 export default function AccountProfileRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<ProfileActionData>();
-  const [values, setValues] = useState({
-    username: loaderData.username,
-    displayName: loaderData.displayName,
-  });
+  const [values, setValues] = useState(
+    actionData?.values ?? {
+      username: loaderData.username,
+      displayName: loaderData.displayName,
+    },
+  );
   const [clientErrors, setClientErrors] = useState<{
     username?: string;
     displayName?: string;

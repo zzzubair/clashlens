@@ -45,6 +45,14 @@ describe("Python account response mappers", () => {
       mapAccount({
         username: "nova",
         display_name: "Nova",
+        preferences: [],
+        providers: [],
+      }),
+    ).toBeNull();
+    expect(
+      mapAccount({
+        username: "nova",
+        display_name: "Nova",
         preferences: {},
         providers: [7],
       }),

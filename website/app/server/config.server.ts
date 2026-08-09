@@ -46,12 +46,17 @@ export function getWebsiteConfig(): WebsiteConfig {
   return cachedConfig;
 }
 
+export function isWebsiteLoginEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env.CLASHLENS_LOGIN_ENABLED === "true" || env.CLASHLENS_LOGIN_ENABLED === "1";
+}
+
 export function loadWebsiteConfig(
   env: Record<string, string | undefined> = process.env,
 ): WebsiteConfig {
   const production = env.NODE_ENV === "production";
-  const loginEnabled =
-    env.CLASHLENS_LOGIN_ENABLED === "true" || env.CLASHLENS_LOGIN_ENABLED === "1";
+  const loginEnabled = isWebsiteLoginEnabled(env);
   const publicOrigin = loadPublicOrigin(env.CLASHLENS_PUBLIC_ORIGIN, production);
   const cookieSecure = publicOrigin.protocol === "https:";
   if (!loginEnabled) {

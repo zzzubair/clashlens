@@ -18,27 +18,23 @@ import "./theme.css";
 
 export interface RootLoaderData {
   loggedIn: boolean;
+  accountLabel: string | null;
+  logoutIdempotencyKey: string | null;
 }
 
 /**
- * Root loader for the navigation bar. It parses only the signed login cookie
- * locally (never calling the private Python service for public pages) and
- * yields a boolean so no provider identity ever reaches the browser. Any
- * missing or broken login configuration falls back to logged-out.
+ * Root loader for the navigation bar. Logged-out public requests never call
+ * the private Python service. Signed-in requests resolve only the public
+ * account label; no provider identity reaches the browser. Any missing or
+ * broken login configuration falls back to logged-out.
  */
 export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoaderData> {
-  let loggedIn = false;
   try {
-    const { getWebsiteConfig } = await import("./server/config.server");
-    const { readLoginIdentity } = await import("./server/actions.server");
-    const config = getWebsiteConfig();
-    if (config.loginEnabled) {
-      loggedIn = readLoginIdentity(request, config) !== null;
-    }
+    const { loadRootNavigation } = await import("./server/root-navigation.server");
+    return await loadRootNavigation(request);
   } catch {
-    loggedIn = false;
+    return { loggedIn: false, accountLabel: null, logoutIdempotencyKey: null };
   }
-  return { loggedIn };
 }
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -93,8 +89,16 @@ export default function App() {
             <>
               <Link className="nav-link" to="/account">
                 Account
+                {data.accountLabel ? (
+                  <span className="nav-account-name">{data.accountLabel}</span>
+                ) : null}
               </Link>
               <Form method="post" action="/logout" className="nav-form">
+                <input
+                  type="hidden"
+                  name="idempotencyKey"
+                  value={data.logoutIdempotencyKey ?? ""}
+                />
                 <button type="submit" className="nav-button">
                   Log out
                 </button>

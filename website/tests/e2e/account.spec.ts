@@ -226,7 +226,10 @@ test.describe("account flows", () => {
     await expect(page.getByLabel("Display name")).toBeVisible();
 
     // The setup form carries a canonical idempotency UUID.
-    const setupKey = await page.locator('input[name="idempotencyKey"]').inputValue();
+    const setupKey = await page
+      .getByRole("region", { name: "Account setup form" })
+      .locator('input[name="idempotencyKey"]')
+      .inputValue();
     expect(setupKey).toMatch(UUID_PATTERN);
 
     // A reserved username is rejected client-side before any network POST.
@@ -244,7 +247,10 @@ test.describe("account flows", () => {
     await noJsContext.addCookies(cookies);
     const noJsPage = await noJsContext.newPage();
     await noJsPage.goto("/account/setup");
-    const keyBefore = await noJsPage.locator('input[name="idempotencyKey"]').inputValue();
+    const keyBefore = await noJsPage
+      .getByRole("region", { name: "Account setup form" })
+      .locator('input[name="idempotencyKey"]')
+      .inputValue();
     expect(keyBefore).toMatch(UUID_PATTERN);
     await noJsPage.getByLabel("Username").fill("login");
     await noJsPage.getByLabel("Display name").fill("Lens Keeper");
@@ -253,7 +259,12 @@ test.describe("account flows", () => {
       "That username is reserved. Choose a different one.",
     );
     await expect(noJsPage).toHaveURL(`${websiteOrigin}/account/setup`);
-    const keyAfter = await noJsPage.locator('input[name="idempotencyKey"]').inputValue();
+    await expect(noJsPage.getByLabel("Username")).toHaveValue("login");
+    await expect(noJsPage.getByLabel("Display name")).toHaveValue("Lens Keeper");
+    const keyAfter = await noJsPage
+      .getByRole("region", { name: "Account setup form" })
+      .locator('input[name="idempotencyKey"]')
+      .inputValue();
     expect(keyAfter).toMatch(UUID_PATTERN);
     expect(keyAfter).not.toBe(keyBefore);
     await noJsContext.close();
@@ -261,6 +272,7 @@ test.describe("account flows", () => {
 
   test("setup succeeds, the login cookie never slides, and profile edits publish canonical data", async ({
     page,
+    browser,
     context,
   }) => {
     const errors = trackPageErrors(page);
@@ -283,8 +295,13 @@ test.describe("account flows", () => {
     const expiresBefore = loginBefore?.expires;
 
     await createAccount(page, "lenskeeper", "Lens Keeper");
-    await expect(page.getByRole("link", { name: "Account" })).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Account Lens Keeper", exact: true }),
+    ).toBeVisible();
     await expect(page.getByRole("button", { name: "Log out" })).toBeVisible();
+    await expect(
+      page.locator('form[action="/logout"] input[name="idempotencyKey"]'),
+    ).toHaveValue(UUID_PATTERN);
     await expect(page.locator(".lede")).toContainText("Lens Keeper");
     await expect(page.locator(".lede")).toContainText("@lenskeeper");
 
@@ -307,6 +324,21 @@ test.describe("account flows", () => {
     );
     expect(loginAfterMutation?.value).toBe(valueBefore);
     expect(loginAfterMutation?.expires).toBe(expiresBefore);
+
+    // Server-rendered validation keeps non-secret profile values without JavaScript.
+    const noJsContext = await browser.newContext({ javaScriptEnabled: false });
+    await noJsContext.addCookies(await context.cookies());
+    const noJsPage = await noJsContext.newPage();
+    await noJsPage.goto("/account/profile");
+    await noJsPage.getByLabel("Username").fill("login");
+    await noJsPage.getByLabel("Display name").fill("Kept Name");
+    await noJsPage.getByRole("button", { name: "Save changes" }).click();
+    await expect(noJsPage.getByRole("alert")).toContainText(
+      "That username is reserved. Choose a different one.",
+    );
+    await expect(noJsPage.getByLabel("Username")).toHaveValue("login");
+    await expect(noJsPage.getByLabel("Display name")).toHaveValue("Kept Name");
+    await noJsContext.close();
 
     // The account page reflects the renamed canonical values.
     await page.goto("/account");
@@ -403,13 +435,19 @@ test.describe("account flows", () => {
     // An invalid token is reported safely and the idempotency key rotates.
     await page.getByLabel("Player tag").fill("#2pp");
     await page.getByLabel("One-time verification token").fill(WRONG_TOKEN);
-    const keyBefore = await page.locator('input[name="idempotencyKey"]').inputValue();
+    const keyBefore = await page
+      .getByRole("region", { name: "Player verification form" })
+      .locator('input[name="idempotencyKey"]')
+      .inputValue();
     await page.getByRole("button", { name: "Verify player" }).click();
     await expect(page.getByRole("status")).toContainText(
       "The one-time token is invalid or expired",
     );
     await expect(page.getByLabel("One-time verification token")).toHaveValue("");
-    const keyAfter = await page.locator('input[name="idempotencyKey"]').inputValue();
+    const keyAfter = await page
+      .getByRole("region", { name: "Player verification form" })
+      .locator('input[name="idempotencyKey"]')
+      .inputValue();
     expect(keyAfter).toMatch(UUID_PATTERN);
     expect(keyAfter).not.toBe(keyBefore);
 
@@ -747,7 +785,7 @@ test.describe("account flows", () => {
         await expect(page.locator("main")).toBeVisible();
         await assertLayout();
         await expect(
-          page.getByRole("link", { name: "Account", exact: true }),
+          page.getByRole("link", { name: "Account Lens Scout", exact: true }),
         ).toBeVisible();
         await expect(page.getByRole("button", { name: "Log out" })).toBeVisible();
       }

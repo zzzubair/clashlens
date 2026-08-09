@@ -112,6 +112,10 @@ export interface GoogleAccountIdentity {
   providerSubject: string;
 }
 
+export interface PythonClientOptions {
+  accountReadTimeoutMs?: number;
+}
+
 export interface AccountNameInput {
   username: string;
   displayName: string;
@@ -127,8 +131,14 @@ export interface GroupInput {
  * (from the login cookie) when account operations are needed; public
  * operations stay anonymous either way.
  */
-export function createPythonClient(identity?: GoogleAccountIdentity): PythonClient {
-  const accountOperations = createAccountOperations(identity);
+export function createPythonClient(
+  identity?: GoogleAccountIdentity,
+  options: PythonClientOptions = {},
+): PythonClient {
+  const accountOperations = createAccountOperations(
+    identity,
+    boundedAccountReadTimeout(options.accountReadTimeoutMs),
+  );
   return {
     getTrackedLeaderboard,
     searchPlayers,
@@ -137,6 +147,14 @@ export function createPythonClient(identity?: GoogleAccountIdentity): PythonClie
     getRefreshStatus,
     ...accountOperations,
   };
+}
+
+function boundedAccountReadTimeout(value: number | undefined): number {
+  if (value === undefined) return REQUEST_TIMEOUT_MS;
+  if (!Number.isInteger(value) || value < 50 || value > REQUEST_TIMEOUT_MS) {
+    throw new Error("account read timeout must be a bounded integer");
+  }
+  return value;
 }
 
 async function getTrackedLeaderboard(
@@ -222,6 +240,7 @@ async function requestJson<T>(
   requestId?: string,
   identity?: GoogleAccountIdentity,
   allowedStatuses?: readonly number[],
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   const { status, payload } = await requestJsonRaw(
     target,
@@ -229,6 +248,7 @@ async function requestJson<T>(
     body,
     requestId,
     identity,
+    timeoutMs,
   );
   if (!(status >= 200 && status < 300) && !allowedStatuses?.includes(status)) {
     throw new PythonApiError(status, payload);
@@ -254,6 +274,7 @@ async function requestJsonRaw(
   body: Buffer | undefined,
   requestId?: string,
   identity?: GoogleAccountIdentity,
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<{ status: number; payload: unknown }> {
   const config = getConfig();
   const proof = createProofHeaders({
@@ -278,7 +299,7 @@ async function requestJsonRaw(
       },
       body: body === undefined ? undefined : Uint8Array.from(body),
       cache: "no-store",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     throw new PythonApiError(503, { error: "unavailable" });
@@ -978,6 +999,7 @@ type AccountOperations = Pick<
 
 function createAccountOperations(
   identity: GoogleAccountIdentity | undefined,
+  accountReadTimeoutMs: number,
 ): AccountOperations {
   if (identity !== undefined) {
     if (identity.provider !== "google" || !isProviderSubject(identity.providerSubject)) {
@@ -987,7 +1009,7 @@ function createAccountOperations(
   return {
     createAccount: (input, idempotencyKey) =>
       createAccount(input, idempotencyKey, identity),
-    getAccount: () => getAccount(identity),
+    getAccount: () => getAccount(identity, accountReadTimeoutMs),
     updateAccount: (input, idempotencyKey) =>
       updateAccount(input, idempotencyKey, identity),
     listSavedTags: () => listSavedTags(identity),
@@ -1062,6 +1084,7 @@ async function createAccount(
 
 async function getAccount(
   identity: GoogleAccountIdentity | undefined,
+  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<ClashLensAccount> {
   requireIdentity(identity);
   const payload = await requestJson<unknown>(
@@ -1071,6 +1094,8 @@ async function getAccount(
     undefined,
     undefined,
     identity,
+    undefined,
+    timeoutMs,
   );
   return mappedOrMalformed(mapAccount(payload));
 }

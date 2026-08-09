@@ -49,6 +49,7 @@ const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
 const ORIGIN = "https://clashlens.example";
 const CALLBACK_ORIGIN = "https://accounts.google.com/o/oauth2/v2/auth";
+const IDEMPOTENCY_KEY = "00000000-0000-4000-8000-000000000001";
 
 interface DataWithResponseInit<T> {
   type: "DataWithResponseInit";
@@ -243,11 +244,26 @@ describe("logout route", () => {
     }
   });
 
+  it("rejects a same-origin logout without a canonical idempotency key", async () => {
+    const response = await logoutAction({
+      request: new Request(`${ORIGIN}/logout`, {
+        method: "POST",
+        headers: { Origin: ORIGIN },
+        body: new URLSearchParams(),
+      }),
+    } as never);
+    expect(isResponse(response)).toBe(true);
+    expect((response as Response).status).toBe(400);
+    expect((response as Response).headers.get("Cache-Control")).toBe("no-store");
+    expect((response as Response).headers.getSetCookie()).toEqual([]);
+  });
+
   it("clears the login cookie on a same-origin POST and redirects home", async () => {
     const response = await logoutAction({
       request: new Request(`${ORIGIN}/logout`, {
         method: "POST",
         headers: { Origin: ORIGIN },
+        body: new URLSearchParams({ idempotencyKey: IDEMPOTENCY_KEY }),
       }),
     } as never);
     expect(isResponse(response)).toBe(true);
@@ -266,6 +282,7 @@ describe("logout route", () => {
       request: new Request(`${ORIGIN}/logout`, {
         method: "POST",
         headers: { Referer: `${ORIGIN}/account` },
+        body: new URLSearchParams({ idempotencyKey: IDEMPOTENCY_KEY }),
       }),
     } as never);
     expect((response as Response).status).toBe(302);

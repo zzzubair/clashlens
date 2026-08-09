@@ -15,7 +15,7 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
   if (request.method !== "POST") throw redirect("/");
   const { getWebsiteConfig } = await import("../server/config.server");
   const cookies = await import("../server/auth-cookies.server");
-  const { isSameOrigin } = await import("../server/actions.server");
+  const actions = await import("../server/actions.server");
 
   let config;
   try {
@@ -23,8 +23,12 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
   } catch {
     throw redirect("/");
   }
-  if (!isSameOrigin(request, config.publicOrigin)) {
+  if (!actions.isSameOrigin(request, config.publicOrigin)) {
     return new Response(null, { status: 403, headers: NO_STORE });
+  }
+  const form = await actions.parseBoundedFormData(request);
+  if (form === null || !actions.isIdempotencyKey(form.idempotencyKey)) {
+    return new Response(null, { status: 400, headers: NO_STORE });
   }
   return new Response(null, {
     status: 302,

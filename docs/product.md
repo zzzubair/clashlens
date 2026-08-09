@@ -25,6 +25,10 @@ The scope is final. The implementation-level details that remain open are listed
 
 The functional beta accepts Google authentication only. Discord login, the Discord bot, and exports are disabled by default. A player link already owned by another account does not move automatically. It requires fresh verification and a restricted audited support action.
 
+The beta website requests only the Google OpenID Connect `openid` scope and uses only the provider's immutable subject. It does not request or store a Google email address or profile. A successful login creates one fixed, non-sliding 24-hour browser session. First login requires the user to choose both a username and a display name before Clash Lens creates the account.
+
+Account usernames, display names, and group names must pass a strict inappropriate-name filter. Browser and TypeScript checks provide early feedback only. Python is authoritative. Keep production account creation and name changes disabled until the Python service enforces the accepted filter with false positives preferred to false negatives.
+
 ## Primary user
 
 The primary user is an individual competitive rank pusher. The same public data supports creators, players with several accounts, clans, friends, and followers.
@@ -182,5 +186,5 @@ The product scope is final. These implementation-level details remain for later 
 - Discord commands and response formats.
 - Google Sheets export formats and refresh behavior.
 - OBS overlay layouts and creator workflows.
-- Username syntax and case normalization, profile editing, account deletion, player-account unlinking, and verification-audit retention.
+- Account deletion, player-account unlinking, and verification-audit retention.
 - Product success measures and validation thresholds.

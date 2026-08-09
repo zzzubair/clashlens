@@ -151,7 +151,9 @@ export function headers() {
 export default function AccountSetupRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<SetupActionData>();
-  const [values, setValues] = useState({ username: "", displayName: "" });
+  const [values, setValues] = useState(
+    actionData?.values ?? { username: "", displayName: "" },
+  );
   const [clientErrors, setClientErrors] = useState<{
     username?: string;
     displayName?: string;
