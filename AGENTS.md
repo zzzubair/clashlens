@@ -3,12 +3,8 @@
 ## Roles
 
 - The maintainer-facing agent uses `openai/gpt-5.6-sol` and owns coordination, decisions, final review, and the final response.
-- Delegate heavy implementation, research, or review to `openai/gpt-5.6-luna` or `deepseek/deepseek-v4-flash` through Hermes subagents or the Kanban coder profile.
+- Delegate heavy implementation, research, or review to `openai/gpt-5.6-luna` or `deepseek/deepseek-v4-flash` through subagents or new threads (with codex)
 - Direct maintainer instructions override this split.
-
-## Current state
-
-Clash Lens Phase 1 targets Legend I. Main includes the Go collector, Python application layer, React Router 8 SSR website on Node.js 24, and the Google account experience. PostgreSQL stores structured data; Go collects official API evidence; Python owns domain processing and the private API; TypeScript owns the public website and backend. Detailed specifications, the raw archive, remaining infrastructure, complete deployment, cloud providers, and exact resource budgets remain open.
 
 ## Sources
 
