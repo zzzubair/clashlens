@@ -9,9 +9,7 @@ import {
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import { FreshnessText, Provenance, formatTimestamp } from "../components/Provenance";
-import { StateBadge } from "../components/StateBadge";
-import type { StateValue } from "../components/StateBadge";
+import { formatTimestamp } from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
   PlayerPage,
@@ -208,8 +206,8 @@ export default function PlayerRoute() {
   if (player === null) {
     return (
       <main className="page-shell narrow-page">
-        <Link className="back-link" to="/">
-          ← Back to tracked players
+        <Link className="back-link" to="/leaderboards/tracked">
+          ← Back to live leaderboard
         </Link>
         <h1>Player data unavailable</h1>
         {data.error ? <ErrorNotice error={data.error} /> : null}
@@ -227,63 +225,58 @@ export default function PlayerRoute() {
 
   return (
     <main className="page-shell player-page">
-      <Link className="back-link" to="/">
-        ← Back to tracked players
+      <Link className="back-link" to="/leaderboards/tracked">
+        ← Back to live leaderboard
       </Link>
       <header className="player-header">
         <div>
-          <p className="eyebrow">Public player page</p>
           <h1>{player.profile.name}</h1>
           <p className="player-identity">
             <span className="player-tag prominent">{player.tag}</span>
             <span>{player.profile.clan}</span>
           </p>
         </div>
-        <div className="player-trophy-card">
-          <span className="metric-label">Saved trophies</span>
-          <strong>{player.profile.trophies.toLocaleString()}</strong>
-          <StateBadge state={player.profile.freshness.state} />
+        <div className="player-summary">
+          <div className="player-trophy-card">
+            <span className="metric-label">Trophies</span>
+            <strong>{player.profile.trophies.toLocaleString()}</strong>
+            <span className="metric-label">Last updated</span>
+            <time
+              className="player-updated"
+              dateTime={player.profile.freshness.observedAt}
+            >
+              {formatTimestamp(player.profile.freshness.observedAt)}
+            </time>
+          </div>
+          <refreshFetcher.Form
+            className="player-refresh-form"
+            action={refreshActionPath}
+            method="post"
+          >
+            <input
+              type="hidden"
+              name="idempotencyKey"
+              value={data.noJsIdempotencyKey}
+              readOnly
+            />
+            <button
+              type="submit"
+              disabled={refreshFetcher.state !== "idle"}
+              name="refresh"
+              value="public"
+              onClick={(event) => {
+                event.preventDefault();
+                refreshFetcher.submit(
+                  { idempotencyKey: data.noJsIdempotencyKey },
+                  { method: "post", action: refreshActionPath },
+                );
+              }}
+            >
+              {refreshFetcher.state === "submitting" ? "Refreshing…" : "Refresh"}
+            </button>
+          </refreshFetcher.Form>
         </div>
       </header>
-
-      <section className="saved-data-panel" aria-labelledby="saved-data-title">
-        <div>
-          <h2 id="saved-data-title">Saved profile data</h2>
-          <p>
-            Last saved observation:{" "}
-            <time dateTime={player.profile.freshness.observedAt}>
-              {formatTimestamp(player.profile.freshness.observedAt)}
-            </time>{" "}
-            (<FreshnessText freshness={player.profile.freshness} />
-            ).
-          </p>
-        </div>
-        <refreshFetcher.Form action={refreshActionPath} method="post">
-          <input
-            type="hidden"
-            name="idempotencyKey"
-            value={data.noJsIdempotencyKey}
-            readOnly
-          />
-          <button
-            type="submit"
-            disabled={refreshFetcher.state !== "idle"}
-            name="refresh"
-            value="public"
-            onClick={(event) => {
-              event.preventDefault();
-              refreshFetcher.submit(
-                { idempotencyKey: data.noJsIdempotencyKey },
-                { method: "post", action: refreshActionPath },
-              );
-            }}
-          >
-            {refreshFetcher.state === "submitting"
-              ? "Requesting refresh…"
-              : "Refresh public data"}
-          </button>
-        </refreshFetcher.Form>
-      </section>
 
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {visibleStatus ? <RefreshProgress status={visibleStatus} /> : null}
@@ -291,30 +284,18 @@ export default function PlayerRoute() {
       {player.currentDay === null ? (
         <section className="data-section" aria-labelledby="current-day-title">
           <div className="section-heading">
-            <div>
-              <p className="eyebrow">Ranked-day data quality</p>
-              <h2 id="current-day-title">Current Legend day</h2>
-            </div>
-            <StateBadge state="unavailable" />
+            <h2 id="current-day-title">Current Legend day</h2>
           </div>
-          <p className="section-note">
-            No ranked-day publication is available for this accepted profile. Clash Lens
-            does not fabricate a day.
-          </p>
+          <p className="section-note">Current Legend day data is not available.</p>
         </section>
       ) : (
         <section className="data-section" aria-labelledby="current-day-title">
           <div className="section-heading">
-            <div>
-              <p className="eyebrow">Season {player.season?.id ?? "Unknown"}</p>
-              <h2 id="current-day-title">Current Legend day</h2>
-            </div>
-            <StateBadge state={dayStateBadge(player.currentDay!.state)} />
+            <h2 id="current-day-title">Current Legend day</h2>
           </div>
           <p className="section-note">
             Ranked day {player.currentDay!.dayNumber ?? "Unknown"} ·{" "}
-            {player.currentDay!.period} · day state is{" "}
-            <strong>{player.currentDay!.state}</strong> until it can be reconciled.
+            {player.currentDay!.period}
           </p>
           <div className="metric-grid">
             <MetricCard title="Offense">
@@ -358,10 +339,6 @@ export default function PlayerRoute() {
                 value={formatSigned(player.currentDay!.trophyChange)}
               />
               <Metric
-                label="Completeness"
-                value={capitalize(player.currentDay!.completeness.state)}
-              />
-              <Metric
                 label="Season day"
                 value={
                   player.season
@@ -371,51 +348,19 @@ export default function PlayerRoute() {
               />
             </MetricCard>
           </div>
-          <div className="quality-panel">
-            <h3>Completeness and uncertainty</h3>
-            <p>
-              Completeness: <StateBadge state={player.currentDay!.completeness.state} />{" "}
-              {player.currentDay!.completeness.reason}
-            </p>
-            <ul>
-              {player.currentDay!.uncertainty.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </div>
         </section>
       )}
 
-      <section className="data-section" aria-labelledby="quality-title">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Trust and provenance</p>
-            <h2 id="quality-title">Data quality</h2>
-          </div>
-        </div>
-        <ul className="quality-list">
-          {player.dataQuality.map((item) => (
-            <li key={item.code}>
-              <StateBadge state={item.code === "partial" ? "partial" : item.code} />
-              <div>
-                <strong>{item.label}</strong>
-                <p>{item.detail}</p>
-              </div>
-            </li>
-          ))}
-        </ul>
-        <Provenance provenance={player.provenance} />
-      </section>
-
       <section className="data-section" aria-labelledby="recent-days-title">
-        <h2 id="recent-days-title">Recent Legend days</h2>
+        <h2 id="recent-days-title">Legend season</h2>
         <div className="table-wrap">
-          <table className="data-table compact-table">
-            <caption className="sr-only">Recent ranked day summaries</caption>
+          <table className="data-table compact-table" aria-label="Legend season days">
+            <caption className="sr-only">
+              Legend season days returned by the service
+            </caption>
             <thead>
               <tr>
                 <th scope="col">Day</th>
-                <th scope="col">State</th>
                 <th scope="col">Offense</th>
                 <th scope="col">Defense</th>
                 <th scope="col">Trophy change</th>
@@ -425,9 +370,6 @@ export default function PlayerRoute() {
               {player.recentDays.map((day) => (
                 <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
                   <th scope="row">{day.dayNumber ?? "Unknown"}</th>
-                  <td>
-                    <StateBadge state={dayStateBadge(day.state)} />
-                  </td>
                   <td>
                     {day.offense.attacks === null
                       ? "Unknown"
@@ -450,20 +392,18 @@ export default function PlayerRoute() {
 }
 
 function RefreshProgress({ status }: { status: RefreshStatus | RefreshWork }) {
+  const inProgress = status.state === "queued" || status.state === "running";
   return (
-    <section className="refresh-panel" aria-live="polite" aria-labelledby="refresh-title">
-      <h2 id="refresh-title">Public refresh</h2>
-      <p role="status">
-        Refresh status: <strong>{status.state}</strong>
-      </p>
-      <progress aria-label="Refresh progress" value={status.progressPercent} max="100">
-        {status.progressPercent}%
-      </progress>
-      <p data-testid="refresh-work-id">Work ID: {status.workId}</p>
-      <p>{status.message}</p>
-      {status.state === "queued" || status.state === "running" ? (
-        <p>Saved data remains visible while refresh runs.</p>
+    <section className="refresh-panel" aria-live="polite" aria-label="Player refresh">
+      <p role="status">{inProgress ? "Refreshing…" : "Updated."}</p>
+      {inProgress ? (
+        <progress aria-label="Refresh progress" value={status.progressPercent} max="100">
+          {status.progressPercent}%
+        </progress>
       ) : null}
+      <span className="sr-only" data-testid="refresh-work-id">
+        Work ID: {status.workId}
+      </span>
     </section>
   );
 }
@@ -499,25 +439,6 @@ function formatFraction(numerator: number | null, denominator: number | null): s
   return numerator === null || denominator === null
     ? "Unknown"
     : `${numerator} / ${denominator}`;
-}
-
-function capitalize(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function dayStateBadge(
-  value: NonNullable<PlayerPage["currentDay"]>["state"],
-): StateValue {
-  switch (value) {
-    case "Live":
-      return "live";
-    case "Complete":
-      return "complete";
-    case "Partial":
-      return "partial";
-    case "Uncertain":
-      return "uncertain";
-  }
 }
 
 async function safeError(cause: unknown): Promise<WebsiteErrorResponse> {

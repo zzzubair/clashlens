@@ -46,19 +46,19 @@ A domain change is complete only when every affected source observation, derived
 - Re-evaluate inactive known players during the Monday promotion and demotion transition and whenever a tag is rediscovered or submitted.
 - Retaining inactive tags must allow later ranked-tournament support without re-creating player identity or losing history.
 
-### Tracked Players ordering
+### Live Leaderboard ordering
 
-- The **Tracked Players leaderboard** orders actively tracked players by the newest valid trophy observation that Clash Lens has accepted for each player. A position on it means position among players tracked by Clash Lens, not a claim of complete global coverage or one simultaneous official observation.
+- The **Live Leaderboard** orders actively tracked players by the newest valid trophy observation that Clash Lens has accepted for each player. Its **Rank** means position among players tracked by Clash Lens, not a claim of complete global coverage or one simultaneous official observation.
 - Keep a player in this ordering when a later request is missing, delayed, malformed, or unsuccessful. Change the player's trophy value only when Clash Lens accepts a newer valid observation. Remove the player from active ordering only when newer valid evidence shows that the player is no longer eligible for active Legend I tracking.
-- Show the trophy observation time, age, and freshness state with each leaderboard entry. Old data remains ranked and remains eligible for that snapshot's cumulative Top-N cohorts and rank bands, but the snapshot and its analytics must show how much membership uses old data.
-- Order all Tracked Players entries by newest accepted trophies descending and resolve equal-trophy ties with a versioned deterministic hash of the normalized player tag. An official rank is separate provenance and does not change a Tracked Players position.
+- Record the trophy observation time, age, and freshness state with each leaderboard entry. Show the observation time as Last updated on the public Live Leaderboard and player page without adding technical freshness panels. Old data remains ranked and remains eligible for that snapshot's cumulative Top-N cohorts and rank bands, but the snapshot and its analytics must record how much membership uses old data.
+- Order all Live Leaderboard entries by newest accepted trophies descending and resolve equal-trophy ties with a versioned deterministic hash of the normalized player tag. An official rank is separate provenance, is not a public leaderboard column, and does not change a Live Leaderboard Rank.
 - Never use fresh randomness for a snapshot tie-break. The same tag, trophies, and ordering-rule version must reproduce the same position.
 - Every snapshot must identify the ordering-rule version it used.
 
 ### Official rank is separate
 
-- Order the official Top-200 data view by the rank that Supercell supplies, including its ordering of equal-trophy players. It remains a separate rank system even when the public Tracked Players surface shows the official rank field.
-- Keep official rank separate from Tracked Players position. A player can have one, both, or neither.
+- Order the official Top-200 data view by the rank that Supercell supplies, including its ordering of equal-trophy players. It remains a separate source-backed rank system and does not appear as a column on the public Live Leaderboard.
+- Keep official rank separate from Live Leaderboard Rank. A player can have one, both, or neither.
 
 ## 3. Official API observations
 
@@ -68,8 +68,8 @@ A domain change is complete only when every affected source observation, derived
 - A complete official Top-200 observation contains exactly 200 entries, exactly 200 unique valid normalized player tags, and the official `rank` values 1 through 200 once each. The same normalized tag at more than one rank is invalid. Use the returned rank. Do not calculate official rank from trophies or response position.
 - The verified response does not supply a season identifier. Store official rank as a current observation with its source and observation time. Any Legend I season association is Clash Lens derived context, not an official season field.
 - Preserve the untouched response as raw evidence. Add its valid player tags to the known-player registry and request normal profile collection for newly discovered tags.
-- Maintain one most recent complete official Top-200 view. Atomically replace it only after a newer observation passes all completeness checks. A failed, short, malformed, duplicate-tagged, duplicate-ranked, or rank-gapped response remains visible as a failed or partial collection attempt but does not replace the most recent complete view.
-- Show when the current official Top 200 was observed and whether a newer refresh attempt failed. Do not imply that one API response and the latest per-player profile observations were captured at the same instant.
+- Maintain one most recent complete official Top-200 view. Atomically replace it only after a newer observation passes all completeness checks. Keep a failed, short, malformed, duplicate-tagged, duplicate-ranked, or rank-gapped response inspectable as a failed or partial collection attempt, but do not let it replace the most recent complete view.
+- Record when the current official Top 200 was observed and whether a newer refresh attempt failed. Do not imply that one API response and the latest per-player profile observations were captured at the same instant.
 
 ### Player profiles and battle logs
 

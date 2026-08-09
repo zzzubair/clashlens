@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 import {
+  Form,
+  Link,
   isRouteErrorResponse,
+  useLoaderData,
+  type LoaderFunctionArgs,
   Links,
   Meta,
   Outlet,
@@ -10,6 +14,28 @@ import {
 
 import type { Route } from "./+types/root";
 import "./app.css";
+import "./theme.css";
+
+export interface RootLoaderData {
+  loggedIn: boolean;
+  accountLabel: string | null;
+  logoutIdempotencyKey: string | null;
+}
+
+/**
+ * Root loader for the navigation bar. Logged-out public requests never call
+ * the private Python service. Signed-in requests resolve only the public
+ * account label; no provider identity reaches the browser. Any missing or
+ * broken login configuration falls back to logged-out.
+ */
+export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoaderData> {
+  try {
+    const { loadRootNavigation } = await import("./server/root-navigation.server");
+    return await loadRootNavigation(request);
+  } catch {
+    return { loggedIn: false, accountLabel: null, logoutIdempotencyKey: null };
+  }
+}
 
 export function Layout({ children }: { children: ReactNode }) {
   return (
@@ -17,7 +43,12 @@ export function Layout({ children }: { children: ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Clash Lens | Legend I data</title>
+        <title>Clash Lens</title>
+        <meta name="theme-color" content="#28170F" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <link rel="manifest" href="/site.webmanifest" />
         <Meta />
         <Links />
       </head>
@@ -46,7 +77,43 @@ export function Layout({ children }: { children: ReactNode }) {
 }
 
 export default function App() {
-  return <Outlet />;
+  const data = useLoaderData<typeof loader>();
+  return (
+    <>
+      <header className="site-header">
+        <Link className="site-brand" to="/">
+          Clash Lens
+        </Link>
+        <nav className="site-nav" aria-label="Account navigation">
+          {data.loggedIn ? (
+            <>
+              <Link className="nav-link" to="/account">
+                Account
+                {data.accountLabel ? (
+                  <span className="nav-account-name">{data.accountLabel}</span>
+                ) : null}
+              </Link>
+              <Form method="post" action="/logout" className="nav-form">
+                <input
+                  type="hidden"
+                  name="idempotencyKey"
+                  value={data.logoutIdempotencyKey ?? ""}
+                />
+                <button type="submit" className="nav-button">
+                  Log out
+                </button>
+              </Form>
+            </>
+          ) : (
+            <Link className="nav-link nav-link-primary" to="/login">
+              Log in
+            </Link>
+          )}
+        </nav>
+      </header>
+      <Outlet />
+    </>
+  );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {

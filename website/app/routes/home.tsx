@@ -1,9 +1,8 @@
-import { Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, useFetcher, useLoaderData, type LoaderFunctionArgs } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import { CoverageSummary } from "../components/CoverageSummary";
-import { FreshnessText, Provenance } from "../components/Provenance";
-import { StateBadge } from "../components/StateBadge";
+import { formatTimestamp } from "../components/Provenance";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type {
@@ -12,6 +11,9 @@ import type {
   TrackedPlayerEntry,
   WebsiteErrorResponse,
 } from "../lib/contracts";
+import type { PlayerSearchLoaderData } from "./player-search";
+
+const SEARCH_DEBOUNCE_MS = 180;
 
 export interface HomeLoaderData {
   leaderboard: TrackedLeaderboard | null;
@@ -56,15 +58,61 @@ export function headers() {
 
 export default function Home() {
   const data = useLoaderData<typeof loader>();
+  const searchFetcher = useFetcher<PlayerSearchLoaderData>();
+  const [searchQuery, setSearchQuery] = useState(data.query);
+  const [requestedQuery, setRequestedQuery] = useState("");
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setSearchQuery(data.query);
+  }, [data.query]);
+
+  useEffect(
+    () => () => {
+      if (searchTimer.current !== null) clearTimeout(searchTimer.current);
+    },
+    [],
+  );
+
+  const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
+  const requestMatchesInput =
+    requestedQuery.toLocaleLowerCase() === normalizedQuery && normalizedQuery !== "";
+  const suggestionData = requestMatchesInput ? searchFetcher.data : undefined;
+  const suggestionsOpen =
+    requestMatchesInput &&
+    (searchFetcher.state !== "idle" ||
+      suggestionData?.search != null ||
+      !!suggestionData?.error);
+
+  function handleSearchInput(value: string) {
+    setSearchQuery(value);
+    if (searchTimer.current !== null) clearTimeout(searchTimer.current);
+
+    const query = value.trim();
+    if (query === "" || value.length > MAX_SEARCH_QUERY_LENGTH) {
+      setRequestedQuery("");
+      return;
+    }
+
+    searchTimer.current = setTimeout(() => {
+      setRequestedQuery(query);
+      void searchFetcher.load(`/resources/players/search?q=${encodeURIComponent(query)}`);
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
   return (
     <main className="page-shell">
       <section className="hero" aria-labelledby="home-title">
-        <p className="eyebrow">Evidence-led Legend I tracking</p>
-        <h1 id="home-title">Tracked Players</h1>
-        <p className="lede">
-          Live tracked players from the saved Python data service. This cohort is not a
-          claim of full Legend I coverage.
-        </p>
+        <div className="brand-lockup">
+          <img
+            className="brand-mark"
+            src="/brand/clashlens-mark.svg"
+            alt=""
+            width="128"
+            height="128"
+          />
+          <h1 id="home-title">Clash Lens</h1>
+        </div>
       </section>
 
       <section className="search-panel" aria-labelledby="search-title">
@@ -76,57 +124,36 @@ export default function Home() {
               id="player-search"
               name="q"
               type="search"
-              defaultValue={data.query}
-              placeholder="#2PP or Nova"
+              value={searchQuery}
+              placeholder="Player tag or Name"
               autoComplete="off"
+              onChange={(event) => handleSearchInput(event.currentTarget.value)}
             />
             <button type="submit">Search</button>
           </div>
-          <p className="form-help">
-            Exact valid tags open a canonical player page. Other text searches known Clash
-            Lens players only.
-          </p>
+          {suggestionsOpen ? (
+            <SearchSuggestions
+              data={suggestionData}
+              loading={searchFetcher.state !== "idle"}
+            />
+          ) : null}
         </form>
-        {data.search ? <SearchResults search={data.search} /> : null}
+        {data.search && searchQuery === data.query ? (
+          <SearchResults search={data.search} />
+        ) : null}
       </section>
 
       {data.error ? <ErrorNotice error={data.error} /> : null}
 
       <section className="data-section" aria-labelledby="live-leaderboard-title">
         <div className="section-heading">
-          <div>
-            <p className="eyebrow">Live view</p>
-            <h2 id="live-leaderboard-title">Live tracked players</h2>
-          </div>
+          <h2 id="live-leaderboard-title">Live leaderboard</h2>
           <Link className="button secondary" to="/leaderboards/tracked">
-            Full live leaderboard
+            View all →
           </Link>
         </div>
         {data.leaderboard ? (
-          <>
-            <p className="section-note">
-              Showing the first {data.leaderboard.entries.length} of{" "}
-              {data.leaderboard.totalTracked} actively tracked players. Older observations
-              remain ordered and are marked.
-            </p>
-            <Provenance provenance={data.leaderboard.provenance} />
-            <CoverageSummary coverage={data.leaderboard.coverage} />
-            <section className="quality-panel" aria-labelledby="fixture-quality-title">
-              <h3 id="fixture-quality-title">Fixture data-quality states</h3>
-              <p>
-                These explicit states remain distinct in the Python-owned response
-                contract.
-              </p>
-              <ul className="state-list">
-                {data.leaderboard.qualityStates.map((state) => (
-                  <li key={state}>
-                    <StateBadge state={state} />
-                  </li>
-                ))}
-              </ul>
-            </section>
-            <LeaderboardTable entries={data.leaderboard.entries} />
-          </>
+          <LeaderboardTable entries={data.leaderboard.entries} />
         ) : (
           <div className="empty-state">
             <h3>Tracked player data is unavailable</h3>
@@ -135,6 +162,71 @@ export default function Home() {
         )}
       </section>
     </main>
+  );
+}
+
+function SearchSuggestions({
+  data,
+  loading,
+}: {
+  data: PlayerSearchLoaderData | undefined;
+  loading: boolean;
+}) {
+  const search = data?.search;
+  const results = search?.results.slice(0, 5) ?? [];
+  const unknownExactTag =
+    search?.exactTag && results.length === 0 ? search.exactTag : null;
+
+  return (
+    <div
+      id="player-search-suggestions"
+      className="search-dropdown"
+      role="region"
+      aria-label="Player search suggestions"
+      aria-live="polite"
+      aria-busy={loading}
+    >
+      {loading && !search ? <p className="search-dropdown-status">Searching…</p> : null}
+      {data?.error ? <p className="search-dropdown-status">Search unavailable.</p> : null}
+      {!loading && search && results.length === 0 && !unknownExactTag ? (
+        <p className="search-dropdown-status">No players found.</p>
+      ) : null}
+      {results.length > 0 || unknownExactTag ? (
+        <ul className="search-dropdown-list">
+          {results.map((result) => (
+            <li key={result.tag}>
+              <Link
+                className="search-suggestion"
+                data-testid="search-suggestion"
+                to={canonicalPlayerPath(result.tag)}
+              >
+                <span className="search-suggestion-player">
+                  <strong>{result.name}</strong>
+                  <small>{result.tag}</small>
+                </span>
+                <span className="search-suggestion-meta">
+                  {result.clan} · {result.trophies.toLocaleString()}
+                </span>
+              </Link>
+            </li>
+          ))}
+          {unknownExactTag ? (
+            <li>
+              <Link
+                className="search-suggestion"
+                data-testid="search-suggestion"
+                to={canonicalPlayerPath(unknownExactTag)}
+              >
+                <span className="search-suggestion-player">
+                  <strong>Open {unknownExactTag}</strong>
+                  <small>Player tag</small>
+                </span>
+              </Link>
+            </li>
+          ) : null}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 
@@ -195,8 +287,6 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
       <div className="search-context">
         <span>{result.clan}</span>
         <span>{result.trophies.toLocaleString()} trophies</span>
-        <FreshnessText freshness={result.freshness} />
-        <StateBadge state={result.state} />
       </div>
     </div>
   );
@@ -205,24 +295,21 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
 function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
   return (
     <div className="table-wrap">
-      <table aria-label="Live tracked players" className="data-table">
-        <caption className="sr-only">First 25 live tracked Legend I players</caption>
+      <table aria-label="Live leaderboard" className="data-table">
+        <caption className="sr-only">First 25 players on the live leaderboard</caption>
         <thead>
           <tr>
-            <th scope="col">Tracked position</th>
-            <th scope="col">Official rank</th>
+            <th scope="col">Rank</th>
             <th scope="col">Player</th>
             <th scope="col">Clan</th>
             <th scope="col">Trophies</th>
-            <th scope="col">Observation</th>
-            <th scope="col">State</th>
+            <th scope="col">Last updated</th>
           </tr>
         </thead>
         <tbody>
           {entries.map((entry) => (
             <tr key={entry.tag} data-testid="tracked-player-row">
               <td>{entry.rank}</td>
-              <td>{entry.officialRank ?? "Not supplied"}</td>
               <th scope="row">
                 <Link className="player-name" to={canonicalPlayerPath(entry.tag)}>
                   {entry.name}
@@ -232,11 +319,9 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
               <td>{entry.clan}</td>
               <td>{entry.trophies.toLocaleString()}</td>
               <td>
-                <FreshnessText freshness={entry.freshness} />
-              </td>
-              <td>
-                <StateBadge state={entry.state} />
-                <small className="table-detail">Confidence: {entry.confidence}</small>
+                <time dateTime={entry.freshness.observedAt}>
+                  {formatTimestamp(entry.freshness.observedAt)}
+                </time>
               </td>
             </tr>
           ))}

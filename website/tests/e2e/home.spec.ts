@@ -1,23 +1,59 @@
 import { expect, test } from "@playwright/test";
 
-test("home server-renders the first 25 live players and search controls", async ({
-  page,
-}) => {
+test("home presents the minimal Clash Lens leaderboard", async ({ page }) => {
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Tracked Players", exact: true }),
+    page.getByRole("heading", { name: "Clash Lens", exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("link", { name: "Full live leaderboard" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "View all →" })).toBeVisible();
   await expect(
     page.getByRole("searchbox", { name: "Search player tags or names" }),
   ).toBeVisible();
   await expect(page.locator("[data-testid='tracked-player-row']")).toHaveCount(25);
-  await expect(page.getByText("Stale", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Uncertain", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("table", { name: "Live leaderboard" })).toBeVisible();
+  await expect(page.getByRole("columnheader").allTextContents()).resolves.toEqual([
+    "Rank",
+    "Player",
+    "Clan",
+    "Trophies",
+    "Last updated",
+  ]);
+  await expect(page.getByText("Official rank", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Confidence:", { exact: false })).toHaveCount(0);
+});
 
-  const initialHtml = await page.content();
-  expect(initialHtml).toContain("Live tracked players");
+test("search suggests at most five known players while typing", async ({ page }) => {
+  await page.goto("/");
+  const search = page.getByRole("searchbox", { name: "Search player tags or names" });
+
+  await expect(search).toHaveAttribute("placeholder", "Player tag or Name");
+  await search.fill("a");
+
+  const suggestions = page.getByRole("region", { name: "Player search suggestions" });
+  await expect(suggestions).toBeVisible();
+  await expect(suggestions.getByTestId("search-suggestion")).toHaveCount(5);
+  await expect(page).toHaveURL(/\/$/);
+});
+
+test("full live leaderboard presents only the Clash Lens rank and public fields", async ({
+  page,
+}) => {
+  await page.goto("/leaderboards/tracked");
+
+  await expect(
+    page.getByRole("heading", { name: "Live leaderboard", exact: true, level: 1 }),
+  ).toBeVisible();
+  await expect(page.getByRole("columnheader").allTextContents()).resolves.toEqual([
+    "Rank",
+    "Player",
+    "Clan",
+    "Trophies",
+    "Last updated",
+  ]);
+  await expect(page.getByText("Official rank", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("Data provenance")).toHaveCount(0);
+  await expect(page.getByText("actively tracked Legend I cohort")).toHaveCount(0);
 });
 
 test("home SSR keeps exactly 25 entries with JavaScript disabled", async ({
@@ -29,9 +65,7 @@ test("home SSR keeps exactly 25 entries with JavaScript disabled", async ({
 
   expect(response?.status()).toBe(200);
   await expect(page.locator("[data-testid='tracked-player-row']")).toHaveCount(25);
-  await expect(page.getByText("Stale", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Uncertain", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: "Full live leaderboard" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "View all →" })).toBeVisible();
 
   await context.close();
 });
@@ -99,32 +133,13 @@ test("oversized search input is rejected without a private search request", asyn
 }) => {
   const privateRequests: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes(":8011")) privateRequests.push(request.url());
+    if (request.url().includes(":8010")) privateRequests.push(request.url());
   });
 
   await page.goto(`/?q=${"N".repeat(10_000)}`);
 
   await expect(page.getByText("Check the submitted value and try again.")).toBeVisible();
   expect(privateRequests.some((url) => url.includes("/v1/players/search"))).toBe(false);
-});
-
-test("the rendered quality panel keeps every fixture state visible", async ({ page }) => {
-  await page.goto("/");
-  const qualityPanel = page.getByRole("region", { name: "Fixture data-quality states" });
-
-  for (const state of [
-    "Missing",
-    "Partial",
-    "Stale",
-    "Malformed",
-    "Unclassified",
-    "Uncertain",
-    "Rate-limited",
-    "Unavailable",
-  ]) {
-    await expect(qualityPanel.getByText(state, { exact: true })).toBeVisible();
-  }
-  await expect(page.getByText("63% measured", { exact: false })).toBeVisible();
 });
 
 test("home search can be completed with the keyboard", async ({ page }) => {
@@ -143,7 +158,7 @@ test("home search can be completed with the keyboard", async ({ page }) => {
 test("tables and controls expose accessible names", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByRole("table", { name: "Live tracked players" })).toBeVisible();
+  await expect(page.getByRole("table", { name: "Live leaderboard" })).toBeVisible();
   await expect(
     page.getByRole("searchbox", { name: "Search player tags or names" }),
   ).toBeVisible();

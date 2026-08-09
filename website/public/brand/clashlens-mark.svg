@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-8 5 250 250" role="img" aria-labelledby="title desc">
+  <title id="title">ClashLens Impact CL mark</title>
+  <desc id="desc">A blue C and gold L monogram with orange and yellow impact pieces.</desc>
+  <defs>
+    <linearGradient id="blue" x1="38" y1="50" x2="185" y2="205" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#63E8FF"/>
+      <stop offset="0.48" stop-color="#2196F3"/>
+      <stop offset="1" stop-color="#1554C5"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#FFF178"/>
+      <stop offset="1" stop-color="#FFB30F"/>
+    </linearGradient>
+  </defs>
+  <g transform="rotate(-5 111 130)">
+    <path d="M169 64 A82 82 0 1 0 169 196" fill="none" stroke="#28170F" stroke-width="60" stroke-linecap="square"/>
+    <path d="M169 64 A82 82 0 1 0 169 196" fill="none" stroke="url(#blue)" stroke-width="42" stroke-linecap="square"/>
+    <path d="M79 68 C91 53 109 45 126 44" fill="none" stroke="#B7F8FF" stroke-linecap="round" stroke-width="8" opacity="0.9"/>
+    <path d="M122 52 H154 V157 H202 V191 H122 Z" fill="url(#gold)" stroke="#28170F" stroke-width="10" stroke-linejoin="round"/>
+    <path d="M177 76 L213 48 L225 68 L188 93 Z" fill="#FF5B24" stroke="#28170F" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M190 108 L226 100 L228 121 L191 124 Z" fill="#FFCA28" stroke="#28170F" stroke-width="7" stroke-linejoin="round"/>
+  </g>
+</svg>
