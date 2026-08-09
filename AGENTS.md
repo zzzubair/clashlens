@@ -25,6 +25,10 @@ Keep open decisions open. Report conflicts instead of resolving them by assumpti
 
 - Preserve maintainer changes and make the smallest complete change.
 - Add or update only the tests needed for changed behavior. Stop when the requested behavior and relevant tests pass.
+- Treat every added line, file, table, abstraction, and compatibility path as a cost.
+- Prefer reuse, replacement, and deletion. Do not add speculative infrastructure or future-proofing.
+- For parsing or other input-to-output work, use one direct module and focused tests. Add persistence, replay, deployment, versioning, or research only when explicitly required.
+- After the requested behavior and relevant tests pass, stop. Ignore stale asynchronous results unless they expose a current blocker.
 - Keep feature and prototype worktrees under `../ClashLens-worktrees/<name>/`.
 - Use the authenticated `gh` CLI for this private repository.
 - Do not commit, push, rebase, or open a pull request unless the maintainer asks.
