@@ -1,6 +1,10 @@
 import type { ReactNode } from "react";
 import {
+  Form,
+  Link,
   isRouteErrorResponse,
+  useLoaderData,
+  type LoaderFunctionArgs,
   Links,
   Meta,
   Outlet,
@@ -11,6 +15,31 @@ import {
 import type { Route } from "./+types/root";
 import "./app.css";
 import "./theme.css";
+
+export interface RootLoaderData {
+  loggedIn: boolean;
+}
+
+/**
+ * Root loader for the navigation bar. It parses only the signed login cookie
+ * locally (never calling the private Python service for public pages) and
+ * yields a boolean so no provider identity ever reaches the browser. Any
+ * missing or broken login configuration falls back to logged-out.
+ */
+export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoaderData> {
+  let loggedIn = false;
+  try {
+    const { getWebsiteConfig } = await import("./server/config.server");
+    const { readLoginIdentity } = await import("./server/actions.server");
+    const config = getWebsiteConfig();
+    if (config.loginEnabled) {
+      loggedIn = readLoginIdentity(request, config) !== null;
+    }
+  } catch {
+    loggedIn = false;
+  }
+  return { loggedIn };
+}
 
 export function Layout({ children }: { children: ReactNode }) {
   return (
@@ -52,7 +81,35 @@ export function Layout({ children }: { children: ReactNode }) {
 }
 
 export default function App() {
-  return <Outlet />;
+  const data = useLoaderData<typeof loader>();
+  return (
+    <>
+      <header className="site-header">
+        <Link className="site-brand" to="/">
+          Clash Lens
+        </Link>
+        <nav className="site-nav" aria-label="Account navigation">
+          {data.loggedIn ? (
+            <>
+              <Link className="nav-link" to="/account">
+                Account
+              </Link>
+              <Form method="post" action="/logout" className="nav-form">
+                <button type="submit" className="nav-button">
+                  Log out
+                </button>
+              </Form>
+            </>
+          ) : (
+            <Link className="nav-link nav-link-primary" to="/login">
+              Log in
+            </Link>
+          )}
+        </nav>
+      </header>
+      <Outlet />
+    </>
+  );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {

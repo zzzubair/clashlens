@@ -18,6 +18,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import {
+  allowInsecureRequests,
   authorizationCodeGrant as openidAuthorizationCodeGrant,
   buildAuthorizationUrl as openidBuildAuthorizationUrl,
   discovery as openidDiscovery,
@@ -159,7 +160,13 @@ export function redirectUriFor(publicOrigin: URL): string {
 }
 
 const defaultDiscovery: OidcDiscovery = (issuerUrl, clientId, metadata) =>
-  openidDiscovery(issuerUrl, clientId, metadata.client_secret);
+  openidDiscovery(
+    issuerUrl,
+    clientId,
+    metadata.client_secret,
+    undefined,
+    issuerUrl.protocol === "http:" ? { execute: [allowInsecureRequests] } : undefined,
+  );
 
 const defaultBuildAuthorizationUrl: OidcAuthorizationUrlBuilder = (config, parameters) =>
   openidBuildAuthorizationUrl(config as Configuration, parameters);
