@@ -133,7 +133,7 @@ test("oversized search input is rejected without a private search request", asyn
 }) => {
   const privateRequests: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes(":8011")) privateRequests.push(request.url());
+    if (request.url().includes(":8010")) privateRequests.push(request.url());
   });
 
   await page.goto(`/?q=${"N".repeat(10_000)}`);

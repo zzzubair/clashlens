@@ -210,12 +210,13 @@ export default function AccountSetupRoute() {
               value={values.username}
               aria-invalid={usernameError ? true : undefined}
               aria-describedby={usernameError ? "setup-username-error" : undefined}
-              onChange={(event) =>
+              onChange={(event) => {
+                const username = event.currentTarget.value;
                 setValues((current) => ({
                   ...current,
-                  username: event.currentTarget.value,
-                }))
-              }
+                  username,
+                }));
+              }}
             />
             {usernameError ? (
               <p id="setup-username-error" className="field-error" role="alert">
@@ -237,12 +238,13 @@ export default function AccountSetupRoute() {
               value={values.displayName}
               aria-invalid={displayNameError ? true : undefined}
               aria-describedby={displayNameError ? "setup-display-name-error" : undefined}
-              onChange={(event) =>
+              onChange={(event) => {
+                const displayName = event.currentTarget.value;
                 setValues((current) => ({
                   ...current,
-                  displayName: event.currentTarget.value,
-                }))
-              }
+                  displayName,
+                }));
+              }}
             />
             {displayNameError ? (
               <p id="setup-display-name-error" className="field-error" role="alert">

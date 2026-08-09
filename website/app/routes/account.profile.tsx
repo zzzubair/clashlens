@@ -238,12 +238,13 @@ export default function AccountProfileRoute() {
               value={values.username}
               aria-invalid={usernameError ? true : undefined}
               aria-describedby={usernameError ? "profile-username-error" : undefined}
-              onChange={(event) =>
+              onChange={(event) => {
+                const username = event.currentTarget.value;
                 setValues((current) => ({
                   ...current,
-                  username: event.currentTarget.value,
-                }))
-              }
+                  username,
+                }));
+              }}
             />
             {usernameError ? (
               <p id="profile-username-error" className="field-error" role="alert">
@@ -267,12 +268,13 @@ export default function AccountProfileRoute() {
               aria-describedby={
                 displayNameError ? "profile-display-name-error" : undefined
               }
-              onChange={(event) =>
+              onChange={(event) => {
+                const displayName = event.currentTarget.value;
                 setValues((current) => ({
                   ...current,
-                  displayName: event.currentTarget.value,
-                }))
-              }
+                  displayName,
+                }));
+              }}
             />
             {displayNameError ? (
               <p id="profile-display-name-error" className="field-error" role="alert">

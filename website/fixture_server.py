@@ -1,8 +1,25 @@
 #!/usr/bin/env python3
 """Deterministic private-API fixture for the website prototype.
 
-This server is test-only. It uses screen-ready payloads and in-memory refresh work.
-It does not call Supercell, PostgreSQL, or the real Python application.
+This server is test-only. It uses screen-ready payloads, in-memory refresh work,
+and in-memory Google account state. It does not call Supercell, PostgreSQL, or
+the real Python application.
+
+Account rules mirror the production private API (python/src/clashlens/api.py):
+- Account operations require a signed google identity in the HMAC proof.
+- An unresolved google identity returns 403 account_not_found.
+- POST /v1/account creates an account; an existing account returns
+  409 account_exists; a taken username returns 409 username_unavailable.
+- Saved tags and groups are stored per account with deterministic payloads.
+- POST /v1/players/{tag}/verifytoken returns the documented verification
+  payloads: linked, already_linked, invalid_token, verification_unavailable,
+  support_required, and 202 in_progress for replays.
+- Every mutation replays the stored outcome for the same request ID, or
+  returns 409 request_id_conflict for a mismatched replay.
+
+The fixture verification token for player tag #2PP is FIXTURE-VERIFY-2PP.
+The token FIXTURE-VERIFY-UNAVAILABLE always reports verification_unavailable.
+The reset endpoint is loopback-only and clears all account state.
 """
 
 import argparse
@@ -14,6 +31,8 @@ import os
 import re
 import threading
 import time
+import unicodedata
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlsplit
 
@@ -28,6 +47,33 @@ FIXTURE_VERSION = "python-fixture-v1"
 ALLOWED_PROVIDERS = {"discord", "google"}
 JOB_RETENTION_SECONDS = 300
 MAX_JOBS = 1_000
+ACCOUNT_USERNAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,31}$")
+RESERVED_USERNAMES = frozenset(
+    {
+        "account",
+        "admin",
+        "analytics",
+        "api",
+        "clashlens",
+        "groups",
+        "leaderboard",
+        "login",
+        "logout",
+        "players",
+        "settings",
+        "support",
+        "users",
+    }
+)
+MAX_ACCOUNT_NAME_LENGTH = 80
+MAX_GROUP_TAGS = 100
+MAX_VERIFICATION_TOKEN_LENGTH = 512
+MAX_SAVED_TAGS_PER_ACCOUNT = 500
+MAX_GROUPS_PER_ACCOUNT = 500
+MAX_REPLAY_ENTRIES = 2_000
+REPLAY_RETENTION_SECONDS = 600
+FIXTURE_VERIFY_PREFIX = "FIXTURE-VERIFY-"
+FIXTURE_VERIFY_UNAVAILABLE_TOKEN = "FIXTURE-VERIFY-UNAVAILABLE"
 
 PLAYER_SPECS = [
     ("#2PP", "Nova", "Northwind", 7211, 90, "available"),
@@ -68,6 +114,13 @@ STATE = {
     "jobs_by_request": {},
     "refresh_counts": {},
     "refreshed": set(),
+    "accounts": {},
+    "accounts_by_username": {},
+    "saved_tags": {},
+    "groups": {},
+    "verified_players": {},
+    "verified_owner": {},
+    "replays": {},
     "lock": threading.RLock(),
 }
 
@@ -352,6 +405,128 @@ def reset_state():
         STATE["jobs_by_request"].clear()
         STATE["refresh_counts"].clear()
         STATE["refreshed"].clear()
+        STATE["accounts"].clear()
+        STATE["accounts_by_username"].clear()
+        STATE["saved_tags"].clear()
+        STATE["groups"].clear()
+        STATE["verified_players"].clear()
+        STATE["verified_owner"].clear()
+        STATE["replays"].clear()
+
+
+def normalize_account_username(value):
+    normalized = value.strip().lower()
+    if not ACCOUNT_USERNAME_PATTERN.fullmatch(normalized):
+        return None
+    if normalized in RESERVED_USERNAMES:
+        return None
+    return normalized
+
+
+def normalize_account_name(value):
+    normalized = unicodedata.normalize("NFC", value).strip()
+    if not normalized or len(normalized) > MAX_ACCOUNT_NAME_LENGTH:
+        return None
+    if any(
+        unicodedata.category(char) in {"Cc", "Cf", "Cs", "Co", "Cn"}
+        for char in normalized
+    ):
+        return None
+    return normalized
+
+
+def normalize_group_tags(values):
+    if not isinstance(values, list) or len(values) > MAX_GROUP_TAGS:
+        return None
+    tags = set()
+    for value in values:
+        if not isinstance(value, str):
+            return None
+        tag = normalize_tag(value)
+        if tag is None:
+            return None
+        tags.add(tag)
+    return sorted(tags)
+
+
+def account_payload(account):
+    return {
+        "username": account["username"],
+        "display_name": account["display_name"],
+        "preferences": dict(account["preferences"]),
+        "providers": list(account["providers"]),
+    }
+
+
+def saved_players_payload(subject):
+    players = []
+    for tag in STATE["saved_tags"].get(subject, []):
+        spec = spec_for(tag)
+        players.append({"tag": tag, "name": spec[1] if spec else None})
+    return {"players": players}
+
+
+def groups_payload(subject):
+    groups = []
+    for group_id, group in sorted(
+        STATE["groups"].get(subject, {}).items(),
+        key=lambda item: (item[1]["name"].casefold(), item[0]),
+    ):
+        groups.append(
+            {"group_id": group_id, "name": group["name"], "tags": list(group["tags"])}
+        )
+    return {"groups": groups}
+
+
+def verified_players_payload(subject):
+    players = []
+    for tag in sorted(STATE["verified_players"].get(subject, [])):
+        spec = spec_for(tag)
+        players.append({"tag": tag, "name": spec[1] if spec else None})
+    return players
+
+
+def summary_payload(account, subject):
+    return {
+        "username": account["username"],
+        "display_name": account["display_name"],
+        "verified_players": verified_players_payload(subject),
+    }
+
+
+def cleanup_replays():
+    now = time.monotonic()
+    for request_id, entry in list(STATE["replays"].items()):
+        if now - entry["at"] > REPLAY_RETENTION_SECONDS:
+            del STATE["replays"][request_id]
+    if len(STATE["replays"]) >= MAX_REPLAY_ENTRIES:
+        oldest = min(
+            STATE["replays"].items(), key=lambda item: item[1]["at"], default=None
+        )
+        if oldest is not None:
+            del STATE["replays"][oldest[0]]
+
+
+def store_replay(request_id, binding, status, payload):
+    with STATE["lock"]:
+        cleanup_replays()
+        STATE["replays"][request_id] = {
+            "binding": binding,
+            "status": status,
+            "payload": payload,
+            "at": time.monotonic(),
+        }
+
+
+def lookup_replay(request_id, binding):
+    with STATE["lock"]:
+        cleanup_replays()
+        entry = STATE["replays"].get(request_id)
+        if entry is None:
+            return None
+        if entry["binding"] != binding:
+            return (409, {"error": "request_id_conflict"})
+        return (entry["status"], entry["payload"])
 
 
 def refresh_work(tag, idempotency_key):
@@ -490,13 +665,69 @@ class FixtureHandler(BaseHTTPRequestHandler):
             else:
                 self.send_json(200, work)
             return
+        if path == "/v1/account":
+            account, _subject, error = self.account_context()
+            if error is not None:
+                self.send_json(403, {"error": error})
+            else:
+                self.send_json(200, account_payload(account))
+            return
+        if path == "/v1/account/summary":
+            account, subject, error = self.account_context()
+            if error is not None:
+                self.send_json(403, {"error": error})
+            else:
+                self.send_json(200, summary_payload(account, subject))
+            return
+        if path == "/v1/account/saved-tags":
+            _account, subject, error = self.account_context()
+            if error is not None:
+                self.send_json(403, {"error": error})
+            else:
+                self.send_json(200, saved_players_payload(subject))
+            return
+        if path == "/v1/account/groups":
+            _account, subject, error = self.account_context()
+            if error is not None:
+                self.send_json(403, {"error": error})
+            else:
+                self.send_json(200, groups_payload(subject))
+            return
+        if path.startswith("/v1/users/"):
+            username = normalize_account_username(path[len("/v1/users/") :])
+            subject = STATE["accounts_by_username"].get(username) if username else None
+            account = STATE["accounts"].get(subject) if subject else None
+            if account is None:
+                self.send_json(404, {"error": "missing"})
+            else:
+                self.send_json(200, summary_payload(account, subject))
+            return
         self.send_json(404, {"error": "missing"})
 
     def do_POST(self):
+        if self.path == "/__fixture/reset":
+            if not self.is_loopback():
+                self.send_json(403, {"error": "forbidden"})
+                return
+            reset_state()
+            self.send_json(200, {"ok": True})
+            return
         if not self.verify_request():
             return
         parsed = urlsplit(self.path)
         path = unquote(parsed.path)
+        if path == "/v1/account":
+            self.create_account_route()
+            return
+        if path == "/v1/account/saved-tags":
+            self.add_saved_tag_route()
+            return
+        if path == "/v1/account/groups":
+            self.create_group_route()
+            return
+        if path.startswith("/v1/players/") and path.endswith("/verifytoken"):
+            self.verify_token_route(path)
+            return
         if path.startswith("/v1/players/") and path.endswith("/refresh"):
             tag = normalize_tag(path[len("/v1/players/") : -len("/refresh")])
             if tag is None or spec_for(tag) is None:
@@ -519,6 +750,30 @@ class FixtureHandler(BaseHTTPRequestHandler):
             work_id, _job = refresh_work(tag, idempotency_key)
             work = refresh_response(work_id, include_player=True)
             self.send_json(202, work)
+            return
+        self.send_json(404, {"error": "missing"})
+
+    def do_PATCH(self):
+        if not self.verify_request():
+            return
+        path = unquote(urlsplit(self.path).path)
+        if path == "/v1/account":
+            self.update_account_route()
+            return
+        if path.startswith("/v1/account/groups/"):
+            self.update_group_route(path)
+            return
+        self.send_json(404, {"error": "missing"})
+
+    def do_DELETE(self):
+        if not self.verify_request():
+            return
+        path = unquote(urlsplit(self.path).path)
+        if path.startswith("/v1/account/saved-tags/"):
+            self.remove_saved_tag_route(path)
+            return
+        if path.startswith("/v1/account/groups/"):
+            self.delete_group_route(path)
             return
         self.send_json(404, {"error": "missing"})
 
@@ -607,7 +862,335 @@ class FixtureHandler(BaseHTTPRequestHandler):
         except (UnicodeError, ValueError, TypeError):
             self.send_json(401, {"error": "forbidden"})
             return False
+        self.verified_provider = provider
+        self.verified_provider_subject = provider_subject
+        self.verified_request_id = values["X-ClashLens-Request-Id"]
         return True
+
+    def is_loopback(self):
+        return self.client_address[0] in {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+
+    def account_context(self, allow_unresolved=False):
+        provider = getattr(self, "verified_provider", "")
+        subject = getattr(self, "verified_provider_subject", "")
+        if provider != "google" or not subject:
+            return None, None, "caller_operation_not_authorized"
+        account = STATE["accounts"].get(subject)
+        if account is None and not allow_unresolved:
+            return None, subject, "account_not_found"
+        return account, subject, None
+
+    def json_body(self):
+        content_type = (
+            self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        )
+        if content_type != "application/json":
+            return None
+        try:
+            payload = json.loads(self.verified_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
+
+    def replay_or_none(self, request_id, binding):
+        replayed = lookup_replay(request_id, binding)
+        if replayed is None:
+            return None
+        self.send_json(*replayed)
+        return replayed
+
+    def create_account_route(self):
+        _account, subject, error = self.account_context(allow_unresolved=True)
+        if error is not None:
+            self.send_json(403, {"error": error})
+            return
+        if subject is None:
+            self.send_json(403, {"error": "caller_operation_not_authorized"})
+            return
+        binding = (subject, "account.create", "POST", "/v1/account")
+        if self.replay_or_none(self.verified_request_id, binding) is not None:
+            return
+        if subject in STATE["accounts"]:
+            self.send_json(409, {"error": "account_exists"})
+            return
+        payload = self.json_body()
+        if payload is None:
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        username = normalize_account_username(payload.get("username", ""))
+        display_name = normalize_account_name(payload.get("display_name", ""))
+        if username is None or display_name is None:
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        with STATE["lock"]:
+            owner = STATE["accounts_by_username"].get(username)
+            if owner is not None:
+                self.send_json(409, {"error": "username_unavailable"})
+                return
+            STATE["accounts"][subject] = {
+                "username": username,
+                "display_name": display_name,
+                "preferences": {},
+                "providers": ["google"],
+            }
+            STATE["accounts_by_username"][username] = subject
+            STATE["saved_tags"].setdefault(subject, [])
+            STATE["groups"].setdefault(subject, {})
+            STATE["verified_players"].setdefault(subject, [])
+            created = account_payload(STATE["accounts"][subject])
+        store_replay(self.verified_request_id, binding, 201, created)
+        self.send_json(201, created)
+
+    def update_account_route(self):
+        account, subject, error = self.account_context()
+        if error is not None:
+            self.send_json(403, {"error": error})
+            return
+        if account is None or subject is None:
+            self.send_json(403, {"error": "account_not_found"})
+            return
+        binding = (subject, "account.update", "PATCH", "/v1/account")
+        if self.replay_or_none(self.verified_request_id, binding) is not None:
+            return
+        payload = self.json_body()
+        if payload is None:
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        username = normalize_account_username(payload.get("username", ""))
+        display_name = normalize_account_name(payload.get("display_name", ""))
+        preferences = payload.get("preferences")
+        if (
+            username is None
+            or display_name is None
+            or not isinstance(preferences, dict)
+        ):
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        if len(json.dumps(preferences, separators=(",", ":")).encode("utf-8")) > 4096:
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        with STATE["lock"]:
+            owner = STATE["accounts_by_username"].get(username)
+            if owner is not None and owner != subject:
+                self.send_json(409, {"error": "username_unavailable"})
+                return
+            old_username = account["username"]
+            if old_username != username:
+                STATE["accounts_by_username"].pop(old_username, None)
+            account["username"] = username
+            account["display_name"] = display_name
+            account["preferences"] = preferences
+            STATE["accounts_by_username"][username] = subject
+            updated = account_payload(account)
+        store_replay(self.verified_request_id, binding, 200, updated)
+        self.send_json(200, updated)
+
+    def add_saved_tag_route(self):
+        _account, subject, error = self.account_context()
+        if error is not None:
+            self.send_json(403, {"error": error})
+            return
+        binding = (subject, "saved_tags.add", "POST", "/v1/account/saved-tags")
+        if self.replay_or_none(self.verified_request_id, binding) is not None:
+            return
+        payload = self.json_body()
+        if payload is None:
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        tag = normalize_tag(payload.get("tag", ""))
+        if tag is None:
+            self.send_json(422, {"error": "invalid_tag"})
+            return
+        with STATE["lock"]:
+            saved = STATE["saved_tags"].setdefault(subject, [])
+            if tag not in saved:
+                if len(saved) >= MAX_SAVED_TAGS_PER_ACCOUNT:
+                    self.send_json(409, {"error": "limit_exceeded"})
+                    return
+                saved.append(tag)
+        store_replay(self.verified_request_id, binding, 200, {"tag": tag, "saved": True})
+        self.send_json(200, {"tag": tag, "saved": True})
+
+    def remove_saved_tag_route(self, path):
+        tag = normalize_tag(path[len("/v1/account/saved-tags/") :])
+        if tag is None:
+            self.send_json(422, {"error": "invalid_tag"})
+            return
+        _account, subject, error = self.account_context()
+        if error is not None:
+            self.send_json(403, {"error": error})
+            return
+        binding = (subject, "saved_tags.remove", "DELETE", f"/v1/account/saved-tags/{tag}")
+        if self.replay_or_none(self.verified_request_id, binding) is not None:
+            return
+        with STATE["lock"]:
+            saved = STATE["saved_tags"].get(subject, [])
+            if tag in saved:
+                saved.remove(tag)
+        store_replay(
+            self.verified_request_id, binding, 200, {"tag": tag, "saved": False}
+        )
+        self.send_json(200, {"tag": tag, "saved": False})
+
+    def create_group_route(self):
+        _account, subject, error = self.account_context()
+        if error is not None:
+            self.send_json(403, {"error": error})
+            return
+        binding = (subject, "groups.create", "POST", "/v1/account/groups")
+        if self.replay_or_none(self.verified_request_id, binding) is not None:
+            return
+        payload = self.json_body()
+        if payload is None:
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        name = normalize_account_name(payload.get("name", ""))
+        tags = normalize_group_tags(payload.get("tags"))
+        if name is None or tags is None:
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        with STATE["lock"]:
+            groups = STATE["groups"].setdefault(subject, {})
+            if len(groups) >= MAX_GROUPS_PER_ACCOUNT:
+                self.send_json(409, {"error": "limit_exceeded"})
+                return
+            if any(group["name"].casefold() == name.casefold() for group in groups.values()):
+                self.send_json(409, {"error": "group_name_conflict"})
+                return
+            group_id = str(uuid.uuid4())
+            groups[group_id] = {"name": name, "tags": tags}
+            created = {"group_id": group_id, "name": name, "tags": list(tags)}
+        store_replay(self.verified_request_id, binding, 201, created)
+        self.send_json(201, created)
+
+    def update_group_route(self, path):
+        group_id = path[len("/v1/account/groups/") :]
+        if not UUID_PATTERN.fullmatch(group_id):
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        _account, subject, error = self.account_context()
+        if error is not None:
+            self.send_json(403, {"error": error})
+            return
+        binding = (subject, "groups.update", "PATCH", f"/v1/account/groups/{group_id}")
+        if self.replay_or_none(self.verified_request_id, binding) is not None:
+            return
+        payload = self.json_body()
+        if payload is None:
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        name = normalize_account_name(payload.get("name", ""))
+        tags = normalize_group_tags(payload.get("tags"))
+        if name is None or tags is None:
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        with STATE["lock"]:
+            groups = STATE["groups"].setdefault(subject, {})
+            group = groups.get(group_id)
+            if group is None:
+                self.send_json(404, {"error": "group_not_found"})
+                return
+            if any(
+                other_id != group_id and other["name"].casefold() == name.casefold()
+                for other_id, other in groups.items()
+            ):
+                self.send_json(409, {"error": "group_name_conflict"})
+                return
+            group["name"] = name
+            group["tags"] = tags
+            updated = {"group_id": group_id, "name": name, "tags": list(tags)}
+        store_replay(self.verified_request_id, binding, 200, updated)
+        self.send_json(200, updated)
+
+    def delete_group_route(self, path):
+        group_id = path[len("/v1/account/groups/") :]
+        if not UUID_PATTERN.fullmatch(group_id):
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        _account, subject, error = self.account_context()
+        if error is not None:
+            self.send_json(403, {"error": error})
+            return
+        binding = (subject, "groups.delete", "DELETE", f"/v1/account/groups/{group_id}")
+        if self.replay_or_none(self.verified_request_id, binding) is not None:
+            return
+        with STATE["lock"]:
+            groups = STATE["groups"].get(subject, {})
+            if group_id not in groups:
+                self.send_json(404, {"error": "group_not_found"})
+                return
+            del groups[group_id]
+            deleted = {"deleted": True, "group_id": group_id}
+        store_replay(self.verified_request_id, binding, 200, deleted)
+        self.send_json(200, deleted)
+
+    def verify_token_route(self, path):
+        tag = normalize_tag(path[len("/v1/players/") : -len("/verifytoken")])
+        if tag is None:
+            self.send_json(422, {"error": "invalid_tag"})
+            return
+        _account, subject, error = self.account_context()
+        if error is not None:
+            self.send_json(403, {"error": error})
+            return
+        binding = (subject, "player_links.verify", "POST", f"/v1/players/{tag}/verifytoken")
+        if self.replay_or_none(self.verified_request_id, binding) is not None:
+            return
+        if tag not in {spec[0] for spec in PLAYER_SPECS}:
+            self.send_json(404, {"error": "missing"})
+            return
+        content_type = (
+            self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        )
+        if content_type != "application/json":
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        try:
+            payload = json.loads(self.verified_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"token"}
+            or not isinstance(payload["token"], str)
+        ):
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        token = payload["token"]
+        if (
+            not 1 <= len(token) <= MAX_VERIFICATION_TOKEN_LENGTH
+            or not token.isascii()
+            or any(character.isspace() or not character.isprintable() for character in token)
+        ):
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        with STATE["lock"]:
+            if token == FIXTURE_VERIFY_UNAVAILABLE_TOKEN:
+                result = (503, {"status": "verification_unavailable", "tag": tag})
+            elif token == FIXTURE_VERIFY_PREFIX + tag[1:]:
+                owner = STATE["verified_owner"].get(tag)
+                if owner == subject:
+                    result = (200, {"status": "already_linked", "tag": tag})
+                elif owner is None:
+                    STATE["verified_players"].setdefault(subject, []).append(tag)
+                    STATE["verified_owner"][tag] = subject
+                    result = (200, {"status": "linked", "tag": tag})
+                else:
+                    result = (
+                        409,
+                        {
+                            "status": "support_required",
+                            "tag": tag,
+                            "verification_request_id": self.verified_request_id,
+                        },
+                    )
+            else:
+                result = (401, {"status": "invalid_token", "tag": tag})
+            store_replay(self.verified_request_id, binding, result[0], result[1])
+        self.send_json(*result)
 
     def send_json(self, status, payload):
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")

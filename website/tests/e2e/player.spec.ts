@@ -44,7 +44,7 @@ test("refresh shows progress and publishes newer saved player data", async ({ pa
   const pythonRequests: string[] = [];
   const refreshSubmissions: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes(":8011")) pythonRequests.push(request.url());
+    if (request.url().includes(":8010")) pythonRequests.push(request.url());
     if (request.method() === "POST") {
       refreshSubmissions.push(new URL(request.url()).pathname);
     }

@@ -55,6 +55,30 @@ Production uses `CLASHLENS_PYTHON_HMAC_SECRET_FILE` instead of an environment
 secret. The file must contain one unpadded base64url value for exactly 32 bytes,
 with at most one final LF.
 
+## Configure Google login
+
+Google login is optional. Public pages continue to work when
+`CLASHLENS_LOGIN_ENABLED=false`.
+
+When production login is enabled, configure:
+
+- `CLASHLENS_PUBLIC_ORIGIN`: the exact HTTPS origin, with no path, query, or fragment.
+- `CLASHLENS_GOOGLE_CLIENT_ID`: the Google OpenID Connect client ID.
+- `CLASHLENS_GOOGLE_CLIENT_SECRET_FILE`: a protected file that contains the client secret.
+- `CLASHLENS_LOGIN_SECRET_FILE`: a protected file that contains one unpadded base64url value for exactly 32 bytes, with at most one final LF.
+
+Register this exact Google redirect URI:
+
+```text
+<CLASHLENS_PUBLIC_ORIGIN>/auth/google/callback
+```
+
+The application requests only the `openid` scope and retains only Google’s stable
+private subject. It does not request or store email or profile claims. Production
+rejects HTTP origins, environment-based secrets, and
+`CLASHLENS_GOOGLE_ISSUER_URL`. The issuer override is for local tests only; local
+HTTP overrides must use `localhost`, `127.0.0.1`, or `::1`.
+
 ## Build and checks
 
 ```sh
@@ -70,16 +94,21 @@ or secret markers enter the browser bundle.
 
 ## Playwright acceptance tests
 
-The acceptance command builds the app, starts the deterministic Python fixture,
-starts the built Node app, and tests the HTTP and browser seam:
+The acceptance command builds the app and starts three loopback-only processes:
+the deterministic Python API fixture on port 8010, the deterministic OIDC provider
+on port 8011, and the built Node app on port 5173. It then tests the complete HTTP
+and browser seam:
 
 ```sh
 npm run test:e2e
 ```
 
-The acceptance tests do not call the real Python application. They use the
-deterministic fixture through the same signed route client that production uses
-for the private Python API.
+The acceptance tests do not call Google, Supercell, production data, or the real
+Python application. The OIDC provider uses an ephemeral RSA key and one stable
+test subject. The API fixture keeps account, saved-player, verification, and group
+state in memory. Test values are defined in `tests/fixtures/test-values.ts`; they
+are not real credentials. Both fixtures expose loopback-only reset endpoints and
+must never run in production.
 
 ## Podman
 

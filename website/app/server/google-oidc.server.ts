@@ -317,6 +317,7 @@ function validateClaims(
   if (!audienceMatches) {
     throw new OAuthCallbackError("invalid_claims");
   }
+
   const expiry = claims["exp"];
   if (typeof expiry !== "number" || !Number.isFinite(expiry) || expiry <= nowSeconds) {
     throw new OAuthCallbackError("invalid_claims");
