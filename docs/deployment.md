@@ -102,21 +102,21 @@ Each worker replica also runs bounded in-process concurrency.
 replica; the default 1 preserves the sequential behavior of a single worker.
 `CLASHLENS_WORKER_DATABASE_POOL_SIZE` and `CLASHLENS_WORKER_ARCHIVE_POOL_SIZE`
 (1 to 64 each) size each replica's PostgreSQL and archive HTTP connection
-pools; the defaults 4 and 4 match the sequential worker. The initial
-production settings are 20 lanes, 8 database connections, and 20 archive
-connections per replica on the 16-core host. Production measurement must
-confirm or adjust them. The deployment rejects any out-of-range value before
+pools; the defaults 4 and 4 match the sequential worker. The measured
+production settings are 4 lanes, 4 database connections, and 4 archive
+connections per replica across 6 replicas on the 16-core host. Production
+measurement must confirm any adjustment. The deployment rejects any out-of-range value before
 changing runtime state. These three settings are worker-only and are never
 forwarded to the collector.
 
 `CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE` (1 to 64) explicitly bounds the
-collector PostgreSQL pool. The default is 16. The initial production stage is
-48 database connections with `CLASHLENS_WORKERS_PER_KEY=12`: four normal keys
-give 48 normal request workers, and the interactive workers share the same
+collector PostgreSQL pool. The default is 16. The measured production stage is
+32 database connections with `CLASHLENS_WORKERS_PER_KEY=8`: four normal keys
+give 32 normal request workers, and the interactive workers share the same
 pool. Keep the six Python replicas at four database connections each for this
-stage. With PostgreSQL `max_connections=100`, this budgets 48 collector and 24
-worker connections and leaves approximately 25 connections for the API,
-administration, and short workload spikes. Production measurement must confirm
+stage. With PostgreSQL `max_connections=100`, this budgets 32 collector and 24
+worker connections and leaves approximately 40 connections for the API,
+administration, backups, and short workload spikes. Production measurement must confirm
 the pool sizes before any further increase; do not increase PostgreSQL
 `max_connections` or CPU limits as part of this stage.
 
@@ -135,7 +135,9 @@ container runs with Docker host networking and no published port, so
 Tinyproxy sees the client's real source address and listens on the
 configured `PROXY_LISTEN_IP` and `PROXY_PORT` directly instead of a
 bridge-mapped container port. The Fedora collector host continues to use
-rootless Podman.
+rootless Podman. Before the proxy starts, the proxy host firewall must allow
+that port only from the configured Fedora Tailscale address and deny it on all
+other source addresses and interfaces.
 
 Completion: `app.env` has no `CHANGE_ME` value, every key path resolves to a
 mode-`600` file, and the archive and official API origins use the required

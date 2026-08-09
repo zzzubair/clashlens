@@ -278,7 +278,8 @@ CLASHLENS_WEBSITE_CPUS=0.5
 CLASHLENS_WEBSITE_PIDS=128
 CLASHLENS_WORKER_LEASE_SECONDS=60
 CLASHLENS_WORKER_CONCURRENCY=20
-CLASHLENS_WORKER_DATABASE_POOL_SIZE=8
+# A non-production, non-default value proves exact command wiring.
+CLASHLENS_WORKER_DATABASE_POOL_SIZE=5
 CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=20
 EOF
   chmod 0600 "$envfile"
@@ -762,7 +763,7 @@ worker_normalized=$(norm_log <<<"$worker_run")
   fail 'worker read-only archive secret secret was not mounted'
 [[ "$worker_normalized" == *'--env CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key'* ]] || \
   fail 'worker archive access key file setting is missing'
-[[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 8 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
   fail 'worker did not receive the configured lease, concurrency, and pool bounds'
 [[ "$worker_normalized" == *'ready --expected-contract-version 2'* ]] || \
   fail 'worker health does not use the ready seam'
@@ -1226,15 +1227,15 @@ run_1=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worke
 run_2=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-2 ')
 run_3=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-3 ')
 [[ -n "$run_1" && -n "$run_2" && -n "$run_3" ]] || fail 'not every configured worker replica was started'
-[[ "$run_1" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 8 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$run_1" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
   fail 'replica 1 did not receive its unique owner'
-[[ "$run_2" == *'worker --owner production-python-2 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 8 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$run_2" == *'worker --owner production-python-2 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
   fail 'replica 2 did not receive its unique owner'
-[[ "$run_3" == *'worker --owner production-python-3 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 8 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$run_3" == *'worker --owner production-python-3 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
   fail 'replica 3 did not receive its unique owner'
 for run in "$run_1" "$run_2" "$run_3"; do
   [[ "$run" == *'ready --expected-contract-version 2'* ]] || fail 'a replica health check lost the ready seam'
-  [[ "$run" == *'--concurrency 20 --database-pool-size 8 --archive-pool-size 20'* ]] || \
+  [[ "$run" == *'--concurrency 20 --database-pool-size 5 --archive-pool-size 20'* ]] || \
     fail 'a replica did not receive the exact configured concurrency and pool sizes'
   [[ "$run" == *'--memory 384m'* && "$run" == *'--pids-limit 256'* && "$run" == *'--cpus 1.0'* ]] || \
     fail 'a replica lost its explicit resource budget'

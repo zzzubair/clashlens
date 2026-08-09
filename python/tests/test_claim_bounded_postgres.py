@@ -112,6 +112,14 @@ def _explain_claim(
     return plan_text, float(match.group(1))
 
 
+def test_claim_statement_uses_postgresql_statement_clock() -> None:
+    statement, params = _claim_select_statement("python_processing_jobs_worker")
+
+    assert "statement_timestamp()" in statement
+    assert "%(now)s" not in statement
+    assert "now" not in params
+
+
 def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
     with _production_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as connection:

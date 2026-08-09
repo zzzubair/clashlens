@@ -263,13 +263,15 @@ def _claim_select_statement(
     supported_filter, supported_params = _supported_claim_filter(
         "job", "source_observation"
     )
-    params: dict[str, Any] = {"now": datetime.now(UTC), **supported_params}
+    params: dict[str, Any] = {**supported_params}
     if job_id is not None:
         params["job_id"] = job_id
-    score = """job.priority + floor(extract(epoch FROM (%(now)s - job.created_at))
+    score = """job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
         / 60)::integer * 10"""
-    due = """(job.state IN ('pending', 'waiting_retry') AND job.due_at <= %(now)s)
-        OR (job.state = 'leased' AND job.lease_expires_at <= %(now)s)"""
+    due = """(job.state IN ('pending', 'waiting_retry')
+            AND job.due_at <= statement_timestamp())
+        OR (job.state = 'leased'
+            AND job.lease_expires_at <= statement_timestamp())"""
     job_filter = f"""job.attempt_count < job.max_attempts AND {supported_filter}"""
     if job_id is not None:
         probe = f"""
@@ -301,7 +303,7 @@ def _claim_select_statement(
                         )
                     WHERE job.state IN ('pending', 'waiting_retry')
                       AND job.priority = claim_priority.priority
-                      AND job.due_at <= %(now)s
+                      AND job.due_at <= statement_timestamp()
                       AND {job_filter}
                     ORDER BY job.created_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
@@ -316,7 +318,7 @@ def _claim_select_statement(
                         )
                     WHERE job.state IN ('pending', 'waiting_retry')
                       AND job.priority NOT IN ({_PYTHON_CLAIM_PRIORITY_EXCLUSIONS})
-                      AND job.due_at <= %(now)s
+                      AND job.due_at <= statement_timestamp()
                       AND {job_filter}
                     ORDER BY ({score}) DESC, job.due_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
@@ -330,7 +332,7 @@ def _claim_select_statement(
                             job.observation_id, job.replay_observation_id
                         )
                     WHERE job.state = 'leased'
-                      AND job.lease_expires_at <= %(now)s
+                      AND job.lease_expires_at <= statement_timestamp()
                       AND {job_filter}
                     ORDER BY ({score}) DESC, job.due_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
