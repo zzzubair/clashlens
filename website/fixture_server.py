@@ -272,7 +272,7 @@ def player_page(tag):
     }
 
 
-def search_players(query):
+def search_players(query, limit=50):
     exact_tag = normalize_tag(query)
     if exact_tag:
         spec = spec_for(exact_tag)
@@ -307,7 +307,13 @@ def search_players(query):
                         "context": "Known Clash Lens player",
                     }
                 )
-    return {"kind": "player-search", "query": query, "exactTag": None, "results": results, "knownOnly": True}
+    return {
+        "kind": "player-search",
+        "query": query,
+        "exactTag": None,
+        "results": results[:limit],
+        "knownOnly": True,
+    }
 
 
 def remove_job(work_id):
@@ -451,7 +457,13 @@ class FixtureHandler(BaseHTTPRequestHandler):
             self.send_json(200, leaderboard(limit, view))
             return
         if path == "/v1/players/search":
-            self.send_json(200, search_players(query.get("q", [""])[0]))
+            try:
+                limit = int(query.get("limit", ["50"])[0])
+            except ValueError:
+                limit = 50
+            if not 1 <= limit <= 50:
+                limit = 50
+            self.send_json(200, search_players(query.get("q", [""])[0], limit))
             return
         if path.startswith("/v1/players/"):
             tag = normalize_tag(path[len("/v1/players/") :])

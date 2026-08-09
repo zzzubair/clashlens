@@ -44,7 +44,7 @@ export interface PythonClient {
     limit?: number,
     view?: "live" | "daily",
   ): Promise<TrackedLeaderboard>;
-  searchPlayers(query: string): Promise<SearchResponse>;
+  searchPlayers(query: string, limit?: number): Promise<SearchResponse>;
   getPlayer(tag: string): Promise<PlayerPage>;
   requestRefresh(tag: string, idempotencyKey: string): Promise<RefreshWork>;
   getRefreshStatus(workId: string, tag: string): Promise<RefreshStatus>;
@@ -73,12 +73,17 @@ async function getTrackedLeaderboard(
   return mapLeaderboard(payload, view);
 }
 
-async function searchPlayers(query: string): Promise<SearchResponse> {
-  if (query.length > MAX_SEARCH_QUERY_LENGTH) {
+async function searchPlayers(query: string, limit = 50): Promise<SearchResponse> {
+  if (
+    query.length > MAX_SEARCH_QUERY_LENGTH ||
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > 50
+  ) {
     throw new PythonApiError(400, { error: "invalid_input" });
   }
   const payload = await requestJson<unknown>(
-    `/v1/players/search?q=${encodeURIComponent(query)}`,
+    `/v1/players/search?q=${encodeURIComponent(query)}&limit=${limit}`,
     "GET",
     undefined,
     undefined,

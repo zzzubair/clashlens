@@ -75,6 +75,26 @@ describe("server-only Python client response boundary", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it.each([0, 1.5, 51])(
+    "rejects invalid search limit %s before contacting the private service",
+    async (limit) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      process.env.NODE_ENV = "test";
+      process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+
+      const { createPythonClient } = await import("../../app/services/python.server");
+
+      await expect(
+        createPythonClient().searchPlayers("Nova", limit),
+      ).rejects.toMatchObject({
+        status: 400,
+        payload: { error: "invalid_input" },
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects refresh status from a different player", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

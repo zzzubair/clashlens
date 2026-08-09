@@ -47,7 +47,7 @@ The primary user is an individual competitive rank pusher. The same public data 
 
 ### Domain terms
 
-[`docs/domain.md`](domain.md) owns the exact definitions and rules for the Tracked Players leaderboard, official rank, frozen and live leaderboards, inferred shielded days, rank bands, rank streaks, and offense and defense lenses. Product capabilities use those terms without redefining them here.
+[`docs/domain.md`](domain.md) owns the exact definitions and rules for the Live Leaderboard, official rank, frozen daily leaderboards, inferred shielded days, rank bands, rank streaks, and offense and defense lenses. Product capabilities use those terms without redefining them here.
 
 ## Phase 1 capabilities
 
@@ -63,7 +63,7 @@ The primary user is an individual competitive rank pusher. The same public data 
 
 - Preserve and decode the `armyShareCode` from timestamped Legend I battles.
 - Keep the exact decoded army composition and classify it into a versioned army archetype without discarding the raw source value.
-- Let users analyze army usage and three-star rate for a trophy range, cumulative Tracked Players leaderboard cohort, rank band, or rank-streak cohort within a stated time period.
+- Let users analyze army usage and three-star rate for a trophy range, cumulative Live Leaderboard cohort, rank band, or rank-streak cohort within a stated time period.
 - Offer cumulative frozen-snapshot presets for Top 10, Top 50, Top 100, Top 200, Top 500, Top 1,000, Top 2,000, Top 5,000, and Top 10,000 tracked players.
 - Let users select rank bands such as ranks 51–100 or ranks 201–1,000.
 - Let users list players who remained within a selected Top-N cohort or rank band for a consecutive period. The default period is 7 days.
@@ -91,19 +91,23 @@ The primary user is an individual competitive rank pusher. The same public data 
 ### Public discovery
 
 - Provide a public player page for each tracked player tag without requiring a Clash Lens account.
-- Show the latest saved player data immediately with its observation time and freshness.
+- Keep the player-page header focused on player name, tag, clan, trophies, Last updated, and a Refresh action.
+- Show the current Legend day with offense, defense, trophy change, and season-day values. Do not add completeness, uncertainty, confidence, coverage, source, provenance, or contract panels to the normal player page.
+- Show every available ranked day in the identified current Legend season. Do not describe a fixed latest-N window as complete current-season history.
 - Let a user request a live refresh without blocking the initial page. Update the page after the new observation has been processed.
-- Provide one public Tracked Players leaderboard for the actively tracked Legend I population.
-- On that leaderboard, show the official top-200 rank as a separate provenance-backed field when the official Clash of Clans API supplies it.
+- Provide one public **Live Leaderboard** for the actively tracked Legend I population.
+- Label the Clash Lens ordering **Rank**. Order it by the newest accepted trophy value, highest first, with the accepted deterministic tie-break rule.
+- Keep the public leaderboard minimal. Show Rank, Player, Clan, Trophies, and Last updated.
+- Store the official Top-200 rank as source evidence, but do not show it as a separate public leaderboard column.
 - Maintain the most recent complete official global Top 200 from the official API. Replace it only after one newer response contains 200 unique valid normalized player tags and valid ranks 1 through 200 once each.
-- Keep the prior complete official Top 200 available when a refresh fails or is partial. Show the failed refresh state.
+- Keep the prior complete official Top 200 available when a refresh fails or is partial. Record the failed refresh state.
 - Show the official observation time. The official response has no season identifier. A derived Legend I season label is not an official API field.
-- Describe only the source-backed positions as official. Clash Lens positions are not official positions.
+- Do not describe the Clash Lens rank as an official Supercell position.
 - Keep serving the previous frozen leaderboard until its replacement publishes as one internally consistent snapshot version.
-- Show missing, partial, stale, or uncertain entries within a published snapshot. Atomic publication does not prove complete coverage.
+- Preserve missing, partial, stale, and uncertain entry states within published data and response contracts. Do not add their technical detail panels to the normal public leaderboard or player page.
 - Offer a separately labeled live view based on newer observations.
-- Show tracked population, measured coverage, source provenance, snapshot time, and freshness. Link entries to player pages.
-- Keep the latest accepted Tracked Players ordering available when a refresh is delayed or fails. Keep entries that use older valid trophy observations in the ordering and label their observation time, age, and freshness. Update the ordering when newer valid observations arrive.
+- Keep tracked population, measured coverage, source provenance, snapshot time, and freshness in the product records and response contracts. Do not show these as technical panels on the public leaderboard or player page. Link entries to player pages.
+- Keep the latest accepted Live Leaderboard ordering available when a refresh is delayed or fails. Keep entries that use older valid trophy observations in the ordering and show their observation time as Last updated. Update the ordering when newer valid observations arrive.
 - Provide a public user page for each Clash Lens username. Show its non-unique display name and all player accounts currently linked through successful player-token verification.
 
 ### Accounts and groups
@@ -132,7 +136,7 @@ The primary user is an individual competitive rank pusher. The same public data 
 - Clash Lens must be trustworthy.
 - Treat event accuracy, ranked-day reconciliation, and ranked-day completeness as separate claims.
 - Mark a ranked day **Complete** only when stored events and final trophy balance reconcile and available evidence shows that no relevant event or settlement adjustment is missing. Apply the exact evidence rules in [`docs/domain.md`](domain.md).
-- Show partial, stale, missing, malformed, or uncertain data explicitly.
+- Preserve partial, stale, missing, malformed, and uncertain data explicitly in product records and response contracts. Normal public leaderboard and player pages show user-actionable unavailable or refresh errors without exposing technical evidence panels.
 - Do not overstate accuracy, coverage, completeness, or classification confidence.
 
 ### Evidence, not prescriptions

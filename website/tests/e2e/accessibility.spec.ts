@@ -12,7 +12,7 @@ async function expectNoSeriousAccessibilityViolations(page: Page) {
 test("home has no serious or critical accessibility violations", async ({ page }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Tracked Players", exact: true }),
+    page.getByRole("heading", { name: "Clash Lens", exact: true }),
   ).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
 });
@@ -47,7 +47,7 @@ test("public pages remain usable at a narrow viewport and 200 percent zoom", asy
   await expect(
     page.getByRole("searchbox", { name: "Search player tags or names" }),
   ).toBeVisible();
-  await expect(page.getByRole("table", { name: "Live tracked players" })).toBeVisible();
+  await expect(page.getByRole("table", { name: "Live leaderboard" })).toBeVisible();
   expect(
     await page
       .locator(".table-wrap")
@@ -58,5 +58,5 @@ test("public pages remain usable at a narrow viewport and 200 percent zoom", asy
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
   });
-  await expect(page.getByRole("button", { name: "Refresh public data" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
 });

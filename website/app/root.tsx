@@ -10,6 +10,7 @@ import {
 
 import type { Route } from "./+types/root";
 import "./app.css";
+import "./theme.css";
 
 export function Layout({ children }: { children: ReactNode }) {
   return (
@@ -17,7 +18,12 @@ export function Layout({ children }: { children: ReactNode }) {
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Clash Lens | Legend I data</title>
+        <title>Clash Lens</title>
+        <meta name="theme-color" content="#28170F" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <link rel="manifest" href="/site.webmanifest" />
         <Meta />
         <Links />
       </head>
