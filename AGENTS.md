@@ -5,7 +5,7 @@ Clash Lens makes competitive Clash of Clans ranked data accessible for all. It b
 We need to be on the same page with terminology. When communicating use this language:
 - **you** means the agent reading this file and changing Clash Lens.
 - **me**, **I**, and **maintainers** mean Zubair and Surbhi building Clash Lens. These are who you are talking to now.
-- **user**, **clasher** means the person that will use Clash Lens to view data and analyse.
+- **user**, **clasher** means the person that plays clash of clans and will use Clash Lens to view data and analyse.
 - **Legend day** means a complete Legend day that starts at 05:00 UTC and ends at 05:00 UTC the next day.
 - **season** means a full legend season that lasts exactly 28 days.
 - **tournament** means a ranked competition period. Tournaments are weekly in all Ranked Leagues except Legend I, where one tournament runs for 4 weeks and consists of 28 Legend days.
