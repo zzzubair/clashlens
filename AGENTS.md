@@ -23,11 +23,6 @@ We need to be on the same page with terminology. When communicating use this lan
 - Report what changed, what was verified, what was not verified, and what remains open.
 - The rest of this file is to help you navigate the project, but these are not "hard rules", think of them as "good defaults". The maintainers should be able to override anything written here.  
 
-## Roles and models
-- The maintainer-facing agent uses `gpt-5.6-sol` and owns coordination, decisions, final review, and the final response. It babysits the subagents.
-- Delegate heavy implementation to `deepseek-v4-flash` through subagents.
-- Direct maintainer instructions override this split.
-
 ## Target machine
 - Clash Lens must run comfortably on the Fedora host available over `ssh zubair@fedora` (hostname `rogue`). Treat this machine as the implementation resource ceiling.
 - OS and architecture: Fedora Linux 44, x86_64.
