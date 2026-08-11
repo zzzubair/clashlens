@@ -28,6 +28,14 @@ We need to be on the same page with terminology. When communicating use this lan
 - Delegate heavy implementation to `deepseek-v4-flash` through subagents.
 - Direct maintainer instructions override this split.
 
+## Target machine
+- Clash Lens must run comfortably on the Fedora host available over `ssh zubair@fedora` (hostname `rogue`). Treat this machine as the implementation resource ceiling.
+- OS and architecture: Fedora Linux 44, x86_64.
+- CPU: AMD Ryzen 9 5900HS with Radeon Graphics, 8 cores and 16 threads.
+- Memory: 16 GB RAM and 8 GB swap.
+- GPUs: NVIDIA GeForce RTX 3050 Ti Mobile and integrated AMD Radeon graphics. Do not assume NVIDIA drivers or CUDA are available without checking.
+- Storage: 1 TB NVMe SSD (`HFM001TD3JX013N`).
+
 ## Sources
 - Codebase is the source of truth, but if still uncertain read only the sources relevant to the task, the docs are previously accepted decisions and useful context but can be stale.
 - [`docs/product.md`](docs/product.md) for product scope and behavior.
