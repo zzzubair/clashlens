@@ -9,11 +9,14 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .domain import DomainRuleError, validate_season_anchor
+from .source_observation_contract import PROFILE_SOURCE_OBSERVATION_CONTRACT
 
-ENDPOINT_VERSION = "profile-v1"
-SCHEMA_VERSION = "profile-schema-v1"
-PARSER_VERSION = "supercell-source-parser-v1"
-SUPPORTED_PARSER_VERSIONS = frozenset({PARSER_VERSION, "supercell-source-parser-v2"})
+ENDPOINT_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.endpoint_version
+SCHEMA_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.schema_version
+PARSER_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.default_parser_version
+SUPPORTED_PARSER_VERSIONS = (
+    PROFILE_SOURCE_OBSERVATION_CONTRACT.supported_parser_versions
+)
 LEGEND_I_TIER_ID = 105000036
 LEGEND_I_TIER_NAME = "Legend I"
 RECOGNIZED_NON_LEGEND_TIERS_V1 = {105000035: "Legend II"}

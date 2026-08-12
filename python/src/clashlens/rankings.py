@@ -4,11 +4,23 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from .battle import SOURCE_PARSER_VERSION
 from .profile import ProfileParseError, normalize_player_tag
+from .source_observation_contract import (
+    GLOBAL_PLAYER_RANKINGS_SOURCE_OBSERVATION_CONTRACT,
+)
 
-GLOBAL_RANKING_ENDPOINT_VERSION = "global-player-rankings-v1"
-GLOBAL_RANKING_SCHEMA_VERSION = "global-player-rankings-schema-v1"
+GLOBAL_RANKING_ENDPOINT_VERSION = (
+    GLOBAL_PLAYER_RANKINGS_SOURCE_OBSERVATION_CONTRACT.endpoint_version
+)
+GLOBAL_RANKING_SCHEMA_VERSION = (
+    GLOBAL_PLAYER_RANKINGS_SOURCE_OBSERVATION_CONTRACT.schema_version
+)
+SOURCE_PARSER_VERSION = (
+    GLOBAL_PLAYER_RANKINGS_SOURCE_OBSERVATION_CONTRACT.default_parser_version
+)
+SUPPORTED_SOURCE_PARSER_VERSIONS = (
+    GLOBAL_PLAYER_RANKINGS_SOURCE_OBSERVATION_CONTRACT.supported_parser_versions
+)
 
 
 class RankingParseError(ValueError):
@@ -44,6 +56,11 @@ def parse_global_player_rankings(
     parser_version: str = SOURCE_PARSER_VERSION,
     endpoint_version: str = GLOBAL_RANKING_ENDPOINT_VERSION,
 ) -> ParsedOfficialRankings:
+    if parser_version not in SUPPORTED_SOURCE_PARSER_VERSIONS:
+        raise RankingParseError(
+            "unsupported_parser_version",
+            "global player rankings parser version is not installed",
+        )
     try:
         payload = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:

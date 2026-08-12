@@ -5,9 +5,6 @@ from threading import Event
 
 from .archive import ArchiveReadError, S3ArchiveReader
 from .battle import (
-    BATTLE_LOG_ENDPOINT_VERSION,
-    BATTLE_LOG_SCHEMA_VERSION,
-    SUPPORTED_SOURCE_PARSER_VERSIONS,
     BattleLogParseError,
     parse_battle_log,
 )
@@ -19,18 +16,12 @@ from .db import (
     Database,
     LeaseLost,
 )
-from .profile import (
-    ENDPOINT_VERSION,
-    SCHEMA_VERSION,
-    ProfileParseError,
-    parse_profile,
-)
+from .profile import ProfileParseError, parse_profile
 from .rankings import (
-    GLOBAL_RANKING_ENDPOINT_VERSION,
-    GLOBAL_RANKING_SCHEMA_VERSION,
     RankingParseError,
     parse_global_player_rankings,
 )
+from .source_observation_contract import validate_source_observation_contract
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,27 +107,15 @@ class ObservationProcessor:
             return ProcessResult(claim.job_id, "processed")
         if claim.work_type not in {"process_observation", "replay_observation"}:
             return self._fail(claim, "unsupported_work_type", retryable=False)
-        endpoint_contracts = {
-            "profile": (ENDPOINT_VERSION, SCHEMA_VERSION),
-            "battle_log": (BATTLE_LOG_ENDPOINT_VERSION, BATTLE_LOG_SCHEMA_VERSION),
-            "global_player_rankings": (
-                GLOBAL_RANKING_ENDPOINT_VERSION,
-                GLOBAL_RANKING_SCHEMA_VERSION,
-            ),
-        }
-        if claim.endpoint not in endpoint_contracts:
-            return self._fail(claim, "unsupported_endpoint", retryable=False)
-        endpoint_version, schema_version = endpoint_contracts[claim.endpoint]
+        source_contract_error = validate_source_observation_contract(
+            claim.endpoint,
+            claim.endpoint_version,
+            claim.schema_version,
+            claim.parser_version,
+        )
+        if source_contract_error is not None:
+            return self._fail(claim, source_contract_error, retryable=False)
         checks = (
-            (
-                claim.endpoint_version == endpoint_version,
-                "unsupported_endpoint_version",
-            ),
-            (claim.schema_version == schema_version, "unsupported_schema_version"),
-            (
-                claim.parser_version in SUPPORTED_SOURCE_PARSER_VERSIONS,
-                "unsupported_parser_version",
-            ),
             (
                 claim.processing_version == PROCESSING_VERSION,
                 "unsupported_processing_version",
