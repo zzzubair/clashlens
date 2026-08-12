@@ -38,19 +38,20 @@ Run the complete Python suite without PostgreSQL from `python`:
 UV_PROJECT_ENVIRONMENT=/tmp/clashlens-python-venv UV_LINK_MODE=copy uv run --locked --python 3.12 pytest -q
 ```
 
-Run the complete Python suite with embedded PostgreSQL from the repository root:
+Run the complete Python suite against a PostgreSQL 18 test database from
+`python`:
 
 ```sh
-go test ./internal/collector -run '^TestPythonPrototypeSuiteEmbeddedPostgres$' -count=1 -v -timeout=150s
+CLASHLENS_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/clashlens UV_PROJECT_ENVIRONMENT=/tmp/clashlens-python-venv UV_LINK_MODE=copy uv run --locked --python 3.12 pytest -q
 ```
 
 Run the complete vertical seam from the repository root:
 
 ```sh
-go test ./internal/collector -run '^TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage$' -count=1 -v -timeout=120s
+go test ./internal/collector -run '^TestGoCollectorHandoffToPythonSignedPlayerPage$' -count=1 -v -timeout=120s
 ```
 
-The Go tests create the Python environment in a temporary directory. They do
+The Go seam creates its Python environment in a temporary directory and does
 not leave a repository-local `.venv`. The dependency and Python-version
 constraints are in [`pyproject.toml`](pyproject.toml) and [`uv.lock`](uv.lock).
 

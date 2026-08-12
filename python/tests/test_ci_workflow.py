@@ -6,6 +6,7 @@ import yaml
 
 CI_WORKFLOW = Path(__file__).parents[2] / ".github" / "workflows" / "ci.yml"
 LOCKED_ENVIRONMENT = "/tmp/clashlens-ci-venv"
+TEST_DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432/clashlens"
 EXPECTED_JOBS = {"go", "python", "postgres", "deploy-shell", "website"}
 
 
@@ -30,7 +31,7 @@ def test_ci_workflow_yaml_parses_and_lists_expected_jobs() -> None:
 
 def test_python_job_uses_one_locked_environment_for_every_uv_step() -> None:
     job = _python_job()
-    # The job-level environment applies to sync, Ruff, compile, and the unit
+    # The job-level environment applies to sync, Ruff, compile, and the
     # tests, so every uv step in the job resolves one locked environment.
     assert job.get("env", {}).get("UV_PROJECT_ENVIRONMENT") == LOCKED_ENVIRONMENT
     uv_steps = [
@@ -42,11 +43,32 @@ def test_python_job_uses_one_locked_environment_for_every_uv_step() -> None:
         "Sync locked dependencies",
         "Ruff",
         "Compile",
-        "Unit tests",
+        "Tests",
     ]
     for step in uv_steps:
         # A step-level override would fragment the locked environment.
         assert "UV_PROJECT_ENVIRONMENT" not in step.get("env", {})
+
+
+def test_python_job_runs_the_complete_suite_against_postgresql() -> None:
+    job = _python_job()
+    assert job["env"]["CLASHLENS_TEST_DATABASE_URL"] == TEST_DATABASE_URL
+    assert job["services"]["postgres"] == {
+        "image": "postgres:18",
+        "env": {
+            "POSTGRES_DB": "clashlens",
+            "POSTGRES_PASSWORD": "postgres",
+            "POSTGRES_USER": "postgres",
+        },
+        "ports": ["5432:5432"],
+        "options": (
+            "--health-cmd \"pg_isready -U postgres -d clashlens\" "
+            "--health-interval 10s --health-timeout 5s --health-retries 5"
+        ),
+    }
+    test_step = next(step for step in job["steps"] if step.get("name") == "Tests")
+    assert test_step["working-directory"] == "python"
+    assert test_step["run"] == "uv run pytest -q"
 
 
 def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate() -> None:
