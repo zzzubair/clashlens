@@ -7,12 +7,13 @@ from typing import Any
 
 from .domain import DomainRuleError, allocate_trophies, ranked_day_for
 from .profile import ProfileParseError, normalize_player_tag
+from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
-BATTLE_LOG_ENDPOINT_VERSION = "battle-log-v1"
-BATTLE_LOG_SCHEMA_VERSION = "battle-log-schema-v1"
-SOURCE_PARSER_VERSION = "supercell-source-parser-v1"
-SUPPORTED_SOURCE_PARSER_VERSIONS = frozenset(
-    {SOURCE_PARSER_VERSION, "supercell-source-parser-v2"}
+BATTLE_LOG_ENDPOINT_VERSION = BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.endpoint_version
+BATTLE_LOG_SCHEMA_VERSION = BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.schema_version
+SOURCE_PARSER_VERSION = BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.default_parser_version
+SUPPORTED_SOURCE_PARSER_VERSIONS = (
+    BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.supported_parser_versions
 )
 
 

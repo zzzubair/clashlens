@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import make_conninfo
 
 from clashlens.archive import S3ArchiveReader
@@ -179,6 +180,56 @@ def _processor(database: Database, archive_server) -> ObservationProcessor:
             allow_insecure_test_origin=True,
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "parser_version", "claimable"),
+    [
+        (endpoint, parser_version, claimable)
+        for endpoint in ("profile", "battle_log", "global_player_rankings")
+        for parser_version, claimable in (
+            ("supercell-source-parser-v1", True),
+            ("supercell-source-parser-v2", True),
+            ("supercell-source-parser-v99", False),
+        )
+    ],
+)
+def test_claim_job_applies_each_endpoint_parser_contract(
+    database_url: str,
+    archive_server,
+    endpoint: str,
+    parser_version: str,
+    claimable: bool,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        _observation_id, job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key=f"claim-contract:{endpoint}:{parser_version}",
+            endpoint=endpoint,
+            body=b"{}",
+            observed_at=datetime(2026, 8, 3, 19, 35, 1, tzinfo=UTC),
+            normalized_tag=None if endpoint == "global_player_rankings" else "#2PP",
+            parser_version=parser_version,
+        )
+        database = Database(connection_info)
+        try:
+            claim = database.claim_job(owner="source-contract-test", job_id=job_id)
+
+            assert (claim is not None) is claimable
+            if claim is not None:
+                assert claim.endpoint == endpoint
+                assert claim.parser_version == parser_version
+            else:
+                assert (
+                    database.scalar(
+                        "SELECT status FROM python_processing_jobs WHERE id = %s",
+                        (job_id,),
+                    )
+                    == "pending"
+                )
+        finally:
+            database.close()
 
 
 def test_replay_observation_claim_carries_source_metadata_and_processes(

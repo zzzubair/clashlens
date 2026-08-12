@@ -21,10 +21,7 @@ from .analytics import (
     deterministic_tag_hash,
 )
 from .battle import (
-    BATTLE_LOG_ENDPOINT_VERSION,
-    BATTLE_LOG_SCHEMA_VERSION,
     SOURCE_PARSER_VERSION,
-    SUPPORTED_SOURCE_PARSER_VERSIONS,
     ParsedBattleLog,
 )
 from .domain import (
@@ -33,18 +30,8 @@ from .domain import (
     ranked_day_for,
     validate_season_anchor,
 )
-from .profile import (
-    ENDPOINT_VERSION,
-    SCHEMA_VERSION,
-    SUPPORTED_PARSER_VERSIONS,
-    ParsedProfile,
-    normalize_player_tag,
-)
-from .rankings import (
-    GLOBAL_RANKING_ENDPOINT_VERSION,
-    GLOBAL_RANKING_SCHEMA_VERSION,
-    ParsedOfficialRankings,
-)
+from .profile import ParsedProfile, normalize_player_tag
+from .rankings import ParsedOfficialRankings
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
     BattleContribution,
@@ -54,6 +41,7 @@ from .reconciliation import (
     ReconciliationResult,
     reconcile_ranked_day,
 )
+from .source_observation_contract import SOURCE_OBSERVATION_CONTRACTS
 
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
 DEFAULT_PARSER_VERSION = SOURCE_PARSER_VERSION
@@ -74,26 +62,6 @@ SUPPORTED_WORK_TYPES = (
     "build_snapshot",
     "build_analytics",
 )
-_SOURCE_ENDPOINT_CONTRACTS = (
-    (
-        "profile",
-        ENDPOINT_VERSION,
-        SCHEMA_VERSION,
-        tuple(sorted(SUPPORTED_PARSER_VERSIONS)),
-    ),
-    (
-        "battle_log",
-        BATTLE_LOG_ENDPOINT_VERSION,
-        BATTLE_LOG_SCHEMA_VERSION,
-        tuple(sorted(SUPPORTED_SOURCE_PARSER_VERSIONS)),
-    ),
-    (
-        "global_player_rankings",
-        GLOBAL_RANKING_ENDPOINT_VERSION,
-        GLOBAL_RANKING_SCHEMA_VERSION,
-        tuple(sorted(SUPPORTED_SOURCE_PARSER_VERSIONS)),
-    ),
-)
 
 
 def _supported_job_filter(alias: str) -> tuple[str, list[Any]]:
@@ -109,12 +77,7 @@ def _supported_job_filter(alias: str) -> tuple[str, list[Any]]:
     """
     source_clauses: list[str] = []
     params: list[Any] = []
-    for (
-        endpoint,
-        endpoint_version,
-        schema_version,
-        parser_versions,
-    ) in _SOURCE_ENDPOINT_CONTRACTS:
+    for contract in SOURCE_OBSERVATION_CONTRACTS:
         source_clauses.append(
             f"""(
                 {alias}.parser_version = ANY(%s::text[])
@@ -130,7 +93,12 @@ def _supported_job_filter(alias: str) -> tuple[str, list[Any]]:
             )"""
         )
         params.extend(
-            (list(parser_versions), endpoint, endpoint_version, schema_version)
+            (
+                sorted(contract.supported_parser_versions),
+                contract.endpoint,
+                contract.endpoint_version,
+                contract.schema_version,
+            )
         )
     source_contract = " OR ".join(source_clauses)
     analytics_input_shape = f"""{alias}.input_json ? 'snapshot_id'

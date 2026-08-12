@@ -69,3 +69,10 @@ def test_global_ranking_parser_distinguishes_malformed_json_and_schema_change() 
         parse_global_player_rankings(b"not-json")
     with pytest.raises(RankingParseError, match="unsupported_global_ranking_schema"):
         parse_global_player_rankings(b"{}")
+
+
+def test_global_ranking_parser_rejects_an_uninstalled_parser_version() -> None:
+    with pytest.raises(RankingParseError, match="unsupported_parser_version"):
+        parse_global_player_rankings(
+            FIXTURE.read_bytes(), parser_version="supercell-source-parser-v99"
+        )
