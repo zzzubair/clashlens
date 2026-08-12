@@ -31,18 +31,33 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
-      # Short mode skips the embedded-PostgreSQL and uv subprocess suites;
+      # Short mode skips the embedded-PostgreSQL and focused Go→Python seam;
       # the postgres job below owns those and installs uv there.
       - name: Test
         run: go test -short -count=1 ./...
 
   python:
-    name: Python lint, compile, and unit tests
+    name: Python lint, compile, and PostgreSQL tests
     runs-on: ubuntu-latest
     # One locked environment for every uv step in this job: sync, Ruff,
-    # compile, and the unit tests must all resolve the same environment.
+    # compile, and the tests must all resolve the same environment.
     env:
+      CLASHLENS_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/clashlens
       UV_PROJECT_ENVIRONMENT: /tmp/clashlens-ci-venv
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: clashlens
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d clashlens"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -57,12 +72,12 @@ jobs:
       - name: Compile
         working-directory: python
         run: uv run python -m compileall -q src
-      - name: Unit tests
+      - name: Tests
         working-directory: python
         run: uv run pytest -q
 
   postgres:
-    name: Go collector suite on embedded PostgreSQL (includes uv Python suites)
+    name: Go collector suite on embedded PostgreSQL (includes focused Go→Python seam)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

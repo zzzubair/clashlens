@@ -19,40 +19,23 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/zzzubair/ClashLens/internal/testsupport"
 )
 
-func TestPythonPrototypeSuiteEmbeddedPostgres(t *testing.T) {
+func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 	if testing.Short() {
-		t.Skip("Python prototype PostgreSQL integration suite")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
-	projectRoot := filepath.Join(repositoryRootForTest(t), "python")
-	environment := map[string]string{
-		"CLASHLENS_TEST_DATABASE_URL": testsupport.StartPostgres(t),
-		"UV_LINK_MODE":                "copy",
-		"UV_PROJECT_ENVIRONMENT":      filepath.Join(t.TempDir(), "venv"),
-	}
-	command := exec.CommandContext(ctx, "uv", "run", "--locked", "--python", "3.12", "pytest", "-q")
-	command.Dir = projectRoot
-	command.Env = pythonPrototypeEnvironment(environment)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("Python prototype suite failed: %v\n%s", err, output)
-	}
-	t.Log(strings.TrimSpace(string(output)))
-}
-
-func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Python prototype black-box process test")
+		t.Skip("focused Go→Python process test")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	databaseURL := testsupport.StartPostgres(t)
+	collectorStore := startVersionTwoStore(t, ctx)
+	databaseURL := collectorStore.pool.Config().ConnString()
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect to test PostgreSQL: %v", err)
+	}
+	t.Cleanup(func() { _ = connection.Close(context.Background()) })
+
 	archive, backend := newFakeS3Server(t)
 	profileBody, err := os.ReadFile(filepath.Join(repositoryRootForTest(t), "python", "testdata", "legend_i_profile_v1.json"))
 	if err != nil {
@@ -64,6 +47,58 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 	backend.mu.Lock()
 	backend.objects[objectKey] = &fakeS3Object{body: profileBody, hash: hash, writes: 1}
 	backend.mu.Unlock()
+	reference := "s3://evidence/" + objectKey
+
+	now := time.Now().UTC()
+	if _, err := collectorStore.pool.Exec(ctx, `
+		INSERT INTO players (normalized_tag, active, next_due_at)
+		VALUES ('#2PP', true, $1)
+	`, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("insert active player: %v", err)
+	}
+	if _, err := collectorStore.scheduleDueRegular(ctx, now, 5*time.Minute, 1); err != nil {
+		t.Fatalf("schedule production collector job: %v", err)
+	}
+	job, err := collectorStore.claimNext(ctx, "go-python-seam", normalPool, now, time.Minute, "go-python-token")
+	if err != nil || job == nil {
+		t.Fatalf("claim production collector job: job=%v err=%v", job, err)
+	}
+	attemptID, _, err := collectorStore.prepareAttempt(ctx, job, now)
+	if err != nil {
+		t.Fatalf("prepare production collector attempt: %v", err)
+	}
+	requestCount, err := collectorStore.beginEndpointRequest(ctx, job, attemptID, profileEndpoint, now.Add(-time.Second))
+	if err != nil {
+		t.Fatalf("begin production profile request: %v", err)
+	}
+	provenance, _, err := officialRequest(profileEndpoint, "#2PP")
+	if err != nil {
+		t.Fatalf("build production profile request: %v", err)
+	}
+	if err := collectorStore.commitObservation(
+		ctx,
+		job,
+		attemptID,
+		profileEndpoint,
+		requestCount,
+		officialResponse{
+			requestStartedAt:    now.Add(-time.Second),
+			responseCompletedAt: now,
+			statusCode:          http.StatusOK,
+			body:                profileBody,
+			headers:             map[string]string{"Content-Type": "application/json"},
+			request:             provenance,
+			pagingEnvelopeState: "not_applicable",
+		},
+		hash,
+		reference,
+		"collector-v2",
+		"normal-a",
+		"observed",
+		nil,
+	); err != nil {
+		t.Fatalf("commit production Go→Python handoff: %v", err)
+	}
 
 	environment := map[string]string{
 		"CLASHLENS_DATABASE_URL":       databaseURL,
@@ -76,24 +111,10 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 	}
 	pythonEnvironment := filepath.Join(t.TempDir(), "venv")
 	environment["UV_PROJECT_ENVIRONMENT"] = pythonEnvironment
-	python := func(arguments ...string) (string, string) {
-		t.Helper()
-		return runPythonPrototype(t, ctx, environment, arguments...)
-	}
-	python("init-db")
-	reference := "s3://evidence/" + objectKey
-	seedOutput, _ := python(
-		"seed",
-		"--occurrence-key", "blackbox-profile-1",
-		"--tag", "#2PP",
-		"--observed-at", time.Now().UTC().Add(-time.Minute).Format(time.RFC3339),
-		"--response-hash", hash,
-		"--archive-reference", reference,
-	)
-	if !strings.Contains(seedOutput, `"status": "seeded"`) && !strings.Contains(seedOutput, `"status":"seeded"`) {
-		t.Fatalf("seed output = %q", seedOutput)
-	}
-	workerOutput, _ := python(
+	workerOutput, _ := runPythonPrototype(
+		t,
+		ctx,
+		environment,
 		"worker",
 		"--max-jobs", "1",
 		"--archive-endpoint", strings.TrimPrefix(archive.URL, "http://"),
@@ -104,11 +125,6 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 		t.Fatalf("worker output = %q", workerOutput)
 	}
 
-	connection, err := pgx.Connect(ctx, databaseURL)
-	if err != nil {
-		t.Fatalf("connect after Python worker: %v", err)
-	}
-	t.Cleanup(func() { _ = connection.Close(context.Background()) })
 	var state string
 	if err := connection.QueryRow(ctx, "SELECT status FROM python_processing_jobs").Scan(&state); err != nil {
 		t.Fatalf("read Python job state: %v", err)
@@ -155,12 +171,12 @@ func TestPythonPrototypeBlackBoxEmbeddedPostgresToSignedPlayerPage(t *testing.T)
 	waitForTCP(t, ctx, port)
 
 	target := "/v1/players/%232PP?view=summary&view=live"
-	now := time.Now().Unix()
+	requestTime := time.Now().Unix()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:"+fmt.Sprint(port)+target, nil)
 	if err != nil {
 		t.Fatalf("create signed player request: %v", err)
 	}
-	for name, value := range pythonPrototypeProofHeaders(key, target, now) {
+	for name, value := range pythonPrototypeProofHeaders(key, target, requestTime) {
 		request.Header.Set(name, value)
 	}
 	response, err := http.DefaultClient.Do(request)
