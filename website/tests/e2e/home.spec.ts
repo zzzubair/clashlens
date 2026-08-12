@@ -56,6 +56,20 @@ test("full live leaderboard presents only the Clash Lens rank and public fields"
   await expect(page.getByText("actively tracked Legend I cohort")).toHaveCount(0);
 });
 
+test("daily leaderboard renders the frozen production wire fixture", async ({ page }) => {
+  await page.goto("/leaderboards/tracked?view=daily");
+
+  await expect(
+    page.getByRole("heading", { name: "Daily leaderboard", exact: true, level: 1 }),
+  ).toBeVisible();
+  const table = page.getByRole("table", { name: "Daily leaderboard" });
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("row")).toHaveCount(31);
+  await expect(table.getByRole("row").nth(1)).toContainText("Nova");
+  await expect(table.getByRole("row").nth(1)).toContainText("#2PP");
+  await expect(table.getByRole("row").nth(1)).toContainText("7,211");
+});
+
 test("home SSR keeps exactly 25 entries with JavaScript disabled", async ({
   browser,
 }) => {

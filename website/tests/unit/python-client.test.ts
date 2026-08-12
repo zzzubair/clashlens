@@ -99,14 +99,10 @@ describe("server-only Python client response boundary", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          kind: "refresh-status",
-          workId: "work-1",
+          refresh_id: "7c4d7f3a-4ff1-4fdd-889e-2284debc622d",
           tag: "#2PQ",
-          state: "queued",
-          progressPercent: 0,
-          message: "queued",
-          publishedAt: null,
-          player: null,
+          status: "pending",
+          outcome: "created",
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       ),
@@ -123,6 +119,66 @@ describe("server-only Python client response boundary", () => {
       status: 409,
       payload: { error: "conflict" },
     });
+  });
+
+  it.each([
+    ["leased", "running", 50],
+    ["waiting_retry", "queued", 0],
+  ] as const)(
+    "maps collector %s refresh status to %s",
+    async (status, state, progressPercent) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              refresh_id: "7c4d7f3a-4ff1-4fdd-889e-2284debc622d",
+              tag: "#2PP",
+              status,
+              outcome: "created",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+      );
+      process.env.NODE_ENV = "test";
+      process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+      const { createPythonClient } = await import("../../app/services/python.server");
+
+      await expect(
+        createPythonClient().getRefreshStatus(
+          "7c4d7f3a-4ff1-4fdd-889e-2284debc622d",
+          "#2PP",
+        ),
+      ).resolves.toMatchObject({ state, progressPercent });
+    },
+  );
+
+  it("rejects impossible collector running refresh status", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            refresh_id: "7c4d7f3a-4ff1-4fdd-889e-2284debc622d",
+            tag: "#2PP",
+            status: "running",
+            outcome: "created",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+
+    await expect(
+      createPythonClient().getRefreshStatus(
+        "7c4d7f3a-4ff1-4fdd-889e-2284debc622d",
+        "#2PP",
+      ),
+    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
   });
 
   it("binds refresh idempotency to the signed request ID and sends no body", async () => {
@@ -212,6 +268,7 @@ describe("server-only Python client response boundary", () => {
                 observed_at: "2026-08-06T11:59:00+00:00",
                 age_seconds: 60,
                 freshness: "fresh",
+                confidence: "eligible",
                 public_confidence: "high",
                 official_rank: null,
               },
@@ -269,6 +326,7 @@ describe("server-only Python client response boundary", () => {
                 observed_at: "2026-08-06T04:00:00+00:00",
                 age_seconds: 3600,
                 freshness: "stale",
+                confidence: "exact",
                 public_confidence: "partial",
                 official_rank: 1,
               },
@@ -319,9 +377,29 @@ describe("server-only Python client response boundary", () => {
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
     const { createPythonClient } = await import("../../app/services/python.server");
     await expect(createPythonClient().searchPlayers("Nova")).resolves.toMatchObject({
+      exactTag: null,
       results: [
         { freshness: { observedAt: "2026-08-06T11:59:00+00:00" }, state: "uncertain" },
       ],
+    });
+  });
+
+  it("derives an exact tag from the submitted query, not the Python payload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ query: "#2pp", known_only: true, results: [] }), {
+          status: 200,
+        }),
+      ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+
+    await expect(createPythonClient().searchPlayers("#2pp")).resolves.toMatchObject({
+      exactTag: "#2PP",
+      knownOnly: true,
     });
   });
 
@@ -344,6 +422,7 @@ describe("server-only Python client response boundary", () => {
           season_day_number: 3,
           version: 9,
           state: "Live",
+          confidence: "partial",
           completeness: { state: "partial", reason: "Open day." },
           public_confidence: "partial",
           uncertainty_reasons: ["Open day."],

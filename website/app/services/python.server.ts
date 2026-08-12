@@ -185,7 +185,7 @@ async function searchPlayers(query: string, limit = 50): Promise<SearchResponse>
     undefined,
     undefined,
   );
-  return mapSearch(payload);
+  return mapSearch(payload, query);
 }
 
 async function getPlayerPage(tag: string): Promise<PlayerPage> {
@@ -261,9 +261,6 @@ async function requestJson<T>(
     !acceptedKinds.includes(payload.kind)
   ) {
     throw new PythonApiError(502, { error: "unavailable" });
-  }
-  if (!isValidResponsePayload(payload)) {
-    throw new PythonApiError(502, { error: "malformed" });
   }
   return payload as T;
 }
@@ -406,201 +403,10 @@ function isCanonicalPlayerTag(value: unknown): value is string {
   return isString(value) && normalizePlayerTag(value) === value;
 }
 
-function isRefreshWorkId(value: unknown): value is string {
-  return isString(value) && /^[A-Za-z0-9_-]{1,128}$/.test(value);
-}
-
-function isFreshness(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isOneOf(value.state, ["fresh", "stale", "unknown"] as const) &&
-    isString(value.observedAt) &&
-    isFiniteNumber(value.ageSeconds) &&
-    value.ageSeconds >= 0
-  );
-}
-
-function isProvenance(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isString(value.source) &&
-    isString(value.observedAt) &&
-    isOneOf(value.freshness, ["fresh", "stale", "unknown"] as const) &&
-    isOneOf(value.confidence, ["high", "partial", "uncertain"] as const) &&
-    isOneOf(value.coverage, ["complete", "partial", "missing", "unknown"] as const) &&
-    isString(value.version)
-  );
-}
-
-function isTrackedEntry(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isInteger(value.rank) &&
-    value.rank > 0 &&
-    isCanonicalPlayerTag(value.tag) &&
-    isString(value.name) &&
-    isString(value.clan) &&
-    isInteger(value.trophies) &&
-    isFreshness(value.freshness) &&
-    isOneOf(value.state, ["available", "stale", "uncertain"] as const) &&
-    isOneOf(value.confidence, ["high", "partial", "uncertain"] as const) &&
-    (value.officialRank === null ||
-      (isInteger(value.officialRank) &&
-        value.officialRank > 0 &&
-        value.officialRank <= 200))
-  );
-}
-
-function isTrackedLeaderboard(value: Record<string, unknown>): boolean {
-  return (
-    value.kind === "tracked-leaderboard" &&
-    isOneOf(value.view, ["live", "daily"] as const) &&
-    Array.isArray(value.entries) &&
-    value.entries.every(isTrackedEntry) &&
-    isInteger(value.totalTracked) &&
-    isRecord(value.coverage) &&
-    isOneOf(value.coverage.state, [
-      "complete",
-      "partial",
-      "missing",
-      "unknown",
-    ] as const) &&
-    isInteger(value.coverage.trackedPlayers) &&
-    isFiniteNumber(value.coverage.measuredPercent) &&
-    isString(value.coverage.note) &&
-    isProvenance(value.provenance) &&
-    Array.isArray(value.qualityStates) &&
-    value.qualityStates.every(isString)
-  );
-}
-
-function isKnownPlayerResult(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isCanonicalPlayerTag(value.tag) &&
-    isString(value.name) &&
-    isString(value.clan) &&
-    isInteger(value.trophies) &&
-    isFreshness(value.freshness) &&
-    isOneOf(value.state, ["available", "stale", "uncertain"] as const) &&
-    isString(value.context)
-  );
-}
-
-function isSearchResponse(value: Record<string, unknown>): boolean {
-  return (
-    value.kind === "player-search" &&
-    isString(value.query) &&
-    (value.exactTag === null || isCanonicalPlayerTag(value.exactTag)) &&
-    Array.isArray(value.results) &&
-    value.results.every(isKnownPlayerResult) &&
-    typeof value.knownOnly === "boolean"
-  );
-}
-
-function isProfile(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    isCanonicalPlayerTag(value.tag) &&
-    isString(value.name) &&
-    isString(value.clan) &&
-    isInteger(value.trophies) &&
-    isFreshness(value.freshness) &&
-    isOneOf(value.confidence, ["high", "partial", "uncertain"] as const) &&
-    isOneOf(value.coverage, ["complete", "partial", "missing", "unknown"] as const) &&
-    isOneOf(value.eligibility, ["legend-i", "uncertain"] as const)
-  );
-}
-
-function isDaySummary(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  const offense = value.offense;
-  const defense = value.defense;
-  const completeness = value.completeness;
-  return (
-    isInteger(value.dayNumber) &&
-    value.dayNumber > 0 &&
-    isString(value.label) &&
-    isString(value.period) &&
-    isOneOf(value.state, ["Live", "Complete", "Partial", "Uncertain"] as const) &&
-    isRecord(offense) &&
-    isInteger(offense.attacks) &&
-    isInteger(offense.threeStars) &&
-    isInteger(offense.trophyGain) &&
-    isRecord(defense) &&
-    isInteger(defense.defenses) &&
-    isInteger(defense.threeStarsAgainst) &&
-    isInteger(defense.trophyLoss) &&
-    isInteger(value.trophyChange) &&
-    isRecord(completeness) &&
-    isOneOf(completeness.state, ["complete", "partial", "uncertain"] as const) &&
-    isString(completeness.reason) &&
-    Array.isArray(value.uncertainty) &&
-    value.uncertainty.every(isString)
-  );
-}
-
-function isPlayerPage(value: Record<string, unknown>): boolean {
-  return (
-    value.kind === "player-page" &&
-    isCanonicalPlayerTag(value.tag) &&
-    isRecord(value.profile) &&
-    isProfile(value.profile) &&
-    value.profile.tag === value.tag &&
-    isRecord(value.season) &&
-    isString(value.season.id) &&
-    isString(value.season.anchor) &&
-    isInteger(value.season.currentDayNumber) &&
-    isInteger(value.season.dayCount) &&
-    isDaySummary(value.currentDay) &&
-    Array.isArray(value.recentDays) &&
-    value.recentDays.every(isDaySummary) &&
-    Array.isArray(value.dataQuality) &&
-    value.dataQuality.every(
-      (item) =>
-        isRecord(item) &&
-        isString(item.code) &&
-        isString(item.label) &&
-        isString(item.detail),
-    ) &&
-    isProvenance(value.provenance)
-  );
-}
-
-function isRefreshPayload(value: Record<string, unknown>): boolean {
-  const validWorkState = [
-    "queued",
-    "running",
-    "complete",
-    "unavailable",
-    "failed",
-  ] as const;
-  return (
-    (value.kind === "refresh-work" || value.kind === "refresh-status") &&
-    isRefreshWorkId(value.workId) &&
-    isCanonicalPlayerTag(value.tag) &&
-    isOneOf(value.state, validWorkState) &&
-    isInteger(value.progressPercent) &&
-    value.progressPercent >= 0 &&
-    value.progressPercent <= 100 &&
-    isString(value.message) &&
-    isNullableString(value.publishedAt) &&
-    (value.kind === "refresh-work" || "player" in value) &&
-    (value.player === undefined ||
-      value.player === null ||
-      (isRecord(value.player) &&
-        isPlayerPage(value.player) &&
-        value.player.tag === value.tag))
-  );
-}
-
 function mapRefresh(
   payload: unknown,
   kind: "refresh-work" | "refresh-status",
 ): RefreshWork | RefreshStatus {
-  if (isRecord(payload) && isRefreshPayload(payload)) {
-    return payload as unknown as RefreshWork | RefreshStatus;
-  }
   if (
     !isRecord(payload) ||
     !isString(payload.refresh_id) ||
@@ -609,7 +415,7 @@ function mapRefresh(
     !isOneOf(payload.status, [
       "pending",
       "leased",
-      "running",
+      "waiting_retry",
       "complete",
       "failed",
       "cancelled",
@@ -621,13 +427,13 @@ function mapRefresh(
   const raw = payload as {
     refresh_id: string;
     tag: string;
-    status: "pending" | "leased" | "running" | "complete" | "failed" | "cancelled";
+    status: "pending" | "leased" | "waiting_retry" | "complete" | "failed" | "cancelled";
     outcome: string;
   };
   const state =
-    raw.status === "pending"
+    raw.status === "pending" || raw.status === "waiting_retry"
       ? "queued"
-      : raw.status === "leased" || raw.status === "running"
+      : raw.status === "leased"
         ? "running"
         : raw.status === "complete"
           ? "complete"
@@ -647,8 +453,6 @@ function mapRefresh(
 }
 
 function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeaderboard {
-  if (isRecord(payload) && isTrackedLeaderboard(payload))
-    return payload as unknown as TrackedLeaderboard;
   if (
     !isRecord(payload) ||
     !isOneOf(payload.kind, ["live", "frozen"] as const) ||
@@ -683,7 +487,15 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
       !isString(entry.observed_at) ||
       !isFiniteNumber(entry.age_seconds) ||
       entry.age_seconds < 0 ||
-      !isOneOf(entry.freshness, ["fresh", "stale", "unknown"] as const) ||
+      !isOneOf(entry.freshness, ["fresh", "stale"] as const) ||
+      (payload.kind === "live"
+        ? !isOneOf(entry.confidence, [
+            "unknown",
+            "eligible",
+            "ineligible",
+            "uncertain",
+          ] as const)
+        : !isOneOf(entry.confidence, ["exact", "confirmed", "uncertain"] as const)) ||
       !isOneOf(entry.public_confidence, ["high", "partial", "uncertain"] as const) ||
       !(entry.official_rank === null || isInteger(entry.official_rank))
     )
@@ -720,9 +532,7 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
   };
 }
 
-function mapSearch(payload: unknown): SearchResponse {
-  if (isRecord(payload) && isSearchResponse(payload))
-    return payload as unknown as SearchResponse;
+function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {
   if (
     !isRecord(payload) ||
     !isString(payload.query) ||
@@ -736,7 +546,7 @@ function mapSearch(payload: unknown): SearchResponse {
       !isCanonicalPlayerTag(item.tag) ||
       !isString(item.name) ||
       !isInteger(item.trophies) ||
-      !isOneOf(item.freshness, ["fresh", "stale", "unknown"] as const) ||
+      !isOneOf(item.freshness, ["fresh", "stale"] as const) ||
       !isFiniteNumber(item.age_seconds) ||
       !isString(item.observed_at) ||
       !isOneOf(item.public_confidence, ["high", "partial", "uncertain"] as const)
@@ -764,14 +574,13 @@ function mapSearch(payload: unknown): SearchResponse {
   return {
     kind: "player-search",
     query: payload.query,
-    exactTag: null,
+    exactTag: normalizePlayerTag(submittedQuery),
     results: results as SearchResponse["results"],
     knownOnly: payload.known_only,
   };
 }
 
 function mapPlayerPage(payload: unknown): PlayerPage {
-  if (isRecord(payload) && isPlayerPage(payload)) return payload as unknown as PlayerPage;
   if (
     !isRecord(payload) ||
     !isCanonicalPlayerTag(payload.tag) ||
@@ -786,7 +595,11 @@ function mapPlayerPage(payload: unknown): PlayerPage {
       !isRecord(value) ||
       !isString(value.ranked_day_start) ||
       !isNullableString(value.ranked_day_end) ||
-      !isOneOf(value.state, ["Live", "Complete", "Partial", "Uncertain"] as const) ||
+      !isOneOf(value.state, ["Live", "Complete", "Partial"] as const) ||
+      !(
+        value.confidence === null ||
+        isOneOf(value.confidence, ["exact", "inferred", "partial", "uncertain"] as const)
+      ) ||
       !isRecord(value.completeness) ||
       !isOneOf(value.completeness.state, ["complete", "partial", "uncertain"] as const) ||
       !isString(value.completeness.reason) ||
@@ -962,22 +775,6 @@ function mapDataQuality(value: unknown): PlayerPage["dataQuality"] {
   )
     throw new PythonApiError(502, { error: "malformed" });
   return value as PlayerPage["dataQuality"];
-}
-
-function isValidResponsePayload(value: Record<string, unknown>): boolean {
-  switch (value.kind) {
-    case "tracked-leaderboard":
-      return isTrackedLeaderboard(value);
-    case "player-search":
-      return isSearchResponse(value);
-    case "player-page":
-      return isPlayerPage(value);
-    case "refresh-work":
-    case "refresh-status":
-      return isRefreshPayload(value);
-    default:
-      return false;
-  }
 }
 
 type AccountOperations = Pick<

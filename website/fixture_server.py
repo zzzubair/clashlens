@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Deterministic private-API fixture for the website prototype.
 
-This server is test-only. It uses screen-ready payloads, in-memory refresh work,
-and in-memory Google account state. It does not call Supercell, PostgreSQL, or
-the real Python application.
+This server is test-only. It uses production-shaped public payloads, in-memory
+refresh work, and in-memory Google account state. It does not call Supercell,
+PostgreSQL, or the real Python application.
 
 Account rules mirror the production private API (python/src/clashlens/api.py):
 - Account operations require a signed google identity in the HMAC proof.
@@ -174,52 +174,63 @@ def spec_for(tag):
     return None
 
 
-def freshness_for(age_seconds, state):
-    return {
-        "state": "stale" if state == "stale" else "unknown" if state == "uncertain" else "fresh",
-        "observedAt": FIXTURE_OBSERVED_AT,
-        "ageSeconds": age_seconds,
-    }
-
-
-def entry_for(spec, rank):
+def entry_for(spec, position, kind="live"):
     tag, name, clan, trophies, age_seconds, state = spec
+    freshness = "stale" if state == "stale" else "fresh"
+    confidence = (
+        "uncertain"
+        if state == "uncertain"
+        else "confirmed"
+        if kind == "frozen"
+        else "eligible"
+    )
+    public_confidence = "uncertain" if state == "uncertain" else "high"
     return {
-        "rank": rank,
+        "position": position,
         "tag": tag,
         "name": name,
         "clan": clan,
         "trophies": trophies,
-        "freshness": freshness_for(age_seconds, state),
-        "state": state,
-        "confidence": "uncertain" if state == "uncertain" else "partial" if state == "stale" else "high",
-        "officialRank": ((rank * 17 - 1) % 200) + 1 if rank <= 200 else None,
+        "observed_at": FIXTURE_OBSERVED_AT,
+        "age_seconds": age_seconds,
+        "freshness": freshness,
+        "confidence": confidence,
+        "public_confidence": public_confidence,
+        "official_rank": ((position * 17 - 1) % 200) + 1 if position <= 200 else None,
     }
 
 
 def leaderboard(limit, view):
     limit = max(1, min(limit, len(PLAYER_SPECS)))
-    entries = [entry_for(spec, index) for index, spec in enumerate(PLAYER_SPECS, 1)]
-    return {
-        "kind": "tracked-leaderboard",
-        "view": view,
+    kind = "frozen" if view == "daily" else "live"
+    entries = [entry_for(spec, index, kind) for index, spec in enumerate(PLAYER_SPECS, 1)]
+    if kind == "live":
+        for entry in entries:
+            entry["official_rank"] = None
+    ordering_rule_version = (
+        "fixture-frozen-v1" if kind == "frozen" else "tracked-trophies-md5-v1"
+    )
+    payload = {
+        "kind": kind,
+        "ordering_rule_version": ordering_rule_version,
+        "generated_at": FIXTURE_OBSERVED_AT,
         "entries": entries[:limit],
-        "totalTracked": len(PLAYER_SPECS),
+        "tracked_population": len(PLAYER_SPECS),
         "coverage": {
             "state": "partial",
-            "trackedPlayers": len(PLAYER_SPECS),
-            "measuredPercent": 63.0,
+            "tracked_players": len(PLAYER_SPECS),
+            "measured_percent": 63.0,
             "note": "This fixture represents a measured tracked cohort, not the full Legend I population.",
         },
         "provenance": {
             "source": "deterministic-python-fixture",
-            "observedAt": FIXTURE_OBSERVED_AT,
+            "observed_at": FIXTURE_OBSERVED_AT,
             "freshness": "fresh",
             "confidence": "partial",
             "coverage": "partial",
-            "version": FIXTURE_VERSION,
+            "version": ordering_rule_version,
         },
-        "qualityStates": [
+        "quality_states": [
             "missing",
             "partial",
             "stale",
@@ -230,24 +241,46 @@ def leaderboard(limit, view):
             "unavailable",
         ],
     }
+    if kind == "frozen":
+        payload.update(
+            {
+                "snapshot_id": "c74af723-6da8-54a3-a710-ee8229c9f747",
+                "boundary_at": "2026-08-05T05:00:00Z",
+                "version": 1,
+            }
+        )
+    return payload
 
 
-def day_for(tag, current):
+def day_for(tag):
     is_uncertain = tag in {"#2PP", "#2PY"}
-    current_state = "Uncertain" if is_uncertain else "Live"
     return {
-        "dayNumber": 24,
-        "label": "Current Legend day",
-        "period": "2026-08-05 05:00 UTC – 2026-08-06 05:00 UTC",
-        "state": current_state,
-        "offense": {"attacks": 7, "threeStars": 5, "trophyGain": 31},
-        "defense": {"defenses": 6, "threeStarsAgainst": 2, "trophyLoss": 13},
-        "trophyChange": 18,
+        "ranked_day_start": "2026-08-05T05:00:00Z",
+        "ranked_day_end": "2026-08-06T05:00:00Z",
+        "official_season_id": "1783918800",
+        "season_day_number": 24,
+        "version": 1,
+        "state": "Partial" if is_uncertain else "Live",
+        "coverage": "partial",
+        "confidence": "uncertain" if is_uncertain else "partial",
+        "attack_count": 7,
+        "attack_three_star_count": 5,
+        "attack_gain": 31,
+        "defense_count": 6,
+        "defense_three_star_count": 2,
+        "defense_loss": 13,
+        "net_trophy_change": 18,
+        "adjustments": [],
+        "battles": [],
+        "partial_reasons": [
+            "The paired battle-log evidence is not complete for this fixture observation."
+        ],
         "completeness": {
             "state": "uncertain" if is_uncertain else "partial",
             "reason": "The paired battle-log evidence is not complete for this fixture observation.",
         },
-        "uncertainty": [
+        "public_confidence": "uncertain" if is_uncertain else "partial",
+        "uncertainty_reasons": [
             "Current day evidence is still being reconciled.",
             "This screen does not claim complete Legend I coverage.",
         ],
@@ -256,15 +289,27 @@ def day_for(tag, current):
 
 def previous_day():
     return {
-        "dayNumber": 23,
-        "label": "Previous ranked day",
-        "period": "2026-08-04 05:00 UTC – 2026-08-05 05:00 UTC",
+        "ranked_day_start": "2026-08-04T05:00:00Z",
+        "ranked_day_end": "2026-08-05T05:00:00Z",
+        "official_season_id": "1783918800",
+        "season_day_number": 23,
+        "version": 1,
         "state": "Complete",
-        "offense": {"attacks": 8, "threeStars": 6, "trophyGain": 38},
-        "defense": {"defenses": 8, "threeStarsAgainst": 3, "trophyLoss": 16},
-        "trophyChange": 22,
+        "coverage": "complete",
+        "confidence": "exact",
+        "attack_count": 8,
+        "attack_three_star_count": 6,
+        "attack_gain": 38,
+        "defense_count": 8,
+        "defense_three_star_count": 3,
+        "defense_loss": 16,
+        "net_trophy_change": 22,
+        "adjustments": [],
+        "battles": [],
+        "partial_reasons": [],
         "completeness": {"state": "complete", "reason": "Fixture evidence reconciles this ended day."},
-        "uncertainty": [],
+        "public_confidence": "high",
+        "uncertainty_reasons": [],
     }
 
 
@@ -280,47 +325,64 @@ def player_page(tag):
         trophies += 4 * refresh_count
         age_seconds = 45
         state = "available"
-    current = day_for(tag, refreshed)
+    current = day_for(tag)
+    recent_days = [current, previous_day()]
+    daily_logs = [
+        {
+            key: value
+            for key, value in day.items()
+            if key not in {"completeness", "public_confidence", "uncertainty_reasons"}
+        }
+        for day in recent_days
+    ]
+    public_confidence = "uncertain" if state == "uncertain" else "high"
+    observed_at = FIXTURE_OBSERVED_AT if not refreshed else "2026-08-05T18:10:00Z"
     return {
-        "kind": "player-page",
         "tag": tag,
-        "profile": {
-            "tag": tag,
-            "name": name,
-            "clan": clan,
-            "trophies": trophies,
-            "freshness": freshness_for(age_seconds, state),
-            "confidence": "uncertain" if state == "uncertain" else "partial" if state == "stale" else "high",
-            "coverage": "partial",
-            "eligibility": "legend-i",
-        },
-        "season": {
-            "id": "1783918800",
-            "anchor": "2026-07-13T05:00:00Z",
-            "currentDayNumber": 24,
-            "dayCount": 28,
-        },
-        "currentDay": current,
-        "recentDays": [current, previous_day()],
-        "dataQuality": [
-            {
-                "code": "partial",
-                "label": "Partial coverage",
-                "detail": "Some paired endpoint evidence is still missing in this saved fixture.",
+        "name": name,
+        "trophies": trophies,
+        "eligibility": "uncertain" if state == "uncertain" else "eligible",
+        "active": True,
+        "freshness": "fresh" if refreshed else "stale" if state == "stale" else "fresh",
+        "age_seconds": age_seconds,
+        "coverage": "ranked_days",
+        "observed_at": observed_at,
+        "source_http_status": 200,
+        "endpoint_version": "v1",
+        "schema_version": "fixture-v1",
+        "parser_version": FIXTURE_VERSION,
+        "clan": clan,
+        "public_confidence": public_confidence,
+        "daily_logs": daily_logs,
+        "screen_ready": {
+            "current_day": current,
+            "recent_days": recent_days,
+            "season": {
+                "id": "1783918800",
+                "start": "2026-07-13T05:00:00Z",
+                "end": "2026-08-10T05:00:00Z",
+                "current_day_number": 24,
             },
-            {
-                "code": "uncertain",
-                "label": "Uncertain reconciliation",
-                "detail": "The active day is not a complete ranked-day claim.",
+            "data_quality": [
+                {
+                    "code": "partial",
+                    "label": "Partial coverage",
+                    "detail": "Some paired endpoint evidence is still missing in this saved fixture.",
+                },
+                {
+                    "code": "uncertain",
+                    "label": "Uncertain reconciliation",
+                    "detail": "The active day is not a complete ranked-day claim.",
+                },
+            ],
+            "provenance": {
+                "source": "deterministic-python-fixture",
+                "observed_at": observed_at,
+                "freshness": "fresh" if refreshed else "stale" if state == "stale" else "fresh",
+                "confidence": "uncertain" if state == "uncertain" else "partial",
+                "coverage": "partial",
+                "version": FIXTURE_VERSION,
             },
-        ],
-        "provenance": {
-            "source": "deterministic-python-fixture",
-            "observedAt": FIXTURE_OBSERVED_AT if not refreshed else "2026-08-05T18:10:00Z",
-            "freshness": "fresh" if refreshed else "stale" if state == "stale" else "fresh",
-            "confidence": "uncertain" if state == "uncertain" else "partial",
-            "coverage": "partial",
-            "version": FIXTURE_VERSION,
         },
     }
 
@@ -336,13 +398,14 @@ def search_players(query, limit=50):
                 "name": result["name"],
                 "clan": result["clan"],
                 "trophies": result["trophies"],
+                "observed_at": result["observed_at"],
+                "age_seconds": result["age_seconds"],
                 "freshness": result["freshness"],
-                "state": result["state"],
-                "context": "Exact normalized player tag",
+                "public_confidence": result["public_confidence"],
             }
             for result in results
         ]
-        return {"kind": "player-search", "query": query, "exactTag": exact_tag, "results": results, "knownOnly": False}
+        return {"query": query, "known_only": True, "results": results}
     needle = query.strip().casefold()
     results = []
     if needle:
@@ -355,17 +418,16 @@ def search_players(query, limit=50):
                         "name": result["name"],
                         "clan": result["clan"],
                         "trophies": result["trophies"],
+                        "observed_at": result["observed_at"],
+                        "age_seconds": result["age_seconds"],
                         "freshness": result["freshness"],
-                        "state": result["state"],
-                        "context": "Known Clash Lens player",
+                        "public_confidence": result["public_confidence"],
                     }
                 )
     return {
-        "kind": "player-search",
         "query": query,
-        "exactTag": None,
         "results": results[:limit],
-        "knownOnly": True,
+        "known_only": True,
     }
 
 
@@ -543,14 +605,18 @@ def refresh_work(tag, idempotency_key):
             work_id = active_id
         else:
             generation = STATE["refresh_counts"].get(tag, 0) + 1
-            work_id = f"refresh-{tag[1:].lower()}-{generation}"
+            work_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"clashlens-fixture-refresh:{tag}:{generation}",
+                )
+            )
             STATE["jobs_by_tag"][tag] = work_id
             now = time.monotonic()
             STATE["jobs"][work_id] = {
                 "tag": tag,
                 "polls": 0,
                 "state": "queued",
-                "publishedAt": None,
                 "createdAt": now,
                 "updatedAt": now,
             }
@@ -558,45 +624,28 @@ def refresh_work(tag, idempotency_key):
         return work_id, STATE["jobs"][work_id]
 
 
-def refresh_response(work_id, include_player=False):
+def refresh_response(work_id):
     with STATE["lock"]:
         cleanup_jobs()
         job = STATE["jobs"].get(work_id)
         if job is None:
             return None
-        if not include_player:
-            job["polls"] += 1
+        job["polls"] += 1
         if job["state"] == "complete":
             state = "complete"
-            progress = 100
-            message = "Updated observation published."
-        elif job["polls"] == 0:
-            state = "queued"
-            progress = 10
-            message = "Refresh work accepted."
         elif job["polls"] == 1:
             state = "running"
-            progress = 55
-            message = "The saved observation is being processed."
         else:
             state = "complete"
-            progress = 100
-            message = "Updated observation published."
-            job["publishedAt"] = "2026-08-05T18:10:00Z"
             STATE["refreshed"].add(job["tag"])
             STATE["refresh_counts"][job["tag"]] = STATE["refresh_counts"].get(job["tag"], 0) + 1
         job["state"] = state
         job["updatedAt"] = time.monotonic()
-        page = player_page(job["tag"]) if state == "complete" else None
         return {
-            "kind": "refresh-status" if not include_player else "refresh-work",
-            "workId": work_id,
+            "refresh_id": work_id,
             "tag": job["tag"],
-            "state": state,
-            "progressPercent": progress,
-            "message": message,
-            "publishedAt": job["publishedAt"],
-            "player": page,
+            "status": "pending" if state == "queued" else "leased" if state == "running" else state,
+            "outcome": "created",
         }
 
 
@@ -748,7 +797,12 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": "invalid_input"})
                 return
             work_id, _job = refresh_work(tag, idempotency_key)
-            work = refresh_response(work_id, include_player=True)
+            work = {
+                "refresh_id": work_id,
+                "tag": tag,
+                "status": "pending",
+                "outcome": "created",
+            }
             self.send_json(202, work)
             return
         self.send_json(404, {"error": "missing"})
