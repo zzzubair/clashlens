@@ -28,11 +28,16 @@ FAKE_DOCKER_LOG="$DOCKER_LOG" \
   PROXY_STATE_DIR="$WORK_DIR" \
   PROXY_LISTEN_IP=100.108.3.103 \
   PROXY_CLIENT_IP=100.115.149.49 \
+  PROXY_PORT=3129 \
   "$ROOT_DIR/deploy.sh" up >/dev/null
 
 run_line=$(grep '^run ' "$DOCKER_LOG")
-[[ "$run_line" == *'100.108.3.103:3128:8888/tcp'* ]] || {
-  printf 'proxy is not bound only to the Tailscale address\n' >&2
+[[ "$run_line" == *'--network host'* ]] || {
+  printf 'proxy does not use Docker host networking\n' >&2
+  exit 1
+}
+[[ "$run_line" != *'--publish'* ]] || {
+  printf 'proxy still publishes a bridge port; bridge publication hides the client source address\n' >&2
   exit 1
 }
 [[ "$run_line" == *'--read-only'* && "$run_line" == *'--cap-drop all'* ]] || {
@@ -48,6 +53,18 @@ grep -q '^Allow 100.115.149.49$' "$WORK_DIR/tinyproxy.conf" || {
   printf 'proxy client restriction is missing\n' >&2
   exit 1
 }
+grep -q '^Listen 100.108.3.103$' "$WORK_DIR/tinyproxy.conf" || {
+  printf 'proxy does not listen on the configured Tailscale address\n' >&2
+  exit 1
+}
+grep -q '^Port 3129$' "$WORK_DIR/tinyproxy.conf" || {
+  printf 'proxy does not listen on the configured port\n' >&2
+  exit 1
+}
+if grep -Eq '^(Listen 0\.0\.0\.0|Port 8888)$' "$WORK_DIR/tinyproxy.conf"; then
+  printf 'proxy configuration still binds the bridge defaults\n' >&2
+  exit 1
+fi
 grep -q '^ConnectPort 443$' "$WORK_DIR/tinyproxy.conf" || {
   printf 'proxy CONNECT port restriction is missing\n' >&2
   exit 1

@@ -88,6 +88,34 @@ func TestStoreBridgeRejectsContractVersionThree(t *testing.T) {
 	}
 }
 
+func TestClaimRecordsDatabasePoolAcquireDuration(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx := context.Background()
+	store, err := openStore(ctx, databaseURL, 1)
+	if err != nil {
+		t.Fatalf("openStore returned an error: %v", err)
+	}
+	t.Cleanup(store.close)
+	store.metrics = newCollectorMetrics()
+
+	job, err := store.claimNext(
+		ctx, "metrics-worker", normalPool, time.Now().UTC(), time.Minute, "metrics-token",
+	)
+	if err != nil {
+		t.Fatalf("claimNext returned an error: %v", err)
+	}
+	if job != nil {
+		t.Fatal("claimNext unexpectedly returned a job")
+	}
+
+	store.metrics.mu.Lock()
+	histogram := store.metrics.stageDurations["claim_pool_acquire"]
+	store.metrics.mu.Unlock()
+	if histogram.count != 1 {
+		t.Fatalf("claim pool-acquire metric count = %d, want 1", histogram.count)
+	}
+}
+
 func TestScheduleDueRegularCreatesOneCurrentPollAndAdvancesDueTime(t *testing.T) {
 	databaseURL := startContractDatabase(t)
 	ctx := context.Background()
@@ -138,6 +166,34 @@ func TestScheduleDueRegularCreatesOneCurrentPollAndAdvancesDueTime(t *testing.T)
 	cycleStart := now.Truncate(5 * time.Minute).Add(5 * time.Minute)
 	if nextDue.Before(cycleStart) || !nextDue.Before(cycleStart.Add(5*time.Minute)) {
 		t.Fatalf("next due time %s is outside next cycle [%s, %s)", nextDue, cycleStart, cycleStart.Add(5*time.Minute))
+	}
+}
+
+func TestScheduleDueRegularEnqueuesTargetPopulationWithoutPerPlayerRoundTrips(t *testing.T) {
+	ctx := context.Background()
+	store := startVersionTwoStore(t, ctx)
+	now := time.Now().UTC().Truncate(time.Second)
+	const playerCount = 12_500
+
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO players (normalized_tag, active, next_due_at)
+		SELECT '#SCHEDULE' || player_number, true, $1::timestamptz - interval '10 minutes'
+		FROM generate_series(1, $2) AS player_number
+	`, now, playerCount); err != nil {
+		t.Fatalf("seed target scheduling population: %v", err)
+	}
+
+	startedAt := time.Now()
+	created, err := store.scheduleDueRegular(ctx, now, 5*time.Minute, playerCount)
+	elapsed := time.Since(startedAt)
+	if err != nil {
+		t.Fatalf("schedule target population: %v", err)
+	}
+	if created != playerCount {
+		t.Fatalf("scheduled %d players, want %d", created, playerCount)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("target population scheduling took %v, want <= 2s", elapsed)
 	}
 }
 

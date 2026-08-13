@@ -81,6 +81,48 @@ host and for temporary workload spikes. The worker lease
 (`CLASHLENS_WORKER_LEASE_SECONDS`) sets how long a claimed job may run; the
 deployment derives the worker stop grace from it.
 
+The dedicated 8-core/16-thread Fedora host uses `CLASHLENS_POSTGRES_MEMORY=8g`,
+`CLASHLENS_POSTGRES_SHM_SIZE=1g`, and `CLASHLENS_POSTGRES_CPUS=8`. The previous
+2 GB / 4 CPU budget constrained the collector's database path while the Go
+process remained mostly idle. A 64 MB container shared-memory mount also
+caused PostgreSQL `DsmAllocate` failures under the 32-connection collector
+stage. Keep the 8 GB / 1 GB / 8 CPU values host-specific; smaller hosts must
+select smaller explicit budgets.
+
+New PostgreSQL containers preload `pg_stat_statements` and enable statement,
+I/O, and WAL I/O timing. Migration 0003 installs the extension in the Clash
+Lens database. Keep this profile enabled: it is the production measurement
+seam for statement amplification, temporary I/O, WAL pressure, and workload
+regressions.
+
+Set `CLASHLENS_WORKER_REPLICAS` to the number of identical Python worker
+containers. The target-host profile uses one replica. The valid range is 1 to
+16, bounded by the host's 16 hardware threads, and the deployment rejects any
+other value before changing runtime state. Every replica claims jobs from the
+same shared queue. The worker resource budgets apply per container, so the
+combined worker budget is the replica count times the per-replica budget.
+
+Each worker replica also runs bounded in-process concurrency.
+`CLASHLENS_WORKER_CONCURRENCY` (1 to 32) sets the parallel job lanes per
+replica; the default 1 preserves the sequential behavior of a single worker.
+`CLASHLENS_WORKER_DATABASE_POOL_SIZE` and `CLASHLENS_WORKER_ARCHIVE_POOL_SIZE`
+(1 to 64 each) size each replica's PostgreSQL and archive HTTP connection
+pools; the defaults 4 and 4 match the sequential worker. The measured
+target-host settings are 12 lanes, 12 database connections, and 12 archive
+connections in one replica. The deployment rejects any out-of-range value
+before changing runtime state. These three settings are worker-only and are
+never forwarded to the collector.
+
+`CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE` (1 to 64) explicitly bounds the
+collector PostgreSQL pool. The default is 16. The measured production stage is
+32 database connections with `CLASHLENS_WORKERS_PER_KEY=8`: four normal keys
+give 32 normal request workers, and the interactive workers share the same
+pool. Keep the Python worker at twelve database connections for this stage.
+With PostgreSQL `max_connections=100`, this budgets 32 collector and 12 worker
+connections and leaves approximately 56 connections for the API,
+administration, backups, and short workload spikes. Do not increase the pool
+sizes, PostgreSQL `max_connections`, or CPU limits without new measurements.
+
 The script creates one named rootless Podman network and one PostgreSQL
 volume. The network has outbound access for the official API and external
 archive. It is private because no database or archive service port is
@@ -90,8 +132,15 @@ The website publishes only its configured beta ingress host and port.
 
 The repository includes `deploy/egress-proxy/` for the narrow CONNECT proxy
 that runs on the `ser5ver` host. Its policy accepts only the Fedora Tailscale
-address and only permits `api.clashofclans.com:443`. The proxy host uses
-Docker. The Fedora collector host continues to use rootless Podman.
+address and only
+permits `api.clashofclans.com:443`. The proxy host uses Docker. The proxy
+container runs with Docker host networking and no published port, so
+Tinyproxy sees the client's real source address and listens on the
+configured `PROXY_LISTEN_IP` and `PROXY_PORT` directly instead of a
+bridge-mapped container port. The Fedora collector host continues to use
+rootless Podman. Before the proxy starts, the proxy host firewall must allow
+that port only from the configured Fedora Tailscale address and deny it on all
+other source addresses and interfaces.
 
 Completion: `app.env` has no `CHANGE_ME` value, every key path resolves to a
 mode-`600` file, and the archive and official API origins use the required
@@ -110,18 +159,47 @@ version is rejected without side effects.
 curl --fail http://127.0.0.1:8081/readyz
 ```
 
+Build and start the Python image after `up` has applied every pending forward
+migration:
+
+```bash
+./deploy.sh worker-down
+./deploy.sh up
+./deploy.sh build-python
+./deploy.sh worker-start
+```
+
+Migration 0002 is frozen. Migration 0003 adds the reset-baseline lock seam and
+retains the prior worker's narrow `UPDATE (id)` grant for one rollback window,
+so the previous Python image remains compatible while the new image rolls out.
+The deployment consults `clash_lens_schema_migrations` and applies only missing
+forward migrations; a normal `up` never replays 0002 or an already-recorded
+0003. Runtime role passwords are still reconciled on every `up` through the
+separate role-configuration step.
+
 - `init` starts PostgreSQL, waits for readiness, and applies migration 0001
   only on an absent database. On a version-1 or version-2 database it fails
   without side effects.
 - `up` builds the collector image, then migrates the contract to version 2.
-  On an absent database it applies migration 0001 first. It starts the
-  bridge collector against contract version 1, applies migration 0002,
-  configures the three runtime role passwords, removes the bridge, and
-  starts the required collector. On a version-1 database it uses the same
-  bridge path. On a version-2 database it reapplies migration 0002 and the
-  role passwords without a bridge. The bridge-before-migration order keeps
-  the collector's version-1 observation-job insert valid while the schema
-  advances. `up` finishes only when `/readyz` reports `"ready":true`.
+  On an absent database it applies migrations 0001, 0002, and 0003 before
+  configuring the three runtime role passwords and starting the required
+  collector. On a version-1 database it starts the bridge collector, applies
+  missing migrations 0002 and 0003, configures roles, removes the bridge, and
+  starts the required collector. On a version-2 database it applies only
+  missing forward migrations and reconciles role passwords without a bridge.
+  The bridge-before-migration order keeps the collector's version-1
+  observation-job insert valid while the schema advances. `up` finishes only
+  when `/readyz` reports `"ready":true`.
+- PostgreSQL shared-memory size is a container-creation setting. If an
+  existing PostgreSQL container was created with a different value (or before
+  the deployment labelled the value), `up` fails before migration and tells
+  the operator to run `stack-down`, then `up`. This recreates containers while
+  preserving the named database volume.
+- The PostgreSQL metrics profile is also a container-creation setting. If an
+  existing container predates the `step6-v1` profile label, `up` gives the same
+  `stack-down`, then `up` instruction. The recreated container preloads
+  `pg_stat_statements` and enables I/O and WAL I/O timing while preserving the
+  named database volume.
 - `build-collector` and `build-python` build the immutable images only.
 - `python-up` builds the Python image, then starts the private API and the
   production worker and waits for both health checks. It requires contract
@@ -133,7 +211,10 @@ curl --fail http://127.0.0.1:8081/readyz
   `api-start` and `worker-start` start one role each without building.
   They require the Python image to exist.
 - `status` shows the network, volume, every container with its health, and
-  the worker queue line without loading unrelated secrets.
+  the worker queue line without loading unrelated secrets. It shows every
+  configured worker replica (`python-worker-1` through
+  `python-worker-<N>`) and flags any surplus or legacy worker container
+  that a later start or down command will remove.
 
 Completion: `init` and `up` exit with status `0`, `status` shows the
 containers, and `/readyz` reports `"ready":true`.
@@ -149,9 +230,9 @@ After `up` has advanced the contract to version 2:
 ```
 
 `python-up` verifies that the contract is version 2, builds the Python
-image, and starts two containers from the same image with different
-commands. Both run with a read-only root filesystem, dropped capabilities,
-explicit resource budgets, and file-backed secrets.
+image, and starts the private API plus `CLASHLENS_WORKER_REPLICAS` worker
+containers from the same image. All run with a read-only root filesystem,
+dropped capabilities, explicit resource budgets, and file-backed secrets.
 
 The private API listens on `0.0.0.0:8000` inside the private network under
 the stable alias `python-api`. It has no published host port; approved
@@ -160,15 +241,35 @@ database role, its HMAC proof files, one interactive official key file, and
 the fixed-egress proxy URL. It never receives archive credentials or the
 normal key pool.
 
-The worker receives its own database role and a read-only archive
-credential. On merged main, it claims and processes one leased Python job at a
-time. Each serial processing pass stops when the queue is idle or the
-configured `--max-jobs` count is reached. It writes product data only inside
-fenced transactions and never receives official API keys, HMAC files, or the
-API role.
+The worker runs as identical replicas named
+`clashlens-python-worker-1` through `clashlens-python-worker-<N>` (the
+name base comes from `CLASHLENS_PYTHON_WORKER_CONTAINER`). Every replica
+claims any supported Python job from the same shared queue — no replica is
+bound to a job type or endpoint — and each replica has its own container
+name and its own `--owner` value. All replicas share the worker database
+role and the read-only archive credential through the same three
+file-backed secrets. Replicas never receive official API keys, HMAC files,
+or the API role. Every job writes product data only inside its fenced
+transaction.
 
-`queue-status` prints the worker queue summary from inside the worker
-container. `status` includes the same summary line when the worker runs.
+Every replica receives the configured `--concurrency`,
+`--database-pool-size`, and `--archive-pool-size` bounds from
+`CLASHLENS_WORKER_CONCURRENCY`, `CLASHLENS_WORKER_DATABASE_POOL_SIZE`, and
+`CLASHLENS_WORKER_ARCHIVE_POOL_SIZE`. These worker-only settings are never
+forwarded to the collector environment.
+
+The deployment replaces the shared worker secrets only after every worker
+container has stopped, so no running replica ever mounts a replaced
+secret. When the configured count is reduced, surplus replica containers
+are stopped and removed on the next `python-start`, `worker-start`, or
+down command; a legacy single-worker container from before replicas is
+stopped and removed the same way.
+
+`queue-status` prints the shared queue summary from inside replica 1.
+`status` includes the same summary line when a replica runs, shows every
+configured replica with its health, and flags any surplus or legacy worker
+container. `logs python-worker` shows replica 1; `logs python-worker-N`
+shows that specific replica.
 
 Completion: `status` shows the API and worker as healthy, and `queue-status`
 prints the queue summary without secrets.
@@ -236,6 +337,7 @@ Use only the supported lifecycle commands:
 ./deploy.sh logs postgres
 ./deploy.sh logs python-api
 ./deploy.sh logs python-worker
+./deploy.sh logs python-worker-2
 ./deploy.sh logs website
 ./deploy.sh restart
 ./deploy.sh python-start
@@ -253,12 +355,13 @@ Use only the supported lifecycle commands:
 
 Shutdown is graceful and ordered. Every stop sends SIGTERM with a grace
 period before removal: worker `lease + 10` seconds, API and collector 30
-seconds, PostgreSQL 60 seconds. `down` stops the worker, then the API, then
-the collector, then PostgreSQL, and removes all containers while keeping the
-network and the data volume. `stack-down` stops the collector and
-PostgreSQL only. `python-down`, `api-down`, and `worker-down` stop one
-Python scope only. None of the down commands deletes evidence or database
-data.
+seconds, PostgreSQL 60 seconds. `down` stops the website, then every
+worker replica, then the API, then the collector, then PostgreSQL, and
+removes all containers while keeping the network and the data volume.
+`stack-down` stops the collector and PostgreSQL only. `python-down`,
+`api-down`, and `worker-down` stop one Python scope only; `worker-down`
+stops every worker replica, including surplus and legacy worker
+containers. None of the down commands deletes evidence or database data.
 
 Completion: each down command exits with status `0`, and `status` shows the
 expected remaining containers.
@@ -311,16 +414,21 @@ forward-only in this first deployment.
 - Application rollback is start-only. Select a previous compatible image
   tag with `CLASHLENS_COLLECTOR_IMAGE` or `CLASHLENS_PYTHON_IMAGE`, then run
   `./deploy.sh restart` or `./deploy.sh python-start`. These commands never
-  build and never run SQL. The previous image must be compatible with
-  contract version 2.
+  build and never run SQL; `python-start` starts every worker replica from
+  the selected image. The previous image must be compatible with contract
+  version 2 and every applied forward migration. Migration 0003 deliberately
+  retains the prior direct-lock Python image's narrow `UPDATE (id)` privilege
+  for one rollback window, so that image remains start-only compatible. A
+  later migration may revoke the privilege only after the image leaves the
+  supported rollback window.
 - For an incompatible schema change, stop the collector and Python
   containers, keep the volume, and restore a tested PostgreSQL backup before
   starting the old image. Immutable archive objects are not removed by
   `down` and are not rolled back.
 - Role password rotation: change the role password in `app.env`, then run
-  `./deploy.sh up`. `up` always reapplies migration 0002 and reconfigures
-  the three role passwords through admin `psql` stdin. `restart` does not
-  touch passwords. The admin password rotation requires a separate
+  `./deploy.sh up`. `up` applies only missing forward migrations and always
+  reconfigures the three role passwords through admin `psql` stdin. `restart`
+  does not touch passwords. The admin password rotation requires a separate
   `init`-style admin operation and is not part of this runbook.
 - HMAC rotation: configure `CLASHLENS_HMAC_PREVIOUS_KEY_ID` and
   `CLASHLENS_HMAC_PREVIOUS_SECRET_FILE` together, run `python-up` or
@@ -331,7 +439,8 @@ forward-only in this first deployment.
   `restart` so the collector secrets are recreated from the new files.
 - Archive credential rotation: change the archive settings in `app.env`,
   then run `up` and `python-start` so the collector and worker secrets are
-  recreated.
+  recreated. `python-start` stops every worker replica before it replaces
+  the shared worker secrets, so rotation is safe with replicas running.
 
 Secret rotation scope: the deployment replaces every Podman file secret on
 each start (`secret create --replace`). No rotation command prints or logs a

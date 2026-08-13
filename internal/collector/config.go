@@ -12,6 +12,15 @@ import (
 	"time"
 )
 
+// The collector PostgreSQL pool is explicitly bounded. The safe default of
+// 16 preserves pgxpool's behavior on the 16-thread production host. The
+// measured target profile explicitly raises it to 32 for 32 normal workers;
+// the deployment validates 1-64.
+const (
+	defaultCollectorDatabasePoolSize = 16
+	maximumCollectorDatabasePoolSize = 64
+)
+
 type collectorConfig struct {
 	databaseURL             string
 	schemaVersion           int
@@ -28,6 +37,7 @@ type collectorConfig struct {
 	keys                    []APIKey
 	requestsPerSecondPerKey int
 	workersPerKey           int
+	databasePoolSize        int
 	pollCycle               time.Duration
 	scheduleBatchSize       int
 	leaseDuration           time.Duration
@@ -94,6 +104,7 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 		officialAPIProxyURL:     strings.TrimSpace(getenv("CLASHLENS_OFFICIAL_API_PROXY_URL")),
 		requestsPerSecondPerKey: 30,
 		workersPerKey:           8,
+		databasePoolSize:        defaultCollectorDatabasePoolSize,
 		pollCycle:               5 * time.Minute,
 		scheduleBatchSize:       1000,
 		leaseDuration:           30 * time.Second,
@@ -188,6 +199,15 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	}
 	if err := optionalInt(getenv, "CLASHLENS_WORKERS_PER_KEY", &config.workersPerKey); err != nil {
 		return collectorConfig{}, err
+	}
+	if err := optionalInt(getenv, "CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE", &config.databasePoolSize); err != nil {
+		return collectorConfig{}, err
+	}
+	if config.databasePoolSize < 1 || config.databasePoolSize > maximumCollectorDatabasePoolSize {
+		return collectorConfig{}, fmt.Errorf(
+			"CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE must be between 1 and %d",
+			maximumCollectorDatabasePoolSize,
+		)
 	}
 	if value := strings.TrimSpace(getenv("CLASHLENS_RETRY_JITTER_FRACTION")); value != "" {
 		parsed, parseError := strconv.ParseFloat(value, 64)

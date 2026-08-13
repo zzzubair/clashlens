@@ -13,6 +13,10 @@ type capacityPool string
 const (
 	normalPool      capacityPool = "normal"
 	interactivePool capacityPool = "interactive"
+	// recoveryPool is a claim lane, not an API-key pool. Recovery requests
+	// use the one shared interactive key through their own database permit
+	// budget and therefore never occupy interactive worker slots.
+	recoveryPool capacityPool = "recovery"
 )
 
 var (

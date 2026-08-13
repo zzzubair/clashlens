@@ -58,18 +58,26 @@ func newWorker(
 }
 
 func (w *worker) runOnce(ctx context.Context, pool capacityPool) (bool, error) {
+	readinessStartedAt := time.Now()
 	if w.config.dependenciesReady != nil {
 		if err := w.config.dependenciesReady(ctx); err != nil {
+			w.config.metrics.recordStageDuration("dependency_readiness", time.Since(readinessStartedAt))
 			return false, err
 		}
 	}
-	if err := w.keys.readyForPool(pool); err != nil {
+	w.config.metrics.recordStageDuration("dependency_readiness", time.Since(readinessStartedAt))
+	keyPool := pool
+	if pool == recoveryPool {
+		keyPool = interactivePool
+	}
+	if err := w.keys.readyForPool(keyPool); err != nil {
 		return false, err
 	}
 	leaseToken, err := randomToken()
 	if err != nil {
 		return false, err
 	}
+	claimStartedAt := time.Now()
 	job, err := w.store.claimNext(
 		ctx,
 		w.config.owner,
@@ -78,10 +86,15 @@ func (w *worker) runOnce(ctx context.Context, pool capacityPool) (bool, error) {
 		w.config.leaseDuration,
 		leaseToken,
 	)
+	w.config.metrics.recordStageDuration("claim", time.Since(claimStartedAt))
 	if err != nil || job == nil {
 		return false, err
 	}
 	w.config.metrics.recordJob(job.workType, string(job.pool), "claimed")
+	jobStartedAt := time.Now()
+	defer func() {
+		w.config.metrics.recordStageDuration("job", time.Since(jobStartedAt))
+	}()
 	if w.config.logger != nil {
 		w.config.logger.InfoContext(
 			ctx,
@@ -93,7 +106,9 @@ func (w *worker) runOnce(ctx context.Context, pool capacityPool) (bool, error) {
 	}
 	jobContext, stopHeartbeat := w.startLeaseHeartbeat(ctx, job)
 
+	prepareStartedAt := time.Now()
 	attemptID, endpoints, err := w.store.prepareAttempt(jobContext, job, time.Now().UTC())
+	w.config.metrics.recordStageDuration("prepare_attempt", time.Since(prepareStartedAt))
 	if errors.Is(err, errJobCancelled) {
 		_ = stopHeartbeat()
 		return true, nil
@@ -125,6 +140,7 @@ func (w *worker) runOnce(ctx context.Context, pool capacityPool) (bool, error) {
 	for endpointError := range errorsByEndpoint {
 		endpointErrors = append(endpointErrors, endpointError)
 	}
+	resolutionStartedAt := time.Now()
 	finishError := w.store.resolveAttempt(
 		jobContext,
 		job,
@@ -132,6 +148,7 @@ func (w *worker) runOnce(ctx context.Context, pool capacityPool) (bool, error) {
 		time.Now().UTC(),
 		w.config.maximumRetries,
 	)
+	w.config.metrics.recordStageDuration("attempt_resolution", time.Since(resolutionStartedAt))
 	if finishError != nil {
 		endpointErrors = append(endpointErrors, finishError)
 	}
@@ -174,7 +191,7 @@ func (w *worker) collectEndpoint(
 	for {
 		var key APIKey
 		var err error
-		if job.pool == interactivePool {
+		if job.pool == interactivePool || job.retryClass == "recovery" {
 			key, err = w.keys.sharedInteractiveKey()
 		} else {
 			key, err = w.keys.acquire(ctx, job.pool)
@@ -182,10 +199,12 @@ func (w *worker) collectEndpoint(
 		if err != nil {
 			return err
 		}
-		if err := w.acquireSharedPermitForRequest(ctx, key); err != nil {
+		if err := w.acquireSharedPermitForRequest(ctx, key, job); err != nil {
 			return err
 		}
+		requestStartStartedAt := time.Now()
 		requestCount, err := w.store.beginEndpointRequest(ctx, job, attemptID, endpoint, time.Now().UTC())
+		w.config.metrics.recordStageDuration("request_start", time.Since(requestStartStartedAt))
 		if err != nil {
 			return err
 		}
@@ -201,6 +220,7 @@ func (w *worker) collectEndpoint(
 				duration,
 			)
 		}
+		w.config.metrics.recordStageDuration("official_api_"+string(endpoint), duration)
 		if err != nil {
 			failedAt := time.Now().UTC()
 			nextRetryAt := w.config.retryPolicy.nextRetryAt(failedAt, requestCount, "")
@@ -269,7 +289,9 @@ func (w *worker) collectEndpoint(
 		}
 		digest := sha256.Sum256(response.body)
 		hash := hex.EncodeToString(digest[:])
+		archiveStartedAt := time.Now()
 		archiveReference, err := w.archive.store(ctx, hash, response.body)
+		w.config.metrics.recordStageDuration("archive_write", time.Since(archiveStartedAt))
 		if err != nil {
 			failureCategory := "archive_write_failed"
 			if errors.Is(err, errArchiveChecksumMismatch) {
@@ -320,7 +342,8 @@ func (w *worker) collectEndpoint(
 			nextRetryAt = &retryAt
 			outcome = "retrying"
 		}
-		if err := w.store.commitObservation(
+		observationCommitStartedAt := time.Now()
+		err = w.store.commitObservation(
 			ctx,
 			job,
 			attemptID,
@@ -333,7 +356,9 @@ func (w *worker) collectEndpoint(
 			key.Label,
 			outcome,
 			nextRetryAt,
-		); err != nil {
+		)
+		w.config.metrics.recordStageDuration("observation_commit", time.Since(observationCommitStartedAt))
+		if err != nil {
 			w.config.metrics.recordStorageError("database_transaction_failed")
 			if w.config.logger != nil {
 				w.config.logger.WarnContext(
@@ -382,7 +407,7 @@ func (w *worker) collectEndpoint(
 	}
 }
 
-func (w *worker) acquireSharedPermitForRequest(ctx context.Context, key APIKey) error {
+func (w *worker) acquireSharedPermitForRequest(ctx context.Context, key APIKey, job *collectionJob) error {
 	if key.Pool != interactivePool {
 		return nil
 	}
@@ -397,8 +422,9 @@ func (w *worker) acquireSharedPermitForRequest(ctx context.Context, key APIKey) 
 	if err := w.store.registerSharedCredential(ctx, fingerprint, 29, 1, 30, "collector:worker"); err != nil {
 		return err
 	}
+	caller := sharedPermitCaller(job, w.store.recoveryRetrySupported)
 	for {
-		permit, err := w.store.acquireSharedPermit(ctx, fingerprint, "go")
+		permit, err := w.store.acquireSharedPermit(ctx, fingerprint, caller)
 		if err != nil {
 			return err
 		}
@@ -426,6 +452,13 @@ func (w *worker) acquireSharedPermitForRequest(ctx context.Context, key APIKey) 
 		case <-timer.C:
 		}
 	}
+}
+
+func sharedPermitCaller(job *collectionJob, recoverySupported bool) string {
+	if recoverySupported && job != nil && job.retryClass == "recovery" {
+		return "go_recovery"
+	}
+	return "go"
 }
 
 func retryableHTTPStatus(statusCode int) bool {

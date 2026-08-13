@@ -22,7 +22,9 @@ def text(value: object) -> str:
 
 
 @contextmanager
-def migrated_production_database(database_url: str) -> Iterator[str]:
+def migrated_production_database(
+    database_url: str, *, include_migration_0003: bool = True
+) -> Iterator[str]:
     schema = f"python_api_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
         admin.execute(f'CREATE SCHEMA "{schema}"')
@@ -41,6 +43,12 @@ def migrated_production_database(database_url: str) -> Iterator[str]:
             # The production migration is the only authoritative 0002 path and
             # must be safe to apply again.
             connection.execute(migration_0002)
+            if include_migration_0003:
+                connection.execute(
+                    (ROOT / "deploy/migrations/0003_regular_poll_dedup.sql").read_text(
+                        encoding="utf-8"
+                    )
+                )
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -411,7 +419,11 @@ def test_python_migration_normalizes_all_legacy_source_parser_versions(
         "battle-log-parser-v1",
         "global-player-rankings-parser-v1",
     )
-    with migrated_production_database(database_url) as connection_info:
+    # Migration 0002 is frozen once 0003 has been applied. Exercise its legacy
+    # normalization idempotency at the v2 boundary where replay was supported.
+    with migrated_production_database(
+        database_url, include_migration_0003=False
+    ) as connection_info:
         with psycopg.connect(connection_info) as connection:
             for index, parser_version in enumerate(legacy_versions, 1):
                 connection.execute(

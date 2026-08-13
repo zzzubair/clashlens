@@ -12,6 +12,14 @@ fail() {
   exit 1
 }
 
+grep -Fq 'COPY --chown=10001:10001 src /opt/clashlens/src' \
+  "$ROOT_DIR/python/Containerfile" || \
+  fail 'python image source is not readable by its runtime user'
+grep -Fq 'COPY --chown=10001:10001 testdata/legend_i_profile_v1.json' \
+  "$ROOT_DIR/python/Containerfile" || \
+  fail 'python image testdata is not readable by its runtime user'
+printf 'ok: python image owns runtime files as the runtime user\n'
+
 # ---------------------------------------------------------------------------
 # Shared fake Podman. State lives in $FAKE_STATE; every command line is
 # appended escaped to $FAKE_PODMAN_LOG. The fake models enough state for the
@@ -87,7 +95,11 @@ case "$verb" in
         ;;
       inspect)
         name=${!#}
-        if [[ "$*" == *"State.Health.Status"* ]]; then
+        if [[ "$*" == *"org.clashlens.postgres-shm-size"* ]]; then
+          cat "$FAKE_STATE/containers/$name.postgres-shm-size" 2>/dev/null || true
+        elif [[ "$*" == *"org.clashlens.postgres-metrics-profile"* ]]; then
+          cat "$FAKE_STATE/containers/$name.postgres-metrics-profile" 2>/dev/null || true
+        elif [[ "$*" == *"State.Health.Status"* ]]; then
           if [[ -f "$FAKE_STATE/containers/$name.health" ]]; then
             cat "$FAKE_STATE/containers/$name.health"
           else
@@ -119,9 +131,17 @@ case "$verb" in
     ;;
   run)
     name=""
+    postgres_shm_size=""
+    postgres_metrics_profile=""
     while (( $# > 0 )); do
       if [[ "$1" == "--name" && $# -ge 2 ]]; then
         name=$2
+        shift 2
+      elif [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.postgres-shm-size=* ]]; then
+        postgres_shm_size=${2#*=}
+        shift 2
+      elif [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.postgres-metrics-profile=* ]]; then
+        postgres_metrics_profile=${2#*=}
         shift 2
       else
         shift
@@ -129,6 +149,12 @@ case "$verb" in
     done
     mkdir -p "$FAKE_STATE/containers/$name"
     : >"$FAKE_STATE/containers/$name.running"
+    if [[ -n "$postgres_shm_size" ]]; then
+      printf '%s' "$postgres_shm_size" >"$FAKE_STATE/containers/$name.postgres-shm-size"
+    fi
+    if [[ -n "$postgres_metrics_profile" ]]; then
+      printf '%s' "$postgres_metrics_profile" >"$FAKE_STATE/containers/$name.postgres-metrics-profile"
+    fi
     ;;
   exec)
     interactive=false
@@ -145,9 +171,14 @@ case "$verb" in
       cat >"$FAKE_STATE/stdin/exec-$n"
       if grep -Fq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$FAKE_STATE/stdin/exec-$n"; then
         printf '1' >"$FAKE_STATE/contract_version"
+        printf '%s\n' 1 >>"$FAKE_STATE/schema_migrations"
       fi
       if grep -q 'collector_reset_baseline_sweeps' "$FAKE_STATE/stdin/exec-$n"; then
         printf '2' >"$FAKE_STATE/contract_version"
+        printf '%s\n' 2 >>"$FAKE_STATE/schema_migrations"
+      fi
+      if grep -q 'VALUES (3)' "$FAKE_STATE/stdin/exec-$n"; then
+        printf '%s\n' 3 >>"$FAKE_STATE/schema_migrations"
       fi
     fi
     if [[ "$*" == *"SELECT version FROM clash_lens_contract"* ]]; then
@@ -155,6 +186,17 @@ case "$verb" in
         cat "$FAKE_STATE/contract_version"
       else
         exit 1
+      fi
+    fi
+    if [[ "$*" =~ SELECT\ EXISTS.*clash_lens_schema_migrations.*version\ =\ ([0-9]+) ]]; then
+      migration_version=${BASH_REMATCH[1]}
+      if grep -qx "$migration_version" "$FAKE_STATE/schema_migrations" 2>/dev/null; then
+        printf 't\n'
+      elif [[ -f "$FAKE_STATE/contract_version" ]] &&
+        (( migration_version <= $(cat "$FAKE_STATE/contract_version") )); then
+        printf 't\n'
+      else
+        printf 'f\n'
       fi
     fi
     if [[ "$*" == *"queue-status"* ]]; then
@@ -262,6 +304,7 @@ CLASHLENS_COLLECTOR_MEMORY=256m
 CLASHLENS_COLLECTOR_CPUS=1.0
 CLASHLENS_COLLECTOR_PIDS=128
 CLASHLENS_POSTGRES_MEMORY=512m
+CLASHLENS_POSTGRES_SHM_SIZE=128m
 CLASHLENS_POSTGRES_CPUS=1.5
 CLASHLENS_POSTGRES_PIDS=256
 CLASHLENS_API_MEMORY=192m
@@ -276,6 +319,10 @@ CLASHLENS_WEBSITE_MEMORY=128m
 CLASHLENS_WEBSITE_CPUS=0.5
 CLASHLENS_WEBSITE_PIDS=128
 CLASHLENS_WORKER_LEASE_SECONDS=60
+CLASHLENS_WORKER_CONCURRENCY=20
+# A non-production, non-default value proves exact command wiring.
+CLASHLENS_WORKER_DATABASE_POOL_SIZE=5
+CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=20
 EOF
   chmod 0600 "$envfile"
 }
@@ -311,12 +358,12 @@ deploy_fails() {
 
 log_has() {
   local log=$1 pattern=$2 description=$3
-  grep -q "$pattern" "$log" || fail "$description"
+  grep -q -- "$pattern" "$log" || fail "$description"
 }
 
 log_lacks() {
   local log=$1 pattern=$2 description=$3
-  grep -q "$pattern" "$log" && fail "$description" || true
+  grep -q -- "$pattern" "$log" && fail "$description" || true
 }
 
 norm_log() {
@@ -457,6 +504,7 @@ printf 'ok: resource budgets are required, explicit, and validated before side e
 FRESH_DIR=$(new_scenario)
 FRESH_ENV="$FRESH_DIR/app.env"
 write_scenario_env "$FRESH_ENV" "$FRESH_DIR/keys"
+printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=3' >>"$FRESH_ENV"
 deploy "$FRESH_DIR" "$FRESH_ENV" -- up >/dev/null
 
 FRESH_LOG="$FRESH_DIR/podman.log"
@@ -470,6 +518,8 @@ grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$FRESH_DIR/state/stdin"
   fail 'migration 0001 was not applied on an absent database'
 grep -lq 'collector_reset_baseline_sweeps' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'migration 0002 was not applied on a fresh database'
+grep -lq 'collector_jobs_one_active_regular_poll_per_player' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
+  fail 'migration 0003 was not applied on a fresh database'
 grep -lq 'ALTER ROLE clashlens_collector' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'collector role password was not configured through psql stdin'
 grep -lq 'ALTER ROLE clashlens_python_worker' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
@@ -497,13 +547,15 @@ required_run=$(grep '^run ' "$FRESH_NORM" | grep 'clashlens-collector:deployment
 bridge_line=$(first_line "$FRESH_LOG" 'clashlens-collector-bridge' || true)
 migration1_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '1p' | cut -d: -f1)
 migration2_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '2p' | cut -d: -f1)
-role_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '3p' | cut -d: -f1)
+migration3_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '3p' | cut -d: -f1)
+role_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '4p' | cut -d: -f1)
 required_line=$(first_line "$FRESH_LOG" '^run .*--name clashlens-collector ')
 [[ -z "$bridge_line" && -n "$migration1_line" && -n "$migration2_line" \
-  && -n "$role_line" && -n "$required_line" ]] || \
+  && -n "$migration3_line" && -n "$role_line" && -n "$required_line" ]] || \
   fail 'could not locate fresh migration/role/required order lines'
 (( migration1_line < migration2_line )) || fail 'migration 0001 did not run before migration 0002'
-(( migration2_line < role_line )) || fail 'roles were configured before migration 0002'
+(( migration2_line < migration3_line )) || fail 'migration 0002 did not run before migration 0003'
+(( migration3_line < role_line )) || fail 'roles were configured before forward migrations'
 (( role_line < required_line )) || fail 'required collector started before roles were configured'
 (( migration2_line < required_line )) || fail 'migration 0002 did not run before the required collector'
 [[ ! -f "$(secret_file "$FRESH_DIR" clashlens-bridge-database-url)" ]] || \
@@ -545,6 +597,8 @@ required_normalized=$required_run
 [[ "$required_normalized" != *'--env CLASHLENS_API_BASE_URL='* \
   && "$required_normalized" != *'--env CLASHLENS_API_PROXY_URL='* ]] || \
   fail 'collector received unsupported official API setting names'
+[[ "$required_normalized" == *'--env CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=16'* ]] || \
+  fail 'collector did not receive the bounded database pool size default'
 
 postgres_run=$(grep '^run ' "$FRESH_NORM" | grep 'postgres:17-alpine')
 postgres_normalized=$(norm_log <<<"$postgres_run")
@@ -556,6 +610,14 @@ postgres_normalized=$(norm_log <<<"$postgres_run")
   fail 'PostgreSQL password secret mount is missing'
 [[ "$postgres_normalized" == *'--memory 512m'* && "$postgres_normalized" == *'--pids-limit 256'* && "$postgres_normalized" == *'--cpus 1.5'* ]] || \
   fail 'PostgreSQL did not receive its explicit resource budget'
+[[ "$postgres_normalized" == *'--shm-size 128m'* ]] || \
+  fail 'PostgreSQL did not receive its explicit shared-memory budget'
+[[ "$postgres_normalized" == *'--label org.clashlens.postgres-metrics-profile=step6-v1'* \
+  && "$postgres_normalized" == *'shared_preload_libraries=pg_stat_statements'* \
+  && "$postgres_normalized" == *'pg_stat_statements.track=all'* \
+  && "$postgres_normalized" == *'track_io_timing=on'* \
+  && "$postgres_normalized" == *'track_wal_io_timing=on'* ]] || \
+  fail 'PostgreSQL did not receive the Step 6 statement and I/O metrics profile'
 
 [[ "$required_normalized" == *'--memory 256m'* && "$required_normalized" == *'--pids-limit 128'* && "$required_normalized" == *'--cpus 1.0'* ]] || \
   fail 'collector did not receive its explicit resource budget'
@@ -564,7 +626,9 @@ postgres_normalized=$(norm_log <<<"$postgres_run")
 for setting in CLASHLENS_COLLECTOR_DB_PASSWORD CLASHLENS_WORKER_DB_PASSWORD CLASHLENS_API_DB_PASSWORD \
   CLASHLENS_WORKER_ARCHIVE_ACCESS_KEY CLASHLENS_WORKER_ARCHIVE_SECRET_KEY \
   CLASHLENS_HMAC_SECRET_FILE CLASHLENS_HMAC_CALLER CLASHLENS_HMAC_KEY_ID \
-  CLASHLENS_INTERACTIVE_API_KEY_FILE; do
+  CLASHLENS_INTERACTIVE_API_KEY_FILE CLASHLENS_WORKER_REPLICAS \
+  CLASHLENS_WORKER_CONCURRENCY CLASHLENS_WORKER_DATABASE_POOL_SIZE \
+  CLASHLENS_WORKER_ARCHIVE_POOL_SIZE; do
   [[ "$required_normalized" != *"--env $setting "* ]] || \
     fail "$setting leaked into collector environment metadata"
 done
@@ -595,6 +659,8 @@ if grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$V1_DIR/state/stdin"
 fi
 grep -lq 'collector_reset_baseline_sweeps' "$V1_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'migration 0002 was not applied on a v1 database'
+grep -lq 'collector_jobs_one_active_regular_poll_per_player' "$V1_DIR/state/stdin"/exec-* 2>/dev/null || \
+  fail 'migration 0003 was not applied on a v1 database'
 grep -lq 'ALTER ROLE clashlens_collector' "$V1_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'roles were not configured on a v1 database'
 log_has "$V1_DIR/podman.log" 'clashlens-collector-bridge' 'bridge was not used on a v1 database'
@@ -612,7 +678,8 @@ assert_no_sentinel_in_log "$V1_DIR/podman.log"
 printf 'ok: up on v1 stops the existing collector before applying 0002 through the bridge\n'
 
 # ---------------------------------------------------------------------------
-# Scenario C: up on v2 reapplies only 0002 and never runs a bridge.
+# Scenario C: up on v2 applies only missing forward migrations and never
+# replays a recorded migration or runs a bridge.
 # ---------------------------------------------------------------------------
 V2_DIR=$(new_scenario)
 V2_ENV="$V2_DIR/app.env"
@@ -620,17 +687,24 @@ write_scenario_env "$V2_ENV" "$V2_DIR/keys"
 printf '2' >"$V2_DIR/state/contract_version"
 deploy "$V2_DIR" "$V2_ENV" -- up >/dev/null
 [[ -n "$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f)" ]] || fail 'no psql stdin was captured on a v2 database'
-if grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$V2_DIR/state/stdin"/exec-* 2>/dev/null; then
-  fail 'migration 0001 was applied on a v2 database'
+if grep -Flq 'UPDATE clash_lens_contract' "$V2_DIR/state/stdin"/exec-* 2>/dev/null; then
+  fail 'migration 0002 was replayed on a v2 database'
 fi
-[[ "$(grep -l 'collector_reset_baseline_sweeps' "$V2_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
-  fail 'migration 0002 was not reapplied exactly once on a v2 database'
+[[ "$(grep -l 'collector_jobs_one_active_regular_poll_per_player' "$V2_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
+  fail 'missing migration 0003 was not applied exactly once on a v2 database'
 grep -lq 'ALTER ROLE clashlens_collector' "$V2_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'roles were not configured on a v2 database'
 log_lacks "$V2_DIR/podman.log" 'clashlens-collector-bridge' 'bridge collector was started on a v2 database'
 log_has "$V2_DIR/podman.log" 'clashlens-collector:deployment' 'required collector was not started on a v2 database'
 assert_no_sentinel_in_log "$V2_DIR/podman.log"
-printf 'ok: up on a v2 database reapplies only 0002 and starts the required collector\n'
+v2_first_up_lines=$(wc -l <"$V2_DIR/podman.log")
+deploy "$V2_DIR" "$V2_ENV" -- up >/dev/null
+v2_second_up=$(tail -n +"$((v2_first_up_lines + 1))" "$V2_DIR/podman.log")
+if rg -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
+  second_up_stdin_count=$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f | wc -l)
+  [[ "$second_up_stdin_count" == "3" ]] || fail 'a recorded forward migration was replayed on second up'
+fi
+printf 'ok: up on v2 applies only missing forward migrations and starts the required collector\n'
 
 # ---------------------------------------------------------------------------
 # Scenario D: init applies 0001 only on an absent database.
@@ -666,6 +740,7 @@ RESTART_DIR=$(new_scenario)
 RESTART_ENV="$RESTART_DIR/app.env"
 write_scenario_env "$RESTART_ENV" "$RESTART_DIR/keys"
 printf '2' >"$RESTART_DIR/state/contract_version"
+printf '3\n' >"$RESTART_DIR/state/schema_migrations"
 mkdir -p "$RESTART_DIR/state/images/localhost"
 : >"$RESTART_DIR/state/images/localhost/clashlens-collector:deployment"
 deploy "$RESTART_DIR" "$RESTART_ENV" -- restart >/dev/null
@@ -680,12 +755,24 @@ RESTART_ABSENT_ENV="$RESTART_ABSENT_DIR/app.env"
 write_scenario_env "$RESTART_ABSENT_ENV" "$RESTART_ABSENT_DIR/keys"
 deploy_fails "$RESTART_ABSENT_DIR" "$RESTART_ABSENT_ENV" 'restart requires contract version 2' -- restart
 
+RESTART_UNMIGRATED_DIR=$(new_scenario)
+RESTART_UNMIGRATED_ENV="$RESTART_UNMIGRATED_DIR/app.env"
+write_scenario_env "$RESTART_UNMIGRATED_ENV" "$RESTART_UNMIGRATED_DIR/keys"
+printf '2' >"$RESTART_UNMIGRATED_DIR/state/contract_version"
+mkdir -p "$RESTART_UNMIGRATED_DIR/state/images/localhost"
+: >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-collector:deployment"
+: >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-python:deployment"
+deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
+  'forward migration 3 is required' -- restart
+deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
+  'forward migration 3 is required' -- python-start
+
 UNKNOWN_DIR=$(new_scenario)
 UNKNOWN_ENV="$UNKNOWN_DIR/app.env"
 write_scenario_env "$UNKNOWN_ENV" "$UNKNOWN_DIR/keys"
 printf '3' >"$UNKNOWN_DIR/state/contract_version"
 deploy_fails "$UNKNOWN_DIR" "$UNKNOWN_ENV" 'unsupported contract version' -- up
-printf 'ok: restart is start-only for v2 and unknown versions are rejected\n'
+printf 'ok: start-only paths require contract v2 and every forward migration\n'
 
 # ---------------------------------------------------------------------------
 # Scenario F: python-up builds then starts API and worker; start paths never
@@ -704,6 +791,8 @@ api_run=$(grep '^run ' "$PY_NORM" | grep 'clashlens-python:deployment' | grep 's
 worker_run=$(grep '^run ' "$PY_NORM" | grep 'clashlens-python:deployment' | grep 'worker ')
 [[ -n "$api_run" ]] || fail 'private Python API was not started'
 [[ -n "$worker_run" ]] || fail 'production Python worker was not started'
+[[ "$worker_run" == *'--name clashlens-python-worker-1'* ]] || \
+  fail 'worker replica 1 does not use its replica container name'
 api_normalized=$(norm_log <<<"$api_run")
 worker_normalized=$(norm_log <<<"$worker_run")
 
@@ -749,8 +838,8 @@ worker_normalized=$(norm_log <<<"$worker_run")
   fail 'worker read-only archive secret secret was not mounted'
 [[ "$worker_normalized" == *'--env CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key'* ]] || \
   fail 'worker archive access key file setting is missing'
-[[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --run-forever'* ]] || \
-  fail 'worker did not receive the configured lease and bounds'
+[[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+  fail 'worker did not receive the configured lease, concurrency, and pool bounds'
 [[ "$worker_normalized" == *'ready --expected-contract-version 2'* ]] || \
   fail 'worker health does not use the ready seam'
 [[ "$worker_normalized" == *'--memory 384m'* && "$worker_normalized" == *'--pids-limit 256'* && "$worker_normalized" == *'--cpus 1.0'* ]] || \
@@ -782,6 +871,7 @@ ROLLBACK_DIR=$(new_scenario)
 ROLLBACK_ENV="$ROLLBACK_DIR/app.env"
 write_scenario_env "$ROLLBACK_ENV" "$ROLLBACK_DIR/keys"
 printf '2' >"$ROLLBACK_DIR/state/contract_version"
+printf '3\n' >"$ROLLBACK_DIR/state/schema_migrations"
 mkdir -p "$ROLLBACK_DIR/state/networks" "$ROLLBACK_DIR/state/containers" "$ROLLBACK_DIR/state/images/localhost"
 mkdir -p "$ROLLBACK_DIR/state/networks/clashlens-private"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres"
@@ -877,9 +967,9 @@ grep -q 'clashlens-postgres' <<<"$api_down_segment" && fail 'api-down touched Po
 segment_before=$(wc -l <"$LIFE_LOG")
 deploy "$LIFE_DIR" "$LIFE_ENV" -- worker-down >/dev/null
 worker_down_segment=$(tail -n +"$((segment_before + 1))" "$LIFE_LOG")
-grep -q '^stop --time 70 clashlens-python-worker' <<<"$worker_down_segment" || \
+grep -q '^stop --time 70 clashlens-python-worker-1' <<<"$worker_down_segment" || \
   fail 'worker stop grace is not at least the configured job lease plus margin'
-grep -q '^rm clashlens-python-worker *$' <<<"$worker_down_segment" || fail 'worker-down did not remove the worker'
+grep -q '^rm clashlens-python-worker-1 *$' <<<"$worker_down_segment" || fail 'worker-down did not remove the worker'
 
 deploy "$LIFE_DIR" "$LIFE_ENV" -- python-up >/dev/null
 deploy "$LIFE_DIR" "$LIFE_ENV" -- website-up >/dev/null
@@ -887,9 +977,9 @@ down_before=$(wc -l <"$LIFE_LOG")
 deploy "$LIFE_DIR" "$LIFE_ENV" -- down >/dev/null
 down_log=$(tail -n +"$((down_before + 1))" "$LIFE_LOG")
 grep -q '^stop --time 30 clashlens-website' <<<"$down_log" || fail 'down did not stop the website first'
-grep -q '^stop --time 70 clashlens-python-worker' <<<"$down_log" || fail 'down did not stop the worker first'
+grep -q '^stop --time 70 clashlens-python-worker-1' <<<"$down_log" || fail 'down did not stop the worker first'
 website_stop_line=$(grep -n '^stop --time 30 clashlens-website' <<<"$down_log" | head -n1 | cut -d: -f1)
-worker_stop_line=$(grep -n '^stop --time 70 clashlens-python-worker' <<<"$down_log" | head -n1 | cut -d: -f1)
+worker_stop_line=$(grep -n '^stop --time 70 clashlens-python-worker-1' <<<"$down_log" | head -n1 | cut -d: -f1)
 api_stop_line=$(grep -n '^stop --time 30 clashlens-python-api' <<<"$down_log" | head -n1 | cut -d: -f1)
 collector_stop_line=$(grep -n '^stop --time 30 clashlens-collector' <<<"$down_log" | head -n1 | cut -d: -f1)
 postgres_stop_line=$(grep -n '^stop --time 60 clashlens-postgres' <<<"$down_log" | head -n1 | cut -d: -f1)
@@ -908,14 +998,14 @@ STATUS_ENV="$STATUS_DIR/app.env"
 write_scenario_env "$STATUS_ENV" "$STATUS_DIR/keys"
 deploy "$STATUS_DIR" "$STATUS_ENV" -- up >/dev/null
 deploy "$STATUS_DIR" "$STATUS_ENV" -- python-up >/dev/null
-for name in clashlens-postgres clashlens-collector clashlens-python-api clashlens-python-worker; do
+for name in clashlens-postgres clashlens-collector clashlens-python-api clashlens-python-worker-1; do
   printf 'healthy\n' >"$STATUS_DIR/state/containers/$name.health"
 done
 output=$(deploy "$STATUS_DIR" "$STATUS_ENV" -- status)
 [[ "$output" == *'postgres: running (healthy)'* ]] || fail 'status did not show postgres health'
 [[ "$output" == *'collector: running (healthy)'* ]] || fail 'status did not show collector health'
 [[ "$output" == *'python-api: running (healthy)'* ]] || fail 'status did not show API health'
-[[ "$output" == *'python-worker: running (healthy)'* ]] || fail 'status did not show worker health'
+[[ "$output" == *'python-worker-1: running (healthy)'* ]] || fail 'status did not show worker health'
 [[ "$output" == *'python queue: {'* ]] || fail 'status did not invoke the worker queue-status seam'
 grep -q 'queue-status' "$STATUS_DIR/podman.log" || fail 'status did not invoke queue-status through the CLI seam'
 assert_no_sentinel_in_log <(printf '%s\n' "$output")
@@ -972,8 +1062,11 @@ for setting in POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD \
   CLASHLENS_NORMAL_API_KEY_FILES CLASHLENS_INTERACTIVE_API_KEY_FILES \
   CLASHLENS_API_KEY_HOST_DIR CLASHLENS_INTERACTIVE_API_KEY_FILE \
   CLASHLENS_HMAC_CALLER CLASHLENS_HMAC_KEY_ID CLASHLENS_HMAC_SECRET_FILE \
-  CLASHLENS_WORKER_LEASE_SECONDS CLASHLENS_HEALTH_HOST CLASHLENS_HEALTH_PORT \
-  CLASHLENS_POSTGRES_MEMORY CLASHLENS_POSTGRES_CPUS CLASHLENS_POSTGRES_PIDS \
+  CLASHLENS_WORKER_LEASE_SECONDS CLASHLENS_WORKER_REPLICAS \
+  CLASHLENS_WORKER_CONCURRENCY CLASHLENS_WORKER_DATABASE_POOL_SIZE \
+  CLASHLENS_WORKER_ARCHIVE_POOL_SIZE CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE \
+  CLASHLENS_HEALTH_HOST CLASHLENS_HEALTH_PORT \
+  CLASHLENS_POSTGRES_MEMORY CLASHLENS_POSTGRES_SHM_SIZE CLASHLENS_POSTGRES_CPUS CLASHLENS_POSTGRES_PIDS \
   CLASHLENS_COLLECTOR_MEMORY CLASHLENS_COLLECTOR_CPUS CLASHLENS_COLLECTOR_PIDS \
   CLASHLENS_API_MEMORY CLASHLENS_API_CPUS CLASHLENS_API_PIDS \
   CLASHLENS_WORKER_MEMORY CLASHLENS_WORKER_CPUS CLASHLENS_WORKER_PIDS \
@@ -1008,10 +1101,338 @@ for marker in 'deploy.sh init' 'deploy.sh up' 'deploy.sh restart' 'deploy.sh pyt
   'deploy.sh api-start' 'deploy.sh worker-start' 'deploy.sh python-start' \
   'deploy.sh queue-status' 'deploy.sh stack-down' 'deploy.sh python-down' \
   'deploy.sh api-down' 'deploy.sh worker-down' 'clashlens-python-api.service' \
-  'bridge' 'contract version' 'Issue 31' 'python-api' 'resource budget'; do
+  'bridge' 'contract version' 'Issue 31' 'python-api' 'resource budget' \
+  'CLASHLENS_WORKER_REPLICAS' 'CLASHLENS_WORKER_CONCURRENCY' \
+  'CLASHLENS_WORKER_DATABASE_POOL_SIZE' 'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE' \
+  'CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE' \
+  'worker replica'; do
   [[ "$deployment_doc" == *"$marker"* ]] || fail "docs/deployment.md no longer documents $marker"
 done
 [[ "$deployment_doc" != *'python-status'* ]] || fail 'docs/deployment.md still references the removed python-status command'
 printf 'ok: systemd units and deployment runbook stay aligned with the script\n'
+
+# ---------------------------------------------------------------------------
+# Scenario L: worker replica count is a bounded positive integer validated
+# before any side effect. The upper bound matches the 16-core host.
+# ---------------------------------------------------------------------------
+for bad_count in 0 abc -1 1.5 17; do
+  REPLICA_BAD_DIR=$(new_scenario)
+  REPLICA_BAD_ENV="$REPLICA_BAD_DIR/app.env"
+  write_scenario_env "$REPLICA_BAD_ENV" "$REPLICA_BAD_DIR/keys"
+  printf '%s\n' "CLASHLENS_WORKER_REPLICAS=$bad_count" >>"$REPLICA_BAD_ENV"
+  deploy_fails "$REPLICA_BAD_DIR" "$REPLICA_BAD_ENV" \
+    'CLASHLENS_WORKER_REPLICAS must be an integer between 1 and 16' -- python-start
+  [[ ! -s "$REPLICA_BAD_DIR/podman.log" ]] || \
+    fail "invalid replica count $bad_count had podman side effects"
+done
+
+REPLICA_MAX_DIR=$(new_scenario)
+REPLICA_MAX_ENV="$REPLICA_MAX_DIR/app.env"
+write_scenario_env "$REPLICA_MAX_ENV" "$REPLICA_MAX_DIR/keys"
+printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=16' >>"$REPLICA_MAX_ENV"
+printf '2' >"$REPLICA_MAX_DIR/state/contract_version"
+printf '3\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
+mkdir -p "$REPLICA_MAX_DIR/state/networks/clashlens-private"
+mkdir -p "$REPLICA_MAX_DIR/state/containers/clashlens-postgres"
+: >"$REPLICA_MAX_DIR/state/containers/clashlens-postgres.running"
+mkdir -p "$REPLICA_MAX_DIR/state/images/localhost"
+: >"$REPLICA_MAX_DIR/state/images/localhost/clashlens-python:deployment"
+deploy "$REPLICA_MAX_DIR" "$REPLICA_MAX_ENV" -- worker-start >/dev/null
+log_has "$REPLICA_MAX_DIR/podman.log" '^run .*--name clashlens-python-worker-16 ' \
+  'replica 16 was not started at the validated upper bound'
+printf 'ok: worker replica count must be an integer between 1 and 16\n'
+
+# ---------------------------------------------------------------------------
+# Scenario L2: worker concurrency and pool sizes are bounded integers
+# validated before any side effect, and the sequential-compatible defaults
+# remain the single-worker behavior.
+# ---------------------------------------------------------------------------
+for bad_value in 'CLASHLENS_WORKER_CONCURRENCY=0' 'CLASHLENS_WORKER_CONCURRENCY=33' \
+  'CLASHLENS_WORKER_CONCURRENCY=abc' 'CLASHLENS_WORKER_CONCURRENCY=1.5' \
+  'CLASHLENS_WORKER_DATABASE_POOL_SIZE=0' 'CLASHLENS_WORKER_DATABASE_POOL_SIZE=65' \
+  'CLASHLENS_WORKER_DATABASE_POOL_SIZE=-2' \
+  'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=0' 'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=65' \
+  'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=abc'; do
+  CONCURRENCY_BAD_DIR=$(new_scenario)
+  CONCURRENCY_BAD_ENV="$CONCURRENCY_BAD_DIR/app.env"
+  write_scenario_env "$CONCURRENCY_BAD_ENV" "$CONCURRENCY_BAD_DIR/keys"
+  printf '%s\n' "$bad_value" >>"$CONCURRENCY_BAD_ENV"
+  setting_name=${bad_value%%=*}
+  deploy_fails "$CONCURRENCY_BAD_DIR" "$CONCURRENCY_BAD_ENV" \
+    "$setting_name must be an integer" -- python-start
+  [[ ! -s "$CONCURRENCY_BAD_DIR/podman.log" ]] || \
+    fail "$bad_value had podman side effects"
+done
+
+# Without the three settings, a single worker must receive the
+# sequential-compatible defaults: concurrency 1, database pool 4, archive
+# pool 4, and exactly one replica.
+DEFAULTS_DIR=$(new_scenario)
+DEFAULTS_RAW="$WORK_DIR/defaults.raw.env"
+DEFAULTS_ENV="$WORK_DIR/defaults.env"
+write_scenario_env "$DEFAULTS_RAW" "$DEFAULTS_DIR/keys"
+grep -v -E 'CLASHLENS_WORKER_(CONCURRENCY|DATABASE_POOL_SIZE|ARCHIVE_POOL_SIZE)=' \
+  "$DEFAULTS_RAW" >"$DEFAULTS_ENV"
+chmod 0600 "$DEFAULTS_ENV"
+printf '2' >"$DEFAULTS_DIR/state/contract_version"
+printf '3\n' >"$DEFAULTS_DIR/state/schema_migrations"
+mkdir -p "$DEFAULTS_DIR/state/networks/clashlens-private"
+mkdir -p "$DEFAULTS_DIR/state/containers/clashlens-postgres"
+: >"$DEFAULTS_DIR/state/containers/clashlens-postgres.running"
+mkdir -p "$DEFAULTS_DIR/state/images/localhost"
+: >"$DEFAULTS_DIR/state/images/localhost/clashlens-python:deployment"
+deploy "$DEFAULTS_DIR" "$DEFAULTS_ENV" -- worker-start >/dev/null
+log_has "$DEFAULTS_DIR/podman.log" \
+  '--concurrency 1 --database-pool-size 4 --archive-pool-size 4' \
+  'default concurrency settings are not sequential-compatible'
+[[ "$(grep -c -- '--name clashlens-python-worker-1 ' "$DEFAULTS_DIR/podman.log")" == "1" ]] || \
+  fail 'default replica count did not stay at one worker'
+
+# The documented upper bounds are accepted and forwarded exactly.
+CONCURRENCY_MAX_DIR=$(new_scenario)
+CONCURRENCY_MAX_ENV="$CONCURRENCY_MAX_DIR/app.env"
+write_scenario_env "$CONCURRENCY_MAX_ENV" "$CONCURRENCY_MAX_DIR/keys"
+printf '%s\n' 'CLASHLENS_WORKER_CONCURRENCY=32' \
+  'CLASHLENS_WORKER_DATABASE_POOL_SIZE=64' \
+  'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=64' >>"$CONCURRENCY_MAX_ENV"
+printf '2' >"$CONCURRENCY_MAX_DIR/state/contract_version"
+printf '3\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
+mkdir -p "$CONCURRENCY_MAX_DIR/state/networks/clashlens-private"
+mkdir -p "$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres"
+: >"$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres.running"
+mkdir -p "$CONCURRENCY_MAX_DIR/state/images/localhost"
+: >"$CONCURRENCY_MAX_DIR/state/images/localhost/clashlens-python:deployment"
+deploy "$CONCURRENCY_MAX_DIR" "$CONCURRENCY_MAX_ENV" -- worker-start >/dev/null
+log_has "$CONCURRENCY_MAX_DIR/podman.log" \
+  '--concurrency 32 --database-pool-size 64 --archive-pool-size 64' \
+  'upper-bound concurrency settings were not passed to the worker'
+printf 'ok: worker concurrency and pool sizes are bounded, validated before side effects, and default to sequential values\n'
+
+# ---------------------------------------------------------------------------
+# Scenario L3: the collector database pool size is a bounded integer validated
+# before any side effect, forwarded exactly to the collector, and never
+# forwarded to the Python worker, API, or website.
+# ---------------------------------------------------------------------------
+for bad_value in 'CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=0' \
+  'CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=65' \
+  'CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=-2' \
+  'CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=abc'; do
+  POOL_BAD_DIR=$(new_scenario)
+  POOL_BAD_ENV="$POOL_BAD_DIR/app.env"
+  write_scenario_env "$POOL_BAD_ENV" "$POOL_BAD_DIR/keys"
+  printf '%s\n' "$bad_value" >>"$POOL_BAD_ENV"
+  deploy_fails "$POOL_BAD_DIR" "$POOL_BAD_ENV" \
+    'CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE must be an integer between 1 and 64' -- restart
+  [[ ! -s "$POOL_BAD_DIR/podman.log" ]] || \
+    fail "$bad_value had podman side effects"
+done
+
+POOL_MAX_DIR=$(new_scenario)
+POOL_MAX_ENV="$POOL_MAX_DIR/app.env"
+write_scenario_env "$POOL_MAX_ENV" "$POOL_MAX_DIR/keys"
+printf '%s\n' 'CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=48' >>"$POOL_MAX_ENV"
+deploy "$POOL_MAX_DIR" "$POOL_MAX_ENV" -- up >/dev/null
+POOL_MAX_NORM="$POOL_MAX_DIR/podman.norm.log"
+norm_log "$POOL_MAX_DIR/podman.log" >"$POOL_MAX_NORM"
+pool_collector_run=$(grep '^run ' "$POOL_MAX_NORM" | grep 'clashlens-collector:deployment')
+pool_collector_normalized=$(norm_log <<<"$pool_collector_run")
+[[ "$pool_collector_normalized" == *'--env CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=48'* ]] || \
+  fail 'collector did not receive the configured bounded database pool size'
+deploy "$POOL_MAX_DIR" "$POOL_MAX_ENV" -- python-up >/dev/null
+deploy "$POOL_MAX_DIR" "$POOL_MAX_ENV" -- website-up >/dev/null
+POOL_MAX_NORM2="$POOL_MAX_DIR/podman.norm2.log"
+norm_log "$POOL_MAX_DIR/podman.log" >"$POOL_MAX_NORM2"
+pool_worker_run=$(grep '^run ' "$POOL_MAX_NORM2" | grep 'clashlens-python:deployment' | grep 'worker ')
+pool_api_run=$(grep '^run ' "$POOL_MAX_NORM2" | grep 'clashlens-python:deployment' | grep 'serve ')
+pool_website_run=$(grep '^run ' "$POOL_MAX_NORM2" | grep 'clashlens-website:deployment')
+for pool_line in "$pool_worker_run" "$pool_api_run" "$pool_website_run"; do
+  [[ "$pool_line" != *'CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE'* ]] || \
+    fail 'collector database pool size leaked to a non-collector container'
+done
+printf 'ok: collector database pool size is bounded, validated before side effects, and collector-only\n'
+
+# ---------------------------------------------------------------------------
+# Scenario M: worker-start replaces shared secrets only after every existing
+# worker container stops, then starts identical replicas with unique names
+# and owners. Surplus and legacy worker containers are removed.
+# ---------------------------------------------------------------------------
+REPLICA_DIR=$(new_scenario)
+REPLICA_ENV="$REPLICA_DIR/app.env"
+write_scenario_env "$REPLICA_ENV" "$REPLICA_DIR/keys"
+printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=3' >>"$REPLICA_ENV"
+printf '2' >"$REPLICA_DIR/state/contract_version"
+printf '3\n' >"$REPLICA_DIR/state/schema_migrations"
+mkdir -p "$REPLICA_DIR/state/networks/clashlens-private"
+mkdir -p "$REPLICA_DIR/state/containers/clashlens-postgres"
+: >"$REPLICA_DIR/state/containers/clashlens-postgres.running"
+mkdir -p "$REPLICA_DIR/state/images/localhost"
+: >"$REPLICA_DIR/state/images/localhost/clashlens-python:deployment"
+# Simulate the previous deployment: a legacy single worker plus replicas 1,
+# 2, 4, and 5 already running.
+for name in clashlens-python-worker clashlens-python-worker-1 \
+  clashlens-python-worker-2 clashlens-python-worker-4 clashlens-python-worker-5; do
+  FAKE_STATE="$REPLICA_DIR/state" FAKE_PODMAN_LOG="$REPLICA_DIR/podman.log" \
+    "$FAKE_BIN/podman" run --detach --name "$name" \
+    localhost/clashlens-python:deployment >/dev/null
+done
+segment_before=$(wc -l <"$REPLICA_DIR/podman.log")
+deploy "$REPLICA_DIR" "$REPLICA_ENV" -- worker-start >/dev/null
+REPLICA_LOG="$REPLICA_DIR/podman.log"
+REPLICA_SEGMENT=$(tail -n +"$((segment_before + 1))" "$REPLICA_LOG")
+REPLICA_NORM=$(norm_log <<<"$REPLICA_SEGMENT")
+
+grep -q '^build ' <<<"$REPLICA_SEGMENT" && fail 'worker-start rebuilt an image'
+
+worker_stop_1=$(grep -n '^stop --time 70 clashlens-python-worker-1' <<<"$REPLICA_SEGMENT" | head -n1 | cut -d: -f1)
+worker_stop_2=$(grep -n '^stop --time 70 clashlens-python-worker-2' <<<"$REPLICA_SEGMENT" | head -n1 | cut -d: -f1)
+worker_stop_4=$(grep -n '^stop --time 70 clashlens-python-worker-4' <<<"$REPLICA_SEGMENT" | head -n1 | cut -d: -f1)
+worker_stop_5=$(grep -n '^stop --time 70 clashlens-python-worker-5' <<<"$REPLICA_SEGMENT" | head -n1 | cut -d: -f1)
+legacy_stop=$(grep -n '^stop --time 70 clashlens-python-worker ' <<<"$REPLICA_SEGMENT" | head -n1 | cut -d: -f1)
+secret_line=$(grep -n '^secret create --replace clashlens-python-worker-database-url ' <<<"$REPLICA_SEGMENT" | head -n1 | cut -d: -f1)
+for line in "$worker_stop_1" "$worker_stop_2" "$worker_stop_4" "$worker_stop_5" "$legacy_stop" "$secret_line"; do
+  [[ -n "$line" ]] || fail 'a worker stop or shared secret replacement line is missing'
+done
+(( worker_stop_1 < secret_line && worker_stop_2 < secret_line && worker_stop_4 < secret_line \
+  && worker_stop_5 < secret_line && legacy_stop < secret_line )) || \
+  fail 'worker containers were not stopped before the shared secrets were replaced'
+
+[[ "$(grep -c '^secret create --replace clashlens-python-worker-database-url ' <<<"$REPLICA_SEGMENT")" == "1" ]] || \
+  fail 'worker database secret was not replaced exactly once for all replicas'
+[[ "$(grep -c '^secret create --replace clashlens-python-worker-archive-access-key ' <<<"$REPLICA_SEGMENT")" == "1" ]] || \
+  fail 'worker archive access secret was not replaced exactly once'
+[[ "$(grep -c '^secret create --replace clashlens-python-worker-archive-secret-key ' <<<"$REPLICA_SEGMENT")" == "1" ]] || \
+  fail 'worker archive secret key was not replaced exactly once'
+
+run_1=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-1 ')
+run_2=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-2 ')
+run_3=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-3 ')
+[[ -n "$run_1" && -n "$run_2" && -n "$run_3" ]] || fail 'not every configured worker replica was started'
+[[ "$run_1" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+  fail 'replica 1 did not receive its unique owner'
+[[ "$run_2" == *'worker --owner production-python-2 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+  fail 'replica 2 did not receive its unique owner'
+[[ "$run_3" == *'worker --owner production-python-3 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+  fail 'replica 3 did not receive its unique owner'
+for run in "$run_1" "$run_2" "$run_3"; do
+  [[ "$run" == *'ready --expected-contract-version 2'* ]] || fail 'a replica health check lost the ready seam'
+  [[ "$run" == *'--concurrency 20 --database-pool-size 5 --archive-pool-size 20'* ]] || \
+    fail 'a replica did not receive the exact configured concurrency and pool sizes'
+  [[ "$run" == *'--memory 384m'* && "$run" == *'--pids-limit 256'* && "$run" == *'--cpus 1.0'* ]] || \
+    fail 'a replica lost its explicit resource budget'
+  [[ "$run" == *'clashlens-python-worker-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400'* ]] || \
+    fail 'a replica lost its file-backed database secret mount'
+  [[ "$run" == *'--network clashlens-private'* ]] || fail 'a replica left the private network'
+  [[ "$run" != *'--publish'* ]] || fail 'a replica published a host port'
+done
+grep -q '^rm clashlens-python-worker-4 *$' <<<"$REPLICA_SEGMENT" || fail 'surplus replica 4 was not removed'
+grep -q '^rm clashlens-python-worker-5 *$' <<<"$REPLICA_SEGMENT" || fail 'surplus replica 5 was not removed'
+grep -q '^rm clashlens-python-worker *$' <<<"$REPLICA_SEGMENT" || fail 'legacy worker container was not removed'
+[[ "$REPLICA_SEGMENT" != *'--name clashlens-python-worker-4 '* && "$REPLICA_SEGMENT" != *'--name clashlens-python-worker-5 '* \
+  && "$REPLICA_SEGMENT" != *'--name clashlens-python-worker '* ]] || \
+  fail 'a surplus or legacy worker container was restarted'
+
+segment_before=$(wc -l <"$REPLICA_LOG")
+deploy "$REPLICA_DIR" "$REPLICA_ENV" -- queue-status >/dev/null
+queue_segment=$(tail -n +"$((segment_before + 1))" "$REPLICA_LOG")
+grep -q '^exec clashlens-python-worker-1 python -m clashlens.cli queue-status' <<<"$queue_segment" || \
+  fail 'queue-status did not run inside replica 1'
+
+segment_before=$(wc -l <"$REPLICA_LOG")
+deploy "$REPLICA_DIR" "$REPLICA_ENV" -- logs python-worker-2 >/dev/null
+logs_segment=$(tail -n +"$((segment_before + 1))" "$REPLICA_LOG")
+grep -q '^logs clashlens-python-worker-2' <<<"$logs_segment" || \
+  fail 'logs python-worker-2 did not target replica 2'
+segment_before=$(wc -l <"$REPLICA_LOG")
+deploy "$REPLICA_DIR" "$REPLICA_ENV" -- logs python-worker >/dev/null
+logs_segment=$(tail -n +"$((segment_before + 1))" "$REPLICA_LOG")
+grep -q '^logs clashlens-python-worker-1' <<<"$logs_segment" || \
+  fail 'logs python-worker did not target replica 1'
+deploy_fails "$REPLICA_DIR" "$REPLICA_ENV" 'must be between 1 and 16' -- logs python-worker-17
+
+output=$(deploy "$REPLICA_DIR" "$REPLICA_ENV" -- status)
+[[ "$output" == *'python-worker-1: running'* ]] || fail 'status did not show replica 1'
+[[ "$output" == *'python-worker-2: running'* ]] || fail 'status did not show replica 2'
+[[ "$output" == *'python-worker-3: running'* ]] || fail 'status did not show replica 3'
+[[ "$output" == *'python queue: {'* ]] || fail 'status did not show the shared queue line'
+assert_no_sentinel_in_log <(printf '%s\n' "$output")
+printf 'ok: worker replicas share one queue, unique names and owners, and stop before shared secret replacement\n'
+
+# ---------------------------------------------------------------------------
+# Scenario N: worker-down, python-down, and down stop every replica,
+# including surplus and legacy worker containers.
+# ---------------------------------------------------------------------------
+DOWN_R_DIR=$(new_scenario)
+DOWN_R_ENV="$DOWN_R_DIR/app.env"
+write_scenario_env "$DOWN_R_ENV" "$DOWN_R_DIR/keys"
+printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=2' >>"$DOWN_R_ENV"
+recreate_workers() {
+  local name
+  for name in clashlens-python-api clashlens-python-worker clashlens-python-worker-1 \
+    clashlens-python-worker-2 clashlens-python-worker-3 clashlens-python-worker-6; do
+    FAKE_STATE="$DOWN_R_DIR/state" FAKE_PODMAN_LOG="$DOWN_R_DIR/podman.log" \
+      "$FAKE_BIN/podman" run --detach --name "$name" \
+      localhost/clashlens-python:deployment >/dev/null
+  done
+}
+recreate_workers
+segment_before=$(wc -l <"$DOWN_R_DIR/podman.log")
+deploy "$DOWN_R_DIR" "$DOWN_R_ENV" -- worker-down >/dev/null
+DOWN_SEGMENT=$(tail -n +"$((segment_before + 1))" "$DOWN_R_DIR/podman.log")
+for name in clashlens-python-worker clashlens-python-worker-1 clashlens-python-worker-2 \
+  clashlens-python-worker-3 clashlens-python-worker-6; do
+  grep -q "^stop --time 70 $name " <<<"$DOWN_SEGMENT" || fail "worker-down did not stop $name"
+  grep -q "^rm $name *$" <<<"$DOWN_SEGMENT" || fail "worker-down did not remove $name"
+done
+[[ "$DOWN_SEGMENT" != *'python-api'* && "$DOWN_SEGMENT" != *'postgres'* ]] || \
+  fail 'worker-down touched the API or PostgreSQL'
+
+recreate_workers
+segment_before=$(wc -l <"$DOWN_R_DIR/podman.log")
+deploy "$DOWN_R_DIR" "$DOWN_R_ENV" -- python-down >/dev/null
+PDOWN_SEGMENT=$(tail -n +"$((segment_before + 1))" "$DOWN_R_DIR/podman.log")
+grep -q '^stop --time 30 clashlens-python-api' <<<"$PDOWN_SEGMENT" || \
+  fail 'python-down did not stop the API'
+for name in clashlens-python-worker clashlens-python-worker-1 clashlens-python-worker-2 \
+  clashlens-python-worker-3 clashlens-python-worker-6; do
+  grep -q "^rm $name *$" <<<"$PDOWN_SEGMENT" || fail "python-down did not remove $name"
+done
+
+recreate_workers
+segment_before=$(wc -l <"$DOWN_R_DIR/podman.log")
+deploy "$DOWN_R_DIR" "$DOWN_R_ENV" -- down >/dev/null
+DOWN_SEGMENT2=$(tail -n +"$((segment_before + 1))" "$DOWN_R_DIR/podman.log")
+for name in clashlens-python-worker clashlens-python-worker-1 clashlens-python-worker-2 \
+  clashlens-python-worker-3 clashlens-python-worker-6; do
+  grep -q "^rm $name *$" <<<"$DOWN_SEGMENT2" || fail "down did not remove $name"
+done
+printf 'ok: worker-down, python-down, and down stop every worker replica\n'
+
+# ---------------------------------------------------------------------------
+# Scenario O: status shows every configured replica and flags surplus and
+# legacy worker containers without printing secrets.
+# ---------------------------------------------------------------------------
+STATUS_R_DIR=$(new_scenario)
+STATUS_R_ENV="$STATUS_R_DIR/app.env"
+write_scenario_env "$STATUS_R_ENV" "$STATUS_R_DIR/keys"
+printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=2' >>"$STATUS_R_ENV"
+for name in clashlens-python-worker clashlens-python-worker-1 \
+  clashlens-python-worker-2 clashlens-python-worker-4; do
+  FAKE_STATE="$STATUS_R_DIR/state" FAKE_PODMAN_LOG="$STATUS_R_DIR/podman.log" \
+    "$FAKE_BIN/podman" run --detach --name "$name" \
+    localhost/clashlens-python:deployment >/dev/null
+done
+for name in clashlens-python-worker-1 clashlens-python-worker-2 clashlens-python-worker-4; do
+  printf 'healthy\n' >"$STATUS_R_DIR/state/containers/$name.health"
+done
+output=$(deploy "$STATUS_R_DIR" "$STATUS_R_ENV" -- status)
+[[ "$output" == *'python-worker-1: running (healthy)'* ]] || fail 'status did not show replica 1 health'
+[[ "$output" == *'python-worker-2: running (healthy)'* ]] || fail 'status did not show replica 2 health'
+[[ "$output" == *'python-worker-4: surplus (removed on next start)'* ]] || \
+  fail 'status did not flag the surplus replica 4'
+[[ "$output" == *'python-worker: stale (removed on next start)'* ]] || \
+  fail 'status did not flag the legacy worker container'
+[[ "$output" == *'python queue: {'* ]] || fail 'status did not show the shared queue line'
+assert_no_sentinel_in_log <(printf '%s\n' "$output")
+printf 'ok: status shows every replica and flags surplus and legacy worker containers\n'
 
 printf 'all deploy regression tests passed\n'

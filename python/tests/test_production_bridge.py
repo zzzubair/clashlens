@@ -29,7 +29,11 @@ def _production_database(database_url: str) -> Iterator[tuple[str, str]]:
     try:
         with psycopg.connect(connection_info, autocommit=True) as connection:
             root = Path(__file__).parents[2]
-            for name in ("0001_collector.sql", "0002_python_layer.sql"):
+            for name in (
+                "0001_collector.sql",
+                "0002_python_layer.sql",
+                "0003_regular_poll_dedup.sql",
+            ):
                 migration = (root / "deploy" / "migrations" / name).read_text(
                     encoding="utf-8"
                 )

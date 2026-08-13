@@ -187,6 +187,9 @@ func TestCollectorExecutablePreserves404MalformedJSONAndContentReuse(t *testing.
 	}
 	archiveBackend.mu.Lock()
 	defer archiveBackend.mu.Unlock()
+	if archiveBackend.bucketChecks != 2 {
+		t.Fatalf("archive bucket readiness checks = %d, want startup and first-admission checks", archiveBackend.bucketChecks)
+	}
 	for _, body := range [][]byte{notFoundBody, malformedBody, battleLogBody} {
 		found := false
 		for _, object := range archiveBackend.objects {

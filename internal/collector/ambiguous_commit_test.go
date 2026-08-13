@@ -14,6 +14,7 @@ func TestVersionTwoObservationReconcilesCommittedCommitErrorAndIsIdempotent(t *t
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	store := startVersionTwoStore(t, ctx)
+	store.metrics = newCollectorMetrics()
 
 	job, attemptID, requestCount, response := prepareAmbiguousObservationFixture(t, ctx, store)
 	commitErr := errors.New("injected ambiguous observation commit")
@@ -51,6 +52,12 @@ func TestVersionTwoObservationReconcilesCommittedCommitErrorAndIsIdempotent(t *t
 	if observations != 1 || processingJobs != 1 || observedEndpoints != 1 {
 		t.Fatalf("durable observation effects = %d observations, %d Python jobs, %d observed endpoints; want 1, 1, 1",
 			observations, processingJobs, observedEndpoints)
+	}
+	store.metrics.mu.Lock()
+	proofMetrics := store.metrics.stageDurations["ambiguous_commit_proof"]
+	store.metrics.mu.Unlock()
+	if proofMetrics.count < 1 {
+		t.Fatal("ambiguous commit reconciliation did not record proof duration")
 	}
 }
 

@@ -48,6 +48,11 @@ def _production_database(database_url: str) -> Iterator[str]:
                     encoding="utf-8"
                 )
             )
+            connection.execute(
+                (root / "deploy/migrations/0003_regular_poll_dedup.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -180,6 +185,24 @@ def _processor(database: Database, archive_server) -> ObservationProcessor:
             allow_insecure_test_origin=True,
         ),
     )
+
+
+def test_queue_health_reports_an_empty_active_queue(
+    database_url: str,
+) -> None:
+    with _production_database(database_url) as connection_info:
+        database = Database(connection_info)
+        try:
+            assert database.queue_health() == {
+                "pending": 0,
+                "waiting_retry": 0,
+                "leased": 0,
+                "failed": 0,
+                "failed_count_capped": False,
+                "oldest_due_seconds": None,
+            }
+        finally:
+            database.close()
 
 
 @pytest.mark.parametrize(
@@ -703,7 +726,7 @@ def test_claim_order_tie_breaks_by_due_at_then_id(database_url: str) -> None:
             database.close()
 
 
-def test_expired_unsupported_lease_is_released_and_not_terminalized(
+def test_claim_does_not_sweep_expired_unsupported_lease_but_maintenance_does(
     database_url: str,
 ) -> None:
     with _production_database(database_url) as connection_info:
@@ -756,6 +779,14 @@ def test_expired_unsupported_lease_is_released_and_not_terminalized(
             claim = database.claim_job(owner="cleanup-test")
             assert claim is not None
             assert claim.job_id == supported_job_id
+            assert (
+                database.scalar(
+                    "SELECT status FROM python_processing_jobs WHERE id = %s",
+                    (export_job_id,),
+                )
+                == "leased"
+            )
+            assert database.maintain_queue(max_jobs=100) == 1
             assert (
                 database.scalar(
                     "SELECT status FROM python_processing_jobs WHERE id = %s",

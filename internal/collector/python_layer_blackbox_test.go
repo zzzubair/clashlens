@@ -35,6 +35,7 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 		t.Fatalf("connect to test PostgreSQL: %v", err)
 	}
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0003_regular_poll_dedup.sql"))
 
 	archive, backend := newFakeS3Server(t)
 	profileBody, err := os.ReadFile(filepath.Join(repositoryRootForTest(t), "python", "testdata", "legend_i_profile_v1.json"))

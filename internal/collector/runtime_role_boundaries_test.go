@@ -11,19 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries proves the explicit
-// least-privilege grant layer that migration 0002 installs for the three
+// TestProductionMigrationsEnforceRuntimeRoleBoundaries proves the explicit
+// least-privilege grant layer that the current migrations install for the three
 // runtime roles: the Go collector, the Python worker, and the Python API.
 // Each role is NOLOGIN with no elevated attributes and no password; positive
 // probes run the role's sanctioned statements and negative probes assert
 // SQLSTATE 42501 across the documented boundary matrix.
-func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
+func TestProductionMigrationsEnforceRuntimeRoleBoundaries(t *testing.T) {
 	ctx := context.Background()
 	connection := migratedVersionTwoConnection(t, ctx)
 
 	// Reapplication must be stable: roles stay unique with fixed attributes
 	// and every grant/revoke can be repeated.
 	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0003_regular_poll_dedup.sql"))
 
 	const (
 		collectorRole = "clashlens_collector"
@@ -189,6 +190,9 @@ func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
 		t.Fatalf("collector identity sequence usage: %v", err)
 	}
 	expectInsufficientPrivilege(t, ctx, connection, `SELECT count(*) FROM clash_lens_accounts`, "collector reading accounts")
+	for _, table := range []string{"account_saved_players", "account_groups", "account_group_players"} {
+		expectInsufficientPrivilege(t, ctx, connection, `DELETE FROM `+table+` WHERE false`, "collector deleting from "+table)
+	}
 	expectInsufficientPrivilege(t, ctx, connection, `
 		INSERT INTO player_profile_versions (
 			player_id, observation_id, normalized_tag, endpoint_version, schema_version,
@@ -287,6 +291,9 @@ func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
 		t.Fatalf("worker identity sequence usage: %v", err)
 	}
 	expectInsufficientPrivilege(t, ctx, connection, `SELECT count(*) FROM clash_lens_accounts`, "worker reading accounts")
+	for _, table := range []string{"account_saved_players", "account_groups", "account_group_players"} {
+		expectInsufficientPrivilege(t, ctx, connection, `DELETE FROM `+table+` WHERE false`, "worker deleting from "+table)
+	}
 	expectInsufficientPrivilege(t, ctx, connection, `
 		UPDATE shared_api_credentials SET state = 'retired' WHERE credential_fingerprint = repeat('c', 64)
 	`, "worker mutating shared credentials")
@@ -361,6 +368,15 @@ func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
 	`); err != nil {
 		t.Fatalf("api enqueue export job: %v", err)
 	}
+	for _, table := range []string{
+		"account_saved_players",
+		"account_groups",
+		"account_group_players",
+	} {
+		if _, err := connection.Exec(ctx, `DELETE FROM `+table+` WHERE false`); err != nil {
+			t.Fatalf("api delete from %s: %v", table, err)
+		}
+	}
 	expectInsufficientPrivilege(t, ctx, connection, `SELECT count(*) FROM ranked_day_versions`, "api reading ranked-day rows")
 	expectInsufficientPrivilege(t, ctx, connection, `UPDATE ranked_day_versions SET state = 'Malformed' WHERE id = 1`, "api mutating ranked-day rows")
 	expectInsufficientPrivilege(t, ctx, connection, `UPDATE player_profile_versions SET trophies = 0 WHERE id = 1`, "api mutating profile rows")
@@ -384,6 +400,246 @@ func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
 	if _, err := connection.Exec(ctx, `COMMIT`); err != nil {
 		t.Fatalf("commit api probe transaction: %v", err)
 	}
+}
+
+// TestResetBaselineWorkerPrivilegeContract proves the hardened reset-baseline
+// worker contract that migration 0003 installs: the Python worker alone can
+// execute the job-lineage helper and the narrow sweep-lock seam; PUBLIC, the
+// collector, and the API cannot; the lineage helper stays SECURITY INVOKER
+// under the worker's read grants on collector evidence; the lock seam is
+// SECURITY DEFINER with a fixed search_path and actually holds the row lock.
+func TestResetBaselineWorkerPrivilegeContract(t *testing.T) {
+	ctx := context.Background()
+	connection := migratedVersionTwoConnection(t, ctx)
+
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0003_regular_poll_dedup.sql"))
+
+	const (
+		collectorRole = "clashlens_collector"
+		workerRole    = "clashlens_python_worker"
+		apiRole       = "clashlens_python_api"
+	)
+
+	// Seed a two-level job lineage and its baseline sweep as the owner so the
+	// role probes run against real rows.
+	var playerID, parentJobID, parentAttemptID, childJobID, baselineID int64
+	if err := connection.QueryRow(ctx, `INSERT INTO players (normalized_tag) VALUES ('#RBL') RETURNING id`).Scan(&playerID); err != nil {
+		t.Fatalf("seed reset-baseline player: %v", err)
+	}
+	var sweepID int64
+	if err := connection.QueryRow(ctx, `INSERT INTO collector_reset_sweeps (boundary_at) VALUES ('2026-08-05 05:00:00+00') RETURNING id`).Scan(&sweepID); err != nil {
+		t.Fatalf("seed reset sweep: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO collector_reset_baseline_sweeps (
+			reset_sweep_id, player_id, boundary_at, evidence_kind, state
+		) VALUES ($1, $2, '2026-08-05 05:00:00+00', 'paired_v2', 'pending')
+		RETURNING id
+	`, sweepID, playerID).Scan(&baselineID); err != nil {
+		t.Fatalf("seed baseline sweep: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, player_id, normalized_tag, capacity_pool, priority,
+			due_at, coalescing_key, status, reset_baseline_sweep_id, sweep_id
+		) VALUES ('reset_baseline', $1, '#RBL', 'normal', 400,
+			'2026-08-05 05:00:00+00', 'reset-baseline-role', 'complete', $2, $3)
+		RETURNING id
+	`, playerID, baselineID, sweepID).Scan(&parentJobID); err != nil {
+		t.Fatalf("seed root reset-baseline job: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
+		VALUES ($1, 'complete', '2026-08-05 05:00:00+00', '2026-08-05 05:01:00+00')
+		RETURNING id
+	`, parentJobID).Scan(&parentAttemptID); err != nil {
+		t.Fatalf("seed root reset-baseline attempt: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, player_id, normalized_tag, capacity_pool, priority,
+			due_at, coalescing_key, status, parent_attempt_id
+		) VALUES ('live_refresh', $1, '#RBL', 'normal', 300,
+			'2026-08-05 05:01:00+00', 'reset-baseline-child', 'complete', $2)
+		RETURNING id
+	`, playerID, parentAttemptID).Scan(&childJobID); err != nil {
+		t.Fatalf("seed child lineage job: %v", err)
+	}
+
+	// The lock seam is SECURITY DEFINER owned by the migration owner with a
+	// fixed search_path; the lineage helper stays SECURITY INVOKER.
+	for _, function := range []struct {
+		name      string
+		definer   bool
+		fixedPath bool
+	}{
+		{name: "clashlens_lock_reset_baseline_v2", definer: true, fixedPath: true},
+		{name: "clashlens_reset_job_lineage_v2", definer: false, fixedPath: false},
+	} {
+		var prosecdef, fixedSearchPath, ownedByMigrator bool
+		if err := connection.QueryRow(ctx, `
+			SELECT p.prosecdef,
+			       EXISTS (
+			           SELECT 1
+			           FROM unnest(COALESCE(p.proconfig, ARRAY[]::text[])) AS entry
+			           WHERE entry LIKE 'search_path=pg_catalog,%'
+			       ),
+			       p.proowner::regrole::text = current_user::text
+			FROM pg_proc AS p
+			JOIN pg_namespace AS n ON n.oid = p.pronamespace
+			WHERE n.nspname = current_schema() AND p.proname = $1
+		`, function.name).Scan(&prosecdef, &fixedSearchPath, &ownedByMigrator); err != nil {
+			t.Fatalf("inspect %s metadata: %v", function.name, err)
+		}
+		if prosecdef != function.definer {
+			t.Fatalf("%s prosecdef = %v, want %v", function.name, prosecdef, function.definer)
+		}
+		if fixedSearchPath != function.fixedPath {
+			t.Fatalf("%s fixed search_path = %v, want %v", function.name, fixedSearchPath, function.fixedPath)
+		}
+		if !ownedByMigrator {
+			t.Fatalf("%s is not owned by the migration owner", function.name)
+		}
+	}
+
+	// Worker: executes the lineage helper and the lock seam, and the lock
+	// actually holds the sweep row. The previous image's direct FOR UPDATE
+	// remains compatible for this release through UPDATE(id), but the worker
+	// still cannot mutate sweep state.
+	if _, err := connection.Exec(ctx, `BEGIN`); err != nil {
+		t.Fatalf("begin worker reset-baseline probe transaction: %v", err)
+	}
+	if _, err := connection.Exec(ctx, `SET ROLE `+workerRole); err != nil {
+		t.Fatalf("set worker role: %v", err)
+	}
+	var lineageFound bool
+	if err := connection.QueryRow(ctx, `SELECT clashlens_reset_job_lineage_v2($1, $2)`, childJobID, parentJobID).Scan(&lineageFound); err != nil {
+		t.Fatalf("worker execute lineage helper: %v", err)
+	}
+	if !lineageFound {
+		t.Fatal("worker lineage lookup did not find the root job")
+	}
+	if err := connection.QueryRow(ctx, `SELECT clashlens_reset_job_lineage_v2($1, 999999999)`, childJobID).Scan(&lineageFound); err != nil {
+		t.Fatalf("worker execute lineage helper for missing root: %v", err)
+	}
+	if lineageFound {
+		t.Fatal("worker lineage lookup found an unknown root job")
+	}
+	if err := connection.QueryRow(ctx, `SELECT clashlens_reset_job_lineage_v2(999999999, $1)`, parentJobID).Scan(&lineageFound); err != nil {
+		t.Fatalf("worker execute lineage helper for missing observed job: %v", err)
+	}
+	if lineageFound {
+		t.Fatal("worker lineage lookup found an unknown observed job")
+	}
+	var locked bool
+	if err := connection.QueryRow(ctx, `SELECT clashlens_lock_reset_baseline_v2($1)`, baselineID).Scan(&locked); err != nil {
+		t.Fatalf("worker lock existing baseline sweep: %v", err)
+	}
+	if !locked {
+		t.Fatal("worker lock of an existing baseline sweep returned false")
+	}
+	if err := connection.QueryRow(ctx, `SELECT clashlens_lock_reset_baseline_v2(999999999)`).Scan(&locked); err != nil {
+		t.Fatalf("worker lock missing baseline sweep: %v", err)
+	}
+	if locked {
+		t.Fatal("worker lock of a missing baseline sweep returned true")
+	}
+	var directlyLockedID int64
+	if err := connection.QueryRow(ctx, `
+		SELECT id FROM collector_reset_baseline_sweeps WHERE id = $1 FOR UPDATE
+	`, baselineID).Scan(&directlyLockedID); err != nil || directlyLockedID != baselineID {
+		t.Fatalf("previous worker image cannot lock the sweep row during its compatibility window: id=%d err=%v", directlyLockedID, err)
+	}
+	expectInsufficientPrivilege(t, ctx, connection, `
+		UPDATE collector_reset_baseline_sweeps SET state = 'complete' WHERE id = $1
+	`, "worker updating the sweep table directly", baselineID)
+
+	// The worker transaction still holds the sweep lock: a second session
+	// must block and time out instead of updating the locked row.
+	blockedConnection, err := pgx.ConnectConfig(ctx, connection.Config())
+	if err != nil {
+		t.Fatalf("open lock-blocking connection: %v", err)
+	}
+	t.Cleanup(func() { _ = blockedConnection.Close(context.Background()) })
+	if _, err := blockedConnection.Exec(ctx, `BEGIN`); err != nil {
+		t.Fatalf("begin lock-blocking transaction: %v", err)
+	}
+	if _, err := blockedConnection.Exec(ctx, `SET LOCAL lock_timeout = '500ms'`); err != nil {
+		t.Fatalf("set lock timeout: %v", err)
+	}
+	_, err = blockedConnection.Exec(ctx, `
+		UPDATE collector_reset_baseline_sweeps SET state = 'complete' WHERE id = $1
+	`, baselineID)
+	if err == nil {
+		_, _ = blockedConnection.Exec(ctx, `ROLLBACK`)
+		t.Fatal("database accepted an update of the worker-locked sweep")
+	}
+	var pgError *pgconn.PgError
+	if !errors.As(err, &pgError) || pgError.Code != "55P03" {
+		t.Fatalf("update of worker-locked sweep failed with %v, want SQLSTATE 55P03", err)
+	}
+	if _, err := blockedConnection.Exec(ctx, `ROLLBACK`); err != nil {
+		t.Fatalf("roll back lock-blocking transaction: %v", err)
+	}
+
+	// Release the worker's lock and prove the same update now succeeds.
+	if _, err := connection.Exec(ctx, `RESET ROLE`); err != nil {
+		t.Fatalf("reset worker role: %v", err)
+	}
+	if _, err := connection.Exec(ctx, `ROLLBACK`); err != nil {
+		t.Fatalf("roll back worker probe transaction: %v", err)
+	}
+	if _, err := blockedConnection.Exec(ctx, `BEGIN`); err != nil {
+		t.Fatalf("begin post-release transaction: %v", err)
+	}
+	if _, err := blockedConnection.Exec(ctx, `
+		UPDATE collector_reset_baseline_sweeps SET state = 'complete' WHERE id = $1
+	`, baselineID); err != nil {
+		t.Fatalf("update of released sweep failed: %v", err)
+	}
+	if _, err := blockedConnection.Exec(ctx, `ROLLBACK`); err != nil {
+		t.Fatalf("roll back post-release transaction: %v", err)
+	}
+
+	// The collector, the API, and a neutral PUBLIC-only role cannot execute
+	// either seam. The neutral role gets schema USAGE so the denial comes
+	// specifically from function EXECUTE, not from schema reach.
+	if _, err := connection.Exec(ctx, `CREATE ROLE clashlens_public_probe NOLOGIN`); err != nil {
+		t.Fatalf("create PUBLIC probe role: %v", err)
+	}
+	t.Cleanup(func() { _, _ = connection.Exec(context.Background(), `DROP ROLE IF EXISTS clashlens_public_probe`) })
+	if _, err := connection.Exec(ctx, `GRANT USAGE ON SCHEMA `+schemaName(t, ctx, connection)+` TO clashlens_public_probe`); err != nil {
+		t.Fatalf("grant schema usage to PUBLIC probe role: %v", err)
+	}
+	for _, role := range []string{collectorRole, apiRole, "clashlens_public_probe"} {
+		if _, err := connection.Exec(ctx, `BEGIN`); err != nil {
+			t.Fatalf("begin %s reset-baseline probe transaction: %v", role, err)
+		}
+		if _, err := connection.Exec(ctx, `SET ROLE `+role); err != nil {
+			t.Fatalf("set %s role: %v", role, err)
+		}
+		expectInsufficientPrivilege(t, ctx, connection, `
+			SELECT clashlens_lock_reset_baseline_v2($1)
+		`, role+" executing the sweep-lock seam", baselineID)
+		expectInsufficientPrivilege(t, ctx, connection, `
+			SELECT clashlens_reset_job_lineage_v2($1, $2)
+		`, role+" executing the lineage helper", childJobID, parentJobID)
+		if _, err := connection.Exec(ctx, `RESET ROLE`); err != nil {
+			t.Fatalf("reset %s role: %v", role, err)
+		}
+		if _, err := connection.Exec(ctx, `COMMIT`); err != nil {
+			t.Fatalf("commit %s reset-baseline probe transaction: %v", role, err)
+		}
+	}
+}
+
+func schemaName(t *testing.T, ctx context.Context, connection *pgx.Conn) string {
+	t.Helper()
+	var name string
+	if err := connection.QueryRow(ctx, `SELECT current_schema()`).Scan(&name); err != nil {
+		t.Fatalf("read current schema: %v", err)
+	}
+	return name
 }
 
 // expectInsufficientPrivilege asserts that statement fails with SQLSTATE

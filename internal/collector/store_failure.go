@@ -487,12 +487,6 @@ func (s *store) resolveAttemptV2(
 		now:            now,
 		maximumRetries: maximumRetries,
 	}
-	if proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
-		return s.proveAttemptResolutionCommit(proofCtx, connection, preflightIntent)
-	}); proofErr == nil && proofOutcome == commitProofCommitted {
-		return nil
-	}
-
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin version-two attempt resolution transaction: %w", err)
@@ -500,6 +494,14 @@ func (s *store) resolveAttemptV2(
 	defer func() { _ = transaction.Rollback(ctx) }()
 
 	if err := lockCurrentAttemptV2(ctx, transaction, job, attemptID); err != nil {
+		if errors.Is(err, errLeaseLost) {
+			proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+				return s.proveAttemptResolutionCommit(proofCtx, connection, preflightIntent)
+			})
+			if proofErr == nil && proofOutcome == commitProofCommitted {
+				return nil
+			}
+		}
 		return err
 	}
 	var rootJobID int64
@@ -741,16 +743,38 @@ func (s *store) resolveAttemptV2(
 		if job.scope == "global" {
 			normalizedTag = nil
 		}
+		retryColumns := ""
+		retrySelect := ""
+		retryArgs := []any{
+			job.scope, job.playerID, normalizedTag, string(job.pool), dueAt,
+			coalescingKey, job.sweepID, job.resetBaselineSweepID, attemptID,
+			string(endpoint.name), job.id, job.leaseOwner, job.leaseToken,
+			job.leaseGeneration,
+		}
+		if s.recoveryRetrySupported {
+			retryClass := job.retryClass
+			if retryClass == "" {
+				retryClass = "normal"
+			}
+			var recoveryReason, recoveryOriginPool any
+			if retryClass == "recovery" {
+				recoveryReason = "collector_lease_expired"
+				recoveryOriginPool = string(job.pool)
+			}
+			retryColumns = ", retry_class, recovery_reason, recovery_origin_pool"
+			retrySelect = ", $15, $16, $17"
+			retryArgs = append(retryArgs, retryClass, recoveryReason, recoveryOriginPool)
+		}
 		command, err := transaction.Exec(ctx, `
-			INSERT INTO collector_jobs (
-				work_type, scope, player_id, normalized_tag, capacity_pool,
-				priority, due_at, coalescing_key, sweep_id,
-				reset_baseline_sweep_id, parent_attempt_id,
-				required_endpoint, lease_generation, status
-			)
-			SELECT 'endpoint_retry', $1, $2, $3, $4, 300, $5, $6,
-				$7, $8, $9, $10, current_job.lease_generation, 'pending'
-			FROM collector_jobs AS current_job
+				INSERT INTO collector_jobs (
+					work_type, scope, player_id, normalized_tag, capacity_pool,
+					priority, due_at, coalescing_key, sweep_id,
+					reset_baseline_sweep_id, parent_attempt_id,
+					required_endpoint, lease_generation, status`+retryColumns+`
+				)
+				SELECT 'endpoint_retry', $1, $2, $3, $4, 300, $5, $6,
+					$7, $8, $9, $10, current_job.lease_generation, 'pending'`+retrySelect+`
+				FROM collector_jobs AS current_job
 			WHERE current_job.id = $11
 				AND current_job.lease_owner = $12
 				AND current_job.lease_token = $13
@@ -759,9 +783,7 @@ func (s *store) resolveAttemptV2(
 				AND current_job.lease_expires_at > clock_timestamp()
 				AND (current_job.result_attempt_id = $9 OR current_job.parent_attempt_id = $9)
 			ON CONFLICT DO NOTHING
-		`, job.scope, job.playerID, normalizedTag, string(job.pool), dueAt,
-			coalescingKey, job.sweepID, job.resetBaselineSweepID, attemptID,
-			string(endpoint.name), job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration)
+			`, retryArgs...)
 		if err != nil {
 			return fmt.Errorf("insert version-two endpoint retry: %w", err)
 		}

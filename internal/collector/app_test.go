@@ -370,6 +370,32 @@ func TestApplicationRequiredTrafficGateFailsClosedBeforeMigration(t *testing.T) 
 	}
 }
 
+func TestNewApplicationBindsConfiguredCollectorDatabasePoolSize(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	archive, _ := newFakeS3Server(t)
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(api.Close)
+	environment := runtimeTestEnvironment(databaseURL, archive.URL, api.URL)
+	environment["CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE"] = "48"
+	config, err := loadConfig(func(name string) string { return environment[name] })
+	if err != nil {
+		t.Fatalf("loadConfig returned an error: %v", err)
+	}
+
+	app, err := newApplication(ctx, config, nil)
+	if err != nil {
+		t.Fatalf("newApplication returned an error: %v", err)
+	}
+	defer app.close()
+	if maximum := app.store.pool.Config().MaxConns; maximum != 48 {
+		t.Fatalf("production store pool Config().MaxConns = %d, want the configured 48", maximum)
+	}
+}
+
 func runtimeTestEnvironment(databaseURL, archiveURL, apiURL string) map[string]string {
 	return map[string]string{
 		"CLASHLENS_DATABASE_URL":               databaseURL,

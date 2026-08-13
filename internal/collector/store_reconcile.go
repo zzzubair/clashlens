@@ -53,6 +53,12 @@ func (s *store) reconcileCommitError(
 	commitErr error,
 	proof func(context.Context, *pgx.Conn) (commitProofOutcome, error),
 ) error {
+	startedAt := time.Now()
+	defer func() {
+		if s.metrics != nil {
+			s.metrics.recordStageDuration("ambiguous_commit_proof", time.Since(startedAt))
+		}
+	}()
 	connection, err := s.pool.Acquire(ctx)
 	if err != nil {
 		return commitOutcomeUnknownError(commitErr, fmt.Errorf("acquire fresh reconciliation connection: %w", err))

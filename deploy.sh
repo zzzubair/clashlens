@@ -6,6 +6,7 @@ ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0001_collector.sql"
   "$ROOT_DIR/deploy/migrations/0002_python_layer.sql"
+  "$ROOT_DIR/deploy/migrations/0003_regular_poll_dedup.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -35,6 +36,25 @@ API_ROLE=clashlens_python_api
 API_NETWORK_ALIAS=python-api
 API_LISTEN_PORT=8000
 
+# Worker replicas are identical containers over one shared queue. The
+# configured count is bounded by the target host's 16 hardware threads.
+# Replicas are named <CLASHLENS_PYTHON_WORKER_CONTAINER>-1..-N.
+WORKER_REPLICA_MAX=16
+
+# Bounded in-process Python worker concurrency. The sequential-compatible
+# default is 1 lane per replica. The target-host profile is one replica with
+# 12 lanes and 12 database/archive connections. The two pool sizes bound each
+# replica's PostgreSQL and archive HTTP connections; the sequential defaults
+# keep a single worker compatible with prior behavior.
+WORKER_CONCURRENCY_MAX=32
+WORKER_POOL_SIZE_MAX=64
+
+# The collector PostgreSQL pool is explicitly bounded. The safe default of 16
+# matches the pgxpool implicit default on the 16-thread production host. The
+# target-host profile uses 32 connections for 4 normal keys at 8 workers per
+# key; interactive work shares the same bounded pool.
+COLLECTOR_POOL_SIZE_MAX=64
+
 COLLECTOR_STOP_GRACE=30
 API_STOP_GRACE=30
 POSTGRES_STOP_GRACE=60
@@ -60,26 +80,30 @@ Commands:
   build-python                 Build the immutable Python image only.
   build-website                Build the immutable website image only.
   python-up                    Build the Python image, then start the private
-                               API and the production worker.
-  python-start                 Start-only path for the private API and worker.
+                               API and the worker replicas.
+  python-start                 Start-only path for the private API and worker
+                               replicas.
   api-start                    Start-only path for the private Python API.
-  worker-start                 Start-only path for the production worker.
+  worker-start                 Start-only path for the worker replicas.
   website-up                   Build, replace, start, and wait for the website.
   website-start                Start-only path for the website container.
   status                       Show safe container, network, and volume status.
-  logs [collector|postgres|python-api|python-worker|website]
+  logs [collector|postgres|python-api|python-worker[-N]|website]
                                Show logs for one private container.
   down                         Gracefully stop and remove all containers; keep
                                the data volume.
   stack-down                   Gracefully stop and remove only collector and
                                PostgreSQL.
-  python-down                  Gracefully stop and remove website, API, and worker.
+  python-down                  Gracefully stop and remove website, API, and
+                               worker replicas.
   api-down                     Gracefully stop website, then remove only the API.
-  worker-down                  Gracefully stop and remove only the worker.
+  worker-down                  Gracefully stop and remove only the worker
+                               replicas.
   website-down                 Gracefully stop and remove only the website.
   enqueue [collector args]     Enqueue work, or pass a tag as the only argument.
   maintenance <collector args> Run a collector maintenance command.
-  queue-status                 Show the Python worker queue status.
+  queue-status                 Show the Python worker queue status from
+                               replica 1.
 EOF
 }
 
@@ -190,6 +214,7 @@ validate_resource_budgets() {
       esac
     done
   done
+  validate_resource_setting CLASHLENS_POSTGRES_SHM_SIZE memory
 }
 
 validate_key_specs() {
@@ -301,6 +326,26 @@ validate_common_settings() {
 
   [[ "$CLASHLENS_WORKER_LEASE_SECONDS" =~ ^[0-9]+$ ]] && (( CLASHLENS_WORKER_LEASE_SECONDS >= 1 )) || \
     die "CLASHLENS_WORKER_LEASE_SECONDS must be a positive integer"
+
+  [[ "$CLASHLENS_WORKER_REPLICAS" =~ ^[0-9]+$ ]] && \
+    (( CLASHLENS_WORKER_REPLICAS >= 1 && CLASHLENS_WORKER_REPLICAS <= WORKER_REPLICA_MAX )) || \
+    die "CLASHLENS_WORKER_REPLICAS must be an integer between 1 and $WORKER_REPLICA_MAX"
+
+  [[ "$CLASHLENS_WORKER_CONCURRENCY" =~ ^[0-9]+$ ]] && \
+    (( CLASHLENS_WORKER_CONCURRENCY >= 1 && CLASHLENS_WORKER_CONCURRENCY <= WORKER_CONCURRENCY_MAX )) || \
+    die "CLASHLENS_WORKER_CONCURRENCY must be an integer between 1 and $WORKER_CONCURRENCY_MAX"
+
+  [[ "$CLASHLENS_WORKER_DATABASE_POOL_SIZE" =~ ^[0-9]+$ ]] && \
+    (( CLASHLENS_WORKER_DATABASE_POOL_SIZE >= 1 && CLASHLENS_WORKER_DATABASE_POOL_SIZE <= WORKER_POOL_SIZE_MAX )) || \
+    die "CLASHLENS_WORKER_DATABASE_POOL_SIZE must be an integer between 1 and $WORKER_POOL_SIZE_MAX"
+
+  [[ "$CLASHLENS_WORKER_ARCHIVE_POOL_SIZE" =~ ^[0-9]+$ ]] && \
+    (( CLASHLENS_WORKER_ARCHIVE_POOL_SIZE >= 1 && CLASHLENS_WORKER_ARCHIVE_POOL_SIZE <= WORKER_POOL_SIZE_MAX )) || \
+    die "CLASHLENS_WORKER_ARCHIVE_POOL_SIZE must be an integer between 1 and $WORKER_POOL_SIZE_MAX"
+
+  [[ "$CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE" =~ ^[0-9]+$ ]] && \
+    (( CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE >= 1 && CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE <= COLLECTOR_POOL_SIZE_MAX )) || \
+    die "CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE must be an integer between 1 and $COLLECTOR_POOL_SIZE_MAX"
 
   validate_key_specs CLASHLENS_NORMAL_API_KEY_FILES "$CLASHLENS_NORMAL_API_KEY_FILES" 4
   validate_key_specs CLASHLENS_INTERACTIVE_API_KEY_FILES "$CLASHLENS_INTERACTIVE_API_KEY_FILES" 1
@@ -423,6 +468,17 @@ ensure_volume() {
 ensure_postgres() {
   replace_secret_value clashlens-postgres-password "$POSTGRES_PASSWORD"
   if container_exists "$POSTGRES_CONTAINER"; then
+    local configured_shm_size configured_metrics_profile
+    configured_shm_size=$("$PODMAN_BIN" container inspect \
+      --format '{{index .Config.Labels "org.clashlens.postgres-shm-size"}}' \
+      "$POSTGRES_CONTAINER" 2>/dev/null || true)
+    [[ "$configured_shm_size" == "$CLASHLENS_POSTGRES_SHM_SIZE" ]] || \
+      die "existing PostgreSQL container does not use CLASHLENS_POSTGRES_SHM_SIZE=$CLASHLENS_POSTGRES_SHM_SIZE; run stack-down, then up to recreate containers while preserving the named data volume"
+    configured_metrics_profile=$("$PODMAN_BIN" container inspect \
+      --format '{{index .Config.Labels "org.clashlens.postgres-metrics-profile"}}' \
+      "$POSTGRES_CONTAINER" 2>/dev/null || true)
+    [[ "$configured_metrics_profile" == "step6-v1" ]] || \
+      die "existing PostgreSQL container does not enable the Step 6 metrics profile; run stack-down, then up to recreate containers while preserving the named data volume"
     if ! container_running "$POSTGRES_CONTAINER"; then
       "$PODMAN_BIN" start "$POSTGRES_CONTAINER" >/dev/null
     fi
@@ -440,6 +496,7 @@ ensure_postgres() {
     --env POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password \
     --secret clashlens-postgres-password,type=mount,target=/run/secrets/postgres-password,uid=70,gid=70,mode=0400 \
     --memory "$CLASHLENS_POSTGRES_MEMORY" \
+    --shm-size "$CLASHLENS_POSTGRES_SHM_SIZE" \
     --pids-limit "$CLASHLENS_POSTGRES_PIDS" \
     --cpus "$CLASHLENS_POSTGRES_CPUS" \
     --health-cmd "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB" \
@@ -448,7 +505,14 @@ ensure_postgres() {
     --health-retries 6 \
     --restart unless-stopped \
     --label org.clashlens.component=postgres \
-    "$POSTGRES_IMAGE" >/dev/null
+    --label "org.clashlens.postgres-shm-size=$CLASHLENS_POSTGRES_SHM_SIZE" \
+    --label org.clashlens.postgres-metrics-profile=step6-v1 \
+    "$POSTGRES_IMAGE" \
+    postgres \
+    -c shared_preload_libraries=pg_stat_statements \
+    -c pg_stat_statements.track=all \
+    -c track_io_timing=on \
+    -c track_wal_io_timing=on >/dev/null
 }
 
 wait_for_postgres() {
@@ -474,10 +538,29 @@ apply_initial_contract() {
   apply_migration_file "${MIGRATION_FILES[0]}"
 }
 
-advance_contract() {
-  local migration_file
-  for migration_file in "${MIGRATION_FILES[@]:1}"; do
-    apply_migration_file "$migration_file"
+schema_migration_applied() {
+  local version=$1 applied
+  applied=$("$PODMAN_BIN" exec "$POSTGRES_CONTAINER" \
+    psql --tuples-only --no-align --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+    --command "SELECT EXISTS (SELECT 1 FROM clash_lens_schema_migrations WHERE version = $version)" \
+    2>/dev/null || true)
+  [[ "$(trim "$applied")" == "t" ]]
+}
+
+require_current_schema() {
+  local required_version=${#MIGRATION_FILES[@]}
+  schema_migration_applied "$required_version" || \
+    die "forward migration $required_version is required; run up first"
+}
+
+apply_pending_forward_migrations() {
+  local index migration_file version
+  for ((index = 1; index < ${#MIGRATION_FILES[@]}; index++)); do
+    version=$((index + 1))
+    migration_file=${MIGRATION_FILES[$index]}
+    if ! schema_migration_applied "$version"; then
+      apply_migration_file "$migration_file"
+    fi
   done
 }
 
@@ -573,7 +656,7 @@ collector_env_args() {
 
   for name in "${!ENV_PRESENT[@]}"; do
     case "$name" in
-      CLASHLENS_DATABASE_URL|CLASHLENS_DATABASE_URL_FILE|CLASHLENS_*_DB_PASSWORD|CLASHLENS_ARCHIVE_ACCESS_KEY|CLASHLENS_ARCHIVE_SECRET_KEY|CLASHLENS_WORKER_ARCHIVE_*|CLASHLENS_NORMAL_API_KEYS|CLASHLENS_INTERACTIVE_API_KEYS|CLASHLENS_NORMAL_API_KEY_FILES|CLASHLENS_INTERACTIVE_API_KEY_FILES|CLASHLENS_API_KEY_HOST_DIR|CLASHLENS_HEALTH_HOST|CLASHLENS_HEALTH_PORT|CLASHLENS_PODMAN_*|CLASHLENS_POSTGRES_CONTAINER|CLASHLENS_POSTGRES_IMAGE|CLASHLENS_COLLECTOR_CONTAINER|CLASHLENS_COLLECTOR_IMAGE|CLASHLENS_PYTHON_*|CLASHLENS_HMAC_*|CLASHLENS_INTERACTIVE_API_KEY_FILE|CLASHLENS_OFFICIAL_API_ORIGIN|CLASHLENS_OFFICIAL_API_PROXY_URL|CLASHLENS_OFFICIAL_KEY_FILE|CLASHLENS_OFFICIAL_PROXY_URL|CLASHLENS_API_HOST|CLASHLENS_API_PORT|CLASHLENS_SCHEMA_VERSION|CLASHLENS_SHARED_TRAFFIC_GATE_MODE|CLASHLENS_WORKER_LEASE_SECONDS|CLASHLENS_POSTGRES_MEMORY|CLASHLENS_POSTGRES_CPUS|CLASHLENS_POSTGRES_PIDS|CLASHLENS_COLLECTOR_MEMORY|CLASHLENS_COLLECTOR_CPUS|CLASHLENS_COLLECTOR_PIDS|CLASHLENS_API_MEMORY|CLASHLENS_API_CPUS|CLASHLENS_API_PIDS|CLASHLENS_WORKER_MEMORY|CLASHLENS_WORKER_CPUS|CLASHLENS_WORKER_PIDS)
+      CLASHLENS_DATABASE_URL|CLASHLENS_DATABASE_URL_FILE|CLASHLENS_*_DB_PASSWORD|CLASHLENS_ARCHIVE_ACCESS_KEY|CLASHLENS_ARCHIVE_SECRET_KEY|CLASHLENS_WORKER_ARCHIVE_*|CLASHLENS_NORMAL_API_KEYS|CLASHLENS_INTERACTIVE_API_KEYS|CLASHLENS_NORMAL_API_KEY_FILES|CLASHLENS_INTERACTIVE_API_KEY_FILES|CLASHLENS_API_KEY_HOST_DIR|CLASHLENS_HEALTH_HOST|CLASHLENS_HEALTH_PORT|CLASHLENS_PODMAN_*|CLASHLENS_POSTGRES_CONTAINER|CLASHLENS_POSTGRES_IMAGE|CLASHLENS_COLLECTOR_CONTAINER|CLASHLENS_COLLECTOR_IMAGE|CLASHLENS_PYTHON_*|CLASHLENS_HMAC_*|CLASHLENS_INTERACTIVE_API_KEY_FILE|CLASHLENS_OFFICIAL_API_ORIGIN|CLASHLENS_OFFICIAL_API_PROXY_URL|CLASHLENS_OFFICIAL_KEY_FILE|CLASHLENS_OFFICIAL_PROXY_URL|CLASHLENS_API_HOST|CLASHLENS_API_PORT|CLASHLENS_SCHEMA_VERSION|CLASHLENS_SHARED_TRAFFIC_GATE_MODE|CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE|CLASHLENS_WORKER_LEASE_SECONDS|CLASHLENS_WORKER_REPLICAS|CLASHLENS_WORKER_CONCURRENCY|CLASHLENS_WORKER_DATABASE_POOL_SIZE|CLASHLENS_WORKER_ARCHIVE_POOL_SIZE|CLASHLENS_POSTGRES_MEMORY|CLASHLENS_POSTGRES_SHM_SIZE|CLASHLENS_POSTGRES_CPUS|CLASHLENS_POSTGRES_PIDS|CLASHLENS_COLLECTOR_MEMORY|CLASHLENS_COLLECTOR_CPUS|CLASHLENS_COLLECTOR_PIDS|CLASHLENS_API_MEMORY|CLASHLENS_API_CPUS|CLASHLENS_API_PIDS|CLASHLENS_WORKER_MEMORY|CLASHLENS_WORKER_CPUS|CLASHLENS_WORKER_PIDS)
         ;;
       CLASHLENS_*)
         result+=(--env "$name")
@@ -585,6 +668,7 @@ collector_env_args() {
   result+=(--env "CLASHLENS_OFFICIAL_API_PROXY_URL=$CLASHLENS_OFFICIAL_API_PROXY_URL")
   result+=(--env "CLASHLENS_NORMAL_API_KEY_FILES=$CLASHLENS_NORMAL_API_KEY_FILES")
   result+=(--env "CLASHLENS_INTERACTIVE_API_KEY_FILES=$CLASHLENS_INTERACTIVE_API_KEY_FILES")
+  result+=(--env "CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=$CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE")
   result+=(--env "CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081")
 }
 
@@ -717,6 +801,7 @@ require_python_runtime() {
   local version
   version=$(contract_version)
   [[ "$version" == "2" ]] || die "production contract version 2 is required (found $version)"
+  require_current_schema
 
   python_image_exists || die "python image is missing; run python-up first"
 }
@@ -853,6 +938,7 @@ website_start() {
 
 # The worker receives its own database role and a read-only archive
 # credential. It never receives official API keys, HMAC keys, or the API role.
+# All replicas share the same three file-backed secrets.
 worker_secret_args() {
   local -n secret_result=$1
   local -n env_result=$2
@@ -868,57 +954,85 @@ worker_secret_args() {
   env_result+=(--env "CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key")
 }
 
-start_python_worker() {
-  local -a secrets=() env_args=()
-  worker_secret_args secrets env_args
-
+# Stop and remove every worker container: the configured replicas, any
+# surplus replica left from a previous higher count, and the legacy
+# pre-replica container name. Start and down commands must stop all of them
+# before the shared worker secrets are replaced, so no running container
+# mounts a replaced secret.
+stop_all_worker_containers() {
+  local i
+  for ((i = 1; i <= WORKER_REPLICA_MAX; i++)); do
+    if container_exists "${PYTHON_WORKER_CONTAINER}-${i}"; then
+      stop_and_remove "${PYTHON_WORKER_CONTAINER}-${i}" "$WORKER_STOP_GRACE"
+    fi
+  done
   if container_exists "$PYTHON_WORKER_CONTAINER"; then
     stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
   fi
-
-  "$PODMAN_BIN" run \
-    --detach \
-    --name "$PYTHON_WORKER_CONTAINER" \
-    --network "$NETWORK_NAME" \
-    "${env_args[@]}" \
-    --env CLASHLENS_ARCHIVE_ENDPOINT \
-    --env CLASHLENS_ARCHIVE_BUCKET \
-    --read-only \
-    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
-    --cap-drop all \
-    --security-opt no-new-privileges \
-    --memory "$CLASHLENS_WORKER_MEMORY" \
-    --pids-limit "$CLASHLENS_WORKER_PIDS" \
-    --cpus "$CLASHLENS_WORKER_CPUS" \
-    --health-cmd "python -m clashlens.cli ready --expected-contract-version 2" \
-    --health-interval 30s \
-    --health-timeout 20s \
-    --health-retries 3 \
-    --restart unless-stopped \
-    --label org.clashlens.component=python-worker \
-    "${secrets[@]}" \
-    "$PYTHON_IMAGE" worker --owner production-python-1 --max-jobs 100 --lease-seconds "$CLASHLENS_WORKER_LEASE_SECONDS" --run-forever >/dev/null
 }
 
-wait_for_python_worker() {
-  local attempt
+start_python_workers() {
+  # All replicas share one queue, one database role, and one read-only
+  # archive pair. Stop every existing worker container first, then replace
+  # the shared secrets once, then start the configured identical replicas.
+  stop_all_worker_containers
+
+  local -a secrets=() env_args=()
+  worker_secret_args secrets env_args
+
+  local i
+  for ((i = 1; i <= CLASHLENS_WORKER_REPLICAS; i++)); do
+    "$PODMAN_BIN" run \
+      --detach \
+      --name "${PYTHON_WORKER_CONTAINER}-${i}" \
+      --network "$NETWORK_NAME" \
+      "${env_args[@]}" \
+      --env CLASHLENS_ARCHIVE_ENDPOINT \
+      --env CLASHLENS_ARCHIVE_BUCKET \
+      --read-only \
+      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
+      --cap-drop all \
+      --security-opt no-new-privileges \
+      --memory "$CLASHLENS_WORKER_MEMORY" \
+      --pids-limit "$CLASHLENS_WORKER_PIDS" \
+      --cpus "$CLASHLENS_WORKER_CPUS" \
+      --health-cmd "python -m clashlens.cli ready --expected-contract-version 2" \
+      --health-interval 30s \
+      --health-timeout 20s \
+      --health-retries 3 \
+      --restart unless-stopped \
+      --label org.clashlens.component=python-worker \
+      "${secrets[@]}" \
+      "$PYTHON_IMAGE" worker --owner "production-python-${i}" --max-jobs 100 --lease-seconds "$CLASHLENS_WORKER_LEASE_SECONDS" --concurrency "$CLASHLENS_WORKER_CONCURRENCY" --database-pool-size "$CLASHLENS_WORKER_DATABASE_POOL_SIZE" --archive-pool-size "$CLASHLENS_WORKER_ARCHIVE_POOL_SIZE" --run-forever >/dev/null
+  done
+}
+
+wait_for_python_workers() {
+  local attempt i
   for ((attempt = 1; attempt <= 60; attempt++)); do
-    if container_running "$PYTHON_WORKER_CONTAINER" && \
-      "$PODMAN_BIN" healthcheck run "$PYTHON_WORKER_CONTAINER" >/dev/null 2>&1; then
+    local all_healthy=true
+    for ((i = 1; i <= CLASHLENS_WORKER_REPLICAS; i++)); do
+      if ! container_running "${PYTHON_WORKER_CONTAINER}-${i}" || \
+        ! "$PODMAN_BIN" healthcheck run "${PYTHON_WORKER_CONTAINER}-${i}" >/dev/null 2>&1; then
+        all_healthy=false
+        break
+      fi
+    done
+    if [[ "$all_healthy" == true ]]; then
       return
     fi
     sleep 1
   done
-  die "production Python worker did not become healthy"
+  die "production Python worker replicas did not become healthy"
 }
 
 python_start() {
   require_python_runtime
   start_python_api
   wait_for_python_api
-  start_python_worker
-  wait_for_python_worker
-  printf 'production Python API and worker are healthy\n'
+  start_python_workers
+  wait_for_python_workers
+  printf 'production Python API and %s worker replicas are healthy\n' "$CLASHLENS_WORKER_REPLICAS"
 }
 
 status_of_container() {
@@ -954,10 +1068,21 @@ show_status() {
   status_of_container postgres "$POSTGRES_CONTAINER"
   status_of_container collector "$COLLECTOR_CONTAINER"
   status_of_container python-api "$PYTHON_API_CONTAINER"
-  status_of_container python-worker "$PYTHON_WORKER_CONTAINER"
+  local i
+  for ((i = 1; i <= CLASHLENS_WORKER_REPLICAS; i++)); do
+    status_of_container "python-worker-$i" "${PYTHON_WORKER_CONTAINER}-${i}"
+  done
+  if container_exists "$PYTHON_WORKER_CONTAINER"; then
+    printf 'python-worker: stale (removed on next start)\n'
+  fi
+  for ((i = CLASHLENS_WORKER_REPLICAS + 1; i <= WORKER_REPLICA_MAX; i++)); do
+    if container_exists "${PYTHON_WORKER_CONTAINER}-${i}"; then
+      printf 'python-worker-%s: surplus (removed on next start)\n' "$i"
+    fi
+  done
   status_of_container website "$WEBSITE_CONTAINER"
-  if container_running "$PYTHON_WORKER_CONTAINER"; then
-    if queue_output=$("$PODMAN_BIN" exec "$PYTHON_WORKER_CONTAINER" python -m clashlens.cli queue-status 2>/dev/null); then
+  if container_running "${PYTHON_WORKER_CONTAINER}-1"; then
+    if queue_output=$("$PODMAN_BIN" exec "${PYTHON_WORKER_CONTAINER}-1" python -m clashlens.cli queue-status 2>/dev/null); then
       printf 'python queue: %s\n' "$(printf '%s' "$queue_output" | head -n 1)"
     else
       printf 'python queue: unavailable\n'
@@ -1024,6 +1149,11 @@ CLASHLENS_ARCHIVE_SECURE=${CLASHLENS_ARCHIVE_SECURE:-true}
 CLASHLENS_HEALTH_HOST=${CLASHLENS_HEALTH_HOST:-$HEALTH_HOST}
 CLASHLENS_HEALTH_PORT=${CLASHLENS_HEALTH_PORT:-$HEALTH_PORT}
 CLASHLENS_WORKER_LEASE_SECONDS=${CLASHLENS_WORKER_LEASE_SECONDS:-60}
+CLASHLENS_WORKER_REPLICAS=${CLASHLENS_WORKER_REPLICAS:-1}
+CLASHLENS_WORKER_CONCURRENCY=${CLASHLENS_WORKER_CONCURRENCY:-1}
+CLASHLENS_WORKER_DATABASE_POOL_SIZE=${CLASHLENS_WORKER_DATABASE_POOL_SIZE:-4}
+CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=${CLASHLENS_WORKER_ARCHIVE_POOL_SIZE:-4}
+CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=${CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE:-16}
 HEALTH_HOST=$CLASHLENS_HEALTH_HOST
 HEALTH_PORT=$CLASHLENS_HEALTH_PORT
 WORKER_STOP_GRACE=$((CLASHLENS_WORKER_LEASE_SECONDS + 10))
@@ -1066,7 +1196,7 @@ case "$command" in
     case "$version" in
       absent)
         apply_initial_contract
-        advance_contract
+        apply_pending_forward_migrations
         configure_runtime_roles
         version=2
         fresh_bootstrap=true
@@ -1082,12 +1212,12 @@ case "$command" in
       stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
       start_bridge_collector
       wait_for_collector
-      advance_contract
+      apply_pending_forward_migrations
       configure_runtime_roles
       stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
       secret_rm clashlens-bridge-database-url
     elif [[ "$version" == "2" && "$fresh_bootstrap" != true ]]; then
-      advance_contract
+      apply_pending_forward_migrations
       configure_runtime_roles
     fi
     start_required_collector
@@ -1111,6 +1241,7 @@ case "$command" in
     wait_for_postgres
     version=$(contract_version)
     [[ "$version" == "2" ]] || die "restart requires contract version 2 (found $version); run up first"
+    require_current_schema
     image_exists || die "collector image is missing; run up first"
     start_required_collector
     wait_for_collector
@@ -1161,9 +1292,9 @@ case "$command" in
     require_podman
     require_rootless_podman
     require_python_runtime
-    start_python_worker
-    wait_for_python_worker
-    printf 'production Python worker is healthy\n'
+    start_python_workers
+    wait_for_python_workers
+    printf 'production Python worker replicas (%s) are healthy\n' "$CLASHLENS_WORKER_REPLICAS"
     ;;
   website-up)
     [[ $# == 0 ]] || die "website-up accepts no arguments"
@@ -1191,11 +1322,16 @@ case "$command" in
     elif [[ "$component" == "python-api" ]]; then
       target=$PYTHON_API_CONTAINER
     elif [[ "$component" == "python-worker" ]]; then
-      target=$PYTHON_WORKER_CONTAINER
+      target="${PYTHON_WORKER_CONTAINER}-1"
+    elif [[ "$component" =~ ^python-worker-([0-9]+)$ ]]; then
+      replica=${BASH_REMATCH[1]}
+      (( replica >= 1 && replica <= WORKER_REPLICA_MAX )) || \
+        die "logs target python-worker-N must be between 1 and $WORKER_REPLICA_MAX"
+      target="${PYTHON_WORKER_CONTAINER}-${replica}"
     elif [[ "$component" == "website" ]]; then
       target=$WEBSITE_CONTAINER
     else
-      die "logs target must be collector, postgres, python-api, python-worker, or website"
+      die "logs target must be collector, postgres, python-api, python-worker, python-worker-N, or website"
     fi
     shift || true
     container_exists "$target" || die "$component container does not exist"
@@ -1205,7 +1341,7 @@ case "$command" in
     [[ $# == 0 ]] || die "down accepts no arguments"
     require_podman
     stop_and_remove "$WEBSITE_CONTAINER" "$API_STOP_GRACE"
-    stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
+    stop_all_worker_containers
     stop_and_remove "$PYTHON_API_CONTAINER" "$API_STOP_GRACE"
     stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
     stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
@@ -1227,7 +1363,7 @@ case "$command" in
     [[ $# == 0 ]] || die "python-down accepts no arguments"
     require_podman
     stop_and_remove "$WEBSITE_CONTAINER" "$API_STOP_GRACE"
-    stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
+    stop_all_worker_containers
     stop_and_remove "$PYTHON_API_CONTAINER" "$API_STOP_GRACE"
     printf 'production Python containers removed\n'
     ;;
@@ -1241,8 +1377,8 @@ case "$command" in
   worker-down)
     [[ $# == 0 ]] || die "worker-down accepts no arguments"
     require_podman
-    stop_and_remove "$PYTHON_WORKER_CONTAINER" "$WORKER_STOP_GRACE"
-    printf 'production Python worker container removed\n'
+    stop_all_worker_containers
+    printf 'production Python worker containers removed\n'
     ;;
   website-down)
     [[ $# == 0 ]] || die "website-down accepts no arguments"
@@ -1264,9 +1400,9 @@ case "$command" in
   queue-status)
     [[ $# == 0 ]] || die "queue-status accepts no arguments"
     require_podman
-    container_exists "$PYTHON_WORKER_CONTAINER" || die "python worker container does not exist; run python-up first"
-    container_running "$PYTHON_WORKER_CONTAINER" || die "python worker container is not running"
-    "$PODMAN_BIN" exec "$PYTHON_WORKER_CONTAINER" python -m clashlens.cli queue-status
+    container_exists "${PYTHON_WORKER_CONTAINER}-1" || die "python worker replica 1 does not exist; run python-up first"
+    container_running "${PYTHON_WORKER_CONTAINER}-1" || die "python worker replica 1 is not running"
+    "$PODMAN_BIN" exec "${PYTHON_WORKER_CONTAINER}-1" python -m clashlens.cli queue-status
     ;;
   help|-h|--help)
     usage
