@@ -34,6 +34,10 @@ def _production_database(database_url: str) -> Iterator[tuple[str, str]]:
                     encoding="utf-8"
                 )
                 connection.execute(migration)
+            connection.execute(
+                "REVOKE ALL PRIVILEGES ON TABLE python_processing_jobs "
+                "FROM clashlens_python_worker"
+            )
         yield connection_info, schema
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
