@@ -141,7 +141,7 @@ def test_production_profile_job_activates_legend_player_and_makes_it_due(
     database_url: str,
     archive_server,
 ) -> None:
-    with _production_database(database_url) as (connection_info, _schema):
+    with _production_database(database_url) as (connection_info, schema):
         readiness = cli.main(
             [
                 "ready",
@@ -167,7 +167,11 @@ def test_production_profile_job_activates_legend_player_and_makes_it_due(
             archive_reference=archive_server[1],
             response_hash=archive_server[2],
         )
-        database = Database(connection_info)
+        worker_connection_info = make_conninfo(
+            database_url,
+            options=f"-c search_path={schema} -c role=clashlens_python_worker",
+        )
+        database = Database(worker_connection_info)
         try:
             processor = ObservationProcessor(
                 database,
@@ -196,8 +200,8 @@ def test_production_profile_job_activates_legend_player_and_makes_it_due(
                 ).fetchone()
                 job = connection.execute(
                     """
-                    SELECT status, outcome, lease_owner, lease_token, lease_expires_at
-                    FROM python_processing_jobs
+                    SELECT state, outcome, lease_owner, lease_token, lease_expires_at
+                    FROM python_processing_jobs_worker
                     WHERE id = %s
                     """,
                     (job_id,),
@@ -229,5 +233,12 @@ def test_production_profile_job_activates_legend_player_and_makes_it_due(
             assert versions == 1
             assert effects == 1
             assert attempts == 1
+            reconciliation_job_id = database.enqueue_reconciliation(
+                player_tag="#2PP",
+                day_start=datetime(2026, 8, 3, 5, tzinfo=UTC),
+                now=datetime(2026, 8, 4, 5, tzinfo=UTC),
+                request_key="worker-view-test",
+            )
+            assert reconciliation_job_id > job_id
         finally:
             database.close()

@@ -3523,6 +3523,7 @@ GRANT SELECT ON TABLE clash_lens_contract TO clashlens_collector;
 -- claim view), Python-owned domain writes, and read-only collector evidence.
 -- No account, credential, support, replay, or operator-reset access.
 GRANT SELECT, INSERT, UPDATE ON TABLE
+    python_processing_jobs,
     python_processing_attempts,
     python_processing_job_events,
     player_profile_versions,
