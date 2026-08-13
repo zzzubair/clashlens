@@ -38,6 +38,10 @@ def _production_database(database_url: str) -> Iterator[tuple[str, str]]:
                 "REVOKE ALL PRIVILEGES ON TABLE python_processing_jobs "
                 "FROM clashlens_python_worker"
             )
+            connection.execute(
+                "GRANT SELECT (id, lease_generation) ON TABLE python_processing_jobs "
+                "TO clashlens_python_worker"
+            )
         yield connection_info, schema
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -138,7 +142,7 @@ def test_worker_role_uses_only_the_production_queue_view(database_url: str) -> N
             assert _text(current_user[0]) == "clashlens_python_worker"
             assert view_count == (0,)
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                connection.execute("SELECT count(*) FROM python_processing_jobs")
+                connection.execute("SELECT status FROM python_processing_jobs LIMIT 1")
 
 
 def test_production_profile_job_activates_legend_player_and_makes_it_due(
@@ -177,6 +181,11 @@ def test_production_profile_job_activates_legend_player_and_makes_it_due(
         )
         database = Database(worker_connection_info)
         try:
+            with database.pool.connection() as connection:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(
+                        "SELECT status FROM python_processing_jobs LIMIT 1"
+                    )
             processor = ObservationProcessor(
                 database,
                 S3ArchiveReader(
