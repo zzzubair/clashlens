@@ -111,7 +111,7 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 	}
 	pythonEnvironment := filepath.Join(t.TempDir(), "venv")
 	environment["UV_PROJECT_ENVIRONMENT"] = pythonEnvironment
-	workerOutput, _ := runPythonPrototype(
+	workerOutput, _ := runPythonService(
 		t,
 		ctx,
 		environment,
@@ -140,8 +140,8 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 		t.Fatalf("profile effects = %d, want 1", effects)
 	}
 
-	port := unusedPortForPythonPrototype(t)
-	key := bytesFromHexForPythonPrototype(t, strings.Repeat("11", 32))
+	port := unusedPortForPythonService(t)
+	key := bytesFromHexForPythonService(t, strings.Repeat("11", 32))
 	secretFile := filepath.Join(t.TempDir(), "typescript-hmac.key")
 	if err := os.WriteFile(secretFile, []byte(base64.RawURLEncoding.EncodeToString(key)+"\n"), 0o600); err != nil {
 		t.Fatalf("write Python API HMAC secret fixture: %v", err)
@@ -161,13 +161,13 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 		"--official-proxy-url", "http://127.0.0.1:9",
 	)
 	serve.Dir = repositoryRootForTest(t)
-	serve.Env = pythonPrototypeEnvironment(environment)
+	serve.Env = pythonServiceEnvironment(environment)
 	serve.Stdout = io.Discard
 	serve.Stderr = io.Discard
 	if err := serve.Start(); err != nil {
 		t.Fatalf("start Python API: %v", err)
 	}
-	defer stopPythonPrototypeProcess(t, serve)
+	defer stopPythonServiceProcess(t, serve)
 	waitForTCP(t, ctx, port)
 
 	target := "/v1/players/%232PP?view=summary&view=live"
@@ -176,7 +176,7 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create signed player request: %v", err)
 	}
-	for name, value := range pythonPrototypeProofHeaders(key, target, requestTime) {
+	for name, value := range pythonServiceProofHeaders(key, target, requestTime) {
 		request.Header.Set(name, value)
 	}
 	response, err := http.DefaultClient.Do(request)
@@ -200,7 +200,7 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 	}
 }
 
-func stopPythonPrototypeProcess(t *testing.T, command *exec.Cmd) {
+func stopPythonServiceProcess(t *testing.T, command *exec.Cmd) {
 	t.Helper()
 	if command.Process == nil {
 		return
@@ -221,22 +221,22 @@ func stopPythonPrototypeProcess(t *testing.T, command *exec.Cmd) {
 	}
 }
 
-func runPythonPrototype(t *testing.T, ctx context.Context, environment map[string]string, arguments ...string) (string, string) {
+func runPythonService(t *testing.T, ctx context.Context, environment map[string]string, arguments ...string) (string, string) {
 	t.Helper()
 	commandArguments := append([]string{"run", "--locked", "--project", "python", "python", "-m", "clashlens.cli"}, arguments...)
 	command := exec.CommandContext(ctx, "uv", commandArguments...)
 	command.Dir = repositoryRootForTest(t)
-	command.Env = pythonPrototypeEnvironment(environment)
+	command.Env = pythonServiceEnvironment(environment)
 	var stdout, stderr strings.Builder
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
-		t.Fatalf("Python prototype command %v failed: %v\nstdout: %s\nstderr: %s", arguments, err, stdout.String(), stderr.String())
+		t.Fatalf("Python service command %v failed: %v\nstdout: %s\nstderr: %s", arguments, err, stdout.String(), stderr.String())
 	}
 	return stdout.String(), stderr.String()
 }
 
-func pythonPrototypeEnvironment(environment map[string]string) []string {
+func pythonServiceEnvironment(environment map[string]string) []string {
 	values := append([]string{}, os.Environ()...)
 	for name, value := range environment {
 		values = append(values, name+"="+value)
@@ -244,7 +244,7 @@ func pythonPrototypeEnvironment(environment map[string]string) []string {
 	return values
 }
 
-func unusedPortForPythonPrototype(t *testing.T) int {
+func unusedPortForPythonService(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -275,7 +275,7 @@ func waitForTCP(t *testing.T, ctx context.Context, port int) {
 	t.Fatalf("Python API did not listen on port %d", port)
 }
 
-func bytesFromHexForPythonPrototype(t *testing.T, value string) []byte {
+func bytesFromHexForPythonService(t *testing.T, value string) []byte {
 	t.Helper()
 	decoded, err := hex.DecodeString(value)
 	if err != nil {
@@ -284,7 +284,7 @@ func bytesFromHexForPythonPrototype(t *testing.T, value string) []byte {
 	return decoded
 }
 
-func pythonPrototypeProofHeaders(key []byte, target string, now int64) map[string]string {
+func pythonServiceProofHeaders(key []byte, target string, now int64) map[string]string {
 	caller := base64.RawURLEncoding.EncodeToString([]byte("typescript-website"))
 	keyID := base64.RawURLEncoding.EncodeToString([]byte("current"))
 	targetB64 := base64.RawURLEncoding.EncodeToString([]byte(target))

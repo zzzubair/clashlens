@@ -14,8 +14,13 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from .accounts import normalize_display_name, normalize_group_name, normalize_username
-from .api_db import AccountContext, ApiDatabase, OperationResult, RequestBinding
-from .db import PROTOTYPE_CONTRACT_VERSION, Database
+from .api_db import (
+    API_CONTRACT_VERSION,
+    AccountContext,
+    ApiDatabase,
+    OperationResult,
+    RequestBinding,
+)
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .profile import normalize_player_tag
 from .verification import (
@@ -99,9 +104,8 @@ class RequestBodyTooLarge(ValueError):
 
 
 def create_app(
-    database_url: str | None = None,
+    database: ApiDatabase,
     *,
-    database: Database | ApiDatabase | Any | None = None,
     keys: Mapping[tuple[str, str], bytes],
     clock: Callable[[], int | float] = time.time,
     now: Callable[[], datetime] | None = None,
@@ -111,10 +115,6 @@ def create_app(
     official_credential_fingerprint: str | None = None,
     verification_cooldown_seconds: int = 5,
 ) -> FastAPI:
-    if database is not None and database_url is not None:
-        raise ValueError("provide database_url or database, not both")
-    if database is None and database_url is None:
-        raise ValueError("database_url or database is required")
     if not 1 <= max_body_bytes <= _MAX_SUPPORTED_BODY_BYTES:
         raise ValueError("max_body_bytes exceeds the supported maximum")
     if not 1 <= max_response_bytes <= _MAX_SUPPORTED_BODY_BYTES:
@@ -133,17 +133,13 @@ def create_app(
         if caller_counts[caller] > 2:
             raise ValueError("a caller may have only current and previous HMAC keys")
 
-    api_database = database if database is not None else Database(str(database_url))
-    production_database = (
-        api_database if isinstance(api_database, ApiDatabase) else None
-    )
+    production_database = database
     current_time = now or (lambda: datetime.fromtimestamp(int(clock()), tz=UTC))
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
-        if database is None or isinstance(api_database, ApiDatabase):
-            api_database.close()
+        database.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -218,8 +214,8 @@ def create_app(
     @app.get("/readyz")
     def ready() -> JSONResponse:
         try:
-            is_ready = api_database.is_ready(
-                expected_contract_version=PROTOTYPE_CONTRACT_VERSION
+            is_ready = database.is_ready(
+                expected_contract_version=API_CONTRACT_VERSION
             )
         except Exception:  # noqa: BLE001 - readiness fails closed without disclosure.
             is_ready = False
@@ -235,8 +231,6 @@ def create_app(
         limit: int = Query(default=50, ge=1, le=50),
     ) -> JSONResponse:
         _authorize(request, "player.read", production_database)
-        if production_database is None:
-            raise ApiError(503, "operation_unavailable")
         return JSONResponse(
             status_code=200,
             content={
@@ -255,24 +249,11 @@ def create_app(
     def player(tag: str, request: Request) -> JSONResponse:
         _authorize(request, "player.read", production_database)
         normalized_tag = _safe_tag(tag)
-        if production_database is None:
-            result = api_database.get_player(normalized_tag)
-            if result is not None:
-                result = dict(result)
-                result["tag"] = result.pop("normalized_tag")
-                result["eligibility"] = result.pop("eligibility_state")
-                observed_at = result["observed_at"].astimezone(UTC)
-                age = max(0, int((current_time() - observed_at).total_seconds()))
-                result["freshness"] = (
-                    "fresh" if age <= _DEFAULT_FRESHNESS_SECONDS else "stale"
-                )
-                result["coverage"] = "profile"
-        else:
-            result = production_database.get_player_page(
-                normalized_tag,
-                now=current_time(),
-                freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
-            )
+        result = production_database.get_player_page(
+            normalized_tag,
+            now=current_time(),
+            freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
+        )
         if result is None:
             raise ApiError(404, "player_not_found")
         return JSONResponse(status_code=200, content=_json_safe(result))
@@ -283,10 +264,6 @@ def create_app(
         if await request.body():
             raise ApiError(422, "invalid_request")
         normalized_tag = _safe_tag(tag)
-        if production_database is None:
-            result = api_database.submit_refresh(normalized_tag)
-            payload = _json_safe(result)
-            return JSONResponse(status_code=202, content=payload)
         binding = _binding(
             request,
             context,
@@ -303,8 +280,6 @@ def create_app(
     @app.get("/v1/refreshes/{refresh_id}")
     def refresh_status(refresh_id: str, request: Request) -> JSONResponse:
         _authorize(request, "refresh.status", production_database)
-        if production_database is None:
-            raise ApiError(404, "refresh_not_found")
         _safe_uuid(refresh_id)
         result = production_database.get_refresh_status(refresh_id)
         if result is None:
@@ -318,8 +293,6 @@ def create_app(
         limit: int = Query(default=100, ge=1, le=200),
     ) -> JSONResponse:
         _authorize(request, "leaderboards.read", production_database)
-        if production_database is None:
-            raise ApiError(503, "operation_unavailable")
         if kind == "live":
             result = production_database.get_live_leaderboard(
                 limit=limit,
@@ -339,8 +312,6 @@ def create_app(
     @app.get("/v1/analytics/basic")
     def analytics(request: Request) -> JSONResponse:
         _authorize(request, "analytics.read", production_database)
-        if production_database is None:
-            raise ApiError(503, "operation_unavailable")
         return JSONResponse(
             status_code=200,
             content=production_database.get_basic_analytics(
@@ -352,8 +323,6 @@ def create_app(
     @app.get("/v1/users/{username}")
     def public_user(username: str, request: Request) -> JSONResponse:
         _authorize(request, "user.read", production_database)
-        if production_database is None:
-            raise ApiError(404, "user_not_found")
         try:
             normalized_username = normalize_username(username)
         except ValueError as error:

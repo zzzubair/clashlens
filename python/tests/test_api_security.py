@@ -141,7 +141,7 @@ def test_invalid_private_proof_has_a_safe_error_envelope() -> None:
     assert response.json() == {"error": "invalid_proof"}
 
 
-def test_public_player_read_denies_a_signed_end_user_identity_in_the_profile_prototype() -> (
+def test_public_player_read_denies_a_signed_end_user_identity() -> (
     None
 ):
     database = FakeDatabase()

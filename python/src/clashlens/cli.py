@@ -11,7 +11,6 @@ import urllib.request
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import asdict
-from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
 from time import monotonic, time
@@ -33,32 +32,11 @@ MAX_REPORTED_RESULTS = 100
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Issue 29 Python-layer prototype CLI")
+    parser = argparse.ArgumentParser(description="Clash Lens Python services CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    init_db = subparsers.add_parser(
-        "init-db", help="apply the prototype-only SQL contract"
-    )
-    _database_argument(init_db)
-
-    seed = subparsers.add_parser(
-        "seed", help="insert one collector-compatible observation and job"
-    )
-    _database_argument(seed)
-    seed.add_argument("--occurrence-key", required=True)
-    seed.add_argument("--tag", default="#2PP")
-    seed.add_argument("--endpoint", default="profile")
-    seed.add_argument("--endpoint-version", default="profile-v1")
-    seed.add_argument("--schema-version", default="profile-schema-v1")
-    seed.add_argument("--observed-at", required=True)
-    seed.add_argument("--http-status", type=int, default=200)
-    seed.add_argument("--response-hash", required=True)
-    seed.add_argument("--archive-reference", required=True)
-    seed.add_argument("--collector-version", default="collector-prototype-v1")
-    seed.add_argument("--max-attempts", type=int, default=2)
-
     worker = subparsers.add_parser(
-        "worker", help="claim and process prototype observations"
+        "worker", help="claim and process production observations"
     )
     _database_argument(worker)
     _archive_arguments(worker)
@@ -138,44 +116,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
-        if arguments.command == "init-db":
-            database = Database(_database_url(arguments))
-            try:
-                database.apply_schema()
-            finally:
-                database.close()
-            print(
-                json.dumps({"status": "schema_ready", "contract": "prototype-only-v2"})
-            )
-            return 0
-        if arguments.command == "seed":
-            database = Database(_database_url(arguments))
-            try:
-                observation_id, job_id = database.insert_observation_and_job(
-                    occurrence_key=arguments.occurrence_key,
-                    normalized_tag=arguments.tag,
-                    endpoint=arguments.endpoint,
-                    endpoint_version=arguments.endpoint_version,
-                    schema_version=arguments.schema_version,
-                    observed_at=_parse_datetime(arguments.observed_at),
-                    http_status=arguments.http_status,
-                    response_hash=arguments.response_hash,
-                    archive_reference=arguments.archive_reference,
-                    collector_version=arguments.collector_version,
-                    max_attempts=arguments.max_attempts,
-                )
-            finally:
-                database.close()
-            print(
-                json.dumps(
-                    {
-                        "status": "seeded",
-                        "observation_id": observation_id,
-                        "job_id": job_id,
-                    }
-                )
-            )
-            return 0
         if arguments.command == "worker":
             return _run_worker(arguments)
         if arguments.command == "ready":
@@ -202,10 +142,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (ValueError, OSError) as error:
         # Do not print exception details. Database URLs, request targets, and
         # mounted secret paths can appear in third-party exception messages.
-        print(f"prototype command failed: {type(error).__name__}", file=sys.stderr)
+        print(f"service command failed: {type(error).__name__}", file=sys.stderr)
         return 1
     except Exception:  # noqa: BLE001 - sanitize the CLI boundary
-        print("prototype command failed: internal_error", file=sys.stderr)
+        print("service command failed: internal_error", file=sys.stderr)
         return 1
     raise AssertionError("unreachable command")
 
@@ -417,13 +357,6 @@ def _file_value(path: str, inline_value: str, label: str) -> str:
             raise ValueError(f"{label} file contains invalid line endings")
         return decoded
     return inline_value
-
-
-def _parse_datetime(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError("timestamp must include a UTC offset")
-    return parsed.astimezone(UTC)
 
 
 def _load_hmac_keys(arguments: argparse.Namespace) -> dict[tuple[str, str], bytes]:

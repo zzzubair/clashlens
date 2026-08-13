@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import psycopg
+import pytest
 from psycopg.conninfo import make_conninfo
 
 from clashlens import cli
@@ -33,6 +34,14 @@ def _production_database(database_url: str) -> Iterator[tuple[str, str]]:
                     encoding="utf-8"
                 )
                 connection.execute(migration)
+            connection.execute(
+                "REVOKE ALL PRIVILEGES ON TABLE python_processing_jobs "
+                "FROM clashlens_python_worker"
+            )
+            connection.execute(
+                "GRANT SELECT (id, lease_generation) ON TABLE python_processing_jobs "
+                "TO clashlens_python_worker"
+            )
         yield connection_info, schema
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -81,11 +90,13 @@ def _seed_production_profile(
                 occurrence_key, collection_job_id, attempt_id, player_id,
                 normalized_tag, endpoint, request_started_at, response_completed_at,
                 http_status, response_hash, archive_reference, collector_version,
-                key_label, evidence_headers
+                key_label, evidence_headers, request_method, request_path,
+                request_query, paging_envelope_state, source_adapter_version
             ) VALUES (
                 'production-profile-bridge:profile', %s, %s, %s,
                 '#2PP', 'profile', %s, %s, 200, %s, %s,
-                'collector-v1', 'normal-a', '{}'::jsonb
+                'collector-v1', 'normal-a', '{}'::jsonb, 'GET',
+                '/v1/players/%%232PP', '', 'not_applicable', 'player-profile-v1'
             )
             RETURNING id
             """,
@@ -108,14 +119,37 @@ def _seed_production_profile(
             (observation_id,),
         ).fetchone()[0]
         connection.commit()
-        return int(job_id)
+    return int(job_id)
+
+
+def test_worker_requires_the_production_queue_view(database_url: str) -> None:
+    with _production_database(database_url) as (connection_info, _schema):
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute("DROP VIEW python_processing_jobs_worker")
+        with pytest.raises(RuntimeError, match="python_processing_jobs_worker view"):
+            Database(connection_info)
+
+
+def test_worker_role_uses_only_the_production_queue_view(database_url: str) -> None:
+    with _production_database(database_url) as (connection_info, _schema):
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute("SET ROLE clashlens_python_worker")
+            current_user = connection.execute("SELECT current_user").fetchone()
+            view_count = connection.execute(
+                "SELECT count(*) FROM python_processing_jobs_worker"
+            ).fetchone()
+            assert current_user is not None
+            assert _text(current_user[0]) == "clashlens_python_worker"
+            assert view_count == (0,)
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("SELECT status FROM python_processing_jobs LIMIT 1")
 
 
 def test_production_profile_job_activates_legend_player_and_makes_it_due(
     database_url: str,
     archive_server,
 ) -> None:
-    with _production_database(database_url) as (connection_info, _schema):
+    with _production_database(database_url) as (connection_info, schema):
         readiness = cli.main(
             [
                 "ready",
@@ -141,8 +175,17 @@ def test_production_profile_job_activates_legend_player_and_makes_it_due(
             archive_reference=archive_server[1],
             response_hash=archive_server[2],
         )
-        database = Database(connection_info)
+        worker_connection_info = make_conninfo(
+            database_url,
+            options=f"-c search_path={schema} -c role=clashlens_python_worker",
+        )
+        database = Database(worker_connection_info)
         try:
+            with database.pool.connection() as connection:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(
+                        "SELECT status FROM python_processing_jobs LIMIT 1"
+                    )
             processor = ObservationProcessor(
                 database,
                 S3ArchiveReader(
@@ -170,8 +213,8 @@ def test_production_profile_job_activates_legend_player_and_makes_it_due(
                 ).fetchone()
                 job = connection.execute(
                     """
-                    SELECT status, outcome, lease_owner, lease_token, lease_expires_at
-                    FROM python_processing_jobs
+                    SELECT state, outcome, lease_owner, lease_token, lease_expires_at
+                    FROM python_processing_jobs_worker
                     WHERE id = %s
                     """,
                     (job_id,),
@@ -203,5 +246,12 @@ def test_production_profile_job_activates_legend_player_and_makes_it_due(
             assert versions == 1
             assert effects == 1
             assert attempts == 1
+            reconciliation_job_id = database.enqueue_reconciliation(
+                player_tag="#2PP",
+                day_start=datetime(2026, 8, 3, 5, tzinfo=UTC),
+                now=datetime(2026, 8, 4, 5, tzinfo=UTC),
+                request_key="worker-view-test",
+            )
+            assert reconciliation_job_id > job_id
         finally:
             database.close()

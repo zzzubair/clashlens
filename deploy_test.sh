@@ -452,7 +452,7 @@ deploy_fails "$BADBUDGET_DIR" "$BADBUDGET_ENV" 'CLASHLENS_API_CPUS' -- up
 printf 'ok: resource budgets are required, explicit, and validated before side effects\n'
 
 # ---------------------------------------------------------------------------
-# Scenario A: fresh up runs bridge -> migration 0002 -> roles -> required.
+# Scenario A: fresh up runs migrations -> roles -> required, without a bridge.
 # ---------------------------------------------------------------------------
 FRESH_DIR=$(new_scenario)
 FRESH_ENV="$FRESH_DIR/app.env"
@@ -485,63 +485,39 @@ grep -q 'worker-role-password-0123456789abcd' "$role_stdin" || \
 grep -q 'api-role-password-0123456789abcdef' "$role_stdin" || \
   fail 'api role password did not reach psql stdin'
 
-bridge_run=$(grep '^run ' "$FRESH_NORM" | grep 'clashlens-collector-bridge')
+bridge_run=$(grep '^run ' "$FRESH_NORM" | grep 'clashlens-collector-bridge' || true)
 required_run=$(grep '^run ' "$FRESH_NORM" | grep 'clashlens-collector:deployment' | grep -v 'clashlens-collector-bridge')
-[[ -n "$bridge_run" ]] || fail 'bridge collector was not started on a fresh database'
+[[ -z "$bridge_run" ]] || fail 'bridge collector was started on a fresh database'
 [[ -n "$required_run" ]] || fail 'required collector was not started after migration'
-[[ "$bridge_run" == *'CLASHLENS_SHARED_TRAFFIC_GATE_MODE=bridge'* ]] || \
-  fail 'bridge collector did not receive the explicit bridge mode'
-[[ "$bridge_run" == *'CLASHLENS_SCHEMA_VERSION=1'* ]] || \
-  fail 'bridge collector did not receive contract version 1'
 [[ "$required_run" == *'CLASHLENS_SHARED_TRAFFIC_GATE_MODE=required'* ]] || \
   fail 'required collector did not receive the explicit required mode'
 [[ "$required_run" == *'CLASHLENS_SCHEMA_VERSION=2'* ]] || \
   fail 'required collector did not receive contract version 2'
 
-bridge_line=$(first_line "$FRESH_LOG" 'clashlens-collector-bridge')
+bridge_line=$(first_line "$FRESH_LOG" 'clashlens-collector-bridge' || true)
+migration1_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '1p' | cut -d: -f1)
 migration2_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '2p' | cut -d: -f1)
+role_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '3p' | cut -d: -f1)
 required_line=$(first_line "$FRESH_LOG" '^run .*--name clashlens-collector ')
-bridge_stop_line=$(first_line "$FRESH_LOG" '^stop --time 30 clashlens-collector-bridge')
-bridge_secret_rm_line=$(first_line "$FRESH_LOG" '^secret rm clashlens-bridge-database-url')
-[[ -n "$bridge_line" && -n "$migration2_line" && -n "$required_line" \
-  && -n "$bridge_stop_line" && -n "$bridge_secret_rm_line" ]] || \
-  fail 'could not locate bridge/migration/required order lines'
-(( bridge_line < migration2_line )) || fail 'bridge was not started before migration 0002'
+[[ -z "$bridge_line" && -n "$migration1_line" && -n "$migration2_line" \
+  && -n "$role_line" && -n "$required_line" ]] || \
+  fail 'could not locate fresh migration/role/required order lines'
+(( migration1_line < migration2_line )) || fail 'migration 0001 did not run before migration 0002'
+(( migration2_line < role_line )) || fail 'roles were configured before migration 0002'
+(( role_line < required_line )) || fail 'required collector started before roles were configured'
 (( migration2_line < required_line )) || fail 'migration 0002 did not run before the required collector'
-(( bridge_stop_line < required_line )) || fail 'bridge was not stopped before the required collector'
-(( bridge_secret_rm_line < required_line )) || fail 'bridge admin secret was not removed before the required collector'
 [[ ! -f "$(secret_file "$FRESH_DIR" clashlens-bridge-database-url)" ]] || \
-  fail 'bridge admin secret file still exists after migration'
-
-log_has "$FRESH_LOG" '^secret rm clashlens-bridge-database-url' 'bridge admin secret was not removed'
-log_has "$FRESH_LOG" '^stop --time 30 clashlens-collector-bridge' 'bridge was not stopped gracefully'
+  fail 'bridge admin secret was created on a fresh install'
+log_lacks "$FRESH_LOG" 'clashlens-bridge-database-url' \
+  'fresh install created or used the bridge admin secret'
 
 assert_no_sentinel_in_log "$FRESH_LOG"
-[[ "$bridge_run" != *'test-admin-password-0123456789abcdef'* ]] || fail 'admin password appeared in bridge run metadata'
 grep -q 'collector-role-password-0123456789' "$(secret_file "$FRESH_DIR" clashlens-collector-database-url)" || \
   fail 'collector database URL did not flow through secret stdin'
 grep -q 'collector-archive-secret-do-not-print' "$(secret_file "$FRESH_DIR" clashlens-collector-archive-secret-key)" || \
   fail 'collector archive secret did not flow through secret stdin'
 [[ "$required_run" != *'clashlens-bridge-database-url'* ]] || \
   fail 'required collector received the bridge admin secret'
-
-[[ "$bridge_run" == *'clashlens-bridge-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400'* ]] || \
-  fail 'bridge admin URL secret was not mounted'
-bridge_normalized=$(norm_log <<<"$bridge_run")
-[[ "$bridge_normalized" == *'--env CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url'* ]] || \
-  fail 'bridge did not receive the database URL file setting'
-[[ "$bridge_normalized" == *'--env CLASHLENS_NORMAL_API_KEY_FILES=normal-1=/run/secrets/normal-1,normal-2=/run/secrets/normal-2,normal-3=/run/secrets/normal-3,normal-4=/run/secrets/normal-4'* ]] || \
-  fail 'bridge did not receive the normal API key file list'
-[[ "$bridge_normalized" == *'--env CLASHLENS_INTERACTIVE_API_KEY_FILES=interactive-1=/run/secrets/interactive-1'* ]] || \
-  fail 'bridge did not receive the interactive API key file list'
-[[ "$bridge_normalized" == *'clashlens-collector-archive-access-key,type=mount,target=/run/secrets/archive-access-key'* ]] || \
-  fail 'bridge archive access secret was not mounted'
-[[ "$bridge_normalized" == *'clashlens-collector-archive-secret-key,type=mount,target=/run/secrets/archive-secret-key'* ]] || \
-  fail 'bridge archive secret was not mounted'
-[[ "$bridge_normalized" == *'--env CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key'* ]] || \
-  fail 'bridge archive access key file setting is missing'
-[[ "$bridge_normalized" == *'--env CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key'* ]] || \
-  fail 'bridge archive secret key file setting is missing'
 
 required_normalized=$required_run
 [[ "$required_normalized" == *'clashlens-collector-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400'* ]] || \
@@ -592,7 +568,7 @@ for setting in CLASHLENS_COLLECTOR_DB_PASSWORD CLASHLENS_WORKER_DB_PASSWORD CLAS
   [[ "$required_normalized" != *"--env $setting "* ]] || \
     fail "$setting leaked into collector environment metadata"
 done
-printf 'ok: fresh up runs bridge before migration 0002 and replaces it with the required collector\n'
+printf 'ok: fresh up applies v2 directly without a bridge\n'
 
 # ---------------------------------------------------------------------------
 # Scenario B: up on a populated v1 database never reapplies migration 0001.

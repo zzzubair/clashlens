@@ -101,5 +101,4 @@ The selected runtime is fixed for this package:
 The database schema lives in the production migrations at
 `deploy/migrations/0001_collector.sql` and
 `deploy/migrations/0002_python_layer.sql`. Application startup does not create
-or alter tables; `db.apply_schema()` is a test helper that applies the real
-migration files, and it refuses to alter a contract version it does not own.
+or alter tables; tests apply the real migration files directly.
