@@ -5,7 +5,6 @@ import json
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -47,10 +46,6 @@ PROCESSING_VERSION = "clashlens-domain-processing-v1"
 DEFAULT_PARSER_VERSION = SOURCE_PARSER_VERSION
 DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
 ANALYTICS_RULE_VERSION = "legend-analytics-v1"
-CONTRACT_VERSION = 2
-# Compatibility alias for the API/account integration worker. Domain code uses
-# CONTRACT_VERSION and the integration owner can remove this alias when api.py moves.
-PROTOTYPE_CONTRACT_VERSION = CONTRACT_VERSION
 
 # Work types this worker image may claim. Unsupported work types (for example
 # build_export) and unknown or future contracts stay pending and unclaimed so a
@@ -188,13 +183,21 @@ class Database:
             max_size=max_size,
             open=True,
         )
-        self._jobs_relation = "python_processing_jobs"
         with self.pool.connection() as connection:
             worker_view = connection.execute(
-                "SELECT to_regclass('python_processing_jobs_worker')"
+                """
+                SELECT c.relkind
+                FROM pg_class AS c
+                WHERE c.oid = to_regclass('python_processing_jobs_worker')
+                """
             ).fetchone()
-            if worker_view is not None and worker_view[0] is not None:
-                self._jobs_relation = "python_processing_jobs_worker"
+            missing_worker_view = worker_view is None or worker_view[0] not in {"v", b"v"}
+        if missing_worker_view:
+            self.pool.close()
+            raise RuntimeError(
+                "required python_processing_jobs_worker view is unavailable"
+            )
+        self._jobs_relation = "python_processing_jobs_worker"
 
     def close(self) -> None:
         self.pool.close()
@@ -237,174 +240,10 @@ class Database:
             "oldest_due_seconds": None if row[4] is None else max(0.0, float(row[4])),
         }
 
-    def apply_schema(self) -> None:
-        root = Path(__file__).parents[3]
-        migration_0001 = (
-            root / "deploy" / "migrations" / "0001_collector.sql"
-        ).read_text(encoding="utf-8")
-        migration_0002 = (
-            root / "deploy" / "migrations" / "0002_python_layer.sql"
-        ).read_text(encoding="utf-8")
-        with self.pool.connection() as connection:
-            relation = connection.execute(
-                "SELECT to_regclass('clash_lens_contract')"
-            ).fetchone()
-            if relation is not None and relation[0] is not None:
-                contract = connection.execute(
-                    "SELECT version FROM clash_lens_contract WHERE singleton = true"
-                ).fetchone()
-                if contract is None:
-                    raise RuntimeError(
-                        "existing Clash Lens contract has no singleton version row"
-                    )
-                version = int(contract[0])
-                if version != CONTRACT_VERSION:
-                    raise RuntimeError(
-                        f"refusing to alter existing Clash Lens contract version {version}; "
-                        f"Python layer requires version {CONTRACT_VERSION}"
-                    )
-                return
-            connection.execute(migration_0001)
-            connection.execute(migration_0002)
-
-    def clear_prototype_data(self) -> None:
-        with self.pool.connection() as connection:
-            connection.execute(
-                "TRUNCATE player_profile_effects, player_profile_versions, players, "
-                "python_processing_attempts, python_processing_jobs, collector_observations "
-                "RESTART IDENTITY CASCADE"
-            )
-            connection.commit()
-
     def scalar(self, query: str, params: Iterable[Any] = ()) -> Any:
         with self.pool.connection() as connection:
             row = connection.execute(query, tuple(params)).fetchone()
             return None if row is None else _text_value(row[0])
-
-    def insert_observation_and_job(
-        self,
-        *,
-        occurrence_key: str,
-        normalized_tag: str,
-        endpoint: str,
-        endpoint_version: str,
-        schema_version: str,
-        observed_at: datetime,
-        http_status: int,
-        response_hash: str,
-        archive_reference: str,
-        collector_version: str,
-        max_attempts: int = 2,
-    ) -> tuple[int, int]:
-        del endpoint_version, schema_version
-        global_scope = endpoint == "global_player_rankings"
-        collector_work_type = (
-            "global_player_rankings" if global_scope else "initial_collection"
-        )
-        job_scope = "global" if global_scope else "player"
-        job_tag = None if global_scope else normalized_tag
-        with self.pool.connection() as connection:
-            with connection.transaction():
-                player_id = None
-                if not global_scope:
-                    player = connection.execute(
-                        """
-                        INSERT INTO players (normalized_tag, active)
-                        VALUES (%s, false)
-                        ON CONFLICT (normalized_tag) DO UPDATE
-                            SET normalized_tag = EXCLUDED.normalized_tag
-                        RETURNING id
-                        """,
-                        (normalized_tag,),
-                    ).fetchone()
-                    assert player is not None
-                    player_id = int(player[0])
-                collector_job = connection.execute(
-                    """
-                    INSERT INTO collector_jobs (
-                        work_type, player_id, normalized_tag, scope, capacity_pool,
-                        priority, due_at, coalescing_key, status, required_endpoint
-                    ) VALUES (
-                        %s, %s, %s, %s, 'normal', 300, %s, %s, 'complete', %s
-                    )
-                    RETURNING id
-                    """,
-                    (
-                        collector_work_type,
-                        player_id,
-                        job_tag,
-                        job_scope,
-                        observed_at,
-                        occurrence_key,
-                        endpoint,
-                    ),
-                ).fetchone()
-                assert collector_job is not None
-                collector_job_id = int(collector_job[0])
-                attempt = connection.execute(
-                    """
-                    INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
-                    VALUES (%s, 'complete', %s, %s)
-                    RETURNING id
-                    """,
-                    (collector_job_id, observed_at, observed_at),
-                ).fetchone()
-                assert attempt is not None
-                attempt_id = int(attempt[0])
-                observation = connection.execute(
-                    """
-                    INSERT INTO collector_observations (
-                        occurrence_key, collection_job_id, attempt_id, scope,
-                        player_id, normalized_tag, endpoint,
-                        request_started_at, response_completed_at,
-                        http_status, response_hash, archive_reference, collector_version,
-                        key_label, evidence_headers
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s,
-                        %s - interval '1 second', %s,
-                        %s, %s, %s, %s, 'normal-a', '{}'::jsonb
-                    )
-                    ON CONFLICT (occurrence_key) DO UPDATE
-                        SET occurrence_key = EXCLUDED.occurrence_key
-                    RETURNING id
-                    """,
-                    (
-                        occurrence_key,
-                        collector_job_id,
-                        attempt_id,
-                        job_scope,
-                        player_id,
-                        job_tag,
-                        endpoint,
-                        observed_at,
-                        observed_at,
-                        http_status,
-                        response_hash,
-                        archive_reference,
-                        collector_version,
-                    ),
-                ).fetchone()
-                assert observation is not None
-                observation_id = int(observation[0])
-                job = connection.execute(
-                    """
-                    INSERT INTO python_processing_jobs (
-                        observation_id, work_type, status, due_at,
-                        parser_version, processing_version, max_attempts
-                    ) VALUES (%s, 'process_observation', 'pending', clock_timestamp(), %s, %s, %s)
-                    ON CONFLICT (observation_id) DO UPDATE
-                        SET observation_id = EXCLUDED.observation_id
-                    RETURNING id
-                    """,
-                    (
-                        observation_id,
-                        DEFAULT_PARSER_VERSION,
-                        PROCESSING_VERSION,
-                        max_attempts,
-                    ),
-                ).fetchone()
-                assert job is not None
-                return observation_id, int(job[0])
 
     def enqueue_reconciliation(
         self,

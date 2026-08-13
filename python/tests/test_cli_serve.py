@@ -62,7 +62,7 @@ def test_serve_requires_file_backed_official_key(tmp_path: Path, capsys) -> None
     assert result == 1
     assert "postgresql://user" not in captured.err
     assert (
-        "official API key" in captured.err or "prototype command failed" in captured.err
+        "service command failed" in captured.err
     )
 
 
@@ -84,7 +84,7 @@ def test_serve_requires_fixed_egress_proxy(tmp_path: Path, capsys) -> None:
     captured = capsys.readouterr()
 
     assert result == 1
-    assert "proxy" in captured.err or "prototype command failed" in captured.err
+    assert "service command failed" in captured.err
 
 
 def test_serve_rejects_credentialed_proxy_url(tmp_path: Path, capsys) -> None:
@@ -132,8 +132,7 @@ def test_serve_rejects_invalid_official_key_file_bytes(tmp_path: Path, capsys) -
 
     assert result == 1
     assert (
-        "official API key file" in captured.err
-        or "prototype command failed" in captured.err
+        "service command failed" in captured.err
     )
 
 

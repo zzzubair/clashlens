@@ -78,7 +78,7 @@ finally:
 
 	command := exec.CommandContext(ctx, "uv", "run", "--locked", "--project", "python", "python", scriptFile)
 	command.Dir = repositoryRootForTest(t)
-	command.Env = pythonPrototypeEnvironment(map[string]string{
+	command.Env = pythonServiceEnvironment(map[string]string{
 		"CLASHLENS_TEST_DATABASE_URL":       databaseURL,
 		"CLASHLENS_TEST_SHARED_FINGERPRINT": fingerprint,
 		"PYTHONPATH":                        filepath.Join(repositoryRootForTest(t), "python", "src"),

@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import psycopg
+import pytest
 from psycopg.conninfo import make_conninfo
 
 from clashlens import cli
@@ -108,7 +109,15 @@ def _seed_production_profile(
             (observation_id,),
         ).fetchone()[0]
         connection.commit()
-        return int(job_id)
+    return int(job_id)
+
+
+def test_worker_requires_the_production_queue_view(database_url: str) -> None:
+    with _production_database(database_url) as (connection_info, _schema):
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute("DROP VIEW python_processing_jobs_worker")
+        with pytest.raises(RuntimeError, match="python_processing_jobs_worker view"):
+            Database(connection_info)
 
 
 def test_production_profile_job_activates_legend_player_and_makes_it_due(

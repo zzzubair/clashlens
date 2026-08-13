@@ -1,1 +1,1 @@
-"""Issue 29 Python-layer prototype."""
+"""Clash Lens Python services."""
