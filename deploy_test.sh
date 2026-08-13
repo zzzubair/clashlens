@@ -508,6 +508,8 @@ required_line=$(first_line "$FRESH_LOG" '^run .*--name clashlens-collector ')
 (( migration2_line < required_line )) || fail 'migration 0002 did not run before the required collector'
 [[ ! -f "$(secret_file "$FRESH_DIR" clashlens-bridge-database-url)" ]] || \
   fail 'bridge admin secret was created on a fresh install'
+log_lacks "$FRESH_LOG" 'clashlens-bridge-database-url' \
+  'fresh install created or used the bridge admin secret'
 
 assert_no_sentinel_in_log "$FRESH_LOG"
 grep -q 'collector-role-password-0123456789' "$(secret_file "$FRESH_DIR" clashlens-collector-database-url)" || \
