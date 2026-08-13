@@ -1061,11 +1061,15 @@ case "$command" in
     build_collector_image
     initialize_runtime
     version=$(contract_version)
+    fresh_bootstrap=false
     case "$version" in
       absent)
         apply_initial_contract
-        version=1
-        ;;
+        advance_contract
+        configure_runtime_roles
+        version=2
+        fresh_bootstrap=true
+      ;;
       1|2) ;;
       *)
         die "unsupported contract version $version"
@@ -1081,7 +1085,7 @@ case "$command" in
       configure_runtime_roles
       stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
       secret_rm clashlens-bridge-database-url
-    else
+    elif [[ "$version" == "2" && "$fresh_bootstrap" != true ]]; then
       advance_contract
       configure_runtime_roles
     fi
