@@ -271,9 +271,9 @@ class Database:
             player_id = int(player[0])
             row = connection.execute(
                 """
-                INSERT INTO python_processing_jobs (
+                INSERT INTO python_processing_jobs_worker (
                     observation_id, work_type, deduplication_key, input_json,
-                    status, due_at, parser_version, processing_version,
+                    state, due_at, parser_version, processing_version,
                     domain_rule_version, analytics_rule_version
                 ) VALUES (
                     NULL, 'reconcile_ranked_day', %s, %s,
@@ -1806,7 +1806,7 @@ class Database:
                         SELECT DISTINCT ON (o.player_id)
                                o.player_id, j.failure_category, j.outcome
                         FROM collector_observations AS o
-                        JOIN python_processing_jobs AS j
+                        JOIN python_processing_jobs_worker AS j
                           ON j.observation_id = o.id
                         WHERE o.endpoint = 'profile'
                           AND o.player_id IS NOT NULL
@@ -2966,9 +2966,9 @@ class Database:
         )
         connection.execute(
             """
-            INSERT INTO python_processing_jobs (
+            INSERT INTO python_processing_jobs_worker (
                 observation_id, work_type, deduplication_key, input_json,
-                status, due_at, parser_version, processing_version,
+                state, due_at, parser_version, processing_version,
                 domain_rule_version, analytics_rule_version
             ) VALUES (
                 NULL, 'reconcile_ranked_day', %s, %s, 'pending', clock_timestamp(),
@@ -3329,9 +3329,9 @@ class Database:
         )
         connection.execute(
             """
-            INSERT INTO python_processing_jobs (
+            INSERT INTO python_processing_jobs_worker (
                 observation_id, work_type, deduplication_key, input_json,
-                status, due_at, parser_version, processing_version,
+                state, due_at, parser_version, processing_version,
                 domain_rule_version, analytics_rule_version
             ) VALUES (NULL, 'build_analytics', %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)
             ON CONFLICT (deduplication_key) DO NOTHING
@@ -3519,9 +3519,9 @@ class Database:
         deduplication_key = f"build_snapshot:ranked-day-version:{ranked_day_version_id}"
         connection.execute(
             """
-            INSERT INTO python_processing_jobs (
+            INSERT INTO python_processing_jobs_worker (
                 observation_id, work_type, deduplication_key, input_json,
-                status, due_at, parser_version, processing_version,
+                state, due_at, parser_version, processing_version,
                 domain_rule_version, analytics_rule_version
             ) VALUES (NULL, 'build_snapshot', %s, %s, 'pending', clock_timestamp(), %s, %s, %s, %s)
             ON CONFLICT (deduplication_key) DO NOTHING

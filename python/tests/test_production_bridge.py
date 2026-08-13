@@ -82,11 +82,13 @@ def _seed_production_profile(
                 occurrence_key, collection_job_id, attempt_id, player_id,
                 normalized_tag, endpoint, request_started_at, response_completed_at,
                 http_status, response_hash, archive_reference, collector_version,
-                key_label, evidence_headers
+                key_label, evidence_headers, request_method, request_path,
+                request_query, paging_envelope_state, source_adapter_version
             ) VALUES (
                 'production-profile-bridge:profile', %s, %s, %s,
                 '#2PP', 'profile', %s, %s, 200, %s, %s,
-                'collector-v1', 'normal-a', '{}'::jsonb
+                'collector-v1', 'normal-a', '{}'::jsonb, 'GET',
+                '/v1/players/%%232PP', '', 'not_applicable', 'player-profile-v1'
             )
             RETURNING id
             """,
@@ -118,6 +120,21 @@ def test_worker_requires_the_production_queue_view(database_url: str) -> None:
             connection.execute("DROP VIEW python_processing_jobs_worker")
         with pytest.raises(RuntimeError, match="python_processing_jobs_worker view"):
             Database(connection_info)
+
+
+def test_worker_role_uses_only_the_production_queue_view(database_url: str) -> None:
+    with _production_database(database_url) as (connection_info, _schema):
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute("SET ROLE clashlens_python_worker")
+            current_user = connection.execute("SELECT current_user").fetchone()
+            view_count = connection.execute(
+                "SELECT count(*) FROM python_processing_jobs_worker"
+            ).fetchone()
+            assert current_user is not None
+            assert _text(current_user[0]) == "clashlens_python_worker"
+            assert view_count == (0,)
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute("SELECT count(*) FROM python_processing_jobs")
 
 
 def test_production_profile_job_activates_legend_player_and_makes_it_due(

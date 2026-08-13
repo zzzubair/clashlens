@@ -133,14 +133,13 @@ def create_app(
         if caller_counts[caller] > 2:
             raise ValueError("a caller may have only current and previous HMAC keys")
 
-    api_database = database
     production_database = database
     current_time = now or (lambda: datetime.fromtimestamp(int(clock()), tz=UTC))
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
-        api_database.close()
+        database.close()
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -215,7 +214,7 @@ def create_app(
     @app.get("/readyz")
     def ready() -> JSONResponse:
         try:
-            is_ready = api_database.is_ready(
+            is_ready = database.is_ready(
                 expected_contract_version=API_CONTRACT_VERSION
             )
         except Exception:  # noqa: BLE001 - readiness fails closed without disclosure.
