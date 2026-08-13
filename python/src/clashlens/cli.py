@@ -234,6 +234,11 @@ def _run_worker(arguments: argparse.Namespace) -> int:
 
         def process_batch() -> list[ProcessResult]:
             nonlocal next_queue_maintenance_at
+            # Archive-backed jobs must remain pending while the object store is
+            # unavailable. Check before maintenance as well as before either
+            # claim path so an outage cannot consume attempts or lease work.
+            if not archive.check_ready():
+                return []
             current_time = monotonic()
             if current_time >= next_queue_maintenance_at:
                 maintenance_started_at = monotonic()

@@ -119,6 +119,128 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
     assert database.maintenance_calls == 1
 
 
+@pytest.mark.parametrize("concurrency", [1, 3])
+def test_worker_does_not_claim_or_maintain_when_archive_is_unavailable(
+    monkeypatch, capsys, concurrency: int
+) -> None:
+    class FakeDatabase:
+        closed = False
+        maintenance_calls = 0
+
+        def __init__(self, _database_url: str, *, max_size: int = 4) -> None:
+            del max_size
+
+        def close(self) -> None:
+            self.closed = True
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            del max_jobs
+            self.maintenance_calls += 1
+            raise AssertionError("archive outage must stop before maintenance")
+
+    database = FakeDatabase("postgresql://prototype@postgres/db")
+
+    class UnavailableArchive:
+        checks = 0
+
+        def check_ready(self) -> bool:
+            self.checks += 1
+            return False
+
+    archive = UnavailableArchive()
+    claim_attempts = 0
+
+    class NoClaimProcessor:
+        def __init__(self, _database: FakeDatabase, _archive: object) -> None:
+            del _database, _archive
+
+        def process_until_idle(self, **_kwargs: object) -> list[ProcessResult]:
+            nonlocal claim_attempts
+            claim_attempts += 1
+            raise AssertionError("archive outage must stop before claiming")
+
+    def forbidden_concurrent(*_args: object, **_kwargs: object) -> list[ProcessResult]:
+        nonlocal claim_attempts
+        claim_attempts += 1
+        raise AssertionError("archive outage must stop before claiming")
+
+    monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: database)
+    monkeypatch.setattr(cli, "_archive", lambda _arguments, **kwargs: archive)
+    monkeypatch.setattr(cli, "ObservationProcessor", NoClaimProcessor)
+    monkeypatch.setattr(cli, "process_concurrently", forbidden_concurrent)
+
+    result = cli._run_worker(
+        _worker_namespace(concurrency=concurrency, run_forever=False)
+    )
+
+    assert result == 0
+    assert archive.checks == 1
+    assert claim_attempts == 0
+    assert database.maintenance_calls == 0
+    assert database.closed is True
+    assert json.loads(capsys.readouterr().out)["results"] == []
+
+
+def test_run_forever_rechecks_archive_and_resumes_after_outage(
+    monkeypatch, capsys
+) -> None:
+    class FakeDatabase:
+        closed = False
+        maintenance_calls = 0
+
+        def __init__(self, _database_url: str, *, max_size: int = 4) -> None:
+            del max_size
+
+        def close(self) -> None:
+            self.closed = True
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            assert max_jobs == 100
+            self.maintenance_calls += 1
+            return 0
+
+    database = FakeDatabase("postgresql://prototype@postgres/db")
+
+    class RecoveringArchive:
+        def __init__(self) -> None:
+            self.checks = 0
+
+        def check_ready(self) -> bool:
+            self.checks += 1
+            return self.checks > 1
+
+    archive = RecoveringArchive()
+    claim_attempts = 0
+
+    class ResumingProcessor:
+        def __init__(self, _database: FakeDatabase, _archive: object) -> None:
+            del _database, _archive
+
+        def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
+            nonlocal claim_attempts
+            claim_attempts += 1
+            stop_requested = kwargs["stop_requested"]
+            assert isinstance(stop_requested, Event)
+            stop_requested.set()
+            return [ProcessResult(7, "processed")]
+
+    monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: database)
+    monkeypatch.setattr(cli, "_archive", lambda _arguments, **kwargs: archive)
+    monkeypatch.setattr(cli, "ObservationProcessor", ResumingProcessor)
+
+    result = cli._run_worker(
+        _worker_namespace(run_forever=True, poll_interval_seconds=0.001)
+    )
+
+    assert result == 0
+    assert archive.checks == 2
+    assert claim_attempts == 1
+    assert database.maintenance_calls == 1
+    assert database.closed is True
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert output[-1]["processed_count"] == 1
+
+
 def _worker_namespace(**overrides: object) -> Namespace:
     values: dict[str, object] = {
         "database_url": "postgresql://prototype@postgres/db",
@@ -154,6 +276,9 @@ class PoolRecordingDatabase:
 class PoolRecordingArchive:
     def __init__(self, pool_size: int) -> None:
         self.pool_size = pool_size
+
+    def check_ready(self) -> bool:
+        return True
 
 
 def test_run_worker_defaults_preserve_the_single_thread_path(

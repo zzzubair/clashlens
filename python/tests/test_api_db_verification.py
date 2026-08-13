@@ -127,11 +127,14 @@ def test_shared_traffic_gate_enforces_non_borrowing_and_combined_budgets(
                 request_id=str(uuid4()),
             )
 
-            assert sum(result.granted for result in go_results) == 29
+            assert sum(result.granted for result in go_results) == 28
+            assert sum(
+                result.reason == "go_budget_exhausted" for result in go_results
+            ) == 2
             assert python_first.granted is True
             assert python_second.granted is False
             assert python_second.reason == "python_budget_exhausted"
-            assert database.scalar("SELECT count(*) FROM shared_api_permits") == 30
+            assert database.scalar("SELECT count(*) FROM shared_api_permits") == 29
         finally:
             database.close()
 

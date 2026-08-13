@@ -17,6 +17,7 @@ type store struct {
 	pool                    *pgxpool.Pool
 	contractVersion         int
 	maxContractVersion      int
+	recoveryRetrySupported  bool
 	commitTx                func(context.Context, pgx.Tx) error
 	inactiveCleanupInterval time.Duration
 	lastInactiveCleanupAt   atomic.Int64
@@ -59,10 +60,27 @@ func openStoreWithPoolSize(ctx context.Context, databaseURL string, expectedCont
 		pool.Close()
 		return nil, fmt.Errorf("%w: got %d, support through %d", errIncompatibleContract, actualVersion, expectedContractVersion)
 	}
+	var recoveryRetrySupported bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_catalog.pg_attribute AS attribute
+			JOIN pg_catalog.pg_class AS relation ON relation.oid = attribute.attrelid
+			JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+			WHERE namespace.nspname = current_schema()
+			  AND relation.relname = 'collector_jobs'
+			  AND attribute.attname = 'retry_class'
+			  AND NOT attribute.attisdropped
+		)
+	`).Scan(&recoveryRetrySupported); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("detect collector recovery retry contract: %w", err)
+	}
 	opened := &store{
 		pool:                    pool,
 		contractVersion:         actualVersion,
 		maxContractVersion:      expectedContractVersion,
+		recoveryRetrySupported:  recoveryRetrySupported,
 		inactiveCleanupInterval: inactivePlayerCleanupInterval,
 	}
 	opened.lastInactiveCleanupAt.Store(time.Now().UnixNano())

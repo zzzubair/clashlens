@@ -196,9 +196,14 @@ class ApiDatabase:
                 ).fetchone()
                 budgets = connection.execute(
                     """
-                    SELECT python_budget, go_budget, total_budget
-                    FROM shared_api_credentials
-                    WHERE credential_fingerprint = %s
+                    SELECT credential.python_budget,
+                           COALESCE(
+                               (to_jsonb(credential)->>'go_interactive_budget')::integer,
+                               credential.go_budget
+                           ),
+                           credential.total_budget
+                    FROM shared_api_credentials AS credential
+                    WHERE credential.credential_fingerprint = %s
                     """,
                     (fingerprint,),
                 ).fetchone()

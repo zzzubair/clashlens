@@ -271,7 +271,14 @@ func (a *application) drain(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if !interactiveClaimed && !normalClaimed {
+		recoveryClaimed := false
+		if a.store.recoveryRetrySupported {
+			recoveryClaimed, err = worker.runOnce(ctx, recoveryPool)
+			if err != nil {
+				return err
+			}
+		}
+		if !interactiveClaimed && !normalClaimed && !recoveryClaimed {
 			return nil
 		}
 	}
@@ -323,6 +330,16 @@ func (a *application) run(ctx context.Context, role string) error {
 				defer wait.Done()
 				a.runWorkerLoop(runContext, interactivePool, "interactive-"+strconv.Itoa(index), errorsByLoop)
 			}(index)
+		}
+		if a.store.recoveryRetrySupported {
+			// Recovery has one deliberately separate worker. It cannot occupy
+			// an interactive worker slot, and its database permit is capped at
+			// one request per second.
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				a.runWorkerLoop(runContext, recoveryPool, "recovery-0", errorsByLoop)
+			}()
 		}
 	}
 

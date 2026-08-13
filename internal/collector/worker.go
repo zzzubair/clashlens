@@ -66,7 +66,11 @@ func (w *worker) runOnce(ctx context.Context, pool capacityPool) (bool, error) {
 		}
 	}
 	w.config.metrics.recordStageDuration("dependency_readiness", time.Since(readinessStartedAt))
-	if err := w.keys.readyForPool(pool); err != nil {
+	keyPool := pool
+	if pool == recoveryPool {
+		keyPool = interactivePool
+	}
+	if err := w.keys.readyForPool(keyPool); err != nil {
 		return false, err
 	}
 	leaseToken, err := randomToken()
@@ -187,7 +191,7 @@ func (w *worker) collectEndpoint(
 	for {
 		var key APIKey
 		var err error
-		if job.pool == interactivePool {
+		if job.pool == interactivePool || job.retryClass == "recovery" {
 			key, err = w.keys.sharedInteractiveKey()
 		} else {
 			key, err = w.keys.acquire(ctx, job.pool)
@@ -195,7 +199,7 @@ func (w *worker) collectEndpoint(
 		if err != nil {
 			return err
 		}
-		if err := w.acquireSharedPermitForRequest(ctx, key); err != nil {
+		if err := w.acquireSharedPermitForRequest(ctx, key, job); err != nil {
 			return err
 		}
 		requestStartStartedAt := time.Now()
@@ -403,7 +407,7 @@ func (w *worker) collectEndpoint(
 	}
 }
 
-func (w *worker) acquireSharedPermitForRequest(ctx context.Context, key APIKey) error {
+func (w *worker) acquireSharedPermitForRequest(ctx context.Context, key APIKey, job *collectionJob) error {
 	if key.Pool != interactivePool {
 		return nil
 	}
@@ -418,8 +422,9 @@ func (w *worker) acquireSharedPermitForRequest(ctx context.Context, key APIKey) 
 	if err := w.store.registerSharedCredential(ctx, fingerprint, 29, 1, 30, "collector:worker"); err != nil {
 		return err
 	}
+	caller := sharedPermitCaller(job, w.store.recoveryRetrySupported)
 	for {
-		permit, err := w.store.acquireSharedPermit(ctx, fingerprint, "go")
+		permit, err := w.store.acquireSharedPermit(ctx, fingerprint, caller)
 		if err != nil {
 			return err
 		}
@@ -447,6 +452,13 @@ func (w *worker) acquireSharedPermitForRequest(ctx context.Context, key APIKey) 
 		case <-timer.C:
 		}
 	}
+}
+
+func sharedPermitCaller(job *collectionJob, recoverySupported bool) string {
+	if recoverySupported && job != nil && job.retryClass == "recovery" {
+		return "go_recovery"
+	}
+	return "go"
 }
 
 func retryableHTTPStatus(statusCode int) bool {

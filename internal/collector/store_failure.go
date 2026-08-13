@@ -743,16 +743,38 @@ func (s *store) resolveAttemptV2(
 		if job.scope == "global" {
 			normalizedTag = nil
 		}
+		retryColumns := ""
+		retrySelect := ""
+		retryArgs := []any{
+			job.scope, job.playerID, normalizedTag, string(job.pool), dueAt,
+			coalescingKey, job.sweepID, job.resetBaselineSweepID, attemptID,
+			string(endpoint.name), job.id, job.leaseOwner, job.leaseToken,
+			job.leaseGeneration,
+		}
+		if s.recoveryRetrySupported {
+			retryClass := job.retryClass
+			if retryClass == "" {
+				retryClass = "normal"
+			}
+			var recoveryReason, recoveryOriginPool any
+			if retryClass == "recovery" {
+				recoveryReason = "collector_lease_expired"
+				recoveryOriginPool = string(job.pool)
+			}
+			retryColumns = ", retry_class, recovery_reason, recovery_origin_pool"
+			retrySelect = ", $15, $16, $17"
+			retryArgs = append(retryArgs, retryClass, recoveryReason, recoveryOriginPool)
+		}
 		command, err := transaction.Exec(ctx, `
-			INSERT INTO collector_jobs (
-				work_type, scope, player_id, normalized_tag, capacity_pool,
-				priority, due_at, coalescing_key, sweep_id,
-				reset_baseline_sweep_id, parent_attempt_id,
-				required_endpoint, lease_generation, status
-			)
-			SELECT 'endpoint_retry', $1, $2, $3, $4, 300, $5, $6,
-				$7, $8, $9, $10, current_job.lease_generation, 'pending'
-			FROM collector_jobs AS current_job
+				INSERT INTO collector_jobs (
+					work_type, scope, player_id, normalized_tag, capacity_pool,
+					priority, due_at, coalescing_key, sweep_id,
+					reset_baseline_sweep_id, parent_attempt_id,
+					required_endpoint, lease_generation, status`+retryColumns+`
+				)
+				SELECT 'endpoint_retry', $1, $2, $3, $4, 300, $5, $6,
+					$7, $8, $9, $10, current_job.lease_generation, 'pending'`+retrySelect+`
+				FROM collector_jobs AS current_job
 			WHERE current_job.id = $11
 				AND current_job.lease_owner = $12
 				AND current_job.lease_token = $13
@@ -761,9 +783,7 @@ func (s *store) resolveAttemptV2(
 				AND current_job.lease_expires_at > clock_timestamp()
 				AND (current_job.result_attempt_id = $9 OR current_job.parent_attempt_id = $9)
 			ON CONFLICT DO NOTHING
-		`, job.scope, job.playerID, normalizedTag, string(job.pool), dueAt,
-			coalescingKey, job.sweepID, job.resetBaselineSweepID, attemptID,
-			string(endpoint.name), job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration)
+			`, retryArgs...)
 		if err != nil {
 			return fmt.Errorf("insert version-two endpoint retry: %w", err)
 		}

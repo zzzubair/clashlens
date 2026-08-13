@@ -23,6 +23,42 @@ CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 -- locks collector_jobs before players, so no lock cycle can form.
 LOCK TABLE collector_jobs IN SHARE ROW EXCLUSIVE MODE;
 
+-- A lease that expires is evidence that the collector which owned the job
+-- disappeared before it finished. Keep that fact on the job itself so the
+-- retry is visible in the audit trail and can use the small recovery share of
+-- the interactive credential. The original capacity pool is retained: it is
+-- the source of truth for scheduled work, while the collector uses
+-- retry_class to choose the recovery request lane.
+ALTER TABLE collector_jobs
+    ADD COLUMN IF NOT EXISTS retry_class text NOT NULL DEFAULT 'normal',
+    ADD COLUMN IF NOT EXISTS recovery_reason text,
+    ADD COLUMN IF NOT EXISTS recovery_origin_pool text;
+
+ALTER TABLE collector_jobs
+    DROP CONSTRAINT IF EXISTS collector_jobs_retry_class_v3_check,
+    DROP CONSTRAINT IF EXISTS collector_jobs_recovery_reason_v3_check,
+    DROP CONSTRAINT IF EXISTS collector_jobs_recovery_origin_pool_v3_check,
+    DROP CONSTRAINT IF EXISTS collector_jobs_recovery_fields_v3_check,
+    ADD CONSTRAINT collector_jobs_retry_class_v3_check CHECK (
+        retry_class IN ('normal', 'recovery')
+    ),
+    ADD CONSTRAINT collector_jobs_recovery_reason_v3_check CHECK (
+        length(COALESCE(recovery_reason, '')) <= 128
+        AND COALESCE(recovery_reason, '') !~ '[\r\n]'
+    ),
+    ADD CONSTRAINT collector_jobs_recovery_origin_pool_v3_check CHECK (
+        recovery_origin_pool IS NULL
+        OR recovery_origin_pool IN ('normal', 'interactive')
+    ),
+    ADD CONSTRAINT collector_jobs_recovery_fields_v3_check CHECK (
+        (retry_class = 'normal'
+            AND recovery_reason IS NULL
+            AND recovery_origin_pool IS NULL)
+        OR (retry_class = 'recovery'
+            AND recovery_reason IS NOT NULL
+            AND recovery_origin_pool IS NOT NULL)
+    );
+
 -- Identify every active regular_poll job except the newest per player. The
 -- temporary sets let the migration terminalize only unfinished attempts and
 -- endpoint states before it cancels their jobs. Observed endpoint evidence
@@ -222,6 +258,154 @@ CREATE INDEX IF NOT EXISTS collector_jobs_expired_claim_v2
 CREATE INDEX IF NOT EXISTS collector_jobs_unknown_priority_v2
     ON collector_jobs (capacity_pool, due_at, created_at, id, priority)
     WHERE status = 'pending' AND priority NOT IN (100, 150, 200, 250, 300, 400);
+
+-- Recovery jobs are claimed by a dedicated recovery lane regardless of the
+-- source pool that created them. Keep a narrow partial index for that probe;
+-- normal scheduled work remains on the normal key pool.
+CREATE INDEX IF NOT EXISTS collector_jobs_recovery_claim_v3
+    ON collector_jobs (status, priority, due_at, created_at, id)
+    WHERE retry_class = 'recovery';
+
+-- The interactive credential keeps its existing Go/Python registration
+-- fields for compatibility with the Python API. These two explicit lanes
+-- split the 30-request key: 28 requests for genuine Go interactive work,
+-- one for collector recovery, and one for Python verification. A recovery
+-- request therefore cannot consume interactive capacity reserved for users.
+ALTER TABLE shared_api_credentials
+    ADD COLUMN IF NOT EXISTS go_interactive_budget integer NOT NULL DEFAULT 28,
+    ADD COLUMN IF NOT EXISTS go_recovery_budget integer NOT NULL DEFAULT 1;
+
+ALTER TABLE shared_api_credentials
+    DROP CONSTRAINT IF EXISTS shared_api_credentials_go_interactive_budget_v3_check,
+    DROP CONSTRAINT IF EXISTS shared_api_credentials_go_recovery_budget_v3_check,
+    DROP CONSTRAINT IF EXISTS shared_api_credentials_budget_split_v3_check,
+    ADD CONSTRAINT shared_api_credentials_go_interactive_budget_v3_check
+        CHECK (go_interactive_budget = 28),
+    ADD CONSTRAINT shared_api_credentials_go_recovery_budget_v3_check
+        CHECK (go_recovery_budget = 1),
+    ADD CONSTRAINT shared_api_credentials_budget_split_v3_check
+        CHECK (go_interactive_budget + go_recovery_budget + python_budget = total_budget);
+
+ALTER TABLE shared_api_permits
+    DROP CONSTRAINT IF EXISTS shared_api_permits_caller_check,
+    DROP CONSTRAINT IF EXISTS shared_api_permits_caller_v3_check,
+    ADD CONSTRAINT shared_api_permits_caller_v3_check
+        CHECK (caller IN ('go', 'go_recovery', 'python'));
+
+-- The old function is replaced only after the new budget columns exist. The
+-- caller names are intentionally narrow: Python cannot spend the recovery
+-- lane, and recovery cannot spend the user-interactive lane.
+CREATE OR REPLACE FUNCTION clashlens_acquire_shared_api_permit(
+    requested_fingerprint text,
+    requested_caller text
+)
+RETURNS TABLE (
+    granted boolean,
+    database_time timestamptz,
+    next_eligible_at timestamptz,
+    credential_state text
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    credential shared_api_credentials%ROWTYPE;
+    now_at timestamptz;
+    caller_count integer;
+    total_count integer;
+    caller_budget integer;
+    caller_next timestamptz;
+    total_next timestamptz;
+BEGIN
+    IF requested_caller NOT IN ('go', 'go_recovery', 'python') THEN
+        RAISE EXCEPTION 'shared API caller must be go, go_recovery, or python';
+    END IF;
+
+    PERFORM clashlens_cleanup_shared_api_permits(100);
+
+    SELECT * INTO credential
+    FROM shared_api_credentials
+    WHERE credential_fingerprint = requested_fingerprint
+    FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'shared API credential is not registered';
+    END IF;
+
+    now_at := clock_timestamp();
+    IF credential.state = 'cooldown' AND credential.cooldown_until <= now_at THEN
+        UPDATE shared_api_credentials
+        SET state = 'active', cooldown_until = NULL, updated_at = now_at
+        WHERE credential_fingerprint = requested_fingerprint;
+        credential.state := 'active';
+        credential.cooldown_until := NULL;
+    END IF;
+
+    IF credential.state <> 'active' THEN
+        RETURN QUERY SELECT
+            false,
+            now_at,
+            CASE credential.state
+                WHEN 'cooldown' THEN credential.cooldown_until
+                ELSE NULL::timestamptz
+            END,
+            credential.state;
+        RETURN;
+    END IF;
+
+    caller_budget := CASE requested_caller
+        WHEN 'go' THEN credential.go_interactive_budget
+        WHEN 'go_recovery' THEN credential.go_recovery_budget
+        ELSE credential.python_budget
+    END;
+    SELECT
+        count(*) FILTER (WHERE caller = requested_caller),
+        count(*)
+    INTO caller_count, total_count
+    FROM shared_api_permits
+    WHERE credential_fingerprint = requested_fingerprint
+      AND permitted_at > now_at - interval '1 second';
+
+    IF caller_count < caller_budget AND total_count < credential.total_budget THEN
+        INSERT INTO shared_api_permits (credential_fingerprint, caller, permitted_at)
+        VALUES (requested_fingerprint, requested_caller, now_at);
+        RETURN QUERY SELECT true, now_at, NULL::timestamptz, credential.state;
+        RETURN;
+    END IF;
+
+    IF caller_count >= caller_budget THEN
+        SELECT min(permitted_at) + interval '1 second'
+        INTO caller_next
+        FROM shared_api_permits
+        WHERE credential_fingerprint = requested_fingerprint
+          AND caller = requested_caller
+          AND permitted_at > now_at - interval '1 second';
+    END IF;
+    IF total_count >= credential.total_budget THEN
+        SELECT min(permitted_at) + interval '1 second'
+        INTO total_next
+        FROM shared_api_permits
+        WHERE credential_fingerprint = requested_fingerprint
+          AND permitted_at > now_at - interval '1 second';
+    END IF;
+
+    RETURN QUERY SELECT
+        false,
+        now_at,
+        GREATEST(COALESCE(caller_next, now_at), COALESCE(total_next, now_at)),
+        credential.state;
+END
+$$;
+
+ALTER FUNCTION clashlens_acquire_shared_api_permit(text, text) SECURITY DEFINER;
+DO $$
+DECLARE
+    shared_gate_schema_name text := current_schema();
+BEGIN
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_acquire_shared_api_permit(text, text) SET search_path TO pg_catalog, %I',
+        shared_gate_schema_name, shared_gate_schema_name
+    );
+END
+$$;
 
 -- Equivalent bounded probes for the Python processing queue.
 CREATE INDEX IF NOT EXISTS python_processing_jobs_pending_claim_v2

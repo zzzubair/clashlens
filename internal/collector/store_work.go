@@ -174,6 +174,42 @@ var collectorClaimStatementV1 = strings.Replace(
 	1,
 )
 
+// collectorClaimStatementRecovery is the migration-0003 claim statement.
+// Recovery jobs retain their source capacity_pool for auditability, but only
+// the dedicated recovery lane may claim them. The returned retry_class tells
+// the worker to spend the separate recovery share of the shared interactive
+// key.
+// Keep the bridge statements above unchanged: databases that have not
+// applied migration 0003 do not have retry_class yet.
+var collectorClaimStatementRecovery = strings.Replace(
+	strings.Replace(
+		strings.ReplaceAll(
+			collectorClaimStatement,
+			"capacity_pool = $1",
+			"((capacity_pool = $1 AND retry_class = 'normal') OR ($1 = 'recovery' AND retry_class = 'recovery'))",
+		),
+		"\t\t\t\tAND result_attempt_id IS NULL\n",
+		"\t\t\t\tAND result_attempt_id IS NULL\n\t\t\t\tAND retry_class = 'recovery'\n",
+		1,
+	),
+	"\tjob.capacity_pool,\n",
+	"\tjob.capacity_pool,\n\tjob.retry_class,\n",
+	1,
+)
+
+var collectorClaimStatementRecoveryOnly = strings.ReplaceAll(
+	collectorClaimStatementRecovery,
+	"((capacity_pool = $1 AND retry_class = 'normal') OR ($1 = 'recovery' AND retry_class = 'recovery'))",
+	"($1::text = 'recovery' AND retry_class = 'recovery')",
+)
+
+var collectorClaimStatementRecoveryV1 = strings.Replace(
+	collectorClaimStatementRecovery,
+	"\t\t\t\tAND result_attempt_id IS NULL\n\t\t\t\tAND retry_class = 'recovery'\n",
+	"",
+	1,
+)
+
 type collectionJob struct {
 	id                   int64
 	workType             string
@@ -188,6 +224,7 @@ type collectionJob struct {
 	leaseOwner           string
 	leaseToken           string
 	leaseGeneration      int64
+	retryClass           string
 }
 
 func (s *store) claimNext(
@@ -234,24 +271,41 @@ func (s *store) claimNext(
 		}
 	}
 
-	if s.contractVersion >= 2 {
+	if s.contractVersion >= 2 && (!s.recoveryRetrySupported || pool == recoveryPool) {
 		if err := s.recoverExpiredAttemptsV2(ctx, transaction, string(pool), now, collectorExpiredLeaseRecoveryLimit); err != nil {
 			return nil, err
 		}
 	}
 
 	claimStatement := collectorClaimStatement
+	if s.recoveryRetrySupported {
+		claimStatement = collectorClaimStatementRecovery
+		if pool == recoveryPool {
+			claimStatement = collectorClaimStatementRecoveryOnly
+		}
+	}
 	if s.contractVersion < 2 {
 		// Version one has no bounded attempt recovery, so its statement must
 		// keep the direct expired-lease path for jobs that still carry an
 		// attempt: prepareAttempt resumes the existing attempt there.
 		claimStatement = collectorClaimStatementV1
+		if s.recoveryRetrySupported {
+			claimStatement = collectorClaimStatementRecoveryV1
+			if pool == recoveryPool {
+				claimStatement = strings.ReplaceAll(
+					collectorClaimStatementRecoveryV1,
+					"((capacity_pool = $1 AND retry_class = 'normal') OR ($1 = 'recovery' AND retry_class = 'recovery'))",
+					"($1::text = 'recovery' AND retry_class = 'recovery')",
+				)
+			}
+		}
 	}
 	row := transaction.QueryRow(ctx, claimStatement, string(pool), now, owner, leaseToken, leaseDuration)
 
 	var job collectionJob
 	var poolName string
-	if err := row.Scan(
+	var scanTargets []any
+	scanTargets = []any{
 		&job.id,
 		&job.workType,
 		&job.scope,
@@ -265,7 +319,13 @@ func (s *store) claimNext(
 		&job.leaseOwner,
 		&job.leaseGeneration,
 		&job.leaseToken,
-	); err != nil {
+	}
+	if s.recoveryRetrySupported {
+		// retry_class is returned directly after capacity_pool by the
+		// migration-0003 claim statement.
+		scanTargets = append(scanTargets[:6], append([]any{&job.retryClass}, scanTargets[6:]...)...)
+	}
+	if err := row.Scan(scanTargets...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			if err := transaction.Commit(ctx); err != nil {
 				return nil, fmt.Errorf("commit empty claim transaction: %w", err)
@@ -313,11 +373,15 @@ func (s *store) claimNext(
 const maxCollectorAttemptsV2 = 3
 
 func (s *store) recoverExpiredAttemptsV2(ctx context.Context, transaction pgx.Tx, pool string, now time.Time, limit int) error {
+	recoveryFilter := "job.capacity_pool = $1"
+	if s.recoveryRetrySupported {
+		recoveryFilter = "$1 = 'recovery'"
+	}
 	rows, err := transaction.Query(ctx, `
 		SELECT job.id, job.lease_owner, job.lease_token, job.lease_generation,
 			job.result_attempt_id
 		FROM collector_jobs AS job
-		WHERE job.capacity_pool = $1
+		WHERE `+recoveryFilter+`
 			AND job.status = 'leased'
 			AND job.lease_expires_at <= $2
 			ORDER BY job.lease_expires_at, job.id
@@ -477,6 +541,13 @@ func (s *store) recoverExpiredAttemptsV2(ctx context.Context, transaction pgx.Tx
 		if attemptNumber >= maxCollectorAttemptsV2 {
 			status = "failed"
 		}
+		recoveryFields := ""
+		if s.recoveryRetrySupported {
+			recoveryFields = `,
+				retry_class = 'recovery',
+				recovery_reason = 'collector_lease_expired',
+				recovery_origin_pool = COALESCE(recovery_origin_pool, capacity_pool)`
+		}
 		command, err := transaction.Exec(ctx, `
 			UPDATE collector_jobs
 			SET status = $6,
@@ -486,7 +557,7 @@ func (s *store) recoverExpiredAttemptsV2(ctx context.Context, transaction pgx.Tx
 				lease_token = NULL,
 				lease_expires_at = NULL,
 				result_attempt_id = NULL,
-				updated_at = $5
+				updated_at = $5`+recoveryFields+`
 			WHERE id = $1
 				AND lease_owner = $2
 				AND lease_token = $3
