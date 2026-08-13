@@ -81,11 +81,11 @@ class PoisonedQueueError(Exception):
         )
 
 
-def test_unexpected_exception_prints_stable_class_code_but_never_details(
+def test_unexpected_exception_prints_stable_error_but_never_details(
     monkeypatch, capsys
 ) -> None:
     secret_password = "hunter2"
-    database_url = f"postgresql://user:{secret_password}@db/prototype"
+    database_url = f"postgresql://user:{secret_password}@db/production"
 
     class FakeDatabase:
         def __init__(self, _database_url: str) -> None:
@@ -103,14 +103,13 @@ def test_unexpected_exception_prints_stable_class_code_but_never_details(
     captured = capsys.readouterr()
 
     assert result == 1
-    assert (
-        captured.err == "prototype command failed: internal_error:PoisonedQueueError\n"
-    )
+    assert captured.err == "service command failed: internal_error\n"
     assert "poison detail" not in captured.err
     assert secret_password not in captured.err
     assert database_url not in captured.err
     assert "job=42" not in captured.err
     assert "s3://evidence/obs-7f3a" not in captured.err
+    assert "PoisonedQueueError" not in captured.err
     assert "Traceback" not in captured.err
 
 
@@ -118,7 +117,7 @@ def test_value_error_boundary_still_prints_only_the_class_name(
     monkeypatch, capsys
 ) -> None:
     secret_password = "hunter2"
-    database_url = f"postgresql://user:{secret_password}@db/prototype"
+    database_url = f"postgresql://user:{secret_password}@db/production"
 
     class FakeDatabase:
         def __init__(self, _database_url: str) -> None:
@@ -133,7 +132,7 @@ def test_value_error_boundary_still_prints_only_the_class_name(
     captured = capsys.readouterr()
 
     assert result == 1
-    assert captured.err == "prototype command failed: ValueError\n"
+    assert captured.err == "service command failed: ValueError\n"
     assert secret_password not in captured.err
     assert database_url not in captured.err
     assert "Traceback" not in captured.err
@@ -157,11 +156,11 @@ def test_unexpected_exception_with_attacker_controlled_class_name_is_normalized(
 
     monkeypatch.setattr("clashlens.cli.Database", FakeDatabase)
 
-    result = main(["queue-status", "--database-url", "postgresql://user@db/prototype"])
+    result = main(["queue-status", "--database-url", "postgresql://user@db/production"])
     captured = capsys.readouterr()
 
     assert result == 1
-    assert captured.err == "prototype command failed: internal_error:unknown\n"
+    assert captured.err == "service command failed: internal_error\n"
     assert secret not in captured.err
     assert "EvilError" not in captured.err
     assert "Traceback" not in captured.err

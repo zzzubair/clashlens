@@ -24,7 +24,10 @@ func TestMetricsIncludeRequiredDurableOperationalGauges(t *testing.T) {
 		t.Fatalf("newKeyPool returned an error: %v", err)
 	}
 
-	output, err := newCollectorMetrics().render(ctx, store, keys, time.Now().UTC())
+	metrics := newCollectorMetrics()
+	metrics.recordStageDuration("claim", 750*time.Microsecond)
+	metrics.recordStageDuration("claim", 3*time.Millisecond)
+	output, err := metrics.render(ctx, store, keys, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("render metrics: %v", err)
 	}
@@ -41,6 +44,9 @@ func TestMetricsIncludeRequiredDurableOperationalGauges(t *testing.T) {
 		"clashlens_collector_live_refresh_coalesced_total",
 		"clashlens_collector_live_refresh_cooldown_hits_total",
 		"clashlens_collector_key_cooldown_seconds",
+		"clashlens_collector_stage_duration_seconds_bucket{stage=\"claim\",le=\"0.001\"} 1",
+		"clashlens_collector_stage_duration_seconds_count{stage=\"claim\"} 2",
+		"clashlens_collector_stage_duration_seconds_sum{stage=\"claim\"} 0.003750",
 	} {
 		if !strings.Contains(output, metric) {
 			t.Errorf("metrics output does not contain %q", metric)

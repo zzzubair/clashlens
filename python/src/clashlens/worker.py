@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from threading import Event
+from threading import Event, Lock
+from time import monotonic
+from typing import Any
 
 from .archive import ArchiveReadError, S3ArchiveReader
 from .battle import (
@@ -25,6 +27,84 @@ from .rankings import (
 from .source_observation_contract import validate_source_observation_contract
 
 MAX_CONCURRENCY = 32
+STAGE_DURATION_BUCKETS_SECONDS = (
+    0.0001,
+    0.00025,
+    0.0005,
+    0.001,
+    0.0025,
+    0.005,
+    0.01,
+    0.025,
+    0.05,
+    0.1,
+    0.25,
+    0.5,
+    1.0,
+    2.5,
+    5.0,
+    10.0,
+)
+
+
+class StageMetrics:
+    """Bounded thread-safe worker stage histograms for production evidence."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._stages: dict[str, dict[str, Any]] = {}
+
+    def record(self, stage: str, duration_seconds: float) -> None:
+        with self._lock:
+            values = self._stages.setdefault(
+                stage,
+                {
+                    "count": 0,
+                    "sum_seconds": 0.0,
+                    "buckets": [0] * (len(STAGE_DURATION_BUCKETS_SECONDS) + 1),
+                },
+            )
+            values["count"] += 1
+            values["sum_seconds"] += duration_seconds
+            for index, upper_bound in enumerate(STAGE_DURATION_BUCKETS_SECONDS):
+                if duration_seconds <= upper_bound:
+                    values["buckets"][index] += 1
+            values["buckets"][-1] += 1
+
+    def snapshot(self) -> dict[str, dict[str, float | int | None]]:
+        with self._lock:
+            copied = {
+                stage: {
+                    "count": values["count"],
+                    "sum_seconds": values["sum_seconds"],
+                    "buckets": list(values["buckets"]),
+                }
+                for stage, values in self._stages.items()
+            }
+        report: dict[str, dict[str, float | int | None]] = {}
+        for stage, values in sorted(copied.items()):
+            count = int(values["count"])
+            buckets = values["buckets"]
+
+            def percentile(
+                fraction: float, *, count: int = count, buckets: list[int] = buckets
+            ) -> float | None:
+                rank = count * fraction
+                for index, bucket_count in enumerate(buckets):
+                    if bucket_count >= rank:
+                        if index == len(STAGE_DURATION_BUCKETS_SECONDS):
+                            return None
+                        return STAGE_DURATION_BUCKETS_SECONDS[index] * 1000
+                return None
+
+            report[stage] = {
+                "count": count,
+                "average_ms": float(values["sum_seconds"]) * 1000 / count,
+                "p50_upper_ms": percentile(0.50),
+                "p95_upper_ms": percentile(0.95),
+                "p99_upper_ms": percentile(0.99),
+            }
+        return report
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,14 +216,27 @@ def process_concurrently(
 
 
 class ObservationProcessor:
-    def __init__(self, database: Database, archive: S3ArchiveReader) -> None:
+    def __init__(
+        self,
+        database: Database,
+        archive: S3ArchiveReader,
+        stage_metrics: StageMetrics | None = None,
+    ) -> None:
         self.database = database
         self.archive = archive
+        self.stage_metrics = stage_metrics
+        self.database.stage_metrics = stage_metrics
+
+    def _record_stage(self, stage: str, started_at: float) -> None:
+        if self.stage_metrics is not None:
+            self.stage_metrics.record(stage, monotonic() - started_at)
 
     def process_once(
         self, *, owner: str, lease_seconds: int = 30
     ) -> ProcessResult | None:
+        started_at = monotonic()
         claim = self.database.claim_job(owner=owner, lease_seconds=lease_seconds)
+        self._record_stage("python_claim", started_at)
         if claim is None:
             return None
         return self._process_claim(claim, lease_seconds=lease_seconds)
@@ -155,9 +248,11 @@ class ObservationProcessor:
         owner: str,
         lease_seconds: int = 30,
     ) -> ProcessResult | None:
+        started_at = monotonic()
         claim = self.database.claim_job(
             owner=owner, lease_seconds=lease_seconds, job_id=job_id
         )
+        self._record_stage("python_claim", started_at)
         if claim is None:
             return None
         return self._process_claim(claim, lease_seconds=lease_seconds)
@@ -238,11 +333,16 @@ class ObservationProcessor:
             return self._fail(claim, "missing_archive_metadata", retryable=False)
 
         try:
+            archive_started_at = monotonic()
+            try:
+                archived = self.archive.read_verified(
+                    claim.archive_reference, claim.response_hash
+                )
+            finally:
+                self._record_stage("python_archive_get_verify", archive_started_at)
+            renewal_started_at = monotonic()
             self.database.renew_claim(claim, lease_seconds=lease_seconds)
-            archived = self.archive.read_verified(
-                claim.archive_reference, claim.response_hash
-            )
-            self.database.renew_claim(claim, lease_seconds=lease_seconds)
+            self._record_stage("python_lease_renew", renewal_started_at)
         except ArchiveReadError as error:
             try:
                 state = self.database.fail_claim(
@@ -277,6 +377,7 @@ class ObservationProcessor:
             if claim.endpoint == "profile":
                 if claim.normalized_tag is None or claim.endpoint_version is None:
                     return self._fail(claim, "missing_player_scope", retryable=False)
+                parse_started_at = monotonic()
                 profile = parse_profile(
                     archived.body,
                     expected_tag=claim.normalized_tag,
@@ -284,11 +385,15 @@ class ObservationProcessor:
                     endpoint_version=claim.endpoint_version,
                     parser_version=claim.parser_version,
                 )
+                self._record_stage("python_parse_profile", parse_started_at)
+                domain_started_at = monotonic()
                 self.database.complete_profile(claim, profile)
+                self._record_stage("python_domain_profile", domain_started_at)
                 outcome = "processed"
             elif claim.endpoint == "battle_log":
                 if claim.normalized_tag is None or claim.endpoint_version is None:
                     return self._fail(claim, "missing_player_scope", retryable=False)
+                parse_started_at = monotonic()
                 battle_log = parse_battle_log(
                     archived.body,
                     expected_tag=claim.normalized_tag,
@@ -296,17 +401,24 @@ class ObservationProcessor:
                     endpoint_version=claim.endpoint_version,
                     parser_version=claim.parser_version,
                 )
+                self._record_stage("python_parse_battle_log", parse_started_at)
+                domain_started_at = monotonic()
                 self.database.complete_battle_log(claim, battle_log)
+                self._record_stage("python_domain_battle_log", domain_started_at)
                 outcome = (
                     "processed_with_gaps" if battle_log.has_row_gap else "processed"
                 )
             else:
+                parse_started_at = monotonic()
                 rankings = parse_global_player_rankings(
                     archived.body,
                     endpoint_version=claim.endpoint_version,
                     parser_version=claim.parser_version,
                 )
+                self._record_stage("python_parse_rankings", parse_started_at)
+                domain_started_at = monotonic()
                 self.database.complete_rankings(claim, rankings)
+                self._record_stage("python_domain_rankings", domain_started_at)
                 outcome = "processed"
         except (ProfileParseError, BattleLogParseError, RankingParseError) as error:
             return self._fail(claim, error.category, detail=str(error), retryable=False)

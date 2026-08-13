@@ -72,11 +72,15 @@ def test_s3_archive_reader_fetches_bytes_and_checks_sha256_before_json_parse(
         secure=False,
         allow_insecure_test_origin=True,
     )
+    pool_acquire_durations: list[float] = []
+    reader.set_pool_acquire_observer(pool_acquire_durations.append)
 
     result = reader.read_verified(reference, digest)
 
     assert json.loads(result.body)["leagueTier"]["name"] == "Legend I"
     assert handler.get_count == 1
+    assert len(pool_acquire_durations) == 1
+    assert pool_acquire_durations[0] >= 0
 
 
 def test_s3_archive_reader_classifies_tampered_bytes(archive_server) -> None:

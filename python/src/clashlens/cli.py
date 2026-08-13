@@ -30,6 +30,7 @@ from .worker import (
     MAX_CONCURRENCY,
     ObservationProcessor,
     ProcessResult,
+    StageMetrics,
     process_concurrently,
 )
 
@@ -90,8 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_bounded_int("archive pool size", 1, MAX_ARCHIVE_POOL_SIZE),
         default=None,
         help=(
-            "archive HTTP connection pool size (default: 20 with concurrency, "
-            "4 for the sequential worker)"
+            "archive HTTP connection pool size (default: max(4, concurrency))"
         ),
     )
 
@@ -215,10 +215,33 @@ def _run_worker(arguments: argparse.Namespace) -> int:
     stop_requested = Event()
     _install_shutdown_handlers(stop_requested)
     try:
+        stage_metrics = StageMetrics()
         archive = _archive(arguments, pool_size=archive_pool_size)
+        set_archive_pool_observer = getattr(
+            archive, "set_pool_acquire_observer", None
+        )
+        if callable(set_archive_pool_observer):
+            set_archive_pool_observer(
+                lambda duration: stage_metrics.record(
+                    "python_archive_pool_acquire", duration
+                )
+            )
         processor = ObservationProcessor(database, archive)
+        if isinstance(processor, ObservationProcessor):
+            processor.stage_metrics = stage_metrics
+            database.stage_metrics = stage_metrics
+        next_queue_maintenance_at = float("-inf")
 
         def process_batch() -> list[ProcessResult]:
+            nonlocal next_queue_maintenance_at
+            current_time = monotonic()
+            if current_time >= next_queue_maintenance_at:
+                maintenance_started_at = monotonic()
+                database.maintain_queue(max_jobs=100)
+                stage_metrics.record(
+                    "python_queue_maintenance", monotonic() - maintenance_started_at
+                )
+                next_queue_maintenance_at = current_time + 10
             if concurrency == 1:
                 return processor.process_until_idle(
                     owner=arguments.owner,
@@ -258,16 +281,23 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     json.dumps({"event": "job_result", **asdict(result)}),
                     flush=True,
                 )
+            current_time = monotonic()
+            if current_time - last_health_report >= 60:
+                print(
+                    json.dumps(
+                        {
+                            "event": "worker_health",
+                            "queue": getattr(database, "queue_health", dict)(),
+                            "database_pool": getattr(
+                                database, "pool_health", dict
+                            )(),
+                            "stages": stage_metrics.snapshot(),
+                        }
+                    ),
+                    flush=True,
+                )
+                last_health_report = current_time
             if not results:
-                current_time = monotonic()
-                if current_time - last_health_report >= 60:
-                    print(
-                        json.dumps(
-                            {"event": "queue_health", **database.queue_health()}
-                        ),
-                        flush=True,
-                    )
-                    last_health_report = current_time
                 stop_requested.wait(arguments.poll_interval_seconds)
         print(
             json.dumps(
@@ -275,6 +305,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     "status": "stopped",
                     "processed_count": processed_count,
                     "results": [asdict(result) for result in recent_results],
+                    "database_pool": getattr(database, "pool_health", dict)(),
+                    "stages": stage_metrics.snapshot(),
                 }
             )
         )

@@ -11,19 +11,20 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries proves the explicit
-// least-privilege grant layer that migration 0002 installs for the three
+// TestProductionMigrationsEnforceRuntimeRoleBoundaries proves the explicit
+// least-privilege grant layer that the current migrations install for the three
 // runtime roles: the Go collector, the Python worker, and the Python API.
 // Each role is NOLOGIN with no elevated attributes and no password; positive
 // probes run the role's sanctioned statements and negative probes assert
 // SQLSTATE 42501 across the documented boundary matrix.
-func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
+func TestProductionMigrationsEnforceRuntimeRoleBoundaries(t *testing.T) {
 	ctx := context.Background()
 	connection := migratedVersionTwoConnection(t, ctx)
 
 	// Reapplication must be stable: roles stay unique with fixed attributes
 	// and every grant/revoke can be repeated.
 	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0003_regular_poll_dedup.sql"))
 
 	const (
 		collectorRole = "clashlens_collector"
@@ -402,25 +403,16 @@ func TestProductionMigrationTwoEnforcesRuntimeRoleBoundaries(t *testing.T) {
 }
 
 // TestResetBaselineWorkerPrivilegeContract proves the hardened reset-baseline
-// worker contract that migration 0002 installs: the Python worker alone can
+// worker contract that migration 0003 installs: the Python worker alone can
 // execute the job-lineage helper and the narrow sweep-lock seam; PUBLIC, the
 // collector, and the API cannot; the lineage helper stays SECURITY INVOKER
 // under the worker's read grants on collector evidence; the lock seam is
-// SECURITY DEFINER with a fixed search_path and actually holds the row lock;
-// and reapplication of migration 0002 keeps every grant and attribute stable.
+// SECURITY DEFINER with a fixed search_path and actually holds the row lock.
 func TestResetBaselineWorkerPrivilegeContract(t *testing.T) {
 	ctx := context.Background()
 	connection := migratedVersionTwoConnection(t, ctx)
 
-	// Reapplication must remove the temporary direct-lock privilege used by the
-	// live incident mitigation before restoring the hardened function seam.
-	if _, err := connection.Exec(ctx, `
-		GRANT UPDATE (id) ON collector_reset_baseline_sweeps
-		TO clashlens_python_worker
-	`); err != nil {
-		t.Fatalf("seed temporary worker lock privilege: %v", err)
-	}
-	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0003_regular_poll_dedup.sql"))
 
 	const (
 		collectorRole = "clashlens_collector"
@@ -511,8 +503,9 @@ func TestResetBaselineWorkerPrivilegeContract(t *testing.T) {
 	}
 
 	// Worker: executes the lineage helper and the lock seam, and the lock
-	// actually holds the sweep row; the worker cannot reach the sweep table
-	// with FOR UPDATE or UPDATE directly.
+	// actually holds the sweep row. The previous image's direct FOR UPDATE
+	// remains compatible for this release through UPDATE(id), but the worker
+	// still cannot mutate sweep state.
 	if _, err := connection.Exec(ctx, `BEGIN`); err != nil {
 		t.Fatalf("begin worker reset-baseline probe transaction: %v", err)
 	}
@@ -551,9 +544,12 @@ func TestResetBaselineWorkerPrivilegeContract(t *testing.T) {
 	if locked {
 		t.Fatal("worker lock of a missing baseline sweep returned true")
 	}
-	expectInsufficientPrivilege(t, ctx, connection, `
+	var directlyLockedID int64
+	if err := connection.QueryRow(ctx, `
 		SELECT id FROM collector_reset_baseline_sweeps WHERE id = $1 FOR UPDATE
-	`, "worker locking the sweep table directly", baselineID)
+	`, baselineID).Scan(&directlyLockedID); err != nil || directlyLockedID != baselineID {
+		t.Fatalf("previous worker image cannot lock the sweep row during its compatibility window: id=%d err=%v", directlyLockedID, err)
+	}
 	expectInsufficientPrivilege(t, ctx, connection, `
 		UPDATE collector_reset_baseline_sweeps SET state = 'complete' WHERE id = $1
 	`, "worker updating the sweep table directly", baselineID)

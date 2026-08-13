@@ -4,6 +4,7 @@ import hashlib
 import math
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -57,6 +58,34 @@ class _BoundedPoolManager(urllib3.PoolManager):
     def __init__(self, *, max_body_bytes: int, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._max_body_bytes = max_body_bytes
+        self._pool_acquire_observer: Callable[[float], None] | None = None
+
+    def set_pool_acquire_observer(
+        self, observer: Callable[[float], None] | None
+    ) -> None:
+        self._pool_acquire_observer = observer
+
+    def _new_pool(
+        self,
+        scheme: str,
+        host: str,
+        port: int,
+        request_context: dict[str, Any] | None = None,
+    ) -> Any:
+        pool = super()._new_pool(scheme, host, port, request_context)
+        get_connection = pool._get_conn
+
+        def observed_get_connection(timeout: float | None = None) -> Any:
+            started_at = time.monotonic()
+            try:
+                return get_connection(timeout)
+            finally:
+                observer = self._pool_acquire_observer
+                if observer is not None:
+                    observer(time.monotonic() - started_at)
+
+        pool._get_conn = observed_get_connection  # type: ignore[method-assign]
+        return pool
 
     def urlopen(self, *args: Any, **kwargs: Any) -> _BoundedResponse:
         response = super().urlopen(*args, **kwargs)
@@ -167,6 +196,11 @@ class S3ArchiveReader:
             region="us-east-1",
             http_client=self.http_client,
         )
+
+    def set_pool_acquire_observer(
+        self, observer: Callable[[float], None] | None
+    ) -> None:
+        self.http_client.set_pool_acquire_observer(observer)
 
     def check_ready(self) -> bool:
         for attempt in range(self.max_retries + 1):

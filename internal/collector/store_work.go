@@ -57,10 +57,15 @@ func (s *store) inactiveCleanupDue(now time.Time) bool {
 // indexed range per priority; a priority outside this list is still claimed
 // through the catch-all probe, so the list is a fast-path declaration, not a
 // claimability gate. Add a new enqueue priority here (and to the partial
-// catch-all index in migration 0002) so its claims stay on the fast path.
+// catch-all index in migration 0003) so its claims stay on the fast path.
 // TestCollectorClaimPrioritiesMatchProductionClasses pins this list to the
 // live production audit.
 const collectorClaimPriorities = "(100), (150), (200), (250), (300), (400)"
+
+// Keep one indexed candidate available per maximum in-process request worker.
+// A smaller window makes concurrent SKIP LOCKED claims repeatedly collide on
+// the same prefix and return empty while a deep queue still has due work.
+const collectorClaimCandidateLimit = "32"
 
 // collectorClaimPriorityExclusions is collectorClaimPriorities rewritten as a
 // plain integer list for the catch-all probe's NOT IN predicate. Derived at
@@ -72,8 +77,7 @@ var collectorClaimPriorityExclusions = strings.ReplaceAll(
 
 // collectorClaimStatement claims the highest-priority due job for one
 // capacity pool in a single statement. The candidate CTE probes the indexed
-// per-priority oldest-due pending jobs (the maximum of priority plus unbounded
-// age is always the oldest job within one priority), adds a catch-all probe
+// per-priority oldest-due pending jobs, adds a catch-all probe
 // for priorities outside the declared classes (scored exactly like the known
 // probes so ordering stays globally correct), adds the indexed expired-lease
 // set restricted to jobs with no stale result attempt (recoverExpiredAttemptsV2
@@ -96,8 +100,8 @@ WITH candidate AS (
 				AND status = 'pending'
 				AND priority = claim_priority.priority
 				AND due_at <= $2
-			ORDER BY created_at, id
-			LIMIT 8
+				ORDER BY due_at, created_at, id
+			LIMIT ` + collectorClaimCandidateLimit + `
 		) AS claim_id
 		UNION ALL
 		(
@@ -107,10 +111,8 @@ WITH candidate AS (
 				AND status = 'pending'
 				AND priority NOT IN (` + collectorClaimPriorityExclusions + `)
 				AND due_at <= $2
-			ORDER BY (
-				priority + floor(extract(epoch FROM ($2 - created_at)) / 60)::integer * 10
-			) DESC, due_at, id
-			LIMIT 8
+			ORDER BY due_at, created_at, id
+			LIMIT ` + collectorClaimCandidateLimit + `
 		)
 		UNION ALL
 		(
@@ -120,10 +122,8 @@ WITH candidate AS (
 				AND status = 'leased'
 				AND lease_expires_at <= $2
 				AND result_attempt_id IS NULL
-			ORDER BY (
-				priority + floor(extract(epoch FROM ($2 - created_at)) / 60)::integer * 10
-			) DESC, due_at, id
-			LIMIT 8
+			ORDER BY lease_expires_at, due_at, created_at, id
+			LIMIT ` + collectorClaimCandidateLimit + `
 		)
 	) AS pick
 	JOIN collector_jobs AS job ON job.id = pick.id
@@ -202,7 +202,11 @@ func (s *store) claimNext(
 		return nil, errors.New("lease owner, token, and positive duration are required")
 	}
 
+	poolStartedAt := time.Now()
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if s.metrics != nil {
+		s.metrics.recordStageDuration("claim_pool_acquire", time.Since(poolStartedAt))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("begin claim transaction: %w", err)
 	}
@@ -316,7 +320,7 @@ func (s *store) recoverExpiredAttemptsV2(ctx context.Context, transaction pgx.Tx
 		WHERE job.capacity_pool = $1
 			AND job.status = 'leased'
 			AND job.lease_expires_at <= $2
-		ORDER BY job.id
+			ORDER BY job.lease_expires_at, job.id
 		LIMIT $3
 		FOR UPDATE OF job SKIP LOCKED
 	`, pool, now, limit)
@@ -1098,12 +1102,6 @@ func (s *store) finishAttemptV2(ctx context.Context, job *collectionJob, attempt
 		attemptID: attemptID,
 		now:       completedAt,
 	}
-	if proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
-		return s.proveTerminalCompletionCommit(proofCtx, connection, preflightIntent)
-	}); proofErr == nil && proofOutcome == commitProofCommitted {
-		return nil
-	}
-
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin version-two completion transaction: %w", err)
@@ -1111,6 +1109,14 @@ func (s *store) finishAttemptV2(ctx context.Context, job *collectionJob, attempt
 	defer func() { _ = transaction.Rollback(ctx) }()
 
 	if err := lockCurrentAttemptV2(ctx, transaction, job, attemptID); err != nil {
+		if errors.Is(err, errLeaseLost) {
+			proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+				return s.proveTerminalCompletionCommit(proofCtx, connection, preflightIntent)
+			})
+			if proofErr == nil && proofOutcome == commitProofCommitted {
+				return nil
+			}
+		}
 		return err
 	}
 	var rootJobID int64

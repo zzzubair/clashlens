@@ -3,12 +3,15 @@ package collector
 import (
 	"bytes"
 	"context"
+	"crypto/md5" // #nosec G501 -- S3 Content-MD5 detects transport corruption; SHA-256 names the object.
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,18 +26,25 @@ type fakeS3Object struct {
 }
 
 type fakeS3 struct {
-	mu                    sync.Mutex
-	objects               map[string]*fakeS3Object
-	rejectWrites          bool
-	unavailable           bool
-	bucketChecks          int
-	failBucketChecksAfter int
+	mu                      sync.Mutex
+	objects                 map[string]*fakeS3Object
+	rejectWrites            bool
+	unavailable             bool
+	bucketChecks            int
+	failBucketChecksAfter   int
+	requests                map[string][]string
+	hideExistingHeadOnce    map[string]bool
+	ignoreConditionalWrites bool
 }
 
 func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 	t.Helper()
 
-	backend := &fakeS3{objects: make(map[string]*fakeS3Object)}
+	backend := &fakeS3{
+		objects:              make(map[string]*fakeS3Object),
+		requests:             make(map[string][]string),
+		hideExistingHeadOnce: make(map[string]bool),
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		backend.mu.Lock()
 		defer backend.mu.Unlock()
@@ -47,6 +57,7 @@ func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 		if request.URL.Path == "/evidence" {
 			key = ""
 		}
+		backend.requests[key] = append(backend.requests[key], request.Method)
 		switch request.Method {
 		case http.MethodHead:
 			if key == "" {
@@ -59,6 +70,10 @@ func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 				return
 			}
 			object, ok := backend.objects[key]
+			if ok && backend.hideExistingHeadOnce[key] {
+				backend.hideExistingHeadOnce[key] = false
+				ok = false
+			}
 			if !ok {
 				response.Header().Set("Content-Type", "application/xml")
 				response.WriteHeader(http.StatusNotFound)
@@ -91,10 +106,32 @@ func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 				_, _ = io.WriteString(response, `<Error><Code>AccessDenied</Code></Error>`)
 				return
 			}
+			if !backend.ignoreConditionalWrites && request.Header.Get("If-None-Match") == "*" && backend.objects[key] != nil {
+				response.Header().Set("Content-Type", "application/xml")
+				response.WriteHeader(http.StatusPreconditionFailed)
+				_, _ = io.WriteString(response, `<Error><Code>PreconditionFailed</Code></Error>`)
+				return
+			}
 			body, err := io.ReadAll(request.Body)
 			if err != nil {
 				http.Error(response, err.Error(), http.StatusInternalServerError)
 				return
+			}
+			if strings.HasPrefix(key, "sha256/") {
+				if request.Header.Get("If-None-Match") != "*" {
+					response.Header().Set("Content-Type", "application/xml")
+					response.WriteHeader(http.StatusPreconditionRequired)
+					_, _ = io.WriteString(response, `<Error><Code>MissingPrecondition</Code></Error>`)
+					return
+				}
+				digest := md5.Sum(body) // #nosec G401 -- checking the S3 transport checksum only.
+				expected := base64.StdEncoding.EncodeToString(digest[:])
+				if request.Header.Get("Content-MD5") != expected {
+					response.Header().Set("Content-Type", "application/xml")
+					response.WriteHeader(http.StatusBadRequest)
+					_, _ = io.WriteString(response, `<Error><Code>BadDigest</Code></Error>`)
+					return
+				}
 			}
 			object := backend.objects[key]
 			if object == nil {
@@ -112,6 +149,34 @@ func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 	}))
 	t.Cleanup(server.Close)
 	return server, backend
+}
+
+func TestS3ArchiveReadinessRequiresConditionalImmutableCreation(t *testing.T) {
+	t.Parallel()
+
+	server, backend := newFakeS3Server(t)
+	archive, err := newS3Archive(strings.TrimPrefix(server.URL, "http://"), false, "evidence", "access", "secret")
+	if err != nil {
+		t.Fatalf("newS3Archive returned an error: %v", err)
+	}
+	if err := archive.verifyWriteCapability(context.Background(), "conditional-ok"); err != nil {
+		t.Fatalf("conditional readiness returned an error: %v", err)
+	}
+	if err := archive.ready(context.Background()); err != nil {
+		t.Fatalf("ready returned an error after conditional verification: %v", err)
+	}
+
+	backend.mu.Lock()
+	backend.ignoreConditionalWrites = true
+	backend.mu.Unlock()
+	unsupported, err := newS3Archive(strings.TrimPrefix(server.URL, "http://"), false, "evidence", "access", "secret")
+	if err != nil {
+		t.Fatalf("new unsupported archive returned an error: %v", err)
+	}
+	if err := unsupported.verifyWriteCapability(context.Background(), "conditional-ignored"); err == nil ||
+		!strings.Contains(err.Error(), "conditional immutable creation") {
+		t.Fatalf("conditional readiness error = %v, want unsupported conditional create", err)
+	}
 }
 
 func (backend *fakeS3) contentObjectCount() int {
@@ -153,6 +218,11 @@ func TestS3ArchiveReusesVerifiedContentAddressedObject(t *testing.T) {
 
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
+	objectKey := "sha256/" + hash[:2] + "/" + hash
+	wantRequests := []string{http.MethodHead, http.MethodPut, http.MethodHead, http.MethodGet}
+	if got := backend.requests[objectKey]; !slices.Equal(got, wantRequests) {
+		t.Fatalf("archive requests = %v, want %v", got, wantRequests)
+	}
 	if len(backend.objects) != 1 {
 		t.Fatalf("archive contains %d objects, want 1", len(backend.objects))
 	}
@@ -208,5 +278,37 @@ func TestS3ArchiveRejectsMismatchedCallerHashBeforeWrite(t *testing.T) {
 	backend.mu.Unlock()
 	if objects != 0 {
 		t.Fatalf("archive object count = %d, want 0 after pre-write hash rejection", objects)
+	}
+}
+
+func TestS3ArchiveVerifiesObjectCreatedBetweenHeadAndConditionalPut(t *testing.T) {
+	t.Parallel()
+
+	server, backend := newFakeS3Server(t)
+	archive, err := newS3Archive(strings.TrimPrefix(server.URL, "http://"), false, "evidence", "access", "secret")
+	if err != nil {
+		t.Fatalf("newS3Archive returned an error: %v", err)
+	}
+	body := []byte(`{"items":[]}`)
+	digest := sha256.Sum256(body)
+	hash := hex.EncodeToString(digest[:])
+	objectKey := "sha256/" + hash[:2] + "/" + hash
+	backend.mu.Lock()
+	backend.objects[objectKey] = &fakeS3Object{body: body, hash: hash, writes: 1}
+	backend.hideExistingHeadOnce[objectKey] = true
+	backend.mu.Unlock()
+
+	if _, err := archive.store(context.Background(), hash, body); err != nil {
+		t.Fatalf("store after a concurrent immutable create returned an error: %v", err)
+	}
+
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	wantRequests := []string{http.MethodHead, http.MethodPut, http.MethodHead, http.MethodGet}
+	if got := backend.requests[objectKey]; !slices.Equal(got, wantRequests) {
+		t.Fatalf("archive requests = %v, want %v", got, wantRequests)
+	}
+	if backend.objects[objectKey].writes != 1 {
+		t.Fatalf("concurrently-created object was overwritten")
 	}
 }

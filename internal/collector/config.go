@@ -13,9 +13,9 @@ import (
 )
 
 // The collector PostgreSQL pool is explicitly bounded. The safe default of
-// 16 preserves the pgxpool behavior on the 16-core production host, where
-// the implicit default is exactly 16 connections. Production raises it to
-// 48 for the planned 48-slot collector stage; the deployment validates 1-64.
+// 16 preserves pgxpool's behavior on the 16-thread production host. The
+// measured target profile explicitly raises it to 32 for 32 normal workers;
+// the deployment validates 1-64.
 const (
 	defaultCollectorDatabasePoolSize = 16
 	maximumCollectorDatabasePoolSize = 64

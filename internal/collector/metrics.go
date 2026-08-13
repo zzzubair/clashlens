@@ -20,6 +20,18 @@ type collectorMetrics struct {
 	storageErrors    map[string]uint64
 	retries          map[string]uint64
 	quarantines      map[string]uint64
+	stageDurations   map[string]durationHistogram
+}
+
+var collectorDurationBuckets = [...]float64{
+	0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025,
+	0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
+}
+
+type durationHistogram struct {
+	count   uint64
+	sum     float64
+	buckets [len(collectorDurationBuckets) + 1]uint64
 }
 
 func newCollectorMetrics() *collectorMetrics {
@@ -32,6 +44,7 @@ func newCollectorMetrics() *collectorMetrics {
 		storageErrors:    map[string]uint64{},
 		retries:          map[string]uint64{},
 		quarantines:      map[string]uint64{},
+		stageDurations:   map[string]durationHistogram{},
 	}
 }
 
@@ -97,6 +110,25 @@ func (m *collectorMetrics) recordQuarantine(label, pool string) {
 	m.increment(m.quarantines, label+"\x00"+pool)
 }
 
+func (m *collectorMetrics) recordStageDuration(stage string, duration time.Duration) {
+	if m == nil {
+		return
+	}
+	seconds := duration.Seconds()
+	m.mu.Lock()
+	histogram := m.stageDurations[stage]
+	histogram.count++
+	histogram.sum += seconds
+	for index, upperBound := range collectorDurationBuckets {
+		if seconds <= upperBound {
+			histogram.buckets[index]++
+		}
+	}
+	histogram.buckets[len(collectorDurationBuckets)]++
+	m.stageDurations[stage] = histogram
+	m.mu.Unlock()
+}
+
 func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPool, now time.Time) (string, error) {
 	statistics, err := store.queueStatistics(ctx)
 	if err != nil {
@@ -112,6 +144,7 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	storageErrors := cloneCounterMap(m.storageErrors)
 	retries := cloneCounterMap(m.retries)
 	quarantines := cloneCounterMap(m.quarantines)
+	stageDurations := cloneHistogramMap(m.stageDurations)
 	m.mu.Unlock()
 
 	var output strings.Builder
@@ -158,6 +191,14 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	writeCounterMap(&output, "clashlens_collector_storage_errors_total", []string{"category"}, storageErrors)
 	writeCounterMap(&output, "clashlens_collector_retries_total", []string{"endpoint"}, retries)
 	writeCounterMap(&output, "clashlens_collector_key_quarantines_total", []string{"key_label", "pool"}, quarantines)
+	writeDurationHistograms(&output, stageDurations)
+	poolStats := store.pool.Stat()
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_max_connections %d\n", poolStats.MaxConns())
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_acquired_connections %d\n", poolStats.AcquiredConns())
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_idle_connections %d\n", poolStats.IdleConns())
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_empty_acquires_total %d\n", poolStats.EmptyAcquireCount())
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_cancelled_acquires_total %d\n", poolStats.CanceledAcquireCount())
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_acquire_duration_seconds_total %s\n", strconv.FormatFloat(poolStats.AcquireDuration().Seconds(), 'f', 6, 64))
 
 	for _, status := range keys.statuses(now) {
 		healthy := 1
@@ -214,6 +255,43 @@ func cloneFloatMap(source map[string]float64) map[string]float64 {
 		clone[key] = value
 	}
 	return clone
+}
+
+func cloneHistogramMap(source map[string]durationHistogram) map[string]durationHistogram {
+	clone := make(map[string]durationHistogram, len(source))
+	for key, value := range source {
+		clone[key] = value
+	}
+	return clone
+}
+
+func writeDurationHistograms(output *strings.Builder, histograms map[string]durationHistogram) {
+	stages := make([]string, 0, len(histograms))
+	for stage := range histograms {
+		stages = append(stages, stage)
+	}
+	sort.Strings(stages)
+	for _, stage := range stages {
+		histogram := histograms[stage]
+		for index, upperBound := range collectorDurationBuckets {
+			fmt.Fprintf(
+				output,
+				"clashlens_collector_stage_duration_seconds_bucket{stage=%q,le=%q} %d\n",
+				stage,
+				strconv.FormatFloat(upperBound, 'f', -1, 64),
+				histogram.buckets[index],
+			)
+		}
+		fmt.Fprintf(
+			output,
+			"clashlens_collector_stage_duration_seconds_bucket{stage=%q,le=%q} %d\n",
+			stage,
+			"+Inf",
+			histogram.buckets[len(collectorDurationBuckets)],
+		)
+		fmt.Fprintf(output, "clashlens_collector_stage_duration_seconds_count{stage=%q} %d\n", stage, histogram.count)
+		fmt.Fprintf(output, "clashlens_collector_stage_duration_seconds_sum{stage=%q} %s\n", stage, strconv.FormatFloat(histogram.sum, 'f', 6, 64))
+	}
 }
 
 func writeCounterMap(output *strings.Builder, name string, labels []string, values map[string]uint64) {

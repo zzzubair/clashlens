@@ -82,18 +82,18 @@ func (s *store) commitObservationV2(
 		job, attemptID, endpoint, requestCount, response, headers, hash,
 		archiveReference, collectorVersion, keyLabel, outcome, nextRetryAt,
 	)
-	if proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
-		return s.proveObservationCommit(proofCtx, connection, intent)
-	}); proofErr == nil && proofOutcome == commitProofCommitted {
-		return nil
-	}
+	poolStartedAt := time.Now()
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if s.metrics != nil {
+		s.metrics.recordStageDuration("database_pool_acquire", time.Since(poolStartedAt))
+	}
 	if err != nil {
 		return fmt.Errorf("begin version-two observation transaction: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
 
 	var leaseCurrent bool
+	lockStartedAt := time.Now()
 	if err := transaction.QueryRow(ctx, `
 		SELECT true
 		FROM collector_jobs
@@ -105,10 +105,16 @@ func (s *store) commitObservationV2(
 			AND lease_expires_at > clock_timestamp()
 		FOR UPDATE
 	`, job.id, job.leaseToken, job.leaseOwner, job.leaseGeneration).Scan(&leaseCurrent); err != nil {
+		if s.metrics != nil {
+			s.metrics.recordStageDuration("observation_job_lock", time.Since(lockStartedAt))
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return errLeaseLost
 		}
 		return fmt.Errorf("lock version-two observation lease: %w", err)
+	}
+	if s.metrics != nil {
+		s.metrics.recordStageDuration("observation_job_lock", time.Since(lockStartedAt))
 	}
 
 	var normalizedTag any = job.normalizedTag

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -21,6 +20,7 @@ type store struct {
 	commitTx                func(context.Context, pgx.Tx) error
 	inactiveCleanupInterval time.Duration
 	lastInactiveCleanupAt   atomic.Int64
+	metrics                 *collectorMetrics
 }
 
 func openStore(ctx context.Context, databaseURL string, expectedContractVersion int) (*store, error) {
@@ -30,8 +30,8 @@ func openStore(ctx context.Context, databaseURL string, expectedContractVersion 
 // openStoreWithPoolSize opens the store with an explicitly bounded PostgreSQL
 // pool. The production collector sets the bound from
 // CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE; without it pgxpool silently caps at
-// max(4, NumCPU) connections, which is 16 on the 16-core host and would starve
-// the planned 48-slot collector stage.
+// max(4, NumCPU) connections, which is 16 on the 16-thread host. The measured
+// target profile explicitly budgets 32 collector connections.
 func openStoreWithPoolSize(ctx context.Context, databaseURL string, expectedContractVersion, maxConns int) (*store, error) {
 	if maxConns < 1 {
 		return nil, errors.New("collector database pool size must be at least 1")
@@ -88,83 +88,43 @@ func (s *store) scheduleDueRegular(ctx context.Context, now time.Time, cycle tim
 		return 0, errors.New("scheduler batch size must be positive")
 	}
 
-	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return 0, fmt.Errorf("begin regular scheduling transaction: %w", err)
-	}
-	defer func() { _ = transaction.Rollback(ctx) }()
-
-	rows, err := transaction.Query(ctx, `
-		SELECT id, normalized_tag, next_due_at
-		FROM players
-		WHERE active AND next_due_at <= $1
-		ORDER BY next_due_at, id
-		FOR NO KEY UPDATE SKIP LOCKED
-		LIMIT $2
-	`, now, batchSize)
-	if err != nil {
-		return 0, fmt.Errorf("select due players: %w", err)
-	}
-	type duePlayer struct {
-		id      int64
-		tag     string
-		nextDue time.Time
-	}
-	players := make([]duePlayer, 0, batchSize)
-	for rows.Next() {
-		var player duePlayer
-		if err := rows.Scan(&player.id, &player.tag, &player.nextDue); err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("scan due player: %w", err)
-		}
-		players = append(players, player)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, fmt.Errorf("read due players: %w", err)
-	}
-	rows.Close()
-
 	cycleStart := now.Truncate(cycle)
 	nextCycleStart := cycleStart.Add(cycle)
-	created := 0
-	for _, player := range players {
-		priority := 100
-		if now.Sub(player.nextDue) >= cycle {
-			priority = 200
-		}
-		coalescingKey := "regular:" + strconv.FormatInt(player.id, 10) + ":" + strconv.FormatInt(cycleStart.Unix(), 10)
-		command, err := transaction.Exec(ctx, `
+	cycleSeconds := int64(cycle / time.Second)
+	var created int
+	if err := s.pool.QueryRow(ctx, `
+		WITH due AS MATERIALIZED (
+			SELECT id, normalized_tag, next_due_at
+			FROM players
+			WHERE active AND next_due_at <= $1
+			ORDER BY next_due_at, id
+			FOR NO KEY UPDATE SKIP LOCKED
+			LIMIT $2
+		), inserted AS (
 			INSERT INTO collector_jobs (
-				work_type,
-				player_id,
-				normalized_tag,
-				capacity_pool,
-				priority,
-				due_at,
-				coalescing_key,
-				status
+				work_type, player_id, normalized_tag, capacity_pool,
+				priority, due_at, coalescing_key, status
 			)
-			VALUES ('regular_poll', $1, $2, 'normal', $3, $4, $5, 'pending')
+			SELECT 'regular_poll', due.id, due.normalized_tag, 'normal',
+				CASE WHEN due.next_due_at <= $1 - ($5::double precision * interval '1 second')
+					THEN 200 ELSE 100 END,
+				$1, 'regular:' || due.id || ':' || ($3::bigint)::text, 'pending'
+			FROM due
 			ON CONFLICT DO NOTHING
-		`, player.id, player.tag, priority, now, coalescingKey)
-		if err != nil {
-			return 0, fmt.Errorf("insert regular poll for player %d: %w", player.id, err)
-		}
-		created += int(command.RowsAffected())
-
-		offset := deterministicStagger(player.id, cycle)
-		if _, err := transaction.Exec(ctx, `
-			UPDATE players
-			SET next_due_at = $2
-			WHERE id = $1
-		`, player.id, nextCycleStart.Add(offset)); err != nil {
-			return 0, fmt.Errorf("advance due time for player %d: %w", player.id, err)
-		}
-	}
-
-	if err := transaction.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit regular scheduling transaction: %w", err)
+			RETURNING 1
+		), advanced AS (
+			UPDATE players AS player
+			SET next_due_at = $4::timestamptz + CASE
+				WHEN $5::bigint < 1 THEN interval '0 seconds'
+				ELSE ((player.id - 1) % $5::bigint) * interval '1 second'
+			END
+			FROM due
+			WHERE player.id = due.id
+			RETURNING player.id
+		)
+		SELECT count(*) FROM inserted
+	`, now, batchSize, cycleStart.Unix(), nextCycleStart, cycleSeconds).Scan(&created); err != nil {
+		return 0, fmt.Errorf("schedule due regular polls: %w", err)
 	}
 	return created, nil
 }

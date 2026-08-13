@@ -12,6 +12,14 @@ fail() {
   exit 1
 }
 
+grep -Fq 'COPY --chown=10001:10001 src /opt/clashlens/src' \
+  "$ROOT_DIR/python/Containerfile" || \
+  fail 'python image source is not readable by its runtime user'
+grep -Fq 'COPY --chown=10001:10001 testdata/legend_i_profile_v1.json' \
+  "$ROOT_DIR/python/Containerfile" || \
+  fail 'python image testdata is not readable by its runtime user'
+printf 'ok: python image owns runtime files as the runtime user\n'
+
 # ---------------------------------------------------------------------------
 # Shared fake Podman. State lives in $FAKE_STATE; every command line is
 # appended escaped to $FAKE_PODMAN_LOG. The fake models enough state for the
@@ -87,7 +95,11 @@ case "$verb" in
         ;;
       inspect)
         name=${!#}
-        if [[ "$*" == *"State.Health.Status"* ]]; then
+        if [[ "$*" == *"org.clashlens.postgres-shm-size"* ]]; then
+          cat "$FAKE_STATE/containers/$name.postgres-shm-size" 2>/dev/null || true
+        elif [[ "$*" == *"org.clashlens.postgres-metrics-profile"* ]]; then
+          cat "$FAKE_STATE/containers/$name.postgres-metrics-profile" 2>/dev/null || true
+        elif [[ "$*" == *"State.Health.Status"* ]]; then
           if [[ -f "$FAKE_STATE/containers/$name.health" ]]; then
             cat "$FAKE_STATE/containers/$name.health"
           else
@@ -119,9 +131,17 @@ case "$verb" in
     ;;
   run)
     name=""
+    postgres_shm_size=""
+    postgres_metrics_profile=""
     while (( $# > 0 )); do
       if [[ "$1" == "--name" && $# -ge 2 ]]; then
         name=$2
+        shift 2
+      elif [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.postgres-shm-size=* ]]; then
+        postgres_shm_size=${2#*=}
+        shift 2
+      elif [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.postgres-metrics-profile=* ]]; then
+        postgres_metrics_profile=${2#*=}
         shift 2
       else
         shift
@@ -129,6 +149,12 @@ case "$verb" in
     done
     mkdir -p "$FAKE_STATE/containers/$name"
     : >"$FAKE_STATE/containers/$name.running"
+    if [[ -n "$postgres_shm_size" ]]; then
+      printf '%s' "$postgres_shm_size" >"$FAKE_STATE/containers/$name.postgres-shm-size"
+    fi
+    if [[ -n "$postgres_metrics_profile" ]]; then
+      printf '%s' "$postgres_metrics_profile" >"$FAKE_STATE/containers/$name.postgres-metrics-profile"
+    fi
     ;;
   exec)
     interactive=false
@@ -145,9 +171,14 @@ case "$verb" in
       cat >"$FAKE_STATE/stdin/exec-$n"
       if grep -Fq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$FAKE_STATE/stdin/exec-$n"; then
         printf '1' >"$FAKE_STATE/contract_version"
+        printf '%s\n' 1 >>"$FAKE_STATE/schema_migrations"
       fi
       if grep -q 'collector_reset_baseline_sweeps' "$FAKE_STATE/stdin/exec-$n"; then
         printf '2' >"$FAKE_STATE/contract_version"
+        printf '%s\n' 2 >>"$FAKE_STATE/schema_migrations"
+      fi
+      if grep -q 'VALUES (3)' "$FAKE_STATE/stdin/exec-$n"; then
+        printf '%s\n' 3 >>"$FAKE_STATE/schema_migrations"
       fi
     fi
     if [[ "$*" == *"SELECT version FROM clash_lens_contract"* ]]; then
@@ -155,6 +186,17 @@ case "$verb" in
         cat "$FAKE_STATE/contract_version"
       else
         exit 1
+      fi
+    fi
+    if [[ "$*" =~ SELECT\ EXISTS.*clash_lens_schema_migrations.*version\ =\ ([0-9]+) ]]; then
+      migration_version=${BASH_REMATCH[1]}
+      if grep -qx "$migration_version" "$FAKE_STATE/schema_migrations" 2>/dev/null; then
+        printf 't\n'
+      elif [[ -f "$FAKE_STATE/contract_version" ]] &&
+        (( migration_version <= $(cat "$FAKE_STATE/contract_version") )); then
+        printf 't\n'
+      else
+        printf 'f\n'
       fi
     fi
     if [[ "$*" == *"queue-status"* ]]; then
@@ -476,6 +518,8 @@ grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$FRESH_DIR/state/stdin"
   fail 'migration 0001 was not applied on an absent database'
 grep -lq 'collector_reset_baseline_sweeps' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'migration 0002 was not applied on a fresh database'
+grep -lq 'collector_jobs_one_active_regular_poll_per_player' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
+  fail 'migration 0003 was not applied on a fresh database'
 grep -lq 'ALTER ROLE clashlens_collector' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'collector role password was not configured through psql stdin'
 grep -lq 'ALTER ROLE clashlens_python_worker' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
@@ -503,13 +547,15 @@ required_run=$(grep '^run ' "$FRESH_NORM" | grep 'clashlens-collector:deployment
 bridge_line=$(first_line "$FRESH_LOG" 'clashlens-collector-bridge' || true)
 migration1_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '1p' | cut -d: -f1)
 migration2_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '2p' | cut -d: -f1)
-role_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '3p' | cut -d: -f1)
+migration3_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '3p' | cut -d: -f1)
+role_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$FRESH_LOG" | sed -n '4p' | cut -d: -f1)
 required_line=$(first_line "$FRESH_LOG" '^run .*--name clashlens-collector ')
 [[ -z "$bridge_line" && -n "$migration1_line" && -n "$migration2_line" \
-  && -n "$role_line" && -n "$required_line" ]] || \
+  && -n "$migration3_line" && -n "$role_line" && -n "$required_line" ]] || \
   fail 'could not locate fresh migration/role/required order lines'
 (( migration1_line < migration2_line )) || fail 'migration 0001 did not run before migration 0002'
-(( migration2_line < role_line )) || fail 'roles were configured before migration 0002'
+(( migration2_line < migration3_line )) || fail 'migration 0002 did not run before migration 0003'
+(( migration3_line < role_line )) || fail 'roles were configured before forward migrations'
 (( role_line < required_line )) || fail 'required collector started before roles were configured'
 (( migration2_line < required_line )) || fail 'migration 0002 did not run before the required collector'
 [[ ! -f "$(secret_file "$FRESH_DIR" clashlens-bridge-database-url)" ]] || \
@@ -566,6 +612,12 @@ postgres_normalized=$(norm_log <<<"$postgres_run")
   fail 'PostgreSQL did not receive its explicit resource budget'
 [[ "$postgres_normalized" == *'--shm-size 128m'* ]] || \
   fail 'PostgreSQL did not receive its explicit shared-memory budget'
+[[ "$postgres_normalized" == *'--label org.clashlens.postgres-metrics-profile=step6-v1'* \
+  && "$postgres_normalized" == *'shared_preload_libraries=pg_stat_statements'* \
+  && "$postgres_normalized" == *'pg_stat_statements.track=all'* \
+  && "$postgres_normalized" == *'track_io_timing=on'* \
+  && "$postgres_normalized" == *'track_wal_io_timing=on'* ]] || \
+  fail 'PostgreSQL did not receive the Step 6 statement and I/O metrics profile'
 
 [[ "$required_normalized" == *'--memory 256m'* && "$required_normalized" == *'--pids-limit 128'* && "$required_normalized" == *'--cpus 1.0'* ]] || \
   fail 'collector did not receive its explicit resource budget'
@@ -607,6 +659,8 @@ if grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$V1_DIR/state/stdin"
 fi
 grep -lq 'collector_reset_baseline_sweeps' "$V1_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'migration 0002 was not applied on a v1 database'
+grep -lq 'collector_jobs_one_active_regular_poll_per_player' "$V1_DIR/state/stdin"/exec-* 2>/dev/null || \
+  fail 'migration 0003 was not applied on a v1 database'
 grep -lq 'ALTER ROLE clashlens_collector' "$V1_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'roles were not configured on a v1 database'
 log_has "$V1_DIR/podman.log" 'clashlens-collector-bridge' 'bridge was not used on a v1 database'
@@ -624,7 +678,8 @@ assert_no_sentinel_in_log "$V1_DIR/podman.log"
 printf 'ok: up on v1 stops the existing collector before applying 0002 through the bridge\n'
 
 # ---------------------------------------------------------------------------
-# Scenario C: up on v2 reapplies only 0002 and never runs a bridge.
+# Scenario C: up on v2 applies only missing forward migrations and never
+# replays a recorded migration or runs a bridge.
 # ---------------------------------------------------------------------------
 V2_DIR=$(new_scenario)
 V2_ENV="$V2_DIR/app.env"
@@ -632,17 +687,24 @@ write_scenario_env "$V2_ENV" "$V2_DIR/keys"
 printf '2' >"$V2_DIR/state/contract_version"
 deploy "$V2_DIR" "$V2_ENV" -- up >/dev/null
 [[ -n "$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f)" ]] || fail 'no psql stdin was captured on a v2 database'
-if grep -Flq 'CREATE TABLE IF NOT EXISTS collector_jobs (' "$V2_DIR/state/stdin"/exec-* 2>/dev/null; then
-  fail 'migration 0001 was applied on a v2 database'
+if grep -Flq 'UPDATE clash_lens_contract' "$V2_DIR/state/stdin"/exec-* 2>/dev/null; then
+  fail 'migration 0002 was replayed on a v2 database'
 fi
-[[ "$(grep -l 'collector_reset_baseline_sweeps' "$V2_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
-  fail 'migration 0002 was not reapplied exactly once on a v2 database'
+[[ "$(grep -l 'collector_jobs_one_active_regular_poll_per_player' "$V2_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
+  fail 'missing migration 0003 was not applied exactly once on a v2 database'
 grep -lq 'ALTER ROLE clashlens_collector' "$V2_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'roles were not configured on a v2 database'
 log_lacks "$V2_DIR/podman.log" 'clashlens-collector-bridge' 'bridge collector was started on a v2 database'
 log_has "$V2_DIR/podman.log" 'clashlens-collector:deployment' 'required collector was not started on a v2 database'
 assert_no_sentinel_in_log "$V2_DIR/podman.log"
-printf 'ok: up on a v2 database reapplies only 0002 and starts the required collector\n'
+v2_first_up_lines=$(wc -l <"$V2_DIR/podman.log")
+deploy "$V2_DIR" "$V2_ENV" -- up >/dev/null
+v2_second_up=$(tail -n +"$((v2_first_up_lines + 1))" "$V2_DIR/podman.log")
+if rg -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
+  second_up_stdin_count=$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f | wc -l)
+  [[ "$second_up_stdin_count" == "3" ]] || fail 'a recorded forward migration was replayed on second up'
+fi
+printf 'ok: up on v2 applies only missing forward migrations and starts the required collector\n'
 
 # ---------------------------------------------------------------------------
 # Scenario D: init applies 0001 only on an absent database.
@@ -678,6 +740,7 @@ RESTART_DIR=$(new_scenario)
 RESTART_ENV="$RESTART_DIR/app.env"
 write_scenario_env "$RESTART_ENV" "$RESTART_DIR/keys"
 printf '2' >"$RESTART_DIR/state/contract_version"
+printf '3\n' >"$RESTART_DIR/state/schema_migrations"
 mkdir -p "$RESTART_DIR/state/images/localhost"
 : >"$RESTART_DIR/state/images/localhost/clashlens-collector:deployment"
 deploy "$RESTART_DIR" "$RESTART_ENV" -- restart >/dev/null
@@ -692,12 +755,24 @@ RESTART_ABSENT_ENV="$RESTART_ABSENT_DIR/app.env"
 write_scenario_env "$RESTART_ABSENT_ENV" "$RESTART_ABSENT_DIR/keys"
 deploy_fails "$RESTART_ABSENT_DIR" "$RESTART_ABSENT_ENV" 'restart requires contract version 2' -- restart
 
+RESTART_UNMIGRATED_DIR=$(new_scenario)
+RESTART_UNMIGRATED_ENV="$RESTART_UNMIGRATED_DIR/app.env"
+write_scenario_env "$RESTART_UNMIGRATED_ENV" "$RESTART_UNMIGRATED_DIR/keys"
+printf '2' >"$RESTART_UNMIGRATED_DIR/state/contract_version"
+mkdir -p "$RESTART_UNMIGRATED_DIR/state/images/localhost"
+: >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-collector:deployment"
+: >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-python:deployment"
+deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
+  'forward migration 3 is required' -- restart
+deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
+  'forward migration 3 is required' -- python-start
+
 UNKNOWN_DIR=$(new_scenario)
 UNKNOWN_ENV="$UNKNOWN_DIR/app.env"
 write_scenario_env "$UNKNOWN_ENV" "$UNKNOWN_DIR/keys"
 printf '3' >"$UNKNOWN_DIR/state/contract_version"
 deploy_fails "$UNKNOWN_DIR" "$UNKNOWN_ENV" 'unsupported contract version' -- up
-printf 'ok: restart is start-only for v2 and unknown versions are rejected\n'
+printf 'ok: start-only paths require contract v2 and every forward migration\n'
 
 # ---------------------------------------------------------------------------
 # Scenario F: python-up builds then starts API and worker; start paths never
@@ -796,6 +871,7 @@ ROLLBACK_DIR=$(new_scenario)
 ROLLBACK_ENV="$ROLLBACK_DIR/app.env"
 write_scenario_env "$ROLLBACK_ENV" "$ROLLBACK_DIR/keys"
 printf '2' >"$ROLLBACK_DIR/state/contract_version"
+printf '3\n' >"$ROLLBACK_DIR/state/schema_migrations"
 mkdir -p "$ROLLBACK_DIR/state/networks" "$ROLLBACK_DIR/state/containers" "$ROLLBACK_DIR/state/images/localhost"
 mkdir -p "$ROLLBACK_DIR/state/networks/clashlens-private"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres"
@@ -1055,6 +1131,7 @@ REPLICA_MAX_ENV="$REPLICA_MAX_DIR/app.env"
 write_scenario_env "$REPLICA_MAX_ENV" "$REPLICA_MAX_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=16' >>"$REPLICA_MAX_ENV"
 printf '2' >"$REPLICA_MAX_DIR/state/contract_version"
+printf '3\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_MAX_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1098,6 +1175,7 @@ grep -v -E 'CLASHLENS_WORKER_(CONCURRENCY|DATABASE_POOL_SIZE|ARCHIVE_POOL_SIZE)=
   "$DEFAULTS_RAW" >"$DEFAULTS_ENV"
 chmod 0600 "$DEFAULTS_ENV"
 printf '2' >"$DEFAULTS_DIR/state/contract_version"
+printf '3\n' >"$DEFAULTS_DIR/state/schema_migrations"
 mkdir -p "$DEFAULTS_DIR/state/networks/clashlens-private"
 mkdir -p "$DEFAULTS_DIR/state/containers/clashlens-postgres"
 : >"$DEFAULTS_DIR/state/containers/clashlens-postgres.running"
@@ -1118,6 +1196,7 @@ printf '%s\n' 'CLASHLENS_WORKER_CONCURRENCY=32' \
   'CLASHLENS_WORKER_DATABASE_POOL_SIZE=64' \
   'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=64' >>"$CONCURRENCY_MAX_ENV"
 printf '2' >"$CONCURRENCY_MAX_DIR/state/contract_version"
+printf '3\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres"
 : >"$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1182,6 +1261,7 @@ REPLICA_ENV="$REPLICA_DIR/app.env"
 write_scenario_env "$REPLICA_ENV" "$REPLICA_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=3' >>"$REPLICA_ENV"
 printf '2' >"$REPLICA_DIR/state/contract_version"
+printf '3\n' >"$REPLICA_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_DIR/state/containers/clashlens-postgres.running"

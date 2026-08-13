@@ -10,8 +10,16 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+const dependencyReadinessInterval = 10 * time.Second
+
+type dependencyReadiness struct {
+	checkedAt time.Time
+	err       error
+}
 
 type application struct {
 	config  collectorConfig
@@ -22,6 +30,9 @@ type application struct {
 	metrics *collectorMetrics
 	logger  *slog.Logger
 	owner   string
+
+	dependencyReadiness atomic.Value
+	dependencyCheckMu   sync.Mutex
 }
 
 type readinessReport struct {
@@ -102,13 +113,16 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 		store.close()
 		return nil, fmt.Errorf("collector startup guard failed: %w", err)
 	}
+	metrics := newCollectorMetrics()
+	archive.observeStage = metrics.recordStageDuration
+	store.metrics = metrics
 	app := &application{
 		config:  config,
 		store:   store,
 		archive: archive,
 		api:     api,
 		keys:    keys,
-		metrics: newCollectorMetrics(),
+		metrics: metrics,
 		logger:  logger,
 		owner:   hostname + "-" + strconv.Itoa(os.Getpid()) + "-" + ownerToken[:8],
 	}
@@ -173,6 +187,14 @@ func (a *application) readiness(ctx context.Context) (readinessReport, error) {
 }
 
 func (a *application) dependenciesReady(ctx context.Context) error {
+	if cached, ok := a.dependencyReadiness.Load().(dependencyReadiness); ok && time.Since(cached.checkedAt) < dependencyReadinessInterval {
+		return cached.err
+	}
+	a.dependencyCheckMu.Lock()
+	defer a.dependencyCheckMu.Unlock()
+	if cached, ok := a.dependencyReadiness.Load().(dependencyReadiness); ok && time.Since(cached.checkedAt) < dependencyReadinessInterval {
+		return cached.err
+	}
 	var failures []error
 	if err := a.store.ready(ctx); err != nil {
 		failures = append(failures, fmt.Errorf("postgresql: %w", err))
@@ -180,11 +202,15 @@ func (a *application) dependenciesReady(ctx context.Context) error {
 	if err := a.archive.ready(ctx); err != nil {
 		failures = append(failures, fmt.Errorf("archive: %w", err))
 	}
-	return errors.Join(failures...)
+	err := errors.Join(failures...)
+	a.dependencyReadiness.Store(dependencyReadiness{checkedAt: time.Now(), err: err})
+	return err
 }
 
 func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
+	schedulerStartedAt := time.Now()
 	scheduled, err := a.store.scheduleDueRegular(ctx, now, a.config.pollCycle, a.config.scheduleBatchSize)
+	a.metrics.recordStageDuration("schedule_due_regular", time.Since(schedulerStartedAt))
 	if err != nil {
 		return err
 	}

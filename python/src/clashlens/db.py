@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from time import monotonic
 from typing import Any
 from uuid import uuid4
 
@@ -228,7 +230,10 @@ def _supported_claim_filter(
 # Claim probe candidate count per indexed range. The probes are refreshed on
 # every claim, so a candidate locked by another lane is simply skipped; the
 # next claim re-probes. Bounded like the collector claim statement.
-_CLAIM_CANDIDATE_LIMIT = 8
+# Cover the maximum supported in-process lane count. A smaller indexed window
+# makes concurrent SKIP LOCKED claims collide on the same prefix and report an
+# empty queue even while eligible work remains behind it.
+_CLAIM_CANDIDATE_LIMIT = 32
 
 # Priority classes that can appear in the Python queue, discovered from every
 # enqueue site: db.py and api_db.py inserts, the Go collector handoff, and
@@ -236,7 +241,7 @@ _CLAIM_CANDIDATE_LIMIT = 8
 # probes one indexed range per declared priority; a priority outside this
 # list is still claimed through the catch-all probe, so this list is a
 # fast-path declaration, not a claimability gate. Add a new enqueue priority
-# here (and to the catch-all partial index in migration 0002) so its claims
+# here (and to the catch-all partial index in migration 0003) so its claims
 # stay on the fast path. TestDeclaredClaimPrioritiesMatchEnqueueSites pins
 # this list to the enqueue sites.
 _PYTHON_CLAIM_PRIORITIES = "(100)"
@@ -272,7 +277,8 @@ def _claim_select_statement(
             AND job.due_at <= statement_timestamp())
         OR (job.state = 'leased'
             AND job.lease_expires_at <= statement_timestamp())"""
-    job_filter = f"""job.attempt_count < job.max_attempts AND {supported_filter}"""
+    job_filter = f"""job.claim_compatibility_version = 1
+        AND job.attempt_count < job.max_attempts AND {supported_filter}"""
     if job_id is not None:
         probe = f"""
             SELECT job.id
@@ -305,7 +311,7 @@ def _claim_select_statement(
                       AND job.priority = claim_priority.priority
                       AND job.due_at <= statement_timestamp()
                       AND {job_filter}
-                    ORDER BY job.created_at, job.id
+                    ORDER BY job.due_at, job.created_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
                 ) AS claim_id
                 UNION ALL
@@ -320,7 +326,7 @@ def _claim_select_statement(
                       AND job.priority NOT IN ({_PYTHON_CLAIM_PRIORITY_EXCLUSIONS})
                       AND job.due_at <= statement_timestamp()
                       AND {job_filter}
-                    ORDER BY ({score}) DESC, job.due_at, job.id
+                    ORDER BY job.due_at, job.created_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
                 )
                 UNION ALL
@@ -334,7 +340,7 @@ def _claim_select_statement(
                     WHERE job.state = 'leased'
                       AND job.lease_expires_at <= statement_timestamp()
                       AND {job_filter}
-                    ORDER BY ({score}) DESC, job.due_at, job.id
+                    ORDER BY job.lease_expires_at, job.due_at, job.created_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
                 )
             ) AS pick
@@ -413,6 +419,7 @@ class Database:
             raise ValueError("database pool size must be positive")
         if max_size > MAX_POOL_SIZE:
             raise ValueError("database pool size exceeds the supported maximum")
+        self.stage_metrics: Any | None = None
         self.pool = ConnectionPool(
             conninfo=database_url,
             min_size=1,
@@ -427,13 +434,25 @@ class Database:
                 WHERE c.oid = to_regclass('python_processing_jobs_worker')
                 """
             ).fetchone()
-            missing_worker_view = worker_view is None or worker_view[0] not in {"v", b"v"}
+            missing_worker_view = worker_view is None or worker_view[0] not in {
+                "v",
+                b"v",
+            }
         if missing_worker_view:
             self.pool.close()
             raise RuntimeError(
                 "required python_processing_jobs_worker view is unavailable"
             )
         self._jobs_relation = "python_processing_jobs_worker"
+
+    @contextmanager
+    def _timed_connection(self):
+        started_at = monotonic()
+        with self.pool.connection() as connection:
+            metrics = getattr(self, "stage_metrics", None)
+            if metrics is not None:
+                metrics.record("python_database_pool_acquire", monotonic() - started_at)
+            yield connection
 
     def close(self) -> None:
         self.pool.close()
@@ -449,22 +468,35 @@ class Database:
             ).fetchone()
             return row is not None and int(row[0]) == expected_contract_version
 
-    def queue_health(self) -> dict[str, int | float | None]:
+    def queue_health(self) -> dict[str, bool | int | float | None]:
         with self.pool.connection() as connection:
             row = connection.execute(
                 f"""
+                WITH active AS MATERIALIZED (
+                    SELECT state, due_at
+                    FROM {self._jobs_relation}
+                    WHERE state IN ('pending', 'waiting_retry', 'leased')
+                ), failed AS (
+                    SELECT count(*) AS failed_count
+                    FROM (
+                        SELECT 1
+                        FROM {self._jobs_relation}
+                        WHERE state = 'failed'
+                        LIMIT 1001
+                    ) AS bounded_failed
+                )
                 SELECT
                     count(*) FILTER (WHERE state = 'pending'),
                     count(*) FILTER (WHERE state = 'waiting_retry'),
                     count(*) FILTER (WHERE state = 'leased'),
-                    count(*) FILTER (WHERE state = 'failed'),
+                    (SELECT failed_count FROM failed),
                     extract(
                         epoch FROM clock_timestamp() - min(due_at) FILTER (
                             WHERE state IN ('pending', 'waiting_retry')
                               AND due_at <= clock_timestamp()
                         )
                     )
-                FROM {self._jobs_relation}
+                FROM active
                 """
             ).fetchone()
         assert row is not None
@@ -473,7 +505,26 @@ class Database:
             "waiting_retry": int(row[1]),
             "leased": int(row[2]),
             "failed": int(row[3]),
+            "failed_count_capped": int(row[3]) == 1001,
             "oldest_due_seconds": None if row[4] is None else max(0.0, float(row[4])),
+        }
+
+    def pool_health(self) -> dict[str, int]:
+        stats = self.pool.get_stats()
+        return {
+            key: int(stats[key])
+            for key in (
+                "pool_min",
+                "pool_max",
+                "pool_size",
+                "pool_available",
+                "requests_waiting",
+                "requests_num",
+                "requests_queued",
+                "requests_wait_ms",
+                "usage_ms",
+            )
+            if key in stats
         }
 
     def scalar(self, query: str, params: Iterable[Any] = ()) -> Any:
@@ -548,49 +599,8 @@ class Database:
             raise ValueError("lease owner is required")
         if lease_seconds <= 0:
             raise ValueError("lease duration must be positive")
-        supported_filter, supported_params = _supported_job_filter("j")
-        now = datetime.now(UTC)
-        with self.pool.connection() as connection:
+        with self._timed_connection() as connection:
             with connection.transaction():
-                connection.execute(
-                    f"""
-                    UPDATE python_processing_attempts AS a
-                    SET state = 'stale', completed_at = clock_timestamp(),
-                        failure_category = COALESCE(a.failure_category, 'lease_expired')
-                    FROM {self._jobs_relation} AS j
-                    WHERE a.job_id = j.id AND a.state = 'running'
-                      AND j.state = 'leased'
-                      AND j.lease_expires_at <= %s
-                      AND j.attempt_count >= j.max_attempts
-                    """,
-                    (now,),
-                )
-                connection.execute(
-                    f"""
-                    UPDATE {self._jobs_relation} AS j
-                    SET state = 'failed', outcome = 'durable_failure',
-                        failure_category = 'lease_expired_max_attempts',
-                        failure_detail = 'lease expired after the configured attempt limit',
-                        lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL,
-                        completed_at = clock_timestamp(), updated_at = clock_timestamp()
-                    WHERE j.state = 'leased'
-                      AND j.lease_expires_at <= %s
-                      AND j.attempt_count >= j.max_attempts
-                      AND {supported_filter}
-                    """,
-                    (now, *supported_params),
-                )
-                connection.execute(
-                    f"""
-                    UPDATE {self._jobs_relation} AS j
-                    SET state = 'pending', lease_owner = NULL, lease_token = NULL,
-                        lease_expires_at = NULL, updated_at = clock_timestamp()
-                    WHERE j.state = 'leased'
-                      AND j.lease_expires_at <= %s
-                      AND NOT ({supported_filter})
-                    """,
-                    (now, *supported_params),
-                )
                 claim_statement, claim_params = _claim_select_statement(
                     self._jobs_relation, job_id=job_id
                 )
@@ -716,10 +726,81 @@ class Database:
                     max_attempts=int(data["max_attempts"]),
                 )
 
+    def maintain_queue(self, *, max_jobs: int = 100) -> int:
+        """Recover a bounded set of expired worker leases.
+
+        This is intentionally separate from ``claim_job`` so ordinary claims
+        stay constant-cost at queue depth. Unsupported work is released for a
+        future worker image; supported work is requeued unless it exhausted
+        its durable attempt limit, in which case it is terminalized.
+        """
+        if max_jobs < 1:
+            raise ValueError("maintenance job limit must be positive")
+        supported_filter, supported_params = _supported_job_filter("job")
+        with self._timed_connection() as connection:
+            with connection.transaction():
+                rows = connection.execute(
+                    f"""
+                    SELECT job.id, ({supported_filter}) AS supported,
+                           job.attempt_count >= job.max_attempts AS exhausted
+                    FROM {self._jobs_relation} AS job
+                    WHERE job.state = 'leased'
+                      AND job.lease_expires_at <= clock_timestamp()
+                    ORDER BY job.lease_expires_at, job.id
+                    FOR UPDATE OF job SKIP LOCKED
+                    LIMIT %s
+                    """,
+                    (*supported_params, max_jobs),
+                ).fetchall()
+                if not rows:
+                    return 0
+                job_ids = [int(row[0]) for row in rows]
+                pending_ids = [
+                    int(row[0]) for row in rows if not bool(row[1]) or not bool(row[2])
+                ]
+                failed_ids = [
+                    int(row[0]) for row in rows if bool(row[1]) and bool(row[2])
+                ]
+                connection.execute(
+                    """
+                    UPDATE python_processing_attempts
+                    SET state = 'stale', completed_at = clock_timestamp(),
+                        failure_category = COALESCE(failure_category, 'lease_expired')
+                    WHERE job_id = ANY(%s::bigint[]) AND state = 'running'
+                    """,
+                    (job_ids,),
+                )
+                if pending_ids:
+                    connection.execute(
+                        f"""
+                        UPDATE {self._jobs_relation}
+                        SET state = 'pending', lease_owner = NULL, lease_token = NULL,
+                            lease_expires_at = NULL, updated_at = clock_timestamp()
+                        WHERE id = ANY(%s::bigint[])
+                        """,
+                        (pending_ids,),
+                    )
+                if failed_ids:
+                    connection.execute(
+                        f"""
+                        UPDATE {self._jobs_relation}
+                        SET state = 'failed', outcome = 'durable_failure',
+                            failure_category = 'lease_expired_max_attempts',
+                            failure_detail = 'lease expired after the configured attempt limit',
+                            lease_owner = NULL, lease_token = NULL,
+                            lease_expires_at = NULL,
+                            completed_at = clock_timestamp(),
+                            updated_at = clock_timestamp()
+                        WHERE id = ANY(%s::bigint[])
+                        """,
+                        (failed_ids,),
+                    )
+                return len(job_ids)
+
     def renew_claim(self, claim: Claim, *, lease_seconds: int) -> None:
         if lease_seconds <= 0:
             raise ValueError("lease duration must be positive")
-        with self.pool.connection() as connection:
+        with self._timed_connection() as connection:
             with connection.transaction():
                 renewed = connection.execute(
                     f"""
@@ -767,7 +848,7 @@ class Database:
             endpoint,
             schema_version,
         ) = self._observation_source(claim)
-        with self.pool.connection() as connection:
+        with self._timed_connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
                 player = connection.execute(
@@ -849,85 +930,71 @@ class Database:
                 )
                 connection.execute(
                     """
+                    WITH candidate AS (
+                        SELECT v.id AS profile_version_id, v.observed_at,
+                               v.eligibility_state,
+                               v.eligibility_state IN ('eligible', 'ineligible')
+                               AND NOT EXISTS (
+                                   SELECT 1
+                                   FROM player_profile_versions AS newer
+                                   WHERE newer.player_id = v.player_id
+                                     AND newer.eligibility_state
+                                         IN ('eligible', 'ineligible')
+                                     AND (newer.observed_at, newer.id)
+                                         > (v.observed_at, v.id)
+                               ) AS update_eligibility,
+                               v.source_contract_state = 'accepted'
+                               AND (
+                                   p.current_observed_at IS NULL
+                                   OR p.current_observed_at < v.observed_at
+                                   OR (
+                                       p.current_observed_at = v.observed_at
+                                       AND (
+                                           p.current_profile_version_id IS NULL
+                                           OR p.current_profile_version_id < v.id
+                                       )
+                                   )
+                               ) AS update_profile
+                        FROM player_profile_versions AS v
+                        JOIN players AS p ON p.id = v.player_id
+                        WHERE p.id = %s AND v.id = %s
+                    )
                     UPDATE players AS p
                     SET active = CASE
-                            WHEN v.eligibility_state = 'eligible' THEN true
-                            WHEN v.eligibility_state = 'ineligible' THEN false
+                            WHEN candidate.update_eligibility
+                                 AND candidate.eligibility_state = 'eligible' THEN true
+                            WHEN candidate.update_eligibility
+                                 AND candidate.eligibility_state = 'ineligible' THEN false
                             ELSE p.active
                         END,
                         next_due_at = CASE
-                            WHEN v.eligibility_state = 'eligible'
+                            WHEN candidate.update_eligibility
+                                 AND candidate.eligibility_state = 'eligible'
                                 THEN COALESCE(p.next_due_at, clock_timestamp())
-                            WHEN v.eligibility_state = 'ineligible' THEN NULL
-                            ELSE p.next_due_at
-                        END,
-                        eligibility_state = v.eligibility_state,
-                        updated_at = clock_timestamp()
-                    FROM player_profile_versions AS v
-                    WHERE p.id = %s
-                      AND v.id = %s
-                      AND v.eligibility_state IN ('eligible', 'ineligible')
-                      AND NOT EXISTS (
-                          SELECT 1
-                          FROM player_profile_versions AS newer
-                          WHERE newer.player_id = v.player_id
-                            AND newer.eligibility_state IN ('eligible', 'ineligible')
-                            AND (newer.observed_at, newer.id) > (v.observed_at, v.id)
-                      )
-                    """,
-                    (player[0], profile_version_id),
-                )
-                connection.execute(
-                    """
-                    UPDATE players AS p
-                    SET active = CASE
-                            WHEN %s = 'eligible' THEN true
-                            WHEN %s = 'ineligible' THEN false
-                            ELSE p.active
-                        END,
-                        next_due_at = CASE
-                            WHEN %s = 'eligible' THEN COALESCE(p.next_due_at, clock_timestamp())
-                            WHEN %s = 'ineligible' THEN NULL
+                            WHEN candidate.update_eligibility
+                                 AND candidate.eligibility_state = 'ineligible' THEN NULL
                             ELSE p.next_due_at
                         END,
                         eligibility_state = CASE
-                            WHEN %s IN ('eligible', 'ineligible') THEN %s
+                            WHEN candidate.update_eligibility
+                                THEN candidate.eligibility_state
                             ELSE p.eligibility_state
                         END,
-                        current_profile_version_id = %s,
-                        current_observed_at = %s,
+                        current_profile_version_id = CASE
+                            WHEN candidate.update_profile
+                                THEN candidate.profile_version_id
+                            ELSE p.current_profile_version_id
+                        END,
+                        current_observed_at = CASE
+                            WHEN candidate.update_profile THEN candidate.observed_at
+                            ELSE p.current_observed_at
+                        END,
                         updated_at = clock_timestamp()
-                    FROM player_profile_versions AS v
+                    FROM candidate
                     WHERE p.id = %s
-                      AND v.id = %s
-                      AND v.source_contract_state = 'accepted'
-                      AND (
-                          p.current_observed_at IS NULL
-                          OR p.current_observed_at < %s
-                          OR (
-                              p.current_observed_at = %s
-                              AND (
-                                  p.current_profile_version_id IS NULL
-                                  OR p.current_profile_version_id < %s
-                              )
-                          )
-                      )
+                      AND (candidate.update_eligibility OR candidate.update_profile)
                     """,
-                    (
-                        profile.eligibility_state,
-                        profile.eligibility_state,
-                        profile.eligibility_state,
-                        profile.eligibility_state,
-                        profile.eligibility_state,
-                        profile.eligibility_state,
-                        profile_version_id,
-                        profile.observed_at,
-                        player[0],
-                        profile_version_id,
-                        profile.observed_at,
-                        profile.observed_at,
-                        profile_version_id,
-                    ),
+                    (player[0], profile_version_id, player[0]),
                 )
                 self._record_parsed_payload(
                     connection,
@@ -962,12 +1029,34 @@ class Database:
             endpoint,
             schema_version,
         ) = self._observation_source(claim)
-        with self.pool.connection() as connection:
+        with self._timed_connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
-                reporter_id = self._upsert_player(
-                    connection, battle_log.normalized_tag, active=False
-                )
+                valid_rows = [row for row in battle_log.rows if row.battle is not None]
+                player_tags = {battle_log.normalized_tag}
+                for row in valid_rows:
+                    assert row.battle is not None
+                    player_tags.add(row.battle.attacker_tag)
+                    player_tags.add(row.battle.defender_tag)
+                player_rows = connection.execute(
+                    """
+                    WITH requested (normalized_tag) AS (
+                        SELECT DISTINCT unnest(%s::text[])
+                    )
+                    INSERT INTO players (
+                        normalized_tag, active, eligibility_state
+                    )
+                    SELECT normalized_tag, false, 'unknown'
+                    FROM requested
+                    ORDER BY normalized_tag
+                    ON CONFLICT (normalized_tag) DO UPDATE
+                        SET updated_at = clock_timestamp()
+                    RETURNING id, normalized_tag
+                    """,
+                    (sorted(player_tags),),
+                ).fetchall()
+                player_ids = {_text_value(row[1]): int(row[0]) for row in player_rows}
+                reporter_id = player_ids[battle_log.normalized_tag]
                 log_row = connection.execute(
                     """
                     INSERT INTO battle_log_observations (
@@ -990,75 +1079,163 @@ class Database:
                 ).fetchone()
                 assert log_row is not None
                 log_id = int(log_row[0])
-                for row in battle_log.rows:
-                    source_row = connection.execute(
-                        """
-                        INSERT INTO battle_source_rows (
-                            battle_log_observation_id, source_row_index, outcome,
-                            failure_category, source_json
-                        ) VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (battle_log_observation_id, source_row_index)
-                        DO UPDATE SET
-                            outcome = EXCLUDED.outcome,
-                            failure_category = EXCLUDED.failure_category,
-                            source_json = EXCLUDED.source_json
-                        RETURNING id
-                        """,
-                        (
-                            log_id,
-                            row.source_row_index,
-                            row.outcome,
-                            row.failure_category,
-                            Jsonb(row.source_json),
+                source_rows = connection.execute(
+                    """
+                    WITH input AS (
+                        SELECT * FROM jsonb_to_recordset(%s::jsonb) AS row_data (
+                            source_row_index integer,
+                            outcome text,
+                            failure_category text,
+                            source_json jsonb
+                        )
+                    )
+                    INSERT INTO battle_source_rows (
+                        battle_log_observation_id, source_row_index, outcome,
+                        failure_category, source_json
+                    )
+                    SELECT %s, source_row_index, outcome,
+                           failure_category, source_json
+                    FROM input
+                    ON CONFLICT (battle_log_observation_id, source_row_index)
+                    DO UPDATE SET
+                        outcome = EXCLUDED.outcome,
+                        failure_category = EXCLUDED.failure_category,
+                        source_json = EXCLUDED.source_json
+                    RETURNING id, source_row_index
+                    """,
+                    (
+                        Jsonb(
+                            [
+                                {
+                                    "source_row_index": row.source_row_index,
+                                    "outcome": row.outcome,
+                                    "failure_category": row.failure_category,
+                                    "source_json": row.source_json,
+                                }
+                                for row in battle_log.rows
+                            ]
                         ),
-                    ).fetchone()
-                    assert source_row is not None
-                    if row.battle is None:
-                        continue
-                    battle = row.battle
-                    attacker_id = self._upsert_player(
-                        connection,
-                        battle.attacker_tag,
-                        active=False,
-                    )
-                    defender_id = self._upsert_player(
-                        connection,
-                        battle.defender_tag,
-                        active=False,
-                    )
-                    opponent_id = (
-                        defender_id if battle.perspective == "attacker" else attacker_id
-                    )
+                        log_id,
+                    ),
+                ).fetchall()
+                source_row_ids = {int(row[1]): int(row[0]) for row in source_rows}
+
+                if valid_rows:
+                    battles = []
+                    discoveries = []
+                    for row in valid_rows:
+                        battle = row.battle
+                        assert battle is not None
+                        attacker_id = player_ids[battle.attacker_tag]
+                        defender_id = player_ids[battle.defender_tag]
+                        battles.append(
+                            {
+                                "ranked_day_start": battle.ranked_day_start.isoformat(),
+                                "attacker_player_id": attacker_id,
+                                "defender_player_id": defender_id,
+                            }
+                        )
+                        discoveries.append(
+                            {
+                                "player_id": (
+                                    defender_id
+                                    if battle.perspective == "attacker"
+                                    else attacker_id
+                                ),
+                                "source_row_index": row.source_row_index,
+                            }
+                        )
                     connection.execute(
                         """
+                        WITH input AS (
+                            SELECT * FROM jsonb_to_recordset(%s::jsonb) AS discovery (
+                                player_id bigint, source_row_index integer
+                            )
+                        )
                         INSERT INTO known_player_discoveries (
                             player_id, observation_id, source_row_index,
                             source_kind, discovered_at
-                        ) VALUES (%s, %s, %s, 'battle_opponent', %s)
+                        )
+                        SELECT player_id, %s, source_row_index,
+                               'battle_opponent', %s
+                        FROM input
+                        ORDER BY player_id, source_row_index
                         ON CONFLICT DO NOTHING
                         """,
-                        (
-                            opponent_id,
-                            observation_id,
-                            row.source_row_index,
-                            battle_log.observed_at,
-                        ),
+                        (Jsonb(discoveries), observation_id, battle_log.observed_at),
                     )
-                    canonical = connection.execute(
+                    canonical_rows = connection.execute(
                         """
+                        WITH input AS (
+                            SELECT DISTINCT *
+                            FROM jsonb_to_recordset(%s::jsonb) AS battle (
+                                ranked_day_start timestamptz,
+                                attacker_player_id bigint,
+                                defender_player_id bigint
+                            )
+                        )
                         INSERT INTO legend_battles (
-                            ranked_day_start, attacker_player_id, defender_player_id
-                        ) VALUES (%s, %s, %s)
+                            ranked_day_start, attacker_player_id,
+                            defender_player_id
+                        )
+                        SELECT ranked_day_start, attacker_player_id,
+                               defender_player_id
+                        FROM input
+                        ORDER BY ranked_day_start, attacker_player_id,
+                                 defender_player_id
                         ON CONFLICT (
-                            ranked_day_start, attacker_player_id, defender_player_id
+                            ranked_day_start, attacker_player_id,
+                            defender_player_id
                         ) DO UPDATE SET updated_at = clock_timestamp()
-                        RETURNING id
+                        RETURNING id, ranked_day_start,
+                                  attacker_player_id, defender_player_id
                         """,
-                        (battle.ranked_day_start, attacker_id, defender_id),
-                    ).fetchone()
-                    assert canonical is not None
-                    evidence = connection.execute(
+                        (Jsonb(battles),),
+                    ).fetchall()
+                    canonical_ids = {
+                        (row[1], int(row[2]), int(row[3])): int(row[0])
+                        for row in canonical_rows
+                    }
+                    evidence_input = []
+                    for row in valid_rows:
+                        battle = row.battle
+                        assert battle is not None
+                        attacker_id = player_ids[battle.attacker_tag]
+                        defender_id = player_ids[battle.defender_tag]
+                        evidence_input.append(
+                            {
+                                "battle_id": canonical_ids[
+                                    (
+                                        battle.ranked_day_start,
+                                        attacker_id,
+                                        defender_id,
+                                    )
+                                ],
+                                "source_row_id": source_row_ids[row.source_row_index],
+                                "perspective": battle.perspective,
+                                "battle_timestamp": battle.battle_timestamp.isoformat(),
+                                "stars": battle.stars,
+                                "destruction_percentage": battle.destruction_percentage,
+                                "army_share_code": battle.army_share_code,
+                                "reporter_trophies": battle.reporter_trophies,
+                                "opponent_trophies": battle.opponent_trophies,
+                                "attacker_gain": battle.attacker_gain,
+                                "defender_loss": battle.defender_loss,
+                                "trophy_rule_version": battle.trophy_rule_version,
+                            }
+                        )
+                    evidence_rows = connection.execute(
                         """
+                        WITH input AS (
+                            SELECT * FROM jsonb_to_recordset(%s::jsonb) AS evidence (
+                                battle_id bigint, source_row_id bigint,
+                                perspective text, battle_timestamp timestamptz,
+                                stars integer, destruction_percentage integer,
+                                army_share_code text, reporter_trophies integer,
+                                opponent_trophies integer, attacker_gain integer,
+                                defender_loss integer, trophy_rule_version text
+                            )
+                        )
                         INSERT INTO battle_evidence (
                             battle_id, source_row_id, observation_id,
                             reporting_player_id, perspective, battle_timestamp,
@@ -1066,57 +1243,73 @@ class Database:
                             reporter_trophies, opponent_trophies, attacker_gain,
                             defender_loss, trophy_rule_version, source_observed_at,
                             parser_version
-                        ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s
                         )
+                        SELECT battle_id, source_row_id, %s, %s, perspective,
+                               battle_timestamp, stars, destruction_percentage,
+                               army_share_code, reporter_trophies, opponent_trophies,
+                               attacker_gain, defender_loss, trophy_rule_version,
+                               %s, %s
+                        FROM input
                         ON CONFLICT (source_row_id) DO UPDATE SET
                             source_row_id = EXCLUDED.source_row_id
-                        RETURNING id
+                        RETURNING id, battle_id, perspective, source_observed_at
                         """,
                         (
-                            canonical[0],
-                            source_row[0],
+                            Jsonb(evidence_input),
                             observation_id,
                             reporter_id,
-                            battle.perspective,
-                            battle.battle_timestamp,
-                            battle.stars,
-                            battle.destruction_percentage,
-                            battle.army_share_code,
-                            battle.reporter_trophies,
-                            battle.opponent_trophies,
-                            battle.attacker_gain,
-                            battle.defender_loss,
-                            battle.trophy_rule_version,
                             battle_log.observed_at,
                             battle_log.parser_version,
                         ),
-                    ).fetchone()
-                    assert evidence is not None
+                    ).fetchall()
+                    perspectives = [
+                        {
+                            "evidence_id": int(row[0]),
+                            "battle_id": int(row[1]),
+                            "perspective": _text_value(row[2]),
+                            "source_observed_at": row[3].isoformat(),
+                        }
+                        for row in evidence_rows
+                    ]
                     connection.execute(
                         """
+                        WITH input AS (
+                            SELECT * FROM jsonb_to_recordset(%s::jsonb) AS perspective (
+                                evidence_id bigint, battle_id bigint,
+                                perspective text, source_observed_at timestamptz
+                            )
+                        ), chosen AS (
+                            SELECT DISTINCT ON (battle_id, perspective) *
+                            FROM input
+                            ORDER BY battle_id, perspective,
+                                     source_observed_at DESC, evidence_id DESC
+                        )
                         INSERT INTO battle_perspectives (
-                            battle_id, perspective, evidence_id, source_observed_at
-                        ) VALUES (%s, %s, %s, %s)
+                            battle_id, perspective, evidence_id,
+                            source_observed_at
+                        )
+                        SELECT battle_id, perspective, evidence_id,
+                               source_observed_at
+                        FROM chosen
                         ON CONFLICT (battle_id, perspective) DO UPDATE SET
                             evidence_id = EXCLUDED.evidence_id,
                             source_observed_at = EXCLUDED.source_observed_at,
                             updated_at = clock_timestamp()
-                        WHERE EXCLUDED.source_observed_at > battle_perspectives.source_observed_at
+                        WHERE EXCLUDED.source_observed_at
+                                  > battle_perspectives.source_observed_at
                            OR (
-                               EXCLUDED.source_observed_at = battle_perspectives.source_observed_at
-                               AND EXCLUDED.evidence_id > battle_perspectives.evidence_id
+                               EXCLUDED.source_observed_at
+                                   = battle_perspectives.source_observed_at
+                               AND EXCLUDED.evidence_id
+                                   > battle_perspectives.evidence_id
                            )
                         """,
-                        (
-                            canonical[0],
-                            battle.perspective,
-                            evidence[0],
-                            battle_log.observed_at,
-                        ),
+                        (Jsonb(perspectives),),
                     )
-                    self._refresh_battle_disagreement(connection, int(canonical[0]))
+                    self._refresh_battle_disagreements(
+                        connection,
+                        sorted({int(row[1]) for row in evidence_rows}),
+                    )
 
                 self._record_parsed_payload(
                     connection,
@@ -2346,33 +2539,37 @@ class Database:
                 ):
                     sample_rows = connection.execute(
                         """
-                        SELECT DISTINCT ON (b.id)
-                               b.id, b.disagreement_state, e.stars,
-                               e.army_share_code, e.id, e.source_row_id,
-                               e.observation_id, e.source_observed_at,
-                               e.battle_timestamp
-                        FROM battle_perspectives AS p
-                        JOIN legend_battles AS b ON b.id = p.battle_id
-                        JOIN battle_evidence AS e ON e.id = p.evidence_id
-                        JOIN battle_source_rows AS source_row
-                          ON source_row.id = e.source_row_id
-                        JOIN leaderboard_snapshot_entries AS se
-                          ON se.snapshot_id = %s
-                         AND se.player_id = CASE
-                             WHEN p.perspective = 'attacker'
-                                 THEN b.attacker_player_id
-                             ELSE b.defender_player_id
-                         END
-                        WHERE p.perspective = %s
-                          AND e.reporting_player_id = CASE
-                             WHEN p.perspective = 'attacker'
-                                 THEN b.attacker_player_id
-                             ELSE b.defender_player_id
-                          END
-                          AND source_row.outcome = 'valid_legend'
-                          AND e.battle_timestamp >= %s
-                          AND e.battle_timestamp < %s
-                        ORDER BY b.id, p.source_observed_at DESC, e.id DESC
+                        SELECT *
+                        FROM (
+                            SELECT DISTINCT ON (b.id)
+                                   b.id AS battle_id, b.disagreement_state, e.stars,
+                                   e.army_share_code, e.id AS evidence_id, e.source_row_id,
+                                   e.observation_id, e.source_observed_at,
+                                   e.battle_timestamp
+                            FROM battle_perspectives AS p
+                            JOIN legend_battles AS b ON b.id = p.battle_id
+                            JOIN battle_evidence AS e ON e.id = p.evidence_id
+                            JOIN battle_source_rows AS source_row
+                              ON source_row.id = e.source_row_id
+                            JOIN leaderboard_snapshot_entries AS se
+                              ON se.snapshot_id = %s
+                             AND se.player_id = CASE
+                                 WHEN p.perspective = 'attacker'
+                                     THEN b.attacker_player_id
+                                 ELSE b.defender_player_id
+                             END
+                            WHERE p.perspective = %s
+                              AND e.reporting_player_id = CASE
+                                 WHEN p.perspective = 'attacker'
+                                     THEN b.attacker_player_id
+                                 ELSE b.defender_player_id
+                              END
+                              AND source_row.outcome = 'valid_legend'
+                              AND e.battle_timestamp >= %s
+                              AND e.battle_timestamp < %s
+                            ORDER BY b.id, p.source_observed_at DESC, e.id DESC
+                        ) AS latest
+                        ORDER BY latest.battle_timestamp, latest.battle_id
                         """,
                         (snapshot_id, perspective, period_start, period_end),
                     ).fetchall()
@@ -3817,62 +4014,83 @@ class Database:
         return int(row[0])
 
     @staticmethod
-    def _refresh_battle_disagreement(connection: Any, battle_id: int) -> None:
-        rows = connection.execute(
-            """
-            SELECT e.battle_timestamp, e.stars, e.destruction_percentage,
-                   e.army_share_code,
-                   CASE
-                       WHEN p.perspective = 'attacker' THEN e.reporter_trophies
-                       ELSE e.opponent_trophies
-                   END AS attacker_trophies,
-                   CASE
-                       WHEN p.perspective = 'attacker' THEN e.opponent_trophies
-                       ELSE e.reporter_trophies
-                   END AS defender_trophies,
-                   e.attacker_gain, e.defender_loss
-            FROM battle_perspectives AS p
-            JOIN battle_evidence AS e ON e.id = p.evidence_id
-            WHERE p.battle_id = %s
-            ORDER BY p.perspective
-            """,
-            (battle_id,),
-        ).fetchall()
-        if len(rows) < 2:
-            state = "single_perspective"
-            disagreement_fields: list[str] = []
-        else:
-            field_names = (
-                "battle_timestamp",
-                "stars",
-                "destruction_percentage",
-                "army_share_code",
-                "attacker_trophies",
-                "defender_trophies",
-                "attacker_gain",
-                "defender_loss",
-            )
-            disagreement_fields = []
-            for index, field_name in enumerate(field_names):
-                left, right = rows[0][index], rows[1][index]
-                # A missing absolute trophy value is unknown evidence, not a
-                # disagreement with a value reported by the other perspective.
-                if field_name in {"attacker_trophies", "defender_trophies"} and (
-                    left is None or right is None
-                ):
-                    continue
-                if left != right:
-                    disagreement_fields.append(field_name)
-            state = "agreed" if not disagreement_fields else "disagreement"
+    def _refresh_battle_disagreements(connection: Any, battle_ids: list[int]) -> None:
+        if not battle_ids:
+            return
         connection.execute(
             """
-            UPDATE legend_battles
-            SET disagreement_state = %s,
-                disagreement_fields = %s,
+            WITH target AS (
+                SELECT unnest(%s::bigint[]) AS battle_id
+            ), normalized AS (
+                SELECT p.battle_id, p.perspective,
+                       e.battle_timestamp, e.stars,
+                       e.destruction_percentage, e.army_share_code,
+                       CASE WHEN p.perspective = 'attacker'
+                           THEN e.reporter_trophies ELSE e.opponent_trophies
+                       END AS attacker_trophies,
+                       CASE WHEN p.perspective = 'attacker'
+                           THEN e.opponent_trophies ELSE e.reporter_trophies
+                       END AS defender_trophies,
+                       e.attacker_gain, e.defender_loss
+                FROM battle_perspectives AS p
+                JOIN battle_evidence AS e ON e.id = p.evidence_id
+                JOIN target ON target.battle_id = p.battle_id
+            ), paired AS (
+                SELECT target.battle_id, count(normalized.battle_id) AS evidence_count,
+                       max(battle_timestamp) FILTER (WHERE perspective = 'attacker') AS a_timestamp,
+                       max(battle_timestamp) FILTER (WHERE perspective = 'defender') AS d_timestamp,
+                       max(stars) FILTER (WHERE perspective = 'attacker') AS a_stars,
+                       max(stars) FILTER (WHERE perspective = 'defender') AS d_stars,
+                       max(destruction_percentage) FILTER (WHERE perspective = 'attacker') AS a_destruction,
+                       max(destruction_percentage) FILTER (WHERE perspective = 'defender') AS d_destruction,
+                       max(army_share_code) FILTER (WHERE perspective = 'attacker') AS a_army,
+                       max(army_share_code) FILTER (WHERE perspective = 'defender') AS d_army,
+                       max(attacker_trophies) FILTER (WHERE perspective = 'attacker') AS a_attacker_trophies,
+                       max(attacker_trophies) FILTER (WHERE perspective = 'defender') AS d_attacker_trophies,
+                       max(defender_trophies) FILTER (WHERE perspective = 'attacker') AS a_defender_trophies,
+                       max(defender_trophies) FILTER (WHERE perspective = 'defender') AS d_defender_trophies,
+                       max(attacker_gain) FILTER (WHERE perspective = 'attacker') AS a_gain,
+                       max(attacker_gain) FILTER (WHERE perspective = 'defender') AS d_gain,
+                       max(defender_loss) FILTER (WHERE perspective = 'attacker') AS a_loss,
+                       max(defender_loss) FILTER (WHERE perspective = 'defender') AS d_loss
+                FROM target
+                LEFT JOIN normalized ON normalized.battle_id = target.battle_id
+                GROUP BY target.battle_id
+            ), classified AS (
+                SELECT battle_id, evidence_count,
+                       array_remove(ARRAY[
+                           CASE WHEN a_timestamp IS DISTINCT FROM d_timestamp THEN 'battle_timestamp' END,
+                           CASE WHEN a_stars IS DISTINCT FROM d_stars THEN 'stars' END,
+                           CASE WHEN a_destruction IS DISTINCT FROM d_destruction THEN 'destruction_percentage' END,
+                           CASE WHEN a_army IS DISTINCT FROM d_army THEN 'army_share_code' END,
+                           CASE WHEN a_attacker_trophies IS NOT NULL
+                                      AND d_attacker_trophies IS NOT NULL
+                                      AND a_attacker_trophies IS DISTINCT FROM d_attacker_trophies
+                                THEN 'attacker_trophies' END,
+                           CASE WHEN a_defender_trophies IS NOT NULL
+                                      AND d_defender_trophies IS NOT NULL
+                                      AND a_defender_trophies IS DISTINCT FROM d_defender_trophies
+                                THEN 'defender_trophies' END,
+                           CASE WHEN a_gain IS DISTINCT FROM d_gain THEN 'attacker_gain' END,
+                           CASE WHEN a_loss IS DISTINCT FROM d_loss THEN 'defender_loss' END
+                       ], NULL)::text[] AS fields
+                FROM paired
+            )
+            UPDATE legend_battles AS battle
+            SET disagreement_state = CASE
+                    WHEN classified.evidence_count < 2 THEN 'single_perspective'
+                    WHEN cardinality(classified.fields) = 0 THEN 'agreed'
+                    ELSE 'disagreement'
+                END,
+                disagreement_fields = CASE
+                    WHEN classified.evidence_count < 2 THEN ARRAY[]::text[]
+                    ELSE classified.fields
+                END,
                 updated_at = clock_timestamp()
-            WHERE id = %s
+            FROM classified
+            WHERE battle.id = classified.battle_id
             """,
-            (state, disagreement_fields, battle_id),
+            (battle_ids,),
         )
 
     @staticmethod
@@ -4044,14 +4262,17 @@ class Database:
                 # path and is never used to advance confirmed state.
                 current = read_current(for_update=True)
 
+            inserted_initial_anchor = False
             if current is None:
-                connection.execute(
+                inserted = connection.execute(
                     """
                     INSERT INTO legend_season_anchors (
                         current_league_season_id, previous_league_season_id,
                         current_start, previous_start, anchor_rule_version,
                         source_profile_version_id, state
                     ) VALUES (%s, %s, %s, %s, %s, %s, 'confirmed')
+                    ON CONFLICT DO NOTHING
+                    RETURNING id
                     """,
                     (
                         anchor.current_id,
@@ -4061,8 +4282,12 @@ class Database:
                         SEASON_ANCHOR_RULE_VERSION,
                         profile_version_id,
                     ),
-                )
-            elif matches_or_is_not_newer(current):
+                ).fetchone()
+                inserted_initial_anchor = inserted is not None
+                if not inserted_initial_anchor:
+                    current = read_current(for_update=True)
+                    assert current is not None
+            if inserted_initial_anchor or matches_or_is_not_newer(current):
                 pass
             elif anchor.current_start > current[3]:
                 connection.execute(

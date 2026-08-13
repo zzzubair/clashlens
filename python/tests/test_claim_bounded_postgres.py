@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 import psycopg
+from test_api_migration import migrated_production_database
 from test_claim_jobs_postgres import (
     _insert_job,
     _insert_observation,
@@ -10,7 +11,13 @@ from test_claim_jobs_postgres import (
 )
 
 import clashlens.db as db_module
-from clashlens.db import Database, _claim_select_statement
+from clashlens.db import (
+    _CLAIM_CANDIDATE_LIMIT,
+    Database,
+    _claim_select_statement,
+    _supported_job_filter,
+)
+from clashlens.worker import MAX_CONCURRENCY
 
 EXECUTION_TIME_PATTERN = re.compile(r"Execution Time: ([0-9.]+) ms")
 
@@ -22,11 +29,12 @@ def _database_text(value: str | bytes) -> str:
 
 
 def _seed_production_depth(connection: psycopg.Connection) -> None:
-    """Fill a 19,220-job queue over 116,460 observations (live production shape).
+    """Fill an adversarial production-depth queue over 116,460 observations.
 
-    Every queued job is a supported priority-100 process_observation job with
-    the current versions, so the whole queue is claimable and the plan must
-    not scan or sort it wholesale.
+    It combines 19,220 supported due jobs with 12,500 old future-schema jobs,
+    12,500 older future-due jobs, and 12,500 expired leases. The plan must find
+    eligible work through compatibility/due/expiry indexes without scanning
+    or sorting any adversarial prefix wholesale.
     """
     connection.execute(
         """
@@ -92,6 +100,74 @@ def _seed_production_depth(connection: psycopg.Connection) -> None:
         JOIN collector_observations AS observation ON observation.id = i
         """
     )
+    connection.execute(
+        """
+        INSERT INTO python_processing_jobs (
+            observation_id, work_type, status, due_at, priority, created_at,
+            parser_version, processing_version, domain_rule_version,
+            analytics_rule_version
+        )
+        SELECT observation.id, 'process_observation', 'pending',
+               clock_timestamp() - interval '1 hour', 100,
+               clock_timestamp() - interval '60 days',
+               'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
+               'clashlens-domain-rules-v1', 'legend-analytics-v1'
+        FROM generate_series(19221, 31720) AS i
+        JOIN collector_observations AS observation ON observation.id = i
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO python_processing_jobs (
+            observation_id, work_type, status, due_at, priority, created_at,
+            parser_version, processing_version, domain_rule_version,
+            analytics_rule_version
+        )
+        SELECT observation.id, 'process_observation', 'pending',
+               clock_timestamp() + interval '1 day', 100,
+               clock_timestamp() - interval '90 days',
+               'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
+               'clashlens-domain-rules-v1', 'legend-analytics-v1'
+        FROM generate_series(31721, 44220) AS i
+        JOIN collector_observations AS observation ON observation.id = i
+        """
+    )
+    # Model a forward migration that admits a future source schema, then make
+    # its existing jobs recalculate the denormalized planner marker. The
+    # authoritative worker predicate rejects the schema; migration 0003's
+    # trigger must also keep this entire older-due prefix out of the partial
+    # claim index.
+    connection.execute(
+        """
+        ALTER TABLE collector_observations
+            ALTER COLUMN schema_version DROP EXPRESSION;
+        UPDATE collector_observations
+        SET schema_version = 'profile-schema-v99'
+        WHERE id BETWEEN 19221 AND 31720;
+        UPDATE python_processing_jobs
+        SET parser_version = parser_version
+        WHERE observation_id BETWEEN 19221 AND 31720
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO python_processing_jobs (
+            observation_id, work_type, status, due_at, priority, created_at,
+            parser_version, processing_version, domain_rule_version,
+            analytics_rule_version, lease_owner, lease_token, lease_expires_at,
+            attempt_count, max_attempts
+        )
+        SELECT observation.id, 'process_observation', 'leased',
+               clock_timestamp() - interval '1 day', 100,
+               clock_timestamp() - interval '120 days',
+               'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
+               'clashlens-domain-rules-v1', 'legend-analytics-v1',
+               'retired-worker', 'expired-' || i,
+               clock_timestamp() - interval '1 day', 5, 5
+        FROM generate_series(44221, 56720) AS i
+        JOIN collector_observations AS observation ON observation.id = i
+        """
+    )
     connection.commit()
     connection.execute("ANALYZE collector_observations")
     connection.execute("ANALYZE python_processing_jobs")
@@ -120,10 +196,25 @@ def test_claim_statement_uses_postgresql_statement_clock() -> None:
     assert "now" not in params
 
 
+def test_claim_candidate_window_covers_maximum_parallel_lanes() -> None:
+    assert _CLAIM_CANDIDATE_LIMIT == MAX_CONCURRENCY
+
+
 def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
     with _production_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as connection:
             _seed_production_depth(connection)
+            future_contracts = connection.execute(
+                """
+                SELECT count(*)
+                FROM python_processing_jobs AS job
+                JOIN collector_observations AS observation
+                  ON observation.id = job.observation_id
+                WHERE observation.schema_version = 'profile-schema-v99'
+                  AND job.claim_compatibility_version = 0
+                """
+            ).fetchone()[0]
+            assert future_contracts == 12500
             plan_text, millis = _explain_claim(connection)
             assert "Seq Scan on python_processing_jobs" not in plan_text, (
                 f"claim plan scans the whole queue:\n{plan_text}"
@@ -134,9 +225,38 @@ def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
             assert "python_processing_jobs_pending_claim_v2" in plan_text, (
                 f"claim plan does not use the indexed pending probe:\n{plan_text}"
             )
+            assert "python_processing_jobs_expired_leases_v2" in plan_text, (
+                f"claim plan does not use the indexed expiry probe:\n{plan_text}"
+            )
             assert millis < 100, (
                 f"claim took {millis:.1f} ms at production depth, want < 100 ms"
             )
+
+            supported_filter, supported_params = _supported_job_filter("job")
+            maintenance_plan = connection.execute(
+                f"""
+                EXPLAIN (ANALYZE, COSTS OFF)
+                SELECT job.id, ({supported_filter}) AS supported,
+                       job.attempt_count >= job.max_attempts AS exhausted
+                FROM python_processing_jobs_worker AS job
+                WHERE job.state = 'leased'
+                  AND job.lease_expires_at <= clock_timestamp()
+                ORDER BY job.lease_expires_at, job.id
+                LIMIT 100
+                """,
+                supported_params,
+            ).fetchall()
+            maintenance_plan_text = "\n".join(
+                _database_text(row[0]) for row in maintenance_plan
+            )
+            assert "Seq Scan on python_processing_jobs" not in maintenance_plan_text
+            assert (
+                "python_processing_jobs_expired_maintenance_v2"
+                in maintenance_plan_text
+            ), maintenance_plan_text
+            maintenance_match = EXECUTION_TIME_PATTERN.search(maintenance_plan_text)
+            assert maintenance_match is not None
+            assert float(maintenance_match.group(1)) < 100
 
         database = Database(connection_info)
         try:
@@ -323,7 +443,7 @@ def test_expired_lease_probe_claims_expired_lease_at_depth(database_url: str) ->
             database.close()
 
 
-def test_migration_reapply_keeps_python_claim_indexes(database_url: str) -> None:
+def test_forward_migration_reapply_keeps_python_claim_indexes(database_url: str) -> None:
     with _production_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
             observation_id = _insert_observation(
@@ -340,7 +460,7 @@ def test_migration_reapply_keeps_python_claim_indexes(database_url: str) -> None
 
             root = Path(__file__).parents[2]
             connection.execute(
-                (root / "deploy/migrations/0002_python_layer.sql").read_text(
+                (root / "deploy/migrations/0003_regular_poll_dedup.sql").read_text(
                     encoding="utf-8"
                 )
             )
@@ -353,7 +473,8 @@ def test_migration_reapply_keeps_python_claim_indexes(database_url: str) -> None
                       AND indexname IN (
                           'python_processing_jobs_pending_claim_v2',
                           'python_processing_jobs_unknown_priority_v2',
-                          'python_processing_jobs_expired_leases_v2'
+                          'python_processing_jobs_expired_leases_v2',
+                          'python_processing_jobs_expired_maintenance_v2'
                       )
                     """
                 )
@@ -362,13 +483,68 @@ def test_migration_reapply_keeps_python_claim_indexes(database_url: str) -> None
                 "python_processing_jobs_pending_claim_v2",
                 "python_processing_jobs_unknown_priority_v2",
                 "python_processing_jobs_expired_leases_v2",
-            }, f"claim indexes after 0002 reapply = {indexes}"
+                "python_processing_jobs_expired_maintenance_v2",
+            }, f"claim indexes after 0003 reapply = {indexes}"
+            marker = connection.execute(
+                """
+                SELECT claim_compatibility_version
+                FROM python_processing_jobs
+                WHERE deduplication_key = 'reapply:keeps'
+                """
+            ).fetchone()[0]
+            assert marker == 1, "0003 reapply must preserve claimable work"
             assert (
                 connection.execute(
                     "SELECT count(*) FROM python_processing_jobs"
                 ).fetchone()[0]
                 == 1
             ), "0002 reapply must be non-destructive"
+
+
+def test_forward_migration_classifies_populated_v2_backlog(database_url: str) -> None:
+    with migrated_production_database(
+        database_url, include_migration_0003=False
+    ) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            observation_id = _insert_observation(
+                connection, occurrence_key="pre-0003-supported-job"
+            )
+            job_id = _insert_job(
+                connection,
+                work_type="process_observation",
+                deduplication_key="pre-0003:supported",
+                input_json={},
+                observation_id=observation_id,
+            )
+            from pathlib import Path
+
+            migration = (
+                Path(__file__).parents[2]
+                / "deploy/migrations/0003_regular_poll_dedup.sql"
+            ).read_text(encoding="utf-8")
+            connection.execute(migration)
+            assert connection.execute(
+                """
+                SELECT claim_compatibility_version
+                FROM python_processing_jobs WHERE id = %s
+                """,
+                (job_id,),
+            ).fetchone()[0] == 1
+            connection.execute(migration)
+            assert connection.execute(
+                """
+                SELECT claim_compatibility_version
+                FROM python_processing_jobs WHERE id = %s
+                """,
+                (job_id,),
+            ).fetchone()[0] == 1
+
+        database = Database(connection_info)
+        try:
+            claim = database.claim_job(owner="populated-v2-migration")
+            assert claim is not None and claim.job_id == job_id
+        finally:
+            database.close()
 
 
 def test_declared_claim_priorities_match_enqueue_sites() -> None:

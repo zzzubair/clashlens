@@ -601,6 +601,14 @@ func TestMigration0003CancelsDuplicateActiveRegularPollsKeepingNewest(t *testing
 	if indexCount != 1 {
 		t.Fatal("partial unique index collector_jobs_one_active_regular_poll_per_player does not exist")
 	}
+	if err := connection.QueryRow(ctx, `
+		SELECT count(*) FROM pg_indexes WHERE indexname = 'players_due_regular_poll_v2'
+	`).Scan(&indexCount); err != nil {
+		t.Fatalf("count due-player index: %v", err)
+	}
+	if indexCount != 1 {
+		t.Fatal("partial index players_due_regular_poll_v2 does not exist")
+	}
 
 	var contractVersion int
 	if err := connection.QueryRow(ctx, `SELECT version FROM clash_lens_contract WHERE singleton`).Scan(&contractVersion); err != nil {

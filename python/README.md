@@ -74,12 +74,13 @@ The root deployment script owns the production lifecycle:
 ```
 
 `python-up` builds the Python image and starts the private API and the
-production worker; the `*-start` commands start roles without building.
-The worker reads archive objects only through its own archive-read
-credential. It claims and processes one leased job at a time. Each serial
-processing pass stops when the queue is idle or the configured `--max-jobs`
-count is reached. The worker never requests a new Supercell source request
-during replay. The private API listens on the private Podman network alias
+configured production-worker replicas; the `*-start` commands start roles
+without building. Each worker uses bounded in-process lanes and database and
+archive pools, claiming one fenced lease per lane. A processing pass stops
+when the queue is idle or the configured `--max-jobs` count is reached. The
+worker reads archive objects only through its own archive-read credential and
+never requests a new Supercell source request during replay. The private API
+listens on the private Podman network alias
 `python-api:8000` with no published host port.
 
 ## 3. Fixed production contract
@@ -99,6 +100,6 @@ The selected runtime is fixed for this package:
 ## 4. Schema ownership
 
 The database schema lives in the production migrations at
-`deploy/migrations/0001_collector.sql` and
-`deploy/migrations/0002_python_layer.sql`. Application startup does not create
+`deploy/migrations/0001_collector.sql` through
+`deploy/migrations/0003_regular_poll_dedup.sql`. Application startup does not create
 or alter tables; tests apply the real migration files directly.

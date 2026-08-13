@@ -81,7 +81,7 @@ host and for temporary workload spikes. The worker lease
 (`CLASHLENS_WORKER_LEASE_SECONDS`) sets how long a claimed job may run; the
 deployment derives the worker stop grace from it.
 
-The dedicated 16-core Fedora host uses `CLASHLENS_POSTGRES_MEMORY=8g`,
+The dedicated 8-core/16-thread Fedora host uses `CLASHLENS_POSTGRES_MEMORY=8g`,
 `CLASHLENS_POSTGRES_SHM_SIZE=1g`, and `CLASHLENS_POSTGRES_CPUS=8`. The previous
 2 GB / 4 CPU budget constrained the collector's database path while the Go
 process remained mostly idle. A 64 MB container shared-memory mount also
@@ -89,12 +89,17 @@ caused PostgreSQL `DsmAllocate` failures under the 32-connection collector
 stage. Keep the 8 GB / 1 GB / 8 CPU values host-specific; smaller hosts must
 select smaller explicit budgets.
 
+New PostgreSQL containers preload `pg_stat_statements` and enable statement,
+I/O, and WAL I/O timing. Migration 0003 installs the extension in the Clash
+Lens database. Keep this profile enabled: it is the production measurement
+seam for statement amplification, temporary I/O, WAL pressure, and workload
+regressions.
+
 Set `CLASHLENS_WORKER_REPLICAS` to the number of identical Python worker
-containers. The default of 1 is safe for non-production hosts; production
-explicitly sets 6. The valid range is 1 to 16, bounded by the 16-core host
-(at most one replica per core), and the deployment rejects any other value
-before changing runtime state. Every replica claims jobs from the same
-shared queue. The worker resource budgets apply per container, so the
+containers. The target-host profile uses one replica. The valid range is 1 to
+16, bounded by the host's 16 hardware threads, and the deployment rejects any
+other value before changing runtime state. Every replica claims jobs from the
+same shared queue. The worker resource budgets apply per container, so the
 combined worker budget is the replica count times the per-replica budget.
 
 Each worker replica also runs bounded in-process concurrency.
@@ -103,22 +108,20 @@ replica; the default 1 preserves the sequential behavior of a single worker.
 `CLASHLENS_WORKER_DATABASE_POOL_SIZE` and `CLASHLENS_WORKER_ARCHIVE_POOL_SIZE`
 (1 to 64 each) size each replica's PostgreSQL and archive HTTP connection
 pools; the defaults 4 and 4 match the sequential worker. The measured
-production settings are 4 lanes, 4 database connections, and 4 archive
-connections per replica across 6 replicas on the 16-core host. Production
-measurement must confirm any adjustment. The deployment rejects any out-of-range value before
-changing runtime state. These three settings are worker-only and are never
-forwarded to the collector.
+target-host settings are 12 lanes, 12 database connections, and 12 archive
+connections in one replica. The deployment rejects any out-of-range value
+before changing runtime state. These three settings are worker-only and are
+never forwarded to the collector.
 
 `CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE` (1 to 64) explicitly bounds the
 collector PostgreSQL pool. The default is 16. The measured production stage is
 32 database connections with `CLASHLENS_WORKERS_PER_KEY=8`: four normal keys
 give 32 normal request workers, and the interactive workers share the same
-pool. Keep the six Python replicas at four database connections each for this
-stage. With PostgreSQL `max_connections=100`, this budgets 32 collector and 24
-worker connections and leaves approximately 40 connections for the API,
-administration, backups, and short workload spikes. Production measurement must confirm
-the pool sizes before any further increase; do not increase PostgreSQL
-`max_connections` or CPU limits as part of this stage.
+pool. Keep the Python worker at twelve database connections for this stage.
+With PostgreSQL `max_connections=100`, this budgets 32 collector and 12 worker
+connections and leaves approximately 56 connections for the API,
+administration, backups, and short workload spikes. Do not increase the pool
+sizes, PostgreSQL `max_connections`, or CPU limits without new measurements.
 
 The script creates one named rootless Podman network and one PostgreSQL
 volume. The network has outbound access for the official API and external
@@ -156,9 +159,8 @@ version is rejected without side effects.
 curl --fail http://127.0.0.1:8081/readyz
 ```
 
-For the reset-baseline lock-seam release, stop every existing Python worker
-before `up` reapplies migration 0002, then start the new Python image only
-after `up` completes:
+Build and start the Python image after `up` has applied every pending forward
+migration:
 
 ```bash
 ./deploy.sh worker-down
@@ -167,26 +169,37 @@ after `up` completes:
 ./deploy.sh worker-start
 ```
 
-Migration 0002 removes the temporary worker `UPDATE (id)` privilege on the
-collector-owned reset-baseline table. A Python image built before the narrow
-`clashlens_lock_reset_baseline_v2` function was added still uses direct
-`SELECT ... FOR UPDATE` and is not compatible with the migrated privilege
-contract. This order prevents that old image from restarting between the
-migration and the new Python start. It does not stop or rebuild the private
-Python API or website.
+Migration 0002 is frozen. Migration 0003 adds the reset-baseline lock seam and
+retains the prior worker's narrow `UPDATE (id)` grant for one rollback window,
+so the previous Python image remains compatible while the new image rolls out.
+The deployment consults `clash_lens_schema_migrations` and applies only missing
+forward migrations; a normal `up` never replays 0002 or an already-recorded
+0003. Runtime role passwords are still reconciled on every `up` through the
+separate role-configuration step.
 
 - `init` starts PostgreSQL, waits for readiness, and applies migration 0001
   only on an absent database. On a version-1 or version-2 database it fails
   without side effects.
 - `up` builds the collector image, then migrates the contract to version 2.
-  On an absent database it applies migration 0001 first. It starts the
-  bridge collector against contract version 1, applies migration 0002,
-  configures the three runtime role passwords, removes the bridge, and
-  starts the required collector. On a version-1 database it uses the same
-  bridge path. On a version-2 database it reapplies migration 0002 and the
-  role passwords without a bridge. The bridge-before-migration order keeps
-  the collector's version-1 observation-job insert valid while the schema
-  advances. `up` finishes only when `/readyz` reports `"ready":true`.
+  On an absent database it applies migrations 0001, 0002, and 0003 before
+  configuring the three runtime role passwords and starting the required
+  collector. On a version-1 database it starts the bridge collector, applies
+  missing migrations 0002 and 0003, configures roles, removes the bridge, and
+  starts the required collector. On a version-2 database it applies only
+  missing forward migrations and reconciles role passwords without a bridge.
+  The bridge-before-migration order keeps the collector's version-1
+  observation-job insert valid while the schema advances. `up` finishes only
+  when `/readyz` reports `"ready":true`.
+- PostgreSQL shared-memory size is a container-creation setting. If an
+  existing PostgreSQL container was created with a different value (or before
+  the deployment labelled the value), `up` fails before migration and tells
+  the operator to run `stack-down`, then `up`. This recreates containers while
+  preserving the named database volume.
+- The PostgreSQL metrics profile is also a container-creation setting. If an
+  existing container predates the `step6-v1` profile label, `up` gives the same
+  `stack-down`, then `up` instruction. The recreated container preloads
+  `pg_stat_statements` and enables I/O and WAL I/O timing while preserving the
+  named database volume.
 - `build-collector` and `build-python` build the immutable images only.
 - `python-up` builds the Python image, then starts the private API and the
   production worker and waits for both health checks. It requires contract
@@ -403,18 +416,19 @@ forward-only in this first deployment.
   `./deploy.sh restart` or `./deploy.sh python-start`. These commands never
   build and never run SQL; `python-start` starts every worker replica from
   the selected image. The previous image must be compatible with contract
-  version 2. A Python image that directly locks
-  `collector_reset_baseline_sweeps` is not compatible after migration 0002
-  revokes the temporary worker column privilege. Restoring that image also
-  requires the tested pre-migration PostgreSQL backup path below.
+  version 2 and every applied forward migration. Migration 0003 deliberately
+  retains the prior direct-lock Python image's narrow `UPDATE (id)` privilege
+  for one rollback window, so that image remains start-only compatible. A
+  later migration may revoke the privilege only after the image leaves the
+  supported rollback window.
 - For an incompatible schema change, stop the collector and Python
   containers, keep the volume, and restore a tested PostgreSQL backup before
   starting the old image. Immutable archive objects are not removed by
   `down` and are not rolled back.
 - Role password rotation: change the role password in `app.env`, then run
-  `./deploy.sh up`. `up` always reapplies migration 0002 and reconfigures
-  the three role passwords through admin `psql` stdin. `restart` does not
-  touch passwords. The admin password rotation requires a separate
+  `./deploy.sh up`. `up` applies only missing forward migrations and always
+  reconfigures the three role passwords through admin `psql` stdin. `restart`
+  does not touch passwords. The admin password rotation requires a separate
   `init`-style admin operation and is not part of this runbook.
 - HMAC rotation: configure `CLASHLENS_HMAC_PREVIOUS_KEY_ID` and
   `CLASHLENS_HMAC_PREVIOUS_SECRET_FILE` together, run `python-up` or

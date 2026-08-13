@@ -487,12 +487,6 @@ func (s *store) resolveAttemptV2(
 		now:            now,
 		maximumRetries: maximumRetries,
 	}
-	if proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
-		return s.proveAttemptResolutionCommit(proofCtx, connection, preflightIntent)
-	}); proofErr == nil && proofOutcome == commitProofCommitted {
-		return nil
-	}
-
 	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("begin version-two attempt resolution transaction: %w", err)
@@ -500,6 +494,14 @@ func (s *store) resolveAttemptV2(
 	defer func() { _ = transaction.Rollback(ctx) }()
 
 	if err := lockCurrentAttemptV2(ctx, transaction, job, attemptID); err != nil {
+		if errors.Is(err, errLeaseLost) {
+			proofOutcome, proofErr := s.probeFreshConnection(ctx, func(proofCtx context.Context, connection *pgx.Conn) (commitProofOutcome, error) {
+				return s.proveAttemptResolutionCommit(proofCtx, connection, preflightIntent)
+			})
+			if proofErr == nil && proofOutcome == commitProofCommitted {
+				return nil
+			}
+		}
 		return err
 	}
 	var rootJobID int64

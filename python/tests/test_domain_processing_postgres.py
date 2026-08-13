@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Barrier
+from typing import Any
 
 import psycopg
 import pytest
@@ -54,6 +57,27 @@ class _WorkerRoleDatabase(Database):
             ).fetchone()
             if worker_view is not None and worker_view[0] is not None:
                 self._jobs_relation = "python_processing_jobs_worker"
+
+
+class _BattleBarrierDatabase(Database):
+    barrier = Barrier(2)
+
+    def complete_battle_log(self, claim: Any, battle_log: Any) -> None:
+        self.barrier.wait(timeout=10)
+        super().complete_battle_log(claim, battle_log)
+
+
+class _AnchorBarrierDatabase(Database):
+    barrier = Barrier(2)
+
+    @staticmethod
+    def _record_season_anchor(
+        connection: Any, profile_version_id: int, profile: Any
+    ) -> str:
+        _AnchorBarrierDatabase.barrier.wait(timeout=10)
+        return Database._record_season_anchor(
+            connection, profile_version_id, profile
+        )
 
 
 def _role_connection(connection_info: str, role: str) -> psycopg.Connection:
@@ -466,7 +490,12 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
                 perspectives_before = connection.execute(
                     "SELECT perspective FROM battle_perspectives"
                 ).fetchall()
+                state_before, fields_before = connection.execute(
+                    "SELECT disagreement_state, disagreement_fields FROM legend_battles"
+                ).fetchone()
             assert [text(row[0]) for row in perspectives_before] == ["attacker"]
+            assert text(state_before) == "single_perspective"
+            assert list(fields_before) == []
 
             repeat_result = processor.process_once(owner="battle-attacker-repeat")
             assert repeat_result is not None and repeat_result.outcome == "processed"
@@ -539,6 +568,137 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
             )
             assert tuple(text(value) for value in opponent) == (False, "unknown")
             assert first_rows == 2
+        finally:
+            database.close()
+
+
+def test_concurrent_battle_batches_lock_shared_rows_in_one_order(
+    database_url: str,
+    archive_server,
+) -> None:
+    observed_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
+    payload = json.loads(BATTLE_FIXTURE.read_bytes())
+    first = payload["items"][0]
+    second = json.loads(json.dumps(first))
+    second["battleTimestamp"] = "2026-08-04T11:30:00Z"
+    second["opponent"] = {
+        "tag": "#9PP",
+        "name": "Second Defender",
+        "trophies": 6002,
+    }
+    forward = json.dumps({"items": [first, second]}).encode()
+    reverse = json.dumps({"items": [second, first]}).encode()
+
+    with domain_database(database_url) as connection_info:
+        _first_observation, first_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="opposite-battle-order-one",
+            endpoint="battle_log",
+            body=forward,
+            observed_at=observed_at,
+            normalized_tag="#2PP",
+        )
+        _second_observation, second_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="opposite-battle-order-two",
+            endpoint="battle_log",
+            body=reverse,
+            observed_at=observed_at + timedelta(seconds=1),
+            normalized_tag="#2PP",
+        )
+        _BattleBarrierDatabase.barrier = Barrier(2)
+        database, processor = _processor(
+            connection_info,
+            archive_server,
+            database_factory=_BattleBarrierDatabase,
+        )
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [
+                    executor.submit(
+                        processor.process_job,
+                        job_id,
+                        owner=f"opposite-order-{job_id}",
+                    )
+                    for job_id in (first_job, second_job)
+                ]
+                results = [future.result(timeout=20) for future in futures]
+            assert all(
+                result is not None and result.outcome == "processed"
+                for result in results
+            )
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM legend_battles"
+                ).fetchone()[0] == 2
+                assert connection.execute(
+                    "SELECT count(*) FROM known_player_discoveries"
+                ).fetchone()[0] == 2
+        finally:
+            database.close()
+
+
+def test_concurrent_initial_season_anchors_use_the_single_confirmed_seam(
+    database_url: str,
+    archive_server,
+) -> None:
+    old_payload = json.loads(PROFILE_FIXTURE.read_bytes())
+    new_payload = json.loads(PROFILE_FIXTURE.read_bytes())
+    new_payload["tag"] = "#8PP"
+    new_payload["currentLeagueSeasonId"] = 1786338000
+    new_payload["previousLeagueSeasonId"] = 1783918800
+
+    with domain_database(database_url) as connection_info:
+        _old_observation, old_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="concurrent-anchor-old",
+            endpoint="profile",
+            body=json.dumps(old_payload).encode(),
+            observed_at=datetime(2026, 8, 9, 12, tzinfo=UTC),
+            normalized_tag="#2PP",
+        )
+        _new_observation, new_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="concurrent-anchor-new",
+            endpoint="profile",
+            body=json.dumps(new_payload).encode(),
+            observed_at=datetime(2026, 8, 11, 12, tzinfo=UTC),
+            normalized_tag="#8PP",
+        )
+        _AnchorBarrierDatabase.barrier = Barrier(2)
+        database, processor = _processor(
+            connection_info,
+            archive_server,
+            database_factory=_AnchorBarrierDatabase,
+        )
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [
+                    executor.submit(
+                        processor.process_job,
+                        job_id,
+                        owner=f"anchor-{job_id}",
+                    )
+                    for job_id in (old_job, new_job)
+                ]
+                results = [future.result(timeout=20) for future in futures]
+            assert all(
+                result is not None and result.outcome == "processed"
+                for result in results
+            )
+            with database.pool.connection() as connection:
+                confirmed = connection.execute(
+                    """
+                    SELECT current_league_season_id
+                    FROM legend_season_anchors
+                    WHERE state = 'confirmed'
+                    """
+                ).fetchall()
+            assert [text(row[0]) for row in confirmed] == ["1786338000"]
         finally:
             database.close()
 

@@ -9,14 +9,20 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // seedProductionShapedQueue fills the collector queue with a production-shaped
-// population: 12,370 players and 74,429 regular poll jobs of which roughly 35%
-// are due now (26,012 in the reported production sample). Priorities follow the
-// live production audit (100 on-time, 150 bulk initial collection, 200
-// overdue) and ages and due times are spread over hours so the planner sees
-// realistic selectivity.
+// population: 12,370 players and 74,429 active jobs of which roughly 35% are
+// due now (26,012 in the reported production sample). The priority-100 range
+// deliberately starts with 12,369 very old future-due jobs before one due job;
+// this catches indexes that bound returned rows but still scan that prefix.
+// Each player has exactly
+// one regular poll, matching migration 0003's invariant; the remaining depth
+// is initial-collection work. Priorities follow the live production audit (100
+// on-time, 150 bulk initial collection, 200 overdue) and ages and due times are
+// spread over hours so the planner sees realistic selectivity.
 func seedProductionShapedQueue(t *testing.T, ctx context.Context, store *store) {
 	t.Helper()
 	if _, err := store.pool.Exec(ctx, `
@@ -31,22 +37,26 @@ func seedProductionShapedQueue(t *testing.T, ctx context.Context, store *store) 
 			work_type, player_id, normalized_tag, capacity_pool, priority,
 			due_at, coalescing_key, status, created_at
 		)
-		SELECT CASE WHEN i % 17 = 0 AND i % 50 <> 0
-				THEN 'initial_collection'
-				ELSE 'regular_poll'
-			END,
+		SELECT CASE WHEN i <= 12370 THEN 'regular_poll' ELSE 'initial_collection' END,
 			player.id, player.normalized_tag, 'normal',
-			CASE WHEN i % 50 = 0 THEN 200
-				WHEN i % 17 = 0 THEN 150
-				ELSE 100
+			CASE WHEN i <= 12370 THEN 100
+				WHEN i % 2 = 0 THEN 150
+				ELSE 200
 			END,
-			CASE WHEN i % 20 < 7
+			CASE WHEN i < 12370
+				THEN clock_timestamp() + interval '1 day'
+				WHEN i = 12370
+				THEN clock_timestamp() - interval '1 minute'
+				WHEN i % 20 < 7
 				THEN clock_timestamp() - ((i % 360) || ' minutes')::interval
 				ELSE clock_timestamp() + ((i % 120) || ' minutes')::interval
 			END,
 			'seed-regular:' || i,
 			'pending',
-			clock_timestamp() - ((i % 720) || ' minutes')::interval
+			CASE WHEN i <= 12370
+				THEN clock_timestamp() - interval '30 days'
+				ELSE clock_timestamp() - ((i % 720) || ' minutes')::interval
+			END
 		FROM generate_series(1, 74429) AS i
 		JOIN players AS player ON player.id = ((i - 1) % 12370) + 1
 	`); err != nil {
@@ -102,6 +112,7 @@ func explainClaimStatement(t *testing.T, ctx context.Context, store *store, now 
 func TestClaimCandidatePlanAtProductionDepth(t *testing.T) {
 	ctx := context.Background()
 	store := startVersionTwoStore(t, ctx)
+	applyMigrationThreeToStore(t, ctx, store)
 	seedProductionShapedQueue(t, ctx, store)
 
 	plan, millis := explainClaimStatement(t, ctx, store, time.Now().UTC())
@@ -125,9 +136,136 @@ func TestClaimCandidatePlanAtProductionDepth(t *testing.T) {
 	}
 }
 
+func TestExpiredRecoveryPlanAtProductionDepthIsBounded(t *testing.T) {
+	ctx := context.Background()
+	store := startVersionTwoStore(t, ctx)
+	applyMigrationThreeToStore(t, ctx, store)
+	seedProductionShapedQueue(t, ctx, store)
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE collector_jobs
+		SET status = 'leased', lease_owner = 'retired-worker',
+			lease_token = 'expired-' || id,
+			lease_expires_at = clock_timestamp()
+				- ((id % 120 + 1) || ' minutes')::interval,
+			updated_at = clock_timestamp()
+		WHERE id IN (
+			SELECT id FROM collector_jobs
+			WHERE work_type = 'initial_collection' AND status = 'pending'
+			ORDER BY id LIMIT 12500
+		)
+	`); err != nil {
+		t.Fatalf("seed expired outage backlog: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `ANALYZE collector_jobs`); err != nil {
+		t.Fatalf("analyze expired collector jobs: %v", err)
+	}
+
+	rows, err := store.pool.Query(ctx, `
+		EXPLAIN (ANALYZE, COSTS OFF)
+		SELECT job.id, job.lease_owner, job.lease_token,
+			job.lease_generation, job.result_attempt_id
+		FROM collector_jobs AS job
+		WHERE job.capacity_pool = 'normal'
+			AND job.status = 'leased'
+			AND job.lease_expires_at <= clock_timestamp()
+		ORDER BY job.lease_expires_at, job.id
+		LIMIT 8
+		FOR UPDATE OF job SKIP LOCKED
+	`)
+	if err != nil {
+		t.Fatalf("explain expired recovery: %v", err)
+	}
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatalf("scan expired recovery plan: %v", err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read expired recovery plan: %v", err)
+	}
+	planText := plan.String()
+	if strings.Contains(planText, "Seq Scan on collector_jobs") {
+		t.Fatalf("expired recovery scans the outage backlog:\n%s", planText)
+	}
+	if !strings.Contains(planText, "collector_jobs_expired_recovery_v2") {
+		t.Fatalf("expired recovery does not use its expiration-first index:\n%s", planText)
+	}
+	match := executionTimePattern.FindStringSubmatch(planText)
+	if match == nil {
+		t.Fatalf("expired recovery plan has no execution time:\n%s", planText)
+	}
+	millis, err := strconv.ParseFloat(match[1], 64)
+	if err != nil {
+		t.Fatalf("parse expired recovery execution time %q: %v", match[1], err)
+	}
+	if millis > 100 {
+		t.Fatalf("expired recovery took %.1f ms at production depth, want < 100 ms", millis)
+	}
+}
+
+func TestDirectExpiredClaimPlanSkipsStaleAttemptsAtProductionDepth(t *testing.T) {
+	ctx := context.Background()
+	store := startVersionTwoStore(t, ctx)
+	applyMigrationThreeToStore(t, ctx, store)
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO players (normalized_tag, active)
+		VALUES ('#EXPIREDPLAN', true);
+		INSERT INTO collector_jobs (
+			work_type, player_id, normalized_tag, capacity_pool, priority,
+			due_at, coalescing_key, status, lease_owner, lease_token,
+			lease_expires_at, created_at
+		)
+		SELECT 'initial_collection', player.id, player.normalized_tag,
+			'normal', 300, clock_timestamp() - interval '1 day',
+			'expired-plan:' || i, 'leased', 'retired-worker',
+			'expired-token-' || i,
+			clock_timestamp() - ((12502 - i) || ' minutes')::interval,
+			clock_timestamp() - interval '30 days'
+		FROM generate_series(1, 12501) AS i
+		CROSS JOIN players AS player
+		WHERE player.normalized_tag = '#EXPIREDPLAN';
+		WITH inserted AS (
+			INSERT INTO collector_attempts (
+				job_id, status, started_at, attempt_number,
+				lease_owner, lease_token
+			)
+			SELECT job.id, 'running', clock_timestamp() - interval '30 days',
+				1, job.lease_owner, job.lease_token
+			FROM collector_jobs AS job
+			WHERE job.coalescing_key LIKE 'expired-plan:%'
+			  AND job.coalescing_key <> 'expired-plan:12501'
+			RETURNING id, job_id
+		)
+		UPDATE collector_jobs AS job
+		SET result_attempt_id = inserted.id
+		FROM inserted
+		WHERE job.id = inserted.job_id;
+		ANALYZE collector_jobs;
+	`); err != nil {
+		t.Fatalf("seed stale-attempt outage backlog: %v", err)
+	}
+
+	plan, millis := explainClaimStatement(t, ctx, store, time.Now().UTC())
+	if strings.Contains(plan, "Seq Scan on collector_jobs") {
+		t.Fatalf("direct expired claim scans the stale-attempt backlog:\n%s", plan)
+	}
+	if !strings.Contains(plan, "collector_jobs_expired_claim_v2") {
+		t.Fatalf("direct expired claim does not use its result-attempt partial index:\n%s", plan)
+	}
+	if millis > 100 {
+		t.Fatalf("direct expired claim took %.1f ms at production depth, want < 100 ms", millis)
+	}
+}
+
 func TestClaimThroughputAtProductionDepth(t *testing.T) {
 	ctx := context.Background()
 	store := startVersionTwoStore(t, ctx)
+	applyMigrationThreeToStore(t, ctx, store)
 	seedProductionShapedQueue(t, ctx, store)
 
 	start := time.Now()
@@ -155,6 +293,16 @@ func TestClaimThroughputAtProductionDepth(t *testing.T) {
 	if elapsed > time.Second {
 		t.Fatalf("40 claims at production depth took %v, want < 1 s", elapsed)
 	}
+}
+
+func applyMigrationThreeToStore(t *testing.T, ctx context.Context, store *store) {
+	t.Helper()
+	connection, err := pgx.Connect(ctx, store.pool.Config().ConnString())
+	if err != nil {
+		t.Fatalf("connect for migration 0003: %v", err)
+	}
+	defer func() { _ = connection.Close(context.Background()) }()
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0003_regular_poll_dedup.sql"))
 }
 
 func TestRecoverExpiredAttemptsIsBoundedPerClaim(t *testing.T) {
@@ -387,11 +535,11 @@ func TestInactivePlayerCleanupIsThrottledNotPerClaim(t *testing.T) {
 	}
 }
 
-func TestMigrationTwoReapplyAddsCollectorClaimIndexes(t *testing.T) {
+func TestMigrationThreeAddsCollectorClaimIndexes(t *testing.T) {
 	ctx := context.Background()
 	connection := migratedVersionTwoConnection(t, ctx)
-	// Simulate the production upgrade path: a populated database receives the
-	// 0002 migration again during a normal deployment.
+	// Simulate the production upgrade path: a populated v2 database receives
+	// only the missing forward migration during a normal deployment.
 	var playerID int64
 	if err := connection.QueryRow(ctx, `
 		INSERT INTO players (normalized_tag, active)
@@ -411,14 +559,19 @@ func TestMigrationTwoReapplyAddsCollectorClaimIndexes(t *testing.T) {
 	`, playerID); err != nil {
 		t.Fatalf("insert pre-reapply job: %v", err)
 	}
-	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0003_regular_poll_dedup.sql"))
 
 	var indexes []string
 	rows, err := connection.Query(ctx, `
 		SELECT indexname
 		FROM pg_indexes
 		WHERE tablename = 'collector_jobs'
-			AND indexname IN ('collector_jobs_claim_order_v2', 'collector_jobs_expired_leases_v2', 'collector_jobs_unknown_priority_v2')
+			AND indexname IN (
+				'collector_jobs_claim_order_v2',
+				'collector_jobs_expired_recovery_v2',
+				'collector_jobs_expired_claim_v2',
+				'collector_jobs_unknown_priority_v2'
+			)
 		ORDER BY indexname
 	`)
 	if err != nil {
@@ -432,8 +585,8 @@ func TestMigrationTwoReapplyAddsCollectorClaimIndexes(t *testing.T) {
 		indexes = append(indexes, name)
 	}
 	rows.Close()
-	if len(indexes) != 3 {
-		t.Fatalf("collector claim indexes after 0002 reapply = %v, want claim order, expired leases, and unknown-priority catch-all", indexes)
+	if len(indexes) != 4 {
+		t.Fatalf("collector claim indexes after 0003 = %v, want claim order, expired recovery, direct expired claim, and unknown-priority catch-all", indexes)
 	}
 	var jobCount int
 	if err := connection.QueryRow(ctx, `
@@ -442,7 +595,7 @@ func TestMigrationTwoReapplyAddsCollectorClaimIndexes(t *testing.T) {
 		t.Fatalf("count pre-reapply job: %v", err)
 	}
 	if jobCount != 1 {
-		t.Fatalf("pre-reapply job count = %d, want 1 (0002 reapply must be non-destructive)", jobCount)
+		t.Fatalf("pre-migration job count = %d, want 1 (0003 must preserve canonical work)", jobCount)
 	}
 }
 
@@ -520,6 +673,16 @@ func TestCollectorClaimPrioritiesMatchProductionClasses(t *testing.T) {
 		if _, ok := excluded[priority]; !ok {
 			t.Fatalf("collector claim catch-all probe does not exclude fast-path priority %d", priority)
 		}
+	}
+}
+
+func TestCollectorClaimCandidateWindowCoversTargetParallelWorkers(t *testing.T) {
+	want := "32"
+	if collectorClaimCandidateLimit != want {
+		t.Fatalf("collector claim candidate limit = %s, want %s target workers", collectorClaimCandidateLimit, want)
+	}
+	if count := strings.Count(collectorClaimStatement, "LIMIT "+want); count != 3 {
+		t.Fatalf("collector claim statement has %d candidate limits, want 3", count)
 	}
 }
 

@@ -37,24 +37,22 @@ API_NETWORK_ALIAS=python-api
 API_LISTEN_PORT=8000
 
 # Worker replicas are identical containers over one shared queue. The
-# configured count is bounded by the 16-core host: at most one replica per
-# core. Replicas are named <CLASHLENS_PYTHON_WORKER_CONTAINER>-1..-N.
+# configured count is bounded by the target host's 16 hardware threads.
+# Replicas are named <CLASHLENS_PYTHON_WORKER_CONTAINER>-1..-N.
 WORKER_REPLICA_MAX=16
 
 # Bounded in-process Python worker concurrency. The sequential-compatible
-# default is 1 lane per replica. The initial production setting is 20 lanes;
-# production measurement must confirm or adjust it. The two pool sizes bound
-# each replica's PostgreSQL and archive HTTP connections; the sequential
-# defaults keep a single worker compatible with prior behavior. Initial
-# production pool settings are 8 and 20, subject to production measurement.
+# default is 1 lane per replica. The target-host profile is one replica with
+# 12 lanes and 12 database/archive connections. The two pool sizes bound each
+# replica's PostgreSQL and archive HTTP connections; the sequential defaults
+# keep a single worker compatible with prior behavior.
 WORKER_CONCURRENCY_MAX=32
 WORKER_POOL_SIZE_MAX=64
 
 # The collector PostgreSQL pool is explicitly bounded. The safe default of 16
-# matches the pgxpool implicit default on the 16-core production host. The
-# planned 48-slot collector stage sets 48 so 4 normal keys at 12 workers per
-# key (48 normal workers) are never starved by the pool; interactive work
-# shares the same bounded pool. The bound is validated before side effects.
+# matches the pgxpool implicit default on the 16-thread production host. The
+# target-host profile uses 32 connections for 4 normal keys at 8 workers per
+# key; interactive work shares the same bounded pool.
 COLLECTOR_POOL_SIZE_MAX=64
 
 COLLECTOR_STOP_GRACE=30
@@ -470,6 +468,17 @@ ensure_volume() {
 ensure_postgres() {
   replace_secret_value clashlens-postgres-password "$POSTGRES_PASSWORD"
   if container_exists "$POSTGRES_CONTAINER"; then
+    local configured_shm_size configured_metrics_profile
+    configured_shm_size=$("$PODMAN_BIN" container inspect \
+      --format '{{index .Config.Labels "org.clashlens.postgres-shm-size"}}' \
+      "$POSTGRES_CONTAINER" 2>/dev/null || true)
+    [[ "$configured_shm_size" == "$CLASHLENS_POSTGRES_SHM_SIZE" ]] || \
+      die "existing PostgreSQL container does not use CLASHLENS_POSTGRES_SHM_SIZE=$CLASHLENS_POSTGRES_SHM_SIZE; run stack-down, then up to recreate containers while preserving the named data volume"
+    configured_metrics_profile=$("$PODMAN_BIN" container inspect \
+      --format '{{index .Config.Labels "org.clashlens.postgres-metrics-profile"}}' \
+      "$POSTGRES_CONTAINER" 2>/dev/null || true)
+    [[ "$configured_metrics_profile" == "step6-v1" ]] || \
+      die "existing PostgreSQL container does not enable the Step 6 metrics profile; run stack-down, then up to recreate containers while preserving the named data volume"
     if ! container_running "$POSTGRES_CONTAINER"; then
       "$PODMAN_BIN" start "$POSTGRES_CONTAINER" >/dev/null
     fi
@@ -496,7 +505,14 @@ ensure_postgres() {
     --health-retries 6 \
     --restart unless-stopped \
     --label org.clashlens.component=postgres \
-    "$POSTGRES_IMAGE" >/dev/null
+    --label "org.clashlens.postgres-shm-size=$CLASHLENS_POSTGRES_SHM_SIZE" \
+    --label org.clashlens.postgres-metrics-profile=step6-v1 \
+    "$POSTGRES_IMAGE" \
+    postgres \
+    -c shared_preload_libraries=pg_stat_statements \
+    -c pg_stat_statements.track=all \
+    -c track_io_timing=on \
+    -c track_wal_io_timing=on >/dev/null
 }
 
 wait_for_postgres() {
@@ -522,10 +538,29 @@ apply_initial_contract() {
   apply_migration_file "${MIGRATION_FILES[0]}"
 }
 
-advance_contract() {
-  local migration_file
-  for migration_file in "${MIGRATION_FILES[@]:1}"; do
-    apply_migration_file "$migration_file"
+schema_migration_applied() {
+  local version=$1 applied
+  applied=$("$PODMAN_BIN" exec "$POSTGRES_CONTAINER" \
+    psql --tuples-only --no-align --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+    --command "SELECT EXISTS (SELECT 1 FROM clash_lens_schema_migrations WHERE version = $version)" \
+    2>/dev/null || true)
+  [[ "$(trim "$applied")" == "t" ]]
+}
+
+require_current_schema() {
+  local required_version=${#MIGRATION_FILES[@]}
+  schema_migration_applied "$required_version" || \
+    die "forward migration $required_version is required; run up first"
+}
+
+apply_pending_forward_migrations() {
+  local index migration_file version
+  for ((index = 1; index < ${#MIGRATION_FILES[@]}; index++)); do
+    version=$((index + 1))
+    migration_file=${MIGRATION_FILES[$index]}
+    if ! schema_migration_applied "$version"; then
+      apply_migration_file "$migration_file"
+    fi
   done
 }
 
@@ -766,6 +801,7 @@ require_python_runtime() {
   local version
   version=$(contract_version)
   [[ "$version" == "2" ]] || die "production contract version 2 is required (found $version)"
+  require_current_schema
 
   python_image_exists || die "python image is missing; run python-up first"
 }
@@ -1160,7 +1196,7 @@ case "$command" in
     case "$version" in
       absent)
         apply_initial_contract
-        advance_contract
+        apply_pending_forward_migrations
         configure_runtime_roles
         version=2
         fresh_bootstrap=true
@@ -1176,12 +1212,12 @@ case "$command" in
       stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
       start_bridge_collector
       wait_for_collector
-      advance_contract
+      apply_pending_forward_migrations
       configure_runtime_roles
       stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
       secret_rm clashlens-bridge-database-url
     elif [[ "$version" == "2" && "$fresh_bootstrap" != true ]]; then
-      advance_contract
+      apply_pending_forward_migrations
       configure_runtime_roles
     fi
     start_required_collector
@@ -1205,6 +1241,7 @@ case "$command" in
     wait_for_postgres
     version=$(contract_version)
     [[ "$version" == "2" ]] || die "restart requires contract version 2 (found $version); run up first"
+    require_current_schema
     image_exists || die "collector image is missing; run up first"
     start_required_collector
     wait_for_collector

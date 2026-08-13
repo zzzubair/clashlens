@@ -4,8 +4,10 @@ import json
 from argparse import Namespace
 from threading import Event
 
+import pytest
+
 from clashlens import cli
-from clashlens.worker import ObservationProcessor, ProcessResult
+from clashlens.worker import ObservationProcessor, ProcessResult, StageMetrics
 
 
 class NoClaimDatabase:
@@ -15,6 +17,19 @@ class NoClaimDatabase:
     def claim_job(self, **_kwargs: object) -> None:
         self.claim_calls += 1
         raise AssertionError("shutdown must stop before claiming another job")
+
+
+def test_stage_metrics_report_bounded_histogram_percentiles() -> None:
+    metrics = StageMetrics()
+    for duration in (0.0002, 0.001, 0.02, 0.2):
+        metrics.record("claim", duration)
+
+    snapshot = metrics.snapshot()["claim"]
+    assert snapshot["count"] == 4
+    assert snapshot["average_ms"] == pytest.approx(55.3)
+    assert snapshot["p50_upper_ms"] == 1.0
+    assert snapshot["p95_upper_ms"] == 250.0
+    assert snapshot["p99_upper_ms"] == 250.0
 
 
 def test_worker_does_not_claim_after_shutdown_is_requested() -> None:
@@ -35,12 +50,18 @@ def test_worker_does_not_claim_after_shutdown_is_requested() -> None:
 def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None:
     class FakeDatabase:
         closed = False
+        maintenance_calls = 0
 
         def __init__(self, _database_url: str, *, max_size: int = 4) -> None:
             assert max_size == 4
 
         def close(self) -> None:
             self.closed = True
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            assert max_jobs == 100
+            self.maintenance_calls += 1
+            return 0
 
     database = FakeDatabase("postgresql://prototype@postgres/db")
 
@@ -91,10 +112,11 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
     assert result == 0
     assert output["processed_count"] == cli.MAX_REPORTED_RESULTS + 1
     assert len(output["results"]) == cli.MAX_REPORTED_RESULTS
-    assert [line["event"] for line in output_lines[:-1]] == ["job_result"] * (
-        cli.MAX_REPORTED_RESULTS + 1
+    assert [line["event"] for line in output_lines[:-1]] == (
+        ["job_result"] * (cli.MAX_REPORTED_RESULTS + 1) + ["worker_health"]
     )
     assert database.closed is True
+    assert database.maintenance_calls == 1
 
 
 def _worker_namespace(**overrides: object) -> Namespace:
@@ -119,6 +141,11 @@ class PoolRecordingDatabase:
     def __init__(self, _database_url: str, *, max_size: int) -> None:
         self.max_size = max_size
         self.closed = False
+        self.maintenance_limits: list[int] = []
+
+    def maintain_queue(self, *, max_jobs: int) -> int:
+        self.maintenance_limits.append(max_jobs)
+        return 0
 
     def close(self) -> None:
         self.closed = True
@@ -144,7 +171,9 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
 
     def fake_database(_url: str, *, max_size: int) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
-        return PoolRecordingDatabase(_url, max_size=max_size)
+        database = PoolRecordingDatabase(_url, max_size=max_size)
+        recorded["database"] = database
+        return database
 
     def fake_archive(_arguments: object, *, pool_size: int = 4) -> PoolRecordingArchive:
         recorded["archive_pool_size"] = pool_size
@@ -163,6 +192,9 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
     assert recorded["process_until_idle"]["max_jobs"] == 3
     assert recorded["process_until_idle"]["lease_seconds"] == 30
     assert isinstance(recorded["process_until_idle"]["stop_requested"], Event)
+    database = recorded["database"]
+    assert isinstance(database, PoolRecordingDatabase)
+    assert database.maintenance_limits == [100]
 
 
 def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> None:
@@ -174,7 +206,9 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
 
     def fake_database(_url: str, *, max_size: int) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
-        return PoolRecordingDatabase(_url, max_size=max_size)
+        database = PoolRecordingDatabase(_url, max_size=max_size)
+        recorded["database"] = database
+        return database
 
     def fake_archive(_arguments: object, *, pool_size: int = 4) -> PoolRecordingArchive:
         recorded["archive_pool_size"] = pool_size
