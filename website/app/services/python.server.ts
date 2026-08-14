@@ -1,5 +1,6 @@
 import type {
   PlayerPage,
+  RankedBattleEvent,
   RefreshStatus,
   RefreshWork,
   SearchResponse,
@@ -383,6 +384,12 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
+function isUtcTimestamp(value: unknown): value is string {
+  return (
+    isString(value) && Number.isFinite(Date.parse(value)) && /(?:Z|\+00:00)$/.test(value)
+  );
+}
+
 function isNullableString(value: unknown): value is string | null {
   return value === null || isString(value);
 }
@@ -590,6 +597,38 @@ function mapPlayerPage(payload: unknown): PlayerPage {
   )
     throw new PythonApiError(502, { error: "malformed" });
   const screen = payload.screen_ready;
+  const mapEvent = (value: unknown, lens: "offense" | "defense"): RankedBattleEvent => {
+    if (
+      !isRecord(value) ||
+      !isString(value.battle_id) ||
+      value.battle_id.length === 0 ||
+      !isUtcTimestamp(value.battle_timestamp) ||
+      !isRecord(value.opponent) ||
+      !isCanonicalPlayerTag(value.opponent.tag) ||
+      !isNullableString(value.opponent.name) ||
+      !isInteger(value.destruction_percentage) ||
+      value.destruction_percentage < 0 ||
+      value.destruction_percentage > 100 ||
+      !isInteger(value.stars) ||
+      value.stars < 0 ||
+      value.stars > 3 ||
+      !isInteger(value.trophy_change) ||
+      (lens === "offense" && value.trophy_change < 0) ||
+      (lens === "defense" && value.trophy_change > 0)
+    )
+      throw new PythonApiError(502, { error: "malformed" });
+    return {
+      battleId: value.battle_id,
+      battleTimestamp: value.battle_timestamp,
+      opponent: {
+        tag: value.opponent.tag,
+        name: value.opponent.name,
+      },
+      destructionPercentage: value.destruction_percentage,
+      stars: value.stars,
+      trophyChange: value.trophy_change,
+    };
+  };
   const mapDay = (value: unknown) => {
     if (
       !isRecord(value) ||
@@ -606,7 +645,9 @@ function mapPlayerPage(payload: unknown): PlayerPage {
       !isOneOf(value.public_confidence, ["high", "partial", "uncertain"] as const) ||
       !Array.isArray(value.uncertainty_reasons) ||
       !value.uncertainty_reasons.every(isString) ||
-      !(value.season_day_number === null || isInteger(value.season_day_number))
+      !(value.season_day_number === null || isInteger(value.season_day_number)) ||
+      !Array.isArray(value.offense_events) ||
+      !Array.isArray(value.defense_events)
     )
       throw new PythonApiError(502, { error: "malformed" });
     const valid = [
@@ -637,6 +678,8 @@ function mapPlayerPage(payload: unknown): PlayerPage {
         trophyLoss: value.defense_loss as number | null,
       },
       trophyChange: value.net_trophy_change as number | null,
+      offenseEvents: value.offense_events.map((event) => mapEvent(event, "offense")),
+      defenseEvents: value.defense_events.map((event) => mapEvent(event, "defense")),
       completeness: {
         state: value.completeness.state as "complete" | "partial" | "uncertain",
         reason: value.completeness.reason as string,
@@ -647,6 +690,8 @@ function mapPlayerPage(payload: unknown): PlayerPage {
   if (screen.current_day !== null && screen.current_day !== undefined)
     mapDay(screen.current_day);
   if (!Array.isArray(screen.recent_days))
+    throw new PythonApiError(502, { error: "malformed" });
+  if (!Array.isArray(screen.season_days))
     throw new PythonApiError(502, { error: "malformed" });
   return {
     kind: "player-page",
@@ -679,6 +724,7 @@ function mapPlayerPage(payload: unknown): PlayerPage {
     season: mapSeason(screen.season),
     currentDay: screen.current_day === null ? null : mapDay(screen.current_day),
     recentDays: screen.recent_days.map(mapDay),
+    seasonDays: screen.season_days.map(mapDay),
     dataQuality: mapDataQuality(screen.data_quality),
     provenance: mapSnakeProvenanceRequired(screen.provenance),
   };

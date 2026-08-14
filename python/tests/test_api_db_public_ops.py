@@ -4,9 +4,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from psycopg.types.json import Jsonb
 from test_api_migration import migrated_production_database
 
-from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.api_db import ApiDatabase, RequestBinding, _screen_events
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
 
@@ -137,6 +138,9 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             assert player["freshness"] == "fresh"
             assert player["screen_ready"]["current_day"] is None
             assert player["screen_ready"]["season"] is None
+            assert player["screen_ready"]["season_days"] == []
+            assert player["screen_ready"]["recent_days"][0]["offense_events"] == []
+            assert player["screen_ready"]["recent_days"][0]["defense_events"] == []
             assert player["screen_ready"]["data_quality"][0]["code"] == "unavailable"
             assert player["daily_logs"] == [
                 {
@@ -256,6 +260,9 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
                 "reason": "active_day",
             }
             assert current_day["uncertainty_reasons"] == ["active_day"]
+            assert current_day["offense_events"] == []
+            assert current_day["defense_events"] == []
+            assert player["screen_ready"]["season_days"] == [current_day]
             assert player["screen_ready"]["season"] == {
                 "id": "1783918800",
                 "current_day_number": 23,
@@ -269,6 +276,194 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
                     "detail": "active_day",
                 }
             ]
+        finally:
+            database.close()
+
+
+def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> None:
+    offense, defense = _screen_events(
+        [
+            {
+                "lens": "offense",
+                "battle_id": "100",
+                "battle_timestamp": "2026-08-05T18:22:31Z",
+                "opponent": {"tag": "#8py", "name": "Earlier"},
+                "destruction_percentage": 50,
+                "stars": 1,
+                "trophy_change": 20,
+            },
+            {
+                "lens": "offense",
+                "battle_id": "101",
+                "battle_timestamp": "2026-08-05T18:22:31Z",
+                "opponent": {"tag": "#9Q2", "name": "Later ID"},
+                "destruction_percentage": 100,
+                "stars": 3,
+                "trophy_change": 40,
+            },
+            {
+                "lens": "offense",
+                "battle_id": "99",
+                "battle_timestamp": "2026-08-05T19:00:00Z",
+                "opponent": {"tag": "#2PP", "name": None},
+                "destruction_percentage": 0,
+                "stars": 0,
+                "trophy_change": 0,
+            },
+            {
+                "lens": "defense",
+                "battle_id": 200,
+                "battle_timestamp": "2026-08-05T20:00:00Z",
+                "opponent": {"tag": "#LQ2", "name": "Defender"},
+                "destruction_percentage": 80,
+                "stars": 2,
+                "trophy_change": -30,
+            },
+            {
+                "lens": "defense",
+                "battle_id": 200,
+                "battle_timestamp": "2026-08-05T20:00:00Z",
+                "opponent": {"tag": "#LQ2", "name": "Duplicate"},
+                "destruction_percentage": 80,
+                "stars": 2,
+                "trophy_change": -30,
+            },
+            {
+                "lens": "offense",
+                "battle_id": "excluded",
+                "included": False,
+                "battle_timestamp": "2026-08-05T21:00:00Z",
+            },
+            {"lens": "offense", "battle_id": "malformed"},
+            "not an event",
+        ]
+    )
+
+    assert [event["battle_id"] for event in offense] == ["99", "101", "100"]
+    assert offense[0]["opponent"] == {"tag": "#2PP", "name": None}
+    assert offense[1]["trophy_change"] == 40
+    assert [event["battle_id"] for event in defense] == ["200"]
+    assert defense[0]["trophy_change"] == -30
+    assert _screen_events(None) == ([], [])
+
+
+def test_player_screen_ready_limits_season_days_to_current_official_season(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            current_battles = [
+                {
+                    "lens": "offense",
+                    "battle_id": "2",
+                    "battle_timestamp": "2026-08-06T11:00:00Z",
+                    "opponent": {"tag": "#8PY", "name": "Latest attack"},
+                    "destruction_percentage": 100,
+                    "stars": 3,
+                    "trophy_change": 40,
+                },
+                {
+                    "lens": "offense",
+                    "battle_id": "1",
+                    "battle_timestamp": "2026-08-06T10:00:00Z",
+                    "opponent": {"tag": "#9Q2", "name": "Earlier attack"},
+                    "destruction_percentage": 80,
+                    "stars": 2,
+                    "trophy_change": 30,
+                },
+                {
+                    "lens": "defense",
+                    "battle_id": "3",
+                    "battle_timestamp": "2026-08-06T09:00:00Z",
+                    "opponent": {"tag": "#2PL", "name": None},
+                    "destruction_percentage": 50,
+                    "stars": 1,
+                    "trophy_change": -20,
+                },
+            ]
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE api_player_daily_logs
+                    SET ranked_day_end = '2026-08-07T05:00:00Z',
+                        official_season_id = 'current-season', season_day_number = 3,
+                        state = 'Complete', coverage = 'complete', confidence = 'exact',
+                        attack_count = 2, attack_three_star_count = 1,
+                        attack_gain = 70, defense_count = 1,
+                        defense_three_star_count = 0, defense_loss = 20,
+                        net_trophy_change = 50, battles = %s,
+                        partial_reasons = '[]'::jsonb
+                    WHERE player_id = (
+                        SELECT id FROM players WHERE normalized_tag = '#2PP'
+                    ) AND ranked_day_start = '2026-08-06T05:00:00Z'
+                    """,
+                    (Jsonb(current_battles),),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, ranked_day_end,
+                        official_season_id, season_day_number, version, state, coverage,
+                        confidence, attack_count, attack_three_star_count, attack_gain,
+                        defense_count, defense_three_star_count, defense_loss,
+                        net_trophy_change, adjustments, battles, partial_reasons
+                    ) VALUES (
+                        (SELECT id FROM players WHERE normalized_tag = '#2PP'),
+                        '2026-08-05T05:00:00Z', '2026-08-06T05:00:00Z',
+                        'current-season', 2, 1, 'Complete', 'complete', 'exact',
+                        0, 0, 0, 0, 0, 0, 0, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb
+                    ), (
+                        (SELECT id FROM players WHERE normalized_tag = '#2PP'),
+                        '2026-08-04T05:00:00Z', '2026-08-05T05:00:00Z',
+                        'previous-season', 28, 1, 'Complete', 'complete', 'exact',
+                        8, 8, 320, 0, 0, 0, 320, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb
+                    )
+                    """
+                )
+                connection.commit()
+
+            player = database.get_player_page("#2PP", now=NOW, freshness_seconds=900)
+
+            assert player is not None
+            screen = player["screen_ready"]
+            assert [day["season_day_number"] for day in screen["season_days"]] == [
+                3,
+                2,
+            ]
+            assert all(
+                day["official_season_id"] == "current-season"
+                for day in screen["season_days"]
+            )
+            assert screen["season_days"][0] == screen["current_day"]
+            assert screen["current_day"]["offense_events"] == [
+                {
+                    "battle_id": "2",
+                    "battle_timestamp": "2026-08-06T11:00:00Z",
+                    "opponent": {"tag": "#8PY", "name": "Latest attack"},
+                    "destruction_percentage": 100,
+                    "stars": 3,
+                    "trophy_change": 40,
+                },
+                {
+                    "battle_id": "1",
+                    "battle_timestamp": "2026-08-06T10:00:00Z",
+                    "opponent": {"tag": "#9Q2", "name": "Earlier attack"},
+                    "destruction_percentage": 80,
+                    "stars": 2,
+                    "trophy_change": 30,
+                },
+            ]
+            assert screen["current_day"]["defense_events"][0]["trophy_change"] == -20
+            assert screen["current_day"]["attack_count"] == len(
+                screen["current_day"]["offense_events"]
+            )
+            assert screen["current_day"]["defense_count"] == len(
+                screen["current_day"]["defense_events"]
+            )
+            assert screen["season_days"][1]["offense_events"] == []
+            assert screen["season_days"][1]["defense_events"] == []
         finally:
             database.close()
 

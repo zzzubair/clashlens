@@ -83,6 +83,18 @@ never requests a new Supercell source request during replay. The private API
 listens on the private Podman network alias
 `python-api:8000` with no published host port.
 
+After a ranked-day publication contract bump, queue existing current-season
+days from the worker environment in bounded batches:
+
+```sh
+python -m clashlens.cli republish-current-season --max-jobs 100
+```
+
+The command uses the normal worker role and only rebuilds derived publications
+from canonical database evidence; it does not read archived source bodies.
+Repeat it after the worker drains the returned jobs until `enqueued_count` is
+zero. The batch size is restricted to 1–1000.
+
 ## 3. Fixed production contract
 
 The selected runtime is fixed for this package:

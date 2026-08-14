@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from itertools import pairwise
 from typing import Any
 
 from .domain import RankedDay
+from .profile import ProfileParseError, normalize_player_tag
 
-# Version 2 records the complete formula and evidence boundary. Version 1 used
-# an incomplete automatic-defense average and could infer a shield from counts.
-RECONCILIATION_RULE_VERSION = "legend-ranked-day-reconciliation-v2"
+# Version 3 freezes the selected battle-event projection (including the source
+# opponent identity) in each ranked-day version. Version 2 records the complete
+# formula and evidence boundary but could not reproduce the public event rows.
+# Version 1 used an incomplete automatic-defense average and could infer a
+# shield from counts.
+RECONCILIATION_RULE_VERSION = "legend-ranked-day-reconciliation-v3"
+BATTLE_EVENT_SERIALIZATION_VERSION = "legend-ranked-day-battle-events-v1"
 MAX_DAILY_ATTACKS = 8
 MAX_DAILY_DEFENSES = 8
 BATTLE_LOG_MAX_ROWS = 50
@@ -57,6 +63,11 @@ class BattleContribution:
     army_share_code: str | None = None
     attacker_gain: int | None = None
     defender_loss: int | None = None
+    # These values come from the selected battle_source_rows source_json. They
+    # are copied into the ranked-day evidence before publication so later
+    # profile changes cannot alter a historical event's opponent identity.
+    opponent_tag: str | None = None
+    opponent_name: str | None = None
 
     def __post_init__(self) -> None:
         if self.lens not in {"offense", "defense"}:
@@ -537,7 +548,139 @@ def _contribution_evidence(
         "army_share_code": contribution.army_share_code,
         "attacker_gain": contribution.attacker_gain,
         "defender_loss": contribution.defender_loss,
+        "opponent_tag": contribution.opponent_tag,
+        "opponent_name": contribution.opponent_name,
     }
+
+
+def serialize_ranked_day_battles(
+    contributions: Iterable[BattleContribution | Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Serialize selected ranked-day evidence as canonical battle events.
+
+    ``contributions`` is normally the frozen ``input_evidence.contributions``
+    list from a ranked-day version.  Accepting ``BattleContribution`` values as
+    well keeps the projection useful at the reconciliation seam and makes its
+    selection rules explicit.  Invalid, excluded, duplicate, and disagreement
+    evidence is deliberately omitted; the full evidence decision remains in
+    ``input_evidence``.
+    """
+
+    selected: set[str] = set()
+    events: list[tuple[datetime, str, dict[str, Any]]] = []
+    for contribution in contributions:
+        if isinstance(contribution, BattleContribution):
+            if not contribution.valid or contribution.disagreement:
+                continue
+            battle_id_value: Any = contribution.battle_identity
+            lens = contribution.lens
+            amount = contribution.amount
+            battle_timestamp: Any = contribution.battle_timestamp
+            stars: Any = contribution.stars
+            destruction: Any = contribution.destruction_percentage
+            opponent_tag: Any = contribution.opponent_tag
+            opponent_name: Any = contribution.opponent_name
+        elif isinstance(contribution, Mapping):
+            # Only rows explicitly retained by reconciliation may become a
+            # public event.  Missing ``included`` is not an implicit opt-in.
+            if (
+                contribution.get("included") is not True
+                or contribution.get("valid") is not True
+                or contribution.get("disagreement") is True
+            ):
+                continue
+            battle_id_value = contribution.get(
+                "battle_identity", contribution.get("battle_id")
+            )
+            lens = contribution.get("lens")
+            amount = contribution.get("amount_used")
+            if amount is None:
+                amount = contribution.get("source_trophy_change")
+            if amount is None:
+                amount = contribution.get("trophy_amount")
+            battle_timestamp = contribution.get("battle_timestamp")
+            stars = contribution.get("stars")
+            destruction = contribution.get("destruction_percentage")
+            opponent = contribution.get("opponent")
+            if isinstance(opponent, Mapping):
+                opponent_tag = contribution.get("opponent_tag", opponent.get("tag"))
+                opponent_name = contribution.get("opponent_name", opponent.get("name"))
+            else:
+                opponent_tag = contribution.get("opponent_tag")
+                opponent_name = contribution.get("opponent_name")
+        else:
+            continue
+
+        if not isinstance(battle_id_value, (str, int)) or isinstance(
+            battle_id_value, bool
+        ):
+            continue
+        battle_id = str(battle_id_value)
+        if not battle_id or battle_id in selected:
+            continue
+        if lens not in {"offense", "defense"}:
+            continue
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 0:
+            continue
+        timestamp = _canonical_event_timestamp(battle_timestamp)
+        if timestamp is None:
+            continue
+        if isinstance(stars, bool) or not isinstance(stars, int) or not 0 <= stars <= 3:
+            continue
+        if (
+            isinstance(destruction, bool)
+            or not isinstance(destruction, int)
+            or not 0 <= destruction <= 100
+        ):
+            continue
+        if not isinstance(opponent_tag, str):
+            continue
+        try:
+            normalized_opponent_tag = normalize_player_tag(opponent_tag)
+        except ProfileParseError:
+            continue
+        if opponent_name is not None and not isinstance(opponent_name, str):
+            continue
+
+        selected.add(battle_id)
+        event = {
+            "battle_id": battle_id,
+            "battle_timestamp": timestamp.isoformat().replace("+00:00", "Z"),
+            "opponent": {
+                "tag": normalized_opponent_tag,
+                "name": opponent_name,
+            },
+            "destruction_percentage": destruction,
+            "stars": stars,
+            "trophy_change": amount if lens == "offense" else -amount,
+        }
+        events.append((timestamp, battle_id, event))
+
+    events.sort(
+        key=lambda item: (item[0], _battle_event_id_sort_key(item[1])),
+        reverse=True,
+    )
+    return [event for _timestamp, _battle_id, event in events]
+
+
+def _canonical_event_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return None
+    return value.astimezone(UTC)
+
+
+def _battle_event_id_sort_key(value: str) -> tuple[int, Any]:
+    try:
+        return 0, int(value)
+    except ValueError:
+        return 1, value
 
 
 def _coverage_is_continuous(
@@ -782,6 +925,7 @@ def _input_evidence(
         "previous_day": _previous_day_evidence(data.previous_day),
         "rule_versions": {
             "reconciliation": RECONCILIATION_RULE_VERSION,
+            "battle_event_serialization": BATTLE_EVENT_SERIALIZATION_VERSION,
             "parser": data.parser_version,
             "processing": data.processing_version,
             "domain": data.domain_rule_version,

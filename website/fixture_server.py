@@ -270,6 +270,8 @@ def day_for(tag):
         "defense_three_star_count": 2,
         "defense_loss": 13,
         "net_trophy_change": 18,
+        "offense_events": [],
+        "defense_events": [],
         "adjustments": [],
         "battles": [],
         "partial_reasons": [
@@ -304,6 +306,8 @@ def previous_day():
         "defense_three_star_count": 3,
         "defense_loss": 16,
         "net_trophy_change": 22,
+        "offense_events": [],
+        "defense_events": [],
         "adjustments": [],
         "battles": [],
         "partial_reasons": [],
@@ -357,6 +361,7 @@ def player_page(tag):
         "screen_ready": {
             "current_day": current,
             "recent_days": recent_days,
+            "season_days": recent_days,
             "season": {
                 "id": "1783918800",
                 "start": "2026-07-13T05:00:00Z",

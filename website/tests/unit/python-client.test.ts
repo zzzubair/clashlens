@@ -404,6 +404,127 @@ describe("server-only Python client response boundary", () => {
   });
 
   it("maps exact full and profile-only Python player payloads", async () => {
+    const offenseEvents = [
+      {
+        battle_id: "attack-8",
+        battle_timestamp: "2026-08-06T16:30:00Z",
+        opponent: { tag: "#2P8", name: "Opponent eight" },
+        destruction_percentage: 100,
+        stars: 3,
+        trophy_change: 40,
+      },
+      {
+        battle_id: "attack-7",
+        battle_timestamp: "2026-08-06T15:45:00Z",
+        opponent: { tag: "#2PY", name: "Opponent seven" },
+        destruction_percentage: 99,
+        stars: 3,
+        trophy_change: 38,
+      },
+      {
+        battle_id: "attack-6",
+        battle_timestamp: "2026-08-06T14:30:00Z",
+        opponent: { tag: "#2PL", name: null },
+        destruction_percentage: 75,
+        stars: 2,
+        trophy_change: 30,
+      },
+      {
+        battle_id: "attack-5",
+        battle_timestamp: "2026-08-06T13:15:00Z",
+        opponent: { tag: "#2PG", name: "Opponent five" },
+        destruction_percentage: 50,
+        stars: 2,
+        trophy_change: 25,
+      },
+      {
+        battle_id: "attack-4",
+        battle_timestamp: "2026-08-06T12:30:00Z",
+        opponent: { tag: "#2PR", name: "Opponent four" },
+        destruction_percentage: 33,
+        stars: 1,
+        trophy_change: 16,
+      },
+      {
+        battle_id: "attack-3",
+        battle_timestamp: "2026-08-06T11:30:00Z",
+        opponent: { tag: "#2PJ", name: "Opponent three" },
+        destruction_percentage: 10,
+        stars: 1,
+        trophy_change: 5,
+      },
+      {
+        battle_id: "attack-2",
+        battle_timestamp: "2026-08-06T10:00:00Z",
+        opponent: { tag: "#2PC", name: "Opponent two" },
+        destruction_percentage: 9,
+        stars: 0,
+        trophy_change: 0,
+      },
+      {
+        battle_id: "attack-1",
+        battle_timestamp: "2026-08-06T09:00:00Z",
+        opponent: { tag: "#2PU", name: "Opponent one" },
+        destruction_percentage: 0,
+        stars: 0,
+        trophy_change: 0,
+      },
+    ];
+    const defenseEvents = [
+      {
+        battle_id: "defense-3",
+        battle_timestamp: "2026-08-06T16:00:00Z",
+        opponent: { tag: "#2PV", name: "Defender three" },
+        destruction_percentage: 100,
+        stars: 3,
+        trophy_change: -40,
+      },
+      {
+        battle_id: "defense-2",
+        battle_timestamp: "2026-08-06T14:00:00Z",
+        opponent: { tag: "#2P9", name: null },
+        destruction_percentage: 50,
+        stars: 1,
+        trophy_change: -5,
+      },
+      {
+        battle_id: "defense-1",
+        battle_timestamp: "2026-08-06T12:00:00Z",
+        opponent: { tag: "#28PP", name: "Defender one" },
+        destruction_percentage: 0,
+        stars: 0,
+        trophy_change: 0,
+      },
+    ];
+    const currentDay = {
+      ranked_day_start: "2026-08-06T05:00:00+00:00",
+      ranked_day_end: "2026-08-07T05:00:00+00:00",
+      official_season_id: "2026-08",
+      season_day_number: 3,
+      version: 9,
+      state: "Live",
+      confidence: "partial",
+      completeness: { state: "partial", reason: "Open day." },
+      public_confidence: "partial",
+      uncertainty_reasons: ["Open day."],
+      attack_count: null,
+      attack_three_star_count: null,
+      attack_gain: null,
+      defense_count: null,
+      defense_three_star_count: null,
+      defense_loss: null,
+      net_trophy_change: null,
+      offense_events: offenseEvents,
+      defense_events: defenseEvents,
+    };
+    const previousDay = {
+      ...currentDay,
+      ranked_day_start: "2026-08-05T05:00:00+00:00",
+      ranked_day_end: "2026-08-06T05:00:00+00:00",
+      season_day_number: 2,
+      offense_events: [],
+      defense_events: [],
+    };
     const full = {
       tag: "#2PP",
       name: "Nova",
@@ -415,26 +536,9 @@ describe("server-only Python client response boundary", () => {
       public_confidence: "high",
       eligibility: "eligible",
       screen_ready: {
-        current_day: {
-          ranked_day_start: "2026-08-06T05:00:00+00:00",
-          ranked_day_end: "2026-08-07T05:00:00+00:00",
-          official_season_id: "2026-08",
-          season_day_number: 3,
-          version: 9,
-          state: "Live",
-          confidence: "partial",
-          completeness: { state: "partial", reason: "Open day." },
-          public_confidence: "partial",
-          uncertainty_reasons: ["Open day."],
-          attack_count: null,
-          attack_three_star_count: null,
-          attack_gain: null,
-          defense_count: null,
-          defense_three_star_count: null,
-          defense_loss: null,
-          net_trophy_change: null,
-        },
-        recent_days: [],
+        current_day: currentDay,
+        recent_days: [previousDay],
+        season_days: [currentDay, previousDay],
         season: {
           id: "2026-08",
           start: "2026-08-04T05:00:00+00:00",
@@ -448,7 +552,7 @@ describe("server-only Python client response boundary", () => {
           freshness: "fresh",
           confidence: "partial",
           coverage: "partial",
-          version: "api-player-daily-log-v2",
+          version: "api-player-daily-log-v3",
         },
       },
     };
@@ -459,6 +563,7 @@ describe("server-only Python client response boundary", () => {
         current_day: null,
         season: null,
         recent_days: [],
+        season_days: [],
         data_quality: [
           {
             code: "unavailable",
@@ -468,22 +573,57 @@ describe("server-only Python client response boundary", () => {
         ],
       },
     };
+    const malformedEvents = {
+      ...full,
+      screen_ready: {
+        ...full.screen_ready,
+        current_day: {
+          ...currentDay,
+          offense_events: [{ ...offenseEvents[0], trophy_change: -1 }],
+        },
+        recent_days: [],
+        season_days: [currentDay],
+      },
+    };
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(full), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(profileOnly), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify(profileOnly), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(malformedEvents), { status: 200 }),
+      );
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
     const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(createPythonClient().getPlayer("#2PP")).resolves.toMatchObject({
-      season: { anchor: "2026-08-04T05:00:00+00:00", dayCount: 28 },
-      currentDay: { dayNumber: 3 },
+    const mapped = await createPythonClient().getPlayer("#2PP");
+    expect(mapped.season).toMatchObject({
+      anchor: "2026-08-04T05:00:00+00:00",
+      dayCount: 28,
     });
+    expect(mapped.seasonDays.map((day) => day.dayNumber)).toEqual([3, 2]);
+    expect(mapped.recentDays.map((day) => day.dayNumber)).toEqual([2]);
+    const mappedCurrentDay = mapped.currentDay;
+    if (mappedCurrentDay === null) throw new Error("expected active day");
+    const mapExpectedEvent = (event: (typeof offenseEvents)[number]) => ({
+      battleId: event.battle_id,
+      battleTimestamp: event.battle_timestamp,
+      opponent: event.opponent,
+      destructionPercentage: event.destruction_percentage,
+      stars: event.stars,
+      trophyChange: event.trophy_change,
+    });
+    expect(mappedCurrentDay.offenseEvents).toEqual(offenseEvents.map(mapExpectedEvent));
+    expect(mappedCurrentDay.defenseEvents).toEqual(defenseEvents.map(mapExpectedEvent));
     await expect(createPythonClient().getPlayer("#2PP")).resolves.toMatchObject({
       season: null,
       currentDay: null,
+      seasonDays: [],
       dataQuality: [{ code: "unavailable" }],
+    });
+    await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
+      status: 502,
+      payload: { error: "malformed" },
     });
   });
 

@@ -287,3 +287,58 @@ def test_queue_status_reports_existing_queue_health(monkeypatch, capsys) -> None
 
     assert result == 0
     assert json.loads(capsys.readouterr().out) == expected
+
+
+def test_current_season_republication_command_is_bounded_and_reports_jobs(
+    monkeypatch,
+    capsys,
+) -> None:
+    class FakeDatabase:
+        def __init__(self, database_url: str) -> None:
+            assert database_url == "postgresql://worker@postgres/clashlens"
+
+        def enqueue_current_season_republication(
+            self,
+            *,
+            max_jobs: int,
+        ) -> list[int]:
+            assert max_jobs == 7
+            return [41, 42]
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("clashlens.cli.Database", FakeDatabase)
+
+    result = main(
+        [
+            "republish-current-season",
+            "--database-url",
+            "postgresql://worker@postgres/clashlens",
+            "--max-jobs",
+            "7",
+        ]
+    )
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "enqueued_count": 2,
+        "job_ids": [41, 42],
+    }
+
+
+@pytest.mark.parametrize("value", ["0", "1001", "many"])
+def test_current_season_republication_command_rejects_unbounded_batches(
+    value: str,
+) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(
+            [
+                "republish-current-season",
+                "--database-url",
+                "postgresql://worker@postgres/clashlens",
+                "--max-jobs",
+                value,
+            ]
+        )
+    assert excinfo.value.code == 2

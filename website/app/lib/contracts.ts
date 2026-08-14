@@ -101,6 +101,18 @@ export interface PlayerProfile {
   eligibility: "legend-i" | "uncertain";
 }
 
+export interface RankedBattleEvent {
+  battleId: string;
+  battleTimestamp: string;
+  opponent: {
+    tag: string;
+    name: string | null;
+  };
+  destructionPercentage: number;
+  stars: number;
+  trophyChange: number;
+}
+
 export interface RankedDaySummary {
   dayNumber: number | null;
   label: string;
@@ -117,6 +129,8 @@ export interface RankedDaySummary {
     trophyLoss: number | null;
   };
   trophyChange: number | null;
+  offenseEvents: RankedBattleEvent[];
+  defenseEvents: RankedBattleEvent[];
   completeness: {
     state: "complete" | "partial" | "uncertain";
     reason: string;
@@ -136,6 +150,7 @@ export interface PlayerPage {
   } | null;
   currentDay: RankedDaySummary | null;
   recentDays: RankedDaySummary[];
+  seasonDays: RankedDaySummary[];
   dataQuality: Array<{
     code:
       | "stale"

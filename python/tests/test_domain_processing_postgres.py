@@ -16,6 +16,7 @@ from psycopg_pool import ConnectionPool
 
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import DEFAULT_POOL_SIZE, Database
+from clashlens.domain import ranked_day_for
 from clashlens.worker import ObservationProcessor
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
@@ -75,9 +76,7 @@ class _AnchorBarrierDatabase(Database):
         connection: Any, profile_version_id: int, profile: Any
     ) -> str:
         _AnchorBarrierDatabase.barrier.wait(timeout=10)
-        return Database._record_season_anchor(
-            connection, profile_version_id, profile
-        )
+        return Database._record_season_anchor(connection, profile_version_id, profile)
 
 
 def _role_connection(connection_info: str, role: str) -> psycopg.Connection:
@@ -630,12 +629,223 @@ def test_concurrent_battle_batches_lock_shared_rows_in_one_order(
                 for result in results
             )
             with database.pool.connection() as connection:
-                assert connection.execute(
-                    "SELECT count(*) FROM legend_battles"
-                ).fetchone()[0] == 2
-                assert connection.execute(
-                    "SELECT count(*) FROM known_player_discoveries"
-                ).fetchone()[0] == 2
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM legend_battles"
+                    ).fetchone()[0]
+                    == 2
+                )
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM known_player_discoveries"
+                    ).fetchone()[0]
+                    == 2
+                )
+        finally:
+            database.close()
+
+
+def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
+    database_url: str,
+    archive_server,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+        ranked_day = ranked_day_for(now)
+        event_at = ranked_day.start + timedelta(hours=1)
+        observed_at = ranked_day.start + timedelta(hours=2)
+
+        payload = json.loads(BATTLE_FIXTURE.read_bytes())
+        payload["items"] = payload["items"][:1]
+        payload["items"][0]["battleTimestamp"] = event_at.isoformat()
+        unchanged_body = json.dumps(payload).encode()
+        changed_payload = json.loads(unchanged_body)
+        changed_payload["items"][0]["stars"] = 2
+        changed_payload["items"][0]["destructionPercentage"] = 75
+        changed_body = json.dumps(changed_payload).encode()
+
+        jobs = []
+        for key, body, offset in (
+            ("live-first", unchanged_body, 0),
+            ("live-repeat", unchanged_body, 1),
+            ("live-changed", changed_body, 2),
+        ):
+            _observation_id, job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key=key,
+                endpoint="battle_log",
+                body=body,
+                observed_at=observed_at + timedelta(minutes=offset),
+                normalized_tag="#2PP",
+            )
+            jobs.append(job_id)
+
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_job(jobs[0], owner="live-first") is not None
+            assert processor.process_job(jobs[1], owner="live-repeat") is not None
+            with database.pool.connection() as connection:
+                repeated_count = connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                      AND deduplication_key LIKE 'reconcile:live:%%'
+                    """
+                ).fetchone()[0]
+            assert repeated_count == 1
+
+            assert processor.process_job(jobs[2], owner="live-changed") is not None
+            with database.pool.connection() as connection:
+                reconciliation_jobs = connection.execute(
+                    """
+                    SELECT id, input_json
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                      AND deduplication_key LIKE 'reconcile:live:%%'
+                    ORDER BY id
+                    """
+                ).fetchall()
+            assert len(reconciliation_jobs) == 2
+            assert all(
+                row[1]["trigger"] == "live_battle_projection"
+                for row in reconciliation_jobs
+            )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = [
+                    executor.submit(
+                        processor.process_job,
+                        int(row[0]),
+                        owner=f"live-reconciliation-{row[0]}",
+                    )
+                    for row in reconciliation_jobs
+                ]
+                reconciliation_results = [
+                    future.result(timeout=20) for future in futures
+                ]
+            assert all(
+                result is not None and result.outcome == "processed"
+                for result in reconciliation_results
+            )
+            with database.pool.connection() as connection:
+                state, battles = connection.execute(
+                    """
+                    SELECT state, battles
+                    FROM api_player_daily_logs
+                    WHERE ranked_day_start = %s
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """,
+                    (ranked_day.start,),
+                ).fetchone()
+                version_count = connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM ranked_day_versions
+                    WHERE ranked_day_start = %s
+                    """,
+                    (ranked_day.start,),
+                ).fetchone()[0]
+            assert text(state) == "Live"
+            assert version_count == 1
+            assert len(battles) == 1
+            assert battles[0]["lens"] == "offense"
+            assert battles[0]["opponent"] == {
+                "tag": "#8PP",
+                "name": "Synthetic Defender",
+            }
+            assert battles[0]["stars"] == 2
+            assert battles[0]["destruction_percentage"] == 75
+            assert battles[0]["trophy_change"] > 0
+
+            defender_payload = json.loads(changed_body)
+            defender_row = defender_payload["items"][0]
+            defender_row["attackOrDefense"] = "defense"
+            defender_row["armyShareCode"] = "disagreed-share-code"
+            defender_row["opponent"] = {
+                "tag": "#2PP",
+                "name": "Synthetic Attacker",
+                "trophies": 6040,
+            }
+            _defender_observation, defender_job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="live-defender-disagreement",
+                endpoint="battle_log",
+                body=json.dumps(defender_payload).encode(),
+                observed_at=observed_at + timedelta(minutes=3),
+                normalized_tag="#8PP",
+            )
+            assert (
+                processor.process_job(defender_job, owner="live-defender") is not None
+            )
+            with database.pool.connection() as connection:
+                player_ids = {
+                    text(row[0]): int(row[1])
+                    for row in connection.execute(
+                        """
+                        SELECT normalized_tag, id
+                        FROM players
+                        WHERE normalized_tag IN ('#2PP', '#8PP')
+                        """
+                    ).fetchall()
+                }
+                pending_reconciliations = connection.execute(
+                    """
+                    SELECT id, (input_json ->> 'player_id')::bigint
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                      AND status = 'pending'
+                      AND input_json ->> 'trigger' = 'live_battle_projection'
+                    ORDER BY id
+                    """
+                ).fetchall()
+            assert {int(row[1]) for row in pending_reconciliations} == set(
+                player_ids.values()
+            )
+
+            attacker_reconciliation_job = next(
+                int(row[0])
+                for row in pending_reconciliations
+                if int(row[1]) == player_ids["#2PP"]
+            )
+            attacker_result = processor.process_job(
+                attacker_reconciliation_job,
+                owner="live-attacker-disagreement",
+            )
+            assert attacker_result is not None
+            assert attacker_result.outcome == "processed"
+            with database.pool.connection() as connection:
+                latest_battles, attacker_version_count = connection.execute(
+                    """
+                    SELECT latest.battles, versions.version_count
+                    FROM (
+                        SELECT battles
+                        FROM api_player_daily_logs
+                        WHERE player_id = %s AND ranked_day_start = %s
+                        ORDER BY version DESC
+                        LIMIT 1
+                    ) AS latest
+                    CROSS JOIN (
+                        SELECT count(*) AS version_count
+                        FROM ranked_day_versions
+                        WHERE player_id = %s AND ranked_day_start = %s
+                    ) AS versions
+                    """,
+                    (
+                        player_ids["#2PP"],
+                        ranked_day.start,
+                        player_ids["#2PP"],
+                        ranked_day.start,
+                    ),
+                ).fetchone()
+            assert attacker_version_count == 2
+            assert len(latest_battles) == 1
+            assert latest_battles[0]["disagreement"] is True
+            assert "battle_id" not in latest_battles[0]
         finally:
             database.close()
 
