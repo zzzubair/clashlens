@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -10,10 +10,12 @@ import psycopg
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+from .profile import normalize_player_tag
 from .verification import KeyAction, VerificationOutcome
 
 API_CONTRACT_VERSION = 2
 VERIFICATION_RESERVATION_SECONDS = 45
+PLAYER_SCREEN_READY_VERSION = "api-player-daily-log-v3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -670,12 +672,13 @@ class ApiDatabase:
             public_confidence = _public_confidence(bool(row[1]), _text(row[2]))
             daily_logs = [_daily_log(day) for day in daily_rows]
             screen_days = [
-                _screen_daily_log(day, public_confidence) for day in daily_logs
+                _screen_daily_log_with_events(day, public_confidence)
+                for day in daily_logs
             ]
             now_utc = now.astimezone(UTC)
-            current_day = next(
+            current_day_pair = next(
                 (
-                    screen_day
+                    (raw_day, screen_day)
                     for raw_day, screen_day in zip(daily_rows, screen_days, strict=True)
                     if raw_day[1] is not None
                     and raw_day[0].astimezone(UTC)
@@ -684,6 +687,58 @@ class ApiDatabase:
                 ),
                 None,
             )
+            current_day_raw = None if current_day_pair is None else current_day_pair[0]
+            current_day = None if current_day_pair is None else current_day_pair[1]
+            season_rows = []
+            if (
+                current_day_raw is not None
+                and current_day_raw[2] is not None
+                and current_day_raw[3] is not None
+            ):
+                # A season is exactly 28 ranked days. Bound this read to the
+                # identified season while retaining the latest frozen
+                # publication for each ranked-day start. Filtering before the
+                # bound prevents previous-season rows from filling the result.
+                season_rows = connection.execute(
+                    """
+                    SELECT ranked_day_start, ranked_day_end, official_season_id,
+                           season_day_number, version, state, coverage, confidence,
+                           attack_count, attack_three_star_count, attack_gain,
+                           defense_count, defense_three_star_count, defense_loss,
+                           net_trophy_change, adjustments, battles, partial_reasons
+                    FROM (
+                        SELECT DISTINCT ON (ranked_day_start)
+                               ranked_day_start, ranked_day_end, official_season_id,
+                               season_day_number, version, state, coverage, confidence,
+                               attack_count, attack_three_star_count, attack_gain,
+                               defense_count, defense_three_star_count, defense_loss,
+                               net_trophy_change, adjustments, battles, partial_reasons
+                        FROM api_player_daily_logs
+                        WHERE player_id = (
+                            SELECT id FROM players WHERE normalized_tag = %s
+                        )
+                          AND ranked_day_start >= %s - (%s - 1) * interval '1 day'
+                          AND ranked_day_start < %s + (29 - %s) * interval '1 day'
+                        ORDER BY ranked_day_start DESC, version DESC
+                    ) AS latest_days
+                    WHERE official_season_id = %s
+                    ORDER BY season_day_number DESC NULLS LAST,
+                             ranked_day_start DESC
+                    LIMIT 28
+                    """,
+                    (
+                        normalized_tag,
+                        current_day_raw[0],
+                        int(current_day_raw[3]),
+                        current_day_raw[0],
+                        int(current_day_raw[3]),
+                        _text(current_day_raw[2]),
+                    ),
+                ).fetchall()
+            season_days = [
+                _screen_daily_log_with_events(_daily_log(day), public_confidence)
+                for day in season_rows
+            ]
             data_quality = []
             if age_seconds > freshness_seconds:
                 data_quality.append(
@@ -729,6 +784,7 @@ class ApiDatabase:
                 "screen_ready": {
                     "current_day": current_day,
                     "recent_days": screen_days,
+                    "season_days": season_days,
                     "season": None
                     if (
                         current_day is None
@@ -754,7 +810,7 @@ class ApiDatabase:
                             if current_day is not None
                             else "missing"
                         ),
-                        "version": "api-player-daily-log-v2",
+                        "version": PLAYER_SCREEN_READY_VERSION,
                     },
                 },
             }
@@ -1797,6 +1853,156 @@ def _screen_daily_log(day: dict[str, Any], profile_confidence: str) -> dict[str,
     }
 
 
+def _screen_daily_log_with_events(
+    day: dict[str, Any], profile_confidence: str
+) -> dict[str, Any]:
+    screen_day = _screen_daily_log(day, profile_confidence)
+    offense_events, defense_events = _screen_events(day.get("battles"))
+    screen_day["offense_events"] = offense_events
+    screen_day["defense_events"] = defense_events
+    return screen_day
+
+
+def _screen_events(
+    battles: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Project versioned published battle evidence into the private API shape.
+
+    The publication is expected to contain canonical, included battle events.
+    The validation here is deliberately defensive: old publications contain
+    reconciliation evidence rather than the new event projection, and a
+    malformed JSON element must not make the player operation fail.
+    """
+    if not isinstance(battles, list):
+        return [], []
+
+    candidates: list[tuple[str, datetime, tuple[int, Any], int, dict[str, Any]]] = []
+    for index, battle in enumerate(battles):
+        parsed = _screen_event(battle)
+        if parsed is None:
+            continue
+        lens, battle_id, timestamp, event = parsed
+        candidates.append(
+            (lens, timestamp, _battle_id_sort_key(battle_id), index, event)
+        )
+
+    # A published version should already contain one canonical row, but keep
+    # the API deterministic if an older or malformed payload repeats a battle.
+    candidates.sort(key=lambda item: (item[1], item[2], -item[3]), reverse=True)
+    seen: set[str] = set()
+    offense: list[dict[str, Any]] = []
+    defense: list[dict[str, Any]] = []
+    for lens, _timestamp, _battle_id, _index, event in candidates:
+        identity = event["battle_id"]
+        if identity in seen:
+            continue
+        seen.add(identity)
+        (offense if lens == "offense" else defense).append(event)
+    return offense, defense
+
+
+def _screen_event(
+    battle: Any,
+) -> tuple[str, str, datetime, dict[str, Any]] | None:
+    if not isinstance(battle, Mapping):
+        return None
+    if (
+        battle.get("included") is False
+        or battle.get("valid") is False
+        or battle.get("disagreement") is True
+    ):
+        return None
+
+    lens = battle.get("lens")
+    if lens not in {"offense", "defense"}:
+        return None
+    battle_id_value = battle.get("battle_id", battle.get("battle_identity"))
+    if not isinstance(battle_id_value, (str, int)) or isinstance(battle_id_value, bool):
+        return None
+    battle_id = str(battle_id_value).strip()
+    if not battle_id:
+        return None
+
+    timestamp = _screen_event_timestamp(battle.get("battle_timestamp"))
+    if timestamp is None:
+        return None
+
+    opponent_payload = battle.get("opponent")
+    if not isinstance(opponent_payload, Mapping):
+        return None
+    opponent_tag_value = opponent_payload.get("tag")
+    opponent_name = opponent_payload.get("name")
+    if not isinstance(opponent_tag_value, str):
+        return None
+    try:
+        opponent_tag = normalize_player_tag(opponent_tag_value)
+    except (TypeError, ValueError):
+        return None
+    if opponent_name is not None and not isinstance(opponent_name, str):
+        return None
+
+    stars = _screen_event_int(battle.get("stars"), lower=0, upper=3)
+    destruction = _screen_event_int(
+        battle.get("destruction_percentage"), lower=0, upper=100
+    )
+    if stars is None or destruction is None:
+        return None
+    trophy_value = _screen_event_trophy_value(battle, lens)
+    if trophy_value is None:
+        return None
+    trophy_change = abs(trophy_value)
+    if lens == "defense":
+        trophy_change = -trophy_change
+    event = {
+        "battle_id": battle_id,
+        "battle_timestamp": timestamp.isoformat().replace("+00:00", "Z"),
+        "opponent": {"tag": opponent_tag, "name": opponent_name},
+        "destruction_percentage": destruction,
+        "stars": stars,
+        "trophy_change": trophy_change,
+    }
+    return lens, battle_id, timestamp, event
+
+
+def _screen_event_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        if value.endswith("Z") and "-" not in value:
+            timestamp = datetime.strptime(value, "%Y%m%dT%H%M%S.%fZ").replace(
+                tzinfo=UTC
+            )
+        else:
+            timestamp = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return None
+    return timestamp.astimezone(UTC)
+
+
+def _screen_event_int(value: Any, *, lower: int, upper: int) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if lower <= value <= upper else None
+
+
+def _screen_event_trophy_value(battle: Mapping[str, Any], lens: str) -> int | None:
+    value = battle.get("trophy_change")
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if (lens == "offense" and value < 0) or (lens == "defense" and value > 0):
+        return None
+    return value
+
+
+def _battle_id_sort_key(value: str) -> tuple[int, Any]:
+    try:
+        return 0, int(value)
+    except ValueError:
+        return 1, value
+
+
 def _daily_log(day: Any) -> dict[str, Any]:
     return {
         "ranked_day_start": day[0].astimezone(UTC).isoformat(),
@@ -1816,7 +2022,11 @@ def _daily_log(day: Any) -> dict[str, Any]:
         "defense_three_star_count": None if day[12] is None else int(day[12]),
         "defense_loss": None if day[13] is None else int(day[13]),
         "net_trophy_change": None if day[14] is None else int(day[14]),
-        "adjustments": list(day[15]),
-        "battles": list(day[16]),
-        "partial_reasons": list(day[17]),
+        "adjustments": _json_array(day[15]),
+        "battles": _json_array(day[16]),
+        "partial_reasons": _json_array(day[17]),
     }
+
+
+def _json_array(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []

@@ -548,7 +548,7 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 == "legend-season-anchor-v1"
             )
             assert text(first_version["reconciliation_rule_version"]) == (
-                "legend-ranked-day-reconciliation-v2"
+                "legend-ranked-day-reconciliation-v3"
             )
             assert first_version["trophy_allocation_rule_versions"] == [
                 "legend-trophy-allocation-v1"
@@ -820,6 +820,228 @@ def test_postgres_persists_complete_inferred_shield_evidence(
             assert row[20] is True
             assert text(row[21]) == "inferred_shielded"
             assert row[22] == 1
+        finally:
+            database.close()
+
+
+def test_reconciliation_publishes_frozen_canonical_battle_projection(
+    database_url: str,
+    archive_server,
+) -> None:
+    """Selected source identity is normalized and published without losing evidence."""
+
+    with domain_database(database_url) as connection_info:
+        _start_profile, _start_battle, start_profile_job, start_battle_job = (
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key="events-start",
+                boundary=DAY_START,
+                trophies=6000,
+                empty_battle_log=True,
+            )
+        )
+        battle_payload = json.loads(_battle_log())
+        battle_payload["items"][0]["opponent"]["tag"] = " #8pp "
+        battle_payload["items"][0]["opponent"].pop("name")
+        _middle_observation, middle_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="events-middle",
+            endpoint="battle_log",
+            body=json.dumps(battle_payload).encode(),
+            observed_at=DAY_START + timedelta(hours=7),
+            normalized_tag="#2PP",
+        )
+        # Repeated attacker evidence and the defender-side report must remain
+        # one selected event for #2PP while retaining both perspectives.
+        _repeat_observation, repeat_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="events-repeat",
+            endpoint="battle_log",
+            body=json.dumps(battle_payload).encode(),
+            observed_at=DAY_START + timedelta(hours=8),
+            normalized_tag="#2PP",
+        )
+        defender_payload = json.loads(json.dumps(battle_payload))
+        defender_payload["items"][0]["attackOrDefense"] = "defense"
+        defender_payload["items"][0]["opponent"] = {"tag": "#2PP"}
+        _defender_observation, defender_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="events-defender",
+            endpoint="battle_log",
+            body=json.dumps(defender_payload).encode(),
+            observed_at=DAY_START + timedelta(hours=9),
+            normalized_tag="#8PP",
+        )
+        _end_profile, _end_battle, end_profile_job, end_battle_job = (
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key="events-end",
+                boundary=DAY_END,
+                trophies=6040,
+                empty_battle_log=True,
+            )
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for job_id in (
+                start_profile_job,
+                start_battle_job,
+                middle_job,
+                repeat_job,
+                defender_job,
+                end_profile_job,
+                end_battle_job,
+            ):
+                result = processor.process_job(job_id, owner=f"events-source-{job_id}")
+                assert result is not None and result.outcome == "processed"
+            ranked_day_start_text = DAY_START.strftime("%Y-%m-%dT%H:%M:%SZ")
+            with database.pool.connection() as connection:
+                reconcile_job = connection.execute(
+                    """
+                    SELECT id
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                      AND input_json->>'ranked_day_start' = %s
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    (ranked_day_start_text,),
+                ).fetchone()
+            assert reconcile_job is not None
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                # Simulate a pre-v3 publication that the existing bounded
+                # current-season republication seam can upgrade.
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, version, state, coverage,
+                        adjustments, battles, partial_reasons,
+                        ranked_day_end, official_season_id, season_day_number
+                    ) VALUES (%s, %s, 1, 'Partial', 'partial',
+                              '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                              %s, '1783918800', 23)
+                    """,
+                    (player_id, DAY_START, DAY_END),
+                )
+                previous_season_day = DAY_START - timedelta(days=28)
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, version, state, coverage,
+                        adjustments, battles, partial_reasons,
+                        ranked_day_end, official_season_id, season_day_number
+                    ) VALUES (%s, %s, 1, 'Partial', 'partial',
+                              '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                              %s, '1781499600', 23)
+                    """,
+                    (
+                        player_id,
+                        previous_season_day,
+                        previous_season_day + timedelta(days=1),
+                    ),
+                )
+                connection.commit()
+            assert database.enqueue_current_season_republication(max_jobs=1) == []
+            with database.pool.connection() as connection:
+                # The source setup runs under v3 and therefore queued a normal
+                # reconciliation. Simulate a deployment whose v2 work is
+                # already terminal before invoking the republication path.
+                connection.execute(
+                    """
+                    UPDATE python_processing_jobs
+                    SET status = 'cancelled', updated_at = clock_timestamp()
+                    WHERE id = %s
+                    """,
+                    (int(reconcile_job[0]),),
+                )
+                connection.commit()
+            republication_jobs = database.enqueue_current_season_republication(
+                max_jobs=1
+            )
+            assert len(republication_jobs) == 1
+            assert database.enqueue_current_season_republication(max_jobs=1) == []
+            with database.pool.connection() as connection:
+                republication_input = connection.execute(
+                    "SELECT input_json FROM python_processing_jobs WHERE id = %s",
+                    (republication_jobs[0],),
+                ).fetchone()[0]
+            assert republication_input == {
+                "player_id": player_id,
+                "ranked_day_start": ranked_day_start_text,
+                "official_season_id": "1783918800",
+                "trigger": "current_season_republication",
+            }
+            republication_result = processor.process_job(
+                republication_jobs[0], owner="events-republication"
+            )
+            assert (
+                republication_result is not None
+                and republication_result.outcome == "processed"
+            )
+            with database.pool.connection() as connection:
+                perspective_count = connection.execute(
+                    "SELECT count(*) FROM battle_perspectives"
+                ).fetchone()
+                ranked = connection.execute(
+                    """
+                    SELECT reconciliation_rule_version, contribution_evidence
+                    FROM ranked_day_versions
+                    WHERE ranked_day_start = %s
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """,
+                    (DAY_START,),
+                ).fetchone()
+                publication = connection.execute(
+                    """
+                    SELECT version, battles
+                    FROM api_player_daily_logs
+                    WHERE ranked_day_start = %s
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """,
+                    (DAY_START,),
+                ).fetchone()
+            assert perspective_count is not None and perspective_count[0] == 2
+            assert ranked is not None
+            assert text(ranked[0]) == "legend-ranked-day-reconciliation-v3"
+            included = [item for item in ranked[1] if item["included"]]
+            assert len(included) == 1
+            assert included[0]["opponent_tag"] == " #8pp "
+            assert included[0]["opponent_name"] is None
+            assert publication is not None
+            assert publication[1] == [
+                {
+                    **included[0],
+                    "battle_id": included[0]["battle_identity"],
+                    "battle_timestamp": "2026-08-04T12:00:00Z",
+                    "opponent": {"tag": "#8PP", "name": None},
+                    "destruction_percentage": 100,
+                    "stars": 3,
+                    "trophy_change": 40,
+                }
+            ]
+            with database.pool.connection() as connection:
+                version_count, publication_count = connection.execute(
+                    """
+                    SELECT
+                        (SELECT count(*) FROM ranked_day_versions
+                         WHERE ranked_day_start = %s
+                           AND reconciliation_rule_version = 'legend-ranked-day-reconciliation-v3'),
+                        (SELECT count(*) FROM api_player_daily_logs
+                         WHERE ranked_day_start = %s)
+                    """,
+                    (DAY_START, DAY_START),
+                ).fetchone()
+            assert (version_count, publication_count) == (1, 2)
         finally:
             database.close()
 

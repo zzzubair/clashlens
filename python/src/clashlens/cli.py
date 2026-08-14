@@ -107,6 +107,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _database_argument(queue_status)
 
+    republish_current_season = subparsers.add_parser(
+        "republish-current-season",
+        help="queue a bounded batch of current-season ranked-day republications",
+    )
+    _database_argument(republish_current_season)
+    republish_current_season.add_argument(
+        "--max-jobs",
+        type=_bounded_int("republication batch size", 1, 1000),
+        default=100,
+    )
+
     serve = subparsers.add_parser(
         "serve", help="run the signed saved-data FastAPI route"
     )
@@ -173,6 +184,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             database = Database(_database_url(arguments))
             try:
                 print(json.dumps(database.queue_health(), sort_keys=True))
+            finally:
+                database.close()
+            return 0
+        if arguments.command == "republish-current-season":
+            database = Database(_database_url(arguments))
+            try:
+                job_ids = database.enqueue_current_season_republication(
+                    max_jobs=arguments.max_jobs
+                )
+                print(
+                    json.dumps(
+                        {"enqueued_count": len(job_ids), "job_ids": job_ids},
+                        sort_keys=True,
+                    )
+                )
             finally:
                 database.close()
             return 0

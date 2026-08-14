@@ -23,7 +23,6 @@ Login stays disabled on the root deployment. These blockers remain open:
 
 - The Python service does not yet enforce the strict inappropriate-name filter for usernames, display names, and group names.
 - The root deployment does not yet pass the login configuration: the enable flag, the public origin, the Google client ID, the client-secret file, and the login-secret file.
-- Battle-log issue [#35](https://github.com/zzzubair/ClashLens/issues/35) is not complete: the player API does not expose complete per-battle offense and defense logs.
 - The public analytics route does not exist yet.
 - Performance issue [#38](https://github.com/zzzubair/ClashLens/issues/38) is open: collector and Python hot-path amplification.
 - A clean merged-main release candidate has not passed the complete live release gate.

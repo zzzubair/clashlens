@@ -41,6 +41,7 @@ from .reconciliation import (
     ReconciliationInput,
     ReconciliationResult,
     reconcile_ranked_day,
+    serialize_ranked_day_battles,
 )
 from .source_observation_contract import SOURCE_OBSERVATION_CONTRACTS
 
@@ -588,6 +589,137 @@ class Database:
             assert row is not None
             return int(row[0])
 
+    def enqueue_current_season_republication(
+        self,
+        *,
+        max_jobs: int = 100,
+    ) -> list[int]:
+        """Queue a bounded batch of published current-season days missing v3.
+
+        This rebuilds derived ranked-day publications from canonical database
+        evidence; it does not replay archived source observations. Repeating
+        the call advances past already queued targets, so an operator can drain
+        a season in measured batches without an unbounded deployment action.
+        """
+
+        if isinstance(max_jobs, bool) or not 1 <= max_jobs <= 1000:
+            raise ValueError("current-season republication batch must be 1 to 1000")
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                candidates = connection.execute(
+                    """
+                    WITH current_anchor AS (
+                        SELECT current_league_season_id, current_start
+                        FROM legend_season_anchors
+                        WHERE state = 'confirmed'
+                          AND anchor_rule_version = %s
+                        ORDER BY current_start DESC
+                        LIMIT 1
+                    ), published AS (
+                        SELECT DISTINCT
+                               log.player_id,
+                               log.ranked_day_start,
+                               anchor.current_league_season_id
+                        FROM api_player_daily_logs AS log
+                        JOIN current_anchor AS anchor
+                          ON log.official_season_id =
+                             anchor.current_league_season_id
+                        WHERE log.ranked_day_start >= anchor.current_start
+                          AND log.ranked_day_start <
+                              anchor.current_start + interval '28 days'
+                    )
+                    SELECT player_id, ranked_day_start,
+                           current_league_season_id
+                    FROM published
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM ranked_day_versions AS version
+                        WHERE version.player_id = published.player_id
+                          AND version.ranked_day_start =
+                              published.ranked_day_start
+                          AND version.reconciliation_rule_version = %s
+                    )
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM python_processing_jobs_worker AS job
+                        WHERE job.work_type = 'reconcile_ranked_day'
+                          AND job.state IN (
+                              'pending', 'waiting_retry', 'leased'
+                          )
+                          AND (job.input_json ->> 'player_id')::bigint =
+                              published.player_id
+                          AND job.input_json ->> 'ranked_day_start' =
+                              to_char(
+                                  published.ranked_day_start AT TIME ZONE 'UTC',
+                                  'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+                              )
+                    )
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM python_processing_jobs_worker AS job
+                        WHERE job.deduplication_key =
+                            'reconcile:current-season:'
+                            || published.player_id::text || ':'
+                            || to_char(
+                                published.ranked_day_start AT TIME ZONE 'UTC',
+                                'YYYY-MM-DD"T"HH24:MI:SS"Z"'
+                            ) || ':' || %s
+                    )
+                    ORDER BY player_id, ranked_day_start
+                    LIMIT %s
+                    """,
+                    (
+                        SEASON_ANCHOR_RULE_VERSION,
+                        RECONCILIATION_RULE_VERSION,
+                        RECONCILIATION_RULE_VERSION,
+                        max_jobs,
+                    ),
+                ).fetchall()
+                job_ids: list[int] = []
+                for player_id, ranked_day_start, official_season_id in candidates:
+                    ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    )
+                    deduplication_key = (
+                        f"reconcile:current-season:{int(player_id)}:"
+                        f"{ranked_day_start_text}:{RECONCILIATION_RULE_VERSION}"
+                    )
+                    row = connection.execute(
+                        """
+                        INSERT INTO python_processing_jobs_worker (
+                            observation_id, work_type, deduplication_key,
+                            input_json, state, due_at, parser_version,
+                            processing_version, domain_rule_version,
+                            analytics_rule_version
+                        ) VALUES (
+                            NULL, 'reconcile_ranked_day', %s, %s, 'pending',
+                            clock_timestamp(), %s, %s, %s, %s
+                        )
+                        ON CONFLICT (deduplication_key) DO NOTHING
+                        RETURNING id
+                        """,
+                        (
+                            deduplication_key,
+                            Jsonb(
+                                {
+                                    "player_id": int(player_id),
+                                    "ranked_day_start": ranked_day_start_text,
+                                    "official_season_id": _text_value(
+                                        official_season_id
+                                    ),
+                                    "trigger": "current_season_republication",
+                                }
+                            ),
+                            DEFAULT_PARSER_VERSION,
+                            PROCESSING_VERSION,
+                            DOMAIN_RULE_VERSION,
+                            ANALYTICS_RULE_VERSION,
+                        ),
+                    ).fetchone()
+                    if row is not None:
+                        job_ids.append(int(row[0]))
+                return job_ids
+
     def claim_job(
         self,
         *,
@@ -1119,6 +1251,8 @@ class Database:
                     ),
                 ).fetchall()
                 source_row_ids = {int(row[1]): int(row[0]) for row in source_rows}
+                affected_battle_ids: set[int] = set()
+                shared_state_changed_battle_ids: set[int] = set()
 
                 if valid_rows:
                     battles = []
@@ -1271,6 +1405,18 @@ class Database:
                         }
                         for row in evidence_rows
                     ]
+                    affected_battle_ids.update(int(row[1]) for row in evidence_rows)
+                    previous_disagreement_states = {
+                        int(row[0]): _text_value(row[1])
+                        for row in connection.execute(
+                            """
+                            SELECT id, disagreement_state
+                            FROM legend_battles
+                            WHERE id = ANY(%s::bigint[])
+                            """,
+                            (sorted(affected_battle_ids),),
+                        ).fetchall()
+                    }
                     connection.execute(
                         """
                         WITH input AS (
@@ -1308,7 +1454,23 @@ class Database:
                     )
                     self._refresh_battle_disagreements(
                         connection,
-                        sorted({int(row[1]) for row in evidence_rows}),
+                        sorted(affected_battle_ids),
+                    )
+                    current_disagreement_states = {
+                        int(row[0]): _text_value(row[1])
+                        for row in connection.execute(
+                            """
+                            SELECT id, disagreement_state
+                            FROM legend_battles
+                            WHERE id = ANY(%s::bigint[])
+                            """,
+                            (sorted(affected_battle_ids),),
+                        ).fetchall()
+                    }
+                    shared_state_changed_battle_ids.update(
+                        battle_id
+                        for battle_id, state in current_disagreement_states.items()
+                        if previous_disagreement_states.get(battle_id) != state
                     )
 
                 self._record_parsed_payload(
@@ -1327,6 +1489,48 @@ class Database:
                 )
                 self._record_processing_outcome(connection, claim, outcome=outcome)
                 self._refresh_reset_baseline_evidence(connection, claim)
+                ranked_day = ranked_day_for(battle_log.observed_at)
+                live_player_ids = {reporter_id}
+                if shared_state_changed_battle_ids:
+                    perspective_players = connection.execute(
+                        """
+                        SELECT DISTINCT CASE p.perspective
+                            WHEN 'attacker' THEN battle.attacker_player_id
+                            ELSE battle.defender_player_id
+                        END AS player_id
+                        FROM legend_battles AS battle
+                        JOIN battle_perspectives AS p ON p.battle_id = battle.id
+                        WHERE battle.id = ANY(%s::bigint[])
+                          AND battle.ranked_day_start = %s
+                        """,
+                        (sorted(shared_state_changed_battle_ids), ranked_day.start),
+                    ).fetchall()
+                    live_player_ids.update(int(row[0]) for row in perspective_players)
+                source_failures = sorted(
+                    (
+                        row.outcome,
+                        row.failure_category or "",
+                    )
+                    for row in battle_log.rows
+                    if row.outcome not in {"valid_legend", "ignored_non_legend"}
+                )
+                source_quality = (
+                    {
+                        "has_row_gap": battle_log.has_row_gap,
+                        "failures": source_failures,
+                    }
+                    if battle_log.has_row_gap or source_failures
+                    else None
+                )
+                for live_player_id in sorted(live_player_ids):
+                    self._enqueue_live_reconciliation(
+                        connection,
+                        player_id=live_player_id,
+                        ranked_day_start=ranked_day.start,
+                        source_quality=(
+                            source_quality if live_player_id == reporter_id else None
+                        ),
+                    )
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome=outcome
                 )
@@ -1458,10 +1662,17 @@ class Database:
         ranked_day = ranked_day_for(day_start)
         with self.pool.connection() as connection:
             with connection.transaction():
+                job = self._lock_live_claim(connection, claim)
+                # Different source changes can enqueue distinct jobs for one
+                # player-day. Serialize their version/publication writes while
+                # allowing unrelated player-days to reconcile concurrently.
+                connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"ranked-day:{player_id}:{ranked_day.start.isoformat()}",),
+                )
                 now_row = connection.execute("SELECT clock_timestamp()").fetchone()
                 assert now_row is not None
                 now = now_row[0]
-                job = self._lock_live_claim(connection, claim)
                 player = connection.execute(
                     "SELECT id, normalized_tag FROM players WHERE id = %s",
                     (player_id,),
@@ -1627,7 +1838,9 @@ class Database:
                         e.trophy_rule_version,
                         b.disagreement_state,
                         source_row.outcome,
-                        source_row.failure_category
+                        source_row.failure_category,
+                        source_row.source_json -> 'opponent' ->> 'tag',
+                        source_row.source_json -> 'opponent' ->> 'name'
                     FROM legend_battles AS b
                     JOIN battle_perspectives AS p ON p.battle_id = b.id
                     JOIN battle_evidence AS e ON e.id = p.evidence_id
@@ -1671,6 +1884,12 @@ class Database:
                         army_share_code=_text_value(row[9]),
                         attacker_gain=int(row[10]),
                         defender_loss=int(row[11]),
+                        opponent_tag=(
+                            _text_value(row[16]) if row[16] is not None else None
+                        ),
+                        opponent_name=(
+                            _text_value(row[17]) if row[17] is not None else None
+                        ),
                     )
                     for row in contribution_rows
                 )
@@ -1955,10 +2174,32 @@ class Database:
                         """,
                         (player_id, ranked_day.start, RECONCILIATION_RULE_VERSION),
                     ).fetchone()
-                    version_number = (
+                    previous_publication = connection.execute(
+                        """
+                        SELECT max(version)
+                        FROM api_player_daily_logs
+                        WHERE player_id = %s AND ranked_day_start = %s
+                        """,
+                        (player_id, ranked_day.start),
+                    ).fetchone()
+                    next_ranked_day_version = (
                         int(previous_version[1]) + 1
                         if previous_version is not None
                         else 1
+                    )
+                    next_publication_version = (
+                        int(previous_publication[0]) + 1
+                        if previous_publication is not None
+                        and previous_publication[0] is not None
+                        else 1
+                    )
+                    # ``api_player_daily_logs.version`` predates the
+                    # reconciliation-rule version and has a global per-day
+                    # uniqueness constraint. Continue above any v2 publication
+                    # when the first v3 republication is written, while
+                    # retaining idempotence for the same v3 result.
+                    version_number = max(
+                        next_ranked_day_version, next_publication_version
                     )
                     evidence_complete = bool(
                         result.coverage_complete
@@ -3428,6 +3669,132 @@ class Database:
         )
 
     @staticmethod
+    def _enqueue_live_reconciliation(
+        connection: Any,
+        *,
+        player_id: int,
+        ranked_day_start: datetime,
+        source_quality: dict[str, Any] | None,
+    ) -> None:
+        ranked_day = ranked_day_for(ranked_day_start)
+        ranked_day_start = ranked_day.start.astimezone(UTC)
+        live = connection.execute(
+            "SELECT clock_timestamp() >= %s AND clock_timestamp() < %s",
+            (ranked_day.start, ranked_day.end),
+        ).fetchone()
+        assert live is not None
+        if not bool(live[0]):
+            return
+        ranked_day_start_text = ranked_day_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows = connection.execute(
+            """
+            SELECT
+                battle.id,
+                p.perspective,
+                evidence.battle_timestamp,
+                evidence.stars,
+                evidence.destruction_percentage,
+                evidence.army_share_code,
+                evidence.reporter_trophies,
+                evidence.opponent_trophies,
+                evidence.attacker_gain,
+                evidence.defender_loss,
+                evidence.trophy_rule_version,
+                battle.disagreement_state,
+                source_row.outcome,
+                source_row.failure_category,
+                source_row.source_json -> 'opponent'
+            FROM legend_battles AS battle
+            JOIN battle_perspectives AS p ON p.battle_id = battle.id
+            JOIN battle_evidence AS evidence ON evidence.id = p.evidence_id
+            JOIN battle_source_rows AS source_row
+              ON source_row.id = evidence.source_row_id
+            WHERE battle.ranked_day_start = %s
+              AND evidence.battle_timestamp >= %s
+              AND evidence.battle_timestamp < %s
+              AND (
+                  (p.perspective = 'attacker'
+                   AND battle.attacker_player_id = %s)
+                  OR
+                  (p.perspective = 'defender'
+                   AND battle.defender_player_id = %s)
+              )
+            ORDER BY battle.id, p.perspective
+            """,
+            (
+                ranked_day.start,
+                ranked_day.start,
+                ranked_day.end,
+                player_id,
+                player_id,
+            ),
+        ).fetchall()
+        projection_rows = [
+            {
+                "battle_id": int(row[0]),
+                "perspective": _text_value(row[1]),
+                "battle_timestamp": row[2].astimezone(UTC).isoformat(),
+                "stars": int(row[3]),
+                "destruction_percentage": int(row[4]),
+                "army_share_code": _text_value(row[5]),
+                "reporter_trophies": (None if row[6] is None else int(row[6])),
+                "opponent_trophies": (None if row[7] is None else int(row[7])),
+                "attacker_gain": int(row[8]),
+                "defender_loss": int(row[9]),
+                "trophy_rule_version": _text_value(row[10]),
+                "disagreement_state": _text_value(row[11]),
+                "source_outcome": _text_value(row[12]),
+                "failure_category": (None if row[13] is None else _text_value(row[13])),
+                "opponent": row[14],
+            }
+            for row in rows
+        ]
+        projection = {
+            "events": projection_rows,
+            "source_quality": source_quality,
+        }
+        projection_hash = hashlib.sha256(
+            json.dumps(
+                projection,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+        deduplication_key = (
+            f"reconcile:live:{player_id}:{ranked_day_start_text}:"
+            f"{RECONCILIATION_RULE_VERSION}:{projection_hash}"
+        )
+        connection.execute(
+            """
+            INSERT INTO python_processing_jobs_worker (
+                observation_id, work_type, deduplication_key, input_json,
+                state, due_at, parser_version, processing_version,
+                domain_rule_version, analytics_rule_version
+            ) VALUES (
+                NULL, 'reconcile_ranked_day', %s, %s, 'pending', clock_timestamp(),
+                %s, %s, %s, %s
+            )
+            ON CONFLICT (deduplication_key) DO NOTHING
+            """,
+            (
+                deduplication_key,
+                Jsonb(
+                    {
+                        "player_id": int(player_id),
+                        "ranked_day_start": ranked_day_start_text,
+                        "trigger": "live_battle_projection",
+                        "projection_hash": projection_hash,
+                    }
+                ),
+                DEFAULT_PARSER_VERSION,
+                PROCESSING_VERSION,
+                DOMAIN_RULE_VERSION,
+                ANALYTICS_RULE_VERSION,
+            ),
+        )
+
+    @staticmethod
     def _load_reset_baseline(
         connection: Any,
         player_id: int,
@@ -3870,22 +4237,35 @@ class Database:
             }
             for row in adjustment_rows
         ]
-        battles = [item for item in contribution_evidence if item.get("included")]
+        canonical_events = serialize_ranked_day_battles(contribution_evidence)
+        events_by_battle_id = {
+            str(event["battle_id"]): event for event in canonical_events
+        }
+        battles: list[dict[str, Any]] = []
+        for item in contribution_evidence:
+            if item.get("included") is not True:
+                continue
+            battle_id = item.get("battle_identity")
+            # Keep the frozen reconciliation evidence (source and decision
+            # fields) and add the canonical screen-event projection alongside
+            # it. Evidence that cannot produce a screen event is still kept
+            # here for the existing private/audit contract; the API mapper
+            # excludes it from offense/defense event arrays.
+            event = (
+                events_by_battle_id.get(str(battle_id))
+                if battle_id is not None
+                else None
+            )
+            battles.append({**item, **event} if event is not None else dict(item))
         attack_three_star_count = sum(
             item.get("lens") == "offense" and item.get("stars") == 3 for item in battles
         )
         defense_three_star_count = sum(
             item.get("lens") == "defense" and item.get("stars") == 3 for item in battles
         )
-        defense_loss = (
-            result.observed_defense_loss
-            if result.automatic_defense_evidence_state == "not_applicable"
-            else (
-                result.observed_defense_loss + result.automatic_defense_loss
-                if result.automatic_defense_loss is not None
-                else None
-            )
-        )
+        # Automatic reset loss is published in adjustments, not attributed to
+        # an opponent battle. Keep this aggregate equal to the defense events.
+        defense_loss = result.observed_defense_loss
         public_state = (
             result.state
             if result.state in {"Live", "Complete", "Partial"}
@@ -3894,6 +4274,32 @@ class Database:
         partial_reasons = list(result.failure_reasons)
         if public_state != result.state:
             partial_reasons.append(f"ranked_day_state:{result.state}")
+        offense_events = [
+            item
+            for item in battles
+            if item.get("lens") == "offense" and "battle_id" in item
+        ]
+        defense_events = [
+            item
+            for item in battles
+            if item.get("lens") == "defense" and "battle_id" in item
+        ]
+        projection_consistent = (
+            len(offense_events) == result.attack_count
+            and len(defense_events) == result.defense_count
+            and sum(item.get("stars") == 3 for item in offense_events)
+            == attack_three_star_count
+            and sum(item.get("stars") == 3 for item in defense_events)
+            == defense_three_star_count
+            and sum(int(item["trophy_change"]) for item in offense_events)
+            == result.attack_trophy_gain
+            and abs(sum(int(item["trophy_change"]) for item in defense_events))
+            == result.observed_defense_loss
+        )
+        if not projection_consistent:
+            if public_state == "Complete":
+                public_state = "Partial"
+            partial_reasons.append("battle_event_projection_incomplete")
         connection.execute(
             """
             INSERT INTO api_player_daily_logs (
