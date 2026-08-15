@@ -15,10 +15,11 @@ We need to be on the same page with terminology. When communicating use this lan
 ## Working rules
 - Keep it simple, stupid.
 - Really channel the "measure twice, cut once" and "yagni" aggressively.
+- Use gpt-5.6-Luna (max reasoning) workers to get the work done, baby sit the workers throughout their task. 
 - Preserve maintainer changes and make the smallest complete change.
 - Add or update only the tests needed for changed behavior. Smallest proof that the change works.
 - Fight scope creep, try to honor the maintainer's intent in the most simple and realistic way.
-- Use the authenticated `gh` CLI for this private repository.
+- Use the authenticated `gh` CLI to navigate this private repository.
 - Do not commit, push, rebase, or open a pull request unless the maintainer asks.
 - Report what changed, what was verified, what was not verified, and what remains open.
 - The rest of this file is to help you navigate the project, but these are not "hard rules", think of them as "good defaults". The maintainers should be able to override anything written here.  
