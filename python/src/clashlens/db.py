@@ -278,7 +278,11 @@ def _claim_select_statement(
             AND job.due_at <= statement_timestamp())
         OR (job.state = 'leased'
             AND job.lease_expires_at <= statement_timestamp())"""
-    job_filter = f"""job.claim_compatibility_version = 1
+    # Generation 2 is the parser-v2 rollout fence. The previous image claims
+    # only generation 1, so it cannot interpret new v2 rows with its old
+    # adapter during a staggered deployment. This image retains generation 1
+    # for queued work and deterministic v1 replay.
+    job_filter = f"""job.claim_compatibility_version IN (1, 2)
         AND job.attempt_count < job.max_attempts AND {supported_filter}"""
     if job_id is not None:
         probe = f"""
@@ -1839,8 +1843,16 @@ class Database:
                         b.disagreement_state,
                         source_row.outcome,
                         source_row.failure_category,
-                        source_row.source_json -> 'opponent' ->> 'tag',
-                        source_row.source_json -> 'opponent' ->> 'name'
+                        CASE e.parser_version
+                            WHEN 'supercell-source-parser-v2'
+                                THEN source_row.source_json ->> 'opponentPlayerTag'
+                            ELSE source_row.source_json -> 'opponent' ->> 'tag'
+                        END,
+                        CASE e.parser_version
+                            WHEN 'supercell-source-parser-v2'
+                                THEN source_row.source_json ->> 'opponentName'
+                            ELSE source_row.source_json -> 'opponent' ->> 'name'
+                        END
                     FROM legend_battles AS b
                     JOIN battle_perspectives AS p ON p.battle_id = b.id
                     JOIN battle_evidence AS e ON e.id = p.evidence_id
@@ -2832,7 +2844,14 @@ class Database:
                         WHERE log.observed_at >= %s
                           AND log.observed_at < %s
                           AND (
-                              source_row.source_json ->> 'attackOrDefense' = %s
+                              (
+                                  log.parser_version = 'supercell-source-parser-v2'
+                                  AND source_row.source_json ->> 'attack' = %s
+                              )
+                              OR (
+                                  log.parser_version = 'supercell-source-parser-v1'
+                                  AND source_row.source_json ->> 'attackOrDefense' = %s
+                              )
                               OR source_row.outcome <> 'valid_legend'
                           )
                         """,
@@ -2840,6 +2859,7 @@ class Database:
                             snapshot_id,
                             period_start,
                             period_end,
+                            "true" if perspective == "attacker" else "false",
                             "attack" if perspective == "attacker" else "defense",
                         ),
                     ).fetchone()
@@ -3703,7 +3723,18 @@ class Database:
                 battle.disagreement_state,
                 source_row.outcome,
                 source_row.failure_category,
-                source_row.source_json -> 'opponent'
+                jsonb_build_object(
+                    'tag', CASE evidence.parser_version
+                        WHEN 'supercell-source-parser-v2'
+                            THEN source_row.source_json -> 'opponentPlayerTag'
+                        ELSE source_row.source_json -> 'opponent' -> 'tag'
+                    END,
+                    'name', CASE evidence.parser_version
+                        WHEN 'supercell-source-parser-v2'
+                            THEN source_row.source_json -> 'opponentName'
+                        ELSE source_row.source_json -> 'opponent' -> 'name'
+                    END
+                )
             FROM legend_battles AS battle
             JOIN battle_perspectives AS p ON p.battle_id = battle.id
             JOIN battle_evidence AS evidence ON evidence.id = p.evidence_id

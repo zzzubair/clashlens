@@ -163,28 +163,39 @@ Build and start the Python image after `up` has applied every pending forward
 migration:
 
 ```bash
-./deploy.sh worker-down
 ./deploy.sh up
 ./deploy.sh build-python
 ./deploy.sh worker-start
 ```
 
 Migration 0002 is frozen. Migration 0003 adds the reset-baseline lock seam and
-retains the prior worker's narrow `UPDATE (id)` grant for one rollback window,
-so the previous Python image remains compatible while the new image rolls out.
+retains the prior worker's narrow `UPDATE (id)` grant for one rollback window.
+Migration 0004 advances new source and replay work to
+`supercell-source-parser-v2` while retaining parser v1 for deterministic replay.
+It does not relabel existing v1 jobs or evidence: v1 reset baselines remain
+isolated from v2 reconciliation, and deployment never starts an automatic
+replay. Current v2 evidence must be collected normally or requested through
+the audited replay seam before it can support v2 reconciliation. The migration
+also fences v2 jobs into claim-compatibility generation 2; the new worker can
+drain generations 1 and 2, while the prior image remains limited to generation
+1 during rollback. When migration 0004 is pending, `up` gracefully stops every
+old worker replica before applying it, and on a contract-v1 upgrade it drains
+them before starting the rebuilt bridge. An old worker therefore cannot claim
+or publish v2-labelled work with the superseded parser interpretation. Workers
+remain stopped until the new Python image is built and started explicitly.
 The deployment consults `clash_lens_schema_migrations` and applies only missing
-forward migrations; a normal `up` never replays 0002 or an already-recorded
-0003. Runtime role passwords are still reconciled on every `up` through the
-separate role-configuration step.
+forward migrations; a normal `up` never replays an already-recorded migration.
+Runtime role passwords are still reconciled on every `up` through the separate
+role-configuration step.
 
 - `init` starts PostgreSQL, waits for readiness, and applies migration 0001
   only on an absent database. On a version-1 or version-2 database it fails
   without side effects.
 - `up` builds the collector image, then migrates the contract to version 2.
-  On an absent database it applies migrations 0001, 0002, and 0003 before
+  On an absent database it applies migrations 0001 through 0004 before
   configuring the three runtime role passwords and starting the required
   collector. On a version-1 database it starts the bridge collector, applies
-  missing migrations 0002 and 0003, configures roles, removes the bridge, and
+  missing migrations 0002 through 0004, configures roles, removes the bridge, and
   starts the required collector. On a version-2 database it applies only
   missing forward migrations and reconciles role passwords without a bridge.
   The bridge-before-migration order keeps the collector's version-1
@@ -451,7 +462,10 @@ monitoring. Operators must provide and test them before production use.
 
 The replay contract is owned by [Architecture](architecture.md#replay).
 Replay requests require an allowlisted authenticated host operator through
-the root-owned wrapper; no application role can insert replay requests.
+the root-owned wrapper; no application role can insert replay requests. The
+wrapper defaults to `supercell-source-parser-v2`. Pass
+`--parser-version supercell-source-parser-v1` only when deterministic replay
+under the archived v1 contract is required; no other parser value is accepted.
 
 Completion: the PostgreSQL volume and immutable archive remain intact, and
 the selected image is compatible with the current schema before restart.

@@ -10,9 +10,9 @@ readonly REPLAY_SERVICE_FILE='/etc/clashlens/replay-request.pg_service.conf'
 readonly OPERATOR_ALLOWLIST='/etc/clashlens/replay-request-operators'
 readonly PSQL='/usr/bin/psql'
 
-# Target versions are pinned to the exact versions the installed Python
-# runtime supports; operators cannot select versions.
-readonly REPLAY_PARSER_VERSION='supercell-source-parser-v1'
+# Derived-processing versions remain pinned. The source parser can be selected
+# only from the exact versions installed for deterministic archive replay.
+readonly DEFAULT_REPLAY_PARSER_VERSION='supercell-source-parser-v2'
 readonly REPLAY_PROCESSING_VERSION='clashlens-domain-processing-v1'
 readonly REPLAY_DOMAIN_RULE_VERSION='clashlens-domain-rules-v1'
 readonly REPLAY_ANALYTICS_RULE_VERSION='legend-analytics-v1'
@@ -70,18 +70,27 @@ IFS=: read -r sudo_passwd_name _ sudo_passwd_uid _ <<<"$sudo_passwd_entry"
 
 observation_id=''
 reason=''
+replay_parser_version=$DEFAULT_REPLAY_PARSER_VERSION
+parser_version_supplied=false
 while (( $# > 0 )); do
     case "$1" in
         --observation-id)
-            (( $# == 2 )) || status_denied
+            (( $# >= 2 )) || status_denied
             [[ -z "$observation_id" ]] || status_denied
             observation_id=$2
             shift 2
             ;;
         --reason)
-            (( $# == 2 )) || status_denied
+            (( $# >= 2 )) || status_denied
             [[ -z "$reason" ]] || status_denied
             reason=$2
+            shift 2
+            ;;
+        --parser-version)
+            (( $# >= 2 )) || status_denied
+            [[ "$parser_version_supplied" == false ]] || status_denied
+            replay_parser_version=$2
+            parser_version_supplied=true
             shift 2
             ;;
         *)
@@ -94,6 +103,10 @@ positive_bigint_pattern='^[1-9][0-9]{0,17}$'
 [[ "$observation_id" =~ $positive_bigint_pattern ]] || status_denied
 [[ ${#reason} -ge 8 && ${#reason} -le 500 ]] || status_denied
 [[ "$reason" =~ ^[[:print:]]+$ ]] || status_denied
+case "$replay_parser_version" in
+    supercell-source-parser-v1|supercell-source-parser-v2) ;;
+    *) status_denied ;;
+esac
 
 operator_identity="sudo:${SUDO_USER}:${SUDO_UID}"
 if ! replay_row=$(
@@ -117,7 +130,7 @@ FROM clashlens_request_python_replay_v2(
     :'observation_id'::bigint,
     :'operator_identity',
     :'reason',
-    '$REPLAY_PARSER_VERSION',
+    '$replay_parser_version',
     '$REPLAY_PROCESSING_VERSION',
     '$REPLAY_DOMAIN_RULE_VERSION',
     '$REPLAY_ANALYTICS_RULE_VERSION'

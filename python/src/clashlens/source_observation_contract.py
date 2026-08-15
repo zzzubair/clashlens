@@ -12,9 +12,9 @@ class SourceObservationContract:
     supported_parser_versions: frozenset[str]
 
 
-_DEFAULT_PARSER_VERSION = "supercell-source-parser-v1"
+_DEFAULT_PARSER_VERSION = "supercell-source-parser-v2"
 _SUPPORTED_PARSER_VERSIONS = frozenset(
-    {_DEFAULT_PARSER_VERSION, "supercell-source-parser-v2"}
+    {"supercell-source-parser-v1", _DEFAULT_PARSER_VERSION}
 )
 
 PROFILE_SOURCE_OBSERVATION_CONTRACT = SourceObservationContract(

@@ -46,7 +46,7 @@ def test_source_observation_contract_accepts_each_installed_endpoint(
     assert contract.endpoint == endpoint
     assert contract.endpoint_version == endpoint_version
     assert contract.schema_version == schema_version
-    assert contract.default_parser_version == "supercell-source-parser-v1"
+    assert contract.default_parser_version == "supercell-source-parser-v2"
     assert contract.supported_parser_versions == parser_versions
     assert (
         validate_source_observation_contract(

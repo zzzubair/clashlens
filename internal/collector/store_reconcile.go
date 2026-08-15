@@ -155,7 +155,7 @@ func newObservationCommitIntent(
 }
 
 func parserVersionForEndpoint(endpoint endpointName) string {
-	return "supercell-source-parser-v1"
+	return "supercell-source-parser-v2"
 }
 
 type endpointResultRow struct {

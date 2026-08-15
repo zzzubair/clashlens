@@ -77,8 +77,12 @@ A domain change is complete only when every affected source observation, derived
 - The official battle-log API returns up to the latest 50 battles.
 - One response can mix `legend`, `ranked`, and `homeVillage` battles.
 - Legend I rows use `battleType: "legend"`.
-- Battle rows include an attack-or-defense flag and a `battleTimestamp`.
-- Battle rows include stars, destruction, opponent data, and `armyShareCode`.
+- Legend I battle rows use `attack: true` when the reporting player attacked
+  and `attack: false` when the reporting player defended, plus a
+  `battleTimestamp`.
+- Legend I battle rows include stars, destruction, flat
+  `opponentPlayerTag`, `opponentName`, and `opponentTownHallLevel` fields, and
+  `armyShareCode`.
 - Battle rows do not include the trophy change directly. Clash Lens derives it from stars and destruction using the versioned table in `docs/data/legend-trophy-allocation-v1.csv`.
 - For each star count, use the last trophy value whose minimum destruction percentage is not greater than the battle's destruction percentage. Reject impossible or out-of-range star and destruction combinations instead of guessing.
 - A 0-star attack at 0 through 9 percent destruction gives the attacker 0 trophies. Other 0-star attacks give the attacker the amount in the table, but the defender loses 0 trophies.

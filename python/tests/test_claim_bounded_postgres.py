@@ -460,7 +460,7 @@ def test_forward_migration_reapply_keeps_python_claim_indexes(database_url: str)
 
             root = Path(__file__).parents[2]
             connection.execute(
-                (root / "deploy/migrations/0003_regular_poll_dedup.sql").read_text(
+                (root / "deploy/migrations/0004_source_parser_v2.sql").read_text(
                     encoding="utf-8"
                 )
             )
@@ -484,7 +484,7 @@ def test_forward_migration_reapply_keeps_python_claim_indexes(database_url: str)
                 "python_processing_jobs_unknown_priority_v2",
                 "python_processing_jobs_expired_leases_v2",
                 "python_processing_jobs_expired_maintenance_v2",
-            }, f"claim indexes after 0003 reapply = {indexes}"
+            }, f"claim indexes after 0004 reapply = {indexes}"
             marker = connection.execute(
                 """
                 SELECT claim_compatibility_version
@@ -492,13 +492,13 @@ def test_forward_migration_reapply_keeps_python_claim_indexes(database_url: str)
                 WHERE deduplication_key = 'reapply:keeps'
                 """
             ).fetchone()[0]
-            assert marker == 1, "0003 reapply must preserve claimable work"
+            assert marker == 1, "0004 reapply must preserve v1 claimable work"
             assert (
                 connection.execute(
                     "SELECT count(*) FROM python_processing_jobs"
                 ).fetchone()[0]
                 == 1
-            ), "0002 reapply must be non-destructive"
+            ), "0004 reapply must be non-destructive"
 
 
 def test_forward_migration_classifies_populated_v2_backlog(database_url: str) -> None:

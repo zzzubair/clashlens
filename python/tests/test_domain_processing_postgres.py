@@ -22,6 +22,34 @@ from clashlens.worker import ObservationProcessor
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 RANKING_FIXTURE = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
+LIVE_BATTLE_PARSER_VERSION = "supercell-source-parser-v2"
+
+
+def _live_battle_row(
+    *,
+    attack: bool,
+    battle_timestamp: datetime,
+    opponent_tag: str,
+    opponent_name: str,
+    opponent_town_hall_level: int = 17,
+    battle_type: str = "legend",
+    stars: int = 3,
+    destruction_percentage: int = 100,
+    army_share_code: str = "u1x0-2x1",
+) -> dict[str, Any]:
+    """Build the flat fields returned by the live Legend I endpoint."""
+
+    return {
+        "attack": attack,
+        "battleTimestamp": battle_timestamp.isoformat().replace("+00:00", "Z"),
+        "stars": stars,
+        "destructionPercentage": destruction_percentage,
+        "armyShareCode": army_share_code,
+        "opponentPlayerTag": opponent_tag,
+        "opponentName": opponent_name,
+        "opponentTownHallLevel": opponent_town_hall_level,
+        "battleType": battle_type,
+    }
 
 
 def _role_configure(role: str):
@@ -501,12 +529,9 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
 
             defender_payload = json.loads(attacker_body)
             defender_row = defender_payload["items"][0]
-            defender_row["attackOrDefense"] = "defense"
-            defender_row["opponent"] = {
-                "tag": "#2PP",
-                "name": "Synthetic Attacker",
-                "trophies": 6040,
-            }
+            defender_row["attack"] = False
+            defender_row["opponentPlayerTag"] = "#2PP"
+            defender_row["opponentName"] = "Synthetic Attacker"
             _defender_observation_id, _defender_job = store_observation(
                 connection_info,
                 archive_server,
@@ -580,11 +605,8 @@ def test_concurrent_battle_batches_lock_shared_rows_in_one_order(
     first = payload["items"][0]
     second = json.loads(json.dumps(first))
     second["battleTimestamp"] = "2026-08-04T11:30:00Z"
-    second["opponent"] = {
-        "tag": "#9PP",
-        "name": "Second Defender",
-        "trophies": 6002,
-    }
+    second["opponentPlayerTag"] = "#9PP"
+    second["opponentName"] = "Second Defender"
     forward = json.dumps({"items": [first, second]}).encode()
     reverse = json.dumps({"items": [second, first]}).encode()
 
@@ -763,13 +785,10 @@ def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
 
             defender_payload = json.loads(changed_body)
             defender_row = defender_payload["items"][0]
-            defender_row["attackOrDefense"] = "defense"
+            defender_row["attack"] = False
             defender_row["armyShareCode"] = "disagreed-share-code"
-            defender_row["opponent"] = {
-                "tag": "#2PP",
-                "name": "Synthetic Attacker",
-                "trophies": 6040,
-            }
+            defender_row["opponentPlayerTag"] = "#2PP"
+            defender_row["opponentName"] = "Synthetic Attacker"
             _defender_observation, defender_job = store_observation(
                 connection_info,
                 archive_server,
@@ -846,6 +865,201 @@ def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
             assert len(latest_battles) == 1
             assert latest_battles[0]["disagreement"] is True
             assert "battle_id" not in latest_battles[0]
+        finally:
+            database.close()
+
+
+def test_live_shaped_battle_rows_publish_one_player_battle_without_duplicate_contribution(
+    database_url: str,
+    archive_server,
+) -> None:
+    """Flat live rows share one battle identity through reconciliation and the API read model."""
+
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+        ranked_day = ranked_day_for(now)
+        event_at = ranked_day.start + timedelta(hours=1)
+        observed_at = ranked_day.start + timedelta(hours=2)
+
+        attacker_row = _live_battle_row(
+            attack=True,
+            battle_timestamp=event_at,
+            opponent_tag="#8PP",
+            opponent_name="Live Defender",
+            opponent_town_hall_level=17,
+        )
+        ranked_row = _live_battle_row(
+            attack=True,
+            battle_timestamp=event_at + timedelta(minutes=1),
+            opponent_tag="#9PP",
+            opponent_name="Ignored Ranked Defender",
+            battle_type="ranked",
+        )
+        defender_row = _live_battle_row(
+            attack=False,
+            battle_timestamp=event_at,
+            opponent_tag="#2PP",
+            opponent_name="Live Attacker",
+            opponent_town_hall_level=17,
+        )
+        attacker_observation_id, attacker_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="live-shape-attacker",
+            endpoint="battle_log",
+            body=json.dumps({"items": [attacker_row, ranked_row]}).encode(),
+            observed_at=observed_at,
+            normalized_tag="#2PP",
+            parser_version=LIVE_BATTLE_PARSER_VERSION,
+        )
+        defender_observation_id, defender_job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="live-shape-defender",
+            endpoint="battle_log",
+            body=json.dumps({"items": [defender_row]}).encode(),
+            observed_at=observed_at + timedelta(minutes=1),
+            normalized_tag="#8PP",
+            parser_version=LIVE_BATTLE_PARSER_VERSION,
+        )
+
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            attacker_result = processor.process_job(
+                attacker_job, owner="live-shape-attacker"
+            )
+            defender_result = processor.process_job(
+                defender_job, owner="live-shape-defender"
+            )
+            assert attacker_result is not None and attacker_result.outcome == "processed"
+            assert defender_result is not None and defender_result.outcome == "processed"
+
+            with database.pool.connection() as connection:
+                source_rows = connection.execute(
+                    """
+                    SELECT source_row.outcome, source_row.source_json
+                    FROM battle_source_rows AS source_row
+                    JOIN battle_log_observations AS battle_log
+                      ON battle_log.id = source_row.battle_log_observation_id
+                    WHERE battle_log.observation_id IN (%s, %s)
+                    ORDER BY battle_log.observation_id, source_row.source_row_index
+                    """,
+                    (attacker_observation_id, defender_observation_id),
+                ).fetchall()
+                battle_parser_versions = connection.execute(
+                    """
+                    SELECT DISTINCT parser_version
+                    FROM battle_log_observations
+                    WHERE observation_id IN (%s, %s)
+                    ORDER BY parser_version
+                    """,
+                    (attacker_observation_id, defender_observation_id),
+                ).fetchall()
+                canonical_counts = connection.execute(
+                    """
+                    SELECT
+                        (SELECT count(*) FROM legend_battles),
+                        (SELECT count(*) FROM battle_evidence),
+                        (SELECT count(*) FROM battle_perspectives),
+                        (SELECT count(*) FROM known_player_discoveries)
+                    """
+                ).fetchone()
+                canonical = connection.execute(
+                    """
+                    SELECT battle.disagreement_state,
+                           attacker.normalized_tag, defender.normalized_tag
+                    FROM legend_battles AS battle
+                    JOIN players AS attacker
+                      ON attacker.id = battle.attacker_player_id
+                    JOIN players AS defender
+                      ON defender.id = battle.defender_player_id
+                    """
+                ).fetchone()
+                player_ids = {
+                    text(row[0]): int(row[1])
+                    for row in connection.execute(
+                        """
+                        SELECT normalized_tag, id
+                        FROM players
+                        WHERE normalized_tag IN ('#2PP', '#8PP')
+                        """
+                    ).fetchall()
+                }
+                reconciliation_jobs = connection.execute(
+                    """
+                    SELECT id, (input_json ->> 'player_id')::bigint
+                    FROM python_processing_jobs
+                    WHERE work_type = 'reconcile_ranked_day'
+                      AND status = 'pending'
+                      AND input_json ->> 'trigger' = 'live_battle_projection'
+                    ORDER BY id
+                    """
+                ).fetchall()
+
+            assert [text(row[0]) for row in source_rows] == [
+                "valid_legend",
+                "ignored_non_legend",
+                "valid_legend",
+            ]
+            assert [text(row[0]) for row in battle_parser_versions] == [
+                LIVE_BATTLE_PARSER_VERSION
+            ]
+            assert source_rows[0][1]["opponentPlayerTag"] == "#8PP"
+            assert source_rows[0][1]["opponentTownHallLevel"] == 17
+            assert canonical_counts == (1, 2, 2, 2)
+            assert canonical is not None
+            assert tuple(text(value) for value in canonical) == (
+                "agreed",
+                "#2PP",
+                "#8PP",
+            )
+            assert {int(row[1]) for row in reconciliation_jobs} == set(
+                player_ids.values()
+            )
+
+            for job_id, _player_id in reconciliation_jobs:
+                result = processor.process_job(
+                    int(job_id), owner=f"live-shape-reconcile-{job_id}"
+                )
+                assert result is not None and result.outcome == "processed"
+
+            with database.pool.connection() as connection:
+                ranked = connection.execute(
+                    """
+                    SELECT version, state, attack_count, defense_count,
+                           contribution_evidence
+                    FROM ranked_day_versions
+                    WHERE player_id = %s AND ranked_day_start = %s
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """,
+                    (player_ids["#2PP"], ranked_day.start),
+                ).fetchone()
+                publication = connection.execute(
+                    """
+                    SELECT battles
+                    FROM api_player_daily_logs
+                    WHERE player_id = %s AND ranked_day_start = %s
+                    ORDER BY version DESC
+                    LIMIT 1
+                    """,
+                    (player_ids["#2PP"], ranked_day.start),
+                ).fetchone()
+
+            assert ranked is not None
+            assert text(ranked[1]) == "Live"
+            assert ranked[2:4] == (1, 0)
+            included = [item for item in ranked[4] if item["included"]]
+            assert len(included) == 1
+            assert included[0]["opponent_tag"] == "#8PP"
+            assert included[0]["opponent_name"] == "Live Defender"
+            assert publication is not None
+            assert len(publication[0]) == 1
+            assert publication[0][0]["opponent"] == {
+                "tag": "#8PP",
+                "name": "Live Defender",
+            }
         finally:
             database.close()
 
@@ -1216,12 +1430,9 @@ def test_canonical_battle_keeps_detail_disagreement_for_both_perspectives(
         )
         defender_payload = json.loads(attacker_body)
         defender_row = defender_payload["items"][0]
-        defender_row["attackOrDefense"] = "defense"
-        defender_row["opponent"] = {
-            "tag": "#2PP",
-            "name": "Synthetic Attacker",
-            "trophies": 6022,
-        }
+        defender_row["attack"] = False
+        defender_row["opponentPlayerTag"] = "#2PP"
+        defender_row["opponentName"] = "Synthetic Attacker"
         defender_row["armyShareCode"] = "different-share-code"
         _defender_observation_id, defender_job_id = store_observation(
             connection_info,
