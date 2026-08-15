@@ -28,6 +28,7 @@ def domain_database(database_url: str) -> Iterator[str]:
             root / "deploy" / "migrations" / "0001_collector.sql",
             root / "deploy" / "migrations" / "0002_python_layer.sql",
             root / "deploy" / "migrations" / "0003_regular_poll_dedup.sql",
+            root / "deploy" / "migrations" / "0004_source_parser_v2.sql",
         )
         with psycopg.connect(connection_info, autocommit=True) as connection:
             for path in sql_files:

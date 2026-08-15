@@ -11,7 +11,14 @@ from .source_observation_contract import BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT
 
 BATTLE_LOG_ENDPOINT_VERSION = BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.endpoint_version
 BATTLE_LOG_SCHEMA_VERSION = BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.schema_version
-SOURCE_PARSER_VERSION = BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.default_parser_version
+LEGACY_SOURCE_PARSER_VERSION = "supercell-source-parser-v1"
+LIVE_SOURCE_PARSER_VERSION = (
+    BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.default_parser_version
+)
+# The endpoint envelope is unchanged, but the source row shape changed. Keep
+# the v1 parser available for replaying old observations and use v2 for new
+# live Legend I observations.
+SOURCE_PARSER_VERSION = LIVE_SOURCE_PARSER_VERSION
 SUPPORTED_SOURCE_PARSER_VERSIONS = (
     BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT.supported_parser_versions
 )
@@ -104,7 +111,8 @@ def parse_battle_log(
         ) from error
 
     rows = tuple(
-        _parse_row(index, item, reporting_tag) for index, item in enumerate(items)
+        _parse_row(index, item, reporting_tag, parser_version)
+        for index, item in enumerate(items)
     )
     return ParsedBattleLog(
         normalized_tag=reporting_tag,
@@ -118,7 +126,12 @@ def parse_battle_log(
     )
 
 
-def _parse_row(index: int, source: Any, reporting_tag: str) -> ParsedBattleRow:
+def _parse_row(
+    index: int,
+    source: Any,
+    reporting_tag: str,
+    parser_version: str,
+) -> ParsedBattleRow:
     if not isinstance(source, dict):
         return _gap(
             index, source, "unsupported_legend_row", "battle row is not an object"
@@ -130,12 +143,8 @@ def _parse_row(index: int, source: Any, reporting_tag: str) -> ParsedBattleRow:
             source_json=source,
         )
     try:
-        direction = source["attackOrDefense"]
-        if direction not in {"attack", "defense"}:
-            raise BattleLogParseError(
-                "unsupported_perspective", "attackOrDefense must be attack or defense"
-            )
-        timestamp = _parse_battle_timestamp(source["battleTimestamp"])
+        is_attacker = _parse_direction(source, parser_version)
+        timestamp = _parse_battle_timestamp(source["battleTimestamp"], parser_version)
         stars = _required_int(source, "stars")
         destruction = _required_int(source, "destructionPercentage")
         army_share_code = source["armyShareCode"]
@@ -143,17 +152,9 @@ def _parse_row(index: int, source: Any, reporting_tag: str) -> ParsedBattleRow:
             raise BattleLogParseError(
                 "missing_army_share_code", "Legend I row must contain armyShareCode"
             )
-        opponent = source["opponent"]
-        if not isinstance(opponent, dict):
-            raise BattleLogParseError(
-                "invalid_opponent", "Legend I row must contain opponent data"
-            )
-        try:
-            opponent_tag = normalize_player_tag(opponent["tag"])
-        except (KeyError, ProfileParseError) as error:
-            raise BattleLogParseError(
-                "invalid_opponent", "Legend I opponent tag is invalid"
-            ) from error
+        opponent_tag, opponent_name, opponent_trophies = _parse_opponent(
+            source, parser_version
+        )
         if opponent_tag == reporting_tag:
             raise BattleLogParseError(
                 "identity_conflict", "reporting player and opponent must differ"
@@ -161,16 +162,10 @@ def _parse_row(index: int, source: Any, reporting_tag: str) -> ParsedBattleRow:
         allocation = allocate_trophies(stars, destruction)
         attacker_tag, defender_tag = (
             (reporting_tag, opponent_tag)
-            if direction == "attack"
+            if is_attacker
             else (opponent_tag, reporting_tag)
         )
         day = ranked_day_for(timestamp)
-        opponent_name = opponent.get("name")
-        if opponent_name is not None and not isinstance(opponent_name, str):
-            raise BattleLogParseError(
-                "invalid_opponent", "opponent name must be text when supplied"
-            )
-        opponent_trophies = _optional_int(opponent.get("trophies"), "opponent trophies")
         reporter_trophies = _optional_int(
             source.get("trophies", source.get("playerTrophies")), "reporter trophies"
         )
@@ -190,7 +185,7 @@ def _parse_row(index: int, source: Any, reporting_tag: str) -> ParsedBattleRow:
         source_json=source,
         battle=ParsedBattle(
             reporting_tag=reporting_tag,
-            perspective="attacker" if direction == "attack" else "defender",
+            perspective="attacker" if is_attacker else "defender",
             attacker_tag=attacker_tag,
             defender_tag=defender_tag,
             opponent_tag=opponent_tag,
@@ -209,19 +204,98 @@ def _parse_row(index: int, source: Any, reporting_tag: str) -> ParsedBattleRow:
     )
 
 
-def _parse_battle_timestamp(value: Any) -> datetime:
+def _parse_direction(source: dict[str, Any], parser_version: str) -> bool:
+    if parser_version == LIVE_SOURCE_PARSER_VERSION:
+        direction = source.get("attack")
+        if not isinstance(direction, bool):
+            raise BattleLogParseError(
+                "unsupported_perspective",
+                "attack must be a boolean for battle-log parser v2",
+            )
+        return direction
+    if parser_version == LEGACY_SOURCE_PARSER_VERSION:
+        direction = source["attackOrDefense"]
+        if direction not in {"attack", "defense"}:
+            raise BattleLogParseError(
+                "unsupported_perspective",
+                "attackOrDefense must be attack or defense for battle-log parser v1",
+            )
+        return direction == "attack"
+    raise BattleLogParseError(
+        "unsupported_parser_version", "battle-log parser version is not installed"
+    )
+
+
+def _parse_opponent(
+    source: dict[str, Any], parser_version: str
+) -> tuple[str, str | None, int | None]:
+    if parser_version == LIVE_SOURCE_PARSER_VERSION:
+        tag_value = source.get("opponentPlayerTag")
+        name = source.get("opponentName")
+        trophies = source.get("opponentTrophies")
+    elif parser_version == LEGACY_SOURCE_PARSER_VERSION:
+        opponent = source["opponent"]
+        if not isinstance(opponent, dict):
+            raise BattleLogParseError(
+                "invalid_opponent", "Legend I row must contain opponent data"
+            )
+        tag_value = opponent.get("tag")
+        name = opponent.get("name")
+        trophies = opponent.get("trophies")
+    else:
+        raise BattleLogParseError(
+            "unsupported_parser_version", "battle-log parser version is not installed"
+        )
+
+    if not isinstance(tag_value, str):
+        raise BattleLogParseError(
+            "invalid_opponent", "Legend I opponent tag is invalid"
+        )
+    try:
+        opponent_tag = normalize_player_tag(tag_value)
+    except ProfileParseError as error:
+        raise BattleLogParseError(
+            "invalid_opponent", "Legend I opponent tag is invalid"
+        ) from error
+    if name is not None and not isinstance(name, str):
+        raise BattleLogParseError(
+            "invalid_opponent", "opponent name must be text when supplied"
+        )
+    opponent_trophies = _optional_int(trophies, "opponent trophies")
+    return opponent_tag, name, opponent_trophies
+
+
+def _parse_battle_timestamp(value: Any, parser_version: str) -> datetime:
     if not isinstance(value, str):
         raise BattleLogParseError(
             "invalid_battle_timestamp", "battleTimestamp must be text"
         )
     try:
-        if value.endswith("Z") and "-" not in value:
-            parsed = datetime.strptime(value, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=UTC)
+        if parser_version == LEGACY_SOURCE_PARSER_VERSION:
+            if value.endswith("Z") and "-" not in value:
+                parsed = datetime.strptime(value, "%Y%m%dT%H%M%S.%fZ").replace(
+                    tzinfo=UTC
+                )
+            else:
+                parsed = datetime.fromisoformat(value)
+        elif (
+            len(value) >= 9
+            and value[:8].isdigit()
+            and value[8] == "T"
+            and value.endswith("Z")
+        ):
+            compact = value[:-1]
+            parsed = datetime.strptime(
+                compact,
+                "%Y%m%dT%H%M%S.%f" if "." in compact else "%Y%m%dT%H%M%S",
+            ).replace(tzinfo=UTC)
         else:
             parsed = datetime.fromisoformat(value)
     except ValueError as error:
         raise BattleLogParseError(
-            "invalid_battle_timestamp", "battleTimestamp is not accepted by adapter v1"
+            "invalid_battle_timestamp",
+            f"battleTimestamp is not accepted by adapter "
+            f"{parser_version.rsplit('-', 1)[-1]}",
         ) from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise BattleLogParseError(

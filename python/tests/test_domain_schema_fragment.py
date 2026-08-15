@@ -91,7 +91,8 @@ def test_python_production_migration_supports_global_observations_without_fake_p
                 INSERT INTO python_processing_jobs (observation_id)
                 VALUES (%s)
                 RETURNING work_type, deduplication_key, parser_version,
-                          processing_version, domain_rule_version
+                          processing_version, domain_rule_version,
+                          claim_compatibility_version
                 """,
                 (observation_id,),
             ).fetchone()
@@ -99,7 +100,8 @@ def test_python_production_migration_supports_global_observations_without_fake_p
     assert tuple(text(value) for value in job) == (
         "process_observation",
         f"process-observation:{observation_id}",
-        "supercell-source-parser-v1",
+        "supercell-source-parser-v2",
         "clashlens-domain-processing-v1",
         "clashlens-domain-rules-v1",
+        2,
     )

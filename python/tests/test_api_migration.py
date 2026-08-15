@@ -23,7 +23,10 @@ def text(value: object) -> str:
 
 @contextmanager
 def migrated_production_database(
-    database_url: str, *, include_migration_0003: bool = True
+    database_url: str,
+    *,
+    include_migration_0003: bool = True,
+    include_migration_0004: bool = True,
 ) -> Iterator[str]:
     schema = f"python_api_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
@@ -49,6 +52,12 @@ def migrated_production_database(
                         encoding="utf-8"
                     )
                 )
+                if include_migration_0004:
+                    connection.execute(
+                        (
+                            ROOT / "deploy/migrations/0004_source_parser_v2.sql"
+                        ).read_text(encoding="utf-8")
+                    )
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -452,3 +461,108 @@ def test_python_migration_normalizes_all_legacy_source_parser_versions(
                 )
             }
             assert normalized_versions == {"supercell-source-parser-v1"}
+
+
+def test_source_parser_v2_migration_advances_defaults_and_keeps_v1_replayable(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            defaults = {
+                text(row[0]): text(row[1])
+                for row in connection.execute(
+                    """
+                    SELECT table_name, column_default
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND column_name = 'parser_version'
+                      AND table_name IN (
+                          'python_processing_jobs',
+                          'ranked_day_versions',
+                          'reset_baseline_evidence'
+                      )
+                    ORDER BY table_name
+                    """
+                )
+            }
+            replay_definition = text(
+                connection.execute(
+                    """
+                    SELECT pg_get_functiondef(
+                        'clashlens_request_python_replay_v2(bigint, text, text, text, text, text, text)'::regprocedure
+                    )
+                    """
+                ).fetchone()[0]
+            )
+            migration_count = connection.execute(
+                """
+                SELECT count(*)
+                FROM clash_lens_schema_migrations
+                WHERE version = 4
+                """
+            ).fetchone()[0]
+
+    assert defaults == {
+        "python_processing_jobs": "'supercell-source-parser-v2'::text",
+        "ranked_day_versions": "'supercell-source-parser-v2'::text",
+        "reset_baseline_evidence": "'supercell-source-parser-v2'::text",
+    }
+    assert "supercell-source-parser-v1" in replay_definition
+    assert "supercell-source-parser-v2" in replay_definition
+    assert migration_count == 1
+
+
+def test_source_parser_v2_migration_fences_existing_v2_work_from_prior_worker(
+    database_url: str,
+) -> None:
+    from test_claim_jobs_postgres import _insert_job, _insert_observation
+
+    with migrated_production_database(
+        database_url, include_migration_0004=False
+    ) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            observation_id = _insert_observation(
+                connection, occurrence_key="pre-0004-parser-v2"
+            )
+            job_id = _insert_job(
+                connection,
+                work_type="process_observation",
+                deduplication_key="pre-0004:parser-v2",
+                input_json={},
+                observation_id=observation_id,
+                parser_version="supercell-source-parser-v2",
+            )
+            before = connection.execute(
+                """
+                SELECT claim_compatibility_version
+                FROM python_processing_jobs
+                WHERE id = %s
+                """,
+                (job_id,),
+            ).fetchone()[0]
+            connection.execute(
+                (ROOT / "deploy/migrations/0004_source_parser_v2.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+            after = connection.execute(
+                """
+                SELECT claim_compatibility_version
+                FROM python_processing_jobs
+                WHERE id = %s
+                """,
+                (job_id,),
+            ).fetchone()[0]
+
+        assert before == 1
+        assert after == 2
+
+        from clashlens.db import Database
+
+        database = Database(connection_info)
+        try:
+            claim = database.claim_job(owner="parser-v2-fence", job_id=job_id)
+            assert claim is not None
+            assert claim.parser_version == "supercell-source-parser-v2"
+        finally:
+            database.close()

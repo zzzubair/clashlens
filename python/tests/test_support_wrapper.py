@@ -89,13 +89,14 @@ def test_replay_request_is_a_restricted_host_wrapper() -> None:
     assert "lock_timeout" in text
     assert 'protected_root_file "$script_path"' in text
     assert "(8#$mode & 0077)" in text
+    assert "supercell-source-parser-v2" in text
     assert "supercell-source-parser-v1" in text
     assert "clashlens-domain-processing-v1" in text
     assert "clashlens-domain-rules-v1" in text
     assert "legend-analytics-v1" in text
     assert "CLASHLENS_DATABASE_URL" not in text
     assert "token" not in text.lower()
-    assert "--parser-version" not in text
+    assert "--parser-version" in text
     assert "--processing-version" not in text
     assert "--domain-rule-version" not in text
     assert "--analytics-rule-version" not in text

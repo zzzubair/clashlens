@@ -2,27 +2,24 @@
   "items": [
     {
       "battleType": "legend",
-      "attackOrDefense": "attack",
+      "attack": true,
       "battleTimestamp": "2026-08-04T12:00:00Z",
       "stars": 3,
       "destructionPercentage": 100,
-      "opponent": {
-        "tag": "#8PP",
-        "name": "Synthetic Defender",
-        "trophies": 6001
-      },
+      "opponentPlayerTag": "#8PP",
+      "opponentName": "Synthetic Defender",
+      "opponentTownHallLevel": 18,
       "armyShareCode": "u1x0-2x1"
     },
     {
       "battleType": "homeVillage",
-      "attackOrDefense": "defense",
+      "attack": false,
       "battleTimestamp": "2026-08-04T11:00:00Z",
       "stars": 1,
       "destructionPercentage": 50,
-      "opponent": {
-        "tag": "#9PP",
-        "name": "Ignored Home Village"
-      },
+      "opponentPlayerTag": "#9PP",
+      "opponentName": "Ignored Home Village",
+      "opponentTownHallLevel": 18,
       "armyShareCode": "u1x0"
     }
   ]

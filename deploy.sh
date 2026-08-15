@@ -7,6 +7,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0001_collector.sql"
   "$ROOT_DIR/deploy/migrations/0002_python_layer.sql"
   "$ROOT_DIR/deploy/migrations/0003_regular_poll_dedup.sql"
+  "$ROOT_DIR/deploy/migrations/0004_source_parser_v2.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -559,6 +560,12 @@ apply_pending_forward_migrations() {
     version=$((index + 1))
     migration_file=${MIGRATION_FILES[$index]}
     if ! schema_migration_applied "$version"; then
+      if (( version == 4 )); then
+        # Parser v2 changes the interpretation of source rows. Drain the old
+        # image before installing its claim fence so no retained lease can
+        # publish with the superseded interpretation after the migration.
+        stop_all_worker_containers
+      fi
       apply_migration_file "$migration_file"
     fi
   done
@@ -1209,7 +1216,10 @@ case "$command" in
     if [[ "$version" == "1" ]]; then
       # A deployed v1 collector already owns the health port. Stop it before
       # the contract-v1 bridge starts, or the bridge cannot bind that port.
+      # Drain old Python workers too: the rebuilt bridge labels new source
+      # work parser-v2, which the previous worker must never claim.
       stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
+      stop_all_worker_containers
       start_bridge_collector
       wait_for_collector
       apply_pending_forward_migrations

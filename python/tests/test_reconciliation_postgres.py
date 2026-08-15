@@ -531,7 +531,7 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             assert second_version["evidence_complete"] is True
             assert first_version["coverage_complete"] is True
             assert second_version["coverage_complete"] is True
-            assert text(first_version["parser_version"]) == "supercell-source-parser-v1"
+            assert text(first_version["parser_version"]) == "supercell-source-parser-v2"
             assert (
                 text(first_version["processing_version"])
                 == "clashlens-domain-processing-v1"
@@ -842,8 +842,8 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
             )
         )
         battle_payload = json.loads(_battle_log())
-        battle_payload["items"][0]["opponent"]["tag"] = " #8pp "
-        battle_payload["items"][0]["opponent"].pop("name")
+        battle_payload["items"][0]["opponentPlayerTag"] = " #8pp "
+        battle_payload["items"][0].pop("opponentName")
         _middle_observation, middle_job = store_observation(
             connection_info,
             archive_server,
@@ -865,8 +865,8 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
             normalized_tag="#2PP",
         )
         defender_payload = json.loads(json.dumps(battle_payload))
-        defender_payload["items"][0]["attackOrDefense"] = "defense"
-        defender_payload["items"][0]["opponent"] = {"tag": "#2PP"}
+        defender_payload["items"][0]["attack"] = False
+        defender_payload["items"][0]["opponentPlayerTag"] = "#2PP"
         _defender_observation, defender_job = store_observation(
             connection_info,
             archive_server,
