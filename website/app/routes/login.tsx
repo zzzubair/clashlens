@@ -69,10 +69,6 @@ export default function LoginRoute() {
           </p>
         </div>
       )}
-
-      <p className="back-link">
-        <Link to="/">← Back to home</Link>
-      </p>
     </main>
   );
 }

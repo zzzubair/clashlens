@@ -69,9 +69,6 @@ export default function UserRoute() {
           <h1 id="user-not-found-title">User not found</h1>
           <p>No Clash Lens user exists at this address.</p>
         </section>
-        <p className="back-link">
-          <Link to="/">← Back to home</Link>
-        </p>
       </main>
     );
   }
@@ -90,7 +87,7 @@ export default function UserRoute() {
           <ul className="player-link-list">
             {data.user.verifiedPlayers.map((player) => (
               <li key={player.tag}>
-                <Link to={canonicalPlayerPath(player.tag)}>
+                <Link to={canonicalPlayerPath(player.tag)} reloadDocument>
                   {player.name ?? player.tag}
                 </Link>
                 <span className="player-tag">{player.tag}</span>
@@ -104,10 +101,6 @@ export default function UserRoute() {
           </div>
         )}
       </section>
-
-      <p className="back-link">
-        <Link to="/">← Back to home</Link>
-      </p>
     </main>
   );
 }

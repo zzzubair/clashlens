@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { Link, data, redirect, useActionData, useLoaderData } from "react-router";
+import { data, redirect, useActionData, useLoaderData } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import {
@@ -291,10 +291,6 @@ export default function AccountProfileRoute() {
           </button>
         </form>
       </section>
-
-      <p className="back-link">
-        <Link to="/account">← Back to your account</Link>
-      </p>
     </main>
   );
 }

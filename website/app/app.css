@@ -549,11 +549,6 @@ h3 {
   border-bottom: 1px solid #e0e7f0;
 }
 
-.back-link {
-  display: inline-block;
-  margin-bottom: 1.5rem;
-}
-
 .page-footer {
   align-items: flex-start;
   justify-content: space-between;
@@ -607,8 +602,7 @@ h3 {
     width: min(100% - 1rem, 76rem);
   }
 
-  .hero-actions,
-  .search-controls {
+  .hero-actions {
     align-items: stretch;
     flex-direction: column;
   }

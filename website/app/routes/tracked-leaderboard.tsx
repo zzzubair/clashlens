@@ -31,9 +31,6 @@ export default function TrackedLeaderboardRoute() {
   const data = useLoaderData<typeof loader>();
   return (
     <main className="page-shell">
-      <Link className="back-link" to="/">
-        ← Back to home
-      </Link>
       <section className="hero" aria-labelledby="leaderboard-title">
         <h1 id="leaderboard-title">
           {data.leaderboard?.view === "daily" ? "Daily leaderboard" : "Live leaderboard"}
@@ -57,7 +54,7 @@ export default function TrackedLeaderboardRoute() {
                   ? "Daily leaderboard"
                   : "Live leaderboard"
               }
-              className="data-table"
+              className="data-table responsive-table"
             >
               <caption className="sr-only">
                 {data.leaderboard.view === "daily"
@@ -76,16 +73,27 @@ export default function TrackedLeaderboardRoute() {
               <tbody>
                 {data.leaderboard.entries.map((entry) => (
                   <tr key={entry.tag}>
-                    <td>{entry.rank}</td>
-                    <th scope="row">
-                      <Link className="player-name" to={canonicalPlayerPath(entry.tag)}>
+                    <td data-label="Rank">{entry.rank}</td>
+                    <th scope="row" data-label="Player">
+                      <Link
+                        className="player-name"
+                        to={canonicalPlayerPath(entry.tag)}
+                        reloadDocument
+                      >
                         {entry.name}
                       </Link>
                       <span className="player-tag">{entry.tag}</span>
+                      <Link
+                        className="view-player-link"
+                        to={canonicalPlayerPath(entry.tag)}
+                        reloadDocument
+                      >
+                        View player →
+                      </Link>
                     </th>
-                    <td>{entry.clan}</td>
-                    <td>{entry.trophies.toLocaleString()}</td>
-                    <td>
+                    <td data-label="Clan">{entry.clan}</td>
+                    <td data-label="Trophies">{entry.trophies.toLocaleString()}</td>
+                    <td data-label="Last updated">
                       <time dateTime={entry.freshness.observedAt}>
                         {formatTimestamp(entry.freshness.observedAt)}
                       </time>

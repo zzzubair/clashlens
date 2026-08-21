@@ -138,9 +138,6 @@ export default function CallbackErrorRoute() {
       <Link className="button button-primary" to="/login">
         Try signing in again
       </Link>
-      <p className="back-link">
-        <Link to="/">← Back to home</Link>
-      </p>
     </main>
   );
 }

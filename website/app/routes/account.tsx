@@ -102,7 +102,7 @@ export default function AccountRoute() {
           <ul className="player-link-list">
             {data.summary.verifiedPlayers.map((player) => (
               <li key={player.tag}>
-                <Link to={canonicalPlayerPath(player.tag)}>
+                <Link to={canonicalPlayerPath(player.tag)} reloadDocument>
                   {player.name ?? player.tag}
                 </Link>
                 <span className="player-tag">{player.tag}</span>
@@ -128,7 +128,7 @@ export default function AccountRoute() {
           <ul className="player-link-list">
             {data.savedPlayers.map((player) => (
               <li key={player.tag}>
-                <Link to={canonicalPlayerPath(player.tag)}>
+                <Link to={canonicalPlayerPath(player.tag)} reloadDocument>
                   {player.name ?? player.tag}
                 </Link>
                 <span className="player-tag">{player.tag}</span>

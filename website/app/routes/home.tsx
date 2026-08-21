@@ -129,7 +129,11 @@ export default function Home() {
               autoComplete="off"
               onChange={(event) => handleSearchInput(event.currentTarget.value)}
             />
-            <button type="submit">Search</button>
+            <button type="submit" aria-label="Search">
+              <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20">
+                <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
+              </svg>
+            </button>
           </div>
           {suggestionsOpen ? (
             <SearchSuggestions
@@ -199,6 +203,7 @@ function SearchSuggestions({
                 className="search-suggestion"
                 data-testid="search-suggestion"
                 to={canonicalPlayerPath(result.tag)}
+                reloadDocument
               >
                 <span className="search-suggestion-player">
                   <strong>{result.name}</strong>
@@ -216,6 +221,7 @@ function SearchSuggestions({
                 className="search-suggestion"
                 data-testid="search-suggestion"
                 to={canonicalPlayerPath(unknownExactTag)}
+                reloadDocument
               >
                 <span className="search-suggestion-player">
                   <strong>Open {unknownExactTag}</strong>
@@ -244,7 +250,11 @@ function SearchResults({ search }: { search: SearchResponse }) {
             cohort.
           </p>
         )}
-        <Link className="text-link" to={canonicalPlayerPath(search.exactTag)}>
+        <Link
+          className="text-link"
+          to={canonicalPlayerPath(search.exactTag)}
+          reloadDocument
+        >
           Open the canonical player page
         </Link>
       </div>
@@ -279,7 +289,7 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
   return (
     <div className="search-result">
       <div>
-        <Link className="player-name" to={canonicalPlayerPath(result.tag)}>
+        <Link className="player-name" to={canonicalPlayerPath(result.tag)} reloadDocument>
           {result.name}
         </Link>
         <span className="player-tag">{result.tag}</span>
@@ -295,7 +305,7 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
 function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
   return (
     <div className="table-wrap">
-      <table aria-label="Live leaderboard" className="data-table">
+      <table aria-label="Live leaderboard" className="data-table responsive-table">
         <caption className="sr-only">First 25 players on the live leaderboard</caption>
         <thead>
           <tr>
@@ -309,16 +319,27 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
         <tbody>
           {entries.map((entry) => (
             <tr key={entry.tag} data-testid="tracked-player-row">
-              <td>{entry.rank}</td>
-              <th scope="row">
-                <Link className="player-name" to={canonicalPlayerPath(entry.tag)}>
+              <td data-label="Rank">{entry.rank}</td>
+              <th scope="row" data-label="Player">
+                <Link
+                  className="player-name"
+                  to={canonicalPlayerPath(entry.tag)}
+                  reloadDocument
+                >
                   {entry.name}
                 </Link>
                 <span className="player-tag">{entry.tag}</span>
+                <Link
+                  className="view-player-link"
+                  to={canonicalPlayerPath(entry.tag)}
+                  reloadDocument
+                >
+                  View player →
+                </Link>
               </th>
-              <td>{entry.clan}</td>
-              <td>{entry.trophies.toLocaleString()}</td>
-              <td>
+              <td data-label="Clan">{entry.clan}</td>
+              <td data-label="Trophies">{entry.trophies.toLocaleString()}</td>
+              <td data-label="Last updated">
                 <time dateTime={entry.freshness.observedAt}>
                   {formatTimestamp(entry.freshness.observedAt)}
                 </time>

@@ -11,7 +11,14 @@ test("home presents the minimal Clash Lens leaderboard", async ({ page }) => {
     page.getByRole("searchbox", { name: "Search player tags or names" }),
   ).toBeVisible();
   await expect(page.locator("[data-testid='tracked-player-row']")).toHaveCount(25);
-  await expect(page.getByRole("table", { name: "Live leaderboard" })).toBeVisible();
+  const leaderboard = page.getByRole("table", { name: "Live leaderboard" });
+  await expect(leaderboard).toBeVisible();
+  await expect(leaderboard.getByRole("link", { name: "View player →" })).toHaveCount(25);
+  await expect(
+    leaderboard.getByRole("link", { name: "View player →" }).first(),
+  ).toHaveAttribute("href", "/players/%232PP");
+  await expect(page.locator(".site-brand")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /Back/ })).toHaveCount(0);
   await expect(page.getByRole("columnheader").allTextContents()).resolves.toEqual([
     "Rank",
     "Player",
@@ -54,6 +61,11 @@ test("full live leaderboard presents only the Clash Lens rank and public fields"
   await expect(page.getByText("Official rank", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Data provenance")).toHaveCount(0);
   await expect(page.getByText("actively tracked Legend I cohort")).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("table", { name: "Live leaderboard" })
+      .getByRole("link", { name: "View player →" }),
+  ).toHaveCount(30);
 });
 
 test("daily leaderboard renders the frozen production wire fixture", async ({ page }) => {
@@ -68,6 +80,40 @@ test("daily leaderboard renders the frozen production wire fixture", async ({ pa
   await expect(table.getByRole("row").nth(1)).toContainText("Nova");
   await expect(table.getByRole("row").nth(1)).toContainText("#2PP");
   await expect(table.getByRole("row").nth(1)).toContainText("7,211");
+});
+
+test("shared header back returns from a player to the originating page", async ({
+  page,
+}) => {
+  await page.goto("/leaderboards/tracked?view=daily");
+  await page.getByRole("link", { name: "View player →" }).first().click();
+
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+  const back = page.getByRole("link", { name: /Back/ });
+  await expect(back).toHaveAttribute("href", "/");
+  await expect(page.locator("main").getByRole("link", { name: /Back/ })).toHaveCount(0);
+  await back.click();
+
+  await expect(page).toHaveURL(/\/leaderboards\/tracked\?view=daily$/);
+});
+
+test("shared header back falls home when a new tab has no back entry", async ({
+  page,
+}) => {
+  await page.goto("/leaderboards/tracked");
+  const popupPromise = page.waitForEvent("popup");
+  await page.evaluate(() => window.open("/players/%232PP", "_blank"));
+  const playerPage = await popupPromise;
+
+  await expect(playerPage).toHaveURL(/\/players\/%232PP$/);
+  await expect.poll(() => playerPage.evaluate(() => window.history.length)).toBe(1);
+  await expect
+    .poll(() => playerPage.evaluate(() => document.referrer))
+    .toMatch(/\/leaderboards\/tracked$/);
+  await playerPage.getByRole("link", { name: /Back/ }).click();
+
+  await expect(playerPage).toHaveURL(/\/$/);
+  await playerPage.close();
 });
 
 test("home SSR keeps exactly 25 entries with JavaScript disabled", async ({

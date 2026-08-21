@@ -235,7 +235,7 @@ export default function SavedPlayersRoute() {
               return (
                 <li key={player.tag}>
                   <span className="player-action-name">
-                    <Link to={canonicalPlayerPath(player.tag)}>
+                    <Link to={canonicalPlayerPath(player.tag)} reloadDocument>
                       {player.name ?? player.tag}
                     </Link>
                     <span className="player-tag">{player.tag}</span>
@@ -259,10 +259,6 @@ export default function SavedPlayersRoute() {
           </div>
         )}
       </section>
-
-      <p className="back-link">
-        <Link to="/account">← Back to your account</Link>
-      </p>
     </main>
   );
 }
