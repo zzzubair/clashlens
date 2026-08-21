@@ -15,7 +15,7 @@ We need to be on the same page with terminology. When communicating use this lan
 ## Working rules
 - Keep it simple, stupid.
 - Really channel the "measure twice, cut once" and "yagni" aggressively.
-- Use gpt-5.6-Luna (max reasoning) workers to get the work done, baby sit the workers throughout their task. 
+- Use worker subagents to get the work done, baby sit the subagents throughout their task. 
 - Preserve maintainer changes and make the smallest complete change.
 - Add or update only the tests needed for changed behavior. Smallest proof that the change works.
 - Fight scope creep, try to honor the maintainer's intent in the most simple and realistic way.
