@@ -621,8 +621,10 @@ required_normalized=$required_run
   fail 'collector received unsupported official API setting names'
 [[ "$required_normalized" == *'--env CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=16'* ]] || \
   fail 'collector did not receive the bounded database pool size default'
-[[ "$required_normalized" == *'--env CLASHLENS_ENABLE_GLOBAL_RANKINGS=true'* ]] || \
-  fail 'required collector did not receive deployment-owned Top-200 enablement'
+[[ "$required_normalized" == *'--env CLASHLENS_ENABLE_GLOBAL_RANKINGS=false'* ]] || \
+  fail 'up did not stage the required collector with Top-200 disabled'
+[[ "$required_normalized" == *'--restart unless-stopped'* ]] || \
+  fail 'collector lost crash recovery through its deployment-owned state'
 
 postgres_run=$(grep '^run ' "$FRESH_NORM" | grep 'postgres:17-alpine')
 postgres_normalized=$(norm_log <<<"$postgres_run")
@@ -816,6 +818,9 @@ log_lacks "$RESTART_DIR/podman.log" '^build ' 'restart rebuilt an image'
 log_lacks "$RESTART_DIR/podman.log" '^exec --interactive ' 'restart ran SQL'
 log_lacks "$RESTART_DIR/podman.log" 'clashlens-collector-bridge' 'restart started a bridge collector'
 log_has "$RESTART_DIR/podman.log" 'clashlens-collector:deployment' 'restart did not start the required collector'
+restart_collector=$(grep '^run ' "$RESTART_DIR/podman.log" | grep 'clashlens-collector:deployment')
+[[ "$(norm_log <<<"$restart_collector")" == *'--env CLASHLENS_ENABLE_GLOBAL_RANKINGS=false'* ]] || \
+  fail 'restart enabled Top-200 before worker recovery'
 assert_no_sentinel_in_log "$RESTART_DIR/podman.log"
 
 RESTART_ABSENT_DIR=$(new_scenario)
@@ -859,6 +864,13 @@ api_run=$(grep '^run ' "$PY_NORM" | grep 'clashlens-python:deployment' | grep 's
 worker_run=$(grep '^run ' "$PY_NORM" | grep 'clashlens-python:deployment' | grep 'worker ')
 [[ -n "$api_run" ]] || fail 'private Python API was not started'
 [[ -n "$worker_run" ]] || fail 'production Python worker was not started'
+enabled_collector_run=$(grep '^run ' "$PY_NORM" | grep 'clashlens-collector:deployment' | tail -n1)
+[[ "$enabled_collector_run" == *'--env CLASHLENS_ENABLE_GLOBAL_RANKINGS=true'* ]] || \
+  fail 'python-up did not enable Top-200 after worker health'
+worker_line=$(grep -n '^run .*clashlens-python:deployment.*worker ' "$PY_NORM" | tail -n1 | cut -d: -f1)
+enabled_collector_line=$(grep -n '^run .*CLASHLENS_ENABLE_GLOBAL_RANKINGS=true.*clashlens-collector:deployment' "$PY_NORM" | tail -n1 | cut -d: -f1)
+[[ -n "$worker_line" && -n "$enabled_collector_line" ]] || fail 'could not locate worker/collector enablement order'
+(( worker_line < enabled_collector_line )) || fail 'Top-200 was enabled before the compatible worker started'
 [[ "$worker_run" == *'--name clashlens-python-worker-1'* ]] || \
   fail 'worker replica 1 does not use its replica container name'
 api_normalized=$(norm_log <<<"$api_run")
@@ -923,14 +935,21 @@ worker_normalized=$(norm_log <<<"$worker_run")
 assert_no_sentinel_in_log "$PY_LOG"
 
 build_count_before=$(grep -c '^build ' "$PY_LOG")
+enabled_count_before=$(grep -c 'CLASHLENS_ENABLE_GLOBAL_RANKINGS=true' "$PY_LOG")
 deploy "$PY_DIR" "$PY_ENV" -- python-start >/dev/null
 build_count_after=$(grep -c '^build ' "$PY_LOG")
 [[ "$build_count_after" == "$build_count_before" ]] || fail 'python-start rebuilt the python image'
+[[ "$(grep -c 'CLASHLENS_ENABLE_GLOBAL_RANKINGS=true' "$PY_LOG")" == "$((enabled_count_before + 1))" ]] || \
+  fail 'python-start did not re-enable Top-200 after worker health'
 deploy "$PY_DIR" "$PY_ENV" -- api-start >/dev/null
 [[ "$(grep -c '^build ' "$PY_LOG")" == "$build_count_after" ]] || fail 'api-start rebuilt an image'
+[[ "$(grep -c 'CLASHLENS_ENABLE_GLOBAL_RANKINGS=true' "$PY_LOG")" == "$((enabled_count_before + 1))" ]] || \
+  fail 'api-start changed Top-200 enablement'
 deploy "$PY_DIR" "$PY_ENV" -- worker-start >/dev/null
 [[ "$(grep -c '^build ' "$PY_LOG")" == "$build_count_after" ]] || fail 'worker-start rebuilt an image'
-printf 'ok: python-up builds once; API and worker start paths are private, scoped, and build-free\n'
+[[ "$(grep -c 'CLASHLENS_ENABLE_GLOBAL_RANKINGS=true' "$PY_LOG")" == "$((enabled_count_before + 2))" ]] || \
+  fail 'worker-start did not restore deployment-owned Top-200 enablement'
+printf 'ok: Python start paths enable Top-200 only after a healthy compatible worker and remain build-free\n'
 
 # ---------------------------------------------------------------------------
 # Scenario G: rollback selects an existing image tag and never builds.

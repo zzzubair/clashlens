@@ -113,10 +113,15 @@ export default function TrackedLeaderboardRoute() {
       {error ? <ErrorNotice error={error} /> : null}
       {leaderboard ? (
         <section className="data-section" aria-label="Leaderboard entries">
-          <div className="table-wrap">
+          <div
+            aria-label={`${view === "daily" ? "Daily" : "Live"} leaderboard table`}
+            className="table-wrap tracked-leaderboard-viewport"
+            role="region"
+            tabIndex={0}
+          >
             <table
               aria-label={view === "daily" ? "Daily leaderboard" : "Live leaderboard"}
-              className="data-table responsive-table"
+              className="data-table"
             >
               <caption className="sr-only">Players on the {view} leaderboard</caption>
               <thead>

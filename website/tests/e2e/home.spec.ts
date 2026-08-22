@@ -46,6 +46,7 @@ test("search suggests at most five known players while typing", async ({ page })
 test("full live leaderboard presents only the Clash Lens rank and public fields", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/leaderboards/tracked");
 
   await expect(
@@ -61,11 +62,27 @@ test("full live leaderboard presents only the Clash Lens rank and public fields"
   await expect(page.getByText("Official rank", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Data provenance")).toHaveCount(0);
   await expect(page.getByText("actively tracked Legend I cohort")).toHaveCount(0);
-  await expect(
-    page
-      .getByRole("table", { name: "Live leaderboard" })
-      .getByRole("link", { name: "View player →" }),
-  ).toHaveCount(100);
+  const table = page.getByRole("table", { name: "Live leaderboard" });
+  await expect(table.getByRole("link", { name: "View player →" })).toHaveCount(100);
+
+  const viewport = page.getByRole("region", { name: "Live leaderboard table" });
+  await viewport.focus();
+  await expect(viewport).toBeFocused();
+  await expect
+    .poll(() =>
+      viewport.evaluate((element) => ({
+        horizontallyScrollable: element.scrollWidth > element.clientWidth,
+        verticallyScrollable: element.scrollHeight > element.clientHeight,
+        tableDisplay: getComputedStyle(element.querySelector("table")!).display,
+        headerPosition: getComputedStyle(element.querySelector("thead th")!).position,
+      })),
+    )
+    .toEqual({
+      horizontallyScrollable: true,
+      verticallyScrollable: true,
+      tableDisplay: "table",
+      headerPosition: "sticky",
+    });
 });
 
 test("live leaderboard paginates with canonical absolute ranks", async ({ page }) => {

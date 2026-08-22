@@ -733,6 +733,7 @@ collector_run() {
   local container=$1
   local schema_version=$2
   local traffic_mode=$3
+  local enable_global_rankings=$4
   local -a secrets=() env_args=()
 
   collector_secret_args secrets "$CLASHLENS_NORMAL_API_KEY_FILES"
@@ -745,7 +746,7 @@ collector_run() {
     collector_archive_secret_args secrets env_args
   else
     collector_credential_secret_args secrets env_args
-    env_args+=(--env "CLASHLENS_ENABLE_GLOBAL_RANKINGS=true")
+    env_args+=(--env "CLASHLENS_ENABLE_GLOBAL_RANKINGS=$enable_global_rankings")
   fi
   env_args+=(--env "CLASHLENS_SCHEMA_VERSION=$schema_version")
   env_args+=(--env "CLASHLENS_SHARED_TRAFFIC_GATE_MODE=$traffic_mode")
@@ -778,11 +779,18 @@ collector_run() {
 }
 
 start_bridge_collector() {
-  collector_run "$COLLECTOR_BRIDGE_CONTAINER" 1 bridge
+  collector_run "$COLLECTOR_BRIDGE_CONTAINER" 1 bridge false
 }
 
 start_required_collector() {
-  collector_run "$COLLECTOR_CONTAINER" 2 required
+  collector_run "$COLLECTOR_CONTAINER" 2 required false
+}
+
+enable_global_rankings() {
+  # A worker-only rollback may intentionally run without a local collector image.
+  image_exists || return 0
+  collector_run "$COLLECTOR_CONTAINER" 2 required true
+  wait_for_collector
 }
 
 wait_for_collector() {
@@ -1158,7 +1166,8 @@ python_start() {
   wait_for_python_api
   start_python_workers
   wait_for_python_workers
-  printf 'production Python API and %s worker replicas are healthy\n' "$CLASHLENS_WORKER_REPLICAS"
+  enable_global_rankings
+  printf 'production Python API and %s worker replicas are healthy; Global Top-200 is enabled\n' "$CLASHLENS_WORKER_REPLICAS"
 }
 
 status_of_container() {
@@ -1429,7 +1438,8 @@ case "$command" in
     require_python_runtime
     start_python_workers
     wait_for_python_workers
-    printf 'production Python worker replicas (%s) are healthy\n' "$CLASHLENS_WORKER_REPLICAS"
+    enable_global_rankings
+    printf 'production Python worker replicas (%s) are healthy; Global Top-200 is enabled\n' "$CLASHLENS_WORKER_REPLICAS"
     ;;
   website-up)
     [[ $# == 0 ]] || die "website-up accepts no arguments"

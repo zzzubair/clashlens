@@ -392,14 +392,18 @@ func (s *store) scheduleGlobalRankings(ctx context.Context, now time.Time, cycle
 		priority = 400
 	}
 	command, err := s.pool.Exec(ctx, `
+		WITH intent AS (
+			INSERT INTO global_rankings_intents (cycle_at) VALUES ($2)
+			ON CONFLICT DO NOTHING
+			RETURNING cycle_at
+		)
 		INSERT INTO collector_jobs (
 			work_type, scope, player_id, normalized_tag, capacity_pool,
 			priority, due_at, coalescing_key, required_endpoint, status
-		) VALUES (
-			'global_player_rankings', 'global', NULL, NULL, 'normal',
-			$1, $2, $3, 'global_player_rankings', 'pending'
 		)
-		ON CONFLICT DO NOTHING
+		SELECT 'global_player_rankings', 'global', NULL, NULL, 'normal',
+		       $1, cycle_at, $3, 'global_player_rankings', 'pending'
+		FROM intent
 	`, priority, cycleStart, "global-player-rankings:"+cycleStart.Format(time.RFC3339))
 	if err != nil {
 		return false, fmt.Errorf("schedule global player rankings: %w", err)

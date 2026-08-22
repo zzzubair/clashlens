@@ -328,6 +328,69 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
             assert older["next_snapshot"] == {
                 "official_season_id": "2026-08", "season_day_number": 21
             }
+
+            with database.pool.connection() as connection:
+                profile_observation_id = connection.execute(
+                    """SELECT observation_id FROM player_profile_versions
+                       WHERE id = (SELECT current_profile_version_id FROM players
+                                   WHERE normalized_tag = '#2PP')"""
+                ).fetchone()[0]
+                ranked_day_id = connection.execute(
+                    """
+                    INSERT INTO ranked_day_versions (
+                        player_id, ranked_day_start, ranked_day_end,
+                        official_season_id, season_day_number,
+                        season_anchor_rule_version, reconciliation_rule_version,
+                        result_hash, version, state, confidence
+                    ) VALUES (%s, '2026-08-06T05:00:00Z', '2026-08-07T05:00:00Z',
+                              '2026-08', 22, 'test-anchor-v1', 'test-reconcile-v1',
+                              repeat('5', 64), 1, 'Complete', 'exact') RETURNING id
+                    """,
+                    (players["#2PP"],),
+                ).fetchone()[0]
+                snapshot_id = connection.execute(
+                    """
+                    INSERT INTO leaderboard_snapshots (
+                        snapshot_kind, boundary_at, version, ordering_rule_version,
+                        freshness_rule_version, state, source_ranked_day_version_id,
+                        measured_coverage, eligible_population_count,
+                        included_entry_count, fresh_entry_count, stale_entry_count,
+                        published_at
+                    ) VALUES ('frozen', '2026-08-07T05:00:00Z', 1,
+                              'frozen-position-v1', 'test-fresh-v1', 'published',
+                              %s, 1, 1, 1, 1, 0, clock_timestamp()) RETURNING id
+                    """,
+                    (ranked_day_id,),
+                ).fetchone()[0]
+                connection.execute(
+                    """
+                    INSERT INTO leaderboard_snapshot_entries (
+                        snapshot_id, position, player_id, trophies,
+                        trophy_observation_id, trophy_observed_at,
+                        observation_age_seconds, freshness, confidence, tie_hash,
+                        profile_observation_id, profile_observed_at,
+                        profile_age_seconds, profile_freshness, profile_confidence
+                    ) VALUES (%s, 1, %s, 6010, %s, %s, 0, 'fresh', 'confirmed',
+                              repeat('6', 64), %s, %s, 0, 'fresh', 'confirmed')
+                    """,
+                    (snapshot_id, players["#2PP"], profile_observation_id, NOW,
+                     profile_observation_id, NOW),
+                )
+                connection.commit()
+
+            newest = database.get_frozen_leaderboard(limit=10, now=NOW)
+            assert newest is not None
+            assert newest["snapshot_id"] == str(snapshot_id)
+            assert newest["previous_snapshot"] == {
+                "official_season_id": "2026-08", "season_day_number": 21
+            }
+            legacy_latest = database.get_frozen_leaderboard(
+                limit=10, official_season_id="2026-08", season_day_number=21
+            )
+            assert legacy_latest is not None
+            assert legacy_latest["next_snapshot"] == {
+                "official_season_id": "2026-08", "season_day_number": 22
+            }
             assert database.scalar(
                 "SELECT count(*) FROM api_frozen_leaderboard_entries"
             ) == 3

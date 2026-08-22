@@ -224,68 +224,48 @@ func TestVersionTwoResetBaselineCompletesOnlyAfterBothEndpoints(t *testing.T) {
 	}
 }
 
-func TestVersionTwoGlobalRankingsScheduleIsFiveMinuteAndBoundaryPrioritized(t *testing.T) {
+func TestVersionTwoGlobalRankingsScheduleUsesImmutableCycleIntent(t *testing.T) {
 	ctx := context.Background()
 	store := startVersionTwoStore(t, ctx)
 	boundary := time.Date(2026, time.August, 4, 5, 0, 0, 0, time.UTC)
-
-	created, err := store.scheduleGlobalRankings(ctx, boundary, 5*time.Minute)
-	if err != nil {
-		t.Fatalf("schedule boundary global rankings: %v", err)
+	mutations := []string{
+		"status = 'complete'",
+		"status = 'failed'",
+		"status = 'cancelled'",
+		"status = 'waiting_retry', due_at = due_at + interval '2 minutes'",
+		"status = 'pending', due_at = due_at + interval '1 hour'",
 	}
-	if !created {
-		t.Fatal("boundary global rankings job was not created")
-	}
-	if _, err := store.pool.Exec(ctx, `
-		UPDATE collector_jobs SET status = 'complete'
-		WHERE work_type = 'global_player_rankings' AND due_at = $1
-	`, boundary); err != nil {
-		t.Fatalf("complete global rankings job: %v", err)
-	}
-	created, err = store.scheduleGlobalRankings(ctx, boundary.Add(4*time.Minute), 5*time.Minute)
-	if err != nil {
-		t.Fatalf("reschedule completed global rankings cycle: %v", err)
-	}
-	if created {
-		t.Fatal("global rankings schedule recreated a completed five-minute cycle")
-	}
-	created, err = store.scheduleGlobalRankings(ctx, boundary.Add(5*time.Minute), 5*time.Minute)
-	if err != nil {
-		t.Fatalf("schedule next global rankings cycle: %v", err)
-	}
-	if !created {
-		t.Fatal("next global rankings cycle was not created")
-	}
-
-	rows, err := store.pool.Query(ctx, `
-		SELECT priority, scope, player_id, normalized_tag, required_endpoint
-		FROM collector_jobs
-		WHERE work_type = 'global_player_rankings'
-		ORDER BY due_at
-	`)
-	if err != nil {
-		t.Fatalf("read global rankings jobs: %v", err)
-	}
-	defer rows.Close()
-	var priorities []int
-	for rows.Next() {
-		var priority int
-		var scope, endpoint string
-		var playerID *int64
-		var tag *string
-		if err := rows.Scan(&priority, &scope, &playerID, &tag, &endpoint); err != nil {
-			t.Fatalf("scan global rankings job: %v", err)
+	for index, mutation := range mutations {
+		cycle := boundary.Add(time.Duration(index) * 5 * time.Minute)
+		created, err := store.scheduleGlobalRankings(ctx, cycle, 5*time.Minute)
+		if err != nil || !created {
+			t.Fatalf("schedule cycle %d: created=%v err=%v", index, created, err)
 		}
-		if scope != "global" || playerID != nil || tag != nil || endpoint != "global_player_rankings" {
-			t.Fatalf("invalid global rankings identity: scope=%q player=%v tag=%v endpoint=%q", scope, playerID, tag, endpoint)
+		if _, err := store.pool.Exec(ctx, `UPDATE collector_jobs SET `+mutation+`
+			WHERE coalescing_key = $1`, "global-player-rankings:"+cycle.Format(time.RFC3339)); err != nil {
+			t.Fatalf("mutate cycle %d: %v", index, err)
 		}
-		priorities = append(priorities, priority)
+		created, err = store.scheduleGlobalRankings(ctx, cycle.Add(4*time.Minute), 5*time.Minute)
+		if err != nil || created {
+			t.Fatalf("reschedule consumed cycle %d: created=%v err=%v", index, created, err)
+		}
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate global rankings jobs: %v", err)
+	nextCycle := boundary.Add(time.Duration(len(mutations)) * 5 * time.Minute)
+	created, err := store.scheduleGlobalRankings(ctx, nextCycle, 5*time.Minute)
+	if err != nil || !created {
+		t.Fatalf("schedule next cycle: created=%v err=%v", created, err)
 	}
-	if len(priorities) != 2 || priorities[0] != 400 || priorities[1] != 300 {
-		t.Fatalf("global rankings priorities = %v, want [400 300]", priorities)
+
+	var jobs, intents, boundaryPriority int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM collector_jobs WHERE work_type = 'global_player_rankings'),
+		       (SELECT count(*) FROM global_rankings_intents),
+		       (SELECT priority FROM collector_jobs WHERE coalescing_key = $1)
+	`, "global-player-rankings:"+boundary.Format(time.RFC3339)).Scan(&jobs, &intents, &boundaryPriority); err != nil {
+		t.Fatalf("read global rankings schedule: %v", err)
+	}
+	if jobs != 6 || intents != 6 || boundaryPriority != 400 {
+		t.Fatalf("global rankings jobs/intents/boundary priority = %d/%d/%d, want 6/6/400", jobs, intents, boundaryPriority)
 	}
 }
 
@@ -490,6 +470,43 @@ func TestDiscoveryProfileUsesOnlyNormalProfileWork(t *testing.T) {
 	}
 	if retryEndpoints != 1 || battleEndpoints != 0 {
 		t.Fatalf("discovery retry/profile evidence = %d retries, %d battle endpoints", retryEndpoints, battleEndpoints)
+	}
+}
+
+func TestDiscoveryMigrationSeedsDuplicateTerminalGlobalCyclesIdempotently(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := testsupport.StartPostgres(t)
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect for migration seed: %v", err)
+	}
+	defer connection.Close(ctx)
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0001_collector.sql"))
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
+	if _, err := connection.Exec(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, scope, capacity_pool, priority, due_at, coalescing_key,
+			required_endpoint, status
+		) VALUES
+			('global_player_rankings', 'global', 'normal', 300, '2026-08-04T12:05:00Z',
+			 'global-player-rankings:2026-08-04T12:05:00Z', 'global_player_rankings', 'complete'),
+			('global_player_rankings', 'global', 'normal', 300, '2026-08-04T13:05:00Z',
+			 'global-player-rankings:2026-08-04T12:05:00Z', 'global_player_rankings', 'failed')
+	`); err != nil {
+		t.Fatalf("insert duplicate terminal jobs: %v", err)
+	}
+	migration := filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql")
+	applySQLFile(t, ctx, connection, migration)
+	applySQLFile(t, ctx, connection, migration)
+	var jobs, intents int
+	if err := connection.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM collector_jobs WHERE work_type = 'global_player_rankings'),
+		       (SELECT count(*) FROM global_rankings_intents)
+	`).Scan(&jobs, &intents); err != nil {
+		t.Fatalf("read migrated cycles: %v", err)
+	}
+	if jobs != 2 || intents != 1 {
+		t.Fatalf("migration retained %d jobs and seeded %d intents, want 2 and 1", jobs, intents)
 	}
 }
 

@@ -28,10 +28,31 @@ ALTER TABLE collector_jobs
 
 DROP INDEX IF EXISTS known_player_discoveries_player_source;
 
--- Unlike the active-job coalescing index, a completed cycle stays consumed.
-CREATE UNIQUE INDEX IF NOT EXISTS collector_jobs_one_global_rankings_per_cycle
-    ON collector_jobs (due_at)
-    WHERE work_type = 'global_player_rankings';
+DROP INDEX IF EXISTS collector_jobs_one_global_rankings_per_cycle;
+
+-- The generated coalescing key is the immutable pre-0007 cycle identity;
+-- due_at may change during lease recovery or operator repair.
+CREATE TABLE IF NOT EXISTS global_rankings_intents (
+    cycle_at timestamptz PRIMARY KEY,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CHECK (cycle_at = date_bin(interval '5 minutes', cycle_at,
+                               timestamptz '2000-01-01 00:00:00+00'))
+);
+REVOKE ALL ON TABLE global_rankings_intents FROM PUBLIC;
+GRANT INSERT ON TABLE global_rankings_intents TO clashlens_collector;
+GRANT SELECT (cycle_at) ON TABLE global_rankings_intents TO clashlens_collector;
+INSERT INTO global_rankings_intents (cycle_at)
+SELECT DISTINCT substring(coalescing_key FROM length('global-player-rankings:') + 1)::timestamptz
+FROM collector_jobs
+WHERE work_type = 'global_player_rankings'
+  AND coalescing_key ~ '^global-player-rankings:[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:00Z$'
+  AND substring(coalescing_key FROM length('global-player-rankings:') + 1)::timestamptz
+      = date_bin(
+          interval '5 minutes',
+          substring(coalescing_key FROM length('global-player-rankings:') + 1)::timestamptz,
+          timestamptz '2000-01-01 00:00:00+00'
+      )
+ON CONFLICT DO NOTHING;
 
 CREATE TABLE IF NOT EXISTS discovery_profile_intents (
     player_id bigint NOT NULL REFERENCES players (id),

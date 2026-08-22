@@ -109,13 +109,12 @@ curl --fail http://127.0.0.1:8081/readyz
   database. It refuses an initialized database.
 - `up` builds the collector image, advances the database through all missing
   migrations (0001–0007 on a fresh database), configures runtime role
-  passwords, and starts the required collector. A contract-v1 upgrade uses
-  the bridge collector while migrations 0002–0007 are applied, then replaces
-  it with the required collector. Migration 0007 must finish before enabling
-  Global Top-200 scheduling or starting the Python API/worker and website.
+  passwords, and stages the required collector with Global Top-200 disabled.
+  A contract-v1 upgrade uses the bridge collector while migrations 0002–0007
+  are applied, then replaces it with the disabled required collector.
 - `build-collector`, `build-python`, and `build-website` build images only.
 - `restart` is the start-only recovery path for a contract-v2 stack. It does
-  not build or run SQL.
+  not build or run SQL and always stages Global Top-200 disabled.
 - `status` shows the network, volume, containers, health, and worker queue
   status without loading unrelated secrets.
 
@@ -132,8 +131,13 @@ curl --fail http://127.0.0.1:3000/healthz
 
 `python-up` requires contract version 2, builds the Python image, and starts
 the private API and `CLASHLENS_WORKER_REPLICAS` identical worker containers.
-`python-start`, `api-start`, and `worker-start` are start-only commands and
-require the Python image. `website-up` requires a healthy private API;
+After the compatible workers report healthy, it recreates the collector with
+Global Top-200 enabled. `python-start` follows the same order without building;
+`worker-start` also enables rankings only after worker health. `api-start`
+does not change collector enablement. The collector restart policy preserves
+its last deployment-owned state; systemd recovery runs `restart` (disabled)
+before `worker-start` recreates it enabled after worker health. The setting is
+deployment-owned and is rejected in `app.env`. `website-up` requires a healthy private API;
 `website-start` is its start-only recovery path. The website connects to
 `http://python-api:8000` on the private network and publishes only the
 configured ingress address.

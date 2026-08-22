@@ -1305,91 +1305,102 @@ class ApiDatabase:
             raise ValueError("season and day must be supplied together")
         now = datetime.now(UTC) if now is None else now
         with self.pool.connection() as connection:
-            snapshot = connection.execute(
+            locator = connection.execute(
                 """
-                WITH published AS (
-                    SELECT snapshot.*, day.official_season_id, day.season_day_number
+                WITH publications AS (
+                    SELECT 'v2'::text AS source, snapshot.id, snapshot.boundary_at,
+                           snapshot.version, day.official_season_id,
+                           day.season_day_number
                     FROM leaderboard_snapshots AS snapshot
                     JOIN ranked_day_versions AS day
                       ON day.id = snapshot.source_ranked_day_version_id
                     WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+                    UNION ALL
+                    SELECT 'legacy', leaderboard.id, leaderboard.boundary_at,
+                           leaderboard.version, selector.official_season_id,
+                           selector.season_day_number
+                    FROM api_frozen_leaderboards AS leaderboard
+                    JOIN LATERAL (
+                        SELECT day.official_season_id, day.season_day_number
+                        FROM ranked_day_versions AS day
+                        WHERE day.ranked_day_end = leaderboard.boundary_at
+                        ORDER BY day.id DESC LIMIT 1
+                    ) AS selector ON true
                 ), selected AS (
-                    SELECT * FROM published
+                    SELECT * FROM publications
                     WHERE (%s::text IS NULL OR
                            (official_season_id = %s AND season_day_number = %s))
-                    ORDER BY boundary_at DESC, version DESC, id DESC LIMIT 1
+                    ORDER BY boundary_at DESC, version DESC,
+                             (source = 'v2') DESC, id DESC LIMIT 1
                 )
-                SELECT selected.id, selected.boundary_at, selected.version,
-                       selected.ordering_rule_version, selected.freshness_rule_version,
-                       selected.measured_coverage, selected.eligible_population_count,
-                       selected.included_entry_count, selected.stale_entry_count,
-                       selected.fresh_entry_count, selected.excluded_missing_count,
-                       selected.excluded_invalid_count, selected.excluded_malformed_count,
-                       selected.excluded_conflicting_count, selected.official_season_id,
-                       selected.season_day_number,
-                       (SELECT json_build_object('official_season_id', p.official_season_id,
-                                                 'season_day_number', p.season_day_number)
-                        FROM published p WHERE p.boundary_at < selected.boundary_at
-                        ORDER BY p.boundary_at DESC, p.version DESC LIMIT 1),
-                       (SELECT json_build_object('official_season_id', p.official_season_id,
-                                                 'season_day_number', p.season_day_number)
-                        FROM published p WHERE p.boundary_at > selected.boundary_at
-                        ORDER BY p.boundary_at, p.version DESC LIMIT 1)
+                SELECT selected.source, selected.id,
+                       (SELECT json_build_object(
+                                   'official_season_id', p.official_season_id,
+                                   'season_day_number', p.season_day_number)
+                        FROM publications p WHERE p.boundary_at < selected.boundary_at
+                        ORDER BY p.boundary_at DESC, p.version DESC,
+                                 (p.source = 'v2') DESC, p.id DESC LIMIT 1),
+                       (SELECT json_build_object(
+                                   'official_season_id', p.official_season_id,
+                                   'season_day_number', p.season_day_number)
+                        FROM publications p WHERE p.boundary_at > selected.boundary_at
+                        ORDER BY p.boundary_at, p.version DESC,
+                                 (p.source = 'v2') DESC, p.id DESC LIMIT 1)
                 FROM selected
                 """,
                 (official_season_id, official_season_id, season_day_number),
             ).fetchone()
-            if snapshot is None:
-                # Preserve populated v1 publications only until the first
-                # immutable domain snapshot is published.
-                legacy = connection.execute(
+            if locator is None:
+                return None
+            snapshot = None
+            if _text(locator[0]) == "v2":
+                snapshot = connection.execute(
                     """
-                    WITH published AS (
-                        SELECT 1 FROM leaderboard_snapshots
-                        WHERE snapshot_kind = 'frozen' AND state = 'published'
-                        LIMIT 1
-                    ), legacy AS (
-                        SELECT leaderboard.*, selector.official_season_id,
-                               selector.season_day_number
-                        FROM api_frozen_leaderboards AS leaderboard
-                        JOIN LATERAL (
-                            SELECT day.official_season_id, day.season_day_number
-                            FROM ranked_day_versions AS day
-                            WHERE day.ranked_day_end = leaderboard.boundary_at
-                            ORDER BY day.id DESC LIMIT 1
-                        ) AS selector ON true
-                        WHERE NOT EXISTS (SELECT 1 FROM published)
-                    ), selected AS (
-                        SELECT * FROM legacy
-                        WHERE (%s::text IS NULL OR
-                               (official_season_id = %s AND season_day_number = %s))
-                        ORDER BY boundary_at DESC, version DESC, id DESC LIMIT 1
-                    )
-                    SELECT selected.id, selected.public_id, selected.boundary_at,
-                           selected.version, selected.ordering_rule_version,
-                           selected.coverage, selected.official_season_id,
-                           selected.season_day_number,
-                           (SELECT json_build_object(
-                                       'official_season_id', p.official_season_id,
-                                       'season_day_number', p.season_day_number)
-                            FROM legacy p WHERE p.boundary_at < selected.boundary_at
-                            ORDER BY p.boundary_at DESC, p.version DESC LIMIT 1),
-                           (SELECT json_build_object(
-                                       'official_season_id', p.official_season_id,
-                                       'season_day_number', p.season_day_number)
-                            FROM legacy p WHERE p.boundary_at > selected.boundary_at
-                            ORDER BY p.boundary_at, p.version DESC LIMIT 1),
-                           (SELECT count(*) FROM api_frozen_leaderboard_entries e
-                            WHERE e.leaderboard_id = selected.id),
-                           (SELECT count(*) FROM api_frozen_leaderboard_entries e
-                            WHERE e.leaderboard_id = selected.id
-                              AND e.freshness = 'stale')
-                    FROM selected
+                    SELECT snapshot.id, snapshot.boundary_at, snapshot.version,
+                           snapshot.ordering_rule_version,
+                           snapshot.freshness_rule_version,
+                           snapshot.measured_coverage,
+                           snapshot.eligible_population_count,
+                           snapshot.included_entry_count, snapshot.stale_entry_count,
+                           snapshot.fresh_entry_count, snapshot.excluded_missing_count,
+                           snapshot.excluded_invalid_count,
+                           snapshot.excluded_malformed_count,
+                           snapshot.excluded_conflicting_count,
+                           day.official_season_id, day.season_day_number
+                    FROM leaderboard_snapshots AS snapshot
+                    JOIN ranked_day_versions AS day
+                      ON day.id = snapshot.source_ranked_day_version_id
+                    WHERE snapshot.id = %s
                     """,
-                    (official_season_id, official_season_id, season_day_number),
+                    (locator[1],),
                 ).fetchone()
-                if legacy is None:
-                    return None
+                assert snapshot is not None
+                snapshot = (*snapshot, locator[2], locator[3])
+            if snapshot is None:
+                legacy_row = connection.execute(
+                    """
+                    SELECT leaderboard.id, leaderboard.public_id,
+                           leaderboard.boundary_at, leaderboard.version,
+                           leaderboard.ordering_rule_version, leaderboard.coverage,
+                           selector.official_season_id, selector.season_day_number,
+                           (SELECT count(*) FROM api_frozen_leaderboard_entries e
+                            WHERE e.leaderboard_id = leaderboard.id),
+                           (SELECT count(*) FROM api_frozen_leaderboard_entries e
+                            WHERE e.leaderboard_id = leaderboard.id
+                              AND e.freshness = 'stale')
+                    FROM api_frozen_leaderboards AS leaderboard
+                    JOIN LATERAL (
+                        SELECT day.official_season_id, day.season_day_number
+                        FROM ranked_day_versions AS day
+                        WHERE day.ranked_day_end = leaderboard.boundary_at
+                        ORDER BY day.id DESC LIMIT 1
+                    ) AS selector ON true
+                    WHERE leaderboard.id = %s
+                    """,
+                    (locator[1],),
+                ).fetchone()
+                assert legacy_row is not None
+                legacy = (*legacy_row[:8], locator[2], locator[3], *legacy_row[8:])
                 total_entries = int(legacy[10])
                 if offset and offset >= total_entries:
                     return None

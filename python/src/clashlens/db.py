@@ -1606,21 +1606,43 @@ class Database:
                 ).fetchone()
                 assert attempt is not None
                 player_ids: dict[str, int] = {}
-                for entry in rankings.entries:
-                    player_id = self._upsert_player(
-                        connection, entry.normalized_tag, active=False
-                    )
-                    player_ids[entry.normalized_tag] = player_id
-                    connection.execute(
+                if rankings.entries:
+                    rows = connection.execute(
                         """
-                        INSERT INTO known_player_discoveries (
-                            player_id, observation_id, source_row_index,
-                            source_kind, discovered_at
-                        ) VALUES (%s, %s, %s, 'official_ranking', %s)
-                        ON CONFLICT DO NOTHING
+                        WITH input AS (
+                            SELECT normalized_tag, min(source_row_index) AS source_row_index
+                            FROM unnest(%s::text[], %s::integer[])
+                                AS item(normalized_tag, source_row_index)
+                            GROUP BY normalized_tag
+                        ), players_upserted AS (
+                            INSERT INTO players (normalized_tag, active, eligibility_state)
+                            SELECT normalized_tag, false, 'unknown' FROM input
+                            ON CONFLICT (normalized_tag) DO UPDATE
+                                SET updated_at = clock_timestamp()
+                            RETURNING id, normalized_tag
+                        ), discoveries AS (
+                            INSERT INTO known_player_discoveries (
+                                player_id, observation_id, source_row_index,
+                                source_kind, discovered_at
+                            )
+                            SELECT player.id, %s, input.source_row_index,
+                                   'official_ranking', %s
+                            FROM players_upserted AS player
+                            JOIN input USING (normalized_tag)
+                            ON CONFLICT DO NOTHING
+                        )
+                        SELECT normalized_tag, id FROM players_upserted
                         """,
-                        (player_id, observation_id, entry.rank - 1, observed_at),
-                    )
+                        (
+                            [entry.normalized_tag for entry in rankings.entries],
+                            [entry.rank - 1 for entry in rankings.entries],
+                            observation_id,
+                            observed_at,
+                        ),
+                    ).fetchall()
+                    player_ids = {
+                        _text_value(tag): int(player_id) for tag, player_id in rows
+                    }
                 if claim.work_type == "process_observation" and player_ids:
                     connection.execute(
                         "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",

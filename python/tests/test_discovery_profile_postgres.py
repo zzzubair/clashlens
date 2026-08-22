@@ -44,7 +44,18 @@ def test_live_discovery_sources_enqueue_once_and_replay_does_not(
                 before = connection.execute(
                     "SELECT count(*) FROM collector_jobs WHERE work_type = 'discovery_profile'"
                 ).fetchone()[0]
+                ranking_discoveries = connection.execute(
+                    """SELECT count(*), count(DISTINCT player_id),
+                              min(source_row_index), max(source_row_index)
+                       FROM known_player_discoveries
+                       WHERE source_kind = 'official_ranking'"""
+                ).fetchone()
+                official_entries = connection.execute(
+                    "SELECT count(DISTINCT player_id) FROM official_top200_entries"
+                ).fetchone()[0]
             assert before == 201
+            assert ranking_discoveries == (200, 200, 0, 199)
+            assert official_entries == 200
 
             replay_observation, replay_job = store_observation(
                 connection_info,
