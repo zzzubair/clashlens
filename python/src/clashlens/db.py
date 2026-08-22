@@ -4842,37 +4842,31 @@ class Database:
         decode_generation = int(latest_decode[0]) if latest_decode else 0
         day_text = ranked_day_start.strftime("%Y-%m-%dT%H:%M:%SZ")
         generation = f"{ranked_day_version_id}:{decode_generation}"
-        jobs = (
+        connection.execute(
+            """
+            INSERT INTO python_processing_jobs_worker (
+                work_type, deduplication_key, input_json,
+                processing_version, domain_rule_version,
+                analytics_rule_version, due_at
+            ) VALUES (
+                'build_army_analytics', %s, %s, %s, %s, %s,
+                clock_timestamp()
+            )
+            ON CONFLICT (deduplication_key) DO NOTHING
+            """,
             (
-                f"build_army_analytics:day:{day_text}:{generation}:{ANALYTICS_RULE_VERSION}:{DECODER_VERSION}:{CATALOG_VERSION}",
-                {"ranked_day_start": day_text},
-            ),
-            (
-                f"build_army_analytics:season:{season_id}:{generation}:{ANALYTICS_RULE_VERSION}:{DECODER_VERSION}:{CATALOG_VERSION}",
-                {"official_season_id": season_id},
+                f"build_army_analytics:{day_text}:{generation}:{ANALYTICS_RULE_VERSION}:{DECODER_VERSION}:{CATALOG_VERSION}",
+                Jsonb(
+                    {
+                        "ranked_day_start": day_text,
+                        "official_season_id": season_id,
+                    }
+                ),
+                PROCESSING_VERSION,
+                DOMAIN_RULE_VERSION,
+                ANALYTICS_RULE_VERSION,
             ),
         )
-        for deduplication_key, input_json in jobs:
-            connection.execute(
-                """
-                INSERT INTO python_processing_jobs_worker (
-                    work_type, deduplication_key, input_json,
-                    processing_version, domain_rule_version,
-                    analytics_rule_version, due_at
-                ) VALUES (
-                    'build_army_analytics', %s, %s, %s, %s, %s,
-                    clock_timestamp()
-                )
-                ON CONFLICT (deduplication_key) DO NOTHING
-                """,
-                (
-                    deduplication_key,
-                    Jsonb(input_json),
-                    PROCESSING_VERSION,
-                    DOMAIN_RULE_VERSION,
-                    ANALYTICS_RULE_VERSION,
-                ),
-            )
 
     def complete_army_analytics(self, claim: Claim) -> None:
         with self.pool.connection() as connection:
@@ -4880,14 +4874,12 @@ class Database:
                 job = self._lock_live_claim(connection, claim)
                 ranked_day_str = claim.input_json.get("ranked_day_start")
                 season_id = claim.input_json.get("official_season_id")
-                if ranked_day_str is None and season_id is None:
+                if ranked_day_str is None or season_id is None:
                     raise ValueError(
-                        "army analytics requires ranked_day_start or official_season_id"
+                        "army analytics requires ranked_day_start and official_season_id"
                     )
-                if ranked_day_str is not None:
-                    self._build_army_day(connection, claim, str(ranked_day_str))
-                if season_id is not None:
-                    self._build_army_season(connection, claim, str(season_id))
+                self._build_army_day(connection, claim, str(ranked_day_str))
+                self._build_army_season(connection, claim, str(season_id))
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
                 )
@@ -5023,10 +5015,10 @@ class Database:
                 "trophies": int(start_trophies) if start_trophies is not None else None,
             }
             all_battles.append(rec)
+            if rec["trophies"] is not None:
+                cohorts[int(rec["trophies"])].append(rec)
             if rec["status"] == "decoded":
                 overall_decoded.append(rec)
-                if rec["trophies"] is not None:
-                    cohorts[int(rec["trophies"])].append(rec)
 
         n_overall = len(overall_decoded)
         input_payload = {
@@ -5066,7 +5058,7 @@ class Database:
                 json.dumps(result_payload, sort_keys=True).encode()
             ).hexdigest()
             existing = connection.execute(
-                "SELECT id, version, result_hash FROM army_analytics_day_summaries WHERE ranked_day_start=%s AND exact_trophies=%s AND decoder_version=%s AND catalog_version=%s AND analytics_rule_version=%s AND is_published=true",
+                "SELECT id, version, result_hash, is_published FROM army_analytics_day_summaries WHERE ranked_day_start=%s AND exact_trophies=%s AND decoder_version=%s AND catalog_version=%s AND analytics_rule_version=%s ORDER BY version DESC LIMIT 1",
                 (
                     ranked_day_start,
                     exact_trophies,
@@ -5075,14 +5067,19 @@ class Database:
                     claim.analytics_rule_version,
                 ),
             ).fetchone()
-            if existing is not None and _text_value(existing[2]) == result_hash:
+            if (
+                existing is not None
+                and existing[3]
+                and _text_value(existing[2]) == result_hash
+            ):
                 return int(existing[0])
             # supersede old
             if existing is not None:
-                connection.execute(
-                    "UPDATE army_analytics_day_summaries SET is_published=false WHERE id=%s",
-                    (existing[0],),
-                )
+                if existing[3]:
+                    connection.execute(
+                        "UPDATE army_analytics_day_summaries SET is_published=false WHERE id=%s",
+                        (existing[0],),
+                    )
                 new_version = int(existing[1]) + 1
                 supersedes = int(existing[0])
             else:
@@ -5125,8 +5122,7 @@ class Database:
         )
 
         # per-trophy cohorts (only known trophies)
-        for trophies in list(cohorts.keys()):
-            all_for_trophy = [b for b in all_battles if b["trophies"] == trophies]
+        for trophies, all_for_trophy in cohorts.items():
             decoded_for_trophy = [b for b in all_for_trophy if b["status"] == "decoded"]
             cid = upsert_summary(trophies, all_for_trophy, decoded_for_trophy)
             self._insert_army_breakdowns(
@@ -5136,6 +5132,25 @@ class Database:
                 battles=decoded_for_trophy,
                 n=len(decoded_for_trophy),
             )
+        connection.execute(
+            """
+            UPDATE army_analytics_day_summaries
+            SET is_published = false
+            WHERE ranked_day_start = %s
+              AND decoder_version = %s
+              AND catalog_version = %s
+              AND analytics_rule_version = %s
+              AND is_published
+              AND NOT (exact_trophies = ANY(%s::integer[]))
+            """,
+            (
+                ranked_day_start,
+                DECODER_VERSION,
+                CATALOG_VERSION,
+                claim.analytics_rule_version,
+                [-1, *cohorts],
+            ),
+        )
 
     def _build_army_season(self, connection: Any, claim: Claim, season_id: str) -> None:
         from collections import defaultdict
@@ -5272,10 +5287,10 @@ class Database:
                 "trophies": int(start_trophies) if start_trophies is not None else None,
             }
             all_battles.append(rec)
+            if rec["trophies"] is not None:
+                cohorts[int(rec["trophies"])].append(rec)
             if rec["status"] == "decoded":
                 overall_decoded.append(rec)
-                if rec["trophies"] is not None:
-                    cohorts[int(rec["trophies"])].append(rec)
 
         def upsert_season_summary(
             exact_trophies: int,
@@ -5311,7 +5326,7 @@ class Database:
                 json.dumps(input_payload, sort_keys=True).encode()
             ).hexdigest()
             existing = connection.execute(
-                "SELECT id, version, result_hash FROM army_analytics_season_summaries WHERE official_season_id=%s AND exact_trophies=%s AND decoder_version=%s AND catalog_version=%s AND analytics_rule_version=%s AND is_published=true",
+                "SELECT id, version, result_hash, is_published FROM army_analytics_season_summaries WHERE official_season_id=%s AND exact_trophies=%s AND decoder_version=%s AND catalog_version=%s AND analytics_rule_version=%s ORDER BY version DESC LIMIT 1",
                 (
                     season_id,
                     exact_trophies,
@@ -5320,13 +5335,18 @@ class Database:
                     claim.analytics_rule_version,
                 ),
             ).fetchone()
-            if existing is not None and _text_value(existing[2]) == result_hash:
+            if (
+                existing is not None
+                and existing[3]
+                and _text_value(existing[2]) == result_hash
+            ):
                 return int(existing[0])
             if existing is not None:
-                connection.execute(
-                    "UPDATE army_analytics_season_summaries SET is_published=false WHERE id=%s",
-                    (existing[0],),
-                )
+                if existing[3]:
+                    connection.execute(
+                        "UPDATE army_analytics_season_summaries SET is_published=false WHERE id=%s",
+                        (existing[0],),
+                    )
                 new_version = int(existing[1]) + 1
                 supersedes = int(existing[0])
             else:
@@ -5364,8 +5384,7 @@ class Database:
             battles=overall_decoded,
             n=len(overall_decoded),
         )
-        for trophies in list(cohorts.keys()):
-            all_for_trophy = [b for b in all_battles if b["trophies"] == trophies]
+        for trophies, all_for_trophy in cohorts.items():
             decoded_for_trophy = [b for b in all_for_trophy if b["status"] == "decoded"]
             sid = upsert_season_summary(trophies, all_for_trophy, decoded_for_trophy)
             self._insert_army_breakdowns(
@@ -5375,6 +5394,25 @@ class Database:
                 battles=decoded_for_trophy,
                 n=len(decoded_for_trophy),
             )
+        connection.execute(
+            """
+            UPDATE army_analytics_season_summaries
+            SET is_published = false
+            WHERE official_season_id = %s
+              AND decoder_version = %s
+              AND catalog_version = %s
+              AND analytics_rule_version = %s
+              AND is_published
+              AND NOT (exact_trophies = ANY(%s::integer[]))
+            """,
+            (
+                season_id,
+                DECODER_VERSION,
+                CATALOG_VERSION,
+                claim.analytics_rule_version,
+                [-1, *cohorts],
+            ),
+        )
 
     def _insert_army_breakdowns(
         self,

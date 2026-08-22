@@ -140,17 +140,15 @@ def _mark_day_complete(database: Database, *, trophies: int = 6000) -> None:
         connection.commit()
 
 
-def _job_id(database: Database, kind: str) -> int:
+def _job_id(database: Database) -> int:
     with database.pool.connection() as connection:
         return int(
             connection.execute(
                 """
                 SELECT id FROM python_processing_jobs
                 WHERE work_type = 'build_army_analytics'
-                  AND deduplication_key LIKE %s
                 ORDER BY id DESC LIMIT 1
-                """,
-                (f"build_army_analytics:{kind}:%",),
+                """
             ).fetchone()[0]
         )
 
@@ -170,13 +168,16 @@ def test_completed_day_and_season_publish_required_army_metrics(
                 )
             _mark_day_complete(database)
 
-            day_job = _job_id(database, "day")
-            season_job = _job_id(database, "season")
+            analytics_job = _job_id(database)
+            with database.pool.connection() as connection:
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_army_analytics'"
+                    ).fetchone()[0]
+                    == 1
+                )
             assert (
-                processor.process_job(day_job, owner="army-day").outcome == "processed"
-            )
-            assert (
-                processor.process_job(season_job, owner="army-season").outcome
+                processor.process_job(analytics_job, owner="army-analytics").outcome
                 == "processed"
             )
 
@@ -285,10 +286,10 @@ def test_completed_day_and_season_publish_required_army_metrics(
                 processor.process_job(correction_job, owner="correction").outcome
                 == "processed"
             )
-            corrected_day_job = _job_id(database, "day")
-            assert corrected_day_job != day_job
+            corrected_job = _job_id(database)
+            assert corrected_job != analytics_job
             assert (
-                processor.process_job(corrected_day_job, owner="corrected-day").outcome
+                processor.process_job(corrected_job, owner="corrected").outcome
                 == "processed"
             )
             with database.pool.connection() as connection:
@@ -322,6 +323,158 @@ def test_completed_day_and_season_publish_required_army_metrics(
             database.close()
 
 
+def test_all_excluded_cohort_is_published_and_stale_scope_is_retired(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _observation, battle_job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="army-all-excluded",
+                endpoint="battle_log",
+                body=json.dumps(
+                    {
+                        "items": [
+                            _battle_row(
+                                opponent="#8PP",
+                                offset_hours=1,
+                                code=None,
+                                stars=1,
+                                destruction=50,
+                            )
+                        ]
+                    }
+                ).encode(),
+                observed_at=DAY_START + timedelta(hours=2),
+                normalized_tag="#2PP",
+            )
+            assert (
+                processor.process_job(battle_job, owner="all-excluded").outcome
+                == "processed"
+            )
+            _mark_day_complete(database, trophies=6100)
+            assert (
+                processor.process_job(_job_id(database), owner="first-build").outcome
+                == "processed"
+            )
+
+            with database.pool.connection() as connection:
+                for table in (
+                    "army_analytics_day_summaries",
+                    "army_analytics_season_summaries",
+                ):
+                    assert connection.execute(
+                        f"""
+                        SELECT total_attacks, sample_size, excluded_attacks,
+                               excluded_breakdown
+                        FROM {table}
+                        WHERE exact_trophies = 6100 AND is_published
+                        """
+                    ).fetchone() == (1, 0, 1, {"missing_army_share_code": 1})
+
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                connection.execute(
+                    """
+                    INSERT INTO ranked_day_versions (
+                        player_id, ranked_day_start, ranked_day_end,
+                        official_season_id, season_day_number,
+                        season_anchor_rule_version, reconciliation_rule_version,
+                        result_hash, version, state, confidence, input_hash,
+                        evidence_complete, coverage_complete, start_trophies
+                    ) VALUES (
+                        %s, %s, %s, %s, 23, 'legend-season-anchor-v1',
+                        'legend-ranked-day-v1', repeat('c', 64), 2,
+                        'Complete', 'exact', repeat('d', 64), true, true, 6200
+                    )
+                    """,
+                    (player_id, DAY_START, DAY_START + timedelta(days=1), SEASON_ID),
+                )
+                database._enqueue_army_analytics(connection, ranked_day_start=DAY_START)
+                connection.commit()
+
+            assert (
+                processor.process_job(
+                    _job_id(database), owner="replacement-build"
+                ).outcome
+                == "processed"
+            )
+            with database.pool.connection() as connection:
+                for table in (
+                    "army_analytics_day_summaries",
+                    "army_analytics_season_summaries",
+                ):
+                    assert connection.execute(
+                        f"""
+                        SELECT exact_trophies, is_published
+                        FROM {table}
+                        WHERE exact_trophies IN (6100, 6200)
+                        ORDER BY exact_trophies
+                        """
+                    ).fetchall() == [(6100, False), (6200, True)]
+        finally:
+            database.close()
+
+
+def test_day_and_season_build_roll_back_together(
+    database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _observation, battle_job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="army-atomic-rollback",
+                endpoint="battle_log",
+                body=json.dumps(
+                    {
+                        "items": [
+                            _battle_row(
+                                opponent="#8PP",
+                                offset_hours=1,
+                                code=FIXTURE_CODE,
+                                stars=3,
+                                destruction=100,
+                            )
+                        ]
+                    }
+                ).encode(),
+                observed_at=DAY_START + timedelta(hours=2),
+                normalized_tag="#2PP",
+            )
+            assert (
+                processor.process_job(battle_job, owner="atomic-battle").outcome
+                == "processed"
+            )
+            _mark_day_complete(database)
+
+            def fail_season(*_args) -> None:
+                raise ValueError("dependency_not_ready: forced season failure")
+
+            monkeypatch.setattr(database, "_build_army_season", fail_season)
+            result = processor.process_job(_job_id(database), owner="atomic-build")
+            assert result.outcome == "retrying"
+            with database.pool.connection() as connection:
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM army_analytics_day_summaries"
+                    ).fetchone()[0]
+                    == 0
+                )
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM army_analytics_season_summaries"
+                    ).fetchone()[0]
+                    == 0
+                )
+        finally:
+            database.close()
+
+
 def test_active_or_incomplete_day_is_withheld_and_retried(
     database_url: str, archive_server
 ) -> None:
@@ -344,7 +497,14 @@ def test_active_or_incomplete_day_is_withheld_and_retried(
                         'clashlens-domain-rules-v1', 'legend-analytics-v1'
                     ) RETURNING id
                     """,
-                    (json.dumps({"ranked_day_start": future_day.isoformat()}),),
+                    (
+                        json.dumps(
+                            {
+                                "ranked_day_start": future_day.isoformat(),
+                                "official_season_id": SEASON_ID,
+                            }
+                        ),
+                    ),
                 ).fetchone()[0]
                 connection.commit()
             result = processor.process_job(job_id, owner="future")
