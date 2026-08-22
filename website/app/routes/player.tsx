@@ -12,6 +12,8 @@ import { formatTimestamp } from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
   PlayerPage,
+  RankedBattleEvent,
+  RankedDaySummary,
   RefreshError,
   RefreshStatus,
   RefreshWork,
@@ -344,48 +346,72 @@ export default function PlayerRoute() {
         </section>
       )}
 
-      <section className="data-section" aria-labelledby="recent-days-title">
-        <h2 id="recent-days-title">Legend season</h2>
-        <div className="table-wrap">
-          <table
-            className="data-table compact-table responsive-table"
-            aria-label="Legend season days"
-          >
-            <caption className="sr-only">
-              Legend season days returned by the service
-            </caption>
-            <thead>
-              <tr>
-                <th scope="col">Day</th>
-                <th scope="col">Offense</th>
-                <th scope="col">Defense</th>
-                <th scope="col">Trophy change</th>
-              </tr>
-            </thead>
-            <tbody>
-              {player.recentDays.map((day) => (
-                <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
-                  <th scope="row" data-label="Day">
-                    {day.dayNumber ?? "Unknown"}
-                  </th>
-                  <td data-label="Offense">
-                    {day.offense.attacks === null
-                      ? "Unknown"
-                      : `${day.offense.attacks} attacks`}
-                  </td>
-                  <td data-label="Defense">
-                    {day.defense.defenses === null
-                      ? "Unknown"
-                      : `${day.defense.defenses} defenses`}
-                  </td>
-                  <td data-label="Trophy change">{formatSigned(day.trophyChange)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <section className="data-section" aria-labelledby="season-days-title">
+        <h2 id="season-days-title">Legend season</h2>
+        <div className="legend-days">
+          {player.seasonDays.map((day) => (
+            <LegendDay key={`${day.period}-${day.dayNumber ?? "unknown"}`} day={day} />
+          ))}
         </div>
       </section>
     </main>
+  );
+}
+
+function LegendDay({ day }: { day: RankedDaySummary }) {
+  return (
+    <details className="legend-day" open={day.state === "Live"}>
+      <summary>
+        <strong>Day {day.dayNumber ?? "Unknown"}</strong>
+        <span>{day.state}</span>
+        <span>{formatCount(day.offense.attacks)} attacks</span>
+        <span>{formatCount(day.defense.defenses)} defenses</span>
+        <span>{formatSigned(day.trophyChange)} trophies</span>
+      </summary>
+      <div className="battle-columns">
+        <BattleColumn title="Attacks" events={day.offenseEvents} />
+        <BattleColumn title="Defenses" events={day.defenseEvents} />
+      </div>
+    </details>
+  );
+}
+
+function BattleColumn({
+  title,
+  events,
+}: {
+  title: "Attacks" | "Defenses";
+  events: RankedBattleEvent[];
+}) {
+  return (
+    <section className="battle-column" aria-label={title}>
+      <h3>{title}</h3>
+      <ol className="battle-slots">
+        {Array.from({ length: 8 }, (_, index) => {
+          const event = events[index];
+          return event ? (
+            <li className="battle-slot" key={event.battleId}>
+              <div className="battle-opponent">
+                <strong>{event.opponent.name ?? event.opponent.tag}</strong>
+                <span className="player-tag">{event.opponent.tag}</span>
+              </div>
+              <time dateTime={event.battleTimestamp}>
+                {formatTimestamp(event.battleTimestamp)}
+              </time>
+              <span>{event.stars} ★</span>
+              <span>{event.destructionPercentage}%</span>
+              <strong>{formatSigned(event.trophyChange)}</strong>
+            </li>
+          ) : (
+            <li
+              aria-label={`Empty ${title.toLowerCase().slice(0, -1)} slot ${index + 1}`}
+              className="battle-slot battle-slot-empty"
+              key={`empty-${index}`}
+            />
+          );
+        })}
+      </ol>
+    </section>
   );
 }
 
