@@ -37,11 +37,12 @@ test("direct loads render the URL-backed selection server-side without JavaScrip
   const context = await browser.newContext({ javaScriptEnabled: false });
   const page = await context.newPage();
   const response = await page.goto(
-    `/analytics/armies?season=${PREVIOUS_SEASON}&lens=defense&start_day=2&end_day=8&population=top-10&category=heroes&sort=usage-count`,
+    `/analytics/armies?season=${PREVIOUS_SEASON}&lens=defense&start_day=2&end_day=8&population=streak-top-10&category=heroes&sort=usage-count`,
   );
 
   expect(response?.status()).toBe(200);
-  await expect(page.getByText(/Legend Days 2–8 · defense · top-10/)).toBeVisible();
+  await expect(page.getByText(/Legend Days 2–8 · defense · streak-top-10/)).toBeVisible();
+  await expect(page.getByText(/shielded member-days: 2/)).toBeVisible();
   // Row labels are th[scope=row], exposed as rowheader cells.
   await expect(page.getByRole("rowheader", { name: "Ice Golem" })).toBeVisible();
   await context.close();
