@@ -2,7 +2,10 @@
 
 ## Read this file before changing domain behavior
 
-`docs/product.md` owns product scope and product rules. This file owns the exact meanings, invariants, evidence states, and versioned calculations for Legend I. `docs/architecture.md` owns runtime ownership and architecture status. Report a conflict between these sources. Do not choose silently.
+This file owns the durable meanings, invariants, evidence states, and
+versioned calculations for Legend I. It does not define current product scope
+or implementation status. Report a conflict with code, tests, migrations, or a
+live GitHub issue; do not choose silently.
 
 Use this order when you implement or review a domain change:
 
@@ -20,10 +23,13 @@ A domain change is complete only when every affected source observation, derived
 - A **Legend I ranked day** starts at **05:00 UTC** and ends at **05:00 UTC** the next day.
 - A Legend I season lasts exactly **28 ranked days**.
 - A Legend I season starts and ends on a Monday at **05:00 UTC**.
-- Use official profile field `currentLeagueSeasonId = 1783918800`, or **2026-07-13 05:00 UTC**, as the version 1 season anchor. The official `previousLeagueSeasonId = 1781499600`, or **2026-06-15 05:00 UTC**, confirms the preceding boundary exactly 28 days earlier.
-- Use half-open intervals. A season includes its start boundary and excludes its end boundary. Ranked day 1 of the anchored season starts on **2026-07-13 05:00 UTC** and ends on **2026-07-14 05:00 UTC**. Ranked day 28 starts on **2026-08-09 05:00 UTC** and ends when the next season starts on **2026-08-10 05:00 UTC**.
+- Use a confirmed official season anchor. Use half-open intervals: a season
+  includes its start boundary and excludes its end boundary.
 - Derive other season boundaries in exact 28-day steps from a confirmed anchor. Store the official season ID and the season-anchor rule version with each derived ranked day and season.
-- A newer valid Legend I profile may advance the confirmed anchor when its current and previous season IDs are Mondays at 05:00 UTC and exactly 28 days apart. If accepted Legend I profiles disagree, retain the last confirmed anchor and mark the new source contract as conflicting.
+- A newer valid Legend I profile may advance the confirmed anchor when its
+  current and previous season boundaries are Mondays at 05:00 UTC and exactly
+  28 days apart. If accepted profiles disagree, retain the last confirmed
+  anchor and mark the new source contract as conflicting.
 - A player can have up to 8 attacks and 8 defenses in one ranked day.
 - Store and calculate time in Coordinated Universal Time (UTC).
 - The ranked-day boundary remains 05:00 UTC even when reset processing and snapshot publication finish later.
@@ -33,17 +39,25 @@ A domain change is complete only when every affected source observation, derived
 ### Identity and eligibility
 
 - A **known player** is a valid, normalized player tag retained by Clash Lens after submission or discovery through an official Clash of Clans API source.
-- An **actively tracked player** is a known player currently confirmed to be participating in Legend I and receiving regular Phase 1 collection.
-- Confirm Legend I membership from the current official player-profile `leagueTier` field. Adapter version 1 uses `leagueTier.id = 105000036` with the expected name `Legend I`. Do not use the older `league` field; it can report `Unranked` for a current Legend I player.
+- An **actively tracked player** is a known player currently confirmed to be participating in Legend I and receiving regular Legend I collection.
+- Confirm Legend I membership from the current official player-profile
+  `leagueTier` field. Do not use the older `league` field; it can report
+  `Unranked` for a current Legend I player.
 - Publish eligibility from the newest recognized `leagueTier` evidence independently of season-anchor acceptance. A season-anchor conflict stays visible and cannot replace current profile, trophy, or anchor state, but it does not discard an otherwise recognized Legend I or non-Legend-I tier classification.
-- Deactivate an actively tracked player only when a newer valid profile contains a tier ID and name that the accepted adapter version explicitly recognizes as non-Legend-I. An unknown tier ID, an unexpected name for a known ID, or a missing or malformed tier is a source-contract conflict or uncertain evidence. Keep the last confirmed eligibility state, mark it stale or conflicting, and require adapter review; do not activate or deactivate from that evidence.
+- Deactivate an actively tracked player only when a newer valid profile contains
+  a tier that the accepted source contract explicitly recognizes as
+  non-Legend-I. An unknown tier, an unexpected name, or a missing or malformed
+  tier is a source-contract conflict or uncertain evidence. Keep the last
+  confirmed eligibility state, mark it stale or conflicting, and do not
+  activate or deactivate from that evidence.
 - An **inactive known player** is retained with all existing history but does not receive regular Legend I battle collection.
-- Begin Phase 1 with the existing set of approximately 12,370 known tags.
 - Accept valid player tags submitted by users.
 - Discover additional tags only through official Clash of Clans API sources, including official leaderboards, clan data, and opponents present in official battle logs.
 - Normalize and deduplicate a tag before adding it to the known-player registry.
-- Add a known player to active tracking after confirming that the player is in Legend I.
-- When newer valid evidence from the accepted tier table shows that an actively tracked player left Legend I, retain the tag and history but remove the player from active Legend I tracking.
+- Check every newly discovered or submitted tag against the current official
+  profile and add it to active tracking immediately after confirming that the
+  player is in Legend I.
+- When newer valid eligibility evidence shows that an actively tracked player left Legend I, retain the tag and history but remove the player from active Legend I tracking.
 - Re-evaluate inactive known players during the Monday promotion and demotion transition and whenever a tag is rediscovered or submitted.
 - Retaining inactive tags must allow later ranked-tournament support without re-creating player identity or losing history.
 
@@ -56,10 +70,10 @@ A domain change is complete only when every affected source observation, derived
 - Never use fresh randomness for a snapshot tie-break. The same tag, trophies, and ordering-rule version must reproduce the same position.
 - Every snapshot must identify the ordering-rule version it used.
 
-### Official rank is separate
+### Official rank is provenance only
 
-- Order the official Top-200 data view by the rank that Supercell supplies, including its ordering of equal-trophy players. It remains a separate source-backed rank system and does not appear as a column on the public Live Leaderboard.
-- Keep official rank separate from Live Leaderboard Rank. A player can have one, both, or neither.
+- Retain the rank that Supercell supplies with each valid official Top-200 observation, including its ordering of equal-trophy players, as source provenance.
+- Official rank does not affect Live Leaderboard Rank and does not create a separate public leaderboard, column, or source badge.
 
 ## 3. Official API observations
 
@@ -69,7 +83,7 @@ A domain change is complete only when every affected source observation, derived
 - A complete official Top-200 observation contains exactly 200 entries, exactly 200 unique valid normalized player tags, and the official `rank` values 1 through 200 once each. The same normalized tag at more than one rank is invalid. Use the returned rank. Do not calculate official rank from trophies or response position.
 - The verified response does not supply a season identifier. Store official rank as a current observation with its source and observation time. Any Legend I season association is Clash Lens derived context, not an official season field.
 - Preserve the untouched response as raw evidence. Add its valid player tags to the known-player registry and request normal profile collection for newly discovered tags.
-- Maintain one most recent complete official Top-200 view. Atomically replace it only after a newer observation passes all completeness checks. Keep a failed, short, malformed, duplicate-tagged, duplicate-ranked, or rank-gapped response inspectable as a failed or partial collection attempt, but do not let it replace the most recent complete view.
+- Maintain one most recent complete official Top-200 observation. Atomically replace it only after a newer observation passes all completeness checks. Keep a failed, short, malformed, duplicate-tagged, duplicate-ranked, or rank-gapped response inspectable as a failed or partial collection attempt, but do not let it replace the most recent complete observation.
 - Record when the current official Top 200 was observed and whether a newer refresh attempt failed. Do not imply that one API response and the latest per-player profile observations were captured at the same instant.
 
 ### Player profiles and battle logs
@@ -166,21 +180,21 @@ A domain change is complete only when every affected source observation, derived
 - Continue serving the previously frozen snapshot while the next snapshot is assembled. Publish the replacement atomically so users never receive a mixture of snapshot versions.
 - Target snapshot publication at approximately 05:05 UTC on normal days, after the daily no-attack matchmaking window.
 - Target snapshot publication at approximately 05:10 UTC on Mondays, after the longer promotion and demotion transition.
-- A **live leaderboard** uses the latest available observations after the frozen baseline and must be labeled separately.
+- The one public **Live Leaderboard** uses the latest available observation for every actively tracked Legend I player. Frozen snapshots support reproducible history and analytics; they do not create a separate official-versus-tracked leaderboard.
 - Retain each entry's observation time, measured coverage, freshness, confidence, and applicable official rank provenance.
 - Publishing at the target time means accepting the best official observations available under those rules; it does not claim that every API response was generated simultaneously or that every entry has equal freshness.
 - If later evidence proves a frozen snapshot inconsistent, retain the prior version and publish a corrected version rather than silently rewriting it.
 
 ## 7. Legend I meta analytics
 
-### Composition, classification, and rates
+### Composition and rates
 
 - Preserve the raw `armyShareCode` from each battle observation.
-- An **army composition** is the exact decoded set of units represented by an `armyShareCode`.
-- An **army archetype** is a versioned and reproducible classification derived from an army composition.
-- **Army usage rate** is the share of unique Legend I attacks in a stated cohort and time period that belong to an army archetype.
-- Count unclassified attacks in an explicit `Unclassified` category.
-- **Three-star rate** is the share of attacks assigned to an army archetype that achieved three stars.
+- An **army composition** is the exact decoded set and quantity of troops, spells, siege machines, and other units represented by an `armyShareCode`.
+- Record each decoded component's numeric identifier, quantity, encoded section, and origin.
+- Preserve an unknown numeric identifier, quantity, encoded section, and origin while retaining the known components from the same army. Keep its semantic category unresolved when the encoded section and current catalog cannot distinguish it. Unknown IDs indicate catalog work still to do and must not be discarded, guessed, or silently grouped.
+- **Unit usage rate** is the share of unique Legend I attacks in a stated cohort and time period that contain the stated unit.
+- **Three-star rate** is the share of attacks in a stated population, time period, and filter that achieved three stars.
 
 ### Population filters and lenses
 
@@ -204,10 +218,10 @@ A domain change is complete only when every affected source observation, derived
 
 ### Aggregate evidence
 
-- Every aggregate must state its population filter, time period, observed sample size, measured coverage, freshness, classification version, classification confidence, unclassified count, and analytics-rule version.
+- Every aggregate must state its population filter, time period, observed sample size, measured coverage, freshness, decoder and catalog version, unknown-ID count, malformed or partial count, and analytics-rule version.
 - When a selected one-snapshot cohort includes entries that use old trophy observations, return the available analytics and state the old-entry count and age. Do not silently replace the requested population or present it as fully fresh.
-- Do not silently exclude malformed, partial, zero-trophy, or unclassified observations. Show their effect on coverage and confidence.
-- Preserve previously published analytics with their original rule labels when classification or calculation rules change.
+- Do not silently exclude malformed, partial, zero-trophy, or unknown-ID observations. Show their effect on coverage and confidence.
+- Preserve previously published analytics with their original rule labels when decoding, catalog, or calculation rules change.
 
 ## 8. Evidence and confidence states
 
@@ -221,10 +235,3 @@ Use the same confidence meanings on every applicable surface.
 - Timestamps allow exact event attribution, but timestamps alone do not prove that a ranked day is complete.
 - If Clash Lens cannot prove completeness, mark the ranked day as partial or uncertain and preserve the reason.
 - Player-profile trophies and battle-log events may become visible at different times. Preserve both observations and require eventual reconciliation rather than assuming paired responses are atomic.
-
-## 9. Other ranked tournaments
-
-- Legend II is a weekly tournament with a fixed participant set, not one step in a continuous rank ladder beneath Legend I.
-- Legend II and every ranked tournament other than Legend I are outside Phase 1.
-- The rules of other ranked tournaments remain unspecified.
-- Tournament, promotion, demotion, tracking, and completeness rules must be specified before Clash Lens extends the Legend I model to another tournament.

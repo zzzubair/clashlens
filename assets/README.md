@@ -1,19 +1,20 @@
-# ClashLens brand assets
+# Clash Lens brand assets
 
-The approved ClashLens mark is a blue `C` and gold `L` monogram with orange and yellow impact pieces. All files use a transparent background unless a consuming application supplies its own background.
+The approved mark is a blue `C` and gold `L` monogram with orange and yellow
+impact pieces. Files use transparent backgrounds unless a consuming
+application supplies its own background.
 
-## Master artwork
+## Source and rendered assets
 
-- `brand/clashlens-mark.svg` is the source of truth.
-- `brand/clashlens-mark-{256,512,1024,2048}.png` are direct RGBA renders of the master SVG.
-
-## Favicons
-
-- `favicons/favicon.svg` preserves the full vector mark.
-- `favicons/favicon.ico` contains PNG-compressed `16`, `32`, `48`, `64`, `128`, and `256` pixel images.
-- `favicons/favicon-{16x16,32x32,48x48}.png` are browser PNG fallbacks.
-- `favicons/apple-touch-icon.png` is `180 × 180`.
-- `favicons/android-chrome-{192x192,512x512}.png` are referenced by `site.webmanifest`.
+- `brand/clashlens-mark.svg` is the master artwork.
+- `brand/clashlens-mark-{256,512,1024,2048}.png` are direct RGBA renders of
+  that SVG.
+- `favicons/favicon.svg` is the vector favicon.
+- `favicons/favicon.ico` contains PNG-compressed 16, 32, 48, 64, 128, and
+  256 pixel images.
+- The PNG favicon fallbacks, Apple touch icon, and Android Chrome icons are
+  referenced by the web manifest and should be regenerated from the master
+  when the mark changes.
 
 ## Palette
 

@@ -33,9 +33,10 @@ We need to be on the same page with terminology. When communicating use this lan
 - Storage: 1 TB NVMe SSD (`HFM001TD3JX013N`).
 
 ## Sources
-- Codebase is the source of truth, but if still uncertain read only the sources relevant to the task, the docs are previously accepted decisions and useful context but can be stale.
-- [`docs/product.md`](docs/product.md) for product scope and behavior.
-- [`docs/domain.md`](docs/domain.md) for domain rules.
-- [`docs/architecture.md`](docs/architecture.md) for runtime boundaries and open technology choices.
-- [`docs/deployment.md`](docs/deployment.md), [`docs/collector-prototype.md`](docs/collector-prototype.md), or [`python/README.md`](python/README.md) for their respective implementation areas.
-- If an important uncertainty remains after inspecting the code and relevant documentation, ask the maintainer.
+Use this authority order when sources disagree:
+
+1. Code, migrations, fixtures, and tests define implemented behavior.
+2. Live GitHub issues define current scope, status, and approved work.
+3. Retained documentation describes durable contracts and operating guidance.
+
+Documentation can be stale. Report conflicts and follow the higher source; do not silently treat prose as more authoritative than the code or an issue. Read only the sources relevant to the task. If an important uncertainty remains, ask the maintainer.
