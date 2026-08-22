@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from .catalog import CATALOG_HASH, CATALOG_VERSION, is_siege_troop, is_valid_typed_id
 
-DECODER_VERSION = "army-decoder-v1"
+DECODER_VERSION = "army-decoder-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +40,14 @@ class HeroFact:
 
 
 @dataclass(frozen=True, slots=True)
+class UnknownFact:
+    numeric_id: int
+    quantity: int
+    section: str
+    origin: str
+
+
+@dataclass(frozen=True, slots=True)
 class DecodedArmy:
     home_troops: tuple[TroopFact, ...]
     cc_troops: tuple[TroopFact, ...]
@@ -48,11 +56,16 @@ class DecodedArmy:
     cc_spells_raw: tuple[SpellFact, ...]
     siege: tuple[SiegeFact, ...]
     heroes: tuple[HeroFact, ...]
+    unknown: tuple[UnknownFact, ...]
     raw_code: str
     decoder_version: str
     catalog_version: str
     catalog_hash: str
-    identity_hash: str
+    identity_hash: str | None
+
+    @property
+    def status(self) -> str:
+        return "partial" if self.unknown else "decoded"
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,24 +143,24 @@ def _guard_int(s: str, label: str) -> int:
     return v
 
 
-def _check_typed(typed: str, expected_ns: str) -> None:
+def _is_known_typed(typed: str, expected_ns: str) -> bool:
     if is_valid_typed_id(typed):
-        return
+        return True
     rid = typed.split(":", 1)[1]
     for ns in ("troop", "spell", "hero", "pet", "equipment"):
-        if ns == expected_ns:
-            continue
-        if is_valid_typed_id(f"{ns}:{rid}"):
+        if ns != expected_ns and is_valid_typed_id(f"{ns}:{rid}"):
             raise DecodeError("wrong_category", f"{typed} exists as {ns}")
-    raise DecodeError("unknown_id", f"unknown {typed}")
+    return False
 
 
-def _parse_section(content: str, ns: str) -> list[tuple[str, int]]:
+def _parse_section(content: str, ns: str) -> list[tuple[str, int, bool]]:
     if content == "":
-        raise DecodeError("partial", f"empty {ns} section")
+        # An empty encoded section is structurally unsupported, never a usable
+        # partial decode.
+        raise DecodeError("malformed", f"empty {ns} section")
     if content.startswith("-") or content.endswith("-") or "--" in content:
         raise DecodeError("malformed", f"empty entry in {ns}")
-    out: list[tuple[str, int]] = []
+    out: list[tuple[str, int, bool]] = []
     for entry in content.split("-"):
         if entry == "":
             raise DecodeError("malformed", f"empty entry in {ns}")
@@ -162,8 +175,7 @@ def _parse_section(content: str, ns: str) -> list[tuple[str, int]]:
         if qty <= 0 or qty > 1000:
             raise DecodeError("malformed", f"quantity {qty} out of range")
         typed = f"{ns}:{rid}"
-        _check_typed(typed, ns)
-        out.append((typed, qty))
+        out.append((typed, qty, _is_known_typed(typed, ns)))
     return out
 
 
@@ -194,30 +206,44 @@ def _decode(raw: str) -> DecodedArmy:
     cc_spells: list[SpellFact] = []
     siege: list[SiegeFact] = []
     heroes: list[HeroFact] = []
+    unknown: list[UnknownFact] = []
+
+    def keep_unknown(typed: str, qty: int, section: str, origin: str) -> None:
+        unknown.append(UnknownFact(int(typed.split(":", 1)[1]), qty, section, origin))
 
     if "u" in sections:
-        for typed, qty in _parse_section(sections["u"], "troop"):
-            if is_siege_troop(typed):
+        for typed, qty, known in _parse_section(sections["u"], "troop"):
+            if not known:
+                keep_unknown(typed, qty, "u", "home")
+            elif is_siege_troop(typed):
                 siege.append(SiegeFact(typed, qty, "home"))
             else:
                 home_troops.append(TroopFact(typed, qty, "home"))
     if "i" in sections:
-        for typed, qty in _parse_section(sections["i"], "troop"):
-            if is_siege_troop(typed):
+        for typed, qty, known in _parse_section(sections["i"], "troop"):
+            if not known:
+                keep_unknown(typed, qty, "i", "clan_castle")
+            elif is_siege_troop(typed):
                 siege.append(SiegeFact(typed, qty, "clan_castle"))
             else:
                 cc_troops.append(TroopFact(typed, qty, "clan_castle"))
     if "s" in sections:
-        for typed, qty in _parse_section(sections["s"], "spell"):
-            home_spells.append(SpellFact(typed, qty, "home"))
+        for typed, qty, known in _parse_section(sections["s"], "spell"):
+            if known:
+                home_spells.append(SpellFact(typed, qty, "home"))
+            else:
+                keep_unknown(typed, qty, "s", "home")
     if "d" in sections:
-        for typed, qty in _parse_section(sections["d"], "spell"):
-            cc_spells.append(SpellFact(typed, qty, "clan_castle"))
+        for typed, qty, known in _parse_section(sections["d"], "spell"):
+            if known:
+                cc_spells.append(SpellFact(typed, qty, "clan_castle"))
+            else:
+                keep_unknown(typed, qty, "d", "clan_castle")
 
     if "h" in sections:
         h_content = sections["h"]
         if h_content == "":
-            raise DecodeError("partial", "empty hero section")
+            raise DecodeError("malformed", "empty hero section")
         seen_heroes: set[str] = set()
         chips = h_content.split("-")
         for chip in chips:
@@ -234,15 +260,18 @@ def _decode(raw: str) -> DecodedArmy:
             hero_s, m_s, pet_s, equip_s = match.groups()
             hero_id = _guard_int(hero_s, "hero")
             hero_typed = f"hero:{hero_id}"
-            _check_typed(hero_typed, "hero")
+            hero_known = _is_known_typed(hero_typed, "hero")
             if hero_typed in seen_heroes:
                 raise DecodeError("malformed", f"duplicate hero {hero_typed}")
             seen_heroes.add(hero_typed)
             pet_typed = None
             if pet_s is not None:
                 pid = _guard_int(pet_s, "pet")
-                pet_typed = f"pet:{pid}"
-                _check_typed(pet_typed, "pet")
+                candidate = f"pet:{pid}"
+                if _is_known_typed(candidate, "pet"):
+                    pet_typed = candidate
+                else:
+                    keep_unknown(candidate, 1, "h", f"hero:{hero_id}:pet")
             equip_list: list[str] = []
             raw_m = f"m{m_s}" if m_s is not None else None
             if m_s is not None:
@@ -258,20 +287,24 @@ def _decode(raw: str) -> DecodedArmy:
                         raise DecodeError("malformed", "empty equipment")
                     eid = _guard_int(part, "equipment")
                     eq_typed = f"equipment:{eid}"
-                    _check_typed(eq_typed, "equipment")
+                    equipment_known = _is_known_typed(eq_typed, "equipment")
                     if eq_typed in equip_list:
                         raise DecodeError(
                             "malformed", f"duplicate equipment {eq_typed}"
                         )
-                    equip_list.append(eq_typed)
+                    if equipment_known:
+                        equip_list.append(eq_typed)
+                    else:
+                        keep_unknown(eq_typed, 1, "h", f"hero:{hero_id}:equipment")
+            # The h-section grammar proves the chip is a hero entry, so known
+            # pet and equipment assignments are retained even when the hero ID
+            # itself is absent from the catalog. The unknown hero ID is kept as
+            # unresolved evidence; no name or category is guessed.
             heroes.append(
-                HeroFact(
-                    hero_typed,
-                    pet_typed,
-                    tuple(sorted(equip_list)),
-                    raw_m,
-                )
+                HeroFact(hero_typed, pet_typed, tuple(sorted(equip_list)), raw_m)
             )
+            if not hero_known:
+                keep_unknown(hero_typed, 1, "h", "hero")
 
     pooled = tuple(sorted(home_spells + cc_spells, key=lambda x: x.typed_id))
 
@@ -297,9 +330,11 @@ def _decode(raw: str) -> DecodedArmy:
             for h in heroes
         ),
     }
-    identity_hash = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    identity_hash = None
+    if not unknown:
+        identity_hash = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
     return DecodedArmy(
         home_troops=tuple(home_troops),
         cc_troops=tuple(cc_troops),
@@ -308,6 +343,7 @@ def _decode(raw: str) -> DecodedArmy:
         cc_spells_raw=tuple(cc_spells),
         siege=tuple(siege),
         heroes=tuple(sorted(heroes, key=lambda h: h.hero_typed_id)),
+        unknown=tuple(unknown),
         raw_code=raw,
         decoder_version=DECODER_VERSION,
         catalog_version=CATALOG_VERSION,

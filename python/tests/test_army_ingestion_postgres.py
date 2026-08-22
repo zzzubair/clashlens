@@ -284,8 +284,8 @@ def test_attacker_defender_perspectives_count_once(
                     "SELECT count(*) FROM battle_army_decodes WHERE status='decoded'"
                 ).fetchone()[0]
                 assert battles == 1
-                assert decodes == 1, (
-                    "defender perspective must not create second army use"
+                assert decodes == 2, (
+                    "attacker and defender reports retain independent decodes"
                 )
         finally:
             db.close()
@@ -351,3 +351,46 @@ def test_correction_replaces_stale_facts(database_url: str, archive_server) -> N
                 )
         finally:
             db.close()
+
+
+def test_partial_decode_persists_known_and_unknown_facts_per_perspective(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as connection_info:
+        timestamp = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        _, job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="partial-perspective",
+            endpoint="battle_log",
+            body=json.dumps(
+                {"items": [_live_row(True, "#8PP", "u2x58-3x9999s1x2", timestamp)]}
+            ).encode(),
+            observed_at=timestamp + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_job(job_id, owner="partial").outcome == "processed"
+            with database.pool.connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT perspective, status, exact_army_id, home_troops,
+                           unresolved_components
+                    FROM battle_army_decodes WHERE is_active
+                    """
+                ).fetchone()
+            assert text(row[0]) == "attacker"
+            assert text(row[1]) == "partial"
+            assert row[2] is None
+            assert row[3] == [["troop:58", 2, "home"]]
+            assert row[4] == [
+                {
+                    "numeric_id": 9999,
+                    "quantity": 3,
+                    "section": "u",
+                    "origin": "home",
+                }
+            ]
+        finally:
+            database.close()

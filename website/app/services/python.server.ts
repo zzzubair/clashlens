@@ -1,4 +1,6 @@
 import type {
+  ArmyAnalytics,
+  BattleArmy,
   PlayerPage,
   RankedBattleEvent,
   RefreshStatus,
@@ -79,6 +81,7 @@ export interface PythonClient {
   ): Promise<TrackedLeaderboard>;
   searchPlayers(query: string, limit?: number): Promise<SearchResponse>;
   getPlayer(tag: string): Promise<PlayerPage>;
+  getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics>;
   requestRefresh(tag: string, idempotencyKey: string): Promise<RefreshWork>;
   getRefreshStatus(workId: string, tag: string): Promise<RefreshStatus>;
   createAccount(
@@ -163,6 +166,7 @@ export function createPythonClient(
     getTrackedLeaderboard,
     searchPlayers,
     getPlayer: getPlayerPage,
+    getArmyAnalytics,
     requestRefresh: requestPlayerRefresh,
     getRefreshStatus,
     ...accountOperations,
@@ -213,6 +217,16 @@ async function searchPlayers(query: string, limit = 50): Promise<SearchResponse>
     undefined,
   );
   return mapSearch(payload, query);
+}
+
+async function getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics> {
+  const payload = await requestJson<unknown>(
+    `/v1/analytics/armies?${query.toString()}`,
+    "GET",
+    undefined,
+    undefined,
+  );
+  return mapArmyAnalytics(payload);
 }
 
 async function getPlayerPage(tag: string): Promise<PlayerPage> {
@@ -703,6 +717,183 @@ function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {
   };
 }
 
+function mapBattleArmy(value: unknown): BattleArmy | null {
+  if (value === null) return null;
+  if (
+    !isRecord(value) ||
+    !isOneOf(value.state, ["decoded", "partial", "failed"] as const) ||
+    !(value.failure_reason === null || isString(value.failure_reason)) ||
+    !Array.isArray(value.components) ||
+    !Array.isArray(value.unknown_components) ||
+    !isString(value.decoder_version) ||
+    !isString(value.catalog_version)
+  )
+    throw new PythonApiError(502, { error: "malformed" });
+  const components = value.components.map((item) => {
+    if (
+      !isRecord(item) ||
+      !isString(item.typed_id) ||
+      !isString(item.name) ||
+      !isInteger(item.quantity) ||
+      item.quantity < 1 ||
+      !isString(item.origin)
+    )
+      throw new PythonApiError(502, { error: "malformed" });
+    return {
+      typedId: item.typed_id,
+      name: item.name,
+      quantity: item.quantity,
+      origin: item.origin,
+    };
+  });
+  const unknownComponents = value.unknown_components.map((item) => {
+    if (
+      !isRecord(item) ||
+      !isInteger(item.numeric_id) ||
+      !isInteger(item.quantity) ||
+      !isString(item.section) ||
+      !isString(item.origin)
+    )
+      throw new PythonApiError(502, { error: "malformed" });
+    return {
+      numericId: item.numeric_id,
+      quantity: item.quantity,
+      section: item.section,
+      origin: item.origin,
+    };
+  });
+  return {
+    state: value.state,
+    failureReason: value.failure_reason,
+    components,
+    unknownComponents,
+    decoderVersion: value.decoder_version,
+    catalogVersion: value.catalog_version,
+  };
+}
+
+function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
+  if (
+    !isRecord(payload) ||
+    !isRecord(payload.selection) ||
+    !Array.isArray(payload.rows) ||
+    !isInteger(payload.total_attacks) ||
+    !isInteger(payload.usable_army_sample) ||
+    !isRecord(payload.army_states) ||
+    !isInteger(payload.unknown_affected_attacks) ||
+    !isInteger(payload.unknown_component_occurrences) ||
+    !isInteger(payload.perspective_disagreement_count) ||
+    !isInteger(payload.missing_trophy_membership_evidence) ||
+    !isRecord(payload.cohort_evidence) ||
+    !isInteger(payload.cohort_evidence.stale_or_uncertain_cohort_members) ||
+    !isInteger(payload.cohort_evidence.streak_excluded_players) ||
+    !isRecord(payload.collection_coverage) ||
+    !isString(payload.collection_coverage.state) ||
+    !isInteger(payload.collection_coverage.completed_days) ||
+    !isRecord(payload.freshness) ||
+    !isString(payload.freshness.state) ||
+    !isRecord(payload.reproducibility) ||
+    !isString(payload.reproducibility.official_season_id) ||
+    !Array.isArray(payload.reproducibility.legend_days) ||
+    payload.reproducibility.legend_days.length !== 2 ||
+    !payload.reproducibility.legend_days.every(isInteger) ||
+    !Array.isArray(payload.reproducibility.snapshot_versions) ||
+    !payload.reproducibility.snapshot_versions.every(isInteger) ||
+    !isRecord(payload.versions) ||
+    !isString(payload.publication_identity)
+  )
+    throw new PythonApiError(502, { error: "malformed" });
+  const selection = payload.selection;
+  if (
+    !isOneOf(selection.lens, ["offense", "defense"] as const) ||
+    !isString(selection.season) ||
+    !isInteger(selection.start_day) ||
+    !isInteger(selection.end_day) ||
+    !isString(selection.population) ||
+    !isString(selection.category) ||
+    !isString(selection.sort) ||
+    !isString(payload.versions.decoder) ||
+    !isString(payload.versions.catalog) ||
+    !isString(payload.versions.analytics)
+  )
+    throw new PythonApiError(502, { error: "malformed" });
+  const rows = payload.rows.map((row) => {
+    if (
+      !isRecord(row) ||
+      !isString(row.key) ||
+      !isString(row.label) ||
+      !isInteger(row.usage_count) ||
+      !isInteger(row.usage_denominator) ||
+      !isFiniteNumber(row.usage_rate) ||
+      !Array.isArray(row.star_counts) ||
+      row.star_counts.length !== 4 ||
+      !row.star_counts.every(isInteger) ||
+      !Array.isArray(row.star_rates) ||
+      row.star_rates.length !== 4 ||
+      !row.star_rates.every(isFiniteNumber) ||
+      !isFiniteNumber(row.three_star_rate) ||
+      !isFiniteNumber(row.average_stars) ||
+      !isFiniteNumber(row.average_destruction) ||
+      !isInteger(row.unknown_excluded_attacks)
+    )
+      throw new PythonApiError(502, { error: "malformed" });
+    return {
+      key: row.key,
+      label: row.label,
+      usageCount: row.usage_count,
+      usageDenominator: row.usage_denominator,
+      usageRate: row.usage_rate,
+      starCounts: row.star_counts as [number, number, number, number],
+      starRates: row.star_rates as [number, number, number, number],
+      threeStarRate: row.three_star_rate,
+      averageStars: row.average_stars,
+      averageDestruction: row.average_destruction,
+      unknownExcludedAttacks: row.unknown_excluded_attacks,
+    };
+  });
+  return {
+    kind: "army-analytics",
+    selection: {
+      lens: selection.lens,
+      season: selection.season,
+      startDay: selection.start_day,
+      endDay: selection.end_day,
+      population: selection.population,
+      category: selection.category,
+      sort: selection.sort,
+    },
+    totalAttacks: payload.total_attacks,
+    usableArmySample: payload.usable_army_sample,
+    armyStates: payload.army_states as Record<string, number>,
+    unknownAffectedAttacks: payload.unknown_affected_attacks,
+    unknownComponentOccurrences: payload.unknown_component_occurrences,
+    perspectiveDisagreementCount: payload.perspective_disagreement_count,
+    missingTrophyMembershipEvidence: payload.missing_trophy_membership_evidence,
+    cohortEvidence: {
+      staleOrUncertainCohortMembers:
+        payload.cohort_evidence.stale_or_uncertain_cohort_members,
+      streakExcludedPlayers: payload.cohort_evidence.streak_excluded_players,
+    },
+    collectionCoverage: {
+      state: payload.collection_coverage.state,
+      completedDays: payload.collection_coverage.completed_days,
+    },
+    freshness: { state: payload.freshness.state },
+    reproducibility: {
+      officialSeasonId: payload.reproducibility.official_season_id,
+      legendDays: payload.reproducibility.legend_days as [number, number],
+      snapshotVersions: payload.reproducibility.snapshot_versions,
+    },
+    versions: {
+      decoder: payload.versions.decoder,
+      catalog: payload.versions.catalog,
+      analytics: payload.versions.analytics,
+    },
+    publicationIdentity: payload.publication_identity,
+    rows,
+  };
+}
+
 function mapPlayerPage(payload: unknown): PlayerPage {
   if (
     !isRecord(payload) ||
@@ -743,6 +934,7 @@ function mapPlayerPage(payload: unknown): PlayerPage {
       destructionPercentage: value.destruction_percentage,
       stars: value.stars,
       trophyChange: value.trophy_change,
+      army: mapBattleArmy(value.army ?? null),
     };
   };
   const mapDay = (value: unknown) => {

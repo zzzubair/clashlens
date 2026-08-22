@@ -68,6 +68,16 @@ def migrated_production_database(
                             ROOT / "deploy/migrations/0006_provider_identities.sql"
                         ).read_text(encoding="utf-8")
                     )
+                    connection.execute(
+                        (
+                            ROOT / "deploy/migrations/0007_player_discovery.sql"
+                        ).read_text(encoding="utf-8")
+                    )
+                    connection.execute(
+                        (
+                            ROOT / "deploy/migrations/0008_public_army_analytics.sql"
+                        ).read_text(encoding="utf-8")
+                    )
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -685,4 +695,32 @@ def test_provider_identities_migration_permits_discord_and_stays_reentrant(
                 ("clashlens_collector", False),
                 ("clashlens_python_api", True),
                 ("clashlens_python_worker", False),
+            ]
+
+
+def test_public_army_migration_is_forward_only_and_reentrant(database_url: str) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        migration = (
+            ROOT / "deploy/migrations/0008_public_army_analytics.sql"
+        ).read_text(encoding="utf-8")
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(migration)
+            assert (
+                connection.execute(
+                    "SELECT true FROM clash_lens_schema_migrations WHERE version = 8"
+                ).fetchone()
+                is not None
+            )
+            columns = connection.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'battle_army_decodes'
+                  AND column_name IN ('perspective', 'unresolved_components')
+                ORDER BY column_name
+                """
+            ).fetchall()
+            assert [row[0] for row in columns] == [
+                "perspective",
+                "unresolved_components",
             ]

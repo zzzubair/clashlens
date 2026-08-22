@@ -7,6 +7,7 @@ export default [
   route("resources/players/search", "routes/player-search.ts"),
   route("resources/players/:tag/refresh", "routes/refresh.ts"),
   route("leaderboards/tracked", "routes/tracked-leaderboard.tsx"),
+  route("analytics/armies", "routes/army-analytics.tsx"),
   route("login", "routes/login.tsx"),
   route("auth/google", "routes/auth.google.ts"),
   route("auth/google/callback", "routes/auth.google.callback.tsx"),

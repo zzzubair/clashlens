@@ -13,6 +13,7 @@ from .battle import (
 )
 from .db import (
     ANALYTICS_RULE_VERSION,
+    ARMY_ANALYTICS_RULE_VERSION,
     DOMAIN_RULE_VERSION,
     PROCESSING_VERSION,
     Claim,
@@ -313,7 +314,7 @@ class ObservationProcessor:
                 return self._fail(
                     claim, "unsupported_domain_rule_version", retryable=False
                 )
-            if claim.analytics_rule_version != ANALYTICS_RULE_VERSION:
+            if claim.analytics_rule_version != ARMY_ANALYTICS_RULE_VERSION:
                 return self._fail(
                     claim, "unsupported_analytics_rule_version", retryable=False
                 )

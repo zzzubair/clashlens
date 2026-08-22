@@ -401,6 +401,7 @@ function BattleColumn({
               <span>{event.stars} ★</span>
               <span>{event.destructionPercentage}%</span>
               <strong>{formatSigned(event.trophyChange)}</strong>
+              {event.army ? <BattleArmyDetails army={event.army} /> : null}
             </li>
           ) : (
             <li
@@ -412,6 +413,31 @@ function BattleColumn({
         })}
       </ol>
     </section>
+  );
+}
+
+function BattleArmyDetails({ army }: { army: RankedBattleEvent["army"] }) {
+  if (!army) return null;
+  return (
+    <details className="battle-army">
+      <summary>Attacking army · {army.state}</summary>
+      {army.failureReason ? <p>{army.failureReason}</p> : null}
+      <ul>
+        {army.components.map((component, index) => (
+          <li key={`${component.typedId}-${component.origin}-${index}`}>
+            {component.name} ×{component.quantity} <small>({component.origin})</small>
+          </li>
+        ))}
+        {army.unknownComponents.map((component, index) => (
+          <li key={`unknown-${component.section}-${component.numericId}-${index}`}>
+            Unknown ID {component.numericId} ×{component.quantity}{" "}
+            <small>
+              ({component.section}, {component.origin})
+            </small>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

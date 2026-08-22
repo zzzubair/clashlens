@@ -11,6 +11,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0005_army_decoding.sql"
   "$ROOT_DIR/deploy/migrations/0006_provider_identities.sql"
   "$ROOT_DIR/deploy/migrations/0007_player_discovery.sql"
+  "$ROOT_DIR/deploy/migrations/0008_public_army_analytics.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}

@@ -94,10 +94,17 @@ def test_missing_and_empty_code_remain_canonical_but_fail_decode() -> None:
         assert parsed.has_row_gap is False
 
 
-def test_unknown_id_and_wrong_category_invalidate_whole_battle() -> None:
-    # unknown troop id 9999
-    result = decode_army_share_code("u1x9999")
-    assert result.category == "unknown_id"
+def test_unknown_id_preserves_known_facts_and_wrong_category_fails() -> None:
+    result = decode_army_share_code("u2x58-3x9999")
+    assert result.status == "partial"
+    assert [(fact.typed_id, fact.quantity) for fact in result.home_troops] == [
+        ("troop:58", 2)
+    ]
+    assert [
+        (fact.numeric_id, fact.quantity, fact.section, fact.origin)
+        for fact in result.unknown
+    ] == [(9999, 3, "u", "home")]
+    assert result.identity_hash is None
     # wrong category: spell id 58 exists as troop but not as spell, so s1x58 should be unknown for spell namespace
     result2 = decode_army_share_code("s1x58")
     assert result2.category == "wrong_category"
@@ -186,6 +193,51 @@ def test_siege_extraction_preserves_origin_combined() -> None:
     assert home_siege.siege[0].origin == "home"
     assert cc_siege.siege[0].origin == "clan_castle"
     # both have same typed_id but origin different
+
+
+def test_unknown_ids_survive_in_every_supported_section() -> None:
+    result = decode_army_share_code("u1x9991i2x9992s3x9993d4x9994h9995p9996e9997_9998")
+    assert result.status == "partial"
+    assert {
+        (fact.numeric_id, fact.quantity, fact.section, fact.origin)
+        for fact in result.unknown
+    } == {
+        (9991, 1, "u", "home"),
+        (9992, 2, "i", "clan_castle"),
+        (9993, 3, "s", "home"),
+        (9994, 4, "d", "clan_castle"),
+        (9995, 1, "h", "hero"),
+        (9996, 1, "h", "hero:9995:pet"),
+        (9997, 1, "h", "hero:9995:equipment"),
+        (9998, 1, "h", "hero:9995:equipment"),
+    }
+
+
+def test_known_pet_and_equipment_survive_unknown_hero_id() -> None:
+    # The h-section grammar proves the chip is a hero entry, so known pet and
+    # equipment facts stay attached with their assignment origin even though
+    # the hero ID is missing from the catalog.
+    result = decode_army_share_code("h999p9e14_32u2x58")
+    assert result.status == "partial"
+    assert len(result.heroes) == 1
+    hero = result.heroes[0]
+    assert hero.hero_typed_id == "hero:999"
+    assert hero.pet_typed_id == "pet:9"
+    assert set(hero.equipment_typed_ids) == {"equipment:14", "equipment:32"}
+    # The unknown hero ID itself remains unresolved evidence.
+    assert [
+        (fact.numeric_id, fact.quantity, fact.section, fact.origin)
+        for fact in result.unknown
+    ] == [(999, 1, "h", "hero")]
+    assert result.identity_hash is None
+
+
+def test_empty_encoded_sections_are_structurally_unsupported() -> None:
+    for code in ["u", "s", "i", "d", "h", "u2x58h", "h0p9u"]:
+        result = decode_army_share_code(code)
+        assert getattr(result, "category", None) == "malformed", (
+            f"expected malformed for {code!r}, got {result}"
+        )
 
 
 def test_malformed_and_partial_invalidate() -> None:
