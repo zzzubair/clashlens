@@ -364,6 +364,22 @@ h3 {
   box-shadow: none;
 }
 
+.tracked-leaderboard-viewport {
+  max-block-size: 40rem;
+  overflow: auto;
+}
+
+.tracked-leaderboard-viewport:focus-visible {
+  outline: 3px solid var(--cl-blue-dark);
+  outline-offset: 3px;
+}
+
+.tracked-leaderboard-viewport thead th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+}
+
 .data-table {
   min-width: 44rem;
   color: var(--cl-ink);

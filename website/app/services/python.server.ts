@@ -74,6 +74,8 @@ export interface PythonClient {
   getTrackedLeaderboard(
     limit?: number,
     view?: "live" | "daily",
+    offset?: number,
+    selector?: { officialSeasonId: string; dayNumber: number },
   ): Promise<TrackedLeaderboard>;
   searchPlayers(query: string, limit?: number): Promise<SearchResponse>;
   getPlayer(tag: string): Promise<PlayerPage>;
@@ -178,9 +180,16 @@ function boundedAccountReadTimeout(value: number | undefined): number {
 async function getTrackedLeaderboard(
   limit = 25,
   view: "live" | "daily" = "live",
+  offset = 0,
+  selector?: { officialSeasonId: string; dayNumber: number },
 ): Promise<TrackedLeaderboard> {
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (selector) {
+    query.set("official_season_id", selector.officialSeasonId);
+    query.set("season_day_number", String(selector.dayNumber));
+  }
   const payload = await requestJson<unknown>(
-    `/v1/leaderboards/${view === "live" ? "live" : "frozen"}?limit=${String(limit)}`,
+    `/v1/leaderboards/${view === "live" ? "live" : "frozen"}?${query.toString()}`,
     "GET",
     undefined,
     undefined,
@@ -407,6 +416,15 @@ function isUtcTimestamp(value: unknown): value is string {
   );
 }
 
+function isResetTimestamp(value: unknown): value is string {
+  if (!isUtcTimestamp(value)) return false;
+  const match = /^(\d{4}-\d{2}-\d{2})T05:00:00(?:Z|\+00:00)$/.exec(value);
+  return (
+    match !== null &&
+    new Date(value).toISOString().slice(0, 19) === `${match[1]}T05:00:00`
+  );
+}
+
 function isNullableString(value: unknown): value is string | null {
   return value === null || isString(value);
 }
@@ -480,8 +498,15 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
   if (
     !isRecord(payload) ||
     !isOneOf(payload.kind, ["live", "frozen"] as const) ||
+    (view === "live" ? payload.kind !== "live" : payload.kind !== "frozen") ||
     !Array.isArray(payload.entries) ||
     !isInteger(payload.tracked_population) ||
+    !isInteger(payload.total_entries) ||
+    !isInteger(payload.page) ||
+    !isInteger(payload.page_size) ||
+    !isInteger(payload.page_count) ||
+    typeof payload.has_previous !== "boolean" ||
+    typeof payload.has_next !== "boolean" ||
     !isSnakeCoverage(payload.coverage) ||
     !isSnakeProvenance(payload.provenance) ||
     !Array.isArray(payload.quality_states) ||
@@ -499,11 +524,29 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
     )
   )
     throw new PythonApiError(502, { error: "malformed" });
+  const expectedPageCount = Math.ceil(payload.total_entries / payload.page_size);
+  const firstPosition = (payload.page - 1) * payload.page_size + 1;
+  const expectedEntries = Math.max(
+    0,
+    Math.min(payload.page_size, payload.total_entries - firstPosition + 1),
+  );
+  if (
+    payload.tracked_population < 0 ||
+    payload.total_entries < 0 ||
+    payload.page < 1 ||
+    payload.page_size < 1 ||
+    payload.page_count !== expectedPageCount ||
+    payload.page > Math.max(1, payload.page_count) ||
+    payload.has_previous !== payload.page > 1 ||
+    payload.has_next !== payload.page < payload.page_count ||
+    payload.entries.length !== expectedEntries
+  )
+    throw new PythonApiError(502, { error: "malformed" });
   const entries = payload.entries.map((entry, index) => {
     if (
       !isRecord(entry) ||
       !isInteger(entry.position) ||
-      entry.position < 1 ||
+      entry.position !== firstPosition + index ||
       !isCanonicalPlayerTag(entry.tag) ||
       !isNullableString(entry.name) ||
       !isNullableString(entry.clan) ||
@@ -542,14 +585,70 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
             ? "stale"
             : "available",
       confidence: entry.public_confidence,
-      officialRank: entry.official_rank,
     };
   });
+  const mapSelector = (value: unknown) => {
+    if (
+      !isRecord(value) ||
+      !isString(value.official_season_id) ||
+      value.official_season_id.length === 0 ||
+      !isInteger(value.season_day_number) ||
+      value.season_day_number < 1 ||
+      value.season_day_number > 28
+    )
+      throw new PythonApiError(502, { error: "malformed" });
+    return {
+      officialSeasonId: value.official_season_id,
+      dayNumber: value.season_day_number,
+    };
+  };
+  const daily =
+    payload.kind === "frozen"
+      ? {
+          ...mapSelector(payload),
+          resetAt: isResetTimestamp(payload.reset_at)
+            ? payload.reset_at
+            : (() => {
+                throw new PythonApiError(502, { error: "malformed" });
+              })(),
+          seasonStartAt: isResetTimestamp(payload.season_start_at)
+            ? payload.season_start_at
+            : (() => {
+                throw new PythonApiError(502, { error: "malformed" });
+              })(),
+          seasonEndAt: isResetTimestamp(payload.season_end_at)
+            ? payload.season_end_at
+            : (() => {
+                throw new PythonApiError(502, { error: "malformed" });
+              })(),
+          previousSnapshot:
+            payload.previous_snapshot === null
+              ? null
+              : mapSelector(payload.previous_snapshot),
+          nextSnapshot:
+            payload.next_snapshot === null ? null : mapSelector(payload.next_snapshot),
+        }
+      : null;
+  if (
+    daily &&
+    (Date.parse(daily.seasonEndAt) - Date.parse(daily.seasonStartAt) !==
+      28 * 24 * 60 * 60 * 1000 ||
+      Date.parse(daily.resetAt) - Date.parse(daily.seasonStartAt) !==
+        daily.dayNumber * 24 * 60 * 60 * 1000)
+  )
+    throw new PythonApiError(502, { error: "malformed" });
   return {
     kind: "tracked-leaderboard",
     view,
     entries: entries as TrackedLeaderboard["entries"],
     totalTracked: payload.tracked_population,
+    totalEntries: payload.total_entries,
+    page: payload.page,
+    pageSize: payload.page_size,
+    pageCount: payload.page_count,
+    hasPrevious: payload.has_previous,
+    hasNext: payload.has_next,
+    daily,
     coverage: mapSnakeCoverage(payload.coverage),
     provenance: mapSnakeProvenance(payload.provenance),
     qualityStates: payload.quality_states as TrackedLeaderboard["qualityStates"],

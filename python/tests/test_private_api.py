@@ -611,3 +611,27 @@ def test_public_player_read_p95_is_below_200_milliseconds(
                 assert response.status_code == 200
         p95 = sorted(durations)[94]
         assert p95 < 200, f"saved player read p95 was {p95:.2f} ms"
+
+
+def test_leaderboard_rejects_misaligned_selectors_and_missing_pages(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        app = create_app(
+            database=database,
+            keys={("typescript-website", "current"): TS_CURRENT},
+            clock=lambda: NOW_SECONDS,
+            now=lambda: NOW,
+        )
+        try:
+            with TestClient(app) as client:
+                for target in (
+                    "/v1/leaderboards/live?limit=100&offset=1",
+                    "/v1/leaderboards/frozen?official_season_id=2026-08",
+                ):
+                    assert client.get(target, headers=signed_headers(target)).status_code == 422
+                missing = "/v1/leaderboards/live?limit=100&offset=100"
+                assert client.get(missing, headers=signed_headers(missing)).status_code == 404
+        finally:
+            database.close()

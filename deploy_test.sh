@@ -189,6 +189,9 @@ case "$verb" in
       if grep -q 'VALUES (6)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '%s\n' 6 >>"$FAKE_STATE/schema_migrations"
       fi
+      if grep -q 'VALUES (7)' "$FAKE_STATE/stdin/exec-$n"; then
+        printf '%s\n' 7 >>"$FAKE_STATE/schema_migrations"
+      fi
     fi
     if [[ "$*" == *"SELECT version FROM clash_lens_contract"* ]]; then
       if [[ -f "$FAKE_STATE/contract_version" ]]; then
@@ -486,8 +489,8 @@ GLOBAL_DIR=$(new_scenario)
 GLOBAL_ENV="$GLOBAL_DIR/app.env"
 write_scenario_env "$GLOBAL_ENV" "$GLOBAL_DIR/keys"
 printf '%s\n' 'CLASHLENS_ENABLE_GLOBAL_RANKINGS=true' >>"$GLOBAL_ENV"
-deploy_fails "$GLOBAL_DIR" "$GLOBAL_ENV" 'global Top-200 collection must stay default-off' -- up
-printf 'ok: legacy shared database URL, worker image name, and global rankings are rejected\n'
+deploy_fails "$GLOBAL_DIR" "$GLOBAL_ENV" 'CLASHLENS_ENABLE_GLOBAL_RANKINGS is deployment-owned' -- up
+printf 'ok: legacy shared database URL, worker image name, and deployment-owned global rankings are rejected\n'
 
 # ---------------------------------------------------------------------------
 # Guard 5: resource budgets must be explicit and valid before side effects.
@@ -618,6 +621,10 @@ required_normalized=$required_run
   fail 'collector received unsupported official API setting names'
 [[ "$required_normalized" == *'--env CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=16'* ]] || \
   fail 'collector did not receive the bounded database pool size default'
+[[ "$required_normalized" == *'--env CLASHLENS_ENABLE_GLOBAL_RANKINGS=false'* ]] || \
+  fail 'up did not stage the required collector with Top-200 disabled'
+[[ "$required_normalized" == *'--restart unless-stopped'* ]] || \
+  fail 'collector lost crash recovery through its deployment-owned state'
 
 postgres_run=$(grep '^run ' "$FRESH_NORM" | grep 'postgres:17-alpine')
 postgres_normalized=$(norm_log <<<"$postgres_run")
@@ -752,12 +759,20 @@ if FAKE_STATE="$V2_DIR/state" FAKE_PODMAN_LOG="$V2_DIR/podman.log" \
   fail 'old Python worker remained after parser-v2 migration'
 fi
 assert_no_sentinel_in_log "$V2_DIR/podman.log"
+FAKE_STATE="$V2_DIR/state" FAKE_PODMAN_LOG="$V2_DIR/podman.log" \
+  "$FAKE_BIN/podman" run --detach --name clashlens-python-worker-1 \
+  localhost/clashlens-python:current >/dev/null
 v2_first_up_lines=$(wc -l <"$V2_DIR/podman.log")
 deploy "$V2_DIR" "$V2_ENV" -- up >/dev/null
 v2_second_up=$(tail -n +"$((v2_first_up_lines + 1))" "$V2_DIR/podman.log")
+rg -q '^stop .*clashlens-python-worker-1 ' <<<"$v2_second_up" && \
+  fail 'idempotent v2 up drained a current Python worker'
+FAKE_STATE="$V2_DIR/state" FAKE_PODMAN_LOG="$V2_DIR/podman.log" \
+  "$FAKE_BIN/podman" container exists clashlens-python-worker-1 || \
+  fail 'idempotent v2 up removed a current Python worker'
 if rg -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
   second_up_stdin_count=$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f | wc -l)
-  [[ "$second_up_stdin_count" == "6" ]] || fail 'a recorded forward migration was replayed on second up'
+  [[ "$second_up_stdin_count" == "7" ]] || fail 'a recorded forward migration was replayed on second up'
 fi
 printf 'ok: up on v2 applies only missing forward migrations and starts the required collector\n'
 
@@ -795,7 +810,7 @@ RESTART_DIR=$(new_scenario)
 RESTART_ENV="$RESTART_DIR/app.env"
 write_scenario_env "$RESTART_ENV" "$RESTART_DIR/keys"
 printf '2' >"$RESTART_DIR/state/contract_version"
-printf '6\n' >"$RESTART_DIR/state/schema_migrations"
+printf '7\n' >"$RESTART_DIR/state/schema_migrations"
 mkdir -p "$RESTART_DIR/state/images/localhost"
 : >"$RESTART_DIR/state/images/localhost/clashlens-collector:deployment"
 deploy "$RESTART_DIR" "$RESTART_ENV" -- restart >/dev/null
@@ -803,6 +818,9 @@ log_lacks "$RESTART_DIR/podman.log" '^build ' 'restart rebuilt an image'
 log_lacks "$RESTART_DIR/podman.log" '^exec --interactive ' 'restart ran SQL'
 log_lacks "$RESTART_DIR/podman.log" 'clashlens-collector-bridge' 'restart started a bridge collector'
 log_has "$RESTART_DIR/podman.log" 'clashlens-collector:deployment' 'restart did not start the required collector'
+restart_collector=$(grep '^run ' "$RESTART_DIR/podman.log" | grep 'clashlens-collector:deployment')
+[[ "$(norm_log <<<"$restart_collector")" == *'--env CLASHLENS_ENABLE_GLOBAL_RANKINGS=false'* ]] || \
+  fail 'restart enabled Top-200 before worker recovery'
 assert_no_sentinel_in_log "$RESTART_DIR/podman.log"
 
 RESTART_ABSENT_DIR=$(new_scenario)
@@ -818,9 +836,9 @@ mkdir -p "$RESTART_UNMIGRATED_DIR/state/images/localhost"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-collector:deployment"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-python:deployment"
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 6 is required' -- restart
+  'forward migration 7 is required' -- restart
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 6 is required' -- python-start
+  'forward migration 7 is required' -- python-start
 
 UNKNOWN_DIR=$(new_scenario)
 UNKNOWN_ENV="$UNKNOWN_DIR/app.env"
@@ -846,6 +864,13 @@ api_run=$(grep '^run ' "$PY_NORM" | grep 'clashlens-python:deployment' | grep 's
 worker_run=$(grep '^run ' "$PY_NORM" | grep 'clashlens-python:deployment' | grep 'worker ')
 [[ -n "$api_run" ]] || fail 'private Python API was not started'
 [[ -n "$worker_run" ]] || fail 'production Python worker was not started'
+enabled_collector_run=$(grep '^run ' "$PY_NORM" | grep 'clashlens-collector:deployment' | tail -n1)
+[[ "$enabled_collector_run" == *'--env CLASHLENS_ENABLE_GLOBAL_RANKINGS=true'* ]] || \
+  fail 'python-up did not enable Top-200 after worker health'
+worker_line=$(grep -n '^run .*clashlens-python:deployment.*worker ' "$PY_NORM" | tail -n1 | cut -d: -f1)
+enabled_collector_line=$(grep -n '^run .*CLASHLENS_ENABLE_GLOBAL_RANKINGS=true.*clashlens-collector:deployment' "$PY_NORM" | tail -n1 | cut -d: -f1)
+[[ -n "$worker_line" && -n "$enabled_collector_line" ]] || fail 'could not locate worker/collector enablement order'
+(( worker_line < enabled_collector_line )) || fail 'Top-200 was enabled before the compatible worker started'
 [[ "$worker_run" == *'--name clashlens-python-worker-1'* ]] || \
   fail 'worker replica 1 does not use its replica container name'
 api_normalized=$(norm_log <<<"$api_run")
@@ -910,14 +935,21 @@ worker_normalized=$(norm_log <<<"$worker_run")
 assert_no_sentinel_in_log "$PY_LOG"
 
 build_count_before=$(grep -c '^build ' "$PY_LOG")
+enabled_count_before=$(grep -c 'CLASHLENS_ENABLE_GLOBAL_RANKINGS=true' "$PY_LOG")
 deploy "$PY_DIR" "$PY_ENV" -- python-start >/dev/null
 build_count_after=$(grep -c '^build ' "$PY_LOG")
 [[ "$build_count_after" == "$build_count_before" ]] || fail 'python-start rebuilt the python image'
+[[ "$(grep -c 'CLASHLENS_ENABLE_GLOBAL_RANKINGS=true' "$PY_LOG")" == "$((enabled_count_before + 1))" ]] || \
+  fail 'python-start did not re-enable Top-200 after worker health'
 deploy "$PY_DIR" "$PY_ENV" -- api-start >/dev/null
 [[ "$(grep -c '^build ' "$PY_LOG")" == "$build_count_after" ]] || fail 'api-start rebuilt an image'
+[[ "$(grep -c 'CLASHLENS_ENABLE_GLOBAL_RANKINGS=true' "$PY_LOG")" == "$((enabled_count_before + 1))" ]] || \
+  fail 'api-start changed Top-200 enablement'
 deploy "$PY_DIR" "$PY_ENV" -- worker-start >/dev/null
 [[ "$(grep -c '^build ' "$PY_LOG")" == "$build_count_after" ]] || fail 'worker-start rebuilt an image'
-printf 'ok: python-up builds once; API and worker start paths are private, scoped, and build-free\n'
+[[ "$(grep -c 'CLASHLENS_ENABLE_GLOBAL_RANKINGS=true' "$PY_LOG")" == "$((enabled_count_before + 2))" ]] || \
+  fail 'worker-start did not restore deployment-owned Top-200 enablement'
+printf 'ok: Python start paths enable Top-200 only after a healthy compatible worker and remain build-free\n'
 
 # ---------------------------------------------------------------------------
 # Scenario G: rollback selects an existing image tag and never builds.
@@ -926,14 +958,18 @@ ROLLBACK_DIR=$(new_scenario)
 ROLLBACK_ENV="$ROLLBACK_DIR/app.env"
 write_scenario_env "$ROLLBACK_ENV" "$ROLLBACK_DIR/keys"
 printf '2' >"$ROLLBACK_DIR/state/contract_version"
-printf '6\n' >"$ROLLBACK_DIR/state/schema_migrations"
+printf '7\n' >"$ROLLBACK_DIR/state/schema_migrations"
 mkdir -p "$ROLLBACK_DIR/state/networks" "$ROLLBACK_DIR/state/containers" "$ROLLBACK_DIR/state/images/localhost"
 mkdir -p "$ROLLBACK_DIR/state/networks/clashlens-private"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres.running"
 : >"$ROLLBACK_DIR/state/images/localhost/clashlens-python:previous-release"
-deploy "$ROLLBACK_DIR" "$ROLLBACK_ENV" \
-  CLASHLENS_PYTHON_IMAGE=localhost/clashlens-python:previous-release -- python-start >/dev/null
+rollback_output=$(deploy "$ROLLBACK_DIR" "$ROLLBACK_ENV" \
+  CLASHLENS_PYTHON_IMAGE=localhost/clashlens-python:previous-release -- python-start)
+[[ "$rollback_output" == *'Global Top-200 enablement was skipped because the collector image is absent'* ]] || \
+  fail 'worker-only rollback falsely reported Top-200 enabled'
+[[ "$rollback_output" != *'Global Top-200 is enabled'* ]] || \
+  fail 'worker-only rollback printed enabled wording'
 log_lacks "$ROLLBACK_DIR/podman.log" '^build ' 'rollback path rebuilt an image'
 log_has "$ROLLBACK_DIR/podman.log" 'clashlens-python:previous-release' \
   'rollback did not start the previous immutable image tag'
@@ -1282,7 +1318,7 @@ REPLICA_MAX_ENV="$REPLICA_MAX_DIR/app.env"
 write_scenario_env "$REPLICA_MAX_ENV" "$REPLICA_MAX_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=16' >>"$REPLICA_MAX_ENV"
 printf '2' >"$REPLICA_MAX_DIR/state/contract_version"
-printf '6\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
+printf '7\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_MAX_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1326,7 +1362,7 @@ grep -v -E 'CLASHLENS_WORKER_(CONCURRENCY|DATABASE_POOL_SIZE|ARCHIVE_POOL_SIZE)=
   "$DEFAULTS_RAW" >"$DEFAULTS_ENV"
 chmod 0600 "$DEFAULTS_ENV"
 printf '2' >"$DEFAULTS_DIR/state/contract_version"
-printf '6\n' >"$DEFAULTS_DIR/state/schema_migrations"
+printf '7\n' >"$DEFAULTS_DIR/state/schema_migrations"
 mkdir -p "$DEFAULTS_DIR/state/networks/clashlens-private"
 mkdir -p "$DEFAULTS_DIR/state/containers/clashlens-postgres"
 : >"$DEFAULTS_DIR/state/containers/clashlens-postgres.running"
@@ -1347,7 +1383,7 @@ printf '%s\n' 'CLASHLENS_WORKER_CONCURRENCY=32' \
   'CLASHLENS_WORKER_DATABASE_POOL_SIZE=64' \
   'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=64' >>"$CONCURRENCY_MAX_ENV"
 printf '2' >"$CONCURRENCY_MAX_DIR/state/contract_version"
-printf '6\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
+printf '7\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres"
 : >"$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1412,7 +1448,7 @@ REPLICA_ENV="$REPLICA_DIR/app.env"
 write_scenario_env "$REPLICA_ENV" "$REPLICA_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=3' >>"$REPLICA_ENV"
 printf '2' >"$REPLICA_DIR/state/contract_version"
-printf '6\n' >"$REPLICA_DIR/state/schema_migrations"
+printf '7\n' >"$REPLICA_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_DIR/state/containers/clashlens-postgres.running"

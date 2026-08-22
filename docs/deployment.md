@@ -92,11 +92,11 @@ PostgreSQL containers use the `step6-v1` metrics profile, preload
 
 The collector contract version is separate from the schema migration number.
 The production contract is version 2. The current forward-migration set is
-0001 through 0006, with 0006 permitting both Phase 1 login providers (Google
-and Discord) and adding the provider audit relation. `up` applies only missing
-forward migrations recorded in `clash_lens_schema_migrations`; it never
-replays an applied migration. An unknown contract version is rejected without
-side effects.
+0001 through 0007, with 0006 permitting both Phase 1 login providers and 0007
+adding player discovery and the durable Global Top-200 cycle guard. `up` applies
+only missing forward migrations recorded in `clash_lens_schema_migrations`; it
+never replays an applied migration. An unknown contract version is rejected
+without side effects.
 
 ```bash
 ./deploy.sh init
@@ -108,13 +108,13 @@ curl --fail http://127.0.0.1:8081/readyz
 - `init` starts PostgreSQL and applies migration 0001 only to an absent
   database. It refuses an initialized database.
 - `up` builds the collector image, advances the database through all missing
-  migrations (0001–0005 on a fresh database), configures runtime role
-  passwords, and starts the required collector. A contract-v1 upgrade uses
-  the bridge collector while migrations 0002–0005 are applied, then replaces
-  it with the required collector.
+  migrations (0001–0007 on a fresh database), configures runtime role
+  passwords, and stages the required collector with Global Top-200 disabled.
+  A contract-v1 upgrade uses the bridge collector while migrations 0002–0007
+  are applied, then replaces it with the disabled required collector.
 - `build-collector`, `build-python`, and `build-website` build images only.
 - `restart` is the start-only recovery path for a contract-v2 stack. It does
-  not build or run SQL.
+  not build or run SQL and always stages Global Top-200 disabled.
 - `status` shows the network, volume, containers, health, and worker queue
   status without loading unrelated secrets.
 
@@ -131,8 +131,15 @@ curl --fail http://127.0.0.1:3000/healthz
 
 `python-up` requires contract version 2, builds the Python image, and starts
 the private API and `CLASHLENS_WORKER_REPLICAS` identical worker containers.
-`python-start`, `api-start`, and `worker-start` are start-only commands and
-require the Python image. `website-up` requires a healthy private API;
+After the compatible workers report healthy, it recreates the collector with
+Global Top-200 enabled. `python-start` follows the same order without building;
+`worker-start` also enables rankings only after worker health. A start-only
+worker rollback without a local collector image reports that enablement was
+skipped instead of claiming rankings are enabled. `api-start`
+does not change collector enablement. The collector restart policy preserves
+its last deployment-owned state; systemd recovery runs `restart` (disabled)
+before `worker-start` recreates it enabled after worker health. The setting is
+deployment-owned and is rejected in `app.env`. `website-up` requires a healthy private API;
 `website-start` is its start-only recovery path. The website connects to
 `http://python-api:8000` on the private network and publishes only the
 configured ingress address.

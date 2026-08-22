@@ -1324,6 +1324,11 @@ class Database:
                         """,
                         (Jsonb(discoveries), observation_id, battle_log.observed_at),
                     )
+                    if claim.work_type == "process_observation":
+                        connection.execute(
+                            "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
+                            (sorted({item["player_id"] for item in discoveries}),),
+                        )
                     canonical_rows = connection.execute(
                         """
                         WITH input AS (
@@ -1601,21 +1606,50 @@ class Database:
                 ).fetchone()
                 assert attempt is not None
                 player_ids: dict[str, int] = {}
-                for entry in rankings.entries:
-                    player_id = self._upsert_player(
-                        connection, entry.normalized_tag, active=False
-                    )
-                    player_ids[entry.normalized_tag] = player_id
-                    connection.execute(
+                if rankings.entries:
+                    rows = connection.execute(
                         """
-                        INSERT INTO known_player_discoveries (
-                            player_id, observation_id, source_row_index,
-                            source_kind, discovered_at
-                        ) VALUES (%s, %s, %s, 'official_ranking', %s)
-                        ON CONFLICT DO NOTHING
+                        WITH input AS (
+                            SELECT normalized_tag, min(source_row_index) AS source_row_index
+                            FROM unnest(%s::text[], %s::integer[])
+                                AS item(normalized_tag, source_row_index)
+                            GROUP BY normalized_tag
+                        ), players_upserted AS (
+                            INSERT INTO players (normalized_tag, active, eligibility_state)
+                            SELECT normalized_tag, false, 'unknown' FROM input
+                            ON CONFLICT (normalized_tag) DO UPDATE
+                                SET updated_at = clock_timestamp()
+                            RETURNING id, normalized_tag
+                        ), discoveries AS (
+                            INSERT INTO known_player_discoveries (
+                                player_id, observation_id, source_row_index,
+                                source_kind, discovered_at
+                            )
+                            SELECT player.id, %s, input.source_row_index,
+                                   'official_ranking', %s
+                            FROM players_upserted AS player
+                            JOIN input USING (normalized_tag)
+                            ON CONFLICT DO NOTHING
+                        )
+                        SELECT normalized_tag, id FROM players_upserted
                         """,
-                        (player_id, observation_id, entry.rank - 1, observed_at),
-                    )
+                        (
+                            [entry.normalized_tag for entry in rankings.entries],
+                            [entry.source_row_index for entry in rankings.entries],
+                            observation_id,
+                            observed_at,
+                        ),
+                    ).fetchall()
+                    player_ids = {
+                        _text_value(tag): int(player_id) for tag, player_id in rows
+                    }
+                if claim.work_type == "process_observation" and player_ids:
+                    discovery_ids = sorted(set(player_ids.values()))
+                    for offset in range(0, len(discovery_ids), 500):
+                        connection.execute(
+                            "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
+                            (discovery_ids[offset : offset + 500],),
+                        )
                 if rankings.outcome == "official_observed":
                     version = connection.execute(
                         """
@@ -1634,25 +1668,37 @@ class Database:
                         ),
                     ).fetchone()
                     assert version is not None
-                    for entry in rankings.entries:
-                        connection.execute(
-                            """
-                            INSERT INTO official_top200_entries (
-                                version_id, rank, player_id, normalized_tag, source_json
-                            ) VALUES (%s, %s, %s, %s, %s)
-                            ON CONFLICT (version_id, rank) DO UPDATE SET
-                                player_id = EXCLUDED.player_id,
-                                normalized_tag = EXCLUDED.normalized_tag,
-                                source_json = EXCLUDED.source_json
-                            """,
-                            (
-                                version[0],
-                                entry.rank,
-                                player_ids[entry.normalized_tag],
-                                entry.normalized_tag,
-                                Jsonb(entry.source_json),
-                            ),
+                    connection.execute(
+                        """
+                        INSERT INTO official_top200_entries (
+                            version_id, rank, player_id, normalized_tag, source_json
                         )
+                        SELECT %s, entry.rank, entry.player_id,
+                               entry.normalized_tag, entry.source_json
+                        FROM jsonb_to_recordset(%s::jsonb) AS entry(
+                            rank integer, player_id bigint,
+                            normalized_tag text, source_json jsonb
+                        )
+                        ON CONFLICT (version_id, rank) DO UPDATE SET
+                            player_id = EXCLUDED.player_id,
+                            normalized_tag = EXCLUDED.normalized_tag,
+                            source_json = EXCLUDED.source_json
+                        """,
+                        (
+                            version[0],
+                            Jsonb(
+                                [
+                                    {
+                                        "rank": entry.rank,
+                                        "player_id": player_ids[entry.normalized_tag],
+                                        "normalized_tag": entry.normalized_tag,
+                                        "source_json": entry.source_json,
+                                    }
+                                    for entry in rankings.entries
+                                ]
+                            ),
+                        ),
+                    )
                 self._record_parsed_payload(
                     connection,
                     endpoint=endpoint,

@@ -508,3 +508,51 @@ def test_concurrent_refreshes_share_one_collector_job_and_public_refresh_identit
             }
         finally:
             database.close()
+
+
+def test_live_pagination_has_absolute_ranks_and_population_freshness(
+    database_url: str,
+) -> None:
+    alphabet = "0289PYLQGRJCUV"
+    tags = [
+        "#" + alphabet[(index // 196) % 14] + alphabet[(index // 14) % 14] + alphabet[index % 14]
+        for index in range(101)
+    ]
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            for tag in tags:
+                seed_profile(database, tag, 6000)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """UPDATE player_profile_versions SET observed_at = %s - interval '900.5 seconds'
+                       WHERE player_id = (SELECT id FROM players WHERE normalized_tag = %s)""",
+                    (NOW, tags[0]),
+                )
+                connection.commit()
+            first = database.get_live_leaderboard(
+                limit=100, offset=0, now=NOW, freshness_seconds=900
+            )
+            second = database.get_live_leaderboard(
+                limit=100, offset=100, now=NOW, freshness_seconds=900
+            )
+            assert first is not None and second is not None
+            assert [entry["position"] for entry in first["entries"]] == list(range(1, 101))
+            assert [entry["position"] for entry in second["entries"]] == [101]
+            assert len({entry["tag"] for entry in first["entries"] + second["entries"]}) == 101
+            assert first["total_entries"] == second["total_entries"] == 101
+            assert first["page_count"] == second["page_count"] == 2
+            assert first["has_next"] is True and second["has_previous"] is True
+            assert first["provenance"]["freshness"] == "stale"
+            stale_entry = next(
+                entry
+                for entry in first["entries"] + second["entries"]
+                if entry["tag"] == tags[0]
+            )
+            assert stale_entry["age_seconds"] == 900
+            assert stale_entry["freshness"] == "stale"
+            assert database.get_live_leaderboard(
+                limit=100, offset=200, now=NOW, freshness_seconds=900
+            ) is None
+        finally:
+            database.close()

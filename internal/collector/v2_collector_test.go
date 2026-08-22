@@ -224,62 +224,48 @@ func TestVersionTwoResetBaselineCompletesOnlyAfterBothEndpoints(t *testing.T) {
 	}
 }
 
-func TestVersionTwoGlobalRankingsScheduleIsFiveMinuteAndBoundaryPrioritized(t *testing.T) {
+func TestVersionTwoGlobalRankingsScheduleUsesImmutableCycleIntent(t *testing.T) {
 	ctx := context.Background()
 	store := startVersionTwoStore(t, ctx)
 	boundary := time.Date(2026, time.August, 4, 5, 0, 0, 0, time.UTC)
-
-	created, err := store.scheduleGlobalRankings(ctx, boundary, 5*time.Minute)
-	if err != nil {
-		t.Fatalf("schedule boundary global rankings: %v", err)
+	mutations := []string{
+		"status = 'complete'",
+		"status = 'failed'",
+		"status = 'cancelled'",
+		"status = 'waiting_retry', due_at = due_at + interval '2 minutes'",
+		"status = 'pending', due_at = due_at + interval '1 hour'",
 	}
-	if !created {
-		t.Fatal("boundary global rankings job was not created")
-	}
-	created, err = store.scheduleGlobalRankings(ctx, boundary.Add(4*time.Minute), 5*time.Minute)
-	if err != nil {
-		t.Fatalf("reschedule same global rankings cycle: %v", err)
-	}
-	if created {
-		t.Fatal("global rankings schedule duplicated one five-minute cycle")
-	}
-	created, err = store.scheduleGlobalRankings(ctx, boundary.Add(5*time.Minute), 5*time.Minute)
-	if err != nil {
-		t.Fatalf("schedule next global rankings cycle: %v", err)
-	}
-	if !created {
-		t.Fatal("next global rankings cycle was not created")
-	}
-
-	rows, err := store.pool.Query(ctx, `
-		SELECT priority, scope, player_id, normalized_tag, required_endpoint
-		FROM collector_jobs
-		WHERE work_type = 'global_player_rankings'
-		ORDER BY due_at
-	`)
-	if err != nil {
-		t.Fatalf("read global rankings jobs: %v", err)
-	}
-	defer rows.Close()
-	var priorities []int
-	for rows.Next() {
-		var priority int
-		var scope, endpoint string
-		var playerID *int64
-		var tag *string
-		if err := rows.Scan(&priority, &scope, &playerID, &tag, &endpoint); err != nil {
-			t.Fatalf("scan global rankings job: %v", err)
+	for index, mutation := range mutations {
+		cycle := boundary.Add(time.Duration(index) * 5 * time.Minute)
+		created, err := store.scheduleGlobalRankings(ctx, cycle, 5*time.Minute)
+		if err != nil || !created {
+			t.Fatalf("schedule cycle %d: created=%v err=%v", index, created, err)
 		}
-		if scope != "global" || playerID != nil || tag != nil || endpoint != "global_player_rankings" {
-			t.Fatalf("invalid global rankings identity: scope=%q player=%v tag=%v endpoint=%q", scope, playerID, tag, endpoint)
+		if _, err := store.pool.Exec(ctx, `UPDATE collector_jobs SET `+mutation+`
+			WHERE coalescing_key = $1`, "global-player-rankings:"+cycle.Format(time.RFC3339)); err != nil {
+			t.Fatalf("mutate cycle %d: %v", index, err)
 		}
-		priorities = append(priorities, priority)
+		created, err = store.scheduleGlobalRankings(ctx, cycle.Add(4*time.Minute), 5*time.Minute)
+		if err != nil || created {
+			t.Fatalf("reschedule consumed cycle %d: created=%v err=%v", index, created, err)
+		}
 	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate global rankings jobs: %v", err)
+	nextCycle := boundary.Add(time.Duration(len(mutations)) * 5 * time.Minute)
+	created, err := store.scheduleGlobalRankings(ctx, nextCycle, 5*time.Minute)
+	if err != nil || !created {
+		t.Fatalf("schedule next cycle: created=%v err=%v", created, err)
 	}
-	if len(priorities) != 2 || priorities[0] != 400 || priorities[1] != 300 {
-		t.Fatalf("global rankings priorities = %v, want [400 300]", priorities)
+
+	var jobs, intents, boundaryPriority int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM collector_jobs WHERE work_type = 'global_player_rankings'),
+		       (SELECT count(*) FROM global_rankings_intents),
+		       (SELECT priority FROM collector_jobs WHERE coalescing_key = $1)
+	`, "global-player-rankings:"+boundary.Format(time.RFC3339)).Scan(&jobs, &intents, &boundaryPriority); err != nil {
+		t.Fatalf("read global rankings schedule: %v", err)
+	}
+	if jobs != 6 || intents != 6 || boundaryPriority != 400 {
+		t.Fatalf("global rankings jobs/intents/boundary priority = %d/%d/%d, want 6/6/400", jobs, intents, boundaryPriority)
 	}
 }
 
@@ -376,6 +362,160 @@ func TestParserVersionForEndpointUsesPythonSourceContract(t *testing.T) {
 	}
 }
 
+func TestDiscoveryProfileUsesOnlyNormalProfileWork(t *testing.T) {
+	ctx := context.Background()
+	store, databaseURL := startVersionTwoStoreWithURL(t, ctx)
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect for discovery migration: %v", err)
+	}
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql"))
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql"))
+	defer connection.Close(ctx)
+	var selectorIndex bool
+	if err := connection.QueryRow(ctx, `
+		SELECT to_regclass(current_schema() || '.ranked_day_versions_daily_selector') IS NOT NULL
+	`).Scan(&selectorIndex); err != nil || !selectorIndex {
+		t.Fatalf("daily selector index after migration reapply: exists=%v err=%v", selectorIndex, err)
+	}
+	var unknownID, eligibleID int64
+	if err := store.pool.QueryRow(ctx, `
+		WITH inserted AS (
+			INSERT INTO players (normalized_tag, active, eligibility_state)
+			VALUES ('#2PP', false, 'unknown'), ('#2PQ', true, 'eligible')
+			RETURNING id, normalized_tag
+		)
+		SELECT max(id) FILTER (WHERE normalized_tag = '#2PP'),
+		       max(id) FILTER (WHERE normalized_tag = '#2PQ') FROM inserted
+	`).Scan(&unknownID, &eligibleID); err != nil {
+		t.Fatalf("insert discovered players: %v", err)
+	}
+	var created, repeated int
+	if err := store.pool.QueryRow(ctx,
+		`SELECT clashlens_enqueue_discovery_profiles($1::bigint[])`,
+		[]int64{unknownID, unknownID, eligibleID},
+	).Scan(&created); err != nil {
+		t.Fatalf("enqueue discovery profile work: %v", err)
+	}
+	if err := store.pool.QueryRow(ctx,
+		`SELECT clashlens_enqueue_discovery_profiles($1::bigint[])`, []int64{unknownID},
+	).Scan(&repeated); err != nil {
+		t.Fatalf("repeat discovery profile work: %v", err)
+	}
+	if created != 1 || repeated != 0 {
+		t.Fatalf("discovery jobs created = %d then %d, want 1 then 0", created, repeated)
+	}
+	var workerExecute, apiExecute, collectorExecute, workerInsert, apiTableRead, apiSelectorRead bool
+	if err := store.pool.QueryRow(ctx, `
+		SELECT
+			has_function_privilege('clashlens_python_worker', 'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
+			has_function_privilege('clashlens_python_api', 'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
+			has_function_privilege('clashlens_collector', 'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
+			has_table_privilege('clashlens_python_worker', 'collector_jobs', 'INSERT'),
+			has_table_privilege('clashlens_python_api', 'ranked_day_versions', 'SELECT'),
+			bool_and(has_column_privilege('clashlens_python_api', 'ranked_day_versions', column_name, 'SELECT'))
+		FROM unnest(ARRAY['id', 'ranked_day_end', 'official_season_id', 'season_day_number']) AS column_name
+		GROUP BY 1, 2, 3, 4, 5
+	`).Scan(&workerExecute, &apiExecute, &collectorExecute, &workerInsert, &apiTableRead, &apiSelectorRead); err != nil {
+		t.Fatalf("read discovery privileges: %v", err)
+	}
+	if !workerExecute || apiExecute || collectorExecute || workerInsert || apiTableRead || !apiSelectorRead {
+		t.Fatalf("unexpected discovery privileges: worker=%v api=%v collector=%v insert=%v table=%v selector=%v",
+			workerExecute, apiExecute, collectorExecute, workerInsert, apiTableRead, apiSelectorRead)
+	}
+	if _, err := connection.Exec(ctx, `BEGIN; SET LOCAL ROLE clashlens_python_api`); err != nil {
+		t.Fatalf("assume API role: %v", err)
+	}
+	if _, err := connection.Exec(ctx, `SELECT id, ranked_day_end, official_season_id, season_day_number FROM ranked_day_versions LIMIT 0`); err != nil {
+		t.Fatalf("API read daily selector columns: %v", err)
+	}
+	expectInsufficientPrivilege(t, ctx, connection, `SELECT state FROM ranked_day_versions LIMIT 0`, "API reading unrelated ranked-day state")
+	if _, err := connection.Exec(ctx, `ROLLBACK`); err != nil {
+		t.Fatalf("finish API role probe: %v", err)
+	}
+	requests := make([]string, 0, 2)
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests = append(requests, request.URL.Path)
+		response.Header().Set("Content-Type", "application/json")
+		if len(requests) == 1 {
+			response.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(response, `{"reason":"retry"}`)
+			return
+		}
+		_, _ = io.WriteString(response, `{"tag":"#2PP"}`)
+	}))
+	t.Cleanup(api.Close)
+	official := newTestOfficialAPIClient(t, api.URL, 1<<20)
+	keys, err := newKeyPool([]APIKey{{Label: "normal-1", Secret: "normal-secret", Pool: normalPool}}, 30, false)
+	if err != nil {
+		t.Fatalf("create discovery key pool: %v", err)
+	}
+	worker := newWorker(store, &memoryArchive{}, official, keys, workerConfig{
+		owner: "discovery-worker", leaseDuration: time.Minute,
+		collectorVersion: "collector-v2", maximumRetries: 1,
+		retryPolicy: newRetryPolicy(0, 0, 0),
+	})
+	for run := 0; run < 2; run++ {
+		claimed, runErr := worker.runOnce(ctx, normalPool)
+		if runErr != nil || !claimed {
+			t.Fatalf("discovery worker run %d: claimed=%v err=%v", run+1, claimed, runErr)
+		}
+	}
+	if len(requests) != 2 || requests[0] != "/v1/players/#2PP" || requests[1] != requests[0] {
+		t.Fatalf("discovery requests = %v, want two profile requests", requests)
+	}
+	var retryEndpoints, battleEndpoints int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE job.work_type = 'endpoint_retry' AND job.required_endpoint = 'profile'),
+		       count(*) FILTER (WHERE result.endpoint = 'battle_log')
+		FROM collector_jobs AS job
+		LEFT JOIN collector_attempts AS attempt ON attempt.job_id = job.id
+		LEFT JOIN collector_endpoint_results AS result ON result.attempt_id = attempt.id
+	`).Scan(&retryEndpoints, &battleEndpoints); err != nil {
+		t.Fatalf("read discovery retry evidence: %v", err)
+	}
+	if retryEndpoints != 1 || battleEndpoints != 0 {
+		t.Fatalf("discovery retry/profile evidence = %d retries, %d battle endpoints", retryEndpoints, battleEndpoints)
+	}
+}
+
+func TestDiscoveryMigrationSeedsDuplicateTerminalGlobalCyclesIdempotently(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := testsupport.StartPostgres(t)
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect for migration seed: %v", err)
+	}
+	defer connection.Close(ctx)
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0001_collector.sql"))
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
+	if _, err := connection.Exec(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, scope, capacity_pool, priority, due_at, coalescing_key,
+			required_endpoint, status
+		) VALUES
+			('global_player_rankings', 'global', 'normal', 300, '2026-08-04T12:05:00Z',
+			 'global-player-rankings:2026-08-04T12:05:00Z', 'global_player_rankings', 'complete'),
+			('global_player_rankings', 'global', 'normal', 300, '2026-08-04T13:05:00Z',
+			 'global-player-rankings:2026-08-04T12:05:00Z', 'global_player_rankings', 'failed')
+	`); err != nil {
+		t.Fatalf("insert duplicate terminal jobs: %v", err)
+	}
+	migration := filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql")
+	applySQLFile(t, ctx, connection, migration)
+	applySQLFile(t, ctx, connection, migration)
+	var jobs, intents int
+	if err := connection.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM collector_jobs WHERE work_type = 'global_player_rankings'),
+		       (SELECT count(*) FROM global_rankings_intents)
+	`).Scan(&jobs, &intents); err != nil {
+		t.Fatalf("read migrated cycles: %v", err)
+	}
+	if jobs != 2 || intents != 1 {
+		t.Fatalf("migration retained %d jobs and seeded %d intents, want 2 and 1", jobs, intents)
+	}
+}
+
 func startVersionTwoStore(t *testing.T, ctx context.Context) *store {
 	t.Helper()
 	// The embedded PostgreSQL bootstrap can take longer under race
@@ -390,6 +530,7 @@ func startVersionTwoStore(t *testing.T, ctx context.Context) *store {
 	}
 	applySQLFile(t, bootstrapContext, connection, filepath.Join("..", "..", "deploy", "migrations", "0001_collector.sql"))
 	applySQLFile(t, bootstrapContext, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
+	applySQLFile(t, bootstrapContext, connection, filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql"))
 	if err := connection.Close(bootstrapContext); err != nil {
 		t.Fatalf("close migration connection: %v", err)
 	}

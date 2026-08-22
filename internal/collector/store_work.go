@@ -897,7 +897,7 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 	}
 
 	required := []endpointName{profileEndpoint, battleLogEndpoint}
-	if job.workType == "legacy_reset_profile" || job.workType == "reset_profile" {
+	if job.workType == "legacy_reset_profile" || job.workType == "reset_profile" || job.workType == "discovery_profile" {
 		required = []endpointName{profileEndpoint}
 	}
 	if job.workType == "global_player_rankings" {
