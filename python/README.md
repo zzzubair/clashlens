@@ -113,5 +113,5 @@ The selected runtime is fixed for this package:
 
 The database schema lives in the production migrations at
 `deploy/migrations/0001_collector.sql` through
-`deploy/migrations/0003_regular_poll_dedup.sql`. Application startup does not create
+`deploy/migrations/0005_army_decoding.sql`. Application startup does not create
 or alter tables; tests apply the real migration files directly.

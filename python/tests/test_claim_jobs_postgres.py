@@ -58,6 +58,11 @@ def _production_database(database_url: str) -> Iterator[str]:
                     encoding="utf-8"
                 )
             )
+            connection.execute(
+                (root / "deploy/migrations/0005_army_decoding.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:

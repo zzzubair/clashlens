@@ -24,12 +24,8 @@ def domain_database(database_url: str) -> Iterator[str]:
     connection_info = make_conninfo(database_url, options=f"-c search_path={schema}")
     try:
         root = Path(__file__).parents[2]
-        sql_files = (
-            root / "deploy" / "migrations" / "0001_collector.sql",
-            root / "deploy" / "migrations" / "0002_python_layer.sql",
-            root / "deploy" / "migrations" / "0003_regular_poll_dedup.sql",
-            root / "deploy" / "migrations" / "0004_source_parser_v2.sql",
-        )
+        migrations_dir = root / "deploy" / "migrations"
+        sql_files = sorted(migrations_dir.glob("*.sql"))
         with psycopg.connect(connection_info, autocommit=True) as connection:
             for path in sql_files:
                 connection.execute(path.read_text(encoding="utf-8"))

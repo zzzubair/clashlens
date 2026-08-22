@@ -8,6 +8,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0002_python_layer.sql"
   "$ROOT_DIR/deploy/migrations/0003_regular_poll_dedup.sql"
   "$ROOT_DIR/deploy/migrations/0004_source_parser_v2.sql"
+  "$ROOT_DIR/deploy/migrations/0005_army_decoding.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}

@@ -42,7 +42,7 @@ class ParsedBattle:
     ranked_day_start: datetime
     stars: int
     destruction_percentage: int
-    army_share_code: str
+    army_share_code: str | None
     reporter_trophies: int | None
     opponent_trophies: int | None
     attacker_gain: int
@@ -147,11 +147,13 @@ def _parse_row(
         timestamp = _parse_battle_timestamp(source["battleTimestamp"], parser_version)
         stars = _required_int(source, "stars")
         destruction = _required_int(source, "destructionPercentage")
-        army_share_code = source["armyShareCode"]
-        if not isinstance(army_share_code, str) or not army_share_code:
-            raise BattleLogParseError(
-                "missing_army_share_code", "Legend I row must contain armyShareCode"
-            )
+        raw_army_code = source.get("armyShareCode", None)
+        if raw_army_code is None:
+            army_share_code = None
+        elif isinstance(raw_army_code, str):
+            army_share_code = raw_army_code
+        else:
+            army_share_code = None
         opponent_tag, opponent_name, opponent_trophies = _parse_opponent(
             source, parser_version
         )
