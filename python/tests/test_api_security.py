@@ -144,14 +144,16 @@ def test_invalid_private_proof_has_a_safe_error_envelope() -> None:
 def test_public_player_read_denies_a_signed_end_user_identity() -> (
     None
 ):
+    """Only the two allowed login providers pass proof verification; anything
+    else is rejected before any authorization decision."""
     database = FakeDatabase()
     target = "/v1/players/%232PP"
 
     with TestClient(_app(database)) as client:
         response = client.get(
             target,
-            headers=_signed_headers(target, provider="discord", provider_subject="123"),
+            headers=_signed_headers(target, provider="email", provider_subject="123"),
         )
 
-    assert response.status_code == 403
-    assert response.json() == {"error": "caller_operation_not_authorized"}
+    assert response.status_code == 401
+    assert response.json() == {"error": "invalid_proof"}

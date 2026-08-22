@@ -1,21 +1,22 @@
 import { redirect } from "react-router";
 
-import type { Route } from "./+types/auth.google";
+import type { Route } from "./+types/auth.discord";
 
 /**
- * GET /auth/google — start a fresh Google authorization transaction.
+ * GET /auth/discord — start a fresh Discord authorization transaction.
  *
- * The return path is validated against the exact public origin, a new
- * one-time OAuth transaction (state, nonce, PKCE) is created with its intent
+ * Discord uses OAuth2 Authorization Code with PKCE S256 and the `identify`
+ * scope only. The return path is validated against the exact public origin,
+ * a new one-time transaction is created for this provider with its intent
  * (login, or a link/unlink started from an authenticated account), and its
- * signed transaction cookie is set with the fixed ten-minute lifetime before
- * the browser is redirected to the provider. The provider receives only the
- * openid scope.
+ * signed transaction cookie is set before the browser is redirected to
+ * Discord.
  */
 export async function loader({ request }: Route.LoaderArgs): Promise<Response> {
   const { getWebsiteConfig } = await import("../server/config.server");
   const { safeReturnPath, DEFAULT_RETURN_PATH } =
     await import("../server/return-path.server");
+  const discord = await import("../server/discord-oauth.server");
   const oidc = await import("../server/google-oidc.server");
   const cookies = await import("../server/auth-cookies.server");
   const { parseTransactionIntent } = await import("../server/provider-callback.server");
@@ -46,11 +47,11 @@ export async function loader({ request }: Route.LoaderArgs): Promise<Response> {
     nowSeconds,
     undefined,
     intent,
-    "google",
+    "discord",
   );
   let service;
   try {
-    service = await oidc.createGoogleOidcService(config);
+    service = await discord.createDiscordOAuthService(config);
   } catch {
     throw redirect("/login");
   }

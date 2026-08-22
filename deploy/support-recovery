@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Run through a sudo rule that permits only this root-owned wrapper.
+set -euo pipefail
+
+PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+umask 077
+
+# Recovery runs inside the already-running private Python API container: it
+# holds the role-scoped database secret and the interactive official-API key,
+# and never exposes either to argv, logs, or output. The operator identity is
+# always derived from the sudo environment; a human-supplied name is never
+# trusted or forwarded.
+readonly PODMAN='/usr/bin/podman'
+readonly PYTHON_API_CONTAINER='clashlens-python-api'
+readonly OPERATOR_ALLOWLIST='/etc/clashlens/support-recovery-operators'
+
+status_denied() {
+    printf '%s\n' 'support_recovery_status=denied'
+    exit 1
+}
+
+status_unavailable() {
+    printf '%s\n' 'support_recovery_status=unavailable'
+    exit 1
+}
+
+protected_root_file() {
+    local path=$1
+    local owner
+    local mode
+
+    [[ -f "$path" && -r "$path" ]] || return 1
+    owner=$(/usr/bin/stat -c '%u' -- "$path") || return 1
+    mode=$(/usr/bin/stat -c '%a' -- "$path") || return 1
+    [[ "$owner" == '0' && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0077) == 0 ))
+}
+
+protected_root_directory() {
+    local path=$1
+    local owner
+    local mode
+
+    [[ -d "$path" && -x "$path" ]] || return 1
+    owner=$(/usr/bin/stat -c '%u' -- "$path") || return 1
+    mode=$(/usr/bin/stat -c '%a' -- "$path") || return 1
+    [[ "$owner" == '0' && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0022) == 0 ))
+}
+
+script_path=$(/usr/bin/readlink -f -- "${BASH_SOURCE[0]}") || status_denied
+[[ "$(/usr/bin/id -u)" == '0' ]] || status_denied
+protected_root_file "$script_path" || status_denied
+protected_root_directory "${OPERATOR_ALLOWLIST%/*}" || status_denied
+protected_root_file "$OPERATOR_ALLOWLIST" || status_denied
+[[ -x "$PODMAN" ]] || status_unavailable
+
+[[ -n "${SUDO_USER:-}" && -n "${SUDO_UID:-}" ]] || status_denied
+[[ "$SUDO_UID" =~ ^[1-9][0-9]*$ ]] || status_denied
+[[ "$SUDO_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || status_denied
+
+sudo_passwd_entry=$(/usr/bin/getent passwd "$SUDO_UID") || status_denied
+IFS=: read -r sudo_passwd_name _ sudo_passwd_uid _ <<<"$sudo_passwd_entry"
+[[ "$sudo_passwd_name" == "$SUDO_USER" && "$sudo_passwd_uid" == "$SUDO_UID" ]] || status_denied
+/usr/bin/grep -Fqx -- "$SUDO_USER" "$OPERATOR_ALLOWLIST" || status_denied
+
+target_account_public_id=''
+player_tag=''
+discord_user_id=''
+reason=''
+while (( $# > 0 )); do
+    case "$1" in
+        --target-account-public-id)
+            (( $# == 2 )) || status_denied
+            [[ -z "$target_account_public_id" ]] || status_denied
+            target_account_public_id=$2
+            shift 2
+            ;;
+        --player-tag)
+            (( $# == 2 )) || status_denied
+            [[ -z "$player_tag" ]] || status_denied
+            player_tag=$2
+            shift 2
+            ;;
+        --discord-user-id)
+            (( $# == 2 )) || status_denied
+            [[ -z "$discord_user_id" ]] || status_denied
+            discord_user_id=$2
+            shift 2
+            ;;
+        --reason)
+            (( $# == 2 )) || status_denied
+            [[ -z "$reason" ]] || status_denied
+            reason=$2
+            shift 2
+            ;;
+        *)
+            status_denied
+            ;;
+    esac
+done
+
+uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+player_tag_pattern='^#[0289PYLQGRJCUV]{3,15}$'
+[[ "$target_account_public_id" =~ $uuid_pattern ]] || status_denied
+[[ "$player_tag" =~ $player_tag_pattern ]] || status_denied
+[[ "$discord_user_id" =~ ^[0-9]{17,20}$ ]] || status_denied
+[[ ${#reason} -ge 8 && ${#reason} -le 500 ]] || status_denied
+[[ "$reason" =~ ^[[:print:]]+$ ]] || status_denied
+
+# The proven in-game secret crosses stdin only; it never reaches argv, logs,
+# or storage. The container forwards it to the CLI's private prompt reader.
+operator_identity="sudo:${SUDO_USER}:${SUDO_UID}"
+set +e
+recovery_output=$(
+    "$PODMAN" exec --interactive "$PYTHON_API_CONTAINER" \
+        /usr/local/bin/python -m clashlens.cli recover-discord \
+        --target-account-public-id="$target_account_public_id" \
+        --player-tag="$player_tag" \
+        --discord-user-id="$discord_user_id" \
+        --operator="$operator_identity" \
+        --reason="$reason" \
+        2>/dev/null
+)
+recovery_exit=$?
+set -e
+
+recovery_status=$(
+    printf '%s\n' "$recovery_output" \
+        | /usr/bin/grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' \
+        | /usr/bin/tail -n 1 \
+        | /usr/bin/cut -d'"' -f4 \
+        || true
+)
+case "$recovery_status:$recovery_exit" in
+    attached:0)
+        printf '%s\n' 'support_recovery_status=attached'
+        exit 0
+        ;;
+    account_not_found:1|invalid_request:1|invalid_token:1|verification_unavailable:1|player_not_verified_on_account:1|refused_collision:1)
+        printf '%s\n' "support_recovery_status=$recovery_status"
+        exit 1
+        ;;
+    *)
+        status_unavailable
+        ;;
+esac

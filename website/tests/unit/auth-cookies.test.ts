@@ -169,14 +169,14 @@ describe("login cookie values", () => {
         KEY,
         1_750_000,
       ),
-    ).toThrow("bounded Google subject");
+    ).toThrow("bounded provider subject");
     expect(() =>
       createLoginCookieValue(
         { provider: "github", providerSubject: "x" } as unknown as LoginIdentity,
         KEY,
         1_750_000,
       ),
-    ).toThrow("bounded Google subject");
+    ).toThrow("bounded provider subject");
   });
 });
 
@@ -189,16 +189,62 @@ describe("OAuth transaction cookie values", () => {
     );
     expect(payload).toEqual({
       v: 1,
+      pr: "google",
       st: transaction.state,
       no: transaction.nonce,
       ve: transaction.codeVerifier,
       ch: transaction.codeChallenge,
       rp: "/account",
+      in: "login",
       i: 1_750_000,
       e: 1_750_000 + OAUTH_TRANSACTION_LIFETIME_SECONDS,
     });
     expect(value.length).toBeLessThan(1024);
     expect(parseOAuthTransactionCookieValue(value, KEY, 1_750_100)).toEqual(transaction);
+  });
+
+  it("round-trips a Discord transaction with its provider bound", () => {
+    const transaction = createOAuthTransaction(
+      "/account/providers",
+      1_750_000,
+      (size) => Buffer.alloc(size, 0x2a),
+      "link",
+      "discord",
+    );
+    const value = createOAuthTransactionCookieValue(transaction, KEY);
+    expect(parseOAuthTransactionCookieValue(value, KEY, 1_750_100)).toEqual(transaction);
+    expect(parseOAuthTransactionCookieValue(value, KEY, 1_750_100)?.provider).toBe(
+      "discord",
+    );
+  });
+
+  it("rejects a validly signed transaction whose provider is unknown or missing", () => {
+    const make = (payload: Record<string, unknown>) => {
+      const bytes = Buffer.from(JSON.stringify(payload));
+      return `${bytes.toString("base64url")}.${createHmac("sha256", KEY)
+        .update(bytes)
+        .digest("base64url")}`;
+    };
+    const base = oauthTransaction();
+    const signedBody = (provider: unknown) =>
+      make({
+        v: 1,
+        pr: provider,
+        st: base.state,
+        no: base.nonce,
+        ve: base.codeVerifier,
+        ch: base.codeChallenge,
+        rp: "/account",
+        in: "login",
+        i: base.issuedAt,
+        e: base.expiresAt,
+      });
+    expect(
+      parseOAuthTransactionCookieValue(signedBody("github"), KEY, 1_750_100),
+    ).toBeNull();
+    expect(
+      parseOAuthTransactionCookieValue(signedBody(undefined), KEY, 1_750_100),
+    ).toBeNull();
   });
 
   it("rejects tampered, expired, and cross-key transaction cookies", () => {

@@ -45,6 +45,7 @@ _PUBLIC_OPERATIONS = frozenset(
         "user.read",
     }
 )
+_ALLOWED_PROVIDERS = frozenset({"google", "discord"})
 _TYPESCRIPT_ACCOUNT_OPERATIONS = frozenset(
     {
         "account.create",
@@ -53,6 +54,8 @@ _TYPESCRIPT_ACCOUNT_OPERATIONS = frozenset(
         "groups.read",
         "groups.write",
         "player_links.verify",
+        "providers.link",
+        "providers.unlink",
         "saved_tags.read",
         "saved_tags.write",
         "summary.read",
@@ -86,6 +89,10 @@ class SavedTagBody(StrictBody):
 class GroupBody(StrictBody):
     name: str = Field(min_length=1, max_length=80)
     tags: list[str] = Field(max_length=100)
+
+
+class ProviderLinkBody(StrictBody):
+    provider_subject: str = Field(min_length=1, max_length=255)
 
 
 class ExportBody(StrictBody):
@@ -335,7 +342,7 @@ def create_app(
     @app.post("/v1/account")
     def create_account(body: AccountCreateBody, request: Request) -> JSONResponse:
         context = _authorize(
-            request, "account.create", production_database, allow_unresolved_google=True
+            request, "account.create", production_database, allow_unresolved_identity=True
         )
         assert production_database is not None
         if context.account is not None:
@@ -525,6 +532,47 @@ def create_app(
             raise ApiError(404, "export_not_found")
         return JSONResponse(status_code=200, content=result)
 
+    @app.post("/v1/account/providers/{provider}")
+    def link_provider(provider: str, body: ProviderLinkBody, request: Request) -> JSONResponse:
+        context = _authorize(request, "providers.link", production_database)
+        assert production_database is not None and context.account is not None
+        if provider not in _ALLOWED_PROVIDERS:
+            raise ApiError(404, "provider_not_found")
+        result = production_database.link_provider(
+            _binding(
+                request,
+                context,
+                "providers.link",
+                # The fresh subject joins the idempotency binding: a reused
+                # request ID with another subject conflicts instead of
+                # replaying the first outcome.
+                {"provider": provider, "provider_subject": body.provider_subject},
+            ),
+            account_id=context.account.internal_id,
+            provider=provider,
+            provider_subject=body.provider_subject,
+        )
+        return _operation_response(result)
+
+    @app.delete("/v1/account/providers/{provider}")
+    def unlink_provider(provider: str, body: ProviderLinkBody, request: Request) -> JSONResponse:
+        context = _authorize(request, "providers.unlink", production_database)
+        assert production_database is not None and context.account is not None
+        if provider not in _ALLOWED_PROVIDERS:
+            raise ApiError(404, "provider_not_found")
+        result = production_database.unlink_provider(
+            _binding(
+                request,
+                context,
+                "providers.unlink",
+                {"provider": provider, "provider_subject": body.provider_subject},
+            ),
+            account_id=context.account.internal_id,
+            provider=provider,
+            provider_subject=body.provider_subject,
+        )
+        return _operation_response(result)
+
     @app.post("/v1/players/{tag}/verifytoken")
     async def verify_player_token(tag: str, request: Request) -> JSONResponse:
         context = _authorize(request, "player_links.verify", production_database)
@@ -622,17 +670,17 @@ def _authorize(
     operation: str,
     database: ApiDatabase | None,
     *,
-    allow_unresolved_google: bool = False,
+    allow_unresolved_identity: bool = False,
 ) -> _AuthorizationContext:
     proof: VerifiedProof = request.state.proof
     if operation in _PUBLIC_OPERATIONS:
         if proof.caller != "typescript-website":
             raise ApiError(403, "caller_operation_not_authorized")
-        if (proof.provider or proof.provider_subject) and proof.provider != "google":
+        if (proof.provider or proof.provider_subject) and proof.provider not in _ALLOWED_PROVIDERS:
             raise ApiError(403, "caller_operation_not_authorized")
         account = (
             database.resolve_account(proof.provider, proof.provider_subject)
-            if database is not None and proof.provider == "google"
+            if database is not None and proof.provider in _ALLOWED_PROVIDERS
             else None
         )
         return _AuthorizationContext(proof, account)
@@ -641,10 +689,14 @@ def _authorize(
         or operation not in _TYPESCRIPT_ACCOUNT_OPERATIONS
     ):
         raise ApiError(403, "caller_operation_not_authorized")
-    if database is None or proof.provider != "google" or not proof.provider_subject:
+    if (
+        database is None
+        or proof.provider not in _ALLOWED_PROVIDERS
+        or not proof.provider_subject
+    ):
         raise ApiError(403, "caller_operation_not_authorized")
-    account = database.resolve_account("google", proof.provider_subject)
-    if account is None and not allow_unresolved_google:
+    account = database.resolve_account(proof.provider, proof.provider_subject)
+    if account is None and not allow_unresolved_identity:
         raise ApiError(403, "account_not_found")
     return _AuthorizationContext(proof, account)
 

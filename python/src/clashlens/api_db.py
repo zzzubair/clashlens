@@ -4,7 +4,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -614,6 +614,318 @@ class ApiDatabase:
                     )
                 self._complete_request(connection, binding.request_id, result)
                 return result
+
+    def link_provider(
+        self,
+        binding: RequestBinding,
+        *,
+        account_id: int,
+        provider: str,
+        provider_subject: str,
+    ) -> OperationResult:
+        """Idempotently attach one provider identity to the signed-in account.
+
+        A collision never merges or moves identities: a subject owned by any
+        other account, or an account that already holds this provider with a
+        different subject, is refused with a safe conflict.
+
+        The account row lock serializes every provider mutation for one
+        account, so concurrent links and unlinks observe a stable provider
+        set and can never remove the final identity together.
+        """
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                locked_account = connection.execute(
+                    """
+                    SELECT id FROM clash_lens_accounts WHERE id = %s FOR UPDATE
+                    """,
+                    (account_id,),
+                ).fetchone()
+                if locked_account is None:
+                    result = OperationResult(404, {"error": "account_not_found"})
+                    self._complete_request(connection, binding.request_id, result)
+                    return result
+                existing = self._reserve_request(connection, binding)
+                if existing is not None:
+                    return existing
+                owner = connection.execute(
+                    """
+                    SELECT account_id FROM account_provider_identities
+                    WHERE provider = %s AND provider_subject = %s
+                    FOR UPDATE
+                    """,
+                    (provider, provider_subject),
+                ).fetchone()
+                current = connection.execute(
+                    """
+                    SELECT provider_subject FROM account_provider_identities
+                    WHERE account_id = %s AND provider = %s
+                    FOR UPDATE
+                    """,
+                    (account_id, provider),
+                ).fetchone()
+                collision = (owner is not None and int(owner[0]) != account_id) or (
+                    current is not None
+                    and _text(current[0]) != provider_subject
+                )
+                if collision:
+                    result = OperationResult(
+                        409, {"error": "provider_identity_conflict"}
+                    )
+                    self._complete_request(connection, binding.request_id, result)
+                    return result
+                if current is None:
+                    connection.execute(
+                        """
+                        INSERT INTO account_provider_identities (
+                            account_id, provider, provider_subject
+                        ) VALUES (%s, %s, %s)
+                        """,
+                        (account_id, provider, provider_subject),
+                    )
+                    self._audit_provider_event(
+                        connection,
+                        account_id=account_id,
+                        provider=provider,
+                        action="link",
+                        result="succeeded",
+                        operator_identity=None,
+                        reason="linked from the authenticated account",
+                    )
+                providers = self._account_providers(connection, account_id)
+                result = OperationResult(
+                    200,
+                    {"providers": providers},
+                )
+                self._complete_request(connection, binding.request_id, result)
+                return result
+
+    def unlink_provider(
+        self,
+        binding: RequestBinding,
+        *,
+        account_id: int,
+        provider: str,
+        provider_subject: str,
+    ) -> OperationResult:
+        """Remove one freshly reauthenticated provider identity.
+
+        The final linked identity cannot be removed, and unlinking never
+        deletes the account or any private data.
+
+        The account row lock serializes concurrent unlinks: the second unlink
+        re-reads the remaining providers only after the first commits, so two
+        simultaneous unlinks can never remove both identities.
+        """
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                locked_account = connection.execute(
+                    """
+                    SELECT id FROM clash_lens_accounts WHERE id = %s FOR UPDATE
+                    """,
+                    (account_id,),
+                ).fetchone()
+                if locked_account is None:
+                    result = OperationResult(404, {"error": "account_not_found"})
+                    self._complete_request(connection, binding.request_id, result)
+                    return result
+                existing = self._reserve_request(connection, binding)
+                if existing is not None:
+                    return existing
+                owned = connection.execute(
+                    """
+                    SELECT 1 FROM account_provider_identities
+                    WHERE account_id = %s AND provider = %s
+                      AND provider_subject = %s
+                    FOR UPDATE
+                    """,
+                    (account_id, provider, provider_subject),
+                ).fetchone()
+                if owned is None:
+                    result = OperationResult(
+                        404, {"error": "provider_not_linked"}
+                    )
+                    self._complete_request(connection, binding.request_id, result)
+                    return result
+                remaining = self._account_providers(connection, account_id)
+                if len(remaining) <= 1:
+                    result = OperationResult(409, {"error": "final_provider"})
+                    self._complete_request(connection, binding.request_id, result)
+                    return result
+                connection.execute(
+                    """
+                    DELETE FROM account_provider_identities
+                    WHERE account_id = %s AND provider = %s
+                      AND provider_subject = %s
+                    """,
+                    (account_id, provider, provider_subject),
+                )
+                self._audit_provider_event(
+                    connection,
+                    account_id=account_id,
+                    provider=provider,
+                    action="unlink",
+                    result="succeeded",
+                    operator_identity=None,
+                    reason="unlinked after fresh provider authentication",
+                )
+                providers = self._account_providers(connection, account_id)
+                result = OperationResult(200, {"providers": providers})
+                self._complete_request(connection, binding.request_id, result)
+                return result
+
+    @staticmethod
+    def _account_providers(connection: Any, account_id: int) -> list[str]:
+        return [
+            _text(row[0])
+            for row in connection.execute(
+                """
+                SELECT provider FROM account_provider_identities
+                WHERE account_id = %s ORDER BY provider
+                """,
+                (account_id,),
+            )
+        ]
+
+    @staticmethod
+    def _audit_provider_event(
+        connection: Any,
+        *,
+        account_id: int,
+        provider: str,
+        action: str,
+        result: str,
+        operator_identity: str | None,
+        reason: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO provider_identity_audits (
+                account_id, provider, action, result, operator_identity, reason
+            ) VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (account_id, provider, action, result, operator_identity, reason),
+        )
+
+    def support_attach_discord_identity(
+        self,
+        *,
+        account_public_id: str,
+        normalized_player_tag: str,
+        discord_subject: str,
+        operator_identity: str,
+        reason: str,
+    ) -> tuple[str, str]:
+        """Attach a free Discord identity after maintainer-assisted recovery.
+
+        The requester must already have proven control of a player whose
+        verified link points at the target account. The Discord subject must
+        not belong to any Clash Lens account and the target must not hold
+        Discord yet. Returns a (status, detail) pair; nothing personal beyond
+        the audited event is written.
+
+        Every outcome after target-account resolution is audited: a
+        player/account mismatch as a failed recovery and either Discord
+        collision as refused_collision. Self-service refusals keep their
+        records in private_api_requests only.
+        """
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                account = connection.execute(
+                    """
+                    SELECT id FROM clash_lens_accounts WHERE public_id = %s
+                    FOR UPDATE
+                    """,
+                    (UUID(account_public_id),),
+                ).fetchone()
+                if account is None:
+                    return "account_not_found", "target account does not exist"
+                account_id = int(account[0])
+                link = connection.execute(
+                    """
+                    SELECT link.account_id
+                    FROM verified_player_links AS link
+                    JOIN players AS player ON player.id = link.player_id
+                    WHERE player.normalized_tag = %s
+                    FOR UPDATE OF link
+                    """,
+                    (normalized_player_tag,),
+                ).fetchone()
+                if link is None or int(link[0]) != account_id:
+                    self._audit_provider_event(
+                        connection,
+                        account_id=account_id,
+                        provider="discord",
+                        action="support_recovery",
+                        result="failed",
+                        operator_identity=operator_identity,
+                        reason=reason,
+                    )
+                    return (
+                        "player_not_verified_on_account",
+                        "the player is not verified on the target account",
+                    )
+                owner = connection.execute(
+                    """
+                    SELECT account_id FROM account_provider_identities
+                    WHERE provider = 'discord' AND provider_subject = %s
+                    FOR UPDATE
+                    """,
+                    (discord_subject,),
+                ).fetchone()
+                if owner is not None:
+                    self._audit_provider_event(
+                        connection,
+                        account_id=account_id,
+                        provider="discord",
+                        action="support_recovery",
+                        result="refused_collision",
+                        operator_identity=operator_identity,
+                        reason=reason,
+                    )
+                    return (
+                        "refused_collision",
+                        "the Discord identity belongs to an account",
+                    )
+                existing = connection.execute(
+                    """
+                    SELECT 1 FROM account_provider_identities
+                    WHERE account_id = %s AND provider = 'discord'
+                    """,
+                    (account_id,),
+                ).fetchone()
+                if existing is not None:
+                    self._audit_provider_event(
+                        connection,
+                        account_id=account_id,
+                        provider="discord",
+                        action="support_recovery",
+                        result="refused_collision",
+                        operator_identity=operator_identity,
+                        reason=reason,
+                    )
+                    return (
+                        "refused_collision",
+                        "the target account already has Discord linked",
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO account_provider_identities (
+                        account_id, provider, provider_subject
+                    ) VALUES (%s, 'discord', %s)
+                    """,
+                    (account_id, discord_subject),
+                )
+                self._audit_provider_event(
+                    connection,
+                    account_id=account_id,
+                    provider="discord",
+                    action="support_recovery",
+                    result="succeeded",
+                    operator_identity=operator_identity,
+                    reason=reason,
+                )
+                return "attached", "Discord identity attached to the account"
 
     def get_player_page(
         self,

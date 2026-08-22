@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 import hashlib
 import json
 import os
+import re
 import signal
 import sys
 import urllib.request
@@ -25,7 +27,13 @@ from .api_db import ApiDatabase
 from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader
 from .db import MAX_POOL_SIZE, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
-from .verification import OfficialVerificationClient, load_official_api_key_file
+from .profile import normalize_player_tag
+from .verification import (
+    OfficialVerificationClient,
+    VerificationOutcome,
+    classify_official_response,
+    load_official_api_key_file,
+)
 from .worker import (
     MAX_CONCURRENCY,
     ObservationProcessor,
@@ -35,6 +43,9 @@ from .worker import (
 )
 
 MAX_REPORTED_RESULTS = 100
+UUID_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
 
 
 def _bounded_int(label: str, minimum: int, maximum: int):
@@ -170,6 +181,24 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--secret-file", required=True)
     probe.add_argument("--timeout-seconds", type=float, default=3.0)
 
+    recover_discord = subparsers.add_parser(
+        "recover-discord",
+        help=(
+            "maintainer-only recovery: verify a linked player's current token, "
+            "then attach a free Discord identity to the target account"
+        ),
+    )
+    _database_argument(recover_discord)
+    recover_discord.add_argument("--target-account-public-id", required=True)
+    recover_discord.add_argument("--player-tag", required=True)
+    recover_discord.add_argument("--discord-user-id", required=True)
+    recover_discord.add_argument("--operator", required=True)
+    recover_discord.add_argument("--reason", required=True)
+    recover_discord.add_argument("--official-key-file",
+                                 default=os.environ.get("CLASHLENS_OFFICIAL_KEY_FILE", ""))
+    recover_discord.add_argument("--official-proxy-url",
+                                 default=os.environ.get("CLASHLENS_OFFICIAL_PROXY_URL", ""))
+
     return parser
 
 
@@ -214,6 +243,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "probe":
             print(_probe(arguments))
             return 0
+        if arguments.command == "recover-discord":
+            return _run_recover_discord(arguments)
     except (ValueError, OSError) as error:
         # Do not print exception details. Database URLs, request targets, and
         # mounted secret paths can appear in third-party exception messages.
@@ -555,6 +586,75 @@ def _serve_app(arguments: argparse.Namespace) -> tuple[Any, ApiDatabase]:
 def _official_credential_fingerprint(key_bytes: bytes) -> str:
     """Full SHA-256 fingerprint of the exact ASCII bearer-token bytes."""
     return hashlib.sha256(key_bytes).hexdigest()
+
+
+def _run_recover_discord(arguments: argparse.Namespace) -> int:
+    """Maintainer-only recovery path; the token is request-only and is never
+    echoed, logged, or persisted."""
+    if not UUID_PATTERN.fullmatch(arguments.target_account_public_id):
+        print(json.dumps({"status": "invalid_request"}))
+        return 1
+    if not arguments.discord_user_id.isdigit() or not 17 <= len(
+        arguments.discord_user_id
+    ) <= 20:
+        print(json.dumps({"status": "invalid_request"}))
+        return 1
+    if (
+        not 1 <= len(arguments.operator) <= 255
+        or any(
+            character.isspace() or not character.isprintable()
+            for character in arguments.operator
+        )
+    ):
+        print(json.dumps({"status": "invalid_request"}))
+        return 1
+    if not 8 <= len(arguments.reason) <= 500 or any(
+        not character.isprintable() for character in arguments.reason
+    ):
+        print(json.dumps({"status": "invalid_request"}))
+        return 1
+    try:
+        normalized_tag = normalize_player_tag(arguments.player_tag)
+        official_key = load_official_api_key_file(arguments.official_key_file)
+        verification_client = OfficialVerificationClient(
+            api_key=official_key,
+            proxy_url=arguments.official_proxy_url,
+        )
+    except ValueError:
+        print(json.dumps({"status": "invalid_request"}))
+        return 1
+
+    # The token crosses stdin only; it never reaches argv, logs, or storage.
+    player_token = getpass.getpass("Clash API token: ")
+    if not 1 <= len(player_token) <= 512:
+        print(json.dumps({"status": "invalid_token"}))
+        return 1
+    try:
+        response = verification_client.verify(normalized_tag, player_token)
+        classification = classify_official_response(response.http_status, response.body)
+    except Exception:  # noqa: BLE001 - never disclose transport details.
+        print(json.dumps({"status": "verification_unavailable"}))
+        return 1
+    del player_token
+    if classification.outcome != VerificationOutcome.VERIFIED:
+        print(json.dumps({"status": classification.outcome.value}))
+        return 1
+
+    database = ApiDatabase(_database_url(arguments))
+    try:
+        status, detail = database.support_attach_discord_identity(
+            account_public_id=arguments.target_account_public_id,
+            normalized_player_tag=normalized_tag,
+            discord_subject=arguments.discord_user_id,
+            # The wrapper derives the operator from the sudo environment and
+            # passes it exactly; Python never rewrites or prefixes it.
+            operator_identity=arguments.operator,
+            reason=arguments.reason,
+        )
+    finally:
+        database.close()
+    print(json.dumps({"status": status, "detail": detail}))
+    return 0 if status == "attached" else 1
 
 
 def _probe(arguments: argparse.Namespace) -> str:

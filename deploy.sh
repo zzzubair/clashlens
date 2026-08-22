@@ -9,6 +9,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0003_regular_poll_dedup.sql"
   "$ROOT_DIR/deploy/migrations/0004_source_parser_v2.sql"
   "$ROOT_DIR/deploy/migrations/0005_army_decoding.sql"
+  "$ROOT_DIR/deploy/migrations/0006_provider_identities.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -894,6 +895,114 @@ wait_for_python_api() {
   die "private Python API did not become healthy"
 }
 
+# Phase 1 browser login needs the browser session key and both provider
+# client secrets as protected host files. A partially configured login must
+# fail before any container change; with no login settings the website starts
+# with login disabled and public data stays available. File contents are
+# validated here too, so a wrong secret fails closed before containers move.
+validate_website_login_config() {
+  local -a required=(
+    CLASHLENS_LOGIN_SECRET_FILE
+    CLASHLENS_GOOGLE_CLIENT_ID
+    CLASHLENS_GOOGLE_CLIENT_SECRET_FILE
+    CLASHLENS_DISCORD_CLIENT_ID
+    CLASHLENS_DISCORD_CLIENT_SECRET_FILE
+    CLASHLENS_PUBLIC_ORIGIN
+  )
+  local configured=0 name value source
+  for name in "${required[@]}"; do
+    [[ -n "${!name:-}" ]] && configured=$((configured + 1))
+  done
+  (( configured == 0 )) && return 1
+  if (( configured != ${#required[@]} )); then
+    die "website login configuration is incomplete: set every login setting in app.env or none"
+  fi
+  for name in "${required[@]}"; do
+    not_placeholder "$name"
+  done
+  case "$CLASHLENS_PUBLIC_ORIGIN" in
+    https://*) ;;
+    *)
+      die "CLASHLENS_PUBLIC_ORIGIN must use https in production deployment"
+      ;;
+  esac
+  # The exact scheme+host[:port] origin only: no path, query, or fragment.
+  [[ "$CLASHLENS_PUBLIC_ORIGIN" =~ ^https://[A-Za-z0-9._~-]+(:[0-9]+)?$ ]] || \
+    die "CLASHLENS_PUBLIC_ORIGIN must be the exact https origin without a path"
+  [[ "$CLASHLENS_GOOGLE_CLIENT_ID" =~ ^[A-Za-z0-9._~-]{1,256}$ ]] || \
+    die "CLASHLENS_GOOGLE_CLIENT_ID is malformed"
+  [[ "$CLASHLENS_DISCORD_CLIENT_ID" =~ ^[0-9]{17,20}$ ]] || \
+    die "CLASHLENS_DISCORD_CLIENT_ID is malformed (expected a numeric Discord application ID)"
+  for name in CLASHLENS_LOGIN_SECRET_FILE CLASHLENS_GOOGLE_CLIENT_SECRET_FILE CLASHLENS_DISCORD_CLIENT_SECRET_FILE; do
+    validate_single_key_file "$name"
+  done
+  validate_login_secret_content CLASHLENS_LOGIN_SECRET_FILE
+  for name in CLASHLENS_GOOGLE_CLIENT_SECRET_FILE CLASHLENS_DISCORD_CLIENT_SECRET_FILE; do
+    validate_provider_secret_content "$name"
+  done
+  return 0
+}
+
+# The browser session key must decode to exactly 32 bytes, mirroring the
+# website's strict one-unpadded-base64url-value requirement.
+validate_login_secret_content() {
+  local name=$1
+  local path=${!name}
+  local source="$CLASHLENS_API_KEY_HOST_DIR/${path##*/}"
+  local raw decoded
+  raw=$(cat -- "$source") || die "cannot read $name"
+  raw=${raw%$'\r'}
+  raw=${raw%$'\n'}
+  [[ "$raw" =~ ^[A-Za-z0-9_-]{43}$ ]] || \
+    die "$name must contain exactly one unpadded base64url value"
+  decoded=$(printf '%s' "$raw" | tr '_-' '/+' | base64 -d 2>/dev/null | wc -c)
+  [[ "$decoded" == "32" ]] || \
+    die "$name must decode to exactly 32 bytes"
+}
+
+# Provider client secrets must satisfy the website's bounded non-placeholder
+# requirements: 1-512 printable ASCII characters with no whitespace or
+# control bytes.
+validate_provider_secret_content() {
+  local name=$1
+  local path=${!name}
+  local source="$CLASHLENS_API_KEY_HOST_DIR/${path##*/}"
+  local raw
+  raw=$(cat -- "$source") || die "cannot read $name"
+  raw=${raw%$'\r'}
+  raw=${raw%$'\n'}
+  case "$raw" in
+    CHANGE_ME|REPLACE_ME|replace-me|change-me)
+      die "$name must contain a deployment value"
+      ;;
+  esac
+  [[ "$raw" =~ ^[!-~]{1,512}$ ]] || \
+    die "$name must contain 1-512 printable characters with no whitespace or control characters"
+}
+
+website_login_secret_args() {
+  local -n login_secret_result=$1
+  local -n login_env_result=$2
+
+  create_secret_from_file clashlens-login-secret-current "$CLASHLENS_API_KEY_HOST_DIR/${CLASHLENS_LOGIN_SECRET_FILE##*/}"
+  create_secret_from_file clashlens-google-client-secret "$CLASHLENS_API_KEY_HOST_DIR/${CLASHLENS_GOOGLE_CLIENT_SECRET_FILE##*/}"
+  create_secret_from_file clashlens-discord-client-secret "$CLASHLENS_API_KEY_HOST_DIR/${CLASHLENS_DISCORD_CLIENT_SECRET_FILE##*/}"
+  login_secret_result+=(
+    --secret "clashlens-login-secret-current,type=mount,target=/run/secrets/clashlens-login-secret,uid=1000,gid=1000,mode=0400"
+    --secret "clashlens-google-client-secret,type=mount,target=/run/secrets/clashlens-google-client-secret,uid=1000,gid=1000,mode=0400"
+    --secret "clashlens-discord-client-secret,type=mount,target=/run/secrets/clashlens-discord-client-secret,uid=1000,gid=1000,mode=0400"
+  )
+  login_env_result+=(
+    --env CLASHLENS_LOGIN_ENABLED=true
+    --env "CLASHLENS_PUBLIC_ORIGIN=$CLASHLENS_PUBLIC_ORIGIN"
+    --env "CLASHLENS_GOOGLE_CLIENT_ID=$CLASHLENS_GOOGLE_CLIENT_ID"
+    --env CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret
+    --env CLASHLENS_GOOGLE_CLIENT_SECRET_FILE=/run/secrets/clashlens-google-client-secret
+    --env "CLASHLENS_DISCORD_CLIENT_ID=$CLASHLENS_DISCORD_CLIENT_ID"
+    --env CLASHLENS_DISCORD_CLIENT_SECRET_FILE=/run/secrets/clashlens-discord-client-secret
+  )
+}
+
 require_website_runtime() {
   "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1 || die "private network is missing; run up first"
   local version
@@ -905,6 +1014,10 @@ require_website_runtime() {
 }
 
 start_website() {
+  local -a login_secrets=() login_env=()
+  if validate_website_login_config; then
+    website_login_secret_args login_secrets login_env
+  fi
   create_secret_from_file clashlens-python-api-hmac-current "$CLASHLENS_API_KEY_HOST_DIR/${CLASHLENS_HMAC_SECRET_FILE##*/}"
   if container_exists "$WEBSITE_CONTAINER"; then
     stop_and_remove "$WEBSITE_CONTAINER" "$API_STOP_GRACE"
@@ -922,6 +1035,7 @@ start_website() {
     --memory "$CLASHLENS_WEBSITE_MEMORY" --pids-limit "$CLASHLENS_WEBSITE_PIDS" --cpus "$CLASHLENS_WEBSITE_CPUS" \
     --health-cmd "node -e \"require('http').get('http://127.0.0.1:3000/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\"" \
     --health-interval 10s --health-timeout 3s --health-retries 12 --restart unless-stopped \
+    "${login_secrets[@]}" "${login_env[@]}" \
     --label org.clashlens.component=website "$WEBSITE_IMAGE" >/dev/null
 }
 
@@ -1311,6 +1425,9 @@ case "$command" in
     [[ $# == 0 ]] || die "website-up accepts no arguments"
     require_podman
     require_rootless_podman
+    # Reject malformed auth settings before building or replacing anything;
+    # a fully absent auth block intentionally leaves public-only mode enabled.
+    validate_website_login_config || true
     build_website_image
     website_start
     ;;

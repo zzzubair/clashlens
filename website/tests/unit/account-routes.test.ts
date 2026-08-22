@@ -154,6 +154,8 @@ describe("account routes", () => {
       CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
       CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
       CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
+      CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
+      CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
       CLASHLENS_LOGIN_SECRET_B64: TEST_SECRET,
     });
     mocks.getWebsiteConfig.mockReturnValue(config);

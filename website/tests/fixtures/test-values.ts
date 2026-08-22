@@ -28,6 +28,11 @@ export const oidcClientSecret = "clashlens-browser-test-secret";
 export const oidcRedirectUri = `${websiteOrigin}/auth/google/callback`;
 export const oidcSubject = "fixture-google-subject-1001";
 
+export const discordApiBaseUrl = "http://127.0.0.1:8012";
+export const discordClientId = "1234567890123456789";
+export const discordClientSecret = "discord-browser-test-secret";
+export const discordSubject = "110022003300440055";
+
 export const fixtureApiHealthUrl = `${fixtureApiUrl}/healthz`;
 export const oidcProviderHealthUrl = `${oidcIssuerUrl}/healthz`;
 export const websiteHealthUrl = `${websiteOrigin}/healthz`;

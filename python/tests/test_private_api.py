@@ -194,13 +194,16 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
             create_data = json_body(
                 {"username": "ApiOwner", "display_name": "API Owner"}
             )
+            discord_data = json_body(
+                {"username": "DiscordOwner", "display_name": "Discord Owner"}
+            )
             discord_create = client.post(
                 create_target,
-                content=create_data,
+                content=discord_data,
                 headers=signed_headers(
                     create_target,
                     method="POST",
-                    body=create_data,
+                    body=discord_data,
                     provider="discord",
                     subject="discord-api-owner",
                 ),
@@ -216,8 +219,15 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
                     subject="google-api-owner",
                 ),
             )
-            assert discord_create.status_code == 403
-            assert discord_create.json() == {"error": "caller_operation_not_authorized"}
+            # Phase 1 login providers are exactly Google and Discord; either
+            # identity may create an independent Clash Lens account.
+            assert discord_create.status_code == 201
+            assert discord_create.json() == {
+                "username": "discordowner",
+                "display_name": "Discord Owner",
+                "preferences": {},
+                "providers": ["discord"],
+            }
             assert created.status_code == 201
             assert created.json()["username"] == "apiowner"
 

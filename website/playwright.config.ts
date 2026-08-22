@@ -1,6 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
 import {
+  discordApiBaseUrl,
+  discordClientId,
+  discordClientSecret,
+  discordSubject,
   fixtureApiHealthUrl,
   fixtureApiUrl,
   fixtureHmacCaller,
@@ -60,6 +64,19 @@ export default defineConfig({
       },
     },
     {
+      command: "node ./tests/fixtures/discord-provider.ts",
+      cwd: ".",
+      url: `${discordApiBaseUrl}/healthz`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      env: {
+        CLASHLENS_FIXTURE_DISCORD_CLIENT_ID: discordClientId,
+        CLASHLENS_FIXTURE_DISCORD_CLIENT_SECRET: discordClientSecret,
+        CLASHLENS_FIXTURE_DISCORD_SUBJECT: discordSubject,
+        CLASHLENS_FIXTURE_DISCORD_REDIRECT_URI: `${websiteOrigin}/auth/discord/callback`,
+      },
+    },
+    {
       command: "npm run start",
       cwd: ".",
       url: websiteHealthUrl,
@@ -79,6 +96,10 @@ export default defineConfig({
         CLASHLENS_GOOGLE_CLIENT_ID: oidcClientId,
         CLASHLENS_GOOGLE_CLIENT_SECRET: oidcClientSecret,
         CLASHLENS_LOGIN_SECRET_B64: loginSecretB64,
+        CLASHLENS_DISCORD_API_BASE_URL: discordApiBaseUrl,
+        CLASHLENS_DISCORD_CLIENT_ID: discordClientId,
+        CLASHLENS_DISCORD_CLIENT_SECRET_FILE: "",
+        CLASHLENS_DISCORD_CLIENT_SECRET: discordClientSecret,
       },
     },
   ],

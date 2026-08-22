@@ -186,6 +186,9 @@ case "$verb" in
       if grep -q 'VALUES (5)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '%s\n' 5 >>"$FAKE_STATE/schema_migrations"
       fi
+      if grep -q 'VALUES (6)' "$FAKE_STATE/stdin/exec-$n"; then
+        printf '%s\n' 6 >>"$FAKE_STATE/schema_migrations"
+      fi
     fi
     if [[ "$*" == *"SELECT version FROM clash_lens_contract"* ]]; then
       if [[ -f "$FAKE_STATE/contract_version" ]]; then
@@ -754,7 +757,7 @@ deploy "$V2_DIR" "$V2_ENV" -- up >/dev/null
 v2_second_up=$(tail -n +"$((v2_first_up_lines + 1))" "$V2_DIR/podman.log")
 if rg -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
   second_up_stdin_count=$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f | wc -l)
-  [[ "$second_up_stdin_count" == "5" ]] || fail 'a recorded forward migration was replayed on second up'
+  [[ "$second_up_stdin_count" == "6" ]] || fail 'a recorded forward migration was replayed on second up'
 fi
 printf 'ok: up on v2 applies only missing forward migrations and starts the required collector\n'
 
@@ -792,7 +795,7 @@ RESTART_DIR=$(new_scenario)
 RESTART_ENV="$RESTART_DIR/app.env"
 write_scenario_env "$RESTART_ENV" "$RESTART_DIR/keys"
 printf '2' >"$RESTART_DIR/state/contract_version"
-printf '5\n' >"$RESTART_DIR/state/schema_migrations"
+printf '6\n' >"$RESTART_DIR/state/schema_migrations"
 mkdir -p "$RESTART_DIR/state/images/localhost"
 : >"$RESTART_DIR/state/images/localhost/clashlens-collector:deployment"
 deploy "$RESTART_DIR" "$RESTART_ENV" -- restart >/dev/null
@@ -815,9 +818,9 @@ mkdir -p "$RESTART_UNMIGRATED_DIR/state/images/localhost"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-collector:deployment"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-python:deployment"
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 5 is required' -- restart
+  'forward migration 6 is required' -- restart
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 5 is required' -- python-start
+  'forward migration 6 is required' -- python-start
 
 UNKNOWN_DIR=$(new_scenario)
 UNKNOWN_ENV="$UNKNOWN_DIR/app.env"
@@ -923,7 +926,7 @@ ROLLBACK_DIR=$(new_scenario)
 ROLLBACK_ENV="$ROLLBACK_DIR/app.env"
 write_scenario_env "$ROLLBACK_ENV" "$ROLLBACK_DIR/keys"
 printf '2' >"$ROLLBACK_DIR/state/contract_version"
-printf '5\n' >"$ROLLBACK_DIR/state/schema_migrations"
+printf '6\n' >"$ROLLBACK_DIR/state/schema_migrations"
 mkdir -p "$ROLLBACK_DIR/state/networks" "$ROLLBACK_DIR/state/containers" "$ROLLBACK_DIR/state/images/localhost"
 mkdir -p "$ROLLBACK_DIR/state/networks/clashlens-private"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres"
@@ -992,6 +995,101 @@ website_down_log=$(tail -n +"$((website_down_before + 1))" "$WEBSITE_LOG")
 grep -q '^stop --time 30 clashlens-website' <<<"$website_down_log" || fail 'website-down was not graceful'
 grep -q '^rm clashlens-website *$' <<<"$website_down_log" || fail 'website-down did not remove the website'
 printf 'ok: website build, start-only recovery, ingress, secrets, and hardening are scoped\n'
+
+# ---------------------------------------------------------------------------
+# Scenario H2: browser-login configuration is validated, including secret
+# file contents and the exact https origin, before any container change.
+# ---------------------------------------------------------------------------
+LOGIN_DIR=$(new_scenario)
+LOGIN_ENV="$LOGIN_DIR/app.env"
+write_scenario_env "$LOGIN_ENV" "$LOGIN_DIR/keys"
+# Valid 32-byte unpadded base64url session key plus bounded provider secrets.
+printf 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\n' >"$LOGIN_DIR/keys/clashlens-login-secret-current"
+chmod 0600 "$LOGIN_DIR/keys/clashlens-login-secret-current"
+printf 'google-client-secret-value-0123456789\n' >"$LOGIN_DIR/keys/google-client-secret-file"
+chmod 0600 "$LOGIN_DIR/keys/google-client-secret-file"
+printf 'discord-client-secret-value-0123456789\n' >"$LOGIN_DIR/keys/discord-client-secret-file"
+chmod 0600 "$LOGIN_DIR/keys/discord-client-secret-file"
+login_env_settings=(
+  'CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret-current'
+  'CLASHLENS_GOOGLE_CLIENT_ID=test-client.apps.googleusercontent.com'
+  'CLASHLENS_GOOGLE_CLIENT_SECRET_FILE=/run/secrets/google-client-secret-file'
+  'CLASHLENS_DISCORD_CLIENT_ID=1234567890123456789'
+  'CLASHLENS_DISCORD_CLIENT_SECRET_FILE=/run/secrets/discord-client-secret-file'
+  'CLASHLENS_PUBLIC_ORIGIN=https://clashlens.example'
+)
+deploy "$LOGIN_DIR" "$LOGIN_ENV" -- up >/dev/null
+deploy "$LOGIN_DIR" "$LOGIN_ENV" -- python-up >/dev/null
+login_run_before=$(wc -l <"$LOGIN_DIR/podman.log")
+deploy "$LOGIN_DIR" "$LOGIN_ENV" "${login_env_settings[@]}" -- website-up >/dev/null
+norm_log "$LOGIN_DIR/podman.log" >"$LOGIN_DIR/podman.norm.log"
+login_website_run=$(grep '^run ' "$LOGIN_DIR/podman.norm.log" | grep 'clashlens-website:deployment' | tail -n 1)
+[[ -n "$login_website_run" ]] || fail 'login website container was not started'
+[[ "$login_website_run" == *'--env CLASHLENS_LOGIN_ENABLED=true'* ]] || fail 'website login was not enabled'
+for secret_mount in \
+  'clashlens-login-secret-current,type=mount,target=/run/secrets/clashlens-login-secret' \
+  'clashlens-google-client-secret,type=mount,target=/run/secrets/clashlens-google-client-secret' \
+  'clashlens-discord-client-secret,type=mount,target=/run/secrets/clashlens-discord-client-secret'; do
+  [[ "$login_website_run" == *"--secret $secret_mount,uid=1000,gid=1000,mode=0400"* ]] || \
+    fail "website login secret mount is missing: $secret_mount"
+done
+[[ "$(grep -o -- '--secret [^ ]*' <<<"$login_website_run" | wc -l)" == '4' ]] || \
+  fail 'login website did not receive exactly the four expected secrets'
+assert_no_sentinel_in_log "$LOGIN_DIR/podman.log"
+grep -q 'google-client-secret-value-0123456789' "$LOGIN_DIR/podman.log" && \
+  fail 'provider client secret value leaked into the command log'
+grep -q 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8' "$LOGIN_DIR/podman.log" && \
+  fail 'session key value leaked into the command log'
+
+login_fails() {
+  # login_fails <message> <setting-override...>
+  local message=$1
+  shift
+  local output log_lines
+  if output=$(deploy "$LOGIN_DIR" "$LOGIN_ENV" "${login_env_settings[@]}" "$@" -- website-up 2>&1); then
+    fail "expected login failure: $message"
+  fi
+  [[ "$output" == *"$message"* ]] || {
+    printf 'expected error containing %q, got:\n%s\n' "$message" "$output" >&2
+    exit 1
+  }
+}
+
+mutation_lines=$(norm_log "$LOGIN_DIR/podman.log" | grep -Ec '^(build|run|stop|rm|secret (create|rm)) ')
+login_fails 'must be the exact https origin without a path' \
+  'CLASHLENS_PUBLIC_ORIGIN=https://clashlens.example/app'
+login_fails 'must use https in production deployment' \
+  'CLASHLENS_PUBLIC_ORIGIN=http://clashlens.example'
+printf 'c2hvcnQ\n' >"$LOGIN_DIR/keys/clashlens-login-secret-current"
+chmod 0600 "$LOGIN_DIR/keys/clashlens-login-secret-current"
+login_fails 'must contain exactly one unpadded base64url value' \
+  'CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret-current'
+printf 'not base64url!!\n' >"$LOGIN_DIR/keys/clashlens-login-secret-current"
+chmod 0600 "$LOGIN_DIR/keys/clashlens-login-secret-current"
+login_fails 'must contain exactly one unpadded base64url value' \
+  'CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret-current'
+printf '%s\n' 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8' >"$LOGIN_DIR/keys/clashlens-login-secret-current"
+chmod 0600 "$LOGIN_DIR/keys/clashlens-login-secret-current"
+printf 'space is not allowed in provider secrets\n' >"$LOGIN_DIR/keys/discord-client-secret-file"
+chmod 0600 "$LOGIN_DIR/keys/discord-client-secret-file"
+login_fails 'must contain 1-512 printable characters' \
+  'CLASHLENS_DISCORD_CLIENT_SECRET_FILE=/run/secrets/discord-client-secret-file'
+printf 'CHANGE_ME\n' >"$LOGIN_DIR/keys/discord-client-secret-file"
+chmod 0600 "$LOGIN_DIR/keys/discord-client-secret-file"
+login_fails 'must contain a deployment value' \
+  'CLASHLENS_DISCORD_CLIENT_SECRET_FILE=/run/secrets/discord-client-secret-file'
+printf '%s\n' 'discord-client-secret-value-0123456789' >"$LOGIN_DIR/keys/discord-client-secret-file"
+chmod 0600 "$LOGIN_DIR/keys/discord-client-secret-file"
+partial_count=${#login_env_settings[@]}
+login_partial=("${login_env_settings[@]:0:partial_count-1}")
+if output=$(deploy "$LOGIN_DIR" "$LOGIN_ENV" "${login_partial[@]}" -- website-up 2>&1); then
+  fail 'expected incomplete login configuration to fail'
+fi
+[[ "$output" == *'website login configuration is incomplete'* ]] || \
+  fail 'partial login configuration did not report the expected error'
+[[ "$(norm_log "$LOGIN_DIR/podman.log" | grep -Ec '^(build|run|stop|rm|secret (create|rm)) ')" == "$mutation_lines" ]] || \
+  fail 'a rejected login configuration still changed containers or secrets'
+printf 'ok: login configuration and secret contents are validated before containers\n'
 
 # ---------------------------------------------------------------------------
 # Scenario I: lifecycle stops are graceful and ordered.
@@ -1183,7 +1281,7 @@ REPLICA_MAX_ENV="$REPLICA_MAX_DIR/app.env"
 write_scenario_env "$REPLICA_MAX_ENV" "$REPLICA_MAX_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=16' >>"$REPLICA_MAX_ENV"
 printf '2' >"$REPLICA_MAX_DIR/state/contract_version"
-printf '5\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
+printf '6\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_MAX_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1227,7 +1325,7 @@ grep -v -E 'CLASHLENS_WORKER_(CONCURRENCY|DATABASE_POOL_SIZE|ARCHIVE_POOL_SIZE)=
   "$DEFAULTS_RAW" >"$DEFAULTS_ENV"
 chmod 0600 "$DEFAULTS_ENV"
 printf '2' >"$DEFAULTS_DIR/state/contract_version"
-printf '5\n' >"$DEFAULTS_DIR/state/schema_migrations"
+printf '6\n' >"$DEFAULTS_DIR/state/schema_migrations"
 mkdir -p "$DEFAULTS_DIR/state/networks/clashlens-private"
 mkdir -p "$DEFAULTS_DIR/state/containers/clashlens-postgres"
 : >"$DEFAULTS_DIR/state/containers/clashlens-postgres.running"
@@ -1248,7 +1346,7 @@ printf '%s\n' 'CLASHLENS_WORKER_CONCURRENCY=32' \
   'CLASHLENS_WORKER_DATABASE_POOL_SIZE=64' \
   'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=64' >>"$CONCURRENCY_MAX_ENV"
 printf '2' >"$CONCURRENCY_MAX_DIR/state/contract_version"
-printf '5\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
+printf '6\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres"
 : >"$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1313,7 +1411,7 @@ REPLICA_ENV="$REPLICA_DIR/app.env"
 write_scenario_env "$REPLICA_ENV" "$REPLICA_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=3' >>"$REPLICA_ENV"
 printf '2' >"$REPLICA_DIR/state/contract_version"
-printf '5\n' >"$REPLICA_DIR/state/schema_migrations"
+printf '6\n' >"$REPLICA_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_DIR/state/containers/clashlens-postgres.running"

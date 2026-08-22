@@ -35,6 +35,8 @@ function testConfig(): WebsiteConfig {
     CLASHLENS_PUBLIC_ORIGIN: "https://clashlens.example",
     CLASHLENS_GOOGLE_CLIENT_ID: CLIENT_ID,
     CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
+    CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
+    CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
     CLASHLENS_LOGIN_SECRET_B64: TEST_SECRET,
     CLASHLENS_GOOGLE_ISSUER_URL: ISSUER,
   });
@@ -47,6 +49,8 @@ function googleConfig(): WebsiteConfig {
     CLASHLENS_PUBLIC_ORIGIN: "https://clashlens.example",
     CLASHLENS_GOOGLE_CLIENT_ID: CLIENT_ID,
     CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
+    CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
+    CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
     CLASHLENS_LOGIN_SECRET_B64: TEST_SECRET,
   });
 }
@@ -56,7 +60,7 @@ function fixedRandom(size: number): Buffer {
 }
 
 function transaction(now = 1_000_000): OAuthTransaction {
-  return createOAuthTransaction("/account", now, fixedRandom);
+  return createOAuthTransaction("/account", now, fixedRandom, "login");
 }
 
 function validClaims(now = 1_000_000, overrides: Record<string, unknown> = {}): unknown {

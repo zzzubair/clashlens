@@ -804,6 +804,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if path == "/v1/account":
             self.create_account_route()
             return
+        if path.startswith("/v1/account/providers/"):
+            self.change_provider_route(path, action="link")
+            return
         if path == "/v1/account/saved-tags":
             self.add_saved_tag_route()
             return
@@ -859,6 +862,9 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if not self.verify_request():
             return
         path = unquote(urlsplit(self.path).path)
+        if path.startswith("/v1/account/providers/"):
+            self.change_provider_route(path, action="unlink")
+            return
         if path.startswith("/v1/account/saved-tags/"):
             self.remove_saved_tag_route(path)
             return
@@ -963,12 +969,15 @@ class FixtureHandler(BaseHTTPRequestHandler):
     def account_context(self, allow_unresolved=False):
         provider = getattr(self, "verified_provider", "")
         subject = getattr(self, "verified_provider_subject", "")
-        if provider != "google" or not subject:
+        if provider not in ALLOWED_PROVIDERS or not subject:
             return None, None, "caller_operation_not_authorized"
-        account = STATE["accounts"].get(subject)
-        if account is None and not allow_unresolved:
-            return None, subject, "account_not_found"
-        return account, subject, None
+        with STATE["lock"]:
+            for account in STATE["accounts"].values():
+                if account["identities"].get(provider) == subject:
+                    return account, subject, None
+        if allow_unresolved:
+            return None, subject, None
+        return None, subject, "account_not_found"
 
     def json_body(self):
         content_type = (
@@ -990,6 +999,79 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return None
         self.send_json(*replayed)
         return replayed
+
+    def change_provider_route(self, path, action):
+        provider = path[len("/v1/account/providers/") :]
+        if provider not in ALLOWED_PROVIDERS:
+            self.send_json(404, {"error": "provider_not_found"})
+            return
+        account, subject, error = self.account_context()
+        if error is not None:
+            self.send_json(403, {"error": error})
+            return
+        if account is None or subject is None:
+            self.send_json(403, {"error": "account_not_found"})
+            return
+        payload = self.json_body()
+        if not isinstance(payload, dict):
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        new_subject = payload.get("provider_subject")
+        if (
+            not isinstance(new_subject, str)
+            or not 1 <= len(new_subject) <= 255
+        ):
+            self.send_json(422, {"error": "invalid_request"})
+            return
+        binding = (subject, f"providers.{action}", action.upper(), path)
+        if self.replay_or_none(self.verified_request_id, binding) is not None:
+            return
+        with STATE["lock"]:
+            for other in STATE["accounts"].values():
+                if other is account:
+                    continue
+                if other["identities"].get(provider) == new_subject and action == "link":
+                    # A collision never merges or moves identities.
+                    result = (409, {"error": "provider_identity_conflict"})
+                    store_replay(self.verified_request_id, binding, *result)
+                    self.send_json(*result)
+                    return
+            providers = list(account["providers"])
+            if action == "link":
+                if provider not in providers:
+                    account["identities"][provider] = new_subject
+                    providers.append(provider)
+                    providers.sort()
+                    account["providers"] = providers
+                elif account["identities"].get(provider) != new_subject:
+                    # The account already holds this provider with another subject.
+                    result = (409, {"error": "provider_identity_conflict"})
+                    store_replay(self.verified_request_id, binding, *result)
+                    self.send_json(*result)
+                    return
+                else:
+                    pass  # Idempotent relink of the same identity.
+                result = (200, {"providers": list(providers)})
+            else:
+                if (
+                    provider not in providers
+                    or account["identities"].get(provider) != new_subject
+                ):
+                    result = (404, {"error": "provider_not_linked"})
+                    store_replay(self.verified_request_id, binding, *result)
+                    self.send_json(*result)
+                    return
+                if len(providers) <= 1:
+                    result = (409, {"error": "final_provider"})
+                    store_replay(self.verified_request_id, binding, *result)
+                    self.send_json(*result)
+                    return
+                providers.remove(provider)
+                account["providers"] = providers
+                account["identities"].pop(provider, None)
+                result = (200, {"providers": list(providers)})
+        store_replay(self.verified_request_id, binding, *result)
+        self.send_json(*result)
 
     def create_account_route(self):
         _account, subject, error = self.account_context(allow_unresolved=True)
@@ -1023,7 +1105,8 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 "username": username,
                 "display_name": display_name,
                 "preferences": {},
-                "providers": ["google"],
+                "providers": [self.verified_provider],
+                "identities": {self.verified_provider: subject},
             }
             STATE["accounts_by_username"][username] = subject
             STATE["saved_tags"].setdefault(subject, [])

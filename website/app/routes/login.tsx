@@ -40,7 +40,9 @@ export function headers() {
 
 export default function LoginRoute() {
   const data = useLoaderData<typeof loader>();
-  const googleUrl = `/auth/google?returnPath=${encodeURIComponent(data.returnPath)}`;
+  const returnPathParameter = encodeURIComponent(data.returnPath);
+  const googleUrl = `/auth/google?returnPath=${returnPathParameter}`;
+  const discordUrl = `/auth/discord?returnPath=${returnPathParameter}`;
   return (
     <main className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="login-title">
@@ -52,14 +54,19 @@ export default function LoginRoute() {
       </section>
 
       {data.loginAvailable ? (
-        <section className="login-panel" aria-label="Google sign-in">
+        <section className="login-panel" aria-label="Provider sign-in">
           <p className="section-note">
-            Sign in with Google. Clash Lens never requests or stores your Google email
-            address.
+            Sign in with Google or Discord. Clash Lens never requests your email address
+            and stores only an immutable provider ID.
           </p>
-          <Link className="button button-primary" to={googleUrl}>
-            Continue with Google
-          </Link>
+          <div className="button-row">
+            <Link className="button button-primary" to={googleUrl}>
+              Continue with Google
+            </Link>
+            <Link className="button button-secondary" to={discordUrl}>
+              Continue with Discord
+            </Link>
+          </div>
         </section>
       ) : (
         <div className="empty-state" role="alert">
