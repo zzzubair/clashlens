@@ -1330,22 +1330,22 @@ class ApiDatabase:
                     SELECT * FROM publications
                     WHERE (%s::text IS NULL OR
                            (official_season_id = %s AND season_day_number = %s))
-                    ORDER BY boundary_at DESC, version DESC,
-                             (source = 'v2') DESC, id DESC LIMIT 1
+                    ORDER BY boundary_at DESC, (source = 'v2') DESC,
+                             version DESC, id DESC LIMIT 1
                 )
                 SELECT selected.source, selected.id,
                        (SELECT json_build_object(
                                    'official_season_id', p.official_season_id,
                                    'season_day_number', p.season_day_number)
                         FROM publications p WHERE p.boundary_at < selected.boundary_at
-                        ORDER BY p.boundary_at DESC, p.version DESC,
-                                 (p.source = 'v2') DESC, p.id DESC LIMIT 1),
+                        ORDER BY p.boundary_at DESC, (p.source = 'v2') DESC,
+                                 p.version DESC, p.id DESC LIMIT 1),
                        (SELECT json_build_object(
                                    'official_season_id', p.official_season_id,
                                    'season_day_number', p.season_day_number)
                         FROM publications p WHERE p.boundary_at > selected.boundary_at
-                        ORDER BY p.boundary_at, p.version DESC,
-                                 (p.source = 'v2') DESC, p.id DESC LIMIT 1)
+                        ORDER BY p.boundary_at, (p.source = 'v2') DESC,
+                                 p.version DESC, p.id DESC LIMIT 1)
                 FROM selected
                 """,
                 (official_season_id, official_season_id, season_day_number),

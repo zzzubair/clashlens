@@ -402,3 +402,97 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
             ) == 3
         finally:
             database.close()
+
+
+def test_frozen_publication_prefers_v2_before_independent_legacy_version(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 6001)
+            with database.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                ranked_day_ids = []
+                for day, start, end in (
+                    (20, "2026-08-04T05:00:00Z", "2026-08-05T05:00:00Z"),
+                    (21, "2026-08-05T05:00:00Z", "2026-08-06T05:00:00Z"),
+                    (22, "2026-08-06T05:00:00Z", "2026-08-07T05:00:00Z"),
+                ):
+                    ranked_day_ids.append(
+                        connection.execute(
+                            """
+                            INSERT INTO ranked_day_versions (
+                                player_id, ranked_day_start, ranked_day_end,
+                                official_season_id, season_day_number,
+                                season_anchor_rule_version, reconciliation_rule_version,
+                                result_hash, version, state, confidence
+                            ) VALUES (%s, %s, %s, '2026-08', %s, 'test-anchor-v1',
+                                      'test-reconcile-v1', repeat(%s, 64), 1,
+                                      'Complete', 'exact')
+                            RETURNING id
+                            """,
+                            (player_id, start, end, day, str(day)[-1]),
+                        ).fetchone()[0]
+                    )
+                for public_id, boundary, version in (
+                    ("00000000-0000-0000-0000-000000000020", "2026-08-05T05:00:00Z", 1),
+                    ("00000000-0000-0000-0000-000000000021", "2026-08-06T05:00:00Z", 99),
+                    ("00000000-0000-0000-0000-000000000022", "2026-08-07T05:00:00Z", 1),
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO api_frozen_leaderboards (
+                            public_id, boundary_at, version, ordering_rule_version, coverage
+                        ) VALUES (%s, %s, %s, 'legacy-position-v1',
+                                  '{"measured": 1, "eligible_population": 0}')
+                        """,
+                        (public_id, boundary, version),
+                    )
+                snapshot_id = connection.execute(
+                    """
+                    INSERT INTO leaderboard_snapshots (
+                        snapshot_kind, boundary_at, version, ordering_rule_version,
+                        freshness_rule_version, state, source_ranked_day_version_id,
+                        measured_coverage, eligible_population_count,
+                        included_entry_count, fresh_entry_count, stale_entry_count,
+                        published_at
+                    ) VALUES ('frozen', '2026-08-06T05:00:00Z', 1,
+                              'frozen-position-v1', 'test-fresh-v1', 'published',
+                              %s, 1, 0, 0, 0, 0, clock_timestamp())
+                    RETURNING id
+                    """,
+                    (ranked_day_ids[1],),
+                ).fetchone()[0]
+                connection.commit()
+
+            selected = database.get_frozen_leaderboard(
+                limit=10, official_season_id="2026-08", season_day_number=21
+            )
+            assert selected is not None
+            assert selected["snapshot_id"] == str(snapshot_id)
+            assert selected["version"] == 1
+            assert selected["previous_snapshot"] == {
+                "official_season_id": "2026-08", "season_day_number": 20
+            }
+            assert selected["next_snapshot"] == {
+                "official_season_id": "2026-08", "season_day_number": 22
+            }
+
+            previous = database.get_frozen_leaderboard(
+                limit=10, official_season_id="2026-08", season_day_number=20
+            )
+            following = database.get_frozen_leaderboard(
+                limit=10, official_season_id="2026-08", season_day_number=22
+            )
+            assert previous is not None and following is not None
+            assert previous["next_snapshot"] == {
+                "official_season_id": "2026-08", "season_day_number": 21
+            }
+            assert following["previous_snapshot"] == {
+                "official_season_id": "2026-08", "season_day_number": 21
+            }
+        finally:
+            database.close()
