@@ -16,10 +16,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<Response> {
   const { getWebsiteConfig } = await import("../server/config.server");
   const { safeReturnPath, DEFAULT_RETURN_PATH } =
     await import("../server/return-path.server");
-  const discord = await import("../server/discord-oauth.server");
-  const oidc = await import("../server/google-oidc.server");
-  const cookies = await import("../server/auth-cookies.server");
-  const { parseTransactionIntent } = await import("../server/provider-callback.server");
+  const { startProviderAuthorization } = await import("../server/provider-start.server");
 
   let config;
   try {
@@ -33,40 +30,11 @@ export async function loader({ request }: Route.LoaderArgs): Promise<Response> {
   const rawReturnPath = url.searchParams.get("returnPath");
   const returnPath =
     safeReturnPath(rawReturnPath, config.publicOrigin) ?? DEFAULT_RETURN_PATH;
-  const intent = parseTransactionIntent(url.searchParams.get("intent"));
-  if (intent !== "login") {
-    // Link and unlink start from an authenticated account only.
-    const actions = await import("../server/actions.server");
-    if (actions.readLoginIdentity(request, config) === null) {
-      throw redirect("/login");
-    }
-  }
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const transaction = oidc.createOAuthTransaction(
-    returnPath,
-    nowSeconds,
-    undefined,
-    intent,
-    "discord",
-  );
-  let service;
+  // Privileged intents are started only by the protected account POST action;
+  // query parameters on this public GET route can start login only.
   try {
-    service = await discord.createDiscordOAuthService(config);
+    return await startProviderAuthorization(config, "discord", "login", returnPath);
   } catch {
     throw redirect("/login");
   }
-
-  return new Response(null, {
-    status: 302,
-    headers: {
-      Location: service.authorizationUrl(transaction).toString(),
-      "Set-Cookie": cookies.buildSetCookieHeader(
-        cookies.OAUTH_COOKIE_NAME,
-        cookies.createOAuthTransactionCookieValue(transaction, config.loginSecret),
-        cookies.OAUTH_TRANSACTION_LIFETIME_SECONDS,
-        config.cookieSecure,
-      ),
-      "Cache-Control": "no-store",
-    },
-  });
 }

@@ -112,6 +112,55 @@ def test_link_refuses_identity_owned_by_another_account(database_url: str) -> No
             database.close()
 
 
+def test_concurrent_links_of_one_subject_return_a_safe_conflict(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            account_ids = [
+                _create_account(
+                    database,
+                    provider="google",
+                    subject=f"g-sub-{index}",
+                    username=f"player{index}",
+                )
+                for index in (1, 2)
+            ]
+            results: list[OperationResult | None] = [None, None]
+            start = threading.Barrier(2)
+
+            def link(index: int) -> None:
+                pool = ApiDatabase(connection_info)
+                try:
+                    start.wait()
+                    results[index] = pool.link_provider(
+                        binding(subject="d-sub-race", provider="discord"),
+                        account_id=account_ids[index],
+                        provider="discord",
+                        provider_subject="d-sub-race",
+                    )
+                finally:
+                    pool.close()
+
+            threads = [threading.Thread(target=link, args=(index,)) for index in (0, 1)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            assert all(isinstance(result, OperationResult) for result in results)
+            operation_results = [
+                result for result in results if isinstance(result, OperationResult)
+            ]
+            assert sorted(result.status_code for result in operation_results) == [200, 409]
+            assert next(
+                result for result in operation_results if result.status_code == 409
+            ).payload == {"error": "provider_identity_conflict"}
+        finally:
+            database.close()
+
+
 def test_link_refuses_second_subject_for_held_provider(database_url: str) -> None:
     with migrated_production_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
@@ -268,6 +317,91 @@ def test_concurrent_unlinks_of_both_providers_cannot_empty_the_account(
                     (account_id,),
                 ).fetchone()
             assert remaining is not None and int(remaining[0]) == 1
+        finally:
+            database.close()
+
+
+def test_concurrent_recovery_collision_retains_refusal_audit(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            account_ids = [
+                _create_account(
+                    database,
+                    provider="google",
+                    subject=f"recovery-google-{index}",
+                    username=f"recover{index}",
+                )
+                for index in (1, 2)
+            ]
+            public_ids = [_public_id(connection_info, account_id) for account_id in account_ids]
+            with psycopg.connect(connection_info) as connection:
+                for index, account_id in enumerate(account_ids, start=1):
+                    tag = f"#P{index}P"
+                    player_id = connection.execute(
+                        "INSERT INTO players (normalized_tag, active) VALUES (%s, false) RETURNING id",
+                        (tag,),
+                    ).fetchone()[0]
+                    request_id = str(uuid4())
+                    connection.execute(
+                        """
+                        INSERT INTO private_api_requests (
+                            request_id, caller, provider, provider_subject, account_id,
+                            operation, method, request_target, identity_json, state,
+                            response_status, response_json, completed_at
+                        ) VALUES (
+                            %s, 'typescript-website', 'google', %s, %s,
+                            'player_links.verify', 'POST', %s,
+                            '{}'::jsonb, 'complete', 200, '{}'::jsonb, clock_timestamp()
+                        )
+                        """,
+                        (request_id, f"recovery-google-{index}", account_id, f"/v1/players/{tag}/verifytoken"),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO verified_player_links (
+                            player_id, account_id, verification_request_id
+                        ) VALUES (%s, %s, %s)
+                        """,
+                        (player_id, account_id, request_id),
+                    )
+
+            results: list[tuple[str, str] | None] = [None, None]
+            start = threading.Barrier(2)
+
+            def recover(index: int) -> None:
+                pool = ApiDatabase(connection_info)
+                try:
+                    start.wait()
+                    results[index] = pool.support_attach_discord_identity(
+                        account_public_id=public_ids[index],
+                        normalized_player_tag=f"#P{index + 1}P",
+                        discord_subject="1234567890123456789",
+                        operator_identity=f"operator-{index}",
+                        reason="verified support recovery race",
+                    )
+                finally:
+                    pool.close()
+
+            threads = [threading.Thread(target=recover, args=(index,)) for index in (0, 1)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            assert all(isinstance(result, tuple) for result in results)
+            statuses = sorted(result[0] for result in results if isinstance(result, tuple))
+            assert statuses == ["attached", "refused_collision"]
+            with psycopg.connect(connection_info) as connection:
+                refused = connection.execute(
+                    """
+                    SELECT count(*) FROM provider_identity_audits
+                    WHERE action = 'support_recovery' AND result = 'refused_collision'
+                    """
+                ).fetchone()
+            assert refused is not None and int(refused[0]) == 1
         finally:
             database.close()
 

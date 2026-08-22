@@ -53,6 +53,9 @@ export async function loader({
  * callback after real provider authentication.
  */
 export async function action({ request }: Route.ActionArgs): Promise<Response> {
+  if (request.method !== "POST") {
+    return new Response(null, { status: 405, headers: NO_STORE });
+  }
   const { requireLogin } = await import("../server/auth-guard.server");
   await requireLogin(request);
   const actions = await import("../server/actions.server");
@@ -79,10 +82,25 @@ export async function action({ request }: Route.ActionArgs): Promise<Response> {
   if (requestedProvider !== "google" && requestedProvider !== "discord") {
     return new Response(null, { status: 400, headers: NO_STORE });
   }
-  throw redirect(
-    `/auth/${requestedProvider}?intent=${intent}` +
-      `&returnPath=${encodeURIComponent("/account/providers")}`,
-  );
+  const cookies = await import("../server/auth-cookies.server");
+  const loginCookie = actions
+    .parseCookieHeader(request.headers.get("cookie"))
+    .get(cookies.LOGIN_COOKIE_NAME);
+  if (loginCookie === undefined || actions.readLoginIdentity(request, config) === null) {
+    throw redirect("/login");
+  }
+  const { startProviderAuthorization } = await import("../server/provider-start.server");
+  try {
+    return await startProviderAuthorization(
+      config,
+      requestedProvider,
+      intent,
+      "/account/providers",
+      cookies.createLoginSessionBinding(loginCookie),
+    );
+  } catch {
+    throw redirect("/login");
+  }
 }
 
 export function headers() {

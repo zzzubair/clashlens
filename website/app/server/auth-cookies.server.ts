@@ -17,7 +17,7 @@
  * later in the same login flow.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import {
   isPlausibleTransaction,
@@ -216,6 +216,9 @@ function canonicalOAuthPayload(transaction: OAuthTransaction): Buffer {
       ch: transaction.codeChallenge,
       rp: transaction.returnPath,
       in: transaction.intent,
+      ...(transaction.sessionBinding === undefined
+        ? {}
+        : { sb: transaction.sessionBinding }),
       i: transaction.issuedAt,
       e: transaction.expiresAt,
     }),
@@ -280,14 +283,24 @@ export function parseOAuthTransactionCookieValue(
     codeChallenge: parsed.ch,
     returnPath: parsed.rp,
     intent: parsed.in,
+    ...(parsed.sb === undefined ? {} : { sessionBinding: parsed.sb as string }),
     issuedAt: parsed.i,
     expiresAt: parsed.e,
   };
-  if (!isPlausibleTransaction(transaction) || transaction.issuedAt > nowSeconds) {
+  if (
+    (parsed.sb !== undefined && typeof parsed.sb !== "string") ||
+    !isPlausibleTransaction(transaction) ||
+    transaction.issuedAt > nowSeconds
+  ) {
     return null;
   }
   if (nowSeconds >= transaction.expiresAt) return null;
   return transaction;
+}
+
+/** Bind a privileged OAuth transaction to the exact signed login session. */
+export function createLoginSessionBinding(loginCookieValue: string): string {
+  return createHash("sha256").update(loginCookieValue, "utf8").digest("base64url");
 }
 
 /**

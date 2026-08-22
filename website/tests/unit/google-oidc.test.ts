@@ -238,6 +238,23 @@ describe("Google OIDC service", () => {
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
   });
 
+  it("forces Google to reauthenticate before unlinking", async () => {
+    const { deps } = fakeDeps();
+    const service = await createGoogleOidcService(testConfig(), deps);
+    const oauthTransaction = createOAuthTransaction(
+      "/account/providers",
+      1_000_000,
+      fixedRandom,
+      "unlink",
+      "google",
+      "A".repeat(43),
+    );
+
+    const url = service.authorizationUrl(oauthTransaction);
+    expect(url.searchParams.get("prompt")).toBe("login");
+    expect(url.searchParams.get("max_age")).toBe("0");
+  });
+
   it("uses the exact configured callback path for the redirect URI", () => {
     expect(CALLBACK_PATH).toBe("/auth/google/callback");
     expect(redirectUriFor(new URL("https://clashlens.example"))).toBe(

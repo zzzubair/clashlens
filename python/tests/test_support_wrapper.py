@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import errno
 import os
+import pty
 import re
+import select
 import shutil
+import signal
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
@@ -83,8 +88,9 @@ def test_support_recovery_is_a_restricted_host_wrapper() -> None:
     assert 'operator_identity="sudo:${SUDO_USER}:${SUDO_UID}"' in text
     assert re.search(r"(?<!SUDO_)\$\{?USER\b", text) is None
     assert "/etc/clashlens/support-recovery-operators" in text
+    assert "/etc/clashlens/support-recovery.conf" in text
     assert 'grep -Fqx -- "$SUDO_USER" "$OPERATOR_ALLOWLIST"' in text
-    assert "recover-discord" in text
+    assert "support-recovery-exec" in text
     assert '--operator="$operator_identity"' in text
     assert "--target-account-public-id" in text
     assert "--player-tag" in text
@@ -92,9 +98,16 @@ def test_support_recovery_is_a_restricted_host_wrapper() -> None:
     assert "--reason" in text
     assert 'protected_root_file "$script_path"' in text
     assert '(8#$mode & 0077)' in text
-    # The command runs inside the existing private API container and never
-    # carries database credentials itself.
-    assert "clashlens-python-api" in text
+    # The wrapper enters the configured deployment account's rootless Podman
+    # context; deploy.sh owns runtime binary and container-name overrides.
+    assert '"$RUNUSER" --user "$service_account"' in text
+    assert 'XDG_RUNTIME_DIR="/run/user/$service_uid"' in text
+    assert '"$deploy_script" support-recovery-exec' in text
+    assert "read_recovery_token || status_unavailable" in text
+    assert "printf '%s\\n' \"$recovery_token\"" in text
+    assert "unset recovery_token" in text
+    assert "clashlens-python-api" not in text
+    assert "/usr/bin/podman" not in text
     assert "CLASHLENS_DATABASE_URL" not in text
     assert re.search(r"--official-(key-file|proxy-url)", text) is None
     assert re.search(r"--[a-z-]*token", text) is None
@@ -148,6 +161,64 @@ def test_support_recovery_is_a_restricted_host_wrapper() -> None:
     )
     assert denied_without_sudo.returncode != 0
     assert denied_without_sudo.stdout.strip() == "support_recovery_status=denied"
+
+
+def test_support_recovery_token_prompt_is_visible_and_does_not_echo() -> None:
+    wrapper_text = (ROOT / "deploy" / "support-recovery").read_text(encoding="utf-8")
+    prompt_function = re.search(
+        r"(?ms)^read_recovery_token\(\) \{\n.*?^\}\n", wrapper_text
+    )
+    assert prompt_function is not None
+
+    shell = shutil.which("bash")
+    assert shell is not None
+    secret = "sentinel-pty-token"
+    probe = f"""{prompt_function.group(0)}
+recovery_token=''
+read_recovery_token || exit 1
+printf 'accepted_length=%s\\n' "${{#recovery_token}}"
+unset recovery_token
+"""
+    pid, master_fd = pty.fork()
+    if pid == 0:
+        os.execv(shell, [shell, "-c", probe])
+
+    output = b""
+    status: int | None = None
+    try:
+        deadline = time.monotonic() + 5
+        prompt = b"Current in-game API token: "
+        accepted = f"accepted_length={len(secret)}".encode()
+        while prompt not in output:
+            readable, _, _ = select.select(
+                [master_fd], [], [], max(0, deadline - time.monotonic())
+            )
+            assert readable, output.decode(errors="replace")
+            output += os.read(master_fd, 4096)
+
+        os.write(master_fd, secret.encode() + b"\n")
+        while accepted not in output:
+            readable, _, _ = select.select(
+                [master_fd], [], [], max(0, deadline - time.monotonic())
+            )
+            assert readable, output.decode(errors="replace")
+            try:
+                output += os.read(master_fd, 4096)
+            except OSError as error:
+                assert error.errno == errno.EIO
+                break
+        _, status = os.waitpid(pid, 0)
+    finally:
+        os.close(master_fd)
+        if status is None:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+
+    decoded = output.decode(errors="replace")
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert "Current in-game API token: " in decoded
+    assert secret not in decoded
+    assert f"accepted_length={len(secret)}" in decoded
 
 
 def test_replay_request_is_a_restricted_host_wrapper() -> None:

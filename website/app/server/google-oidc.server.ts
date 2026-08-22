@@ -51,6 +51,8 @@ export interface OAuthTransaction {
   codeChallenge: string;
   returnPath: string;
   intent: OAuthIntent;
+  /** SHA-256 binding to the initiating login cookie for link/unlink only. */
+  sessionBinding?: string;
   issuedAt: number;
   expiresAt: number;
 }
@@ -153,6 +155,7 @@ export function createOAuthTransaction(
   random: (size: number) => Buffer = randomBytes,
   intent: OAuthIntent = "login",
   provider: "google" | "discord" = "google",
+  sessionBinding?: string,
 ): OAuthTransaction {
   const issuedAt = Math.floor(now);
   const state = random(24).toString("base64url");
@@ -170,6 +173,7 @@ export function createOAuthTransaction(
     codeChallenge,
     returnPath,
     intent,
+    ...(sessionBinding === undefined ? {} : { sessionBinding }),
     issuedAt,
     expiresAt: issuedAt + OAUTH_TRANSACTION_LIFETIME_SECONDS,
   };
@@ -226,6 +230,7 @@ export async function createGoogleOidcService(
         nonce: transaction.nonce,
         code_challenge: transaction.codeChallenge,
         code_challenge_method: "S256",
+        ...(transaction.intent === "unlink" ? { prompt: "login", max_age: "0" } : {}),
       });
     },
 
@@ -308,6 +313,10 @@ export function isPlausibleTransaction(transaction: OAuthTransaction): boolean {
     (transaction.intent === "login" ||
       transaction.intent === "link" ||
       transaction.intent === "unlink") &&
+    (transaction.intent === "login"
+      ? transaction.sessionBinding === undefined
+      : typeof transaction.sessionBinding === "string" &&
+        /^[A-Za-z0-9_-]{43}$/.test(transaction.sessionBinding)) &&
     isProvider(transaction.provider) &&
     Number.isSafeInteger(transaction.issuedAt) &&
     Number.isSafeInteger(transaction.expiresAt) &&

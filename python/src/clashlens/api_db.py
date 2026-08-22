@@ -675,14 +675,22 @@ class ApiDatabase:
                     self._complete_request(connection, binding.request_id, result)
                     return result
                 if current is None:
-                    connection.execute(
+                    inserted = connection.execute(
                         """
                         INSERT INTO account_provider_identities (
                             account_id, provider, provider_subject
                         ) VALUES (%s, %s, %s)
+                        ON CONFLICT DO NOTHING
                         """,
                         (account_id, provider, provider_subject),
                     )
+                    if inserted.rowcount != 1:
+                        # The unique constraints arbitrate absent-key races.
+                        result = OperationResult(
+                            409, {"error": "provider_identity_conflict"}
+                        )
+                        self._complete_request(connection, binding.request_id, result)
+                        return result
                     self._audit_provider_event(
                         connection,
                         account_id=account_id,
@@ -908,14 +916,30 @@ class ApiDatabase:
                         "refused_collision",
                         "the target account already has Discord linked",
                     )
-                connection.execute(
+                inserted = connection.execute(
                     """
                     INSERT INTO account_provider_identities (
                         account_id, provider, provider_subject
                     ) VALUES (%s, 'discord', %s)
+                    ON CONFLICT DO NOTHING
                     """,
                     (account_id, discord_subject),
                 )
+                if inserted.rowcount != 1:
+                    # Keep a concurrent uniqueness refusal in this transaction.
+                    self._audit_provider_event(
+                        connection,
+                        account_id=account_id,
+                        provider="discord",
+                        action="support_recovery",
+                        result="refused_collision",
+                        operator_identity=operator_identity,
+                        reason=reason,
+                    )
+                    return (
+                        "refused_collision",
+                        "the Discord identity belongs to an account",
+                    )
                 self._audit_provider_event(
                     connection,
                     account_id=account_id,

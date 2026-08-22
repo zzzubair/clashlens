@@ -210,6 +210,7 @@ describe("OAuth transaction cookie values", () => {
       (size) => Buffer.alloc(size, 0x2a),
       "link",
       "discord",
+      "A".repeat(43),
     );
     const value = createOAuthTransactionCookieValue(transaction, KEY);
     expect(parseOAuthTransactionCookieValue(value, KEY, 1_750_100)).toEqual(transaction);

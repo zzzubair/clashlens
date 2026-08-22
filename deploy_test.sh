@@ -1254,8 +1254,9 @@ for marker in 'deploy.sh init' 'deploy.sh up' 'deploy.sh restart' 'deploy.sh pyt
   'bridge' 'contract version' 'Issue 31' 'python-api' 'resource budget' \
   'CLASHLENS_WORKER_REPLICAS' 'CLASHLENS_WORKER_CONCURRENCY' \
   'CLASHLENS_WORKER_DATABASE_POOL_SIZE' 'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE' \
-  'CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE' \
-  'worker replica'; do
+  'CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE' 'support-recovery.conf' \
+  'SERVICE_ACCOUNT=clashlens' 'DEPLOY_SCRIPT=/srv/clashlens/deploy.sh' \
+  'clashlens-support-recovery' 'worker replica'; do
   [[ "$deployment_doc" == *"$marker"* ]] || fail "docs/deployment.md no longer documents $marker"
 done
 [[ "$deployment_doc" != *'python-status'* ]] || fail 'docs/deployment.md still references the removed python-status command'
@@ -1486,6 +1487,17 @@ deploy "$REPLICA_DIR" "$REPLICA_ENV" -- queue-status >/dev/null
 queue_segment=$(tail -n +"$((segment_before + 1))" "$REPLICA_LOG")
 grep -q '^exec clashlens-python-worker-1 python -m clashlens.cli queue-status' <<<"$queue_segment" || \
   fail 'queue-status did not run inside replica 1'
+
+mkdir -p "$REPLICA_DIR/state/containers/clashlens-python-api"
+: >"$REPLICA_DIR/state/containers/clashlens-python-api.running"
+segment_before=$(wc -l <"$REPLICA_LOG")
+deploy "$REPLICA_DIR" "$REPLICA_ENV" -- support-recovery-exec \
+  --target-account-public-id=00000000-0000-4000-8000-000000000001 \
+  --player-tag=#2PP --discord-user-id=1234567890123456789 \
+  --operator=sudo:maintainer:1000 --reason='verified support request' </dev/null
+recovery_segment=$(tail -n +"$((segment_before + 1))" "$REPLICA_LOG")
+grep -q '^exec --interactive clashlens-python-api /usr/local/bin/python -m clashlens.cli recover-discord ' <<<"$recovery_segment" || \
+  fail 'support recovery did not use the configured private API container seam'
 
 segment_before=$(wc -l <"$REPLICA_LOG")
 deploy "$REPLICA_DIR" "$REPLICA_ENV" -- logs python-worker-2 >/dev/null

@@ -107,6 +107,8 @@ Commands:
   maintenance <collector args> Run a collector maintenance command.
   queue-status                 Show the Python worker queue status from
                                replica 1.
+  support-recovery-exec <args> Run recovery inside the configured private API
+                               container (for the restricted host wrapper).
 EOF
 }
 
@@ -1247,7 +1249,7 @@ case "$command" in
     load_env_file
     full_configuration=true
     ;;
-  status|logs|down|stack-down|enqueue|maintenance|queue-status|python-down|api-down|worker-down|website-down)
+  status|logs|down|stack-down|enqueue|maintenance|queue-status|support-recovery-exec|python-down|api-down|worker-down|website-down)
     if [[ -f "$ENV_FILE" ]]; then
       load_env_file
     fi
@@ -1531,6 +1533,13 @@ case "$command" in
     container_exists "${PYTHON_WORKER_CONTAINER}-1" || die "python worker replica 1 does not exist; run python-up first"
     container_running "${PYTHON_WORKER_CONTAINER}-1" || die "python worker replica 1 is not running"
     "$PODMAN_BIN" exec "${PYTHON_WORKER_CONTAINER}-1" python -m clashlens.cli queue-status
+    ;;
+  support-recovery-exec)
+    require_podman
+    require_rootless_podman
+    container_running "$PYTHON_API_CONTAINER" || die "private Python API is not running"
+    "$PODMAN_BIN" exec --interactive "$PYTHON_API_CONTAINER" \
+      /usr/local/bin/python -m clashlens.cli recover-discord "$@"
     ;;
   help|-h|--help)
     usage

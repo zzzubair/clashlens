@@ -19,6 +19,7 @@ import {
   buildClearCookieHeader,
   buildSetCookieHeader,
   createLoginCookieValue,
+  createLoginSessionBinding,
   LOGIN_COOKIE_LIFETIME_SECONDS,
   LOGIN_COOKIE_NAME,
   OAUTH_COOKIE_NAME,
@@ -27,7 +28,7 @@ import {
 } from "./auth-cookies.server";
 import { getWebsiteConfig } from "./config.server";
 import type { WebsiteConfig } from "./config.server";
-import { OAuthCallbackError } from "./google-oidc.server";
+import { constantTimeEqual, OAuthCallbackError } from "./google-oidc.server";
 import type { OAuthTransaction } from "./google-oidc.server";
 import type { LoginProviderIdentity } from "../services/python.server";
 import type { UNSAFE_DataWithResponseInit as DataWithResponseInit } from "react-router";
@@ -107,6 +108,31 @@ export async function completeProviderCallback(
     return errorView(400, "invalid_callback", clearTransactionCookie);
   }
 
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  let session: LoginProviderIdentity | null = null;
+  if (transaction.intent !== "login") {
+    const rawLoginCookie = cookiesMap.get(LOGIN_COOKIE_NAME);
+    session = parseLoginCookieValue(rawLoginCookie, config.loginSecret, nowSeconds);
+    if (
+      session === null ||
+      rawLoginCookie === undefined ||
+      transaction.sessionBinding === undefined ||
+      !constantTimeEqual(
+        transaction.sessionBinding,
+        createLoginSessionBinding(rawLoginCookie),
+      )
+    ) {
+      return {
+        kind: "error",
+        status: 400,
+        code: "login_required",
+        message:
+          "Sign in to your Clash Lens account before changing sign-in connections.",
+        clearTransactionCookie,
+      };
+    }
+  }
+
   let validated: LoginProviderIdentity;
   try {
     validated = await validate(params, transaction);
@@ -120,8 +146,6 @@ export async function completeProviderCallback(
   if (validated.provider !== provider) {
     return errorView(400, "invalid_callback", clearTransactionCookie);
   }
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
 
   if (transaction.intent === "login") {
     const loginCookie = buildSetCookieHeader(
@@ -150,23 +174,8 @@ export async function completeProviderCallback(
     };
   }
 
-  // Link and unlink start from an authenticated account: the signed login
-  // cookie must still be present and valid at callback time.
-  const session = parseLoginCookieValue(
-    cookiesMap.get(LOGIN_COOKIE_NAME),
-    config.loginSecret,
-    nowSeconds,
-  );
-  if (session === null) {
-    return {
-      kind: "error",
-      status: 400,
-      code: "login_required",
-      message: "Sign in to your Clash Lens account before changing sign-in connections.",
-      clearTransactionCookie,
-    };
-  }
-
+  // The non-login branch above establishes this before provider validation.
+  if (session === null) return errorView(400, "login_required", clearTransactionCookie);
   const python = await import("../services/python.server");
   const client = python.createPythonClient(session);
   let currentProviders: string[];
@@ -347,11 +356,4 @@ export function redirectOutcomeResponse(outcome: SuccessRedirect): Response {
     headers.append("Set-Cookie", setCookie);
   }
   return new Response(null, { status: 302, headers });
-}
-
-/** Strict intent allowlist for authorize-route query parameters. */
-export function parseTransactionIntent(
-  value: string | null,
-): "login" | "link" | "unlink" {
-  return value === "link" || value === "unlink" ? value : "login";
 }
