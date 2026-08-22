@@ -351,7 +351,9 @@ def create_app(
         except ValueError as error:
             raise ApiError(422, "invalid_army_analytics_selection") from error
         try:
-            result = production_database.get_army_analytics(selection)
+            result = production_database.get_army_analytics(
+                selection, now=current_time()
+            )
         except CurrentSeasonEmpty as empty:
             content: dict[str, Any] = {"error": "no_completed_legend_days"}
             if empty.previous_season_id:

@@ -797,6 +797,7 @@ describe("server-only Python client response boundary", () => {
       cohort_evidence: {
         stale_or_uncertain_cohort_members: 2,
         streak_excluded_players: 1,
+        shielded_player_days: 3,
       },
       collection_coverage: { state: "complete", completed_days: 8 },
       freshness: { state: "frozen" },
@@ -896,6 +897,7 @@ describe("server-only Python client response boundary", () => {
       cohortEvidence: {
         staleOrUncertainCohortMembers: 2,
         streakExcludedPlayers: 1,
+        shieldedPlayerDays: 3,
       },
       collectionCoverage: { state: "complete", completedDays: 8 },
       freshness: { state: "frozen" },

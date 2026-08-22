@@ -190,6 +190,9 @@ export default function ArmyAnalyticsRoute() {
             {analytics.cohortEvidence.streakExcludedPlayers > 0
               ? ` · streak-excluded players: ${analytics.cohortEvidence.streakExcludedPlayers}`
               : null}
+            {analytics.cohortEvidence.shieldedPlayerDays > 0
+              ? ` · shielded member-days: ${analytics.cohortEvidence.shieldedPlayerDays}`
+              : null}
             . Snapshot versions:{" "}
             {analytics.reproducibility.snapshotVersions.join(", ") || "none"}.
           </p>

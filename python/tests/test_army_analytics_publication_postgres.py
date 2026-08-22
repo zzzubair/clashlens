@@ -73,6 +73,8 @@ def _publish_day(
     events: list[dict],
     *,
     start_trophies: int | None = 6000,
+    day_start: datetime = DAY_START,
+    day_number: int = DAY_NUMBER,
 ) -> None:
     with database.pool.connection() as connection:
         player_id = connection.execute(
@@ -94,10 +96,10 @@ def _publish_day(
             """,
             (
                 player_id,
-                DAY_START,
-                DAY_START + timedelta(days=1),
+                day_start,
+                day_start + timedelta(days=1),
                 SEASON_ID,
-                DAY_NUMBER,
+                day_number,
                 start_trophies,
             ),
         )
@@ -110,14 +112,14 @@ def _publish_day(
             """,
             (
                 player_id,
-                DAY_START,
+                day_start,
                 json.dumps(events),
-                DAY_START + timedelta(days=1),
+                day_start + timedelta(days=1),
                 SEASON_ID,
-                DAY_NUMBER,
+                day_number,
             ),
         )
-        database._enqueue_army_analytics(connection, ranked_day_start=DAY_START)
+        database._enqueue_army_analytics(connection, ranked_day_start=day_start)
 
 
 def _army_job(database: Database) -> int:
@@ -751,11 +753,13 @@ def test_current_season_clipped_below_start_day_is_unavailable(
                 battle_id = int(connection.execute("SELECT max(id) FROM legend_battles").fetchone()[0])
             _publish_day(database, "#2PP", [_event(battle_id, "offense", ts, 3, 100, 35)])
             _insert_confirmed_anchor(database, SEASON_ID, "1781296800")
-            # The latest completed Legend day is 23; a request starting at 28
-            # clips to an empty range and must name the affected days.
+            # Day 25's interval has ended but day 23 is still the latest with
+            # completed source evidence; a request starting at 28 lies beyond
+            # the ended days and must name the affected days.
             with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
                 api.get_army_analytics(
-                    _selection(season="current", start_day=28, end_day=28)
+                    _selection(season="current", start_day=28, end_day=28),
+                    now=DAY_START + timedelta(days=24, hours=12),
                 )
             assert unavailable.value.affected_days == [28]
         finally:
@@ -786,8 +790,12 @@ def test_current_season_without_completed_days_names_previous_season(
             # season has none yet, so season=current must not silently serve
             # the previous season's publications.
             _insert_confirmed_anchor(database, "1900000000", SEASON_ID)
+            # No Legend-day interval of the confirmed current season has ended
+            # yet at the season anchor itself.
             with pytest.raises(CurrentSeasonEmpty) as empty:
-                api.get_army_analytics(_selection(season="current", start_day=23))
+                api.get_army_analytics(
+                    _selection(season="current", start_day=23), now=DAY_START
+                )
             assert empty.value.previous_season_id == SEASON_ID
             # Without a confirmed anchor there is no honest current-season
             # identity and no previous season to link.
@@ -798,6 +806,238 @@ def test_current_season_without_completed_days_names_previous_season(
             assert empty.value.previous_season_id is None
             # The historical season stays reachable by explicit id.
             assert api.get_army_analytics(_selection(start_day=23)) is not None
+        finally:
+            api.close()
+            database.close()
+
+
+def test_current_season_ended_but_withheld_day_is_unavailable(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = DAY_START + timedelta(hours=1)
+        _, job = store_observation(
+            ci, archive_server, occurrence_key="withheld-a1", endpoint="battle_log",
+            body=json.dumps({"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}).encode(),
+            observed_at=ts + timedelta(minutes=1), normalized_tag="#2PP",
+        )
+        database, processor = _processor(ci, archive_server)
+        api = ApiDatabase(ci)
+        try:
+            processor.process_job(job, owner="ingest")
+            with database.pool.connection() as connection:
+                battle_id = int(connection.execute("SELECT max(id) FROM legend_battles").fetchone()[0])
+            _publish_day(database, "#2PP", [_event(battle_id, "offense", ts, 3, 100, 35)])
+            assert processor.process_job(_army_job(database), owner="analytics").outcome == "processed"
+            _insert_confirmed_anchor(database, SEASON_ID, "1781296800")
+            # Legend day 1's interval has ended one full day after the anchor,
+            # but no completed source publication exists for it: the default
+            # range must name it unavailable, not fall back to an empty state.
+            with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
+                api.get_army_analytics(
+                    _selection(season="current", start_day=1, end_day=1),
+                    now=DAY_START + timedelta(days=1, hours=1),
+                )
+            assert unavailable.value.affected_days == [1]
+            # Later ended-but-withheld days stay named alongside missing
+            # earlier days instead of being silently clipped away.
+            with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
+                api.get_army_analytics(
+                    _selection(season="current", start_day=1, end_day=28),
+                    now=DAY_START + timedelta(days=24, hours=12),
+                )
+            assert unavailable.value.affected_days == list(range(1, 23)) + [24]
+            # The completed day itself stays reachable through the chronology.
+            resolved = api.get_army_analytics(
+                _selection(season="current", start_day=23, end_day=28),
+                now=DAY_START + timedelta(days=23),
+            )
+            assert resolved is not None
+            assert resolved["selection"]["end_day"] == 23
+            assert resolved["total_attacks"] == 1
+        finally:
+            api.close()
+            database.close()
+
+
+def _seed_frozen_snapshot_at(
+    database: Database,
+    boundary: datetime,
+    entries: list[tuple[int, int, str, str]],
+) -> int:
+    """entries: (player_id, position, freshness, confidence)."""
+    with database.pool.connection() as connection:
+        observation_id = connection.execute(
+            "SELECT id FROM collector_observations ORDER BY id LIMIT 1"
+        ).fetchone()[0]
+        snapshot_id = connection.execute(
+            """
+            INSERT INTO leaderboard_snapshots (
+                snapshot_kind, boundary_at, version, ordering_rule_version,
+                freshness_rule_version, state, measured_coverage, stale_entry_count
+            ) VALUES ('frozen', %s, 1, 'ordering-v1', 'freshness-v1', 'published', 1.0, 0)
+            RETURNING id
+            """,
+            (boundary,),
+        ).fetchone()[0]
+        for player_id, position, freshness, confidence in entries:
+            connection.execute(
+                """
+                INSERT INTO leaderboard_snapshot_entries (
+                    snapshot_id, position, player_id, trophies,
+                    trophy_observation_id, trophy_observed_at,
+                    observation_age_seconds, freshness, confidence, tie_hash
+                ) VALUES (%s, %s, %s, 6000, %s, %s, 10, %s, %s, repeat('c', 64))
+                """,
+                (
+                    snapshot_id,
+                    position,
+                    player_id,
+                    observation_id,
+                    boundary - timedelta(days=1),
+                    freshness,
+                    confidence,
+                ),
+            )
+        return snapshot_id
+
+
+def _mark_shielded(
+    database: Database, player_tag: str, day_start: datetime, day_number: int
+) -> None:
+    with database.pool.connection() as connection:
+        player_id = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = %s", (player_tag,)
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO ranked_day_versions (
+                player_id, ranked_day_start, ranked_day_end,
+                official_season_id, season_day_number,
+                season_anchor_rule_version, reconciliation_rule_version,
+                result_hash, version, state, confidence, input_hash,
+                evidence_complete, coverage_complete, shield_state,
+                shield_duration_days
+            ) VALUES (
+                %s, %s, %s, %s, %s, 'legend-season-anchor-v1',
+                'legend-ranked-day-v1', repeat('d', 64), 2,
+                'Complete', 'exact', repeat('b', 64), true, true,
+                'inferred_shielded', 1
+            )
+            """,
+            (
+                player_id,
+                day_start,
+                day_start + timedelta(days=1),
+                SEASON_ID,
+                day_number,
+            ),
+        )
+
+
+def test_streak_evidence_reports_exclusions_and_shielded_member_days(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as ci:
+        day2_start = DAY_START + timedelta(days=1)
+        ts1 = DAY_START + timedelta(hours=1)
+        ts2 = day2_start + timedelta(hours=1)
+        _, j1 = store_observation(
+            ci, archive_server, occurrence_key="streak-ev-a1", endpoint="battle_log",
+            body=json.dumps({"items": [_row(True, "#8PP", FIXTURE_CODE, ts1, 3, 100)]}).encode(),
+            observed_at=ts1 + timedelta(minutes=1), normalized_tag="#2PP",
+        )
+        _, j2 = store_observation(
+            ci, archive_server, occurrence_key="streak-ev-a2", endpoint="battle_log",
+            body=json.dumps({"items": [_row(True, "#9PP", FIXTURE_CODE, ts2, 2, 60)]}).encode(),
+            observed_at=ts2 + timedelta(minutes=1), normalized_tag="#2PP",
+        )
+        database, processor = _processor(ci, archive_server)
+        api = ApiDatabase(ci)
+        try:
+            for index, job in enumerate((j1, j2)):
+                assert processor.process_job(job, owner=f"ingest-{index}").outcome in (
+                    "processed",
+                    "processed_with_gaps",
+                )
+            with database.pool.connection() as connection:
+                battles = {
+                    text(d): int(b)
+                    for d, b in connection.execute(
+                        """
+                        SELECT def.normalized_tag, b.id
+                        FROM legend_battles b
+                        JOIN players atk ON atk.id = b.attacker_player_id
+                        JOIN players def ON def.id = b.defender_player_id
+                        WHERE atk.normalized_tag = '#2PP'
+                        """
+                    ).fetchall()
+                }
+                attacker_id = int(connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0])
+                defender8_id = int(connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#8PP'"
+                ).fetchone()[0])
+                player9_id = int(connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#9PP'"
+                ).fetchone()[0])
+            _publish_day(database, "#2PP", [_event(battles["#8PP"], "offense", ts1, 3, 100, 35)])
+            assert processor.process_job(_army_job(database), owner="analytics").outcome == "processed"
+            _publish_day(
+                database,
+                "#2PP",
+                [_event(battles["#9PP"], "offense", ts2, 2, 60, 20)],
+                day_start=day2_start,
+                day_number=24,
+            )
+            assert processor.process_job(_army_job(database), owner="analytics-2").outcome == "processed"
+
+            # Snapshot S1 ends day 23; S2 ends day 24. The defender stays in
+            # the Top-N but turns stale in S2; #9PP drops out of S2 entirely.
+            _seed_frozen_snapshot_at(
+                database,
+                DAY_START + timedelta(days=1),
+                [
+                    (attacker_id, 1, "fresh", "confirmed"),
+                    (defender8_id, 2, "fresh", "confirmed"),
+                    (player9_id, 3, "fresh", "confirmed"),
+                ],
+            )
+            _seed_frozen_snapshot_at(
+                database,
+                DAY_START + timedelta(days=2),
+                [
+                    (attacker_id, 1, "fresh", "confirmed"),
+                    (defender8_id, 2, "stale", "uncertain"),
+                ],
+            )
+            # A corrected current version infers a shield for the confirmed
+            # member on day 23 and for the excluded defender on day 24.
+            _mark_shielded(database, "#2PP", DAY_START, 23)
+            _mark_shielded(database, "#8PP", day2_start, 24)
+
+            streak = api.get_army_analytics(
+                _selection(population="streak-top-5", start_day=23, end_day=24)
+            )
+            assert streak is not None
+            evidence = streak["cohort_evidence"]
+            # Only the attacker keeps fresh confirmed Top-5 membership in both
+            # snapshots; stale membership and missing membership both exclude.
+            assert streak["total_attacks"] == 2
+            assert evidence["streak_excluded_players"] == 2
+            # The defender was present in every snapshot but not always fresh
+            # and confirmed; that weakness stays separately visible.
+            assert evidence["stale_or_uncertain_cohort_members"] == 1
+            # Shielded-day evidence counts only confirmed members' member-days.
+            assert evidence["shielded_player_days"] == 1
+
+            non_streak = api.get_army_analytics(
+                _selection(population="top-5", start_day=23, end_day=24)
+            )
+            assert non_streak is not None
+            assert non_streak["cohort_evidence"]["streak_excluded_players"] == 0
+            assert non_streak["cohort_evidence"]["shielded_player_days"] == 0
         finally:
             api.close()
             database.close()

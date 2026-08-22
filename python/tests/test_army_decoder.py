@@ -94,7 +94,7 @@ def test_missing_and_empty_code_remain_canonical_but_fail_decode() -> None:
         assert parsed.has_row_gap is False
 
 
-def test_unknown_id_preserves_known_facts_and_wrong_category_fails() -> None:
+def test_unknown_id_preserves_known_facts_and_stays_partial() -> None:
     result = decode_army_share_code("u2x58-3x9999")
     assert result.status == "partial"
     assert [(fact.typed_id, fact.quantity) for fact in result.home_troops] == [
@@ -105,9 +105,14 @@ def test_unknown_id_preserves_known_facts_and_wrong_category_fails() -> None:
         for fact in result.unknown
     ] == [(9999, 3, "u", "home")]
     assert result.identity_hash is None
-    # wrong category: spell id 58 exists as troop but not as spell, so s1x58 should be unknown for spell namespace
+    # The s section is authoritative: spell id 58 stays unresolved partial
+    # evidence even though troop:58 exists in the catalog.
     result2 = decode_army_share_code("s1x58")
-    assert result2.category == "wrong_category"
+    assert result2.status == "partial"
+    assert [
+        (fact.numeric_id, fact.quantity, fact.section, fact.origin)
+        for fact in result2.unknown
+    ] == [(58, 1, "s", "home")]
     # unknown token
     result3 = decode_army_share_code("u1x58z9")
     assert result3.category == "unknown_token"
@@ -119,6 +124,35 @@ def test_same_numeric_id_in_two_namespaces_distinct() -> None:
     assert not hasattr(a, "category")
     assert any(f.typed_id == "troop:2" for f in a.home_troops)
     assert any(f.typed_id == "spell:2" for f in a.spells)
+
+
+def test_cross_namespace_collision_stays_partial_in_every_section() -> None:
+    # Numeric IDs overlap across catalog namespaces. The encoded section is
+    # authoritative, so an ID absent from the section's own namespace stays
+    # unresolved partial evidence instead of failing as wrong_category.
+    # 16 is spell/pet/equipment but never a troop; 4 is hero/pet/troop/
+    # equipment but never a spell; 3 is pet/spell/troop/equipment but never a
+    # hero; 28 is spell/troop but never equipment.
+    result = decode_army_share_code("u1x16i2x16s1x4d1x4h3p9e14_28")
+    assert result.status == "partial"
+    # Known pet and equipment assignments survive the unknown hero ID; the
+    # colliding equipment ID 28 is retained as unresolved, not guessed.
+    assert [
+        (hero.hero_typed_id, hero.pet_typed_id, hero.equipment_typed_ids)
+        for hero in result.heroes
+    ] == [("hero:3", "pet:9", ("equipment:14",))]
+    assert {
+        (fact.numeric_id, fact.quantity, fact.section, fact.origin)
+        for fact in result.unknown
+    } == {
+        (16, 1, "u", "home"),
+        (16, 2, "i", "clan_castle"),
+        (4, 1, "s", "home"),
+        (4, 1, "d", "clan_castle"),
+        (3, 1, "h", "hero"),
+        (28, 1, "h", "hero:3:equipment"),
+    }
+    assert result.identity_hash is None
 
 
 def test_catalog_display_name_does_not_change_identity(monkeypatch) -> None:

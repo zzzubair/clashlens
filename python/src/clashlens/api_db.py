@@ -22,7 +22,7 @@ from .army_analytics import (
 )
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION, catalog_name
-from .domain import SEASON_ANCHOR_RULE_VERSION
+from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION
 from .profile import normalize_player_tag
 from .verification import KeyAction, VerificationOutcome
 
@@ -1576,7 +1576,7 @@ class ApiDatabase:
             }
 
     def get_army_analytics(
-        self, selection: ArmyAnalyticsSelection
+        self, selection: ArmyAnalyticsSelection, *, now: datetime | None = None
     ) -> dict[str, Any] | None:
         with self.pool.connection() as connection:
             with connection.transaction():
@@ -1584,7 +1584,8 @@ class ApiDatabase:
                 if selection.season == "current":
                     anchor = connection.execute(
                         """
-                        SELECT current_league_season_id, previous_league_season_id
+                        SELECT current_league_season_id, previous_league_season_id,
+                               current_start
                         FROM legend_season_anchors
                         WHERE anchor_rule_version = %s AND state = 'confirmed'
                         """,
@@ -1595,40 +1596,35 @@ class ApiDatabase:
                         # current-season identity; never fall back to the most
                         # recently published season.
                         raise CurrentSeasonEmpty(None)
-                    latest_day = connection.execute(
-                        """
-                        SELECT max(season_day_number)
-                        FROM api_player_daily_logs
-                        WHERE official_season_id = %s
-                          AND state = 'Complete' AND coverage = 'complete'
-                          AND season_day_number BETWEEN %s AND 28
-                        """,
-                        (_text(anchor[0]), selection.start_day),
-                    ).fetchone()
-                    if latest_day is None or latest_day[0] is None:
-                        # The current season has no completed Legend day in the
-                        # requested range. Name the previous season so callers
-                        # can offer it explicitly instead of silently serving
-                        # its publications for season=current.
-                        overall = connection.execute(
-                            """
-                            SELECT EXISTS (
-                                SELECT 1 FROM api_player_daily_logs
-                                WHERE official_season_id = %s
-                                  AND state = 'Complete' AND coverage = 'complete'
-                            )
-                            """,
-                            (_text(anchor[0]),),
-                        ).fetchone()
-                        if not overall[0]:
-                            raise CurrentSeasonEmpty(_text(anchor[1]))
-                        raise ArmyAnalyticsUnavailable(
-                            list(range(selection.start_day, selection.end_day + 1))
+                    # The default range ends at the latest Legend day whose
+                    # interval has ended in reset chronology (05:00 UTC), not
+                    # at the latest day with published source data. The
+                    # completed-day gates below then report any ended but
+                    # withheld day as unavailable instead of hiding it.
+                    current_time = (
+                        now.astimezone(UTC) if now is not None else datetime.now(tz=UTC)
+                    )
+                    if current_time < anchor[2]:
+                        latest_ended_day = 0
+                    else:
+                        # A Legend day's interval ends one full day after the
+                        # season anchor, so the count of fully elapsed days is
+                        # the latest ended day number.
+                        latest_ended_day = min(
+                            28,
+                            int((current_time - anchor[2]) // RANKED_DAY_DURATION),
                         )
-                    clipped_end = min(selection.end_day, int(latest_day[0]))
+                    clipped_end = min(selection.end_day, latest_ended_day)
                     if clipped_end < selection.start_day:
-                        # The whole requested range lies beyond the latest
-                        # completed Legend day; name it instead of clipping.
+                        if latest_ended_day == 0:
+                            # No Legend-day interval has ended this season;
+                            # name the previous season so callers can offer it
+                            # explicitly instead of silently serving its
+                            # publications for season=current.
+                            raise CurrentSeasonEmpty(_text(anchor[1]))
+                        # Intervals have ended but the requested range starts
+                        # beyond them; name the affected days instead of
+                        # clipping.
                         raise ArmyAnalyticsUnavailable(
                             list(range(selection.start_day, selection.end_day + 1))
                         )
@@ -1764,7 +1760,59 @@ class ApiDatabase:
                         ).fetchall()
                     member_ids = {int(row[0]) for row in members}
                     facts = [fact for fact in facts if fact["population_player_id"] in member_ids]
+                    excluded_players = 0
+                    shielded_player_days = 0
                     if population.startswith("streak-top-"):
+                        # Excluded streak players appear in the selected Top-N
+                        # in at least one selected snapshot but fail confirmed
+                        # fresh membership in every one: missing snapshot
+                        # membership or stale/uncertain entries both block a
+                        # confirmed streak.
+                        any_snapshot_ids = {
+                            int(row[0])
+                            for row in connection.execute(
+                                """
+                                SELECT DISTINCT player_id
+                                FROM leaderboard_snapshot_entries
+                                WHERE snapshot_id = ANY(%s::bigint[])
+                                  AND position <= %s
+                                """,
+                                (snapshot_ids, limit),
+                            ).fetchall()
+                        }
+                        excluded_players = len(any_snapshot_ids - member_ids)
+                        # Shielded-day evidence for confirmed streak members:
+                        # one row per member-day whose current ranked-day
+                        # version inferred a shield.
+                        if member_ids:
+                            shielded_player_days = int(
+                                connection.execute(
+                                    """
+                                    SELECT count(*) FROM (
+                                        SELECT DISTINCT ON (rv.player_id,
+                                                            rv.ranked_day_start)
+                                               rv.shield_state
+                                        FROM ranked_day_versions AS rv
+                                        WHERE rv.player_id = ANY(%s::bigint[])
+                                          AND rv.ranked_day_start =
+                                              ANY(%s::timestamptz[])
+                                        ORDER BY rv.player_id, rv.ranked_day_start,
+                                                 rv.version DESC
+                                    ) AS current_version
+                                    WHERE shield_state = 'inferred_shielded'
+                                    """,
+                                    (
+                                        sorted(member_ids),
+                                        [
+                                            day_starts[day]
+                                            for day in range(
+                                                resolved.start_day,
+                                                resolved.end_day + 1,
+                                            )
+                                        ],
+                                    ),
+                                ).fetchone()[0]
+                            )
                         stale_or_uncertain_members = int(
                             connection.execute(
                                 """
@@ -1803,9 +1851,8 @@ class ApiDatabase:
                         )
                     cohort_evidence = {
                         "stale_or_uncertain_cohort_members": stale_or_uncertain_members,
-                        "streak_excluded_players": (
-                            stale_or_uncertain_members if streak else 0
-                        ),
+                        "streak_excluded_players": excluded_players,
+                        "shielded_player_days": shielded_player_days,
                     }
                 result = build_army_result(facts, resolved)
                 result["missing_trophy_membership_evidence"] = missing_trophies
@@ -1813,6 +1860,7 @@ class ApiDatabase:
                     cohort_evidence = {
                         "stale_or_uncertain_cohort_members": 0,
                         "streak_excluded_players": 0,
+                        "shielded_player_days": 0,
                     }
                 result["cohort_evidence"] = cohort_evidence
                 result["reproducibility"] = {

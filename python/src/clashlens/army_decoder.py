@@ -143,14 +143,12 @@ def _guard_int(s: str, label: str) -> int:
     return v
 
 
-def _is_known_typed(typed: str, expected_ns: str) -> bool:
-    if is_valid_typed_id(typed):
-        return True
-    rid = typed.split(":", 1)[1]
-    for ns in ("troop", "spell", "hero", "pet", "equipment"):
-        if ns != expected_ns and is_valid_typed_id(f"{ns}:{rid}"):
-            raise DecodeError("wrong_category", f"{typed} exists as {ns}")
-    return False
+def _is_known_typed(typed: str) -> bool:
+    # The encoded section is authoritative for the semantic category. Numeric
+    # IDs overlap across namespaces, so an ID absent from the section's own
+    # namespace stays unresolved partial evidence even when the same number is
+    # a known ID elsewhere; guessing the other category would fabricate facts.
+    return is_valid_typed_id(typed)
 
 
 def _parse_section(content: str, ns: str) -> list[tuple[str, int, bool]]:
@@ -176,7 +174,7 @@ def _parse_section(content: str, ns: str) -> list[tuple[str, int, bool]]:
         if qty <= 0 or qty > 1000:
             raise DecodeError("malformed", f"quantity {qty} out of range")
         typed = f"{ns}:{rid}"
-        out.append((typed, qty, _is_known_typed(typed, ns)))
+        out.append((typed, qty, _is_known_typed(typed)))
     return out
 
 
@@ -261,7 +259,7 @@ def _decode(raw: str) -> DecodedArmy:
             hero_s, m_s, pet_s, equip_s = match.groups()
             hero_id = _guard_int(hero_s, "hero")
             hero_typed = f"hero:{hero_id}"
-            hero_known = _is_known_typed(hero_typed, "hero")
+            hero_known = _is_known_typed(hero_typed)
             if hero_typed in seen_heroes:
                 raise DecodeError("malformed", f"duplicate hero {hero_typed}")
             seen_heroes.add(hero_typed)
@@ -269,7 +267,7 @@ def _decode(raw: str) -> DecodedArmy:
             if pet_s is not None:
                 pid = _guard_int(pet_s, "pet")
                 candidate = f"pet:{pid}"
-                if _is_known_typed(candidate, "pet"):
+                if _is_known_typed(candidate):
                     pet_typed = candidate
                 else:
                     keep_unknown(candidate, 1, "h", f"hero:{hero_id}:pet")
@@ -288,7 +286,7 @@ def _decode(raw: str) -> DecodedArmy:
                         raise DecodeError("malformed", "empty equipment")
                     eid = _guard_int(part, "equipment")
                     eq_typed = f"equipment:{eid}"
-                    equipment_known = _is_known_typed(eq_typed, "equipment")
+                    equipment_known = _is_known_typed(eq_typed)
                     if eq_typed in equip_list:
                         raise DecodeError(
                             "malformed", f"duplicate equipment {eq_typed}"

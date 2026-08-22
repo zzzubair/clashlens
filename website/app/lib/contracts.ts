@@ -162,6 +162,7 @@ export interface ArmyAnalytics {
   cohortEvidence: {
     staleOrUncertainCohortMembers: number;
     streakExcludedPlayers: number;
+    shieldedPlayerDays: number;
   };
   collectionCoverage: { state: string; completedDays: number };
   freshness: { state: string };

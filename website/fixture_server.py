@@ -244,6 +244,7 @@ def army_analytics(season, query):
         "cohort_evidence": {
             "stale_or_uncertain_cohort_members": 0,
             "streak_excluded_players": 0,
+            "shielded_player_days": 0,
         },
         "collection_coverage": {"state": "complete", "completed_days": 8},
         "freshness": {"state": "frozen"},
