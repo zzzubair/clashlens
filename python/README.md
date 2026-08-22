@@ -1,67 +1,53 @@
-# Clash Lens Phase 1 Python application layer
+# Clash Lens Python application
 
-**Status:** the production functional-beta Python layer on main. It does not
-complete every item of Issue 29. This package owns domain processing, current
-player state, canonical battles, ranked days, snapshots, analytics, replay,
-accounts, and the private signed API. It does not collect official API
-evidence; the Go collector owns collection and the immutable raw archive.
+This package owns domain processing, canonical battles, ranked days,
+snapshots, analytics, replay, accounts, and the private signed API. The Go
+collector owns official API collection and the immutable raw archive. Runtime
+boundaries are in [`docs/architecture.md`](../docs/architecture.md); stable
+domain rules are in [`docs/domain.md`](../docs/domain.md); production Podman
+operations are in [`docs/deployment.md`](../docs/deployment.md).
 
-Open scope: the Discord bot role is absent from this package. Export routes and
-database submission scaffolding exist, but beta caller authorization denies
-those operations and the worker does not claim `build_export` jobs. Exports
-stay disabled during beta. Global Top-200 collection stays default-off: the
-deployment refuses to enable it during beta. Production login stays disabled
-until the Python service enforces the strict inappropriate-name filter and the
-root deployment passes the login configuration.
+## Layout
 
-Use [`docs/architecture.md`](../docs/architecture.md) and
-[`docs/domain.md`](../docs/domain.md) for the accepted production boundaries
-and domain rules. Use [`docs/deployment.md`](../docs/deployment.md) for the
-production Podman lifecycle. The root [`deploy.sh`](../deploy.sh) builds and
-runs the production worker from this package.
+- `src/clashlens/` — application modules, worker, API, accounts, processing,
+  reconciliation, analytics, verification, and HMAC proof.
+- `tests/` — pytest suite, including PostgreSQL-backed tests.
+- `testdata/` — synthetic fixtures only; no credentials or live player bodies.
 
-## Package layout
+The production schema is owned by `deploy/migrations/0001_collector.sql`
+through `0005_army_decoding.sql`. Application startup does not create or alter
+tables; tests apply these migrations directly.
 
-- `src/clashlens/` — application modules: worker, private API, accounts,
-  domain processing, reconciliation, snapshots, analytics, verification,
-  and HMAC proof.
-- `tests/` — pytest suite. PostgreSQL-backed tests run against the real
-  migrations in `deploy/migrations/`.
-- `testdata/` — synthetic fixtures only. No live player bodies, tokens, or
-  credentials are committed.
+## Local checks
 
-## 1. Run the local checks
-
-Run the complete Python suite without PostgreSQL from `python`:
+From `python/`, use the locked environment:
 
 ```sh
-UV_PROJECT_ENVIRONMENT=/tmp/clashlens-python-venv UV_LINK_MODE=copy uv run --locked --python 3.12 pytest -q
+UV_PROJECT_ENVIRONMENT=/tmp/clashlens-python-venv \
+UV_LINK_MODE=copy uv run --locked --python 3.12 pytest -q
 ```
 
-Run the complete Python suite against a PostgreSQL 18 test database from
-`python`:
+For PostgreSQL-backed tests, set `CLASHLENS_TEST_DATABASE_URL` first:
 
 ```sh
-CLASHLENS_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/clashlens UV_PROJECT_ENVIRONMENT=/tmp/clashlens-python-venv UV_LINK_MODE=copy uv run --locked --python 3.12 pytest -q
+CLASHLENS_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/clashlens \
+UV_PROJECT_ENVIRONMENT=/tmp/clashlens-python-venv \
+UV_LINK_MODE=copy uv run --locked --python 3.12 pytest -q
 ```
 
-Run the complete vertical seam from the repository root:
+The Go-to-Python handoff can be checked from the repository root:
 
 ```sh
-go test ./internal/collector -run '^TestGoCollectorHandoffToPythonSignedPlayerPage$' -count=1 -v -timeout=120s
+go test ./internal/collector -run '^TestGoCollectorHandoffToPythonSignedPlayerPage$' \
+  -count=1 -v -timeout=120s
 ```
 
-The Go seam creates its Python environment in a temporary directory and does
-not leave a repository-local `.venv`. The dependency and Python-version
-constraints are in [`pyproject.toml`](pyproject.toml) and [`uv.lock`](uv.lock).
+`uv.lock` and `pyproject.toml` define the Python and dependency constraints.
+Record unavailable prerequisites when an integration test skips.
 
-Completion check: each selected command exits with status `0`. A test that
-skips because PostgreSQL or `uv` is unavailable is not a passing integration
-result; record the skipped prerequisite.
+## Production interface
 
-## 2. Production worker and private API
-
-The root deployment script owns the production lifecycle:
+The root `deploy.sh` owns the lifecycle:
 
 ```sh
 ../deploy.sh python-up
@@ -73,45 +59,15 @@ The root deployment script owns the production lifecycle:
 ../deploy.sh python-down
 ```
 
-`python-up` builds the Python image and starts the private API and the
-configured production-worker replicas; the `*-start` commands start roles
-without building. Each worker uses bounded in-process lanes and database and
-archive pools, claiming one fenced lease per lane. A processing pass stops
-when the queue is idle or the configured `--max-jobs` count is reached. The
-worker reads archive objects only through its own archive-read credential and
-never requests a new Supercell source request during replay. The private API
-listens on the private Podman network alias
-`python-api:8000` with no published host port.
+Workers claim fenced jobs from the shared queue and read archive objects only
+through their archive-read credential. The private API is available only on
+the private Podman network at `python-api:8000`.
 
-After a ranked-day publication contract bump, queue existing current-season
-days from the worker environment in bounded batches:
+After a publication contract change, bounded current-season republishing is
+available to the worker role:
 
 ```sh
 python -m clashlens.cli republish-current-season --max-jobs 100
 ```
 
-The command uses the normal worker role and only rebuilds derived publications
-from canonical database evidence; it does not read archived source bodies.
-Repeat it after the worker drains the returned jobs until `enqueued_count` is
-zero. The batch size is restricted to 1–1000.
-
-## 3. Fixed production contract
-
-The selected runtime is fixed for this package:
-
-- Python `3.12` is required by `pyproject.toml`.
-- The code uses FastAPI, Pydantic 2, psycopg 3 direct SQL and pooling, MinIO,
-  Uvicorn, and pytest. It does not use an ORM.
-- The test client is `httpx2`, as required by the locked Starlette dependency.
-- `uv` owns dependency locking. Do not replace it with an unlocked install in
-  a reproducibility check.
-- The archive reader uses TLS by default, disables client-library retries,
-  applies explicit connect and read timeouts, retries at most once by default,
-  and reads at most `2,000,000` bytes by default.
-
-## 4. Schema ownership
-
-The database schema lives in the production migrations at
-`deploy/migrations/0001_collector.sql` through
-`deploy/migrations/0005_army_decoding.sql`. Application startup does not create
-or alter tables; tests apply the real migration files directly.
+Repeat until the command reports `enqueued_count` as zero.
