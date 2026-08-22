@@ -585,12 +585,30 @@ describe("server-only Python client response boundary", () => {
         season_days: [currentDay],
       },
     };
+    const tooManyEvents = {
+      ...full,
+      screen_ready: {
+        ...full.screen_ready,
+        current_day: {
+          ...currentDay,
+          offense_events: Array.from({ length: 9 }, (_, index) => ({
+            ...offenseEvents[0],
+            battle_id: `extra-attack-${index}`,
+          })),
+        },
+        recent_days: [],
+        season_days: [],
+      },
+    };
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(full), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(profileOnly), { status: 200 }))
       .mockResolvedValueOnce(
         new Response(JSON.stringify(malformedEvents), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(tooManyEvents), { status: 200 }),
       );
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
@@ -620,6 +638,10 @@ describe("server-only Python client response boundary", () => {
       currentDay: null,
       seasonDays: [],
       dataQuality: [{ code: "unavailable" }],
+    });
+    await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
+      status: 502,
+      payload: { error: "malformed" },
     });
     await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
       status: 502,

@@ -254,13 +254,44 @@ def leaderboard(limit, view):
 
 def day_for(tag):
     is_uncertain = tag in {"#2PP", "#2PY"}
+    offense_events = []
+    defense_events = []
+    if tag == "#2PP":
+        offense_events = [
+            {
+                "battle_id": "fixture-attack-1",
+                "battle_timestamp": "2026-08-05T16:30:00Z",
+                "opponent": {"tag": "#2P8", "name": "Ember"},
+                "destruction_percentage": 100,
+                "stars": 3,
+                "trophy_change": 40,
+            },
+            {
+                "battle_id": "fixture-attack-2",
+                "battle_timestamp": "2026-08-05T17:15:00Z",
+                "opponent": {"tag": "#2PY", "name": None},
+                "destruction_percentage": 49,
+                "stars": 1,
+                "trophy_change": 0,
+            },
+        ]
+        defense_events = [
+            {
+                "battle_id": "fixture-defense-1",
+                "battle_timestamp": "2026-08-05T17:45:00Z",
+                "opponent": {"tag": "#2PL", "name": "Mira"},
+                "destruction_percentage": 75,
+                "stars": 2,
+                "trophy_change": -21,
+            }
+        ]
     return {
         "ranked_day_start": "2026-08-05T05:00:00Z",
         "ranked_day_end": "2026-08-06T05:00:00Z",
         "official_season_id": "1783918800",
         "season_day_number": 24,
         "version": 1,
-        "state": "Partial" if is_uncertain else "Live",
+        "state": "Live",
         "coverage": "partial",
         "confidence": "uncertain" if is_uncertain else "partial",
         "attack_count": 7,
@@ -270,8 +301,8 @@ def day_for(tag):
         "defense_three_star_count": 2,
         "defense_loss": 13,
         "net_trophy_change": 18,
-        "offense_events": [],
-        "defense_events": [],
+        "offense_events": offense_events,
+        "defense_events": defense_events,
         "adjustments": [],
         "battles": [],
         "partial_reasons": [

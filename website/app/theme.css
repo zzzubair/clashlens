@@ -586,6 +586,101 @@ h3 {
   border-radius: 0;
 }
 
+.legend-days {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.legend-day {
+  min-width: 0;
+  border: 3px solid var(--cl-ink);
+  background: var(--cl-paper);
+}
+
+.legend-day summary {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, auto));
+  gap: 0.5rem 1rem;
+  align-items: baseline;
+  padding: 0.9rem;
+  cursor: pointer;
+  font-family: "Courier New", Courier, monospace;
+  font-weight: 800;
+}
+
+.legend-day summary::marker {
+  color: var(--cl-blue-dark);
+}
+
+.legend-day summary strong {
+  font-family: "Arial Black", Arial, Helvetica, sans-serif;
+}
+
+.legend-day[open] summary {
+  color: var(--cl-paper);
+  background: var(--cl-ink);
+}
+
+.battle-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.battle-column {
+  min-width: 0;
+}
+
+.battle-column h3 {
+  margin-top: 0;
+}
+
+.battle-slots {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.battle-slot {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(2, auto);
+  gap: 0.35rem 0.75rem;
+  min-width: 0;
+  min-height: 5.8rem;
+  padding: 0.7rem;
+  border: 2px solid var(--cl-ink);
+  background: var(--cl-panel);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.battle-opponent {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.7rem;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.battle-opponent strong,
+.battle-slot time {
+  overflow-wrap: anywhere;
+}
+
+.battle-slot time {
+  grid-column: 1 / -1;
+}
+
+.battle-slot-empty {
+  background: transparent;
+  border-style: dashed;
+}
+
 .refresh-status progress,
 .refresh-panel progress {
   accent-color: var(--cl-blue-dark);
@@ -631,6 +726,14 @@ h3 {
   }
 
   .provenance {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .battle-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .legend-day summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 

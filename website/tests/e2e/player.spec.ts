@@ -17,21 +17,65 @@ test("player page redirects to the uppercase canonical tag and shows player data
   await expect(page.getByRole("heading", { name: "Nova" })).toBeVisible();
   await expect(page.getByText("Current Legend day")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Offense" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Defense" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Defense", exact: true })).toBeVisible();
   await expect(page.getByText("Trophies", { exact: true })).toBeVisible();
   await expect(page.getByText("Last updated", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Legend season" })).toBeVisible();
-  await expect(page.getByRole("columnheader").allTextContents()).resolves.toEqual([
-    "Day",
-    "Offense",
-    "Defense",
-    "Trophy change",
-  ]);
   await expect(page.getByText("Saved profile data")).toHaveCount(0);
   await expect(page.getByText("Completeness and uncertainty")).toHaveCount(0);
   await expect(page.getByText("Data quality")).toHaveCount(0);
   await expect(page.getByText("Trust and provenance")).toHaveCount(0);
+});
+
+test("Legend day logs show populated and empty eight-slot columns", async ({ page }) => {
+  await page.goto("/players/%232PP");
+
+  const days = page.locator("details.legend-day");
+  await expect(days).toHaveCount(2);
+  await expect(days.nth(0)).toHaveAttribute("open", "");
+  await expect(days.nth(1)).not.toHaveAttribute("open", "");
+  await expect(days.nth(0).locator("summary")).toContainText(
+    "Day 24Live7 attacks6 defenses+18 trophies",
+  );
+  await expect(days.nth(1).locator("summary")).toContainText(
+    "Day 23Complete8 attacks8 defenses+22 trophies",
+  );
+
+  const attacks = days.nth(0).getByRole("region", { name: "Attacks" });
+  const defenses = days.nth(0).getByRole("region", { name: "Defenses" });
+  await expect(attacks.locator(".battle-slot")).toHaveCount(8);
+  await expect(defenses.locator(".battle-slot")).toHaveCount(8);
+  await expect(attacks.getByText("Ember", { exact: true })).toBeVisible();
+  await expect(attacks.getByText("#2P8", { exact: true })).toBeVisible();
+  await expect(attacks.locator(".battle-slot").nth(0)).toContainText(
+    "2026-08-05 16:30:00 UTC3 ★100%+40",
+  );
+  await expect(attacks.locator(".battle-slot").nth(1)).toContainText(
+    "#2PY#2PY2026-08-05 17:15:00 UTC1 ★49%0",
+  );
+  await expect(attacks.getByLabel("Empty attack slot 3", { exact: true })).toBeVisible();
+  await expect(
+    defenses.getByLabel("Empty defense slot 2", { exact: true }),
+  ).toBeVisible();
+
+  const desktopAttacks = await attacks.boundingBox();
+  const desktopDefenses = await defenses.boundingBox();
+  expect(desktopAttacks?.y).toBe(desktopDefenses?.y);
+  expect(desktopAttacks?.x ?? 0).toBeLessThan(desktopDefenses?.x ?? 0);
+
+  await page.setViewportSize({ width: 375, height: 800 });
+  const mobileAttacks = await attacks.boundingBox();
+  const mobileDefenses = await defenses.boundingBox();
+  expect(mobileAttacks?.y ?? 0).toBeLessThan(mobileDefenses?.y ?? 0);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(375);
+
+  const liveSummary = days.nth(0).locator("summary");
+  await liveSummary.focus();
+  await page.keyboard.press("Enter");
+  await expect(days.nth(0)).not.toHaveAttribute("open", "");
 });
 
 test("canonical redirects preserve refresh query state", async ({ page }) => {

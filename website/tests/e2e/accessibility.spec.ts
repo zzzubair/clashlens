@@ -62,7 +62,7 @@ test("public pages remain usable at a narrow viewport and 200 percent zoom", asy
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
   expect(
     await page
-      .locator(".table-wrap")
+      .locator(".legend-days")
       .evaluate((element) => element.scrollWidth > element.clientWidth),
   ).toBe(false);
 

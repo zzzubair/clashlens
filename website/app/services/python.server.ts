@@ -647,7 +647,9 @@ function mapPlayerPage(payload: unknown): PlayerPage {
       !value.uncertainty_reasons.every(isString) ||
       !(value.season_day_number === null || isInteger(value.season_day_number)) ||
       !Array.isArray(value.offense_events) ||
-      !Array.isArray(value.defense_events)
+      value.offense_events.length > 8 ||
+      !Array.isArray(value.defense_events) ||
+      value.defense_events.length > 8
     )
       throw new PythonApiError(502, { error: "malformed" });
     const valid = [
