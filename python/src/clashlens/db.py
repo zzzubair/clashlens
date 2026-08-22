@@ -21,10 +21,17 @@ from .analytics import (
     SNAPSHOT_ORDERING_RULE_VERSION,
     deterministic_tag_hash,
 )
+from .army_decoder import (
+    DECODER_VERSION,
+    DecodedArmy,
+    DecodeFailure,
+    decode_army_share_code,
+)
 from .battle import (
     SOURCE_PARSER_VERSION,
     ParsedBattleLog,
 )
+from .catalog import CATALOG_HASH, CATALOG_VERSION
 from .domain import (
     SEASON_ANCHOR_RULE_VERSION,
     DomainRuleError,
@@ -62,6 +69,8 @@ SUPPORTED_WORK_TYPES = (
     "reconcile_ranked_day",
     "build_snapshot",
     "build_analytics",
+    "build_army_analytics",
+    "redecode_army",
 )
 
 
@@ -131,7 +140,11 @@ def _supported_job_filter(alias: str) -> tuple[str, list[Any]]:
                         {alias}.work_type = 'build_analytics'
                         AND {analytics_input_shape}
                     )
-                )))
+                ))
+            OR ({alias}.work_type = ANY(%s::text[])
+                AND {alias}.processing_version = %s
+                AND {alias}.domain_rule_version = %s
+                AND {alias}.analytics_rule_version = %s))
         """,
         [
             list(SUPPORTED_WORK_TYPES[:2]),
@@ -143,6 +156,10 @@ def _supported_job_filter(alias: str) -> tuple[str, list[Any]]:
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
             ["build_snapshot", "build_analytics"],
+            PROCESSING_VERSION,
+            DOMAIN_RULE_VERSION,
+            ANALYTICS_RULE_VERSION,
+            ["build_army_analytics", "redecode_army"],
             PROCESSING_VERSION,
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
@@ -214,7 +231,11 @@ def _supported_claim_filter(
                         {alias}.work_type = 'build_analytics'
                         AND {analytics_input_shape}
                     )
-                )))
+                ))
+            OR ({alias}.work_type = ANY(%(army_work_types)s::text[])
+                AND {alias}.processing_version = %(processing_version)s
+                AND {alias}.domain_rule_version = %(domain_rule_version)s
+                AND {alias}.analytics_rule_version = %(analytics_rule_version)s))
         """,
         {
             "source_work_types": list(SUPPORTED_WORK_TYPES[:2]),
@@ -224,6 +245,7 @@ def _supported_claim_filter(
             "reconcile_work_types": ["reconcile_ranked_day"],
             "analytics_rule_version": ANALYTICS_RULE_VERSION,
             "build_work_types": ["build_snapshot", "build_analytics"],
+            "army_work_types": ["build_army_analytics", "redecode_army"],
         },
     )
 
@@ -282,7 +304,7 @@ def _claim_select_statement(
     # only generation 1, so it cannot interpret new v2 rows with its old
     # adapter during a staggered deployment. This image retains generation 1
     # for queued work and deterministic v1 replay.
-    job_filter = f"""job.claim_compatibility_version IN (1, 2)
+    job_filter = f"""job.claim_compatibility_version IN (1, 2, 3)
         AND job.attempt_count < job.max_attempts AND {supported_filter}"""
     if job_id is not None:
         probe = f"""
@@ -1476,6 +1498,7 @@ class Database:
                         for battle_id, state in current_disagreement_states.items()
                         if previous_disagreement_states.get(battle_id) != state
                     )
+                    self._upsert_army_decodes(connection, sorted(affected_battle_ids))
 
                 self._record_parsed_payload(
                     connection,
@@ -2818,6 +2841,8 @@ class Database:
                                  ELSE b.defender_player_id
                               END
                               AND source_row.outcome = 'valid_legend'
+                              AND e.army_share_code IS NOT NULL
+                              AND e.army_share_code <> ''
                               AND e.battle_timestamp >= %s
                               AND e.battle_timestamp < %s
                             ORDER BY b.id, p.source_observed_at DESC, e.id DESC
@@ -2829,12 +2854,17 @@ class Database:
                     quality = connection.execute(
                         """
                         SELECT
-                            count(*) FILTER (
-                                WHERE source_row.failure_category = 'missing_army_share_code'
-                            ),
+                            0,
                             count(*) FILTER (
                                 WHERE source_row.outcome = 'malformed_legend_row'
-                                  AND source_row.failure_category <> 'missing_army_share_code'
+                                   OR (
+                                      source_row.outcome = 'valid_legend'
+                                      AND (
+                                          NOT (source_row.source_json ? 'armyShareCode')
+                                          OR source_row.source_json ->> 'armyShareCode' IS NULL
+                                          OR source_row.source_json ->> 'armyShareCode' = ''
+                                      )
+                                   )
                             )
                         FROM battle_log_observations AS log
                         JOIN battle_source_rows AS source_row
@@ -2853,6 +2883,14 @@ class Database:
                                   AND source_row.source_json ->> 'attackOrDefense' = %s
                               )
                               OR source_row.outcome <> 'valid_legend'
+                              OR (
+                                  source_row.outcome = 'valid_legend'
+                                  AND (
+                                      NOT (source_row.source_json ? 'armyShareCode')
+                                      OR source_row.source_json ->> 'armyShareCode' IS NULL
+                                      OR source_row.source_json ->> 'armyShareCode' = ''
+                                  )
+                              )
                           )
                         """,
                         (
@@ -4366,8 +4404,8 @@ class Database:
             ),
         )
 
-    @staticmethod
     def _enqueue_ranked_day_dependents(
+        self,
         connection: Any,
         ranked_day_version_id: int,
         player_id: int,
@@ -4405,6 +4443,7 @@ class Database:
                 ANALYTICS_RULE_VERSION,
             ),
         )
+        self._enqueue_army_analytics(connection, ranked_day_start=ranked_day_start)
 
     @staticmethod
     def _observation_source(
@@ -4529,6 +4568,1033 @@ class Database:
             """,
             (battle_ids,),
         )
+
+    def _upsert_army_decodes(self, connection: Any, battle_ids: list[int]) -> None:
+        if not battle_ids:
+            return
+        exists = connection.execute(
+            "SELECT to_regclass('battle_army_decodes')"
+        ).fetchone()
+        if exists is None or exists[0] is None:
+            return
+        catalog = connection.execute(
+            "SELECT content_hash FROM unit_catalog_versions WHERE version = %s",
+            (CATALOG_VERSION,),
+        ).fetchone()
+        catalog_ready = catalog is not None and _text_value(catalog[0]) == CATALOG_HASH
+        rows = connection.execute(
+            """
+            SELECT b.id, p.evidence_id, e.army_share_code,
+                   source_row.source_json
+            FROM legend_battles AS b
+            JOIN battle_perspectives AS p ON p.battle_id = b.id AND p.perspective = 'attacker'
+            JOIN battle_evidence AS e ON e.id = p.evidence_id
+            JOIN battle_source_rows AS source_row ON source_row.id = e.source_row_id
+            WHERE b.id = ANY(%s::bigint[])
+            """,
+            (battle_ids,),
+        ).fetchall()
+        for battle_id, evidence_id, raw_code, source_json in rows:
+            source_code = (
+                source_json.get("armyShareCode")
+                if isinstance(source_json, dict)
+                else None
+            )
+            if source_code is not None and not isinstance(source_code, str):
+                decoded: DecodedArmy | DecodeFailure = DecodeFailure(
+                    None,
+                    "malformed",
+                    "armyShareCode must be text",
+                    DECODER_VERSION,
+                    CATALOG_VERSION,
+                    CATALOG_HASH,
+                )
+            elif catalog_ready:
+                decoded = decode_army_share_code(raw_code)
+            else:
+                decoded = DecodeFailure(
+                    raw_code,
+                    "catalog_version_unavailable",
+                    "pinned unit catalog is unavailable or has the wrong hash",
+                    DECODER_VERSION,
+                    CATALOG_VERSION,
+                    CATALOG_HASH,
+                )
+            is_decoded = isinstance(decoded, DecodedArmy)
+            if is_decoded:
+                existing = connection.execute(
+                    "SELECT id FROM exact_armies WHERE identity_hash = %s",
+                    (decoded.identity_hash,),
+                ).fetchone()
+                if existing is None:
+                    troop_quantities: dict[str, int] = {}
+                    for fact in decoded.home_troops:
+                        troop_quantities[fact.typed_id] = (
+                            troop_quantities.get(fact.typed_id, 0) + fact.quantity
+                        )
+                    spell_quantities: dict[str, int] = {}
+                    for fact in decoded.spells:
+                        spell_quantities[fact.typed_id] = (
+                            spell_quantities.get(fact.typed_id, 0) + fact.quantity
+                        )
+                    inserted = connection.execute(
+                        """
+                        INSERT INTO exact_armies (identity_hash, decoder_version, catalog_version, catalog_hash, home_troops, spells, heroes)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (identity_hash) DO UPDATE SET identity_hash = EXCLUDED.identity_hash
+                        RETURNING id
+                        """,
+                        (
+                            decoded.identity_hash,
+                            decoded.decoder_version,
+                            decoded.catalog_version,
+                            decoded.catalog_hash,
+                            Jsonb(sorted(troop_quantities.items())),
+                            Jsonb(sorted(spell_quantities.items())),
+                            Jsonb(
+                                [
+                                    {
+                                        "hero": h.hero_typed_id,
+                                        "pet": h.pet_typed_id,
+                                        "equipment": list(h.equipment_typed_ids),
+                                    }
+                                    for h in decoded.heroes
+                                ]
+                            ),
+                        ),
+                    ).fetchone()
+                    assert inserted is not None
+                    exact_army_id = int(inserted[0])
+                else:
+                    exact_army_id = int(existing[0])
+                active = connection.execute(
+                    "SELECT id, evidence_id, raw_code, identity_hash FROM battle_army_decodes WHERE battle_id = %s AND decoder_version = %s AND catalog_version = %s AND is_active = true",
+                    (battle_id, decoded.decoder_version, decoded.catalog_version),
+                ).fetchone()
+                raw_cmp_equal = False
+                if active is not None:
+                    active_raw = active[2]
+                    if (active_raw is None and raw_code is None) or (
+                        active_raw is not None
+                        and raw_code is not None
+                        and _text_value(active_raw) == _text_value(raw_code)
+                    ):
+                        raw_cmp_equal = True
+                    if (
+                        int(active[1]) == int(evidence_id)
+                        and raw_cmp_equal
+                        and _text_value(active[3]) == decoded.identity_hash
+                    ):
+                        continue
+                    connection.execute(
+                        "UPDATE battle_army_decodes SET is_active = false WHERE id = %s",
+                        (active[0],),
+                    )
+                    supersedes = int(active[0])
+                else:
+                    supersedes = None
+                connection.execute(
+                    """
+                    INSERT INTO battle_army_decodes (battle_id, evidence_id, raw_code, decoder_version, catalog_version, catalog_hash, status, exact_army_id, identity_hash, home_troops, spells, home_spells, cc_spells, siege, cc_troops, heroes, raw_m, is_active, supersedes_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, 'decoded', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true, %s)
+                    """,
+                    (
+                        battle_id,
+                        evidence_id,
+                        raw_code,
+                        decoded.decoder_version,
+                        decoded.catalog_version,
+                        decoded.catalog_hash,
+                        exact_army_id,
+                        decoded.identity_hash,
+                        Jsonb(
+                            [
+                                (f.typed_id, f.quantity, f.origin)
+                                for f in decoded.home_troops
+                            ]
+                        ),
+                        Jsonb(
+                            [(f.typed_id, f.quantity, f.origin) for f in decoded.spells]
+                        ),
+                        Jsonb(
+                            [
+                                (f.typed_id, f.quantity, f.origin)
+                                for f in decoded.home_spells_raw
+                            ]
+                        ),
+                        Jsonb(
+                            [
+                                (f.typed_id, f.quantity, f.origin)
+                                for f in decoded.cc_spells_raw
+                            ]
+                        ),
+                        Jsonb(
+                            [(f.typed_id, f.quantity, f.origin) for f in decoded.siege]
+                        ),
+                        Jsonb(
+                            [
+                                (f.typed_id, f.quantity, f.origin)
+                                for f in decoded.cc_troops
+                            ]
+                        ),
+                        Jsonb(
+                            [
+                                {
+                                    "hero": h.hero_typed_id,
+                                    "pet": h.pet_typed_id,
+                                    "equipment": list(h.equipment_typed_ids),
+                                    "raw_m": h.raw_m,
+                                }
+                                for h in decoded.heroes
+                            ]
+                        ),
+                        Jsonb([h.raw_m for h in decoded.heroes if h.raw_m]),
+                        supersedes,
+                    ),
+                )
+            else:
+                failure: DecodeFailure = decoded  # type: ignore[assignment]
+                active = connection.execute(
+                    "SELECT id, evidence_id, raw_code, failure_category FROM battle_army_decodes WHERE battle_id = %s AND decoder_version = %s AND catalog_version = %s AND is_active = true",
+                    (battle_id, failure.decoder_version, failure.catalog_version),
+                ).fetchone()
+                raw_cmp_equal = False
+                if active is not None:
+                    active_raw = active[2]
+                    if (active_raw is None and raw_code is None) or (
+                        active_raw is not None
+                        and raw_code is not None
+                        and _text_value(active_raw) == _text_value(raw_code)
+                    ):
+                        raw_cmp_equal = True
+                if (
+                    active is not None
+                    and int(active[1]) == int(evidence_id)
+                    and raw_cmp_equal
+                    and _text_value(active[3]) == failure.category
+                ):
+                    continue
+                if active is not None:
+                    connection.execute(
+                        "UPDATE battle_army_decodes SET is_active = false WHERE id = %s",
+                        (active[0],),
+                    )
+                    supersedes = int(active[0])
+                else:
+                    supersedes = None
+                connection.execute(
+                    """
+                    INSERT INTO battle_army_decodes (battle_id, evidence_id, raw_code, decoder_version, catalog_version, catalog_hash, status, failure_category, failure_detail, is_active, supersedes_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, 'failed', %s, %s, true, %s)
+                    """,
+                    (
+                        battle_id,
+                        evidence_id,
+                        raw_code,
+                        failure.decoder_version,
+                        failure.catalog_version,
+                        failure.catalog_hash,
+                        failure.category,
+                        failure.detail,
+                        supersedes,
+                    ),
+                )
+        day_rows = connection.execute(
+            "SELECT DISTINCT ranked_day_start FROM legend_battles WHERE id = ANY(%s::bigint[])",
+            (battle_ids,),
+        ).fetchall()
+        for (day_start,) in day_rows:
+            self._enqueue_army_analytics(connection, ranked_day_start=day_start)
+
+    def _enqueue_army_analytics(
+        self, connection: Any, *, ranked_day_start: datetime
+    ) -> None:
+        ranked_day_start = ranked_day_start.astimezone(UTC)
+        completed = connection.execute(
+            """
+            SELECT id, official_season_id
+            FROM ranked_day_versions
+            WHERE ranked_day_start = %s
+              AND state = 'Complete'
+              AND coverage_complete
+            ORDER BY version DESC
+            LIMIT 1
+            """,
+            (ranked_day_start,),
+        ).fetchone()
+        if completed is None:
+            return
+        ranked_day_version_id = int(completed[0])
+        season_id = _text_value(completed[1])
+        latest_decode = connection.execute(
+            """
+            SELECT COALESCE(max(decode.id), 0)
+            FROM legend_battles AS battle
+            LEFT JOIN battle_army_decodes AS decode
+              ON decode.battle_id = battle.id
+             AND decode.is_active
+             AND decode.decoder_version = %s
+             AND decode.catalog_version = %s
+            WHERE battle.ranked_day_start = %s
+            """,
+            (DECODER_VERSION, CATALOG_VERSION, ranked_day_start),
+        ).fetchone()
+        decode_generation = int(latest_decode[0]) if latest_decode else 0
+        day_text = ranked_day_start.strftime("%Y-%m-%dT%H:%M:%SZ")
+        generation = f"{ranked_day_version_id}:{decode_generation}"
+        jobs = (
+            (
+                f"build_army_analytics:day:{day_text}:{generation}:{ANALYTICS_RULE_VERSION}:{DECODER_VERSION}:{CATALOG_VERSION}",
+                {"ranked_day_start": day_text},
+            ),
+            (
+                f"build_army_analytics:season:{season_id}:{generation}:{ANALYTICS_RULE_VERSION}:{DECODER_VERSION}:{CATALOG_VERSION}",
+                {"official_season_id": season_id},
+            ),
+        )
+        for deduplication_key, input_json in jobs:
+            connection.execute(
+                """
+                INSERT INTO python_processing_jobs_worker (
+                    work_type, deduplication_key, input_json,
+                    processing_version, domain_rule_version,
+                    analytics_rule_version, due_at
+                ) VALUES (
+                    'build_army_analytics', %s, %s, %s, %s, %s,
+                    clock_timestamp()
+                )
+                ON CONFLICT (deduplication_key) DO NOTHING
+                """,
+                (
+                    deduplication_key,
+                    Jsonb(input_json),
+                    PROCESSING_VERSION,
+                    DOMAIN_RULE_VERSION,
+                    ANALYTICS_RULE_VERSION,
+                ),
+            )
+
+    def complete_army_analytics(self, claim: Claim) -> None:
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                job = self._lock_live_claim(connection, claim)
+                ranked_day_str = claim.input_json.get("ranked_day_start")
+                season_id = claim.input_json.get("official_season_id")
+                if ranked_day_str is None and season_id is None:
+                    raise ValueError(
+                        "army analytics requires ranked_day_start or official_season_id"
+                    )
+                if ranked_day_str is not None:
+                    self._build_army_day(connection, claim, str(ranked_day_str))
+                if season_id is not None:
+                    self._build_army_season(connection, claim, str(season_id))
+                self._finish_claim(
+                    connection, claim, job, state="complete", outcome="processed"
+                )
+
+    def _build_army_day(
+        self, connection: Any, claim: Claim, ranked_day_str: str
+    ) -> None:
+        from collections import defaultdict
+
+        ranked_day_start = datetime.fromisoformat(str(ranked_day_str))
+        if ranked_day_start.tzinfo is None:
+            ranked_day_start = ranked_day_start.replace(tzinfo=UTC)
+        ranked_day_start = ranked_day_start.astimezone(UTC)
+        ranked_day_end = ranked_day_start + timedelta(days=1)
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (
+                f"army-day:{ranked_day_start.isoformat()}:{claim.analytics_rule_version}:{CATALOG_VERSION}:{DECODER_VERSION}",
+            ),
+        )
+        now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+        if ranked_day_start >= now or ranked_day_end > now:
+            raise ValueError(
+                "dependency_not_ready: army analytics day is not completed"
+            )
+        # coverage gate: must have at least one Complete version or no pending collection
+        completed = connection.execute(
+            """
+            SELECT official_season_id
+            FROM ranked_day_versions
+            WHERE ranked_day_start = %s
+              AND state = 'Complete'
+              AND coverage_complete
+            ORDER BY version DESC
+            LIMIT 1
+            """,
+            (ranked_day_start,),
+        ).fetchone()
+        if completed is None:
+            raise ValueError("dependency_not_ready: ranked day is not complete")
+        official_season_id = _text_value(completed[0])
+
+        rows = connection.execute(
+            """
+            SELECT b.id, bad.id, be.stars, be.destruction_percentage,
+                   bad.status, bad.failure_category, bad.home_troops,
+                   bad.spells, bad.heroes, bad.siege, bad.cc_troops,
+                   bad.home_spells, bad.cc_spells, rdv.start_trophies
+            FROM legend_battles b
+            JOIN battle_perspectives p ON p.battle_id=b.id AND p.perspective='attacker'
+            JOIN battle_evidence be ON be.id=p.evidence_id
+            LEFT JOIN battle_army_decodes bad ON bad.battle_id=b.id AND bad.is_active AND bad.decoder_version=%s AND bad.catalog_version=%s
+            LEFT JOIN LATERAL (
+                SELECT start_trophies
+                FROM ranked_day_versions
+                WHERE player_id = b.attacker_player_id
+                  AND ranked_day_start = b.ranked_day_start
+                  AND state = 'Complete'
+                  AND coverage_complete
+                ORDER BY version DESC
+                LIMIT 1
+            ) rdv ON true
+            WHERE b.ranked_day_start=%s
+            """,
+            (DECODER_VERSION, CATALOG_VERSION, ranked_day_start),
+        ).fetchall()
+
+        all_battles: list[dict[str, Any]] = []
+        cohorts: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        overall_decoded: list[dict[str, Any]] = []
+
+        for r in rows:
+            (
+                bid,
+                decode_id,
+                stars,
+                destr,
+                status,
+                fail_cat,
+                home_troops,
+                spells,
+                heroes,
+                siege,
+                cc_troops,
+                home_spells,
+                cc_spells,
+                start_trophies,
+            ) = r
+            rec: dict[str, Any] = {
+                "battle_id": int(bid),
+                "decode_id": int(decode_id) if decode_id is not None else None,
+                "stars": int(stars) if stars is not None else 0,
+                "destruction": int(destr) if destr is not None else 0,
+                "status": _text_value(status) if status else None,
+                "failure": _text_value(fail_cat) if fail_cat else None,
+                "home_troops": home_troops
+                if isinstance(home_troops, list)
+                else (
+                    json.loads(home_troops)
+                    if isinstance(home_troops, str)
+                    else home_troops or []
+                ),
+                "spells": spells
+                if isinstance(spells, list)
+                else (json.loads(spells) if isinstance(spells, str) else spells or []),
+                "heroes": heroes
+                if isinstance(heroes, list)
+                else (json.loads(heroes) if isinstance(heroes, str) else heroes or []),
+                "siege": siege
+                if isinstance(siege, list)
+                else (json.loads(siege) if isinstance(siege, str) else siege or []),
+                "cc_troops": cc_troops
+                if isinstance(cc_troops, list)
+                else (
+                    json.loads(cc_troops)
+                    if isinstance(cc_troops, str)
+                    else cc_troops or []
+                ),
+                "home_spells": home_spells
+                if isinstance(home_spells, list)
+                else (
+                    json.loads(home_spells)
+                    if isinstance(home_spells, str)
+                    else home_spells or []
+                ),
+                "cc_spells": cc_spells
+                if isinstance(cc_spells, list)
+                else (
+                    json.loads(cc_spells)
+                    if isinstance(cc_spells, str)
+                    else cc_spells or []
+                ),
+                "trophies": int(start_trophies) if start_trophies is not None else None,
+            }
+            all_battles.append(rec)
+            if rec["status"] == "decoded":
+                overall_decoded.append(rec)
+                if rec["trophies"] is not None:
+                    cohorts[int(rec["trophies"])].append(rec)
+
+        n_overall = len(overall_decoded)
+        input_payload = {
+            "ranked_day_start": ranked_day_start.isoformat(),
+            "official_season_id": official_season_id,
+            "decoder_version": DECODER_VERSION,
+            "catalog_version": CATALOG_VERSION,
+            "analytics_rule_version": claim.analytics_rule_version,
+            "battles": sorted(all_battles, key=lambda battle: battle["battle_id"]),
+        }
+        input_hash = hashlib.sha256(
+            json.dumps(input_payload, sort_keys=True).encode()
+        ).hexdigest()
+
+        # helper to upsert summary with version preservation
+        def upsert_summary(
+            exact_trophies: int,
+            battles_in_scope: list[dict[str, Any]],
+            decoded_in_scope: list[dict[str, Any]],
+        ) -> int:
+            scope_total = len(battles_in_scope)
+            scope_n = len(decoded_in_scope)
+            scope_excluded = scope_total - scope_n
+            # breakdown for excluded in this scope
+            scope_failures: dict[str, int] = defaultdict(int)
+            for b in battles_in_scope:
+                if b["status"] != "decoded":
+                    scope_failures[b["failure"] or "unknown"] += 1
+            result_payload = {
+                "trophies": exact_trophies,
+                "battles": sorted(
+                    battles_in_scope, key=lambda battle: battle["battle_id"]
+                ),
+                "failures": dict(scope_failures),
+            }
+            result_hash = hashlib.sha256(
+                json.dumps(result_payload, sort_keys=True).encode()
+            ).hexdigest()
+            existing = connection.execute(
+                "SELECT id, version, result_hash FROM army_analytics_day_summaries WHERE ranked_day_start=%s AND exact_trophies=%s AND decoder_version=%s AND catalog_version=%s AND analytics_rule_version=%s AND is_published=true",
+                (
+                    ranked_day_start,
+                    exact_trophies,
+                    DECODER_VERSION,
+                    CATALOG_VERSION,
+                    claim.analytics_rule_version,
+                ),
+            ).fetchone()
+            if existing is not None and _text_value(existing[2]) == result_hash:
+                return int(existing[0])
+            # supersede old
+            if existing is not None:
+                connection.execute(
+                    "UPDATE army_analytics_day_summaries SET is_published=false WHERE id=%s",
+                    (existing[0],),
+                )
+                new_version = int(existing[1]) + 1
+                supersedes = int(existing[0])
+            else:
+                new_version = 1
+                supersedes = None
+            # keep history: old breakdowns remain; they are not deleted
+            summary_id = connection.execute(
+                """
+                INSERT INTO army_analytics_day_summaries (ranked_day_start, official_season_id, exact_trophies, total_attacks, sample_size, excluded_attacks, excluded_breakdown, decoder_version, catalog_version, catalog_hash, analytics_rule_version, result_hash, input_hash, version, is_published, supersedes_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true,%s) RETURNING id
+                """,
+                (
+                    ranked_day_start,
+                    official_season_id,
+                    exact_trophies,
+                    scope_total,
+                    scope_n,
+                    scope_excluded,
+                    Jsonb(dict(scope_failures)),
+                    DECODER_VERSION,
+                    CATALOG_VERSION,
+                    CATALOG_HASH,
+                    claim.analytics_rule_version,
+                    result_hash,
+                    input_hash,
+                    new_version,
+                    supersedes,
+                ),
+            ).fetchone()[0]
+            return int(summary_id)
+
+        # Overall summary sentinel -1
+        overall_id = upsert_summary(-1, all_battles, overall_decoded)
+        self._insert_army_breakdowns(
+            connection,
+            summary_kind="day",
+            summary_id=overall_id,
+            battles=overall_decoded,
+            n=n_overall,
+        )
+
+        # per-trophy cohorts (only known trophies)
+        for trophies in list(cohorts.keys()):
+            all_for_trophy = [b for b in all_battles if b["trophies"] == trophies]
+            decoded_for_trophy = [b for b in all_for_trophy if b["status"] == "decoded"]
+            cid = upsert_summary(trophies, all_for_trophy, decoded_for_trophy)
+            self._insert_army_breakdowns(
+                connection,
+                summary_kind="day",
+                summary_id=cid,
+                battles=decoded_for_trophy,
+                n=len(decoded_for_trophy),
+            )
+
+    def _build_army_season(self, connection: Any, claim: Claim, season_id: str) -> None:
+        from collections import defaultdict
+
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (
+                f"army-season:{season_id}:{claim.analytics_rule_version}:{CATALOG_VERSION}:{DECODER_VERSION}",
+            ),
+        )
+        # only completed days
+        day_rows = connection.execute(
+            "SELECT DISTINCT ranked_day_start FROM ranked_day_versions WHERE official_season_id=%s AND state='Complete' AND coverage_complete=true ORDER BY ranked_day_start",
+            (season_id,),
+        ).fetchall()
+        if not day_rows:
+            season_start_row = connection.execute(
+                "SELECT current_start FROM legend_season_anchors WHERE current_league_season_id=%s",
+                (season_id,),
+            ).fetchone()
+            if season_start_row and season_start_row[0]:
+                season_start = season_start_row[0]
+                day_rows = connection.execute(
+                    """
+                    SELECT DISTINCT ranked_day_start
+                    FROM ranked_day_versions
+                    WHERE ranked_day_start >= %s
+                      AND ranked_day_start < %s + interval '28 days'
+                      AND state = 'Complete'
+                      AND coverage_complete
+                    ORDER BY ranked_day_start
+                    """,
+                    (season_start, season_start),
+                ).fetchall()
+        now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+        for (d,) in day_rows:
+            if d + timedelta(days=1) > now:
+                raise ValueError(
+                    "dependency_not_ready: army season not completed active day"
+                )
+        if not day_rows:
+            # no completed days, nothing to publish
+            return
+        # fetch battles for those completed days only
+        rows = connection.execute(
+            """
+            SELECT b.id, bad.id, be.stars, be.destruction_percentage,
+                   bad.status, bad.failure_category, bad.home_troops,
+                   bad.spells, bad.heroes, bad.siege, bad.cc_troops,
+                   bad.home_spells, bad.cc_spells, rdv.start_trophies
+            FROM legend_battles b
+            JOIN battle_perspectives p ON p.battle_id=b.id AND p.perspective='attacker'
+            JOIN battle_evidence be ON be.id=p.evidence_id
+            LEFT JOIN battle_army_decodes bad ON bad.battle_id=b.id AND bad.is_active AND bad.decoder_version=%s AND bad.catalog_version=%s
+            LEFT JOIN LATERAL (
+                SELECT start_trophies
+                FROM ranked_day_versions
+                WHERE player_id = b.attacker_player_id
+                  AND ranked_day_start = b.ranked_day_start
+                  AND state = 'Complete'
+                  AND coverage_complete
+                ORDER BY version DESC
+                LIMIT 1
+            ) rdv ON true
+            WHERE b.ranked_day_start = ANY(%s::timestamptz[])
+            """,
+            (DECODER_VERSION, CATALOG_VERSION, [r[0] for r in day_rows]),
+        ).fetchall()
+
+        all_battles: list[dict[str, Any]] = []
+        cohorts: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        overall_decoded: list[dict[str, Any]] = []
+        for r in rows:
+            (
+                bid,
+                decode_id,
+                stars,
+                destr,
+                status,
+                fail_cat,
+                home_troops,
+                spells,
+                heroes,
+                siege,
+                cc_troops,
+                home_spells,
+                cc_spells,
+                start_trophies,
+            ) = r
+            rec: dict[str, Any] = {
+                "battle_id": int(bid),
+                "decode_id": int(decode_id) if decode_id is not None else None,
+                "stars": int(stars) if stars is not None else 0,
+                "destruction": int(destr) if destr is not None else 0,
+                "status": _text_value(status) if status else None,
+                "failure": _text_value(fail_cat) if fail_cat else None,
+                "home_troops": home_troops
+                if isinstance(home_troops, list)
+                else (
+                    json.loads(home_troops)
+                    if isinstance(home_troops, str)
+                    else home_troops or []
+                ),
+                "spells": spells
+                if isinstance(spells, list)
+                else (json.loads(spells) if isinstance(spells, str) else spells or []),
+                "heroes": heroes
+                if isinstance(heroes, list)
+                else (json.loads(heroes) if isinstance(heroes, str) else heroes or []),
+                "siege": siege
+                if isinstance(siege, list)
+                else (json.loads(siege) if isinstance(siege, str) else siege or []),
+                "cc_troops": cc_troops
+                if isinstance(cc_troops, list)
+                else (
+                    json.loads(cc_troops)
+                    if isinstance(cc_troops, str)
+                    else cc_troops or []
+                ),
+                "home_spells": home_spells
+                if isinstance(home_spells, list)
+                else (
+                    json.loads(home_spells)
+                    if isinstance(home_spells, str)
+                    else home_spells or []
+                ),
+                "cc_spells": cc_spells
+                if isinstance(cc_spells, list)
+                else (
+                    json.loads(cc_spells)
+                    if isinstance(cc_spells, str)
+                    else cc_spells or []
+                ),
+                "trophies": int(start_trophies) if start_trophies is not None else None,
+            }
+            all_battles.append(rec)
+            if rec["status"] == "decoded":
+                overall_decoded.append(rec)
+                if rec["trophies"] is not None:
+                    cohorts[int(rec["trophies"])].append(rec)
+
+        def upsert_season_summary(
+            exact_trophies: int,
+            battles_in_scope: list[dict[str, Any]],
+            decoded_in_scope: list[dict[str, Any]],
+        ) -> int:
+            scope_total = len(battles_in_scope)
+            scope_n = len(decoded_in_scope)
+            scope_failures: dict[str, int] = defaultdict(int)
+            for b in battles_in_scope:
+                if b["status"] != "decoded":
+                    scope_failures[b["failure"] or "unknown"] += 1
+            result_payload = {
+                "trophies": exact_trophies,
+                "battles": sorted(
+                    battles_in_scope, key=lambda battle: battle["battle_id"]
+                ),
+                "failures": dict(scope_failures),
+            }
+            result_hash = hashlib.sha256(
+                json.dumps(result_payload, sort_keys=True).encode()
+            ).hexdigest()
+            input_payload = {
+                "season": season_id,
+                "trophies": exact_trophies,
+                "decoder": DECODER_VERSION,
+                "catalog": CATALOG_VERSION,
+                "battles": sorted(
+                    battles_in_scope, key=lambda battle: battle["battle_id"]
+                ),
+            }
+            input_hash = hashlib.sha256(
+                json.dumps(input_payload, sort_keys=True).encode()
+            ).hexdigest()
+            existing = connection.execute(
+                "SELECT id, version, result_hash FROM army_analytics_season_summaries WHERE official_season_id=%s AND exact_trophies=%s AND decoder_version=%s AND catalog_version=%s AND analytics_rule_version=%s AND is_published=true",
+                (
+                    season_id,
+                    exact_trophies,
+                    DECODER_VERSION,
+                    CATALOG_VERSION,
+                    claim.analytics_rule_version,
+                ),
+            ).fetchone()
+            if existing is not None and _text_value(existing[2]) == result_hash:
+                return int(existing[0])
+            if existing is not None:
+                connection.execute(
+                    "UPDATE army_analytics_season_summaries SET is_published=false WHERE id=%s",
+                    (existing[0],),
+                )
+                new_version = int(existing[1]) + 1
+                supersedes = int(existing[0])
+            else:
+                new_version = 1
+                supersedes = None
+            summary_id = connection.execute(
+                """
+                INSERT INTO army_analytics_season_summaries (official_season_id, exact_trophies, total_attacks, sample_size, excluded_attacks, excluded_breakdown, decoder_version, catalog_version, catalog_hash, analytics_rule_version, result_hash, input_hash, version, is_published, supersedes_id)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true,%s) RETURNING id
+                """,
+                (
+                    season_id,
+                    exact_trophies,
+                    scope_total,
+                    scope_n,
+                    scope_total - scope_n,
+                    Jsonb(dict(scope_failures)),
+                    DECODER_VERSION,
+                    CATALOG_VERSION,
+                    CATALOG_HASH,
+                    claim.analytics_rule_version,
+                    result_hash,
+                    input_hash,
+                    new_version,
+                    supersedes,
+                ),
+            ).fetchone()[0]
+            return int(summary_id)
+
+        overall_id = upsert_season_summary(-1, all_battles, overall_decoded)
+        self._insert_army_breakdowns(
+            connection,
+            summary_kind="season",
+            summary_id=overall_id,
+            battles=overall_decoded,
+            n=len(overall_decoded),
+        )
+        for trophies in list(cohorts.keys()):
+            all_for_trophy = [b for b in all_battles if b["trophies"] == trophies]
+            decoded_for_trophy = [b for b in all_for_trophy if b["status"] == "decoded"]
+            sid = upsert_season_summary(trophies, all_for_trophy, decoded_for_trophy)
+            self._insert_army_breakdowns(
+                connection,
+                summary_kind="season",
+                summary_id=sid,
+                battles=decoded_for_trophy,
+                n=len(decoded_for_trophy),
+            )
+
+    def _insert_army_breakdowns(
+        self,
+        connection: Any,
+        *,
+        summary_kind: str,
+        summary_id: int,
+        battles: list[dict[str, Any]],
+        n: int,
+    ) -> None:
+        from collections import Counter, defaultdict
+
+        if n == 0:
+            return
+        # clear previous breakdowns for this summary (if reusing same summary id via upsert with same hash we already returned, so this is new summary)
+        # For new summary we have no breakdowns yet; but if we superseded, old breakdowns remain with old summary
+        # Ensure we delete any stray breakdowns for this summary id (idempotent)
+        connection.execute(
+            "DELETE FROM army_analytics_breakdowns WHERE summary_kind=%s AND summary_id=%s",
+            (summary_kind, summary_id),
+        )
+
+        def star_stats(
+            matching: list[dict[str, Any]],
+        ) -> tuple[dict[str, int], dict[str, float], float | None, float | None]:
+            cnt = Counter()
+            total_dest = 0
+            three = 0
+            for b in matching:
+                cnt[int(b["stars"])] += 1
+                total_dest += int(b["destruction"])
+                if int(b["stars"]) == 3:
+                    three += 1
+            star_counts = {str(k): cnt.get(k, 0) for k in range(4)}
+            star_rates = {
+                str(k): (cnt.get(k, 0) / len(matching) if matching else 0)
+                for k in range(4)
+            }
+            avg_dest = (total_dest / len(matching)) if matching else None
+            hit_rate = (three / len(matching)) if matching else None
+            return star_counts, star_rates, avg_dest, hit_rate
+
+        troop_to_battles: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        spell_to_battles: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        hero_to_battles: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        pet_to_battles: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        equip_to_battles: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        equip_for_hero: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        siege_to_battles: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        cc_troop_to_battles: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        hero_pet: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        hero_equip: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        cc_composition: dict[str, list[dict[str, Any]]] = defaultdict(list)
+
+        for b in battles:
+            seen_troops: set[str] = set()
+            for t in b["home_troops"] or []:
+                if isinstance(t, (list, tuple)) and len(t) >= 1:
+                    tid = str(t[0])
+                elif isinstance(t, dict):
+                    tid = str(t.get("typed_id") or t.get(0))
+                else:
+                    continue
+                if tid not in seen_troops:
+                    troop_to_battles[tid].append(b)
+                    seen_troops.add(tid)
+            seen_spells: set[str] = set()
+            for s in b["spells"] or []:
+                if isinstance(s, (list, tuple)) and len(s) >= 1:
+                    tid = str(s[0])
+                elif isinstance(s, dict):
+                    tid = str(s.get("typed_id"))
+                else:
+                    continue
+                if tid not in seen_spells:
+                    spell_to_battles[tid].append(b)
+                    seen_spells.add(tid)
+            for h in b["heroes"] or []:
+                if isinstance(h, dict):
+                    hid = str(h.get("hero") or h.get("hero_typed_id") or "")
+                    if not hid:
+                        continue
+                    pet = h.get("pet")
+                    equips = h.get("equipment") or []
+                else:
+                    continue
+                hero_to_battles[hid].append(b)
+                if pet:
+                    pet_to_battles[str(pet)].append(b)
+                    hero_pet[f"{hid}+{pet}"].append(b)
+                for eq in equips or []:
+                    equip_to_battles[str(eq)].append(b)
+                    equip_for_hero[(hid, str(eq))].append(b)
+                if isinstance(equips, list) and len(equips) == 2:
+                    key = f"{hid}+{','.join(sorted([str(x) for x in equips]))}"
+                    hero_equip[key].append(b)
+            for s in b["siege"] or []:
+                if isinstance(s, (list, tuple)) and len(s) >= 1:
+                    tid = str(s[0])
+                elif isinstance(s, dict):
+                    tid = str(s.get("typed_id"))
+                else:
+                    continue
+                siege_to_battles[tid].append(b)
+            seen_cc: set[str] = set()
+            for ct in b["cc_troops"] or []:
+                if isinstance(ct, (list, tuple)) and len(ct) >= 1:
+                    tid = str(ct[0])
+                elif isinstance(ct, dict):
+                    tid = str(ct.get("typed_id"))
+                else:
+                    continue
+                if tid not in seen_cc:
+                    cc_troop_to_battles[tid].append(b)
+                    seen_cc.add(tid)
+            comp_list: list[tuple[str, int]] = []
+            for ct in b["cc_troops"] or []:
+                if isinstance(ct, (list, tuple)) and len(ct) >= 2:
+                    try:
+                        comp_list.append((str(ct[0]), int(ct[1])))
+                    except (ValueError, TypeError):
+                        continue
+                elif isinstance(ct, dict):
+                    try:
+                        comp_list.append(
+                            (str(ct.get("typed_id")), int(ct.get("quantity") or 1))
+                        )
+                    except (ValueError, TypeError):
+                        continue
+            comp_sorted = tuple(sorted(comp_list))
+            if comp_sorted:
+                key = json.dumps(comp_sorted, separators=(",", ":"))
+                cc_composition[key].append(b)
+
+        def insert(
+            category: str,
+            typed_id: str | None,
+            hero_typed_id: str | None,
+            combination_key: str | None,
+            matching: list[dict[str, Any]],
+        ) -> None:
+            usage = len(matching)
+            if category == "equipment_for_hero" and hero_typed_id:
+                hero_cnt = len(hero_to_battles.get(hero_typed_id, []))
+                usage_rate = (usage / hero_cnt) if hero_cnt else None
+            else:
+                usage_rate = (usage / n) if n else None
+            star_counts, star_rates, avg_dest, hit_rate = star_stats(matching)
+            connection.execute(
+                """
+                INSERT INTO army_analytics_breakdowns (summary_kind, summary_id, category, typed_id, hero_typed_id, combination_key, usage_count, usage_rate, star_counts, star_rates, avg_destruction, hit_rate, evidence)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'{}'::jsonb)
+                ON CONFLICT (summary_kind, summary_id, category, COALESCE(typed_id,''), COALESCE(hero_typed_id,''), COALESCE(combination_key,'')) DO UPDATE SET usage_count=EXCLUDED.usage_count, usage_rate=EXCLUDED.usage_rate, star_counts=EXCLUDED.star_counts, star_rates=EXCLUDED.star_rates, avg_destruction=EXCLUDED.avg_destruction, hit_rate=EXCLUDED.hit_rate
+                """,
+                (
+                    summary_kind,
+                    summary_id,
+                    category,
+                    typed_id,
+                    hero_typed_id,
+                    combination_key,
+                    usage,
+                    usage_rate,
+                    Jsonb(star_counts),
+                    Jsonb(star_rates),
+                    avg_dest,
+                    hit_rate,
+                ),
+            )
+
+        for tid, lst in troop_to_battles.items():
+            insert("home_troop", tid, None, None, lst)
+        for tid, lst in spell_to_battles.items():
+            insert("spell", tid, None, None, lst)
+        for tid, lst in hero_to_battles.items():
+            insert("hero", tid, None, None, lst)
+        for tid, lst in pet_to_battles.items():
+            insert("pet", tid, None, None, lst)
+        for tid, lst in equip_to_battles.items():
+            insert("equipment", tid, None, None, lst)
+        for (hero, eq), lst in equip_for_hero.items():
+            insert("equipment_for_hero", eq, hero, None, lst)
+        for tid, lst in siege_to_battles.items():
+            insert("siege", tid, None, None, lst)
+        for tid, lst in cc_troop_to_battles.items():
+            insert("cc_troop", tid, None, None, lst)
+        for key, lst in hero_pet.items():
+            insert("hero_pet", None, None, key, lst)
+        for key, lst in hero_equip.items():
+            insert("hero_equipment", None, None, key, lst)
+        for key, lst in cc_composition.items():
+            insert("cc_composition", None, None, key, lst)
+
+    def complete_army_redecode(self, claim: Claim) -> None:
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                job = self._lock_live_claim(connection, claim)
+                connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"army-redecode:{claim.job_id}",),
+                )
+                battle_ids: list[int] = []
+                bid = claim.input_json.get("battle_id")
+                if bid is not None:
+                    battle_ids.append(int(bid))
+                bids = claim.input_json.get("battle_ids")
+                if isinstance(bids, list) and bids:
+                    for x in bids[:100]:
+                        try:
+                            battle_ids.append(int(x))
+                        except (TypeError, ValueError) as e:
+                            raise ValueError(f"battle_ids must be integers: {e}") from e
+                if not battle_ids:
+                    raise ValueError("redecode requires battle_id or battle_ids")
+                if len(battle_ids) > 100:
+                    raise ValueError("redecode batch limited to 100")
+                self._upsert_army_decodes(connection, battle_ids)
+                self._finish_claim(
+                    connection, claim, job, state="complete", outcome="processed"
+                )
 
     @staticmethod
     def _record_parsed_payload(

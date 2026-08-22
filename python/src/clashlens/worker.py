@@ -304,6 +304,40 @@ class ObservationProcessor:
                     retryable=False,
                 )
             return ProcessResult(claim.job_id, "processed")
+        if claim.work_type in {"build_army_analytics", "redecode_army"}:
+            if claim.processing_version != PROCESSING_VERSION:
+                return self._fail(
+                    claim, "unsupported_processing_version", retryable=False
+                )
+            if claim.domain_rule_version != DOMAIN_RULE_VERSION:
+                return self._fail(
+                    claim, "unsupported_domain_rule_version", retryable=False
+                )
+            if claim.analytics_rule_version != ANALYTICS_RULE_VERSION:
+                return self._fail(
+                    claim, "unsupported_analytics_rule_version", retryable=False
+                )
+            try:
+                self.database.renew_claim(claim, lease_seconds=max(lease_seconds, 300))
+                if claim.work_type == "build_army_analytics":
+                    self.database.complete_army_analytics(claim)
+                else:
+                    self.database.complete_army_redecode(claim)
+            except LeaseLost:
+                return ProcessResult(claim.job_id, "lease_lost")
+            except (KeyError, TypeError, ValueError) as error:
+                is_dependency = (
+                    "dependency" in str(error).lower()
+                    or "not completed" in str(error).lower()
+                    or "pending" in str(error).lower()
+                )
+                return self._fail(
+                    claim,
+                    "dependency_not_ready" if is_dependency else "invalid_work_input",
+                    detail=str(error),
+                    retryable=is_dependency,
+                )
+            return ProcessResult(claim.job_id, "processed")
         if claim.work_type not in {"process_observation", "replay_observation"}:
             return self._fail(claim, "unsupported_work_type", retryable=False)
         source_contract_error = validate_source_observation_contract(

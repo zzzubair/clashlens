@@ -190,7 +190,7 @@ def test_canonical_analytics_keeps_owned_perspectives_and_raw_evidence(
         zero_trophy["armyShareCode"] = "zero-trophy-share-exact"
         missing_code = dict(battle)
         missing_code["battleTimestamp"] = "2026-08-04T14:00:00Z"
-        missing_code["opponentPlayerTag"] = "#9PP"
+        missing_code["opponentPlayerTag"] = "#YPP"
         missing_code["opponentName"] = "Synthetic Missing Code Defender"
         del missing_code["armyShareCode"]
         malformed_code = dict(battle)
