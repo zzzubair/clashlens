@@ -597,7 +597,7 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
     payload.kind === "frozen"
       ? {
           ...mapSelector(payload),
-          resetAt: isString(payload.reset_at)
+          resetAt: isUtcTimestamp(payload.reset_at)
             ? payload.reset_at
             : (() => {
                 throw new PythonApiError(502, { error: "malformed" });

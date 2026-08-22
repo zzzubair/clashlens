@@ -372,6 +372,12 @@ func TestDiscoveryProfileUsesOnlyNormalProfileWork(t *testing.T) {
 	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql"))
 	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql"))
 	defer connection.Close(ctx)
+	var selectorIndex bool
+	if err := connection.QueryRow(ctx, `
+		SELECT to_regclass(current_schema() || '.ranked_day_versions_daily_selector') IS NOT NULL
+	`).Scan(&selectorIndex); err != nil || !selectorIndex {
+		t.Fatalf("daily selector index after migration reapply: exists=%v err=%v", selectorIndex, err)
+	}
 	var unknownID, eligibleID int64
 	if err := store.pool.QueryRow(ctx, `
 		WITH inserted AS (

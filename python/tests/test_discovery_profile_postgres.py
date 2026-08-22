@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from itertools import product
 from pathlib import Path
 
 import psycopg
@@ -83,6 +85,55 @@ def test_live_discovery_sources_enqueue_once_and_replay_does_not(
                     "SELECT count(*) FROM collector_jobs WHERE work_type = 'discovery_profile'"
                 ).fetchone()[0]
             assert after == before
+        finally:
+            database.close()
+
+
+def test_contract_changed_rankings_enqueue_more_than_500_valid_discoveries(
+    database_url: str, archive_server
+) -> None:
+    tags = ["#" + "".join(value) for value in product("0289PYLQGRJCUV", repeat=3)][:501]
+    body = json.dumps(
+        {
+            "items": [
+                {"rank": rank, "tag": tag} for rank, tag in enumerate(tags, start=1)
+            ]
+            + [{}],
+            "paging": {"cursors": {}},
+        }
+    ).encode()
+    with domain_database(database_url) as connection_info:
+        store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="discovery-ranking-over-500",
+            endpoint="global_player_rankings",
+            body=body,
+            observed_at=OBSERVED_AT,
+            normalized_tag=None,
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            result = processor.process_once(owner="discovery-ranking-over-500")
+            assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM known_player_discoveries"
+                    ).fetchone()[0]
+                    == 501
+                )
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM collector_jobs WHERE work_type = 'discovery_profile'"
+                    ).fetchone()[0]
+                    == 501
+                )
+                assert text(
+                    connection.execute(
+                        "SELECT outcome FROM official_top200_attempts"
+                    ).fetchone()[0]
+                ) == "official_contract_changed"
         finally:
             database.close()
 

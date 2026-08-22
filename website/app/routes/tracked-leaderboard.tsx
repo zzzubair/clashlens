@@ -36,14 +36,6 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<{
     throw new Response(null, { status: 422 });
   const season = url.searchParams.get("season");
   const dayValue = url.searchParams.get("day");
-  const pageValue =
-    url.searchParams.get("page") ??
-    (viewValue === "daily" && season === null && dayValue === null ? "1" : null);
-  if (!pageValue || !/^[1-9][0-9]*$/.test(pageValue))
-    throw new Response(null, { status: 422 });
-  const page = Number(pageValue);
-  if (!Number.isSafeInteger(page) || !Number.isSafeInteger((page - 1) * PAGE_SIZE))
-    throw new Response(null, { status: 422 });
   if (viewValue === "live" && (season !== null || dayValue !== null))
     throw new Response(null, { status: 422 });
   if (viewValue === "daily" && (season === null) !== (dayValue === null))
@@ -54,6 +46,12 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<{
       throw new Response(null, { status: 422 });
     selector = { officialSeasonId: season, dayNumber: Number(dayValue) };
   }
+  const pageValue = url.searchParams.get("page");
+  if (pageValue === null) throw redirect(leaderboardUrl(viewValue, 1, selector));
+  if (!/^[1-9][0-9]*$/.test(pageValue)) throw new Response(null, { status: 422 });
+  const page = Number(pageValue);
+  if (!Number.isSafeInteger(page) || !Number.isSafeInteger((page - 1) * PAGE_SIZE))
+    throw new Response(null, { status: 422 });
   try {
     const { createPythonClient } = await import("../services/python.server");
     const leaderboard = await createPythonClient().getTrackedLeaderboard(
@@ -91,13 +89,7 @@ export default function TrackedLeaderboardRoute() {
         </h1>
         {daily ? (
           <p>
-            Season ending around{" "}
-            {new Intl.DateTimeFormat("en", {
-              month: "long",
-              year: "numeric",
-              timeZone: "UTC",
-            }).format(new Date(daily.resetAt))}
-            {" · reset "}
+            Legend season · reset{" "}
             <time dateTime={daily.resetAt}>{formatTimestamp(daily.resetAt)}</time>
           </p>
         ) : null}

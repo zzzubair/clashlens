@@ -94,15 +94,19 @@ describe("server-only Python client response boundary", () => {
     });
   });
 
-  it("rejects an out-of-range Daily selector", async () => {
+  it.each([
+    ["out-of-range Daily selector", { season_day_number: 29 }],
+    ["invalid Daily reset timestamp", { reset_at: "not-a-timestamp" }],
+  ])("rejects an %s", async (_name, invalidField) => {
     const payload = {
       ...emptyLivePayload(),
       kind: "frozen",
       reset_at: "2026-08-06T05:00:00Z",
       official_season_id: "2026-08",
-      season_day_number: 29,
+      season_day_number: 21,
       previous_snapshot: null,
       next_snapshot: null,
+      ...invalidField,
     };
     vi.stubGlobal(
       "fetch",

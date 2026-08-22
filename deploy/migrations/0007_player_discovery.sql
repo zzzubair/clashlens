@@ -68,6 +68,8 @@ REVOKE ALL ON TABLE discovery_profile_intents FROM PUBLIC;
 REVOKE SELECT ON TABLE ranked_day_versions FROM clashlens_python_api;
 GRANT SELECT (id, ranked_day_end, official_season_id, season_day_number)
     ON TABLE ranked_day_versions TO clashlens_python_api;
+CREATE INDEX IF NOT EXISTS ranked_day_versions_daily_selector
+    ON ranked_day_versions (ranked_day_end, id DESC);
 
 CREATE OR REPLACE FUNCTION clashlens_enqueue_discovery_profiles(requested_player_ids bigint[])
 RETURNS integer

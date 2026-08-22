@@ -131,7 +131,20 @@ test("daily leaderboard renders the frozen production wire fixture", async ({ pa
   await expect(page.getByRole("link", { name: "Newer" })).toBeVisible();
 });
 
-test("leaderboard rejects unsafe page integers", async ({ request }) => {
+test("explicit leaderboard views canonicalize a missing page", async ({ page }) => {
+  await page.goto("/leaderboards/tracked?view=live");
+  await expect(page).toHaveURL(/\/leaderboards\/tracked\?view=live&page=1$/);
+
+  await page.goto("/leaderboards/tracked?view=daily");
+  await expect(page).toHaveURL(
+    /\/leaderboards\/tracked\?view=daily&season=2026-08&day=21&page=1$/,
+  );
+});
+
+test("leaderboard rejects malformed and unsafe page values", async ({ request }) => {
+  expect((await request.get("/leaderboards/tracked?view=live&page=wat")).status()).toBe(
+    422,
+  );
   const response = await request.get(
     "/leaderboards/tracked?view=live&page=9007199254740992",
   );
