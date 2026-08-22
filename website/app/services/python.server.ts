@@ -576,7 +576,6 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
             ? "stale"
             : "available",
       confidence: entry.public_confidence,
-      officialRank: entry.official_rank,
     };
   });
   const mapSelector = (value: unknown) => {

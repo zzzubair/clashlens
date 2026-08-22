@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from test_api_db_organization import account_binding, create_owner
 from test_api_db_public_ops import NOW, seed_profile
-from test_api_migration import migrated_production_database
+from test_api_migration import migrated_production_database, text
 
 from clashlens.api_db import ApiDatabase
 
@@ -232,5 +232,104 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                 )
                 == 1
             )
+        finally:
+            database.close()
+
+
+def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 6001)
+            seed_profile(database, "#2PQ", 5999)
+            with database.pool.connection() as connection:
+                players = {
+                    text(tag): player_id
+                    for tag, player_id in connection.execute(
+                        "SELECT normalized_tag, id FROM players ORDER BY normalized_tag"
+                    ).fetchall()
+                }
+                for tag, start, end, season, day in (
+                    ("#2PP", "2026-07-26T05:00:00Z", "2026-07-27T05:00:00Z", "2026-07", 28),
+                    ("#2PP", "2026-08-05T05:00:00Z", "2026-08-06T05:00:00Z", "2026-08", 21),
+                ):
+                    connection.execute(
+                        """
+                        INSERT INTO ranked_day_versions (
+                            player_id, ranked_day_start, ranked_day_end,
+                            official_season_id, season_day_number,
+                            season_anchor_rule_version, reconciliation_rule_version,
+                            result_hash, version, state, confidence
+                        ) VALUES (%s, %s, %s, %s, %s, 'test-anchor-v1',
+                                  'test-reconcile-v1', repeat('4', 64), 1,
+                                  'Complete', 'exact')
+                        """,
+                        (players[tag], start, end, season, day),
+                    )
+                older_id = connection.execute(
+                    """
+                    INSERT INTO api_frozen_leaderboards (
+                        public_id, boundary_at, version, ordering_rule_version, coverage
+                    ) VALUES ('00000000-0000-0000-0000-000000000071',
+                              '2026-07-27T05:00:00Z', 1, 'legacy-position-v1',
+                              '{"measured": 1, "eligible_population": 1}')
+                    RETURNING id
+                    """
+                ).fetchone()[0]
+                latest_id = connection.execute(
+                    """
+                    INSERT INTO api_frozen_leaderboards (
+                        public_id, boundary_at, version, ordering_rule_version, coverage
+                    ) VALUES ('00000000-0000-0000-0000-000000000081',
+                              '2026-08-06T05:00:00Z', 1, 'legacy-position-v1',
+                              '{"measured": 1, "eligible_population": 2}')
+                    RETURNING id
+                    """
+                ).fetchone()[0]
+                connection.execute(
+                    """
+                    INSERT INTO api_frozen_leaderboard_entries (
+                        leaderboard_id, position, player_id, trophies, observed_at,
+                        freshness, confidence, official_rank
+                    ) VALUES
+                        (%s, 1, %s, 5900, %s, 'fresh', 'confirmed', 9),
+                        (%s, 1, %s, 6001, %s, 'fresh', 'confirmed', 2),
+                        (%s, 2, %s, 5999, %s, 'stale', 'uncertain', NULL)
+                    """,
+                    (
+                        older_id, players["#2PP"], NOW,
+                        latest_id, players["#2PP"], NOW,
+                        latest_id, players["#2PQ"], NOW,
+                    ),
+                )
+                connection.commit()
+
+            latest = database.get_frozen_leaderboard(limit=1, offset=1, now=NOW)
+            assert latest is not None
+            assert latest["official_season_id"] == "2026-08"
+            assert latest["season_day_number"] == 21
+            assert latest["previous_snapshot"] == {
+                "official_season_id": "2026-07", "season_day_number": 28
+            }
+            assert latest["next_snapshot"] is None
+            assert latest["total_entries"] == 2
+            assert latest["page"] == 2
+            assert latest["page_count"] == 2
+            assert latest["has_previous"] is True
+            assert latest["has_next"] is False
+            assert latest["entries"][0]["position"] == 2
+
+            older = database.get_frozen_leaderboard(
+                limit=1, official_season_id="2026-07", season_day_number=28, now=NOW
+            )
+            assert older is not None
+            assert older["next_snapshot"] == {
+                "official_season_id": "2026-08", "season_day_number": 21
+            }
+            assert database.scalar(
+                "SELECT count(*) FROM api_frozen_leaderboard_entries"
+            ) == 3
         finally:
             database.close()

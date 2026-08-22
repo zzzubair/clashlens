@@ -236,12 +236,18 @@ func TestVersionTwoGlobalRankingsScheduleIsFiveMinuteAndBoundaryPrioritized(t *t
 	if !created {
 		t.Fatal("boundary global rankings job was not created")
 	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE collector_jobs SET status = 'complete'
+		WHERE work_type = 'global_player_rankings' AND due_at = $1
+	`, boundary); err != nil {
+		t.Fatalf("complete global rankings job: %v", err)
+	}
 	created, err = store.scheduleGlobalRankings(ctx, boundary.Add(4*time.Minute), 5*time.Minute)
 	if err != nil {
-		t.Fatalf("reschedule same global rankings cycle: %v", err)
+		t.Fatalf("reschedule completed global rankings cycle: %v", err)
 	}
 	if created {
-		t.Fatal("global rankings schedule duplicated one five-minute cycle")
+		t.Fatal("global rankings schedule recreated a completed five-minute cycle")
 	}
 	created, err = store.scheduleGlobalRankings(ctx, boundary.Add(5*time.Minute), 5*time.Minute)
 	if err != nil {
@@ -385,9 +391,7 @@ func TestDiscoveryProfileUsesOnlyNormalProfileWork(t *testing.T) {
 	}
 	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql"))
 	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql"))
-	if err := connection.Close(ctx); err != nil {
-		t.Fatalf("close discovery migration connection: %v", err)
-	}
+	defer connection.Close(ctx)
 	var unknownID, eligibleID int64
 	if err := store.pool.QueryRow(ctx, `
 		WITH inserted AS (
@@ -415,20 +419,33 @@ func TestDiscoveryProfileUsesOnlyNormalProfileWork(t *testing.T) {
 	if created != 1 || repeated != 0 {
 		t.Fatalf("discovery jobs created = %d then %d, want 1 then 0", created, repeated)
 	}
-	var workerExecute, apiExecute, collectorExecute, workerInsert, apiSelectorRead bool
+	var workerExecute, apiExecute, collectorExecute, workerInsert, apiTableRead, apiSelectorRead bool
 	if err := store.pool.QueryRow(ctx, `
 		SELECT
 			has_function_privilege('clashlens_python_worker', 'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
 			has_function_privilege('clashlens_python_api', 'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
 			has_function_privilege('clashlens_collector', 'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
 			has_table_privilege('clashlens_python_worker', 'collector_jobs', 'INSERT'),
-			has_table_privilege('clashlens_python_api', 'ranked_day_versions', 'SELECT')
-	`).Scan(&workerExecute, &apiExecute, &collectorExecute, &workerInsert, &apiSelectorRead); err != nil {
+			has_table_privilege('clashlens_python_api', 'ranked_day_versions', 'SELECT'),
+			bool_and(has_column_privilege('clashlens_python_api', 'ranked_day_versions', column_name, 'SELECT'))
+		FROM unnest(ARRAY['id', 'ranked_day_end', 'official_season_id', 'season_day_number']) AS column_name
+		GROUP BY 1, 2, 3, 4, 5
+	`).Scan(&workerExecute, &apiExecute, &collectorExecute, &workerInsert, &apiTableRead, &apiSelectorRead); err != nil {
 		t.Fatalf("read discovery privileges: %v", err)
 	}
-	if !workerExecute || apiExecute || collectorExecute || workerInsert || !apiSelectorRead {
-		t.Fatalf("unexpected discovery privileges: worker=%v api=%v collector=%v insert=%v selector=%v",
-			workerExecute, apiExecute, collectorExecute, workerInsert, apiSelectorRead)
+	if !workerExecute || apiExecute || collectorExecute || workerInsert || apiTableRead || !apiSelectorRead {
+		t.Fatalf("unexpected discovery privileges: worker=%v api=%v collector=%v insert=%v table=%v selector=%v",
+			workerExecute, apiExecute, collectorExecute, workerInsert, apiTableRead, apiSelectorRead)
+	}
+	if _, err := connection.Exec(ctx, `BEGIN; SET LOCAL ROLE clashlens_python_api`); err != nil {
+		t.Fatalf("assume API role: %v", err)
+	}
+	if _, err := connection.Exec(ctx, `SELECT id, ranked_day_end, official_season_id, season_day_number FROM ranked_day_versions LIMIT 0`); err != nil {
+		t.Fatalf("API read daily selector columns: %v", err)
+	}
+	expectInsufficientPrivilege(t, ctx, connection, `SELECT state FROM ranked_day_versions LIMIT 0`, "API reading unrelated ranked-day state")
+	if _, err := connection.Exec(ctx, `ROLLBACK`); err != nil {
+		t.Fatalf("finish API role probe: %v", err)
 	}
 	requests := make([]string, 0, 2)
 	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -490,6 +507,7 @@ func startVersionTwoStore(t *testing.T, ctx context.Context) *store {
 	}
 	applySQLFile(t, bootstrapContext, connection, filepath.Join("..", "..", "deploy", "migrations", "0001_collector.sql"))
 	applySQLFile(t, bootstrapContext, connection, filepath.Join("..", "..", "deploy", "migrations", "0002_python_layer.sql"))
+	applySQLFile(t, bootstrapContext, connection, filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql"))
 	if err := connection.Close(bootstrapContext); err != nil {
 		t.Fatalf("close migration connection: %v", err)
 	}

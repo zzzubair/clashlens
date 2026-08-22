@@ -1340,7 +1340,113 @@ class ApiDatabase:
                 (official_season_id, official_season_id, season_day_number),
             ).fetchone()
             if snapshot is None:
-                return None
+                # Preserve populated v1 publications only until the first
+                # immutable domain snapshot is published.
+                legacy = connection.execute(
+                    """
+                    WITH published AS (
+                        SELECT 1 FROM leaderboard_snapshots
+                        WHERE snapshot_kind = 'frozen' AND state = 'published'
+                        LIMIT 1
+                    ), legacy AS (
+                        SELECT leaderboard.*, selector.official_season_id,
+                               selector.season_day_number
+                        FROM api_frozen_leaderboards AS leaderboard
+                        JOIN LATERAL (
+                            SELECT day.official_season_id, day.season_day_number
+                            FROM ranked_day_versions AS day
+                            WHERE day.ranked_day_end = leaderboard.boundary_at
+                            ORDER BY day.id DESC LIMIT 1
+                        ) AS selector ON true
+                        WHERE NOT EXISTS (SELECT 1 FROM published)
+                    ), selected AS (
+                        SELECT * FROM legacy
+                        WHERE (%s::text IS NULL OR
+                               (official_season_id = %s AND season_day_number = %s))
+                        ORDER BY boundary_at DESC, version DESC, id DESC LIMIT 1
+                    )
+                    SELECT selected.id, selected.public_id, selected.boundary_at,
+                           selected.version, selected.ordering_rule_version,
+                           selected.coverage, selected.official_season_id,
+                           selected.season_day_number,
+                           (SELECT json_build_object(
+                                       'official_season_id', p.official_season_id,
+                                       'season_day_number', p.season_day_number)
+                            FROM legacy p WHERE p.boundary_at < selected.boundary_at
+                            ORDER BY p.boundary_at DESC, p.version DESC LIMIT 1),
+                           (SELECT json_build_object(
+                                       'official_season_id', p.official_season_id,
+                                       'season_day_number', p.season_day_number)
+                            FROM legacy p WHERE p.boundary_at > selected.boundary_at
+                            ORDER BY p.boundary_at, p.version DESC LIMIT 1),
+                           (SELECT count(*) FROM api_frozen_leaderboard_entries e
+                            WHERE e.leaderboard_id = selected.id),
+                           (SELECT count(*) FROM api_frozen_leaderboard_entries e
+                            WHERE e.leaderboard_id = selected.id
+                              AND e.freshness = 'stale')
+                    FROM selected
+                    """,
+                    (official_season_id, official_season_id, season_day_number),
+                ).fetchone()
+                if legacy is None:
+                    return None
+                total_entries = int(legacy[10])
+                if offset and offset >= total_entries:
+                    return None
+                rows = connection.execute(
+                    """
+                    SELECT entry.position, player.normalized_tag, profile.name,
+                           profile.profile_json -> 'clan' ->> 'name',
+                           entry.trophies, entry.observed_at, entry.freshness,
+                           entry.confidence, entry.official_rank
+                    FROM api_frozen_leaderboard_entries AS entry
+                    JOIN players AS player ON player.id = entry.player_id
+                    LEFT JOIN player_profile_versions AS profile
+                      ON profile.id = player.current_profile_version_id
+                    WHERE entry.leaderboard_id = %s
+                    ORDER BY entry.position LIMIT %s OFFSET %s
+                    """,
+                    (legacy[0], limit, offset),
+                ).fetchall()
+                boundary_at = legacy[2].astimezone(UTC)
+                coverage = dict(legacy[5])
+                measured = float(coverage.get("measured", 0))
+                population = int(coverage.get("eligible_population", total_entries))
+                page_count = (total_entries + limit - 1) // limit
+                page = offset // limit + 1
+                return {
+                    "kind": "frozen", "snapshot_id": str(legacy[1]),
+                    "boundary_at": boundary_at.isoformat(),
+                    "reset_at": boundary_at.isoformat(),
+                    "official_season_id": _text(legacy[6]),
+                    "season_day_number": int(legacy[7]),
+                    "previous_snapshot": legacy[8], "next_snapshot": legacy[9],
+                    "generated_at": boundary_at.isoformat(), "version": int(legacy[3]),
+                    "ordering_rule_version": _text(legacy[4]),
+                    "tracked_population": population, "total_entries": total_entries,
+                    "page": page, "page_size": limit, "page_count": page_count,
+                    "has_previous": page > 1, "has_next": page < page_count,
+                    "coverage": {"state": "partial", "tracked_players": population,
+                        "measured_percent": measured * 100 if measured <= 1 else measured,
+                        "note": "Published frozen snapshot coverage is measured from its accepted population."},
+                    "provenance": {"source": "published frozen leaderboard snapshot",
+                        "observed_at": boundary_at.isoformat(),
+                        "freshness": "stale" if int(legacy[11]) else "fresh",
+                        "confidence": "partial", "coverage": "partial",
+                        "version": _text(legacy[4])},
+                    "quality_states": ["partial"] + (["stale"] if int(legacy[11]) else []),
+                    "entries": [{
+                        "position": int(row[0]), "tag": _text(row[1]),
+                        "name": None if row[2] is None else _text(row[2]),
+                        "clan": None if row[3] is None else _text(row[3]),
+                        "trophies": int(row[4]),
+                        "observed_at": row[5].astimezone(UTC).isoformat(),
+                        "age_seconds": max(0, int((now.astimezone(UTC) - row[5].astimezone(UTC)).total_seconds())),
+                        "freshness": _text(row[6]), "confidence": _text(row[7]),
+                        "public_confidence": _public_snapshot_confidence(_text(row[7])),
+                        "official_rank": None if row[8] is None else int(row[8]),
+                    } for row in rows],
+                }
             total_entries = int(snapshot[7])
             if offset and offset >= total_entries:
                 return None

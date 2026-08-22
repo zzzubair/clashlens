@@ -28,6 +28,11 @@ ALTER TABLE collector_jobs
 
 DROP INDEX IF EXISTS known_player_discoveries_player_source;
 
+-- Unlike the active-job coalescing index, a completed cycle stays consumed.
+CREATE UNIQUE INDEX IF NOT EXISTS collector_jobs_one_global_rankings_per_cycle
+    ON collector_jobs (due_at)
+    WHERE work_type = 'global_player_rankings';
+
 CREATE TABLE IF NOT EXISTS discovery_profile_intents (
     player_id bigint NOT NULL REFERENCES players (id),
     cycle_at timestamptz NOT NULL,
@@ -38,8 +43,10 @@ CREATE TABLE IF NOT EXISTS discovery_profile_intents (
            AND extract(second FROM cycle_at) = 0)
 );
 REVOKE ALL ON TABLE discovery_profile_intents FROM PUBLIC;
--- Daily selection joins this Python-owned immutable selector metadata.
-GRANT SELECT ON TABLE ranked_day_versions TO clashlens_python_api;
+-- Daily selection joins only this Python-owned immutable selector metadata.
+REVOKE SELECT ON TABLE ranked_day_versions FROM clashlens_python_api;
+GRANT SELECT (id, ranked_day_end, official_season_id, season_day_number)
+    ON TABLE ranked_day_versions TO clashlens_python_api;
 
 CREATE OR REPLACE FUNCTION clashlens_enqueue_discovery_profiles(requested_player_ids bigint[])
 RETURNS integer

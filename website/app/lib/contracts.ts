@@ -45,7 +45,6 @@ export interface TrackedPlayerEntry {
   freshness: Freshness;
   state: "available" | "stale" | "uncertain";
   confidence: ConfidenceState;
-  officialRank: number | null;
 }
 
 export interface SnapshotSelector {

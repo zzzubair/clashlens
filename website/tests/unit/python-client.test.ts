@@ -434,12 +434,11 @@ describe("server-only Python client response boundary", () => {
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
     const { createPythonClient } = await import("../../app/services/python.server");
-    await expect(
-      createPythonClient().getTrackedLeaderboard(25, "daily", 0, {
-        officialSeasonId: "2026-08",
-        dayNumber: 21,
-      }),
-    ).resolves.toMatchObject({
+    const leaderboard = await createPythonClient().getTrackedLeaderboard(25, "daily", 0, {
+      officialSeasonId: "2026-08",
+      dayNumber: 21,
+    });
+    expect(leaderboard).toMatchObject({
       view: "daily",
       entries: [{ name: "Unknown", clan: "Unknown" }],
       page: 1,
@@ -447,6 +446,7 @@ describe("server-only Python client response boundary", () => {
       daily: { officialSeasonId: "2026-08", dayNumber: 21 },
       coverage: { measuredPercent: 66.67 },
     });
+    expect(leaderboard.entries[0]).not.toHaveProperty("officialRank");
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toEqual(
       new URL(
         "/v1/leaderboards/frozen?limit=25&offset=0&official_season_id=2026-08&season_day_number=21",
