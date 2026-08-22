@@ -220,13 +220,42 @@ async function searchPlayers(query: string, limit = 50): Promise<SearchResponse>
 }
 
 async function getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics> {
-  const payload = await requestJson<unknown>(
-    `/v1/analytics/armies?${query.toString()}`,
-    "GET",
-    undefined,
-    undefined,
-  );
+  let payload: unknown;
+  try {
+    payload = await requestJson<unknown>(
+      `/v1/analytics/armies?${query.toString()}`,
+      "GET",
+      undefined,
+      undefined,
+    );
+  } catch (cause) {
+    if (
+      cause instanceof PythonApiError &&
+      cause.status === 404 &&
+      isRecord(cause.payload) &&
+      cause.payload.error === "no_completed_legend_days"
+    ) {
+      // The current season has no completed Legend day yet; keep the previous
+      // season reference so the page can link to it honestly.
+      throw new NoCompletedLegendDaysError(
+        isString(cause.payload.previous_season_id)
+          ? cause.payload.previous_season_id
+          : null,
+      );
+    }
+    throw cause;
+  }
   return mapArmyAnalytics(payload);
+}
+
+export class NoCompletedLegendDaysError extends Error {
+  readonly previousSeasonId: string | null;
+
+  constructor(previousSeasonId: string | null) {
+    super("no completed Legend days this season");
+    this.name = "NoCompletedLegendDaysError";
+    this.previousSeasonId = previousSeasonId;
+  }
 }
 
 async function getPlayerPage(tag: string): Promise<PlayerPage> {
@@ -934,6 +963,7 @@ function mapPlayerPage(payload: unknown): PlayerPage {
       destructionPercentage: value.destruction_percentage,
       stars: value.stars,
       trophyChange: value.trophy_change,
+      perspectiveDisagreement: value.perspective_disagreement === true,
       army: mapBattleArmy(value.army ?? null),
     };
   };

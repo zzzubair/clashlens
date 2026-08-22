@@ -106,6 +106,8 @@ def test_usage_counts_once_per_battle_regardless_of_quantity() -> None:
     row = next(row for row in result["rows"] if row["key"] == "troop:58")
     assert row["usage_count"] == 2
     assert row["usage_denominator"] == 2
+    # Individual rows never exclude attacks as unknown.
+    assert row["unknown_excluded_attacks"] == 0
     assert row["usage_rate"] == 1.0
     assert row["star_counts"] == [1, 0, 0, 1]
     assert row["three_star_rate"] == 0.5
@@ -182,6 +184,72 @@ def test_equipment_for_hero_denominator_uses_confirmed_hero() -> None:
     row = next(row for row in result["rows"] if "equipment:14" in row["key"])
     assert row["usage_count"] == 1
     assert row["usage_denominator"] == 1
+
+
+def test_unknown_hero_does_not_exclude_unrelated_known_hero_relationship() -> None:
+    # The partial attack's unknown component is a different hero entry, so it
+    # cannot change whether hero:0 brought pet:9 and must not be excluded.
+    decoded_hero = {"hero": "hero:0", "pet": "pet:9", "equipment": []}
+    facts = [
+        _fact(1, heroes=[decoded_hero]),
+        _fact(
+            2,
+            state="partial",
+            stars=0,
+            heroes=[{"hero": "hero:0", "pet": None, "equipment": []}],
+            unresolved=[
+                # An unrelated unknown hero chip on the same attack.
+                {"numeric_id": 777, "quantity": 1, "section": "h", "origin": "hero"}
+            ],
+        ),
+    ]
+    result = build_army_result(facts, _selection(category="hero-pet"))
+    row = next(row for row in result["rows"] if row["key"] == "hero:0|pet:9")
+    assert row["usage_count"] == 1
+    assert row["usage_denominator"] == 2
+    assert row["unknown_excluded_attacks"] == 0
+
+
+def test_equipment_for_hero_exclusions_scoped_to_confirmed_hero_denominator() -> None:
+    # hero:0's unresolved equipment makes that one attack uncertain. Other
+    # attacks stay in denominator accounting instead of being published as
+    # excluded; only the uncertain confirmed-hero attack counts here.
+    facts = [
+        _fact(
+            1,
+            heroes=[{"hero": "hero:0", "pet": None, "equipment": ["equipment:14"]}],
+        ),
+        _fact(
+            2,
+            state="partial",
+            stars=1,
+            heroes=[{"hero": "hero:0", "pet": None, "equipment": []}],
+            unresolved=[
+                {
+                    "numeric_id": 33,
+                    "quantity": 1,
+                    "section": "h",
+                    "origin": "hero:0:equipment",
+                }
+            ],
+        ),
+        _fact(3, heroes=[{"hero": "hero:1", "pet": None, "equipment": []}]),
+    ]
+    result = build_army_result(facts, _selection(category="equipment-for-hero"))
+    row = next(row for row in result["rows"] if "equipment:14" in row["key"])
+    assert row["usage_count"] == 1
+    assert row["usage_denominator"] == 1
+    assert row["unknown_excluded_attacks"] == 1
+
+
+def test_structurally_unsupported_state_stays_visible_and_reconciles() -> None:
+    facts = [
+        _fact(1),
+        _fact(2, state="structurally_unsupported"),
+    ]
+    result = build_army_result(facts, _selection())
+    assert result["army_states"]["structurally_unsupported"] == 1
+    assert result["army_states_sum_confirmed"] is True
 
 
 def test_cc_composition_uncertain_partial_excluded() -> None:

@@ -197,6 +197,7 @@ export interface RankedBattleEvent {
   destructionPercentage: number;
   stars: number;
   trophyChange: number;
+  perspectiveDisagreement: boolean;
   army: BattleArmy | null;
 }
 

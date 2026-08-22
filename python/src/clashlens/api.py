@@ -21,7 +21,11 @@ from .api_db import (
     OperationResult,
     RequestBinding,
 )
-from .army_analytics import ArmyAnalyticsSelection, ArmyAnalyticsUnavailable
+from .army_analytics import (
+    ArmyAnalyticsSelection,
+    ArmyAnalyticsUnavailable,
+    CurrentSeasonEmpty,
+)
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .profile import normalize_player_tag
 from .verification import (
@@ -348,6 +352,11 @@ def create_app(
             raise ApiError(422, "invalid_army_analytics_selection") from error
         try:
             result = production_database.get_army_analytics(selection)
+        except CurrentSeasonEmpty as empty:
+            content: dict[str, Any] = {"error": "no_completed_legend_days"}
+            if empty.previous_season_id:
+                content["previous_season_id"] = empty.previous_season_id
+            return JSONResponse(status_code=404, content=content)
         except ArmyAnalyticsUnavailable as unavailable:
             raise ApiError(
                 404,

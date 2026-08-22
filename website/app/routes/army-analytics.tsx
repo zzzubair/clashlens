@@ -30,6 +30,7 @@ const allowed = {
 export async function loader({ request }: LoaderFunctionArgs): Promise<{
   analytics: ArmyAnalytics | null;
   error: WebsiteErrorResponse | null;
+  seasonEmpty: { previousSeasonId: string | null } | null;
 }> {
   const source = new URL(request.url).searchParams;
   const query = new URLSearchParams({
@@ -41,12 +42,25 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<{
     category: source.get("category") ?? "troops",
     sort: source.get("sort") ?? "usage-rate",
   });
+  const python = await import("../services/python.server");
   try {
-    const { createPythonClient } = await import("../services/python.server");
-    return { analytics: await createPythonClient().getArmyAnalytics(query), error: null };
+    return {
+      analytics: await python.createPythonClient().getArmyAnalytics(query),
+      error: null,
+      seasonEmpty: null,
+    };
   } catch (cause) {
+    if (cause instanceof python.NoCompletedLegendDaysError) {
+      // The current season has no completed Legend day; show the agreed empty
+      // state and link to the previous season instead of serving its data.
+      return {
+        analytics: null,
+        error: null,
+        seasonEmpty: { previousSeasonId: cause.previousSeasonId },
+      };
+    }
     const { safeWebsiteError } = await import("../server/errors.server");
-    return { analytics: null, error: safeWebsiteError(cause) };
+    return { analytics: null, error: safeWebsiteError(cause), seasonEmpty: null };
   }
 }
 
@@ -55,7 +69,7 @@ export function headers() {
 }
 
 export default function ArmyAnalyticsRoute() {
-  const { analytics, error } = useLoaderData<typeof loader>();
+  const { analytics, error, seasonEmpty } = useLoaderData<typeof loader>();
   const selected = analytics?.selection;
   return (
     <main className="page-shell">
@@ -122,9 +136,24 @@ export default function ArmyAnalyticsRoute() {
         <button type="submit">Apply</button>
       </Form>
       {error ? <ErrorNotice error={error} /> : null}
-      {!analytics ? (
+      {seasonEmpty ? (
+        <section aria-live="polite">
+          <p>No completed Legend days this season</p>
+          {seasonEmpty.previousSeasonId ? (
+            <Link
+              to={`/analytics/armies?season=${encodeURIComponent(
+                seasonEmpty.previousSeasonId,
+              )}&lens=offense&start_day=1&end_day=28&population=top-100&category=troops&sort=usage-rate`}
+            >
+              View the previous season
+            </Link>
+          ) : null}
+        </section>
+      ) : null}
+      {!analytics && !seasonEmpty ? (
         <p>No completed Legend-day army publication is available for this selection.</p>
-      ) : (
+      ) : null}
+      {analytics ? (
         <>
           <section className="metric-grid" aria-label="Army evidence coverage">
             <article className="metric-card">
@@ -209,7 +238,7 @@ export default function ArmyAnalyticsRoute() {
             </small>
           </p>
         </>
-      )}
+      ) : null}
       <Link to="/">Back to home</Link>
     </main>
   );

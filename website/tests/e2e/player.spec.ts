@@ -54,6 +54,9 @@ test("Legend day logs show populated and empty eight-slot columns", async ({ pag
   await expect(attacks.locator(".battle-slot").nth(1)).toContainText(
     "#2PY#2PY2026-08-05 17:15:00 UTC1 ★49%0",
   );
+  // The accepted battle whose attacker and defender reports disagree stays
+  // visible and is flagged on its row instead of being dropped.
+  await expect(attacks.getByText("Perspective disagreement")).toHaveCount(1);
   await expect(attacks.getByLabel("Empty attack slot 3", { exact: true })).toBeVisible();
   await expect(
     defenses.getByLabel("Empty defense slot 2", { exact: true }),

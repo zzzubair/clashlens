@@ -156,8 +156,9 @@ def _is_known_typed(typed: str, expected_ns: str) -> bool:
 def _parse_section(content: str, ns: str) -> list[tuple[str, int, bool]]:
     if content == "":
         # An empty encoded section is structurally unsupported, never a usable
-        # partial decode.
-        raise DecodeError("malformed", f"empty {ns} section")
+        # partial decode. The dedicated category keeps these codes distinct
+        # from genuinely malformed ones in published evidence.
+        raise DecodeError("structurally_unsupported", f"empty {ns} section")
     if content.startswith("-") or content.endswith("-") or "--" in content:
         raise DecodeError("malformed", f"empty entry in {ns}")
     out: list[tuple[str, int, bool]] = []
@@ -243,7 +244,7 @@ def _decode(raw: str) -> DecodedArmy:
     if "h" in sections:
         h_content = sections["h"]
         if h_content == "":
-            raise DecodeError("malformed", "empty hero section")
+            raise DecodeError("structurally_unsupported", "empty hero section")
         seen_heroes: set[str] = set()
         chips = h_content.split("-")
         for chip in chips:

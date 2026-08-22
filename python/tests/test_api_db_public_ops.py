@@ -311,6 +311,16 @@ def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> Non
                 "trophy_change": 0,
             },
             {
+                "lens": "offense",
+                "battle_id": "102",
+                "disagreement": True,
+                "battle_timestamp": "2026-08-05T19:30:00Z",
+                "opponent": {"tag": "#L92", "name": "Disputed"},
+                "destruction_percentage": 60,
+                "stars": 2,
+                "trophy_change": 10,
+            },
+            {
                 "lens": "defense",
                 "battle_id": 200,
                 "battle_timestamp": "2026-08-05T20:00:00Z",
@@ -339,11 +349,15 @@ def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> Non
         ]
     )
 
-    assert [event["battle_id"] for event in offense] == ["99", "101", "100"]
-    assert offense[0]["opponent"] == {"tag": "#2PP", "name": None}
-    assert offense[1]["trophy_change"] == 40
+    assert [event["battle_id"] for event in offense] == ["102", "99", "101", "100"]
+    # A disagreement battle stays visible on its row instead of being dropped.
+    assert offense[0]["perspective_disagreement"] is True
+    assert offense[1]["opponent"] == {"tag": "#2PP", "name": None}
+    assert offense[1]["perspective_disagreement"] is False
+    assert offense[2]["trophy_change"] == 40
     assert [event["battle_id"] for event in defense] == ["200"]
     assert defense[0]["trophy_change"] == -30
+    assert defense[0]["perspective_disagreement"] is False
     assert _screen_events(None) == ([], [])
 
 
@@ -445,6 +459,7 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                     "destruction_percentage": 100,
                     "stars": 3,
                     "trophy_change": 40,
+                    "perspective_disagreement": False,
                 },
                 {
                     "battle_id": "1",
@@ -453,6 +468,7 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                     "destruction_percentage": 80,
                     "stars": 2,
                     "trophy_change": 30,
+                    "perspective_disagreement": False,
                 },
             ]
             assert screen["current_day"]["defense_events"][0]["trophy_change"] == -20

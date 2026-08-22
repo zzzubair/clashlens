@@ -751,6 +751,7 @@ describe("server-only Python client response boundary", () => {
       destructionPercentage: event.destruction_percentage,
       stars: event.stars,
       trophyChange: event.trophy_change,
+      perspectiveDisagreement: false,
       army: null,
     });
     expect(mappedCurrentDay.offenseEvents).toEqual(offenseEvents.map(mapExpectedEvent));
@@ -836,6 +837,30 @@ describe("server-only Python client response boundary", () => {
       ],
     };
   }
+
+  it("translates a current season with no completed days into the empty-state error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: "no_completed_legend_days",
+            previous_season_id: "1783916800",
+          }),
+          { status: 404, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const mod = await import("../../app/services/python.server");
+    const error = await mod
+      .createPythonClient()
+      .getArmyAnalytics(new URLSearchParams({ season: "current" }))
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(mod.NoCompletedLegendDaysError);
+    expect(error).toMatchObject({ previousSeasonId: "1783916800" });
+  });
 
   it("maps the army analytics payload and preserves URL-backed state", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -1003,7 +1028,16 @@ describe("server-only Python client response boundary", () => {
           destruction_percentage: 100,
           stars: 3,
           trophy_change: 35,
+          perspective_disagreement: true,
           army,
+        },
+        {
+          battle_id: "battle-2",
+          battle_timestamp: "2026-08-06T07:00:00Z",
+          opponent: { tag: "#8PY", name: "Calm" },
+          destruction_percentage: 50,
+          stars: 1,
+          trophy_change: 8,
         },
       ],
       defense_events: [],
@@ -1049,6 +1083,9 @@ describe("server-only Python client response boundary", () => {
     const mapped = await createPythonClient().getPlayer("#2PP");
     const event = mapped.currentDay?.offenseEvents[0];
     if (!event) throw new Error("expected an offense event");
+    // Disagreement battles stay visible on their row instead of being dropped.
+    expect(event.perspectiveDisagreement).toBe(true);
+    expect(mapped.currentDay?.offenseEvents[1]?.perspectiveDisagreement).toBe(false);
     expect(event.army).toEqual({
       state: "partial",
       failureReason: null,

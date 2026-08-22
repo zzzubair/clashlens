@@ -401,6 +401,9 @@ function BattleColumn({
               <span>{event.stars} ★</span>
               <span>{event.destructionPercentage}%</span>
               <strong>{formatSigned(event.trophyChange)}</strong>
+              {event.perspectiveDisagreement ? (
+                <span className="battle-disagreement">Perspective disagreement</span>
+              ) : null}
               {event.army ? <BattleArmyDetails army={event.army} /> : null}
             </li>
           ) : (

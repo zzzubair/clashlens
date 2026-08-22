@@ -56,6 +56,17 @@ class ArmyAnalyticsUnavailable(Exception):
         self.affected_days = affected_days
 
 
+class CurrentSeasonEmpty(Exception):
+    """The confirmed current Legend season has no completed Legend day yet.
+
+    The previous season is named so callers can link to it instead of
+    silently serving the previous season's data for ``season=current``."""
+
+    def __init__(self, previous_season_id: str | None) -> None:
+        super().__init__("no completed legend days this season")
+        self.previous_season_id = previous_season_id
+
+
 @dataclass(frozen=True, slots=True)
 class ArmyAnalyticsSelection:
     lens: str
@@ -163,25 +174,37 @@ def build_army_result(
         unknown = fact["unresolved_components"]
         if category == "cc-composition":
             return any(item.get("section") == "i" for item in unknown)
+        # Unknown evidence is scoped to the hero named by the row: an unknown
+        # hero chip (origin "hero") belongs to a different hero entry and must
+        # not exclude this row's proven relationships.
         hero_id = key.split("|", 1)[0]
         if category == "hero-pet":
-            return any(item.get("origin") in {"hero", f"{hero_id}:pet"} for item in unknown)
+            return any(item.get("origin") == f"{hero_id}:pet" for item in unknown)
         if category in {"hero-equipment", "equipment-for-hero"}:
-            return any(item.get("origin") in {"hero", f"{hero_id}:equipment"} for item in unknown)
+            return any(
+                item.get("origin") == f"{hero_id}:equipment" for item in unknown
+            )
         return False
 
     rows = []
     for key in keys:
+        excluded_unknown = 0
         if category == "equipment-for-hero":
             hero_id = key.split("|", 1)[0]
-            denominator = [
+            hero_facts = [
                 fact for fact in usable
                 if any(hero.get("hero") == hero_id for hero in fact["heroes"] if isinstance(hero, dict))
-                and not uncertain(fact, key)
             ]
+            denominator = [fact for fact in hero_facts if not uncertain(fact, key)]
+            # Exclusions are measured against the confirmed-hero denominator,
+            # not against every usable attack.
+            excluded_unknown = len(hero_facts) - len(denominator)
         elif relationship_category:
             denominator = [fact for fact in usable if not uncertain(fact, key)]
+            excluded_unknown = len(usable) - len(denominator)
         else:
+            # Individual denominators use every usable attack, so no attack is
+            # excluded as unknown.
             denominator = usable
         matching = [fact for fact in denominator if key in presence[fact["id"]]]
         counts = Counter(int(fact["stars"]) for fact in matching)
@@ -198,7 +221,7 @@ def build_army_result(
             "three_star_rate": star_rates[3],
             "average_stars": sum(int(fact["stars"]) for fact in matching) / sample if sample else 0,
             "average_destruction": sum(int(fact["destruction_percentage"]) for fact in matching) / sample if sample else 0,
-            "unknown_excluded_attacks": len(usable) - len(denominator),
+            "unknown_excluded_attacks": excluded_unknown,
         })
     sort_field = {
         "usage-rate": "usage_rate", "usage-count": "usage_count",

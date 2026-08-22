@@ -11,6 +11,7 @@ from clashlens.archive import S3ArchiveReader
 from clashlens.army_analytics import (
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
+    CurrentSeasonEmpty,
 )
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
@@ -691,6 +692,47 @@ def test_perspective_disagreement_changes_fact_input_and_version(
             database.close()
 
 
+def _insert_confirmed_anchor(
+    database: Database, current_season_id: str, previous_season_id: str
+) -> None:
+    """Insert one confirmed season anchor without replaying profile intake."""
+    with database.pool.connection() as connection:
+        player_id = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+        ).fetchone()[0]
+        observation_id = int(
+            connection.execute("SELECT max(id) FROM collector_observations").fetchone()[0]
+        )
+        profile_version_id = connection.execute(
+            """
+            INSERT INTO player_profile_versions (
+                player_id, observation_id, normalized_tag, endpoint_version,
+                schema_version, parser_version, observed_at, source_http_status,
+                name, trophies, league_tier_id, league_tier_name,
+                eligibility_state, current_league_season_id,
+                previous_league_season_id, profile_json
+            ) VALUES (
+                %s, %s, '#2PP', 'v1', 'profile-schema-v1', 'test-fixture',
+                %s, 200, 'Opp', 6000, 29000022, 'Legend League', 'eligible',
+                %s, %s, '{}'::jsonb
+            ) RETURNING id
+            """,
+            (player_id, observation_id, DAY_START, current_season_id, previous_season_id),
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO legend_season_anchors (
+                current_league_season_id, previous_league_season_id,
+                current_start, previous_start, anchor_rule_version,
+                source_profile_version_id, state
+            ) VALUES (%s, %s, %s, %s - interval '28 days',
+                      'legend-season-anchor-v1', %s, 'confirmed')
+            """,
+            (current_season_id, previous_season_id, DAY_START, DAY_START,
+             profile_version_id),
+        )
+
+
 def test_current_season_clipped_below_start_day_is_unavailable(
     database_url: str, archive_server
 ) -> None:
@@ -708,6 +750,7 @@ def test_current_season_clipped_below_start_day_is_unavailable(
             with database.pool.connection() as connection:
                 battle_id = int(connection.execute("SELECT max(id) FROM legend_battles").fetchone()[0])
             _publish_day(database, "#2PP", [_event(battle_id, "offense", ts, 3, 100, 35)])
+            _insert_confirmed_anchor(database, SEASON_ID, "1781296800")
             # The latest completed Legend day is 23; a request starting at 28
             # clips to an empty range and must name the affected days.
             with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
@@ -715,6 +758,46 @@ def test_current_season_clipped_below_start_day_is_unavailable(
                     _selection(season="current", start_day=28, end_day=28)
                 )
             assert unavailable.value.affected_days == [28]
+        finally:
+            api.close()
+            database.close()
+
+
+def test_current_season_without_completed_days_names_previous_season(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = DAY_START + timedelta(hours=1)
+        _, job = store_observation(
+            ci, archive_server, occurrence_key="empty-current-a1", endpoint="battle_log",
+            body=json.dumps({"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}).encode(),
+            observed_at=ts + timedelta(minutes=1), normalized_tag="#2PP",
+        )
+        database, processor = _processor(ci, archive_server)
+        api = ApiDatabase(ci)
+        try:
+            processor.process_job(job, owner="ingest")
+            with database.pool.connection() as connection:
+                battle_id = int(connection.execute("SELECT max(id) FROM legend_battles").fetchone()[0])
+            _publish_day(database, "#2PP", [_event(battle_id, "offense", ts, 3, 100, 35)])
+            army_job = _army_job(database)
+            assert processor.process_job(army_job, owner="analytics").outcome == "processed"
+            # The historical season has completed days; the confirmed current
+            # season has none yet, so season=current must not silently serve
+            # the previous season's publications.
+            _insert_confirmed_anchor(database, "1900000000", SEASON_ID)
+            with pytest.raises(CurrentSeasonEmpty) as empty:
+                api.get_army_analytics(_selection(season="current", start_day=23))
+            assert empty.value.previous_season_id == SEASON_ID
+            # Without a confirmed anchor there is no honest current-season
+            # identity and no previous season to link.
+            with database.pool.connection() as connection:
+                connection.execute("DELETE FROM legend_season_anchors")
+            with pytest.raises(CurrentSeasonEmpty) as empty:
+                api.get_army_analytics(_selection(season="current", start_day=23))
+            assert empty.value.previous_season_id is None
+            # The historical season stays reachable by explicit id.
+            assert api.get_army_analytics(_selection(start_day=23)) is not None
         finally:
             api.close()
             database.close()

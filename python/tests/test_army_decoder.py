@@ -235,8 +235,8 @@ def test_known_pet_and_equipment_survive_unknown_hero_id() -> None:
 def test_empty_encoded_sections_are_structurally_unsupported() -> None:
     for code in ["u", "s", "i", "d", "h", "u2x58h", "h0p9u"]:
         result = decode_army_share_code(code)
-        assert getattr(result, "category", None) == "malformed", (
-            f"expected malformed for {code!r}, got {result}"
+        assert getattr(result, "category", None) == "structurally_unsupported", (
+            f"expected structurally_unsupported for {code!r}, got {result}"
         )
 
 

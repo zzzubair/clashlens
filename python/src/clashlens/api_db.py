@@ -17,10 +17,12 @@ from .army_analytics import (
     ARMY_ANALYTICS_RULE_VERSION,
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
+    CurrentSeasonEmpty,
     build_army_result,
 )
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION, catalog_name
+from .domain import SEASON_ANCHOR_RULE_VERSION
 from .profile import normalize_player_tag
 from .verification import KeyAction, VerificationOutcome
 
@@ -1580,19 +1582,50 @@ class ApiDatabase:
             with connection.transaction():
                 resolved = selection
                 if selection.season == "current":
-                    latest = connection.execute(
+                    anchor = connection.execute(
                         """
-                        SELECT official_season_id, max(season_day_number)
-                        FROM api_player_daily_logs
-                        WHERE state = 'Complete' AND coverage = 'complete'
-                        GROUP BY official_season_id
-                        ORDER BY max(ranked_day_start) DESC
-                        LIMIT 1
-                        """
+                        SELECT current_league_season_id, previous_league_season_id
+                        FROM legend_season_anchors
+                        WHERE anchor_rule_version = %s AND state = 'confirmed'
+                        """,
+                        (SEASON_ANCHOR_RULE_VERSION,),
                     ).fetchone()
-                    if latest is None:
-                        return None
-                    clipped_end = min(selection.end_day, int(latest[1]))
+                    if anchor is None:
+                        # Without a confirmed anchor there is no honest
+                        # current-season identity; never fall back to the most
+                        # recently published season.
+                        raise CurrentSeasonEmpty(None)
+                    latest_day = connection.execute(
+                        """
+                        SELECT max(season_day_number)
+                        FROM api_player_daily_logs
+                        WHERE official_season_id = %s
+                          AND state = 'Complete' AND coverage = 'complete'
+                          AND season_day_number BETWEEN %s AND 28
+                        """,
+                        (_text(anchor[0]), selection.start_day),
+                    ).fetchone()
+                    if latest_day is None or latest_day[0] is None:
+                        # The current season has no completed Legend day in the
+                        # requested range. Name the previous season so callers
+                        # can offer it explicitly instead of silently serving
+                        # its publications for season=current.
+                        overall = connection.execute(
+                            """
+                            SELECT EXISTS (
+                                SELECT 1 FROM api_player_daily_logs
+                                WHERE official_season_id = %s
+                                  AND state = 'Complete' AND coverage = 'complete'
+                            )
+                            """,
+                            (_text(anchor[0]),),
+                        ).fetchone()
+                        if not overall[0]:
+                            raise CurrentSeasonEmpty(_text(anchor[1]))
+                        raise ArmyAnalyticsUnavailable(
+                            list(range(selection.start_day, selection.end_day + 1))
+                        )
+                    clipped_end = min(selection.end_day, int(latest_day[0]))
                     if clipped_end < selection.start_day:
                         # The whole requested range lies beyond the latest
                         # completed Legend day; name it instead of clipping.
@@ -1602,7 +1635,7 @@ class ApiDatabase:
                     resolved = ArmyAnalyticsSelection.parse(
                         **{
                             **selection.as_dict(),
-                            "season": _text(latest[0]),
+                            "season": _text(anchor[0]),
                             "end_day": clipped_end,
                         }
                     )
@@ -2610,7 +2643,9 @@ def _screen_events(
     """Project versioned published battle evidence into the private API shape.
 
     The publication is expected to contain canonical, included battle events.
-    The validation here is deliberately defensive: old publications contain
+    Perspective-disagreement battles stay visible on their row so the website
+    can flag them instead of silently dropping accepted evidence. The
+    validation here is deliberately defensive: old publications contain
     reconciliation evidence rather than the new event projection, and a
     malformed JSON element must not make the player operation fail.
     """
@@ -2647,11 +2682,7 @@ def _screen_event(
 ) -> tuple[str, str, datetime, dict[str, Any]] | None:
     if not isinstance(battle, Mapping):
         return None
-    if (
-        battle.get("included") is False
-        or battle.get("valid") is False
-        or battle.get("disagreement") is True
-    ):
+    if battle.get("included") is False or battle.get("valid") is False:
         return None
 
     lens = battle.get("lens")
@@ -2701,6 +2732,7 @@ def _screen_event(
         "destruction_percentage": destruction,
         "stars": stars,
         "trophy_change": trophy_change,
+        "perspective_disagreement": battle.get("disagreement") is True,
     }
     if isinstance(battle.get("army"), Mapping):
         event["army"] = battle["army"]
