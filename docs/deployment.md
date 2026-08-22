@@ -133,7 +133,9 @@ curl --fail http://127.0.0.1:3000/healthz
 the private API and `CLASHLENS_WORKER_REPLICAS` identical worker containers.
 After the compatible workers report healthy, it recreates the collector with
 Global Top-200 enabled. `python-start` follows the same order without building;
-`worker-start` also enables rankings only after worker health. `api-start`
+`worker-start` also enables rankings only after worker health. A start-only
+worker rollback without a local collector image reports that enablement was
+skipped instead of claiming rankings are enabled. `api-start`
 does not change collector enablement. The collector restart policy preserves
 its last deployment-owned state; systemd recovery runs `restart` (disabled)
 before `worker-start` recreates it enabled after worker health. The setting is

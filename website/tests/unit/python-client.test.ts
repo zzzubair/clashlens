@@ -97,11 +97,14 @@ describe("server-only Python client response boundary", () => {
   it.each([
     ["out-of-range Daily selector", { season_day_number: 29 }],
     ["invalid Daily reset timestamp", { reset_at: "not-a-timestamp" }],
+    ["non-reset-hour Daily timestamp", { reset_at: "2026-08-06T06:00:00Z" }],
   ])("rejects an %s", async (_name, invalidField) => {
     const payload = {
       ...emptyLivePayload(),
       kind: "frozen",
       reset_at: "2026-08-06T05:00:00Z",
+      season_start_at: "2026-07-16T05:00:00Z",
+      season_end_at: "2026-08-13T05:00:00Z",
       official_season_id: "2026-08",
       season_day_number: 21,
       previous_snapshot: null,
@@ -396,6 +399,8 @@ describe("server-only Python client response boundary", () => {
             has_previous: false,
             has_next: false,
             reset_at: "2026-08-06T05:00:00+00:00",
+            season_start_at: "2026-07-16T05:00:00+00:00",
+            season_end_at: "2026-08-13T05:00:00+00:00",
             official_season_id: "2026-08",
             season_day_number: 21,
             previous_snapshot: null,
@@ -447,7 +452,12 @@ describe("server-only Python client response boundary", () => {
       entries: [{ name: "Unknown", clan: "Unknown" }],
       page: 1,
       pageSize: 25,
-      daily: { officialSeasonId: "2026-08", dayNumber: 21 },
+      daily: {
+        officialSeasonId: "2026-08",
+        dayNumber: 21,
+        seasonStartAt: "2026-07-16T05:00:00+00:00",
+        seasonEndAt: "2026-08-13T05:00:00+00:00",
+      },
       coverage: { measuredPercent: 66.67 },
     });
     expect(leaderboard.entries[0]).not.toHaveProperty("officialRank");

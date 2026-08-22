@@ -89,6 +89,41 @@ def test_live_discovery_sources_enqueue_once_and_replay_does_not(
             database.close()
 
 
+def test_partial_ranking_rank_values_do_not_corrupt_source_row_provenance(
+    database_url: str, archive_server
+) -> None:
+    payload = json.loads(RANKINGS.read_bytes())
+    payload["items"][0]["rank"] = 0
+    payload["items"][1]["rank"] = -1
+    with domain_database(database_url) as connection_info:
+        store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="discovery-ranking-nonpositive-ranks",
+            endpoint="global_player_rankings",
+            body=json.dumps(payload).encode(),
+            observed_at=OBSERVED_AT,
+            normalized_tag=None,
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            result = processor.process_once(owner="discovery-ranking-nonpositive-ranks")
+            assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                rows = connection.execute(
+                    """SELECT source_row_index FROM known_player_discoveries
+                       WHERE source_kind = 'official_ranking'
+                       ORDER BY source_row_index"""
+                ).fetchall()
+                attempt = connection.execute(
+                    "SELECT outcome FROM official_top200_attempts"
+                ).fetchone()
+            assert [row[0] for row in rows] == list(range(200))
+            assert attempt is not None and text(attempt[0]) == "official_partial"
+        finally:
+            database.close()
+
+
 def test_contract_changed_rankings_enqueue_more_than_500_valid_discoveries(
     database_url: str, archive_server
 ) -> None:

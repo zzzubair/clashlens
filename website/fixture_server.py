@@ -267,6 +267,8 @@ def leaderboard(limit, view, offset=0, season=None, day=None):
                 "snapshot_id": "6ccbbf21-87e2-5b22-8f05-e415c30ca6ac" if older else "c74af723-6da8-54a3-a710-ee8229c9f747",
                 "boundary_at": "2026-07-27T05:00:00Z" if older else "2026-08-05T05:00:00Z",
                 "reset_at": "2026-07-27T05:00:00Z" if older else "2026-08-05T05:00:00Z",
+                "season_start_at": "2026-06-29T05:00:00Z" if older else "2026-07-15T05:00:00Z",
+                "season_end_at": "2026-07-27T05:00:00Z" if older else "2026-08-12T05:00:00Z",
                 "official_season_id": "2026-07" if older else "2026-08",
                 "season_day_number": 28 if older else 21,
                 "previous_snapshot": None if older else {

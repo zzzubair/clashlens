@@ -964,8 +964,12 @@ mkdir -p "$ROLLBACK_DIR/state/networks/clashlens-private"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres.running"
 : >"$ROLLBACK_DIR/state/images/localhost/clashlens-python:previous-release"
-deploy "$ROLLBACK_DIR" "$ROLLBACK_ENV" \
-  CLASHLENS_PYTHON_IMAGE=localhost/clashlens-python:previous-release -- python-start >/dev/null
+rollback_output=$(deploy "$ROLLBACK_DIR" "$ROLLBACK_ENV" \
+  CLASHLENS_PYTHON_IMAGE=localhost/clashlens-python:previous-release -- python-start)
+[[ "$rollback_output" == *'Global Top-200 enablement was skipped because the collector image is absent'* ]] || \
+  fail 'worker-only rollback falsely reported Top-200 enabled'
+[[ "$rollback_output" != *'Global Top-200 is enabled'* ]] || \
+  fail 'worker-only rollback printed enabled wording'
 log_lacks "$ROLLBACK_DIR/podman.log" '^build ' 'rollback path rebuilt an image'
 log_has "$ROLLBACK_DIR/podman.log" 'clashlens-python:previous-release' \
   'rollback did not start the previous immutable image tag'

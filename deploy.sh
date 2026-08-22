@@ -788,7 +788,7 @@ start_required_collector() {
 
 enable_global_rankings() {
   # A worker-only rollback may intentionally run without a local collector image.
-  image_exists || return 0
+  image_exists || return 1
   collector_run "$COLLECTOR_CONTAINER" 2 required true
   wait_for_collector
 }
@@ -1166,8 +1166,11 @@ python_start() {
   wait_for_python_api
   start_python_workers
   wait_for_python_workers
-  enable_global_rankings
-  printf 'production Python API and %s worker replicas are healthy; Global Top-200 is enabled\n' "$CLASHLENS_WORKER_REPLICAS"
+  if enable_global_rankings; then
+    printf 'production Python API and %s worker replicas are healthy; Global Top-200 is enabled\n' "$CLASHLENS_WORKER_REPLICAS"
+  else
+    printf 'production Python API and %s worker replicas are healthy; Global Top-200 enablement was skipped because the collector image is absent\n' "$CLASHLENS_WORKER_REPLICAS"
+  fi
 }
 
 status_of_container() {
@@ -1438,8 +1441,11 @@ case "$command" in
     require_python_runtime
     start_python_workers
     wait_for_python_workers
-    enable_global_rankings
-    printf 'production Python worker replicas (%s) are healthy; Global Top-200 is enabled\n' "$CLASHLENS_WORKER_REPLICAS"
+    if enable_global_rankings; then
+      printf 'production Python worker replicas (%s) are healthy; Global Top-200 is enabled\n' "$CLASHLENS_WORKER_REPLICAS"
+    else
+      printf 'production Python worker replicas (%s) are healthy; Global Top-200 enablement was skipped because the collector image is absent\n' "$CLASHLENS_WORKER_REPLICAS"
+    fi
     ;;
   website-up)
     [[ $# == 0 ]] || die "website-up accepts no arguments"

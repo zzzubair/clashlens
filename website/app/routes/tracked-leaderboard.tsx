@@ -10,6 +10,10 @@ import type {
 } from "../lib/contracts";
 
 const PAGE_SIZE = 100;
+const formatDate = (value: string) =>
+  new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" }).format(
+    new Date(value),
+  );
 
 function leaderboardUrl(
   view: "live" | "daily",
@@ -89,7 +93,8 @@ export default function TrackedLeaderboardRoute() {
         </h1>
         {daily ? (
           <p>
-            Legend season · reset{" "}
+            Legend season {formatDate(daily.seasonStartAt)} –{" "}
+            {formatDate(daily.seasonEndAt)} · reset{" "}
             <time dateTime={daily.resetAt}>{formatTimestamp(daily.resetAt)}</time>
           </p>
         ) : null}

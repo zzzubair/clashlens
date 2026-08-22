@@ -66,6 +66,8 @@ export interface TrackedLeaderboard {
   daily:
     | (SnapshotSelector & {
         resetAt: string;
+        seasonStartAt: string;
+        seasonEndAt: string;
         previousSnapshot: SnapshotSelector | null;
         nextSnapshot: SnapshotSelector | null;
       })

@@ -416,6 +416,15 @@ function isUtcTimestamp(value: unknown): value is string {
   );
 }
 
+function isResetTimestamp(value: unknown): value is string {
+  if (!isUtcTimestamp(value)) return false;
+  const match = /^(\d{4}-\d{2}-\d{2})T05:00:00(?:Z|\+00:00)$/.exec(value);
+  return (
+    match !== null &&
+    new Date(value).toISOString().slice(0, 19) === `${match[1]}T05:00:00`
+  );
+}
+
 function isNullableString(value: unknown): value is string | null {
   return value === null || isString(value);
 }
@@ -597,8 +606,18 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
     payload.kind === "frozen"
       ? {
           ...mapSelector(payload),
-          resetAt: isUtcTimestamp(payload.reset_at)
+          resetAt: isResetTimestamp(payload.reset_at)
             ? payload.reset_at
+            : (() => {
+                throw new PythonApiError(502, { error: "malformed" });
+              })(),
+          seasonStartAt: isResetTimestamp(payload.season_start_at)
+            ? payload.season_start_at
+            : (() => {
+                throw new PythonApiError(502, { error: "malformed" });
+              })(),
+          seasonEndAt: isResetTimestamp(payload.season_end_at)
+            ? payload.season_end_at
             : (() => {
                 throw new PythonApiError(502, { error: "malformed" });
               })(),
@@ -610,6 +629,14 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
             payload.next_snapshot === null ? null : mapSelector(payload.next_snapshot),
         }
       : null;
+  if (
+    daily &&
+    (Date.parse(daily.seasonEndAt) - Date.parse(daily.seasonStartAt) !==
+      28 * 24 * 60 * 60 * 1000 ||
+      Date.parse(daily.resetAt) - Date.parse(daily.seasonStartAt) !==
+        daily.dayNumber * 24 * 60 * 60 * 1000)
+  )
+    throw new PythonApiError(502, { error: "malformed" });
   return {
     kind: "tracked-leaderboard",
     view,

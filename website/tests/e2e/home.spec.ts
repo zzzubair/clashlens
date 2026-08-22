@@ -115,6 +115,7 @@ test("daily leaderboard renders the frozen production wire fixture", async ({ pa
       level: 1,
     }),
   ).toBeVisible();
+  await expect(page.getByText(/Legend season Jul 15, 2026 – Aug 12, 2026/)).toBeVisible();
   const table = page.getByRole("table", { name: "Daily leaderboard" });
   await expect(table).toBeVisible();
   await expect(table.getByRole("row")).toHaveCount(101);

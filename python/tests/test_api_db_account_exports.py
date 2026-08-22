@@ -158,6 +158,8 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                 "reset_at": "2026-08-06T05:00:00+00:00",
                 "official_season_id": "2026-08",
                 "season_day_number": 21,
+                "season_start_at": "2026-07-16T05:00:00+00:00",
+                "season_end_at": "2026-08-13T05:00:00+00:00",
                 "previous_snapshot": {
                     "official_season_id": "2026-07",
                     "season_day_number": 28,
@@ -198,6 +200,8 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                 limit=100, official_season_id="2026-07", season_day_number=28
             )
             assert older is not None
+            assert older["season_start_at"] == "2026-06-29T05:00:00+00:00"
+            assert older["season_end_at"] == "2026-07-27T05:00:00+00:00"
             assert older["next_snapshot"] == {
                 "official_season_id": "2026-08",
                 "season_day_number": 21,
@@ -381,6 +385,8 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
             newest = database.get_frozen_leaderboard(limit=10, now=NOW)
             assert newest is not None
             assert newest["snapshot_id"] == str(snapshot_id)
+            assert newest["season_start_at"] == "2026-07-16T05:00:00+00:00"
+            assert newest["season_end_at"] == "2026-08-13T05:00:00+00:00"
             assert newest["previous_snapshot"] == {
                 "official_season_id": "2026-08", "season_day_number": 21
             }

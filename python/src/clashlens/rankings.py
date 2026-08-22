@@ -33,6 +33,7 @@ class RankingParseError(ValueError):
 class OfficialRankingEntry:
     normalized_tag: str
     rank: int
+    source_row_index: int
     name: str | None
     trophies: int | None
     source_json: dict[str, Any]
@@ -79,8 +80,8 @@ def parse_global_player_rankings(
 
     reasons: set[str] = set()
     entries: list[OfficialRankingEntry] = []
-    for source in payload["items"]:
-        entry = _parse_entry(source)
+    for source_row_index, source in enumerate(payload["items"]):
+        entry = _parse_entry(source, source_row_index)
         if entry is None:
             reasons.add("malformed_entry")
             continue
@@ -123,7 +124,7 @@ def parse_global_player_rankings(
     )
 
 
-def _parse_entry(source: Any) -> OfficialRankingEntry | None:
+def _parse_entry(source: Any, source_row_index: int) -> OfficialRankingEntry | None:
     if not isinstance(source, dict):
         return None
     rank = source.get("rank")
@@ -144,6 +145,7 @@ def _parse_entry(source: Any) -> OfficialRankingEntry | None:
     return OfficialRankingEntry(
         normalized_tag=normalized_tag,
         rank=rank,
+        source_row_index=source_row_index,
         name=name,
         trophies=trophies,
         source_json=source,

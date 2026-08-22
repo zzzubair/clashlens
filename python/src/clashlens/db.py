@@ -1635,7 +1635,7 @@ class Database:
                         """,
                         (
                             [entry.normalized_tag for entry in rankings.entries],
-                            [entry.rank - 1 for entry in rankings.entries],
+                            [entry.source_row_index for entry in rankings.entries],
                             observation_id,
                             observed_at,
                         ),

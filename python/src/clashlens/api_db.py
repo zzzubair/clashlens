@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -1420,6 +1420,8 @@ class ApiDatabase:
                     (legacy[0], limit, offset),
                 ).fetchall()
                 boundary_at = legacy[2].astimezone(UTC)
+                season_start = boundary_at - timedelta(days=int(legacy[7]))
+                season_end = season_start + timedelta(days=28)
                 coverage = dict(legacy[5])
                 measured = float(coverage.get("measured", 0))
                 population = int(coverage.get("eligible_population", total_entries))
@@ -1431,6 +1433,8 @@ class ApiDatabase:
                     "reset_at": boundary_at.isoformat(),
                     "official_season_id": _text(legacy[6]),
                     "season_day_number": int(legacy[7]),
+                    "season_start_at": season_start.isoformat(),
+                    "season_end_at": season_end.isoformat(),
                     "previous_snapshot": legacy[8], "next_snapshot": legacy[9],
                     "generated_at": boundary_at.isoformat(), "version": int(legacy[3]),
                     "ordering_rule_version": _text(legacy[4]),
@@ -1481,6 +1485,8 @@ class ApiDatabase:
                 (snapshot[0], limit, offset),
             ).fetchall()
             boundary_at = snapshot[1].astimezone(UTC)
+            season_start = boundary_at - timedelta(days=int(snapshot[15]))
+            season_end = season_start + timedelta(days=28)
             measured = float(snapshot[5])
             page_count = (total_entries + limit - 1) // limit
             page = offset // limit + 1
@@ -1488,6 +1494,7 @@ class ApiDatabase:
                 "kind": "frozen", "snapshot_id": str(snapshot[0]),
                 "boundary_at": boundary_at.isoformat(), "reset_at": boundary_at.isoformat(),
                 "official_season_id": _text(snapshot[14]), "season_day_number": int(snapshot[15]),
+                "season_start_at": season_start.isoformat(), "season_end_at": season_end.isoformat(),
                 "previous_snapshot": snapshot[16], "next_snapshot": snapshot[17],
                 "generated_at": boundary_at.isoformat(), "version": int(snapshot[2]),
                 "ordering_rule_version": _text(snapshot[3]),

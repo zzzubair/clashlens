@@ -24,6 +24,7 @@ def test_complete_official_top_200_fixture_is_accepted_without_season_provenance
     assert parsed.failure_reasons == ()
     assert len(parsed.entries) == 200
     assert [entry.rank for entry in parsed.entries] == list(range(1, 201))
+    assert [entry.source_row_index for entry in parsed.entries] == list(range(200))
     assert parsed.official_season_id is None
     assert parsed.season_provenance == "not_supplied"
 
@@ -62,6 +63,20 @@ def test_invalid_official_refresh_stays_classified_without_becoming_complete(
 
     assert parsed.outcome == outcome
     assert reason in parsed.failure_reasons
+
+
+def test_partial_ranking_keeps_payload_row_provenance_through_rank_sorting() -> None:
+    payload = json.loads(FIXTURE.read_bytes())
+    payload["items"][0]["rank"] = 0
+    payload["items"][1]["rank"] = -1
+
+    parsed = parse_global_player_rankings(json.dumps(payload).encode())
+
+    assert parsed.outcome == "official_partial"
+    assert [(entry.rank, entry.source_row_index) for entry in parsed.entries[:2]] == [
+        (-1, 1),
+        (0, 0),
+    ]
 
 
 def test_global_ranking_parser_distinguishes_malformed_json_and_schema_change() -> None:
