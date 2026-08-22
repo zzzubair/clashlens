@@ -1206,90 +1206,85 @@ class ApiDatabase:
         self,
         *,
         limit: int,
+        offset: int = 0,
         now: datetime,
         freshness_seconds: int,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
+        if offset < 0 or offset % limit:
+            raise ValueError("offset must be non-negative and aligned to limit")
         with self.pool.connection() as connection:
             rows = connection.execute(
                 """
-                SELECT player.normalized_tag, profile.name, profile.trophies,
-                       profile.observed_at, player.eligibility_state,
-                       profile.profile_json -> 'clan' ->> 'name'
-                FROM players AS player
-                JOIN player_profile_versions AS profile
-                    ON profile.id = player.current_profile_version_id
-                WHERE player.active = true AND profile.source_contract_state = 'accepted'
-                ORDER BY profile.trophies DESC, md5(player.normalized_tag),
-                         player.normalized_tag
-                LIMIT %s
+                WITH selected AS (
+                    SELECT player.normalized_tag, profile.name, profile.trophies,
+                           profile.observed_at, player.eligibility_state,
+                           profile.profile_json -> 'clan' ->> 'name' AS clan
+                    FROM players AS player
+                    JOIN player_profile_versions AS profile
+                      ON profile.id = player.current_profile_version_id
+                    WHERE player.active = true
+                      AND profile.source_contract_state = 'accepted'
+                ), ranked AS (
+                    SELECT selected.*,
+                           row_number() OVER (
+                               ORDER BY trophies DESC, md5(normalized_tag), normalized_tag
+                           ) AS position,
+                           count(*) OVER () AS total_entries,
+                           count(*) FILTER (
+                               WHERE observed_at < %s - make_interval(secs => %s)
+                           ) OVER () AS stale_count
+                    FROM selected
+                ), totals AS (
+                    SELECT count(*)::bigint AS tracked_population FROM players WHERE active
+                )
+                SELECT ranked.normalized_tag, ranked.name, ranked.trophies,
+                       ranked.observed_at, ranked.eligibility_state, ranked.clan,
+                       ranked.position, COALESCE(ranked.total_entries, 0),
+                       COALESCE(ranked.stale_count, 0), totals.tracked_population
+                FROM totals
+                LEFT JOIN ranked ON ranked.position > %s AND ranked.position <= %s
+                ORDER BY ranked.position NULLS LAST
                 """,
-                (limit,),
+                (now, freshness_seconds, offset, offset + limit),
             ).fetchall()
+            total_entries = int(rows[0][7]) if rows else 0
+            if offset and offset >= total_entries:
+                return None
+            tracked_population = int(rows[0][9])
+            stale_count = int(rows[0][8])
             entries = []
-            stale_count = 0
-            for position, row in enumerate(rows, start=1):
+            for row in rows:
+                if row[0] is None:
+                    continue
                 observed_at = row[3].astimezone(UTC)
-                age_seconds = max(
-                    0, int((now.astimezone(UTC) - observed_at).total_seconds())
-                )
-                freshness = "fresh" if age_seconds <= freshness_seconds else "stale"
-                stale_count += freshness == "stale"
-                entries.append(
-                    {
-                        "position": position,
-                        "tag": _text(row[0]),
-                        "name": _text(row[1]),
-                        "trophies": int(row[2]),
-                        "observed_at": observed_at.isoformat(),
-                        "age_seconds": age_seconds,
-                        "freshness": freshness,
-                        "confidence": _text(row[4]),
-                        "public_confidence": _public_confidence(True, _text(row[4])),
-                        "clan": None if row[5] is None else _text(row[5]),
-                        "official_rank": None,
-                    }
-                )
-            tracked_row = connection.execute(
-                "SELECT count(*) FROM players WHERE active = true"
-            ).fetchone()
-            measured_row = connection.execute(
-                """
-                SELECT count(*)
-                FROM players AS player
-                JOIN player_profile_versions AS profile
-                    ON profile.id = player.current_profile_version_id
-                WHERE player.active = true
-                  AND profile.source_contract_state = 'accepted'
-                """
-            ).fetchone()
-            assert tracked_row is not None
-            assert measured_row is not None
-            tracked_population = int(tracked_row[0])
-            measured_population = int(measured_row[0])
-            measured_percent = (
-                100.0 * measured_population / tracked_population
-                if tracked_population
-                else 0.0
-            )
+                age = max(0.0, (now.astimezone(UTC) - observed_at).total_seconds())
+                age_seconds = int(age)
+                freshness = "fresh" if age <= freshness_seconds else "stale"
+                entries.append({
+                    "position": int(row[6]), "tag": _text(row[0]),
+                    "name": _text(row[1]), "trophies": int(row[2]),
+                    "observed_at": observed_at.isoformat(), "age_seconds": age_seconds,
+                    "freshness": freshness, "confidence": _text(row[4]),
+                    "public_confidence": _public_confidence(True, _text(row[4])),
+                    "clan": None if row[5] is None else _text(row[5]),
+                    "official_rank": None,
+                })
+            page_count = (total_entries + limit - 1) // limit
+            page = offset // limit + 1
             return {
-                "kind": "live",
-                "ordering_rule_version": "tracked-trophies-md5-v1",
+                "kind": "live", "ordering_rule_version": "tracked-trophies-md5-v1",
                 "generated_at": now.astimezone(UTC).isoformat(),
                 "tracked_population": tracked_population,
-                "coverage": {
-                    "state": "partial",
-                    "tracked_players": tracked_population,
-                    "measured_percent": measured_percent,
-                    "note": "Tracked-player publication; complete Legend I coverage is not claimed.",
-                },
-                "provenance": {
-                    "source": "current accepted player profiles",
+                "total_entries": total_entries, "page": page, "page_size": limit,
+                "page_count": page_count, "has_previous": page > 1,
+                "has_next": page < page_count,
+                "coverage": {"state": "partial", "tracked_players": tracked_population,
+                    "measured_percent": (100.0 * total_entries / tracked_population if tracked_population else 0.0),
+                    "note": "Tracked-player publication; complete Legend I coverage is not claimed."},
+                "provenance": {"source": "current accepted player profiles",
                     "observed_at": now.astimezone(UTC).isoformat(),
-                    "freshness": "stale" if stale_count else "fresh",
-                    "confidence": "partial",
-                    "coverage": "partial",
-                    "version": "tracked-trophies-md5-v1",
-                },
+                    "freshness": "stale" if stale_count else "fresh", "confidence": "partial",
+                    "coverage": "partial", "version": "tracked-trophies-md5-v1"},
                 "quality_states": ["partial"] + (["stale"] if stale_count else []),
                 "entries": entries,
             }
@@ -1298,191 +1293,108 @@ class ApiDatabase:
         self,
         *,
         limit: int,
+        offset: int = 0,
+        official_season_id: str | None = None,
+        season_day_number: int | None = None,
         now: datetime | None = None,
         freshness_seconds: int = 900,
     ) -> dict[str, Any] | None:
+        if offset < 0 or offset % limit:
+            raise ValueError("offset must be non-negative and aligned to limit")
+        if (official_season_id is None) != (season_day_number is None):
+            raise ValueError("season and day must be supplied together")
         now = datetime.now(UTC) if now is None else now
         with self.pool.connection() as connection:
-            # The domain snapshot is the immutable publication source. A
-            # building candidate is never current; the newest published version
-            # remains visible until its complete entry set commits.
             snapshot = connection.execute(
                 """
-                SELECT id, boundary_at, version, ordering_rule_version,
-                       freshness_rule_version, measured_coverage,
-                       eligible_population_count, included_entry_count,
-                       stale_entry_count, fresh_entry_count,
-                       excluded_missing_count, excluded_invalid_count,
-                       excluded_malformed_count, excluded_conflicting_count
-                FROM leaderboard_snapshots
-                WHERE snapshot_kind = 'frozen' AND state = 'published'
-                ORDER BY boundary_at DESC, version DESC, id DESC
-                LIMIT 1
-                """
-            ).fetchone()
-            if snapshot is not None:
-                assert snapshot is not None
-                rows = connection.execute(
-                    """
-                    SELECT entry.position, player.normalized_tag,
-                           profile.name, entry.trophies,
-                           entry.profile_observed_at,
-                           entry.profile_freshness,
-                           entry.profile_confidence,
-                           entry.official_rank, profile.clan
-                    FROM leaderboard_snapshot_entries AS entry
-                    JOIN players AS player ON player.id = entry.player_id
-                    LEFT JOIN LATERAL (
-                        SELECT version.name,
-                               version.profile_json -> 'clan' ->> 'name' AS clan
-                        FROM player_profile_versions AS version
-                        WHERE version.observation_id = entry.profile_observation_id
-                        ORDER BY version.id DESC
-                        LIMIT 1
-                    ) AS profile ON true
-                    WHERE entry.snapshot_id = %s
-                    ORDER BY entry.position
-                    LIMIT %s
-                    """,
-                    (snapshot[0], limit),
-                ).fetchall()
-                boundary_at = snapshot[1].astimezone(UTC)
-                measured = float(snapshot[5])
-                measured_percent = measured * 100 if measured <= 1 else measured
-                snapshot_is_stale = int(snapshot[8]) > 0
-                return {
-                    "kind": "frozen",
-                    "snapshot_id": str(snapshot[0]),
-                    "boundary_at": boundary_at.isoformat(),
-                    "generated_at": boundary_at.isoformat(),
-                    "version": int(snapshot[2]),
-                    "ordering_rule_version": _text(snapshot[3]),
-                    "coverage": {
-                        "state": "partial",
-                        "tracked_players": int(snapshot[6]),
-                        "measured_percent": measured_percent,
-                        "note": "Published frozen snapshot coverage is measured from its accepted population.",
-                    },
-                    "tracked_population": int(snapshot[6]),
-                    "provenance": {
-                        "source": "published frozen leaderboard snapshot",
-                        "observed_at": boundary_at.isoformat(),
-                        "freshness": "stale" if snapshot_is_stale else "fresh",
-                        "confidence": "partial",
-                        "coverage": "partial",
-                        "version": _text(snapshot[3]),
-                    },
-                    "quality_states": ["partial"]
-                    + (["stale"] if snapshot_is_stale else []),
-                    "entries": [
-                        {
-                            "position": int(row[0]),
-                            "tag": _text(row[1]),
-                            "name": None if row[2] is None else _text(row[2]),
-                            "trophies": int(row[3]),
-                            "observed_at": row[4].astimezone(UTC).isoformat(),
-                            "age_seconds": max(
-                                0,
-                                int(
-                                    (
-                                        now.astimezone(UTC) - row[4].astimezone(UTC)
-                                    ).total_seconds()
-                                ),
-                            ),
-                            "freshness": _text(row[5]),
-                            "confidence": _text(row[6]),
-                            "public_confidence": _public_snapshot_confidence(
-                                _text(row[6])
-                            ),
-                            "official_rank": None if row[7] is None else int(row[7]),
-                            "clan": None if row[8] is None else _text(row[8]),
-                        }
-                        for row in rows
-                    ],
-                }
-
-            # Keep the populated v1 API relation readable during migration. It
-            # is used only when no immutable domain snapshot exists yet.
-            snapshot = connection.execute(
-                """
-                SELECT id, public_id, boundary_at, version,
-                       ordering_rule_version, coverage
-                FROM api_frozen_leaderboards
-                ORDER BY boundary_at DESC, version DESC
-                LIMIT 1
-                """
+                WITH published AS (
+                    SELECT snapshot.*, day.official_season_id, day.season_day_number
+                    FROM leaderboard_snapshots AS snapshot
+                    JOIN ranked_day_versions AS day
+                      ON day.id = snapshot.source_ranked_day_version_id
+                    WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+                ), selected AS (
+                    SELECT * FROM published
+                    WHERE (%s::text IS NULL OR
+                           (official_season_id = %s AND season_day_number = %s))
+                    ORDER BY boundary_at DESC, version DESC, id DESC LIMIT 1
+                )
+                SELECT selected.id, selected.boundary_at, selected.version,
+                       selected.ordering_rule_version, selected.freshness_rule_version,
+                       selected.measured_coverage, selected.eligible_population_count,
+                       selected.included_entry_count, selected.stale_entry_count,
+                       selected.fresh_entry_count, selected.excluded_missing_count,
+                       selected.excluded_invalid_count, selected.excluded_malformed_count,
+                       selected.excluded_conflicting_count, selected.official_season_id,
+                       selected.season_day_number,
+                       (SELECT json_build_object('official_season_id', p.official_season_id,
+                                                 'season_day_number', p.season_day_number)
+                        FROM published p WHERE p.boundary_at < selected.boundary_at
+                        ORDER BY p.boundary_at DESC, p.version DESC LIMIT 1),
+                       (SELECT json_build_object('official_season_id', p.official_season_id,
+                                                 'season_day_number', p.season_day_number)
+                        FROM published p WHERE p.boundary_at > selected.boundary_at
+                        ORDER BY p.boundary_at, p.version DESC LIMIT 1)
+                FROM selected
+                """,
+                (official_season_id, official_season_id, season_day_number),
             ).fetchone()
             if snapshot is None:
+                return None
+            total_entries = int(snapshot[7])
+            if offset and offset >= total_entries:
                 return None
             rows = connection.execute(
                 """
                 SELECT entry.position, player.normalized_tag, profile.name,
-                       profile.profile_json -> 'clan' ->> 'name',
-                       entry.trophies, entry.observed_at, entry.freshness,
-                       entry.confidence, entry.official_rank
-                FROM api_frozen_leaderboard_entries AS entry
+                       entry.trophies, entry.profile_observed_at,
+                       entry.profile_freshness, entry.profile_confidence,
+                       entry.official_rank, profile.clan
+                FROM leaderboard_snapshot_entries AS entry
                 JOIN players AS player ON player.id = entry.player_id
-                LEFT JOIN player_profile_versions AS profile
-                    ON profile.id = player.current_profile_version_id
-                WHERE entry.leaderboard_id = %s
-                ORDER BY entry.position
-                LIMIT %s
+                LEFT JOIN LATERAL (
+                    SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan
+                    FROM player_profile_versions AS version
+                    WHERE version.observation_id = entry.profile_observation_id
+                    ORDER BY version.id DESC LIMIT 1
+                ) AS profile ON true
+                WHERE entry.snapshot_id = %s
+                ORDER BY entry.position LIMIT %s OFFSET %s
                 """,
-                (snapshot[0], limit),
+                (snapshot[0], limit, offset),
             ).fetchall()
-            boundary_at = snapshot[2].astimezone(UTC)
-            coverage = dict(snapshot[5])
-            measured = float(coverage.get("measured", 0))
-            measured_percent = measured * 100 if measured <= 1 else measured
-            population = int(coverage.get("eligible_population", len(rows)))
-            snapshot_is_stale = any(_text(row[6]) == "stale" for row in rows)
+            boundary_at = snapshot[1].astimezone(UTC)
+            measured = float(snapshot[5])
+            page_count = (total_entries + limit - 1) // limit
+            page = offset // limit + 1
             return {
-                "kind": "frozen",
-                "snapshot_id": str(snapshot[1]),
-                "boundary_at": snapshot[2].astimezone(UTC).isoformat(),
-                "version": int(snapshot[3]),
-                "ordering_rule_version": _text(snapshot[4]),
-                "generated_at": boundary_at.isoformat(),
-                "tracked_population": population,
-                "coverage": {
-                    "state": "partial",
-                    "tracked_players": population,
-                    "measured_percent": measured_percent,
-                    "note": "Published frozen snapshot coverage is measured from its accepted population.",
-                },
-                "provenance": {
-                    "source": "published frozen leaderboard snapshot",
+                "kind": "frozen", "snapshot_id": str(snapshot[0]),
+                "boundary_at": boundary_at.isoformat(), "reset_at": boundary_at.isoformat(),
+                "official_season_id": _text(snapshot[14]), "season_day_number": int(snapshot[15]),
+                "previous_snapshot": snapshot[16], "next_snapshot": snapshot[17],
+                "generated_at": boundary_at.isoformat(), "version": int(snapshot[2]),
+                "ordering_rule_version": _text(snapshot[3]),
+                "tracked_population": int(snapshot[6]), "total_entries": total_entries,
+                "page": page, "page_size": limit, "page_count": page_count,
+                "has_previous": page > 1, "has_next": page < page_count,
+                "coverage": {"state": "partial", "tracked_players": int(snapshot[6]),
+                    "measured_percent": measured * 100 if measured <= 1 else measured,
+                    "note": "Published frozen snapshot coverage is measured from its accepted population."},
+                "provenance": {"source": "published frozen leaderboard snapshot",
                     "observed_at": boundary_at.isoformat(),
-                    "freshness": "stale" if snapshot_is_stale else "fresh",
-                    "confidence": "partial",
-                    "coverage": "partial",
-                    "version": _text(snapshot[4]),
-                },
-                "quality_states": ["partial"]
-                + (["stale"] if snapshot_is_stale else []),
-                "entries": [
-                    {
-                        "position": int(row[0]),
-                        "tag": _text(row[1]),
-                        "name": None if row[2] is None else _text(row[2]),
-                        "clan": None if row[3] is None else _text(row[3]),
-                        "trophies": int(row[4]),
-                        "observed_at": row[5].astimezone(UTC).isoformat(),
-                        "age_seconds": max(
-                            0,
-                            int(
-                                (
-                                    now.astimezone(UTC) - row[5].astimezone(UTC)
-                                ).total_seconds()
-                            ),
-                        ),
-                        "freshness": _text(row[6]),
-                        "confidence": _text(row[7]),
-                        "public_confidence": _public_snapshot_confidence(_text(row[7])),
-                        "official_rank": None if row[8] is None else int(row[8]),
-                    }
-                    for row in rows
-                ],
+                    "freshness": "stale" if int(snapshot[8]) else "fresh",
+                    "confidence": "partial", "coverage": "partial", "version": _text(snapshot[3])},
+                "quality_states": ["partial"] + (["stale"] if int(snapshot[8]) else []),
+                "entries": [{
+                    "position": int(row[0]), "tag": _text(row[1]),
+                    "name": None if row[2] is None else _text(row[2]), "trophies": int(row[3]),
+                    "observed_at": row[4].astimezone(UTC).isoformat(),
+                    "age_seconds": max(0, int((now.astimezone(UTC) - row[4].astimezone(UTC)).total_seconds())),
+                    "freshness": _text(row[5]), "confidence": _text(row[6]),
+                    "public_confidence": _public_snapshot_confidence(_text(row[6])),
+                    "official_rank": None if row[7] is None else int(row[7]),
+                    "clan": None if row[8] is None else _text(row[8]),
+                } for row in rows],
             }
 
     def get_basic_analytics(

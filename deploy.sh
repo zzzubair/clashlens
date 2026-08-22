@@ -10,6 +10,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0004_source_parser_v2.sql"
   "$ROOT_DIR/deploy/migrations/0005_army_decoding.sql"
   "$ROOT_DIR/deploy/migrations/0006_provider_identities.sql"
+  "$ROOT_DIR/deploy/migrations/0007_player_discovery.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -312,8 +313,8 @@ validate_common_settings() {
   [[ -z "${CLASHLENS_OFFICIAL_PROXY_URL:-}" ]] || die "CLASHLENS_OFFICIAL_PROXY_URL is derived from CLASHLENS_OFFICIAL_API_PROXY_URL; do not set it in app.env"
   [[ -z "${ENV_PRESENT[CLASHLENS_OFFICIAL_PROXY_URL]+present}" ]] || die "CLASHLENS_OFFICIAL_PROXY_URL is derived from CLASHLENS_OFFICIAL_API_PROXY_URL; do not set it in app.env"
   [[ -z "${CLASHLENS_PYTHON_WORKER_IMAGE:-}" ]] || die "CLASHLENS_PYTHON_WORKER_IMAGE was renamed to CLASHLENS_PYTHON_IMAGE"
-  [[ -z "${CLASHLENS_ENABLE_GLOBAL_RANKINGS:-}" || "$CLASHLENS_ENABLE_GLOBAL_RANKINGS" == "false" ]] || \
-    die "global Top-200 collection must stay default-off for the beta"
+  [[ -z "${ENV_PRESENT[CLASHLENS_ENABLE_GLOBAL_RANKINGS]+present}" ]] || \
+    die "CLASHLENS_ENABLE_GLOBAL_RANKINGS is deployment-owned; remove it from app.env"
 
   [[ "$POSTGRES_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "POSTGRES_DB must be a valid PostgreSQL database name"
   [[ "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "POSTGRES_USER must be a valid PostgreSQL role name"
@@ -744,6 +745,7 @@ collector_run() {
     collector_archive_secret_args secrets env_args
   else
     collector_credential_secret_args secrets env_args
+    env_args+=(--env "CLASHLENS_ENABLE_GLOBAL_RANKINGS=true")
   fi
   env_args+=(--env "CLASHLENS_SCHEMA_VERSION=$schema_version")
   env_args+=(--env "CLASHLENS_SHARED_TRAFFIC_GATE_MODE=$traffic_mode")
@@ -1344,6 +1346,12 @@ case "$command" in
       stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
       secret_rm clashlens-bridge-database-url
     elif [[ "$version" == "2" && "$fresh_bootstrap" != true ]]; then
+      # Migration 0007 exposes work older collectors interpret incorrectly.
+      # Drain them only while installing that migration; ordinary up preserves workers.
+      if ! schema_migration_applied 7; then
+        stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
+        stop_all_worker_containers
+      fi
       apply_pending_forward_migrations
       configure_runtime_roles
     fi

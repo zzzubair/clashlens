@@ -1,23 +1,75 @@
-import { Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
+import { Link, redirect, useLoaderData, type LoaderFunctionArgs } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { formatTimestamp } from "../components/Provenance";
 import { canonicalPlayerPath } from "../lib/player-tag";
-import type { TrackedLeaderboard, WebsiteErrorResponse } from "../lib/contracts";
+import type {
+  SnapshotSelector,
+  TrackedLeaderboard,
+  WebsiteErrorResponse,
+} from "../lib/contracts";
+
+const PAGE_SIZE = 100;
+
+function leaderboardUrl(
+  view: "live" | "daily",
+  page: number,
+  selector?: SnapshotSelector,
+) {
+  const query = new URLSearchParams({ view });
+  if (view === "daily" && selector) {
+    query.set("season", selector.officialSeasonId);
+    query.set("day", String(selector.dayNumber));
+  }
+  query.set("page", String(page));
+  return `/leaderboards/tracked?${query.toString()}`;
+}
 
 export async function loader({ request }: LoaderFunctionArgs): Promise<{
   leaderboard: TrackedLeaderboard | null;
   error: WebsiteErrorResponse | null;
 }> {
-  const view =
-    new URL(request.url).searchParams.get("view") === "daily" ? "daily" : "live";
+  const url = new URL(request.url);
+  const viewValue = url.searchParams.get("view");
+  if (viewValue === null) throw redirect(leaderboardUrl("live", 1));
+  if (viewValue !== "live" && viewValue !== "daily")
+    throw new Response(null, { status: 422 });
+  const season = url.searchParams.get("season");
+  const dayValue = url.searchParams.get("day");
+  const pageValue =
+    url.searchParams.get("page") ??
+    (viewValue === "daily" && season === null && dayValue === null ? "1" : null);
+  if (!pageValue || !/^[1-9][0-9]*$/.test(pageValue))
+    throw new Response(null, { status: 422 });
+  const page = Number(pageValue);
+  if (!Number.isSafeInteger(page) || !Number.isSafeInteger((page - 1) * PAGE_SIZE))
+    throw new Response(null, { status: 422 });
+  if (viewValue === "live" && (season !== null || dayValue !== null))
+    throw new Response(null, { status: 422 });
+  if (viewValue === "daily" && (season === null) !== (dayValue === null))
+    throw new Response(null, { status: 422 });
+  let selector: SnapshotSelector | undefined;
+  if (season !== null && dayValue !== null) {
+    if (!season || !/^(?:[1-9]|1[0-9]|2[0-8])$/.test(dayValue))
+      throw new Response(null, { status: 422 });
+    selector = { officialSeasonId: season, dayNumber: Number(dayValue) };
+  }
   try {
     const { createPythonClient } = await import("../services/python.server");
-    return {
-      leaderboard: await createPythonClient().getTrackedLeaderboard(30, view),
-      error: null,
-    };
+    const leaderboard = await createPythonClient().getTrackedLeaderboard(
+      PAGE_SIZE,
+      viewValue,
+      (page - 1) * PAGE_SIZE,
+      selector,
+    );
+    if (viewValue === "daily" && !selector && leaderboard.daily)
+      throw redirect(leaderboardUrl("daily", page, leaderboard.daily));
+    return { leaderboard, error: null };
   } catch (cause) {
+    const { PythonApiError } = await import("../services/python.server");
+    if (cause instanceof PythonApiError && (cause.status === 404 || cause.status === 422))
+      throw new Response(null, { status: cause.status });
+    if (cause instanceof Response) throw cause;
     const { safeWebsiteError } = await import("../server/errors.server");
     return { leaderboard: null, error: safeWebsiteError(cause) };
   }
@@ -28,39 +80,45 @@ export function headers() {
 }
 
 export default function TrackedLeaderboardRoute() {
-  const data = useLoaderData<typeof loader>();
+  const { leaderboard, error } = useLoaderData<typeof loader>();
+  const view = leaderboard?.view ?? "live";
+  const daily = leaderboard?.daily;
   return (
     <main className="page-shell">
       <section className="hero" aria-labelledby="leaderboard-title">
         <h1 id="leaderboard-title">
-          {data.leaderboard?.view === "daily" ? "Daily leaderboard" : "Live leaderboard"}
+          {daily ? `Daily leaderboard · Day ${daily.dayNumber}` : "Live leaderboard"}
         </h1>
+        {daily ? (
+          <p>
+            Season ending around{" "}
+            {new Intl.DateTimeFormat("en", {
+              month: "long",
+              year: "numeric",
+              timeZone: "UTC",
+            }).format(new Date(daily.resetAt))}
+            {" · reset "}
+            <time dateTime={daily.resetAt}>{formatTimestamp(daily.resetAt)}</time>
+          </p>
+        ) : null}
         <nav aria-label="Leaderboard views" className="hero-actions">
-          <Link className="button secondary" to="/leaderboards/tracked?view=live">
+          <Link className="button secondary" to={leaderboardUrl("live", 1)}>
             Live
           </Link>
-          <Link className="button secondary" to="/leaderboards/tracked?view=daily">
+          <Link className="button secondary" to="/leaderboards/tracked?view=daily&page=1">
             Daily
           </Link>
         </nav>
       </section>
-      {data.error ? <ErrorNotice error={data.error} /> : null}
-      {data.leaderboard ? (
+      {error ? <ErrorNotice error={error} /> : null}
+      {leaderboard ? (
         <section className="data-section" aria-label="Leaderboard entries">
           <div className="table-wrap">
             <table
-              aria-label={
-                data.leaderboard.view === "daily"
-                  ? "Daily leaderboard"
-                  : "Live leaderboard"
-              }
+              aria-label={view === "daily" ? "Daily leaderboard" : "Live leaderboard"}
               className="data-table responsive-table"
             >
-              <caption className="sr-only">
-                {data.leaderboard.view === "daily"
-                  ? "Players on the daily leaderboard"
-                  : "Players on the live leaderboard"}
-              </caption>
+              <caption className="sr-only">Players on the {view} leaderboard</caption>
               <thead>
                 <tr>
                   <th scope="col">Rank</th>
@@ -71,7 +129,7 @@ export default function TrackedLeaderboardRoute() {
                 </tr>
               </thead>
               <tbody>
-                {data.leaderboard.entries.map((entry) => (
+                {leaderboard.entries.map((entry) => (
                   <tr key={entry.tag}>
                     <td data-label="Rank">{entry.rank}</td>
                     <th scope="row" data-label="Player">
@@ -103,6 +161,31 @@ export default function TrackedLeaderboardRoute() {
               </tbody>
             </table>
           </div>
+          <nav aria-label="Leaderboard pages" className="hero-actions">
+            {leaderboard.hasPrevious ? (
+              <Link to={leaderboardUrl(view, leaderboard.page - 1, daily ?? undefined)}>
+                Previous
+              </Link>
+            ) : null}
+            <span>
+              Page {leaderboard.page} of {leaderboard.pageCount}
+            </span>
+            {leaderboard.hasNext ? (
+              <Link to={leaderboardUrl(view, leaderboard.page + 1, daily ?? undefined)}>
+                Next
+              </Link>
+            ) : null}
+          </nav>
+          {daily ? (
+            <nav aria-label="Daily snapshots" className="hero-actions">
+              {daily.previousSnapshot ? (
+                <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>Older</Link>
+              ) : null}
+              {daily.nextSnapshot ? (
+                <Link to={leaderboardUrl("daily", 1, daily.nextSnapshot)}>Newer</Link>
+              ) : null}
+            </nav>
+          ) : null}
         </section>
       ) : (
         <div className="empty-state">

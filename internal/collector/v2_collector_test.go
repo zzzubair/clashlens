@@ -376,6 +376,106 @@ func TestParserVersionForEndpointUsesPythonSourceContract(t *testing.T) {
 	}
 }
 
+func TestDiscoveryProfileUsesOnlyNormalProfileWork(t *testing.T) {
+	ctx := context.Background()
+	store, databaseURL := startVersionTwoStoreWithURL(t, ctx)
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect for discovery migration: %v", err)
+	}
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql"))
+	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0007_player_discovery.sql"))
+	if err := connection.Close(ctx); err != nil {
+		t.Fatalf("close discovery migration connection: %v", err)
+	}
+	var unknownID, eligibleID int64
+	if err := store.pool.QueryRow(ctx, `
+		WITH inserted AS (
+			INSERT INTO players (normalized_tag, active, eligibility_state)
+			VALUES ('#2PP', false, 'unknown'), ('#2PQ', true, 'eligible')
+			RETURNING id, normalized_tag
+		)
+		SELECT max(id) FILTER (WHERE normalized_tag = '#2PP'),
+		       max(id) FILTER (WHERE normalized_tag = '#2PQ') FROM inserted
+	`).Scan(&unknownID, &eligibleID); err != nil {
+		t.Fatalf("insert discovered players: %v", err)
+	}
+	var created, repeated int
+	if err := store.pool.QueryRow(ctx,
+		`SELECT clashlens_enqueue_discovery_profiles($1::bigint[])`,
+		[]int64{unknownID, unknownID, eligibleID},
+	).Scan(&created); err != nil {
+		t.Fatalf("enqueue discovery profile work: %v", err)
+	}
+	if err := store.pool.QueryRow(ctx,
+		`SELECT clashlens_enqueue_discovery_profiles($1::bigint[])`, []int64{unknownID},
+	).Scan(&repeated); err != nil {
+		t.Fatalf("repeat discovery profile work: %v", err)
+	}
+	if created != 1 || repeated != 0 {
+		t.Fatalf("discovery jobs created = %d then %d, want 1 then 0", created, repeated)
+	}
+	var workerExecute, apiExecute, collectorExecute, workerInsert, apiSelectorRead bool
+	if err := store.pool.QueryRow(ctx, `
+		SELECT
+			has_function_privilege('clashlens_python_worker', 'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
+			has_function_privilege('clashlens_python_api', 'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
+			has_function_privilege('clashlens_collector', 'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
+			has_table_privilege('clashlens_python_worker', 'collector_jobs', 'INSERT'),
+			has_table_privilege('clashlens_python_api', 'ranked_day_versions', 'SELECT')
+	`).Scan(&workerExecute, &apiExecute, &collectorExecute, &workerInsert, &apiSelectorRead); err != nil {
+		t.Fatalf("read discovery privileges: %v", err)
+	}
+	if !workerExecute || apiExecute || collectorExecute || workerInsert || !apiSelectorRead {
+		t.Fatalf("unexpected discovery privileges: worker=%v api=%v collector=%v insert=%v selector=%v",
+			workerExecute, apiExecute, collectorExecute, workerInsert, apiSelectorRead)
+	}
+	requests := make([]string, 0, 2)
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests = append(requests, request.URL.Path)
+		response.Header().Set("Content-Type", "application/json")
+		if len(requests) == 1 {
+			response.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(response, `{"reason":"retry"}`)
+			return
+		}
+		_, _ = io.WriteString(response, `{"tag":"#2PP"}`)
+	}))
+	t.Cleanup(api.Close)
+	official := newTestOfficialAPIClient(t, api.URL, 1<<20)
+	keys, err := newKeyPool([]APIKey{{Label: "normal-1", Secret: "normal-secret", Pool: normalPool}}, 30, false)
+	if err != nil {
+		t.Fatalf("create discovery key pool: %v", err)
+	}
+	worker := newWorker(store, &memoryArchive{}, official, keys, workerConfig{
+		owner: "discovery-worker", leaseDuration: time.Minute,
+		collectorVersion: "collector-v2", maximumRetries: 1,
+		retryPolicy: newRetryPolicy(0, 0, 0),
+	})
+	for run := 0; run < 2; run++ {
+		claimed, runErr := worker.runOnce(ctx, normalPool)
+		if runErr != nil || !claimed {
+			t.Fatalf("discovery worker run %d: claimed=%v err=%v", run+1, claimed, runErr)
+		}
+	}
+	if len(requests) != 2 || requests[0] != "/v1/players/#2PP" || requests[1] != requests[0] {
+		t.Fatalf("discovery requests = %v, want two profile requests", requests)
+	}
+	var retryEndpoints, battleEndpoints int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE job.work_type = 'endpoint_retry' AND job.required_endpoint = 'profile'),
+		       count(*) FILTER (WHERE result.endpoint = 'battle_log')
+		FROM collector_jobs AS job
+		LEFT JOIN collector_attempts AS attempt ON attempt.job_id = job.id
+		LEFT JOIN collector_endpoint_results AS result ON result.attempt_id = attempt.id
+	`).Scan(&retryEndpoints, &battleEndpoints); err != nil {
+		t.Fatalf("read discovery retry evidence: %v", err)
+	}
+	if retryEndpoints != 1 || battleEndpoints != 0 {
+		t.Fatalf("discovery retry/profile evidence = %d retries, %d battle endpoints", retryEndpoints, battleEndpoints)
+	}
+}
+
 func startVersionTwoStore(t *testing.T, ctx context.Context) *store {
 	t.Helper()
 	// The embedded PostgreSQL bootstrap can take longer under race

@@ -65,21 +65,67 @@ test("full live leaderboard presents only the Clash Lens rank and public fields"
     page
       .getByRole("table", { name: "Live leaderboard" })
       .getByRole("link", { name: "View player →" }),
-  ).toHaveCount(30);
+  ).toHaveCount(100);
+});
+
+test("live leaderboard paginates with canonical absolute ranks", async ({ page }) => {
+  await page.goto("/leaderboards/tracked?view=live&page=1");
+  await page.getByRole("link", { name: "Next" }).click();
+  await expect(page).toHaveURL(/\/leaderboards\/tracked\?view=live&page=2$/);
+  const table = page.getByRole("table", { name: "Live leaderboard" });
+  await expect(table.getByRole("row")).toHaveCount(2);
+  await expect(table.getByRole("row").nth(1).getByRole("cell").first()).toHaveText("101");
+  await expect(page.getByRole("link", { name: "Previous" })).toBeVisible();
+});
+
+test("unselected Daily canonical redirect preserves its page", async ({ page }) => {
+  await page.goto("/leaderboards/tracked?view=daily&page=2");
+  await expect(page).toHaveURL(
+    /\/leaderboards\/tracked\?view=daily&season=2026-08&day=21&page=2$/,
+  );
+  await expect(
+    page.getByRole("table", { name: "Daily leaderboard" }).getByRole("row"),
+  ).toHaveCount(2);
 });
 
 test("daily leaderboard renders the frozen production wire fixture", async ({ page }) => {
   await page.goto("/leaderboards/tracked?view=daily");
 
   await expect(
-    page.getByRole("heading", { name: "Daily leaderboard", exact: true, level: 1 }),
+    page.getByRole("heading", {
+      name: "Daily leaderboard · Day 21",
+      exact: true,
+      level: 1,
+    }),
   ).toBeVisible();
   const table = page.getByRole("table", { name: "Daily leaderboard" });
   await expect(table).toBeVisible();
-  await expect(table.getByRole("row")).toHaveCount(31);
+  await expect(table.getByRole("row")).toHaveCount(101);
   await expect(table.getByRole("row").nth(1)).toContainText("Nova");
   await expect(table.getByRole("row").nth(1)).toContainText("#2PP");
   await expect(table.getByRole("row").nth(1)).toContainText("7,211");
+  await page.getByRole("link", { name: "Older" }).click();
+  await expect(page).toHaveURL(
+    /\/leaderboards\/tracked\?view=daily&season=2026-07&day=28&page=1$/,
+  );
+  await expect(
+    page.getByRole("heading", { name: "Daily leaderboard · Day 28", level: 1 }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Newer" })).toBeVisible();
+});
+
+test("leaderboard rejects unsafe page integers", async ({ request }) => {
+  const response = await request.get(
+    "/leaderboards/tracked?view=live&page=9007199254740992",
+  );
+  expect(response.status()).toBe(422);
+});
+
+test("leaderboard preserves an upstream validation status", async ({ request }) => {
+  const response = await request.get(
+    "/leaderboards/tracked?view=daily&season=fixture-422&day=1&page=1",
+  );
+  expect(response.status()).toBe(422);
 });
 
 test("shared header back returns from a player to the originating page", async ({
@@ -94,7 +140,9 @@ test("shared header back returns from a player to the originating page", async (
   await expect(page.locator("main").getByRole("link", { name: /Back/ })).toHaveCount(0);
   await back.click();
 
-  await expect(page).toHaveURL(/\/leaderboards\/tracked\?view=daily$/);
+  await expect(page).toHaveURL(
+    /\/leaderboards\/tracked\?view=daily&season=2026-08&day=21&page=1$/,
+  );
 });
 
 test("shared header back falls home when a new tab has no back entry", async ({
@@ -109,7 +157,7 @@ test("shared header back falls home when a new tab has no back entry", async ({
   await expect.poll(() => playerPage.evaluate(() => window.history.length)).toBe(1);
   await expect
     .poll(() => playerPage.evaluate(() => document.referrer))
-    .toMatch(/\/leaderboards\/tracked$/);
+    .toMatch(/\/leaderboards\/tracked\?view=live&page=1$/);
   await playerPage.getByRole("link", { name: /Back/ }).click();
 
   await expect(playerPage).toHaveURL(/\/$/);

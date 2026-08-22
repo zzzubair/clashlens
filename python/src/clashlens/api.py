@@ -298,22 +298,28 @@ def create_app(
         kind: Literal["live", "frozen"],
         request: Request,
         limit: int = Query(default=100, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+        official_season_id: str | None = None,
+        season_day_number: int | None = Query(default=None, ge=1, le=28),
     ) -> JSONResponse:
         _authorize(request, "leaderboards.read", production_database)
+        if offset % limit or (official_season_id is None) != (season_day_number is None):
+            raise ApiError(422, "invalid_request")
         if kind == "live":
+            if official_season_id is not None:
+                raise ApiError(422, "invalid_request")
             result = production_database.get_live_leaderboard(
-                limit=limit,
-                now=current_time(),
+                limit=limit, offset=offset, now=current_time(),
                 freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
             )
         else:
             result = production_database.get_frozen_leaderboard(
-                limit=limit,
-                now=current_time(),
+                limit=limit, offset=offset, official_season_id=official_season_id,
+                season_day_number=season_day_number, now=current_time(),
                 freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
             )
-            if result is None:
-                raise ApiError(404, "leaderboard_not_found")
+        if result is None:
+            raise ApiError(404, "leaderboard_not_found")
         return JSONResponse(status_code=200, content=result)
 
     @app.get("/v1/analytics/basic")

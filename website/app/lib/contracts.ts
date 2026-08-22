@@ -48,11 +48,29 @@ export interface TrackedPlayerEntry {
   officialRank: number | null;
 }
 
+export interface SnapshotSelector {
+  officialSeasonId: string;
+  dayNumber: number;
+}
+
 export interface TrackedLeaderboard {
   kind: "tracked-leaderboard";
   view: "live" | "daily";
   entries: TrackedPlayerEntry[];
   totalTracked: number;
+  totalEntries: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  daily:
+    | (SnapshotSelector & {
+        resetAt: string;
+        previousSnapshot: SnapshotSelector | null;
+        nextSnapshot: SnapshotSelector | null;
+      })
+    | null;
   coverage: {
     state: CoverageState;
     trackedPlayers: number;

@@ -2,6 +2,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 
+function emptyLivePayload() {
+  return {
+    kind: "live",
+    tracked_population: 0,
+    total_entries: 0,
+    page: 1,
+    page_size: 25,
+    page_count: 0,
+    has_previous: false,
+    has_next: false,
+    coverage: {
+      state: "partial",
+      tracked_players: 0,
+      measured_percent: 0,
+      note: "Empty.",
+    },
+    provenance: {
+      source: "test",
+      observed_at: "2026-08-06T12:00:00Z",
+      freshness: "fresh",
+      confidence: "partial",
+      coverage: "partial",
+      version: "test-v1",
+    },
+    quality_states: ["partial"],
+    entries: [],
+  };
+}
+
 describe("server-only Python client response boundary", () => {
   const savedEnvironment = {
     NODE_ENV: process.env.NODE_ENV,
@@ -41,6 +70,55 @@ describe("server-only Python client response boundary", () => {
       status: 502,
       payload: { error: "malformed" },
     });
+  });
+
+  it.each([
+    ["wrong requested kind", { ...emptyLivePayload(), kind: "frozen" }],
+    ["inconsistent pagination", { ...emptyLivePayload(), page_count: 1 }],
+  ])("rejects %s", async (_name, payload) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    await expect(createPythonClient().getTrackedLeaderboard()).rejects.toMatchObject({
+      status: 502,
+      payload: { error: "malformed" },
+    });
+  });
+
+  it("rejects an out-of-range Daily selector", async () => {
+    const payload = {
+      ...emptyLivePayload(),
+      kind: "frozen",
+      reset_at: "2026-08-06T05:00:00Z",
+      official_season_id: "2026-08",
+      season_day_number: 29,
+      previous_snapshot: null,
+      next_snapshot: null,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    await expect(
+      createPythonClient().getTrackedLeaderboard(25, "daily"),
+    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
   });
 
   it("does not use an environment secret in production", async () => {
@@ -229,7 +307,7 @@ describe("server-only Python client response boundary", () => {
     });
 
     expect(fetchMock.mock.calls[0]?.[0]).toEqual(
-      new URL("/v1/leaderboards/live?limit=25", "http://python-fixture.test/"),
+      new URL("/v1/leaderboards/live?limit=25&offset=0", "http://python-fixture.test/"),
     );
   });
 
@@ -243,6 +321,12 @@ describe("server-only Python client response boundary", () => {
             ordering_rule_version: "tracked-trophies-md5-v1",
             generated_at: "2026-08-06T12:00:00+00:00",
             tracked_population: 2,
+            total_entries: 1,
+            page: 1,
+            page_size: 25,
+            page_count: 1,
+            has_previous: false,
+            has_next: false,
             coverage: {
               state: "partial",
               tracked_players: 2,
@@ -301,6 +385,17 @@ describe("server-only Python client response boundary", () => {
             version: 7,
             ordering_rule_version: "snapshot-v1",
             tracked_population: 3,
+            total_entries: 1,
+            page: 1,
+            page_size: 25,
+            page_count: 1,
+            has_previous: false,
+            has_next: false,
+            reset_at: "2026-08-06T05:00:00+00:00",
+            official_season_id: "2026-08",
+            season_day_number: 21,
+            previous_snapshot: null,
+            next_snapshot: null,
             coverage: {
               state: "partial",
               tracked_players: 3,
@@ -340,12 +435,24 @@ describe("server-only Python client response boundary", () => {
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
     const { createPythonClient } = await import("../../app/services/python.server");
     await expect(
-      createPythonClient().getTrackedLeaderboard(25, "daily"),
+      createPythonClient().getTrackedLeaderboard(25, "daily", 0, {
+        officialSeasonId: "2026-08",
+        dayNumber: 21,
+      }),
     ).resolves.toMatchObject({
       view: "daily",
       entries: [{ name: "Unknown", clan: "Unknown" }],
+      page: 1,
+      pageSize: 25,
+      daily: { officialSeasonId: "2026-08", dayNumber: 21 },
       coverage: { measuredPercent: 66.67 },
     });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toEqual(
+      new URL(
+        "/v1/leaderboards/frozen?limit=25&offset=0&official_season_id=2026-08&season_day_number=21",
+        "http://python-fixture.test/",
+      ),
+    );
   });
 
   it("maps the exact Python search payload and preserves uncertain confidence", async () => {

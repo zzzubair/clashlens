@@ -1324,6 +1324,11 @@ class Database:
                         """,
                         (Jsonb(discoveries), observation_id, battle_log.observed_at),
                     )
+                    if claim.work_type == "process_observation":
+                        connection.execute(
+                            "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
+                            (sorted({item["player_id"] for item in discoveries}),),
+                        )
                     canonical_rows = connection.execute(
                         """
                         WITH input AS (
@@ -1615,6 +1620,11 @@ class Database:
                         ON CONFLICT DO NOTHING
                         """,
                         (player_id, observation_id, entry.rank - 1, observed_at),
+                    )
+                if claim.work_type == "process_observation" and player_ids:
+                    connection.execute(
+                        "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
+                        (sorted(set(player_ids.values())),),
                     )
                 if rankings.outcome == "official_observed":
                     version = connection.execute(

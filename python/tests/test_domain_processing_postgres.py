@@ -582,7 +582,7 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
                     (first_observation_id,),
                 ).fetchone()[0]
 
-            assert counts == (1, 3, 2, 2)
+            assert counts == (1, 3, 2, 3)
             assert tuple(text(value) for value in battle) == (
                 "agreed",
                 "u1x0-2x1",
@@ -661,7 +661,7 @@ def test_concurrent_battle_batches_lock_shared_rows_in_one_order(
                     connection.execute(
                         "SELECT count(*) FROM known_player_discoveries"
                     ).fetchone()[0]
-                    == 2
+                    == 4
                 )
         finally:
             database.close()

@@ -107,6 +107,18 @@ PLAYER_SPECS = [
     ("#29PL", "Dawn", "Northwind", 6827, 8_640, "available"),
     ("#29PG", "Fable", "Blue Harbor", 6815, 9_000, "available"),
 ]
+_FIXTURE_TAG_ALPHABET = "0289PYLQGRJCUV"
+PLAYER_SPECS.extend(
+    (
+        "#Q" + _FIXTURE_TAG_ALPHABET[index // 14] + _FIXTURE_TAG_ALPHABET[index % 14],
+        f"Player {index + 31}",
+        "Fixture Clan",
+        6814 - index,
+        60,
+        "available",
+    )
+    for index in range(71)
+)
 
 STATE = {
     "jobs": {},
@@ -200,8 +212,9 @@ def entry_for(spec, position, kind="live"):
     }
 
 
-def leaderboard(limit, view):
-    limit = max(1, min(limit, len(PLAYER_SPECS)))
+def leaderboard(limit, view, offset=0, season=None, day=None):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
     kind = "frozen" if view == "daily" else "live"
     entries = [entry_for(spec, index, kind) for index, spec in enumerate(PLAYER_SPECS, 1)]
     if kind == "live":
@@ -214,8 +227,14 @@ def leaderboard(limit, view):
         "kind": kind,
         "ordering_rule_version": ordering_rule_version,
         "generated_at": FIXTURE_OBSERVED_AT,
-        "entries": entries[:limit],
+        "entries": entries[offset : offset + limit],
         "tracked_population": len(PLAYER_SPECS),
+        "total_entries": len(PLAYER_SPECS),
+        "page": offset // limit + 1,
+        "page_size": limit,
+        "page_count": (len(PLAYER_SPECS) + limit - 1) // limit,
+        "has_previous": offset > 0,
+        "has_next": offset + limit < len(PLAYER_SPECS),
         "coverage": {
             "state": "partial",
             "tracked_players": len(PLAYER_SPECS),
@@ -242,10 +261,20 @@ def leaderboard(limit, view):
         ],
     }
     if kind == "frozen":
+        older = season == "2026-07" and day == 28
         payload.update(
             {
-                "snapshot_id": "c74af723-6da8-54a3-a710-ee8229c9f747",
-                "boundary_at": "2026-08-05T05:00:00Z",
+                "snapshot_id": "6ccbbf21-87e2-5b22-8f05-e415c30ca6ac" if older else "c74af723-6da8-54a3-a710-ee8229c9f747",
+                "boundary_at": "2026-07-27T05:00:00Z" if older else "2026-08-05T05:00:00Z",
+                "reset_at": "2026-07-27T05:00:00Z" if older else "2026-08-05T05:00:00Z",
+                "official_season_id": "2026-07" if older else "2026-08",
+                "season_day_number": 28 if older else 21,
+                "previous_snapshot": None if older else {
+                    "official_season_id": "2026-07", "season_day_number": 28
+                },
+                "next_snapshot": {
+                    "official_season_id": "2026-08", "season_day_number": 21
+                } if older else None,
                 "version": 1,
             }
         )
@@ -711,10 +740,27 @@ class FixtureHandler(BaseHTTPRequestHandler):
         }:
             try:
                 limit = int(query.get("limit", ["25"])[0])
+                offset = int(query.get("offset", ["0"])[0])
             except ValueError:
-                limit = 25
+                limit, offset = 25, 0
             view = "daily" if path == "/v1/leaderboards/frozen" else query.get("view", ["live"])[0]
-            self.send_json(200, leaderboard(limit, view))
+            season = query.get("official_season_id", [None])[0]
+            try:
+                day = int(query["season_day_number"][0]) if "season_day_number" in query else None
+            except ValueError:
+                day = None
+            if offset >= len(PLAYER_SPECS) and offset:
+                self.send_json(404, {"error": "missing"})
+                return
+            if view == "daily" and season == "fixture-422":
+                self.send_json(422, {"error": "invalid_request"})
+                return
+            if view == "daily" and season is not None and (season, day) not in {
+                ("2026-08", 21), ("2026-07", 28)
+            }:
+                self.send_json(404, {"error": "missing"})
+                return
+            self.send_json(200, leaderboard(limit, view, offset, season, day))
             return
         if path == "/v1/players/search":
             try:
