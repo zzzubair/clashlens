@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# Run through a sudo rule that permits only this root-owned wrapper.
+set -euo pipefail
+
+PATH='/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+umask 077
+
+readonly OPERATOR_ALLOWLIST='/etc/clashlens/support-recovery-operators'
+readonly RECOVERY_CONFIG='/etc/clashlens/support-recovery.conf'
+readonly RUNUSER='/usr/sbin/runuser'
+
+status_denied() {
+    printf '%s\n' 'support_recovery_status=denied'
+    exit 1
+}
+
+status_unavailable() {
+    printf '%s\n' 'support_recovery_status=unavailable'
+    exit 1
+}
+
+read_recovery_token() {
+    [[ -r /dev/tty && -w /dev/tty ]] || return 1
+    IFS= read -r -s -p 'Current in-game API token: ' recovery_token </dev/tty || return 1
+    printf '\n' >/dev/tty
+    [[ -n "$recovery_token" ]]
+}
+
+protected_root_file() {
+    local path=$1 owner mode
+    [[ -f "$path" && -r "$path" ]] || return 1
+    owner=$(/usr/bin/stat -c '%u' -- "$path") || return 1
+    mode=$(/usr/bin/stat -c '%a' -- "$path") || return 1
+    [[ "$owner" == '0' && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0077) == 0 ))
+}
+
+protected_root_directory() {
+    local path=$1 owner mode
+    [[ -d "$path" && -x "$path" ]] || return 1
+    owner=$(/usr/bin/stat -c '%u' -- "$path") || return 1
+    mode=$(/usr/bin/stat -c '%a' -- "$path") || return 1
+    [[ "$owner" == '0' && "$mode" =~ ^[0-7]{3,4}$ ]] || return 1
+    (( (8#$mode & 0022) == 0 ))
+}
+
+script_path=$(/usr/bin/readlink -f -- "${BASH_SOURCE[0]}") || status_denied
+[[ "$(/usr/bin/id -u)" == '0' ]] || status_denied
+protected_root_file "$script_path" || status_denied
+protected_root_directory "${OPERATOR_ALLOWLIST%/*}" || status_denied
+protected_root_file "$OPERATOR_ALLOWLIST" || status_denied
+protected_root_file "$RECOVERY_CONFIG" || status_denied
+[[ -x "$RUNUSER" ]] || status_unavailable
+
+[[ -n "${SUDO_USER:-}" && -n "${SUDO_UID:-}" ]] || status_denied
+[[ "$SUDO_UID" =~ ^[1-9][0-9]*$ ]] || status_denied
+[[ "$SUDO_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || status_denied
+sudo_passwd_entry=$(/usr/bin/getent passwd "$SUDO_UID") || status_denied
+IFS=: read -r sudo_passwd_name _ sudo_passwd_uid _ <<<"$sudo_passwd_entry"
+[[ "$sudo_passwd_name" == "$SUDO_USER" && "$sudo_passwd_uid" == "$SUDO_UID" ]] || status_denied
+/usr/bin/grep -Fqx -- "$SUDO_USER" "$OPERATOR_ALLOWLIST" || status_denied
+
+service_account=''
+deploy_script=''
+while IFS='=' read -r name value || [[ -n "$name$value" ]]; do
+    [[ -z "$name$value" || "${name:0:1}" == '#' ]] && continue
+    case "$name" in
+        SERVICE_ACCOUNT)
+            [[ -z "$service_account" ]] || status_denied
+            service_account=$value
+            ;;
+        DEPLOY_SCRIPT)
+            [[ -z "$deploy_script" ]] || status_denied
+            deploy_script=$value
+            ;;
+        *) status_denied ;;
+    esac
+done < "$RECOVERY_CONFIG"
+[[ "$service_account" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || status_denied
+[[ "$deploy_script" == /* && -x "$deploy_script" ]] || status_denied
+service_passwd_entry=$(/usr/bin/getent passwd "$service_account") || status_denied
+IFS=: read -r service_name _ service_uid _ _ service_home _ <<<"$service_passwd_entry"
+[[ "$service_name" == "$service_account" && "$service_uid" =~ ^[1-9][0-9]*$ ]] || status_denied
+[[ -d "/run/user/$service_uid" ]] || status_unavailable
+
+target_account_public_id=''
+player_tag=''
+discord_user_id=''
+reason=''
+while (( $# > 0 )); do
+    case "$1" in
+        --target-account-public-id)
+            (( $# == 2 )) || status_denied
+            [[ -z "$target_account_public_id" ]] || status_denied
+            target_account_public_id=$2
+            shift 2
+            ;;
+        --player-tag)
+            (( $# == 2 )) || status_denied
+            [[ -z "$player_tag" ]] || status_denied
+            player_tag=$2
+            shift 2
+            ;;
+        --discord-user-id)
+            (( $# == 2 )) || status_denied
+            [[ -z "$discord_user_id" ]] || status_denied
+            discord_user_id=$2
+            shift 2
+            ;;
+        --reason)
+            (( $# == 2 )) || status_denied
+            [[ -z "$reason" ]] || status_denied
+            reason=$2
+            shift 2
+            ;;
+        *) status_denied ;;
+    esac
+done
+
+uuid_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+player_tag_pattern='^#[0289PYLQGRJCUV]{3,15}$'
+[[ "$target_account_public_id" =~ $uuid_pattern ]] || status_denied
+[[ "$player_tag" =~ $player_tag_pattern ]] || status_denied
+[[ "$discord_user_id" =~ ^[0-9]{17,20}$ ]] || status_denied
+[[ ${#reason} -ge 8 && ${#reason} -le 500 ]] || status_denied
+[[ "$reason" =~ ^[[:print:]]+$ ]] || status_denied
+
+# Prompt on the host TTY without echo, then send the proven in-game secret
+# only over stdin to the rootless container command.
+recovery_token=''
+read_recovery_token || status_unavailable
+operator_identity="sudo:${SUDO_USER}:${SUDO_UID}"
+set +e
+recovery_output=$(
+    printf '%s\n' "$recovery_token" \
+        | "$RUNUSER" --user "$service_account" -- \
+            /usr/bin/env -i HOME="$service_home" USER="$service_account" \
+            LOGNAME="$service_account" PATH="$PATH" \
+            XDG_RUNTIME_DIR="/run/user/$service_uid" \
+            "$deploy_script" support-recovery-exec \
+            --target-account-public-id="$target_account_public_id" \
+            --player-tag="$player_tag" \
+            --discord-user-id="$discord_user_id" \
+            --operator="$operator_identity" \
+            --reason="$reason" \
+            2>/dev/null
+)
+recovery_exit=$?
+unset recovery_token
+set -e
+
+recovery_status=$(
+    printf '%s\n' "$recovery_output" \
+        | /usr/bin/grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' \
+        | /usr/bin/tail -n 1 \
+        | /usr/bin/cut -d'"' -f4 \
+        || true
+)
+case "$recovery_status:$recovery_exit" in
+    attached:0)
+        printf '%s\n' 'support_recovery_status=attached'
+        exit 0
+        ;;
+    account_not_found:1|invalid_request:1|invalid_token:1|verification_unavailable:1|player_not_verified_on_account:1|refused_collision:1)
+        printf '%s\n' "support_recovery_status=$recovery_status"
+        exit 1
+        ;;
+    *) status_unavailable ;;
+esac

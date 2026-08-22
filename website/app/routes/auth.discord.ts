@@ -1,16 +1,16 @@
 import { redirect } from "react-router";
 
-import type { Route } from "./+types/auth.google";
+import type { Route } from "./+types/auth.discord";
 
 /**
- * GET /auth/google — start a fresh Google authorization transaction.
+ * GET /auth/discord — start a fresh Discord authorization transaction.
  *
- * The return path is validated against the exact public origin, a new
- * one-time OAuth transaction (state, nonce, PKCE) is created with its intent
+ * Discord uses OAuth2 Authorization Code with PKCE S256 and the `identify`
+ * scope only. The return path is validated against the exact public origin,
+ * a new one-time transaction is created for this provider with its intent
  * (login, or a link/unlink started from an authenticated account), and its
- * signed transaction cookie is set with the fixed ten-minute lifetime before
- * the browser is redirected to the provider. The provider receives only the
- * openid scope.
+ * signed transaction cookie is set before the browser is redirected to
+ * Discord.
  */
 export async function loader({ request }: Route.LoaderArgs): Promise<Response> {
   const { getWebsiteConfig } = await import("../server/config.server");
@@ -33,7 +33,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<Response> {
   // Privileged intents are started only by the protected account POST action;
   // query parameters on this public GET route can start login only.
   try {
-    return await startProviderAuthorization(config, "google", "login", returnPath);
+    return await startProviderAuthorization(config, "discord", "login", returnPath);
   } catch {
     throw redirect("/login");
   }

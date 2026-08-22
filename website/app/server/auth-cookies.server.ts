@@ -6,9 +6,9 @@
  * exactly-32-byte login secret, so any tamper is detected by a constant-time
  * comparison and the value is rejected as null. Login cookies carry only the
  * immutable provider and provider subject with a fixed non-sliding 24-hour
- * lifetime. OAuth transaction cookies carry only the state, nonce, PKCE
- * verifier and challenge, and same-origin return path with a ten-minute
- * lifetime. No Google tokens, email, or other personal data ever appears in a
+ * lifetime. OAuth transaction cookies carry only the provider they belong
+ * to, the state, nonce, PKCE verifier and challenge, and same-origin return
+ * path with a ten-minute lifetime. No Google tokens, email, or other personal data ever appears in a
  * cookie value, and every value stays far below the 4 KB cookie limit.
  *
  * The route layer composes Set-Cookie headers from these values; this module
@@ -17,15 +17,16 @@
  * later in the same login flow.
  */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import {
   isPlausibleTransaction,
+  isProvider,
   isProviderSubject,
   MAX_PROVIDER_SUBJECT_LENGTH,
   OAUTH_TRANSACTION_LIFETIME_SECONDS,
 } from "./google-oidc.server";
-import type { OAuthTransaction } from "./google-oidc.server";
+import type { OAuthIntent, OAuthTransaction } from "./google-oidc.server";
 
 export const LOGIN_COOKIE_NAME = "clashlens_login";
 export const OAUTH_COOKIE_NAME = "clashlens_oauth";
@@ -37,9 +38,15 @@ const MAX_COOKIE_VALUE_BYTES = 4096;
 const MAX_RETURN_PATH_LENGTH = 200;
 const RETURN_PATH_CHARS = /^[A-Za-z0-9._~/-]+$/;
 
+const LOGIN_PROVIDERS: ReadonlySet<string> = new Set(["google", "discord"]);
+
 export interface LoginIdentity {
-  provider: "google";
+  provider: "google" | "discord";
   providerSubject: string;
+}
+
+function isBoundedIntent(value: unknown): value is OAuthIntent {
+  return value === "login" || value === "link" || value === "unlink";
 }
 
 function isBoundedReturnPath(value: string): boolean {
@@ -147,8 +154,11 @@ export function createLoginCookieValue(
   nowSeconds: number,
 ): string {
   assertKey(key);
-  if (identity.provider !== "google" || !isProviderSubject(identity.providerSubject)) {
-    throw new Error("login identity must be a bounded Google subject");
+  if (
+    !LOGIN_PROVIDERS.has(identity.provider) ||
+    !isProviderSubject(identity.providerSubject)
+  ) {
+    throw new Error("login identity must be a bounded provider subject");
   }
   if (!Number.isSafeInteger(nowSeconds) || nowSeconds < 0) {
     throw new Error("login cookie timestamps must be safe integers");
@@ -175,7 +185,8 @@ export function parseLoginCookieValue(
   if (!isRecord(parsed)) return null;
   if (
     parsed.v !== COOKIE_VERSION ||
-    parsed.p !== "google" ||
+    typeof parsed.p !== "string" ||
+    !LOGIN_PROVIDERS.has(parsed.p) ||
     !isProviderSubject(parsed.s) ||
     !isSafeInteger(parsed.i) ||
     !isSafeInteger(parsed.e)
@@ -191,18 +202,23 @@ export function parseLoginCookieValue(
   ) {
     return null;
   }
-  return { provider: "google", providerSubject: parsed.s };
+  return { provider: parsed.p as LoginIdentity["provider"], providerSubject: parsed.s };
 }
 
 function canonicalOAuthPayload(transaction: OAuthTransaction): Buffer {
   const payload = Buffer.from(
     JSON.stringify({
       v: COOKIE_VERSION,
+      pr: transaction.provider,
       st: transaction.state,
       no: transaction.nonce,
       ve: transaction.codeVerifier,
       ch: transaction.codeChallenge,
       rp: transaction.returnPath,
+      in: transaction.intent,
+      ...(transaction.sessionBinding === undefined
+        ? {}
+        : { sb: transaction.sessionBinding }),
       i: transaction.issuedAt,
       e: transaction.expiresAt,
     }),
@@ -231,9 +247,9 @@ export function createOAuthTransactionCookieValue(
 
 /**
  * Parse and verify an OAuth transaction cookie value. Returns the
- * transaction or null for any missing, malformed, tampered, or expired
- * value. The callback route consumes (clears) the cookie after a successful
- * parse. Never throws for input.
+ * transaction or null for any missing, malformed, tampered, expired, or
+ * cross-provider value. The callback route consumes (clears) the cookie
+ * after a successful parse. Never throws for input.
  */
 export function parseOAuthTransactionCookieValue(
   value: string | undefined | null,
@@ -249,28 +265,42 @@ export function parseOAuthTransactionCookieValue(
     !isSafeInteger(parsed.i) ||
     !isSafeInteger(parsed.e) ||
     typeof parsed.st !== "string" ||
+    !isProvider(parsed.pr) ||
     typeof parsed.no !== "string" ||
     typeof parsed.ve !== "string" ||
     typeof parsed.ch !== "string" ||
     typeof parsed.rp !== "string" ||
+    !isBoundedIntent(parsed.in) ||
     !isBoundedReturnPath(parsed.rp)
   ) {
     return null;
   }
   const transaction: OAuthTransaction = {
+    provider: parsed.pr,
     state: parsed.st,
     nonce: parsed.no,
     codeVerifier: parsed.ve,
     codeChallenge: parsed.ch,
     returnPath: parsed.rp,
+    intent: parsed.in,
+    ...(parsed.sb === undefined ? {} : { sessionBinding: parsed.sb as string }),
     issuedAt: parsed.i,
     expiresAt: parsed.e,
   };
-  if (!isPlausibleTransaction(transaction) || transaction.issuedAt > nowSeconds) {
+  if (
+    (parsed.sb !== undefined && typeof parsed.sb !== "string") ||
+    !isPlausibleTransaction(transaction) ||
+    transaction.issuedAt > nowSeconds
+  ) {
     return null;
   }
   if (nowSeconds >= transaction.expiresAt) return null;
   return transaction;
+}
+
+/** Bind a privileged OAuth transaction to the exact signed login session. */
+export function createLoginSessionBinding(loginCookieValue: string): string {
+  return createHash("sha256").update(loginCookieValue, "utf8").digest("base64url");
 }
 
 /**

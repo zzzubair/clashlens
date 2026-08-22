@@ -26,9 +26,14 @@ not print their values. Required inputs include:
 - the admin PostgreSQL password and the collector, worker, and API role
   passwords;
 - normal and interactive official API-key files;
-- separate collector-write and worker-read archive credentials; and
+- separate collector-write and worker-read archive credentials;
 - the current HMAC secret, plus an optional previous HMAC secret during
-  rotation.
+  rotation; and
+- for browser login: the browser session key file, the Google client-secret
+  file, and the Discord client-secret file, plus the non-secret Google and
+  Discord client IDs and the exact public https origin. The website starts
+  with login disabled when none of these are configured, and a partial login
+  configuration is rejected before any container change.
 
 `POSTGRES_USER` is the admin role used for migrations and role configuration.
 Role passwords must be 32–128 URL-safe characters (`A-Z`, `a-z`, `0-9`, `_`,
@@ -87,7 +92,8 @@ PostgreSQL containers use the `step6-v1` metrics profile, preload
 
 The collector contract version is separate from the schema migration number.
 The production contract is version 2. The current forward-migration set is
-0001 through 0005, with 0005 adding army decoding. `up` applies only missing
+0001 through 0006, with 0006 permitting both Phase 1 login providers (Google
+and Discord) and adding the provider audit relation. `up` applies only missing
 forward migrations recorded in `clash_lens_schema_migrations`; it never
 replays an applied migration. An unknown contract version is rejected without
 side effects.
@@ -158,6 +164,50 @@ systemctl --user enable --now clashlens.service \
 Enable lingering for the service account. Units use only start-only commands
 at boot: `restart`, `api-start`, `worker-start`, and `website-start`. They do
 not build images or run SQL.
+
+## Install support recovery
+
+Install the recovery wrapper as root, but configure it to enter the existing
+rootless Podman context owned by the deployment service account. Replace the
+example account and checkout path below; `DEPLOY_SCRIPT` must name the same
+`deploy.sh` used for the running stack, so its `app.env` supplies any Python
+API container-name override and Podman resolves in the service account's fixed
+system path.
+
+```bash
+sudo install -o root -g root -m 0700 deploy/support-recovery \
+  /usr/local/sbin/clashlens-support-recovery
+sudo install -d -o root -g root -m 0755 /etc/clashlens
+printf '%s\n' maintainer1 | sudo tee /etc/clashlens/support-recovery-operators >/dev/null
+sudo chmod 0600 /etc/clashlens/support-recovery-operators
+sudo tee /etc/clashlens/support-recovery.conf >/dev/null <<'EOF'
+SERVICE_ACCOUNT=clashlens
+DEPLOY_SCRIPT=/srv/clashlens/deploy.sh
+EOF
+sudo chmod 0600 /etc/clashlens/support-recovery.conf
+printf '%s\n' '%clashlens-support ALL=(root) /usr/local/sbin/clashlens-support-recovery *' \
+  | sudo tee /etc/sudoers.d/clashlens-support-recovery >/dev/null
+sudo chmod 0440 /etc/sudoers.d/clashlens-support-recovery
+sudo visudo -cf /etc/sudoers.d/clashlens-support-recovery
+```
+
+The allowlist contains one login name per line. Add those operators to the
+`clashlens-support` host group used by the sudo rule. The configured service
+account needs lingering enabled and its rootless runtime at
+`/run/user/<uid>` available. With the private API healthy, an allowlisted
+operator runs:
+
+```bash
+sudo /usr/local/sbin/clashlens-support-recovery \
+  --target-account-public-id ACCOUNT_UUID \
+  --player-tag '#PLAYER_TAG' \
+  --discord-user-id DISCORD_USER_ID \
+  --reason 'support ticket and proof summary'
+```
+
+Enter the current in-game API token only at the private prompt. The wrapper
+passes it over stdin to the existing API container and prints only a bounded
+`support_recovery_status` value.
 
 ## Operate and inspect
 

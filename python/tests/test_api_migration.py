@@ -58,6 +58,16 @@ def migrated_production_database(
                             ROOT / "deploy/migrations/0004_source_parser_v2.sql"
                         ).read_text(encoding="utf-8")
                     )
+                    connection.execute(
+                        (ROOT / "deploy/migrations/0005_army_decoding.sql").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    connection.execute(
+                        (
+                            ROOT / "deploy/migrations/0006_provider_identities.sql"
+                        ).read_text(encoding="utf-8")
+                    )
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -566,3 +576,113 @@ def test_source_parser_v2_migration_fences_existing_v2_work_from_prior_worker(
             assert claim.parser_version == "supercell-source-parser-v2"
         finally:
             database.close()
+
+
+def test_provider_identities_migration_permits_discord_and_stays_reentrant(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            migration_0006 = (
+                ROOT / "deploy/migrations/0006_provider_identities.sql"
+            ).read_text(encoding="utf-8")
+            # Reapplication is a stable no-op.
+            connection.execute(migration_0006)
+
+            first_account = connection.execute(
+                """
+                INSERT INTO clash_lens_accounts (
+                    public_id, username, normalized_username, display_name
+                ) VALUES (%s, 'PlayerOne', 'playerone', 'Player One')
+                RETURNING id
+                """,
+                (uuid4(),),
+            ).fetchone()[0]
+            second_account = connection.execute(
+                """
+                INSERT INTO clash_lens_accounts (
+                    public_id, username, normalized_username, display_name
+                ) VALUES (%s, 'PlayerTwo', 'playertwo', 'Player Two')
+                RETURNING id
+                """,
+                (uuid4(),),
+            ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO account_provider_identities (
+                    account_id, provider, provider_subject
+                ) VALUES (%s, 'google', 'google-subject-one')
+                """,
+                (first_account,),
+            )
+            connection.execute(
+                """
+                INSERT INTO account_provider_identities (
+                    account_id, provider, provider_subject
+                ) VALUES (%s, 'discord', 'discord-subject-two')
+                """,
+                (second_account,),
+            )
+            connection.commit()
+
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                with connection.transaction():
+                    connection.execute(
+                        """
+                        INSERT INTO account_provider_identities (
+                            account_id, provider, provider_subject
+                        ) VALUES (%s, 'discord', 'discord-subject-two')
+                        """,
+                        (first_account,),
+                    )
+            with pytest.raises(psycopg.errors.UniqueViolation):
+                with connection.transaction():
+                    connection.execute(
+                        """
+                        INSERT INTO account_provider_identities (
+                            account_id, provider, provider_subject
+                        ) VALUES (%s, 'discord', 'another-discord-subject')
+                        """,
+                        (second_account,),
+                    )
+
+            applied = connection.execute(
+                "SELECT true FROM clash_lens_schema_migrations WHERE version = 6"
+            ).fetchone()
+            assert applied is not None
+
+            audit_grants = connection.execute(
+                """
+                SELECT privilege_type FROM information_schema.role_table_grants
+                WHERE table_name = 'provider_identity_audits'
+                  AND grantee = 'clashlens_python_api'
+                ORDER BY privilege_type
+                """
+            ).fetchall()
+            assert [row[0] for row in audit_grants] == ["INSERT", "SELECT"]
+
+            # Unlink needs exactly one narrow DELETE on the identity table,
+            # granted to the API role and to no other runtime role.
+            delete_boundary = connection.execute(
+                """
+                SELECT role.rolname,
+                       has_table_privilege(
+                           role.rolname,
+                           format('%I.%I', current_schema(),
+                                  'account_provider_identities'),
+                           'DELETE'
+                       )
+                FROM pg_roles AS role
+                WHERE role.rolname IN (
+                    'clashlens_python_api',
+                    'clashlens_collector',
+                    'clashlens_python_worker'
+                )
+                ORDER BY role.rolname
+                """
+            ).fetchall()
+            assert delete_boundary == [
+                ("clashlens_collector", False),
+                ("clashlens_python_api", True),
+                ("clashlens_python_worker", False),
+            ]

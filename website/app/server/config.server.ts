@@ -14,7 +14,10 @@ import { readFileSync } from "node:fs";
 import { decodeSecretValue, loadSecretFile } from "./signer.server";
 
 export const GOOGLE_ISSUER = "https://accounts.google.com";
+export const DISCORD_API_BASE_URL = "https://discord.com";
 export const MAX_GOOGLE_CLIENT_ID_LENGTH = 256;
+/** Discord application (user) IDs are fixed-width numeric snowflakes. */
+export const MAX_DISCORD_CLIENT_ID_LENGTH = 20;
 export const MAX_CLIENT_SECRET_LENGTH = 512;
 
 export class WebsiteConfigError extends Error {
@@ -31,10 +34,14 @@ export interface WebsiteConfig {
   publicOrigin: URL;
   googleClientId: string;
   googleClientSecret: string;
+  discordClientId: string;
+  discordClientSecret: string;
   /** Exactly 32 bytes; HMAC key for the login and OAuth transaction cookies. */
   loginSecret: Buffer;
   /** OpenID issuer for discovery; defaults to Google, overridden in tests. */
   googleIssuerUrl: URL;
+  /** Discord API base; defaults to Discord, overridden in tests only. */
+  discordApiBaseUrl: URL;
   /** True for any https public origin; cookies then carry the Secure flag. */
   cookieSecure: boolean;
 }
@@ -66,8 +73,11 @@ export function loadWebsiteConfig(
       publicOrigin,
       googleClientId: "",
       googleClientSecret: "",
+      discordClientId: "",
+      discordClientSecret: "",
       loginSecret: Buffer.alloc(0),
       googleIssuerUrl: new URL(GOOGLE_ISSUER),
+      discordApiBaseUrl: new URL(DISCORD_API_BASE_URL),
       cookieSecure,
     };
   }
@@ -75,6 +85,14 @@ export function loadWebsiteConfig(
   const googleClientSecret = loadGoogleClientSecret(
     env.CLASHLENS_GOOGLE_CLIENT_SECRET_FILE,
     env.CLASHLENS_GOOGLE_CLIENT_SECRET,
+    production,
+  );
+  // Phase 1 production login requires both providers. A partial
+  // configuration must fail before the website listens.
+  const discordClientId = loadDiscordClientId(env.CLASHLENS_DISCORD_CLIENT_ID);
+  const discordClientSecret = loadDiscordClientSecret(
+    env.CLASHLENS_DISCORD_CLIENT_SECRET_FILE,
+    env.CLASHLENS_DISCORD_CLIENT_SECRET,
     production,
   );
   const loginSecret = loadLoginSecret(
@@ -86,14 +104,21 @@ export function loadWebsiteConfig(
     env.CLASHLENS_GOOGLE_ISSUER_URL,
     production,
   );
+  const discordApiBaseUrl = loadDiscordApiBaseUrl(
+    env.CLASHLENS_DISCORD_API_BASE_URL,
+    production,
+  );
   return {
     production,
     loginEnabled,
     publicOrigin,
     googleClientId,
     googleClientSecret,
+    discordClientId,
+    discordClientSecret,
     loginSecret,
     googleIssuerUrl,
+    discordApiBaseUrl,
     cookieSecure,
   };
 }
@@ -161,6 +186,67 @@ function loadGoogleClientSecret(
       ? "missing protected Google client-secret file"
       : "missing Google client secret or protected secret file",
   );
+}
+
+function loadDiscordClientId(raw: string | undefined): string {
+  if (
+    raw === undefined ||
+    raw.length === 0 ||
+    raw.length > MAX_DISCORD_CLIENT_ID_LENGTH ||
+    !/^[0-9]{17,20}$/.test(raw)
+  ) {
+    throw new WebsiteConfigError("missing or malformed Discord client ID");
+  }
+  return raw;
+}
+
+function loadDiscordClientSecret(
+  secretFile: string | undefined,
+  secretEnv: string | undefined,
+  production: boolean,
+): string {
+  if (secretFile !== undefined && secretFile !== "") {
+    return loadPlainSecretFile(secretFile);
+  }
+  if (!production && secretEnv !== undefined && secretEnv !== "") {
+    return validatePlainSecret(secretEnv, "Discord client secret");
+  }
+  throw new WebsiteConfigError(
+    production
+      ? "missing protected Discord client-secret file"
+      : "missing Discord client secret or protected secret file",
+  );
+}
+
+function loadDiscordApiBaseUrl(raw: string | undefined, production: boolean): URL {
+  if (raw === undefined || raw.trim() === "") {
+    return new URL(DISCORD_API_BASE_URL);
+  }
+  if (production) {
+    throw new WebsiteConfigError(
+      "the Discord API base override is allowed only outside production",
+    );
+  }
+  let base: URL;
+  try {
+    base = new URL(raw.trim());
+  } catch {
+    throw new WebsiteConfigError("malformed Discord API base override");
+  }
+  if (base.protocol !== "https:" && base.protocol !== "http:") {
+    throw new WebsiteConfigError("Discord API base override must use http or https");
+  }
+  if (base.search !== "" || base.hash !== "") {
+    throw new WebsiteConfigError(
+      "Discord API base override must not carry a query or fragment",
+    );
+  }
+  if (base.protocol === "http:" && !isLocalHostname(base.hostname)) {
+    throw new WebsiteConfigError(
+      "an http Discord API base override is allowed only for explicit local test origins",
+    );
+  }
+  return base;
 }
 
 function loadPlainSecretFile(path: string): string {

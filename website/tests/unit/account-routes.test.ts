@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   getWebsiteConfig: vi.fn(),
   requireLogin: vi.fn(),
   createPythonClient: vi.fn(),
+  startProviderAuthorization: vi.fn(),
 }));
 
 vi.mock("../../app/server/config.server", async (importOriginal) => {
@@ -15,15 +16,25 @@ vi.mock("../../app/server/auth-guard.server", () => ({
   requireLogin: mocks.requireLogin,
 }));
 
+vi.mock("../../app/server/provider-start.server", () => ({
+  startProviderAuthorization: mocks.startProviderAuthorization,
+}));
+
 vi.mock("../../app/services/python.server", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../app/services/python.server")>();
   return { ...actual, createPythonClient: mocks.createPythonClient };
 });
 
+import {
+  LOGIN_COOKIE_NAME,
+  createLoginCookieValue,
+  createLoginSessionBinding,
+} from "../../app/server/auth-cookies.server";
 import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError, type PythonClient } from "../../app/services/python.server";
 import { loader as accountLoader } from "../../app/routes/account";
+import { action as providersAction } from "../../app/routes/account.providers";
 import {
   action as groupsAction,
   loader as groupsLoader,
@@ -154,12 +165,72 @@ describe("account routes", () => {
       CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
       CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
       CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
+      CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
+      CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
       CLASHLENS_LOGIN_SECRET_B64: TEST_SECRET,
     });
     mocks.getWebsiteConfig.mockReturnValue(config);
     mocks.requireLogin.mockResolvedValue(IDENTITY);
     client = fakeClient();
     mocks.createPythonClient.mockReturnValue(client);
+    mocks.startProviderAuthorization.mockReset();
+    mocks.startProviderAuthorization.mockResolvedValue(
+      new Response(null, {
+        status: 302,
+        headers: { Location: "https://provider.example" },
+      }),
+    );
+  });
+
+  describe("account.providers", () => {
+    it("starts privileged OAuth only from a same-origin POST bound to the login session", async () => {
+      const loginCookie = createLoginCookieValue(
+        IDENTITY,
+        config.loginSecret,
+        Math.floor(Date.now() / 1000),
+      );
+      const response = await providersAction({
+        request: formRequest(
+          "/account/providers",
+          {
+            idempotencyKey: IDEMPOTENCY_KEY,
+            intent: "unlink",
+            provider: "google",
+          },
+          { cookie: `${LOGIN_COOKIE_NAME}=${loginCookie}` },
+        ),
+      } as never);
+
+      expect(response.status).toBe(302);
+      expect(mocks.startProviderAuthorization).toHaveBeenCalledWith(
+        config,
+        "google",
+        "unlink",
+        "/account/providers",
+        createLoginSessionBinding(loginCookie),
+      );
+    });
+
+    it("rejects non-POST and cross-origin attempts before starting OAuth", async () => {
+      const getResponse = await providersAction({
+        request: new Request(`${ORIGIN}/account/providers?intent=unlink`),
+      } as never);
+      expect(getResponse.status).toBe(405);
+
+      const hostile = await providersAction({
+        request: formRequest(
+          "/account/providers",
+          {
+            idempotencyKey: IDEMPOTENCY_KEY,
+            intent: "unlink",
+            provider: "google",
+          },
+          { Origin: "https://evil.example" },
+        ),
+      } as never);
+      expect(hostile.status).toBe(403);
+      expect(mocks.startProviderAuthorization).not.toHaveBeenCalled();
+    });
   });
 
   describe("account.setup", () => {

@@ -35,12 +35,24 @@ export const MAX_PROVIDER_SUBJECT_LENGTH = 128;
 const MAX_CALLBACK_PARAMS = 32;
 const MAX_CALLBACK_PARAM_BYTES = 8192;
 
+/**
+ * What the authorization completes: a browser login, or a link/unlink
+ * started from an authenticated account. The provider is always the one
+ * whose authorize route created the transaction.
+ */
+export type OAuthIntent = "login" | "link" | "unlink";
+
 export interface OAuthTransaction {
+  /** The only provider whose callback may consume this transaction. */
+  provider: "google" | "discord";
   state: string;
   nonce: string;
   codeVerifier: string;
   codeChallenge: string;
   returnPath: string;
+  intent: OAuthIntent;
+  /** SHA-256 binding to the initiating login cookie for link/unlink only. */
+  sessionBinding?: string;
   issuedAt: number;
   expiresAt: number;
 }
@@ -125,16 +137,25 @@ export function constantTimeEqual(left: string, right: string): boolean {
   return timingSafeEqual(leftBytes, rightBytes);
 }
 
+/** The two Phase 1 login providers; transactions are provider-bound. */
+export function isProvider(value: unknown): value is "google" | "discord" {
+  return value === "google" || value === "discord";
+}
+
 /**
- * Fresh one-time OAuth transaction: state, nonce, and PKCE S256 verifier with
- * challenge, plus the validated same-origin return path. The transaction
- * lives for OAUTH_TRANSACTION_LIFETIME_SECONDS and is consumed once.
+ * Fresh one-time OAuth transaction for exactly one provider and intent:
+ * state, nonce, and PKCE S256 verifier with challenge, plus the validated
+ * same-origin return path. The transaction lives for
+ * OAUTH_TRANSACTION_LIFETIME_SECONDS and is consumed once.
  * `now` is the current epoch time in seconds.
  */
 export function createOAuthTransaction(
   returnPath: string,
   now: number,
   random: (size: number) => Buffer = randomBytes,
+  intent: OAuthIntent = "login",
+  provider: "google" | "discord" = "google",
+  sessionBinding?: string,
 ): OAuthTransaction {
   const issuedAt = Math.floor(now);
   const state = random(24).toString("base64url");
@@ -145,11 +166,14 @@ export function createOAuthTransaction(
     .digest()
     .toString("base64url");
   return {
+    provider,
     state,
     nonce,
     codeVerifier,
     codeChallenge,
     returnPath,
+    intent,
+    ...(sessionBinding === undefined ? {} : { sessionBinding }),
     issuedAt,
     expiresAt: issuedAt + OAUTH_TRANSACTION_LIFETIME_SECONDS,
   };
@@ -206,6 +230,7 @@ export async function createGoogleOidcService(
         nonce: transaction.nonce,
         code_challenge: transaction.codeChallenge,
         code_challenge_method: "S256",
+        ...(transaction.intent === "unlink" ? { prompt: "login", max_age: "0" } : {}),
       });
     },
 
@@ -285,6 +310,14 @@ export function isPlausibleTransaction(transaction: OAuthTransaction): boolean {
     /^[A-Za-z0-9_-]{16,128}$/.test(transaction.nonce) &&
     /^[A-Za-z0-9_-]{43,128}$/.test(transaction.codeVerifier) &&
     /^[A-Za-z0-9_-]{43,128}$/.test(transaction.codeChallenge) &&
+    (transaction.intent === "login" ||
+      transaction.intent === "link" ||
+      transaction.intent === "unlink") &&
+    (transaction.intent === "login"
+      ? transaction.sessionBinding === undefined
+      : typeof transaction.sessionBinding === "string" &&
+        /^[A-Za-z0-9_-]{43}$/.test(transaction.sessionBinding)) &&
+    isProvider(transaction.provider) &&
     Number.isSafeInteger(transaction.issuedAt) &&
     Number.isSafeInteger(transaction.expiresAt) &&
     transaction.expiresAt - transaction.issuedAt === OAUTH_TRANSACTION_LIFETIME_SECONDS

@@ -100,6 +100,16 @@ export interface PythonClient {
   ): Promise<PrivateGroup>;
   deleteGroup(groupId: string, idempotencyKey: string): Promise<GroupDeleteResult>;
   getAccountSummary(): Promise<AccountSummary>;
+  linkProvider(
+    provider: "google" | "discord",
+    providerSubject: string,
+    idempotencyKey: string,
+  ): Promise<{ providers: string[] }>;
+  unlinkProvider(
+    provider: "google" | "discord",
+    providerSubject: string,
+    idempotencyKey: string,
+  ): Promise<{ providers: string[] }>;
   getPublicUser(username: string): Promise<PublicUser>;
   verifyPlayerToken(
     tag: string,
@@ -108,10 +118,17 @@ export interface PythonClient {
   ): Promise<VerificationResult>;
 }
 
-export interface GoogleAccountIdentity {
-  provider: "google";
+/** A validated browser login identity for one of the two Phase 1 providers. */
+export interface LoginProviderIdentity {
+  provider: "google" | "discord";
   providerSubject: string;
 }
+
+/**
+ * Backward-compatible alias for the login identity type. The private Python
+ * client signs every account operation with exactly one provider identity.
+ */
+export type GoogleAccountIdentity = LoginProviderIdentity;
 
 export interface PythonClientOptions {
   accountReadTimeoutMs?: number;
@@ -838,6 +855,8 @@ type AccountOperations = Pick<
   | "updateGroup"
   | "deleteGroup"
   | "getAccountSummary"
+  | "linkProvider"
+  | "unlinkProvider"
   | "getPublicUser"
   | "verifyPlayerToken"
 >;
@@ -847,8 +866,11 @@ function createAccountOperations(
   accountReadTimeoutMs: number,
 ): AccountOperations {
   if (identity !== undefined) {
-    if (identity.provider !== "google" || !isProviderSubject(identity.providerSubject)) {
-      throw new Error("account client requires a bounded Google identity");
+    if (
+      (identity.provider !== "google" && identity.provider !== "discord") ||
+      !isProviderSubject(identity.providerSubject)
+    ) {
+      throw new Error("account client requires a bounded provider identity");
     }
   }
   return {
@@ -868,6 +890,16 @@ function createAccountOperations(
     deleteGroup: (groupId, idempotencyKey) =>
       deleteGroup(groupId, idempotencyKey, identity),
     getAccountSummary: () => getAccountSummary(identity),
+    linkProvider: (provider, providerSubject, idempotencyKey) =>
+      changeProviderIdentity("link", provider, providerSubject, idempotencyKey, identity),
+    unlinkProvider: (provider, providerSubject, idempotencyKey) =>
+      changeProviderIdentity(
+        "unlink",
+        provider,
+        providerSubject,
+        idempotencyKey,
+        identity,
+      ),
     getPublicUser,
     verifyPlayerToken: (tag, token, idempotencyKey) =>
       verifyPlayerToken(tag, token, idempotencyKey, identity),
@@ -1140,6 +1172,45 @@ async function getAccountSummary(
     identity,
   );
   return mappedOrMalformed(mapSummary(payload));
+}
+
+const ALLOWED_PROVIDERS: readonly ("google" | "discord")[] = ["google", "discord"];
+
+/**
+ * Link or unlink one provider identity. The subject comes from the fresh
+ * OAuth authorization that just completed and crosses this boundary once;
+ * it is never persisted by the website.
+ */
+async function changeProviderIdentity(
+  action: "link" | "unlink",
+  provider: "google" | "discord",
+  providerSubject: string,
+  idempotencyKey: string,
+  identity: LoginProviderIdentity | undefined,
+): Promise<{ providers: string[] }> {
+  requireIdentity(identity);
+  if (!isCanonicalUuid(idempotencyKey)) {
+    throw new PythonApiError(400, { error: "invalid_input" });
+  }
+  if (!ALLOWED_PROVIDERS.includes(provider) || !isProviderSubject(providerSubject)) {
+    throw new PythonApiError(422, { error: "invalid_request" });
+  }
+  const payload = await requestJson<unknown>(
+    `/v1/account/providers/${provider}`,
+    action === "link" ? "POST" : "DELETE",
+    jsonBody({ provider_subject: providerSubject }),
+    undefined,
+    idempotencyKey,
+    identity,
+  );
+  if (
+    !isRecord(payload) ||
+    !Array.isArray(payload.providers) ||
+    !payload.providers.every(isString)
+  ) {
+    throw new PythonApiError(502, { error: "malformed" });
+  }
+  return { providers: [...payload.providers] };
 }
 
 async function getPublicUser(username: string): Promise<PublicUser> {

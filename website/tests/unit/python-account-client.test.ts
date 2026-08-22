@@ -513,11 +513,11 @@ describe("server-only Python account client", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("rejects an unbounded Google identity at client creation", async () => {
+  it("rejects an unbounded provider identity at client creation", async () => {
     vi.stubGlobal("fetch", vi.fn());
     const { createPythonClient } = await import("../../app/services/python.server");
     expect(() =>
       createPythonClient({ provider: "google", providerSubject: "bad subject" }),
-    ).toThrow("account client requires a bounded Google identity");
+    ).toThrow("account client requires a bounded provider identity");
   });
 });

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from clashlens.accounts import (
+    is_inappropriate_name,
     normalize_display_name,
     normalize_group_name,
     normalize_username,
@@ -54,3 +55,42 @@ def test_display_and_group_names_reject_empty_controlled_or_long_values(
         normalize_display_name(supplied)
     with pytest.raises(ValueError):
         normalize_group_name(supplied)
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        "sh1tlord",
+        "Sh1tLord",
+        "b0ner",
+        "kys_player",
+        "Ànal",  # combining-mark evasion
+        "a$$hole",
+        "p0rn0",
+    ],
+)
+def test_inappropriate_names_are_rejected_authoritatively(supplied: str) -> None:
+    with pytest.raises(ValueError):
+        normalize_username(supplied)
+    with pytest.raises(ValueError):
+        normalize_display_name(supplied)
+    with pytest.raises(ValueError):
+        normalize_group_name(supplied)
+
+
+@pytest.mark.parametrize(
+    "supplied",
+    [
+        "classico",
+        "assess",
+        "night",
+        "pusher_one",
+    ],
+)
+def test_ordinary_names_still_pass_the_filter(supplied: str) -> None:
+    assert is_inappropriate_name(supplied) is False
+
+
+def test_display_and_group_names_reject_inappropriate_values_directly() -> None:
+    assert is_inappropriate_name("Legend Pushers") is False
+    assert is_inappropriate_name("sh1t") is True

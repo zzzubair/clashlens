@@ -167,3 +167,15 @@ export async function expectNoSeriousAccessibilityViolations(page: Page): Promis
   );
   expect(seriousViolations, JSON.stringify(seriousViolations, null, 2)).toEqual([]);
 }
+
+/**
+ * Run the real local Discord OAuth flow: /login -> Continue with Discord ->
+ * provider -> callback. Waits until the browser lands on the account area
+ * (/account/setup for a fresh identity, /account for an existing account).
+ */
+export async function signInDiscord(page: Page): Promise<void> {
+  await page.goto("/login");
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  await page.getByRole("link", { name: "Continue with Discord" }).click();
+  await expect(page).toHaveURL(/\/account(\/setup)?$/);
+}

@@ -29,6 +29,7 @@ import {
   OAUTH_COOKIE_NAME,
   OAUTH_TRANSACTION_LIFETIME_SECONDS,
   createLoginCookieValue,
+  createLoginSessionBinding,
   createOAuthTransactionCookieValue,
   parseLoginCookieValue,
   parseOAuthTransactionCookieValue,
@@ -82,6 +83,8 @@ function testConfig(): WebsiteConfig {
     CLASHLENS_PUBLIC_ORIGIN: ORIGIN,
     CLASHLENS_GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
     CLASHLENS_GOOGLE_CLIENT_SECRET: "test-client-secret",
+    CLASHLENS_DISCORD_CLIENT_ID: "1234567890123456789",
+    CLASHLENS_DISCORD_CLIENT_SECRET: "discord-test-secret",
     CLASHLENS_LOGIN_SECRET_B64: TEST_SECRET,
   });
 }
@@ -367,6 +370,29 @@ describe("auth.google start loader", () => {
     expect(mocks.createGoogleOidcService).toHaveBeenCalledWith(config);
   });
 
+  it("treats privileged intent query parameters as an ordinary login", async () => {
+    const response = await googleStartLoader({
+      request: new Request(`${ORIGIN}/auth/google?intent=unlink`),
+    } as never);
+    const setCookie = (response as Response).headers.getSetCookie()[0];
+    const cookieValue = setCookie.slice(
+      setCookie.indexOf("=") + 1,
+      setCookie.indexOf(";"),
+    );
+    const transaction = parseOAuthTransactionCookieValue(
+      cookieValue,
+      testConfig().loginSecret,
+      Math.floor(Date.now() / 1000),
+    );
+    expect(transaction?.intent).toBe("login");
+    expect(transaction?.sessionBinding).toBeUndefined();
+    expect(
+      new URL((response as Response).headers.get("Location") ?? "").searchParams.get(
+        "prompt",
+      ),
+    ).toBeNull();
+  });
+
   it("uses the safe default return path for missing or hostile returnPath values", async () => {
     for (const query of [
       "",
@@ -457,6 +483,83 @@ describe("auth.google.callback loader", () => {
       `${OAUTH_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax; Secure`,
     );
   }
+
+  it("rejects a transaction minted for another provider without validating there", async () => {
+    const discordTransaction = createOAuthTransaction(
+      "/account",
+      now(),
+      undefined,
+      "login",
+      "discord",
+    );
+    const header = `${OAUTH_COOKIE_NAME}=${createOAuthTransactionCookieValue(
+      discordTransaction,
+      config.loginSecret,
+    )}`;
+    const result = await callbackLoader({
+      request: new Request(
+        `${ORIGIN}/auth/google/callback?code=provider-code&state=${discordTransaction.state}`,
+        { headers: { cookie: header } },
+      ),
+    } as never);
+    const { data, status, headers } = dataOf<{ error: { code: string } | null }>(result);
+    expect(status).toBe(400);
+    expect(data.error?.code).toBe("invalid_callback");
+    expect(headers["Set-Cookie"]).toContain(`${OAUTH_COOKIE_NAME}=; Max-Age=0`);
+    expect(service.validateCallback).not.toHaveBeenCalled();
+  });
+
+  it("rejects a privileged callback when the initiating login session changed", async () => {
+    const issuedAt = now() - 10;
+    const originalLogin = createLoginCookieValue(IDENTITY, config.loginSecret, issuedAt);
+    const changedLogin = createLoginCookieValue(
+      IDENTITY,
+      config.loginSecret,
+      issuedAt + 1,
+    );
+    const transaction = createOAuthTransaction(
+      "/account/providers",
+      issuedAt,
+      undefined,
+      "unlink",
+      "google",
+      createLoginSessionBinding(originalLogin),
+    );
+    const oauthValue = createOAuthTransactionCookieValue(transaction, config.loginSecret);
+    const result = await callbackLoader({
+      request: new Request(
+        `${ORIGIN}/auth/google/callback?code=provider-code&state=${transaction.state}`,
+        {
+          headers: {
+            cookie: `${OAUTH_COOKIE_NAME}=${oauthValue}; ${LOGIN_COOKIE_NAME}=${changedLogin}`,
+          },
+        },
+      ),
+    } as never);
+    const { data, status } = dataOf<{ error: { code: string } | null }>(result);
+    expect(status).toBe(400);
+    expect(data.error?.code).toBe("login_required");
+    expect(service.validateCallback).not.toHaveBeenCalled();
+    expect(mocks.createPythonClient).not.toHaveBeenCalled();
+  });
+
+  it("rejects a validator identity whose provider differs from the route", async () => {
+    service.validateCallback.mockResolvedValue({
+      provider: "discord",
+      providerSubject: "110022003300440055",
+    });
+    const { transaction, header } = oauthCookie(config, "/account");
+    const result = await callbackLoader({
+      request: new Request(
+        `${ORIGIN}/auth/google/callback?code=provider-code&state=${transaction.state}`,
+        { headers: { cookie: header } },
+      ),
+    } as never);
+    const { data, status, headers } = dataOf<{ error: { code: string } | null }>(result);
+    expect(status).toBe(400);
+    expect(data.error?.code).toBe("invalid_callback");
+    expect(headers["Set-Cookie"]).toContain(`${OAUTH_COOKIE_NAME}=; Max-Age=0`);
+  });
 
   it("clears the transaction, sets a 24-hour login cookie, and redirects to the safe path for an existing account", async () => {
     const { transaction, header } = oauthCookie(config, "/account/saved-players");

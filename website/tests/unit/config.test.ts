@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const CLIENT_SECRET = "GOCSPX-test-secret-value";
 const CLIENT_ID = "1234567890-abc.apps.googleusercontent.com";
+const DISCORD_CLIENT_ID = "1234567890123456789";
+const DISCORD_CLIENT_SECRET = "discord-test-secret-value";
 
 const ENV_KEYS = [
   "NODE_ENV",
@@ -15,6 +17,9 @@ const ENV_KEYS = [
   "CLASHLENS_GOOGLE_CLIENT_ID",
   "CLASHLENS_GOOGLE_CLIENT_SECRET",
   "CLASHLENS_GOOGLE_CLIENT_SECRET_FILE",
+  "CLASHLENS_DISCORD_CLIENT_ID",
+  "CLASHLENS_DISCORD_CLIENT_SECRET",
+  "CLASHLENS_DISCORD_CLIENT_SECRET_FILE",
   "CLASHLENS_LOGIN_SECRET_B64",
   "CLASHLENS_LOGIN_SECRET_FILE",
   "CLASHLENS_GOOGLE_ISSUER_URL",
@@ -27,10 +32,11 @@ const savedEnvironment = Object.fromEntries(
 let tempDirectory: string | undefined;
 
 function writeTempFile(name: string, content: string): string {
-  if (tempDirectory === undefined) {
+  if (tempDirectory === undefined || !existsSync(tempDirectory)) {
     tempDirectory = mkdtempSync(join(tmpdir(), "clashlens-config-"));
   }
   const path = join(tempDirectory, name);
+  rmSync(path, { force: true });
   writeFileSync(path, content);
   return path;
 }
@@ -49,6 +55,8 @@ describe("server-only website login configuration", () => {
     process.env.CLASHLENS_LOGIN_ENABLED = "true";
     process.env.CLASHLENS_GOOGLE_CLIENT_ID = CLIENT_ID;
     process.env.CLASHLENS_GOOGLE_CLIENT_SECRET = CLIENT_SECRET;
+    process.env.CLASHLENS_DISCORD_CLIENT_ID = DISCORD_CLIENT_ID;
+    process.env.CLASHLENS_DISCORD_CLIENT_SECRET = DISCORD_CLIENT_SECRET;
     process.env.CLASHLENS_LOGIN_SECRET_B64 = TEST_SECRET;
   });
 
@@ -71,6 +79,8 @@ describe("server-only website login configuration", () => {
     expect(config.publicOrigin.toString()).toBe("http://127.0.0.1:3000/");
     expect(config.googleClientId).toBe(CLIENT_ID);
     expect(config.googleClientSecret).toBe(CLIENT_SECRET);
+    expect(config.discordClientId).toBe(DISCORD_CLIENT_ID);
+    expect(config.discordClientSecret).toBe(DISCORD_CLIENT_SECRET);
     expect(config.loginSecret).toHaveLength(32);
     expect(config.googleIssuerUrl.toString()).toBe("https://accounts.google.com/");
     expect(config.cookieSecure).toBe(false);
@@ -94,9 +104,14 @@ describe("server-only website login configuration", () => {
     process.env.CLASHLENS_PUBLIC_ORIGIN = "https://clashlens.example";
     delete process.env.CLASHLENS_GOOGLE_CLIENT_SECRET;
     delete process.env.CLASHLENS_LOGIN_SECRET_B64;
+    delete process.env.CLASHLENS_DISCORD_CLIENT_SECRET;
     process.env.CLASHLENS_GOOGLE_CLIENT_SECRET_FILE = writeTempFile(
       "google-client-secret",
       `${CLIENT_SECRET}\n`,
+    );
+    process.env.CLASHLENS_DISCORD_CLIENT_SECRET_FILE = writeTempFile(
+      "discord-client-secret",
+      `${DISCORD_CLIENT_SECRET}\n`,
     );
     process.env.CLASHLENS_LOGIN_SECRET_FILE = writeTempFile(
       "login-secret",
@@ -131,6 +146,11 @@ describe("server-only website login configuration", () => {
     process.env.CLASHLENS_GOOGLE_CLIENT_SECRET_FILE = writeTempFile(
       "issuer-test-client-secret",
       `${CLIENT_SECRET}\n`,
+    );
+    delete process.env.CLASHLENS_DISCORD_CLIENT_SECRET;
+    process.env.CLASHLENS_DISCORD_CLIENT_SECRET_FILE = writeTempFile(
+      "issuer-test-discord-secret",
+      `${DISCORD_CLIENT_SECRET}\n`,
     );
     process.env.CLASHLENS_LOGIN_SECRET_FILE = writeTempFile(
       "issuer-test-login-secret",
@@ -195,5 +215,55 @@ describe("server-only website login configuration", () => {
     await expect(loadConfig()).rejects.toThrow(/not readable/);
     process.env.CLASHLENS_GOOGLE_CLIENT_SECRET_FILE = writeTempFile("empty-secret", "\n");
     await expect(loadConfig()).rejects.toThrow(/malformed protected secret file/);
+  });
+});
+
+describe("server-only website login configuration (Discord)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    for (const key of ENV_KEYS) delete process.env[key];
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PUBLIC_ORIGIN = "http://127.0.0.1:3000";
+    process.env.CLASHLENS_LOGIN_ENABLED = "true";
+    process.env.CLASHLENS_GOOGLE_CLIENT_ID = CLIENT_ID;
+    process.env.CLASHLENS_GOOGLE_CLIENT_SECRET = CLIENT_SECRET;
+    process.env.CLASHLENS_DISCORD_CLIENT_ID = DISCORD_CLIENT_ID;
+    process.env.CLASHLENS_DISCORD_CLIENT_SECRET = DISCORD_CLIENT_SECRET;
+    process.env.CLASHLENS_LOGIN_SECRET_B64 = TEST_SECRET;
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(savedEnvironment)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  it("rejects a malformed Discord client ID", async () => {
+    process.env.CLASHLENS_DISCORD_CLIENT_ID = "not-numeric";
+    await expect(loadConfig()).rejects.toThrow(/Discord client ID/);
+  });
+
+  it("rejects a missing Discord client secret in production from files only", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.CLASHLENS_PUBLIC_ORIGIN = "https://clashlens.example";
+    delete process.env.CLASHLENS_GOOGLE_CLIENT_SECRET;
+    delete process.env.CLASHLENS_GOOGLE_CLIENT_SECRET_FILE;
+    process.env.CLASHLENS_GOOGLE_CLIENT_SECRET_FILE = writeTempFile(
+      "google-secret-production",
+      CLIENT_SECRET,
+    );
+    delete process.env.CLASHLENS_DISCORD_CLIENT_SECRET;
+    await expect(loadConfig()).rejects.toThrow(/protected Discord client-secret file/);
+  });
+
+  it("loads the Discord client secret from a protected file outside production", async () => {
+    delete process.env.CLASHLENS_DISCORD_CLIENT_SECRET;
+    process.env.CLASHLENS_DISCORD_CLIENT_SECRET_FILE = writeTempFile(
+      "discord-secret-file",
+      DISCORD_CLIENT_SECRET,
+    );
+    const config = await loadConfig();
+    expect(config.discordClientSecret).toBe(DISCORD_CLIENT_SECRET);
   });
 });

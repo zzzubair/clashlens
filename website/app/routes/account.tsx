@@ -86,6 +86,9 @@ export default function AccountRoute() {
           <Link className="button button-secondary" to="/account/profile">
             Edit profile
           </Link>
+          <Link className="button button-secondary" to="/account/providers">
+            Sign-in connections
+          </Link>
         </p>
       </section>
 
