@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, data, redirect, useActionData, useLoaderData } from "react-router";
+import { data, redirect, useActionData, useLoaderData } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { VerificationStatus } from "../lib/account-contracts";
@@ -280,10 +280,6 @@ export default function VerifyPlayerRoute() {
           </button>
         </form>
       </section>
-
-      <p className="back-link">
-        <Link to="/account">← Back to your account</Link>
-      </p>
     </main>
   );
 }

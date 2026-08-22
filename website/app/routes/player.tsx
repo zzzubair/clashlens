@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  Link,
   redirect,
   useFetcher,
   useLoaderData,
@@ -206,9 +205,6 @@ export default function PlayerRoute() {
   if (player === null) {
     return (
       <main className="page-shell narrow-page">
-        <Link className="back-link" to="/leaderboards/tracked">
-          ← Back to live leaderboard
-        </Link>
         <h1>Player data unavailable</h1>
         {data.error ? <ErrorNotice error={data.error} /> : null}
         <p>We did not replace saved data with an invented result.</p>
@@ -225,9 +221,6 @@ export default function PlayerRoute() {
 
   return (
     <main className="page-shell player-page">
-      <Link className="back-link" to="/leaderboards/tracked">
-        ← Back to live leaderboard
-      </Link>
       <header className="player-header">
         <div>
           <h1>{player.profile.name}</h1>
@@ -354,7 +347,10 @@ export default function PlayerRoute() {
       <section className="data-section" aria-labelledby="recent-days-title">
         <h2 id="recent-days-title">Legend season</h2>
         <div className="table-wrap">
-          <table className="data-table compact-table" aria-label="Legend season days">
+          <table
+            className="data-table compact-table responsive-table"
+            aria-label="Legend season days"
+          >
             <caption className="sr-only">
               Legend season days returned by the service
             </caption>
@@ -369,18 +365,20 @@ export default function PlayerRoute() {
             <tbody>
               {player.recentDays.map((day) => (
                 <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
-                  <th scope="row">{day.dayNumber ?? "Unknown"}</th>
-                  <td>
+                  <th scope="row" data-label="Day">
+                    {day.dayNumber ?? "Unknown"}
+                  </th>
+                  <td data-label="Offense">
                     {day.offense.attacks === null
                       ? "Unknown"
                       : `${day.offense.attacks} attacks`}
                   </td>
-                  <td>
+                  <td data-label="Defense">
                     {day.defense.defenses === null
                       ? "Unknown"
                       : `${day.defense.defenses} defenses`}
                   </td>
-                  <td>{formatSigned(day.trophyChange)}</td>
+                  <td data-label="Trophy change">{formatSigned(day.trophyChange)}</td>
                 </tr>
               ))}
             </tbody>

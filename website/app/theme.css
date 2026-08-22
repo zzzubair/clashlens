@@ -182,19 +182,25 @@ h3 {
 
 .search-controls {
   display: flex;
-  align-items: stretch;
-  gap: 0;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem;
+  background: var(--cl-paper);
+  border: 3px solid var(--cl-ink);
+  border-radius: 999px;
+  box-shadow: 4px 4px 0 var(--cl-ink);
 }
 
 .search-controls input {
   flex: 1 1 auto;
   width: auto;
-  min-height: 3.25rem;
-  padding: 0.65rem 0.8rem;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0.6rem 0.85rem;
   color: var(--cl-ink);
-  background: var(--cl-paper);
-  border: 3px solid var(--cl-ink);
-  border-radius: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
 }
 
 .search-controls input::placeholder {
@@ -226,12 +232,34 @@ h3 {
   white-space: normal;
 }
 
-.search-controls button {
-  min-height: 3.25rem;
-  border-left: 0;
+.search-controls input + button {
+  flex: 0 0 2.75rem;
+  width: 2.75rem;
+  min-width: 2.75rem;
+  height: 2.75rem;
+  min-height: 2.75rem;
+  justify-content: center;
+  padding: 0.55rem;
+  color: var(--cl-ink);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+}
+
+.search-controls button svg {
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 2;
 }
 
 .search-controls button:hover,
+.search-controls button:focus-visible {
+  color: var(--cl-ink);
+  background: var(--cl-gold);
+}
+
 .saved-data-panel button:hover,
 .player-refresh-form button:hover,
 .button:hover,
@@ -389,6 +417,18 @@ h3 {
   font-weight: 900;
 }
 
+.view-player-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin-top: 0.3rem;
+  color: var(--cl-blue-dark);
+  font-family: "Courier New", Courier, monospace;
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .player-tag,
 .tag {
   color: var(--cl-muted);
@@ -412,14 +452,6 @@ h3 {
 .search-context,
 .player-identity {
   color: var(--cl-muted);
-}
-
-.back-link {
-  margin-bottom: 2rem;
-  font-family: "Courier New", Courier, monospace;
-  font-size: 0.8rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .hero-actions {
@@ -594,8 +626,99 @@ h3 {
     white-space: normal;
   }
 
+  .section-heading {
+    align-items: flex-start;
+  }
+
   .provenance {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .table-wrap:has(.responsive-table) {
+    overflow-x: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .responsive-table {
+    display: block;
+    min-width: 0;
+  }
+
+  .responsive-table thead {
+    position: absolute;
+    display: block;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .responsive-table thead tr,
+  .responsive-table thead th {
+    display: block;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+  }
+
+  .responsive-table tbody {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.8rem;
+  }
+
+  .responsive-table tbody tr {
+    display: grid;
+    align-content: start;
+    border: 2px solid var(--cl-ink);
+    background: var(--cl-paper);
+  }
+
+  .responsive-table tbody tr:nth-child(even) {
+    background: var(--cl-panel);
+  }
+
+  .responsive-table tbody th,
+  .responsive-table tbody td {
+    position: relative;
+    display: block;
+    min-height: 2.75rem;
+    padding: 0.65rem 0.7rem 0.65rem 7.3rem;
+    border-bottom: 1px solid var(--cl-ink);
+    overflow-wrap: anywhere;
+  }
+
+  .responsive-table tbody td:first-child {
+    width: auto;
+  }
+
+  .responsive-table tbody th::before,
+  .responsive-table tbody td::before {
+    position: absolute;
+    left: 0.7rem;
+    width: 6rem;
+    color: var(--cl-muted);
+    content: attr(data-label);
+    font-family: "Courier New", Courier, monospace;
+    font-size: 0.72rem;
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .responsive-table tbody tr > :last-child {
+    border-bottom: 0;
+  }
+
+  .responsive-table time {
+    white-space: normal;
   }
 }
 
@@ -617,14 +740,19 @@ h3 {
     font-size: clamp(2.75rem, 17vw, 4rem);
   }
 
-  .search-controls {
-    flex-direction: column;
+  .responsive-table tbody {
+    grid-template-columns: 1fr;
   }
 
-  .search-controls button {
-    width: 100%;
-    border-top: 0;
-    border-left: 3px solid var(--cl-ink);
+  .responsive-table tbody th,
+  .responsive-table tbody td {
+    padding: 1.75rem 0.7rem 0.65rem;
+  }
+
+  .responsive-table tbody th::before,
+  .responsive-table tbody td::before {
+    top: 0.55rem;
+    width: auto;
   }
 
   .search-suggestion {
@@ -648,22 +776,11 @@ h3 {
   flex-wrap: wrap;
   gap: 0.75rem 1.25rem;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   width: min(100% - 2rem, 82rem);
   margin: 0 auto;
   padding: 1rem 0;
   border-bottom: 5px solid var(--cl-ink);
-}
-
-.site-brand {
-  max-width: 100%;
-  overflow-wrap: anywhere;
-  color: var(--cl-ink);
-  font-family: "Arial Black", Arial, Helvetica, sans-serif;
-  font-size: 1.35rem;
-  letter-spacing: -0.04em;
-  text-decoration: none;
-  text-transform: uppercase;
 }
 
 .site-nav {
@@ -674,6 +791,7 @@ h3 {
   align-items: center;
 }
 
+.header-back,
 .nav-link,
 .nav-button {
   max-width: 100%;
@@ -693,6 +811,8 @@ h3 {
   white-space: normal;
 }
 
+.header-back:hover,
+.header-back:focus-visible,
 .nav-link:hover,
 .nav-link:focus-visible,
 .nav-button:hover,
@@ -700,6 +820,12 @@ h3 {
   color: var(--cl-ink);
   background: var(--cl-orange);
   border-color: var(--cl-ink);
+}
+
+.header-back {
+  margin-right: auto;
+  color: var(--cl-ink);
+  background: var(--cl-paper);
 }
 
 .nav-link-primary {
@@ -917,8 +1043,8 @@ h3 {
   }
 
   .site-nav {
-    width: 100%;
-    justify-content: flex-start;
+    width: auto;
+    justify-content: flex-end;
   }
 
   .login-panel,
@@ -933,10 +1059,7 @@ h3 {
     word-break: break-all;
   }
 
-  .site-brand {
-    font-size: 1rem;
-  }
-
+  .header-back,
   .nav-link,
   .nav-button {
     padding: 0.45rem 0.55rem;

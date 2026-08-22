@@ -47,18 +47,24 @@ test("public pages remain usable at a narrow viewport and 200 percent zoom", asy
   await expect(
     page.getByRole("searchbox", { name: "Search player tags or names" }),
   ).toBeVisible();
+  await expect(page.locator(".search-controls")).toHaveCSS("flex-direction", "row");
   await expect(page.getByRole("table", { name: "Live leaderboard" })).toBeVisible();
   expect(
     await page
       .locator(".table-wrap")
       .evaluate((element) => element.scrollWidth > element.clientWidth),
-  ).toBe(true);
+  ).toBe(false);
 
   await page.goto("/players/%232PP");
   await page.evaluate(() => {
     document.documentElement.style.zoom = "2";
   });
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
+  expect(
+    await page
+      .locator(".table-wrap")
+      .evaluate((element) => element.scrollWidth > element.clientWidth),
+  ).toBe(false);
 
   await page.setViewportSize({ width: 180, height: 450 });
   await page.goto("/players/%232PP");

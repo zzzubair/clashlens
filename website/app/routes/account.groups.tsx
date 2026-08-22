@@ -353,7 +353,9 @@ export default function GroupsRoute() {
                     <ul className="player-link-list">
                       {group.tags.map((tag) => (
                         <li key={tag}>
-                          <Link to={canonicalPlayerPath(tag)}>{tag}</Link>
+                          <Link to={canonicalPlayerPath(tag)} reloadDocument>
+                            {tag}
+                          </Link>
                           <span className="player-tag">{tag}</span>
                         </li>
                       ))}
@@ -430,10 +432,6 @@ export default function GroupsRoute() {
           </div>
         )}
       </section>
-
-      <p className="back-link">
-        <Link to="/account">← Back to your account</Link>
-      </p>
     </main>
   );
 }

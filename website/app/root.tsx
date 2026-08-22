@@ -4,6 +4,8 @@ import {
   Link,
   isRouteErrorResponse,
   useLoaderData,
+  useLocation,
+  useNavigate,
   type LoaderFunctionArgs,
   Links,
   Meta,
@@ -78,12 +80,30 @@ export function Layout({ children }: { children: ReactNode }) {
 
 export default function App() {
   const data = useLoaderData<typeof loader>();
+  const location = useLocation();
+  const navigate = useNavigate();
   return (
     <>
       <header className="site-header">
-        <Link className="site-brand" to="/">
-          Clash Lens
-        </Link>
+        {location.pathname !== "/" ? (
+          <Link
+            className="header-back"
+            to="/"
+            replace
+            onClick={(event) => {
+              const hasSameOriginReferrer =
+                window.history.length > 1 &&
+                document.referrer !== "" &&
+                new URL(document.referrer).origin === window.location.origin;
+              if ((window.history.state?.idx ?? 0) > 0 || hasSameOriginReferrer) {
+                event.preventDefault();
+                void navigate(-1);
+              }
+            }}
+          >
+            ← Back
+          </Link>
+        ) : null}
         <nav className="site-nav" aria-label="Account navigation">
           {data.loggedIn ? (
             <>
