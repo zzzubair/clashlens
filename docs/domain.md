@@ -219,6 +219,7 @@ A domain change is complete only when every affected source observation, derived
 ### Aggregate evidence
 
 - Every aggregate must state its population filter, time period, observed sample size, measured coverage, freshness, decoder and catalog version, unknown-ID count, malformed or partial count, and analytics-rule version.
+- Calculate public URL-filtered army results on demand from retained versioned facts. Derive their stable identity from the selection, result, and source-evidence hashes; opening a new URL must not create persistent per-selection rows.
 - When a selected one-snapshot cohort includes entries that use old trophy observations, return the available analytics and state the old-entry count and age. Do not silently replace the requested population or present it as fully fresh.
 - Do not silently exclude malformed, partial, zero-trophy, or unknown-ID observations. Show their effect on coverage and confidence.
 - Preserve previously published analytics with their original rule labels when decoding, catalog, or calculation rules change.

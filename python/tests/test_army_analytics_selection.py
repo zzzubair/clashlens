@@ -252,7 +252,7 @@ def test_structurally_unsupported_state_stays_visible_and_reconciles() -> None:
     assert result["army_states_sum_confirmed"] is True
 
 
-def test_cc_composition_uncertain_partial_excluded() -> None:
+def test_cc_composition_uncertain_partial_subset_is_not_published() -> None:
     facts = [
         _fact(1, cc_troops=[("troop:0", 2)]),
         _fact(
@@ -264,11 +264,23 @@ def test_cc_composition_uncertain_partial_excluded() -> None:
                 {"numeric_id": 88, "quantity": 1, "section": "i", "origin": "clan_castle"}
             ],
         ),
+        _fact(
+            3,
+            state="partial",
+            cc_troops=[("troop:9", 1)],
+            unresolved=[
+                {"numeric_id": 99, "quantity": 1, "section": "u", "origin": "home"}
+            ],
+        ),
     ]
     result = build_army_result(facts, _selection(category="cc-composition"))
-    row = next(row for row in result["rows"] if row["key"].startswith("cc:"))
-    assert row["usage_count"] == 1
-    assert row["usage_denominator"] == 1
+    assert [row["key"] for row in result["rows"]] == [
+        "cc:troop:0x2",
+        "cc:troop:9x1",
+    ]
+    assert [row["usage_count"] for row in result["rows"]] == [1, 1]
+    assert [row["usage_denominator"] for row in result["rows"]] == [2, 2]
+    assert [row["unknown_excluded_attacks"] for row in result["rows"]] == [1, 1]
 
 
 def test_sorting_is_deterministic_across_ties_and_selectable() -> None:

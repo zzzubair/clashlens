@@ -295,13 +295,31 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 assert troop_row["usage_denominator"] == 2
                 identity = first["publication_identity"]
                 assert identity.startswith("army-publication-")
-                assert "-v1" in identity
                 assert first["reproducibility"]["official_season_id"] == SEASON_ID
 
-                # Same selection twice is one stable publication.
+                # Reads calculate from retained facts without persistent
+                # per-selection storage. Identical inputs keep one identity;
+                # arbitrary URL-backed trophy ranges get distinct identities.
                 second = api.get_army_analytics(selection)
                 assert second is not None
                 assert second["publication_identity"] == identity
+                other_ranges = [
+                    api.get_army_analytics(
+                        _selection(population=f"trophies-5000-{maximum}")
+                    )
+                    for maximum in (8998, 8999)
+                ]
+                assert all(result is not None for result in other_ranges)
+                assert len(
+                    {
+                        identity,
+                        *(result["publication_identity"] for result in other_ranges if result),
+                    }
+                ) == 3
+                with database.pool.connection() as connection:
+                    assert connection.execute(
+                        "SELECT to_regclass('army_analytics_publications')"
+                    ).fetchone()[0] is None
 
                 # Defense lens uses the defender's own accepted report.
                 defense = api.get_army_analytics(
@@ -353,8 +371,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     api.get_army_analytics(_selection(start_day=22))
                 assert unavailable.value.affected_days == [22]
 
-                # Corrected evidence supersedes the publication atomically.
-                # A corrected ranked-day version republishes under v2.
+                # Corrected evidence changes the deterministic identity.
                 corrected_events = [
                     _event(attacker_vs_defender, "offense", ts1, 3, 100, 35),
                     _event(attacker_vs_other, "offense", ts2, 2, 75, 12),
@@ -365,7 +382,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 assert correction is not None and correction.outcome == "processed"
                 third = api.get_army_analytics(selection)
                 assert third is not None
-                assert third["publication_identity"].endswith("-v2")
+                assert third["publication_identity"] != identity
                 two_star_row = next(
                     row
                     for row in third["rows"]
@@ -373,16 +390,9 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 )
                 assert two_star_row["star_counts"][2] == 1
                 with database.pool.connection() as connection:
-                    superseded_current = connection.execute(
-                        """
-                        SELECT p1.is_current, p2.version
-                        FROM army_analytics_publications p1
-                        JOIN army_analytics_publications p2 ON p2.supersedes_id = p1.id
-                        """
-                    ).fetchall()
-                # Exactly the corrected publication was superseded; history stays.
-                assert [int(r[1]) for r in superseded_current] == [2]
-                assert all(r[0] is False for r in superseded_current)
+                    assert connection.execute(
+                        "SELECT to_regclass('army_analytics_publications')"
+                    ).fetchone()[0] is None
             finally:
                 api.close()
         finally:
@@ -589,7 +599,7 @@ def test_stale_snapshot_membership_is_reported_as_cohort_evidence(
             database.close()
 
 
-def test_correction_with_unchanged_aggregates_creates_publication_history(
+def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url) as ci:
@@ -611,29 +621,24 @@ def test_correction_with_unchanged_aggregates_creates_publication_history(
             selection = _selection()
             first = api.get_army_analytics(selection)
             assert first is not None
-            assert first["publication_identity"].endswith("-v1")
 
-            # A corrected source publication with identical battle facts keeps
-            # every aggregate unchanged but must still create v2 history.
+            # A corrected source with identical aggregates still changes the
+            # identity because retained source evidence changed.
             _publish_day_correction(database, "#2PP", events)
             correction = processor.process_job(_army_job(database), owner="correction")
             assert correction is not None and correction.outcome == "processed"
             second = api.get_army_analytics(selection)
             assert second is not None
-            assert second["publication_identity"].endswith("-v2")
+            assert second["publication_identity"] != first["publication_identity"]
             assert second["rows"] == first["rows"]
             assert (
                 second["reproducibility"]["source_evidence_hash"]
                 != first["reproducibility"]["source_evidence_hash"]
             )
             with database.pool.connection() as connection:
-                versions = [
-                    int(row[0])
-                    for row in connection.execute(
-                        "SELECT version FROM army_analytics_publications ORDER BY version"
-                    ).fetchall()
-                ]
-            assert versions == [1, 2]
+                assert connection.execute(
+                    "SELECT to_regclass('army_analytics_publications')"
+                ).fetchone()[0] is None
         finally:
             api.close()
             database.close()

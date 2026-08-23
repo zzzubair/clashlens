@@ -104,44 +104,24 @@ CREATE TABLE IF NOT EXISTS army_analytics_completed_days (
     completed_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 
-CREATE TABLE IF NOT EXISTS army_analytics_publications (
-    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    publication_key text NOT NULL,
-    selection jsonb NOT NULL,
-    result jsonb NOT NULL,
-    result_hash text NOT NULL CHECK (result_hash ~ '^[0-9a-f]{64}$'),
-    decoder_version text NOT NULL,
-    catalog_version text NOT NULL,
-    analytics_rule_version text NOT NULL,
-    version integer NOT NULL,
-    is_current boolean NOT NULL DEFAULT true,
-    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    supersedes_id bigint REFERENCES army_analytics_publications(id),
-    UNIQUE (publication_key, version)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS army_analytics_publications_one_current
-    ON army_analytics_publications(publication_key) WHERE is_current;
-CREATE INDEX IF NOT EXISTS army_analytics_publications_selection
-    ON army_analytics_publications USING gin(selection);
+-- Army analytics pages are calculated on the spot from retained versioned
+-- facts; there is no per-selection publication storage.
 
 REVOKE ALL ON battle_army_decodes, army_analytics_breakdowns,
-    army_analytics_battle_facts, army_analytics_publications FROM PUBLIC;
-GRANT SELECT, INSERT, UPDATE ON battle_army_decodes, army_analytics_battle_facts,
-    army_analytics_publications TO clashlens_python_worker;
+    army_analytics_battle_facts FROM PUBLIC;
+GRANT SELECT, INSERT, UPDATE ON battle_army_decodes, army_analytics_battle_facts
+    TO clashlens_python_worker;
 GRANT SELECT, INSERT, UPDATE, DELETE ON army_analytics_breakdowns
     TO clashlens_python_worker;
 GRANT SELECT, INSERT, UPDATE ON army_analytics_completed_days
     TO clashlens_python_worker;
 GRANT SELECT ON battle_army_decodes, army_analytics_battle_facts,
-    army_analytics_publications, army_analytics_completed_days
+    army_analytics_completed_days
     TO clashlens_python_api;
 GRANT SELECT ON leaderboard_snapshots, leaderboard_snapshot_entries
     TO clashlens_python_api;
-GRANT INSERT, UPDATE ON army_analytics_publications TO clashlens_python_api;
 GRANT USAGE, SELECT ON SEQUENCE army_analytics_battle_facts_id_seq
     TO clashlens_python_worker;
-GRANT USAGE, SELECT ON SEQUENCE army_analytics_publications_id_seq
-    TO clashlens_python_worker, clashlens_python_api;
 
 -- Keep army jobs independently versioned while preserving the existing claim contract.
 CREATE OR REPLACE FUNCTION clashlens_set_python_claim_compatibility_v3()

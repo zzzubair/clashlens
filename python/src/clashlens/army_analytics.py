@@ -138,6 +138,11 @@ def build_army_result(
     def relationships(fact: dict[str, Any]) -> set[str]:
         result: set[str] = set()
         if category == "cc-composition":
+            if fact["army_state"] == "partial" and any(
+                item.get("section") == "i"
+                for item in fact["unresolved_components"]
+            ):
+                return result
             composition = sorted(
                 (str(item[0]), int(item[1]))
                 for item in fact["cc_troops"] if isinstance(item, list) and len(item) > 1

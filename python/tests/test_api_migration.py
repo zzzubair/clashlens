@@ -724,3 +724,10 @@ def test_public_army_migration_is_forward_only_and_reentrant(database_url: str) 
                 "perspective",
                 "unresolved_components",
             ]
+            assert connection.execute(
+                "SELECT to_regclass('army_analytics_publications')"
+            ).fetchone()[0] is None
+            assert connection.execute(
+                "SELECT has_table_privilege('clashlens_python_api', "
+                "'army_analytics_battle_facts', 'INSERT')"
+            ).fetchone()[0] is False

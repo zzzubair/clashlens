@@ -14,7 +14,6 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from .army_analytics import (
-    ARMY_ANALYTICS_RULE_VERSION,
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
     CurrentSeasonEmpty,
@@ -1873,42 +1872,23 @@ class ApiDatabase:
                     "facts": [(fact["id"], fact["input_hash"]) for fact in facts],
                     "snapshots": snapshot_ids,
                 }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-                # The source hash participates in the version comparison so a
-                # corrected publication with unchanged aggregates still creates
-                # history instead of being silently swallowed.
+                # The result hash covers both the aggregates and the retained
+                # source-evidence hash, so corrected inputs always change the
+                # published identity.
                 result_hash = hashlib.sha256(json.dumps({
                     "result": result, "source_evidence": source_hash,
                 }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                 result["reproducibility"]["source_evidence_hash"] = source_hash
+                # Anonymous reads are calculated on the spot and never
+                # persist a row per URL selection. The public identity is
+                # derived deterministically from the selection and the result
+                # hash (which already covers the source-evidence hash), so the
+                # same retained inputs reproduce it and corrected inputs
+                # change it without any database writes.
                 publication_key = hashlib.sha256(json.dumps(requested, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-                connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", ("army-publication:" + publication_key,))
-                current = connection.execute(
-                    "SELECT id, version, result_hash FROM army_analytics_publications WHERE publication_key=%s AND is_current FOR UPDATE",
-                    (publication_key,),
-                ).fetchone()
-                if current is not None and _text(current[2]) == result_hash:
-                    version = int(current[1])
-                else:
-                    supersedes = None
-                    version = 1
-                    if current is not None:
-                        supersedes, version = int(current[0]), int(current[1]) + 1
-                        connection.execute("UPDATE army_analytics_publications SET is_current=false WHERE id=%s", (supersedes,))
-                    connection.execute(
-                        """
-                        INSERT INTO army_analytics_publications (
-                            publication_key, selection, result, result_hash,
-                            decoder_version, catalog_version, analytics_rule_version,
-                            version, supersedes_id
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id
-                        """, (publication_key, Jsonb(requested), Jsonb({**result, "source_hash": source_hash}), result_hash,
-                              DECODER_VERSION, CATALOG_VERSION, ARMY_ANALYTICS_RULE_VERSION, version, supersedes),
-                    ).fetchone()
-                # Public identity derives from the selection hash, never from
-                # a database primary key.
                 result["selection"] = requested
                 result["publication_identity"] = (
-                    f"army-publication-{publication_key[:24]}-v{version}"
+                    f"army-publication-{publication_key[:24]}-{result_hash[:16]}"
                 )
                 return result
 
