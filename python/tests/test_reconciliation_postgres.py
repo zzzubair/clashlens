@@ -19,8 +19,9 @@ DAY_START = datetime(2026, 8, 4, 5, tzinfo=UTC)
 DAY_END = DAY_START + timedelta(days=1)
 
 
-def _profile(trophies: int) -> bytes:
+def _profile(trophies: int, normalized_tag: str = "#2PP") -> bytes:
     payload = json.loads(PROFILE_FIXTURE.read_bytes())
+    payload["tag"] = normalized_tag
     payload["trophies"] = trophies
     return json.dumps(payload).encode()
 
@@ -55,10 +56,11 @@ def _seed_reset_collection_identity(
     boundary: datetime,
     profile_observation_id: int,
     battle_observation_id: int,
+    normalized_tag: str = "#2PP",
 ) -> None:
     with psycopg.connect(connection_info) as connection:
         player_id = connection.execute(
-            "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+            "SELECT id FROM players WHERE normalized_tag = %s", (normalized_tag,)
         ).fetchone()[0]
         baseline = connection.execute(
             """
@@ -75,6 +77,8 @@ def _seed_reset_collection_identity(
                 """
                 INSERT INTO collector_reset_sweeps (boundary_at)
                 VALUES (%s)
+                ON CONFLICT (boundary_at) DO UPDATE
+                    SET boundary_at = EXCLUDED.boundary_at
                 RETURNING id
                 """,
                 (boundary,),
@@ -97,13 +101,14 @@ def _seed_reset_collection_identity(
                 priority, due_at, coalescing_key, sweep_id,
                 reset_baseline_sweep_id, status
             ) VALUES (
-                'reset_baseline', 'player', %s, '#2PP', 'normal', 400, %s,
+                'reset_baseline', 'player', %s, %s, 'normal', 400, %s,
                 %s, %s, %s, 'complete'
             )
             RETURNING id
             """,
             (
                 player_id,
+                normalized_tag,
                 boundary,
                 f"reset-baseline-{key}",
                 reset_sweep_id,
@@ -172,6 +177,7 @@ def _store_baseline_pair(
     trophies: int,
     empty_battle_log: bool,
     observed_at: datetime | None = None,
+    normalized_tag: str = "#2PP",
 ) -> tuple[int, int, int, int]:
     # A reset-baseline sweep requests its endpoints after the boundary, so the
     # stored observations may complete after ``boundary`` itself.
@@ -181,9 +187,9 @@ def _store_baseline_pair(
         archive_server,
         occurrence_key=f"{key}-profile",
         endpoint="profile",
-        body=_profile(trophies),
+        body=_profile(trophies, normalized_tag),
         observed_at=observed_at,
-        normalized_tag="#2PP",
+        normalized_tag=normalized_tag,
     )
     battle_observation, battle_job = store_observation(
         connection_info,
@@ -192,7 +198,7 @@ def _store_baseline_pair(
         endpoint="battle_log",
         body=_battle_log(empty=empty_battle_log),
         observed_at=observed_at,
-        normalized_tag="#2PP",
+        normalized_tag=normalized_tag,
     )
     _seed_reset_collection_identity(
         connection_info,
@@ -200,6 +206,7 @@ def _store_baseline_pair(
         boundary=boundary,
         profile_observation_id=profile_observation,
         battle_observation_id=battle_observation,
+        normalized_tag=normalized_tag,
     )
     return profile_observation, battle_observation, profile_job, battle_job
 

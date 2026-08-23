@@ -68,13 +68,16 @@ jobs:
         run: uv sync --locked
       - name: Ruff
         working-directory: python
-        run: uv run ruff check .
+        run: uv run ruff check . ../scripts/*.py
       - name: Compile
         working-directory: python
         run: uv run python -m compileall -q src
       - name: Tests
         working-directory: python
         run: uv run pytest -q
+      - name: Performance runner tests
+        working-directory: python
+        run: $UV_PROJECT_ENVIRONMENT/bin/python ../scripts/test_performance_runner.py -v
 
   postgres:
     name: Go collector suite on embedded PostgreSQL (includes focused Go→Python seam)

@@ -12,6 +12,7 @@ can make evidence-led decisions.
 - `website/` — the public TypeScript website and browser tests.
 - `deploy/` — migrations, service definitions, and deployment scripts.
 - [`docs/domain.md`](docs/domain.md) — durable Legend I game and evidence rules.
+- [`docs/performance-runner.md`](docs/performance-runner.md) — reproducible bounded performance baselines.
 - [`AGENTS.md`](AGENTS.md) — contribution rules and source authority.
 
 The code, migrations, fixtures, and tests are authoritative for implemented
