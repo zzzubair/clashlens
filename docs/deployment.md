@@ -92,8 +92,10 @@ PostgreSQL containers use the `step6-v1` metrics profile, preload
 
 The collector contract version is separate from the schema migration number.
 The production contract is version 2. The current forward-migration set is
-0001 through 0007, with 0006 permitting both Phase 1 login providers and 0007
-adding player discovery and the durable Global Top-200 cycle guard. `up` applies
+0001 through 0008, with 0006 permitting both Phase 1 login providers, 0007
+adding player discovery and the durable Global Top-200 cycle guard, and 0008
+preserving partial army decodes per perspective and adding the public army
+analytics publications. `up` applies
 only missing forward migrations recorded in `clash_lens_schema_migrations`; it
 never replays an applied migration. An unknown contract version is rejected
 without side effects.
@@ -108,9 +110,9 @@ curl --fail http://127.0.0.1:8081/readyz
 - `init` starts PostgreSQL and applies migration 0001 only to an absent
   database. It refuses an initialized database.
 - `up` builds the collector image, advances the database through all missing
-  migrations (0001–0007 on a fresh database), configures runtime role
+  migrations (0001–0008 on a fresh database), configures runtime role
   passwords, and stages the required collector with Global Top-200 disabled.
-  A contract-v1 upgrade uses the bridge collector while migrations 0002–0007
+  A contract-v1 upgrade uses the bridge collector while migrations 0002–0008
   are applied, then replaces it with the disabled required collector.
 - `build-collector`, `build-python`, and `build-website` build images only.
 - `restart` is the start-only recovery path for a contract-v2 stack. It does

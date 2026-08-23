@@ -194,7 +194,11 @@ A domain change is complete only when every affected source observation, derived
 - Record each decoded component's numeric identifier, quantity, encoded section, and origin.
 - Preserve an unknown numeric identifier, quantity, encoded section, and origin while retaining the known components from the same army. Keep its semantic category unresolved when the encoded section and current catalog cannot distinguish it. Unknown IDs indicate catalog work still to do and must not be discarded, guessed, or silently grouped.
 - **Unit usage rate** is the share of unique Legend I attacks in a stated cohort and time period that contain the stated unit.
-- **Three-star rate** is the share of attacks in a stated population, time period, and filter that achieved three stars.
+- **Three-star rate** is the share of attacks in a stated population, time period, and filter that achieved three stars. It is exposed canonically as `three_star_rate`; there is no duplicate hit-rate field.
+- Confirmed individual components from a partial decode contribute to individual usage and outcomes. Their usage denominator is every fully or partially decoded eligible attack.
+- A relationship or complete composition uses fully decoded attacks plus only partial attacks where unresolved evidence cannot change whether that relationship is present. Publish the row's exact denominator and unknown exclusion count.
+- Equipment conditional on its owning hero uses attacks where that hero is confirmed and the equipment assignment can be proved present or absent.
+- One battle contributes at most one usage regardless of component quantity. Every aggregate keeps small samples visible.
 
 ### Population filters and lenses
 
@@ -206,19 +210,16 @@ A domain change is complete only when every affected source observation, derived
 - For a rank-streak filter, the offense lens includes attacks made by players in the resulting streak set during the selected consecutive period.
 - Do not substitute current, snapshot, or season-end trophies for battle-time trophies without labeling the value as an estimate.
 - Do not count the same battle twice when it appears in both the attacker's and defender's battle logs.
-- Frozen leaderboard cohorts are cumulative and use these presets: Top 10, Top 50, Top 100, Top 200, Top 500, Top 1,000, Top 2,000, Top 5,000, and Top 10,000 tracked players.
-- A **rank band** is lower-exclusive and upper-inclusive. The band `(50, 100]` contains ranks 51 through 100, and `(200, 1,000]` contains ranks 201 through 1,000.
-- A **rank streak** contains only players who belong to the selected cumulative Top-N cohort or rank band in every frozen daily snapshot of a consecutive period.
-- The default rank-streak period is 7 days.
-- Do not treat a changing Top-N population as one multi-day cohort. Use a rank streak when analyzing which players remained consistently within a rank selection.
-- A stale, missing, or uncertain entry on any required daily snapshot is not eligible for confirmed rank-streak membership. Exclude that player from the confirmed streak.
-- An inferred shielded day remains eligible for a rank streak when the player's fresh frozen-snapshot rank is inside the selected cumulative cohort or rank band. Record the shielded-day count with the streak.
-- A selected trophy range includes battle-time trophy values from 5 below through 5 above the selected value, inclusive.
-- Trophy ranges, cumulative cohorts, rank bands, and rank streaks are alternative population filters unless a future specification explicitly defines their intersection.
+- Frozen Top-N cohorts are cumulative and use Top 5, 10, 20, 50, 100, 200, 500, and 1,000. Membership is frozen at the end of the final selected Legend day; Top 100 is the default.
+- Frozen rank bands are ranks 1–5, 6–10, 11–20, 21–50, 51–100, 101–200, and each 100-rank band from 201–300 through 901–1,000. Membership is frozen at the end of the final selected Legend day.
+- A **rank streak** is available only for a Top-N preset and contains players in that Top-N cohort in every frozen daily snapshot of the selected inclusive range. A stale, missing, or uncertain membership cannot establish a confirmed streak; report excluded membership and shielded-day evidence.
+- A trophy range is an arbitrary inclusive minimum and maximum, with minimum at least 5,000 and maximum not lower than minimum. Use the lens-specific battle-time trophy value; missing battle-time evidence is an exclusion, never a substituted observation.
+- Exactly one trophy range, frozen Top-N cohort, frozen rank band, or Top-N rank streak applies at a time.
 
 ### Aggregate evidence
 
 - Every aggregate must state its population filter, time period, observed sample size, measured coverage, freshness, decoder and catalog version, unknown-ID count, malformed or partial count, and analytics-rule version.
+- Calculate public URL-filtered army results on demand from retained versioned facts. Derive their stable identity from the selection, result, and source-evidence hashes; opening a new URL must not create persistent per-selection rows.
 - When a selected one-snapshot cohort includes entries that use old trophy observations, return the available analytics and state the old-entry count and age. Do not silently replace the requested population or present it as fully fresh.
 - Do not silently exclude malformed, partial, zero-trophy, or unknown-ID observations. Show their effect on coverage and confidence.
 - Preserve previously published analytics with their original rule labels when decoding, catalog, or calculation rules change.

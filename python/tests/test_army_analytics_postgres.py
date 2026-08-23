@@ -219,7 +219,7 @@ def test_completed_day_and_season_publish_required_army_metrics(
                         """
                         SELECT category, typed_id, combination_key,
                                usage_count, usage_rate, star_counts,
-                               avg_destruction, hit_rate, hero_typed_id
+                               avg_destruction, three_star_rate, hero_typed_id
                         FROM army_analytics_breakdowns
                         WHERE summary_kind = 'day' AND summary_id = %s
                         """,
@@ -494,7 +494,7 @@ def test_active_or_incomplete_day_is_withheld_and_retried(
                     ) VALUES (
                         'build_army_analytics', 'army-future-test', %s,
                         'clashlens-domain-processing-v1',
-                        'clashlens-domain-rules-v1', 'legend-analytics-v1'
+                        'clashlens-domain-rules-v1', 'army-analytics-v2'
                     ) RETURNING id
                     """,
                     (

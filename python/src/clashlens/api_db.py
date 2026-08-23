@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -10,6 +13,15 @@ import psycopg
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+from .army_analytics import (
+    ArmyAnalyticsSelection,
+    ArmyAnalyticsUnavailable,
+    CurrentSeasonEmpty,
+    build_army_result,
+)
+from .army_decoder import DECODER_VERSION
+from .catalog import CATALOG_VERSION, catalog_name
+from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION
 from .profile import normalize_player_tag
 from .verification import KeyAction, VerificationOutcome
 
@@ -1007,9 +1019,41 @@ class ApiDatabase:
             ).fetchall()
             public_confidence = _public_confidence(bool(row[1]), _text(row[2]))
             daily_logs = [_daily_log(day) for day in daily_rows]
+            battle_ids = {
+                int(battle["battle_id"])
+                for day in daily_logs
+                for battle in day.get("battles", [])
+                if isinstance(battle, Mapping)
+                and isinstance(battle.get("battle_id"), (int, str))
+                and str(battle["battle_id"]).isdigit()
+            }
+            army_rows = connection.execute(
+                """
+                SELECT battle_id, perspective, status, failure_category,
+                       home_troops, spells, siege, cc_troops, heroes,
+                       unresolved_components, decoder_version, catalog_version
+                FROM battle_army_decodes
+                WHERE battle_id = ANY(%s::bigint[]) AND is_active
+                  AND decoder_version = %s AND catalog_version = %s
+                """,
+                (list(battle_ids), DECODER_VERSION, CATALOG_VERSION),
+            ).fetchall() if battle_ids else []
+            armies = {
+                (str(row[0]), _text(row[1])): _public_army(row)
+                for row in army_rows
+            }
+            display_logs = deepcopy(daily_logs)
+            for day in display_logs:
+                for battle in day.get("battles", []):
+                    if not isinstance(battle, dict):
+                        continue
+                    perspective = "attacker" if battle.get("lens") == "offense" else "defender"
+                    army = armies.get((str(battle.get("battle_id")), perspective))
+                    if army is not None:
+                        battle["army"] = army
             screen_days = [
                 _screen_daily_log_with_events(day, public_confidence)
-                for day in daily_logs
+                for day in display_logs
             ]
             now_utc = now.astimezone(UTC)
             current_day_pair = next(
@@ -1071,9 +1115,18 @@ class ApiDatabase:
                         _text(current_day_raw[2]),
                     ),
                 ).fetchall()
+            season_display_logs = [_daily_log(day) for day in season_rows]
+            for day in season_display_logs:
+                for battle in day.get("battles", []):
+                    if not isinstance(battle, dict):
+                        continue
+                    perspective = "attacker" if battle.get("lens") == "offense" else "defender"
+                    army = armies.get((str(battle.get("battle_id")), perspective))
+                    if army is not None:
+                        battle["army"] = army
             season_days = [
-                _screen_daily_log_with_events(_daily_log(day), public_confidence)
-                for day in season_rows
+                _screen_daily_log_with_events(day, public_confidence)
+                for day in season_display_logs
             ]
             data_quality = []
             if age_seconds > freshness_seconds:
@@ -1520,6 +1573,339 @@ class ApiDatabase:
                     "clan": None if row[8] is None else _text(row[8]),
                 } for row in rows],
             }
+
+    def get_army_analytics(
+        self, selection: ArmyAnalyticsSelection, *, now: datetime | None = None
+    ) -> dict[str, Any] | None:
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                resolved = selection
+                if selection.season == "current":
+                    anchor = connection.execute(
+                        """
+                        SELECT current_league_season_id, previous_league_season_id,
+                               current_start
+                        FROM legend_season_anchors
+                        WHERE anchor_rule_version = %s AND state = 'confirmed'
+                        """,
+                        (SEASON_ANCHOR_RULE_VERSION,),
+                    ).fetchone()
+                    if anchor is None:
+                        # Without a confirmed anchor there is no honest
+                        # current-season identity; never fall back to the most
+                        # recently published season.
+                        raise CurrentSeasonEmpty(None)
+                    # The default range ends at the latest Legend day whose
+                    # interval has ended in reset chronology (05:00 UTC), not
+                    # at the latest day with published source data. The
+                    # completed-day gates below then report any ended but
+                    # withheld day as unavailable instead of hiding it.
+                    current_time = (
+                        now.astimezone(UTC) if now is not None else datetime.now(tz=UTC)
+                    )
+                    if current_time < anchor[2]:
+                        latest_ended_day = 0
+                    else:
+                        # A Legend day's interval ends one full day after the
+                        # season anchor, so the count of fully elapsed days is
+                        # the latest ended day number.
+                        latest_ended_day = min(
+                            28,
+                            int((current_time - anchor[2]) // RANKED_DAY_DURATION),
+                        )
+                    clipped_end = min(selection.end_day, latest_ended_day)
+                    if clipped_end < selection.start_day:
+                        if latest_ended_day == 0:
+                            # No Legend-day interval has ended this season;
+                            # name the previous season so callers can offer it
+                            # explicitly instead of silently serving its
+                            # publications for season=current.
+                            raise CurrentSeasonEmpty(_text(anchor[1]))
+                        # Intervals have ended but the requested range starts
+                        # beyond them; name the affected days instead of
+                        # clipping.
+                        raise ArmyAnalyticsUnavailable(
+                            list(range(selection.start_day, selection.end_day + 1))
+                        )
+                    resolved = ArmyAnalyticsSelection.parse(
+                        **{
+                            **selection.as_dict(),
+                            "season": _text(anchor[0]),
+                            "end_day": clipped_end,
+                        }
+                    )
+                day_rows = connection.execute(
+                    """
+                    SELECT DISTINCT season_day_number, ranked_day_start
+                    FROM api_player_daily_logs
+                    WHERE official_season_id = %s
+                      AND state = 'Complete' AND coverage = 'complete'
+                      AND season_day_number BETWEEN %s AND %s
+                    """,
+                    (resolved.season, resolved.start_day, resolved.end_day),
+                ).fetchall()
+                day_starts = {int(row[0]): row[1] for row in day_rows}
+                completed_days = {
+                    int(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT season_day_number
+                        FROM army_analytics_completed_days
+                        WHERE official_season_id = %s
+                          AND season_day_number BETWEEN %s AND %s
+                        """,
+                        (resolved.season, resolved.start_day, resolved.end_day),
+                    ).fetchall()
+                }
+                missing_days = [
+                    day
+                    for day in range(resolved.start_day, resolved.end_day + 1)
+                    if day not in day_starts or day not in completed_days
+                ]
+                if missing_days:
+                    raise ArmyAnalyticsUnavailable(missing_days)
+                requested = resolved.as_dict()
+                facts_rows = connection.execute(
+                    """
+                    SELECT id, battle_id, population_player_id, battle_time_trophies,
+                           stars, destruction_percentage, army_state, failure_reason,
+                           home_troops, spells, siege, cc_troops, heroes,
+                           unresolved_components, perspective_disagreement, input_hash,
+                           source_ranked_day_version_id
+                    FROM army_analytics_battle_facts
+                    WHERE official_season_id=%s AND season_day_number BETWEEN %s AND %s
+                      AND lens=%s AND is_current
+                    ORDER BY battle_id
+                    """,
+                    (resolved.season, resolved.start_day, resolved.end_day, resolved.lens),
+                ).fetchall()
+                facts = [
+                    {
+                        "id": int(row[0]), "battle_id": int(row[1]),
+                        "population_player_id": int(row[2]),
+                        "battle_time_trophies": None if row[3] is None else int(row[3]),
+                        "stars": int(row[4]), "destruction_percentage": int(row[5]),
+                        "army_state": _text(row[6]), "failure_reason": None if row[7] is None else _text(row[7]),
+                        "home_troops": row[8], "spells": row[9], "siege": row[10],
+                        "cc_troops": row[11], "heroes": row[12],
+                        "unresolved_components": row[13],
+                        "perspective_disagreement": bool(row[14]),
+                        "input_hash": _text(row[15]),
+                        "source_ranked_day_version_id": int(row[16]),
+                    }
+                    for row in facts_rows
+                ]
+                population = resolved.population
+                snapshot_versions: list[int] = []
+                snapshot_ids: list[int] = []
+                missing_trophies = 0
+                cohort_evidence: dict[str, int] | None = None
+                if population.startswith("trophies-"):
+                    minimum, maximum = map(int, population.split("-")[1:])
+                    missing_trophies = sum(fact["battle_time_trophies"] is None for fact in facts)
+                    facts = [fact for fact in facts if fact["battle_time_trophies"] is not None and minimum <= fact["battle_time_trophies"] <= maximum]
+                else:
+                    streak = population.startswith("streak-top-")
+                    boundary_by_day = {
+                        day: day_starts[day] + timedelta(days=1)
+                        for day in range(resolved.start_day, resolved.end_day + 1)
+                    }
+                    needed_days = list(boundary_by_day) if streak else [resolved.end_day]
+                    snapshots = connection.execute(
+                        """
+                        SELECT DISTINCT ON (boundary_at)
+                               boundary_at, id, version
+                        FROM leaderboard_snapshots
+                        WHERE snapshot_kind='frozen' AND state='published'
+                          AND boundary_at = ANY(%s::timestamptz[])
+                        ORDER BY boundary_at, version DESC
+                        """,
+                        ([boundary_by_day[day] for day in needed_days],),
+                    ).fetchall()
+                    by_boundary = {
+                        row[0]: (int(row[1]), int(row[2])) for row in snapshots
+                    }
+                    unavailable_days = [
+                        day
+                        for day in needed_days
+                        if boundary_by_day[day] not in by_boundary
+                    ]
+                    if unavailable_days:
+                        raise ArmyAnalyticsUnavailable(unavailable_days)
+                    snapshot_ids = [by_boundary[boundary_by_day[day]][0] for day in needed_days]
+                    snapshot_versions = [
+                        by_boundary[boundary_by_day[day]][1] for day in needed_days
+                    ]
+                    if streak:
+                        limit = int(population.removeprefix("streak-top-"))
+                        members = connection.execute(
+                            """
+                            SELECT player_id FROM leaderboard_snapshot_entries
+                            WHERE snapshot_id=ANY(%s::bigint[]) AND position<=%s
+                              AND freshness='fresh' AND confidence='confirmed'
+                            GROUP BY player_id HAVING count(DISTINCT snapshot_id)=%s
+                            """, (snapshot_ids, limit, len(snapshot_ids)),
+                        ).fetchall()
+                    else:
+                        if population.startswith("top-"):
+                            low, high = 1, int(population.removeprefix("top-"))
+                        else:
+                            low, high = map(int, population.removeprefix("band-").split("-"))
+                        members = connection.execute(
+                            """
+                            SELECT player_id FROM leaderboard_snapshot_entries
+                            WHERE snapshot_id=%s AND position BETWEEN %s AND %s
+                            """, (snapshot_ids[0], low, high),
+                        ).fetchall()
+                    member_ids = {int(row[0]) for row in members}
+                    facts = [fact for fact in facts if fact["population_player_id"] in member_ids]
+                    excluded_players = 0
+                    shielded_player_days = 0
+                    if population.startswith("streak-top-"):
+                        # Excluded streak players appear in the selected Top-N
+                        # in at least one selected snapshot but fail confirmed
+                        # fresh membership in every one: missing snapshot
+                        # membership or stale/uncertain entries both block a
+                        # confirmed streak.
+                        any_snapshot_ids = {
+                            int(row[0])
+                            for row in connection.execute(
+                                """
+                                SELECT DISTINCT player_id
+                                FROM leaderboard_snapshot_entries
+                                WHERE snapshot_id = ANY(%s::bigint[])
+                                  AND position <= %s
+                                """,
+                                (snapshot_ids, limit),
+                            ).fetchall()
+                        }
+                        excluded_players = len(any_snapshot_ids - member_ids)
+                        # Shielded-day evidence for confirmed streak members:
+                        # one row per member-day whose current ranked-day
+                        # version inferred a shield.
+                        if member_ids:
+                            shielded_player_days = int(
+                                connection.execute(
+                                    """
+                                    SELECT count(*) FROM (
+                                        SELECT DISTINCT ON (rv.player_id,
+                                                            rv.ranked_day_start)
+                                               rv.shield_state
+                                        FROM ranked_day_versions AS rv
+                                        WHERE rv.player_id = ANY(%s::bigint[])
+                                          AND rv.ranked_day_start =
+                                              ANY(%s::timestamptz[])
+                                        ORDER BY rv.player_id, rv.ranked_day_start,
+                                                 rv.version DESC
+                                    ) AS current_version
+                                    WHERE shield_state = 'inferred_shielded'
+                                    """,
+                                    (
+                                        sorted(member_ids),
+                                        [
+                                            day_starts[day]
+                                            for day in range(
+                                                resolved.start_day,
+                                                resolved.end_day + 1,
+                                            )
+                                        ],
+                                    ),
+                                ).fetchone()[0]
+                            )
+                        stale_or_uncertain_members = int(
+                            connection.execute(
+                                """
+                                SELECT count(*) FROM (
+                                    SELECT player_id
+                                    FROM leaderboard_snapshot_entries
+                                    WHERE snapshot_id = ANY(%s::bigint[])
+                                      AND position <= %s
+                                    GROUP BY player_id
+                                    HAVING count(DISTINCT snapshot_id) = %s
+                                       AND bool_or(
+                                           NOT (freshness = 'fresh'
+                                                AND confidence = 'confirmed'))
+                                ) AS excluded
+                                """,
+                                (snapshot_ids, limit, len(snapshot_ids)),
+                            ).fetchone()[0]
+                        )
+                    else:
+                        low, high = (
+                            (1, int(population.removeprefix("top-")))
+                            if population.startswith("top-")
+                            else map(int, population.removeprefix("band-").split("-"))
+                        )
+                        stale_or_uncertain_members = int(
+                            connection.execute(
+                                """
+                                SELECT count(*) FROM leaderboard_snapshot_entries
+                                WHERE snapshot_id = %s
+                                  AND position BETWEEN %s AND %s
+                                  AND NOT (freshness = 'fresh'
+                                           AND confidence = 'confirmed')
+                                """,
+                                (snapshot_ids[0], low, high),
+                            ).fetchone()[0]
+                        )
+                    cohort_evidence = {
+                        "stale_or_uncertain_cohort_members": stale_or_uncertain_members,
+                        "streak_excluded_players": excluded_players,
+                        "shielded_player_days": shielded_player_days,
+                    }
+                result = build_army_result(facts, resolved)
+                result["missing_trophy_membership_evidence"] = missing_trophies
+                if cohort_evidence is None:
+                    cohort_evidence = {
+                        "stale_or_uncertain_cohort_members": 0,
+                        "streak_excluded_players": 0,
+                        "shielded_player_days": 0,
+                    }
+                result["cohort_evidence"] = cohort_evidence
+                result["reproducibility"] = {
+                    "official_season_id": resolved.season,
+                    "legend_days": [resolved.start_day, resolved.end_day],
+                    "snapshot_versions": snapshot_versions,
+                }
+                source_hash = hashlib.sha256(json.dumps({
+                    "selection": requested,
+                    "facts": [(fact["id"], fact["input_hash"]) for fact in facts],
+                    "snapshots": snapshot_ids,
+                }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                # The result hash covers both the aggregates and the retained
+                # source-evidence hash, so corrected inputs always change the
+                # published identity.
+                result_hash = hashlib.sha256(json.dumps({
+                    "result": result, "source_evidence": source_hash,
+                }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                result["reproducibility"]["source_evidence_hash"] = source_hash
+                # Anonymous reads are calculated on the spot and never
+                # persist a row per URL selection. The public identity is
+                # derived deterministically from the selection and the result
+                # hash (which already covers the source-evidence hash), so the
+                # same retained inputs reproduce it and corrected inputs
+                # change it without any database writes.
+                publication_key = hashlib.sha256(json.dumps(requested, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                result["selection"] = requested
+                result["publication_identity"] = (
+                    f"army-publication-{publication_key[:24]}-{result_hash[:16]}"
+                )
+                return result
+
+    def get_battle_army(self, battle_id: int, perspective: str) -> dict[str, Any] | None:
+        with self.pool.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT battle_id, perspective, status, failure_category,
+                       home_troops, spells, siege, cc_troops, heroes,
+                       unresolved_components, decoder_version, catalog_version
+                FROM battle_army_decodes
+                WHERE battle_id = %s AND perspective = %s AND is_active
+                  AND decoder_version = %s AND catalog_version = %s
+                """,
+                (battle_id, perspective, DECODER_VERSION, CATALOG_VERSION),
+            ).fetchone()
+            return None if row is None else _public_army(row)
 
     def get_basic_analytics(
         self,
@@ -2198,6 +2584,50 @@ def _public_snapshot_confidence(value: str) -> str:
     return "uncertain"
 
 
+def _public_army(row: Any) -> dict[str, Any]:
+    def facts(value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        result = []
+        for fact in value:
+            if not isinstance(fact, (list, tuple)) or len(fact) < 3:
+                continue
+            typed_id, quantity, origin = str(fact[0]), int(fact[1]), str(fact[2])
+            result.append({
+                "typed_id": typed_id,
+                "name": catalog_name(typed_id) or typed_id,
+                "quantity": quantity,
+                "origin": origin,
+            })
+        return result
+
+    status = _text(row[2])
+    components = []
+    for value in row[4:8]:
+        components.extend(facts(value))
+    if isinstance(row[8], list):
+        for hero in row[8]:
+            if not isinstance(hero, Mapping):
+                continue
+            for typed_id in [hero.get("hero"), hero.get("pet"), *(hero.get("equipment") or [])]:
+                if isinstance(typed_id, str) and (name := catalog_name(typed_id)):
+                    components.append({
+                        "typed_id": typed_id,
+                        "name": name,
+                        "quantity": 1,
+                        "origin": "hero",
+                    })
+    unknown = row[9] if isinstance(row[9], list) else []
+    return {
+        "state": status,
+        "failure_reason": _text(row[3]) if row[3] is not None else None,
+        "components": components,
+        "unknown_components": unknown,
+        "decoder_version": _text(row[10]),
+        "catalog_version": _text(row[11]),
+    }
+
+
 def _screen_daily_log(day: dict[str, Any], profile_confidence: str) -> dict[str, Any]:
     coverage = day["coverage"]
     reasons = [reason for reason in day["partial_reasons"] if isinstance(reason, str)]
@@ -2241,7 +2671,9 @@ def _screen_events(
     """Project versioned published battle evidence into the private API shape.
 
     The publication is expected to contain canonical, included battle events.
-    The validation here is deliberately defensive: old publications contain
+    Perspective-disagreement battles stay visible on their row so the website
+    can flag them instead of silently dropping accepted evidence. The
+    validation here is deliberately defensive: old publications contain
     reconciliation evidence rather than the new event projection, and a
     malformed JSON element must not make the player operation fail.
     """
@@ -2278,11 +2710,7 @@ def _screen_event(
 ) -> tuple[str, str, datetime, dict[str, Any]] | None:
     if not isinstance(battle, Mapping):
         return None
-    if (
-        battle.get("included") is False
-        or battle.get("valid") is False
-        or battle.get("disagreement") is True
-    ):
+    if battle.get("included") is False or battle.get("valid") is False:
         return None
 
     lens = battle.get("lens")
@@ -2332,7 +2760,10 @@ def _screen_event(
         "destruction_percentage": destruction,
         "stars": stars,
         "trophy_change": trophy_change,
+        "perspective_disagreement": battle.get("disagreement") is True,
     }
+    if isinstance(battle.get("army"), Mapping):
+        event["army"] = battle["army"]
     return lens, battle_id, timestamp, event
 
 

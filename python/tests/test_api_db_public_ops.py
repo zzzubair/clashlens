@@ -7,7 +7,7 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 from test_api_migration import migrated_production_database
 
-from clashlens.api_db import ApiDatabase, RequestBinding, _screen_events
+from clashlens.api_db import ApiDatabase, RequestBinding, _public_army, _screen_events
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
 
@@ -280,6 +280,30 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
             database.close()
 
 
+def test_public_army_shows_an_unknown_hero_once_as_unknown() -> None:
+    army = _public_army(
+        (
+            1,
+            "attacker",
+            "partial",
+            None,
+            [],
+            [],
+            [],
+            [],
+            [{"hero": "hero:999", "pet": "pet:9", "equipment": []}],
+            [{"numeric_id": 999, "quantity": 1, "section": "h", "origin": "hero"}],
+            "army-decoder-v2",
+            "unit-catalog-v1",
+        )
+    )
+
+    assert [component["typed_id"] for component in army["components"]] == ["pet:9"]
+    assert army["unknown_components"] == [
+        {"numeric_id": 999, "quantity": 1, "section": "h", "origin": "hero"}
+    ]
+
+
 def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> None:
     offense, defense = _screen_events(
         [
@@ -311,6 +335,16 @@ def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> Non
                 "trophy_change": 0,
             },
             {
+                "lens": "offense",
+                "battle_id": "102",
+                "disagreement": True,
+                "battle_timestamp": "2026-08-05T19:30:00Z",
+                "opponent": {"tag": "#L92", "name": "Disputed"},
+                "destruction_percentage": 60,
+                "stars": 2,
+                "trophy_change": 10,
+            },
+            {
                 "lens": "defense",
                 "battle_id": 200,
                 "battle_timestamp": "2026-08-05T20:00:00Z",
@@ -339,11 +373,15 @@ def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> Non
         ]
     )
 
-    assert [event["battle_id"] for event in offense] == ["99", "101", "100"]
-    assert offense[0]["opponent"] == {"tag": "#2PP", "name": None}
-    assert offense[1]["trophy_change"] == 40
+    assert [event["battle_id"] for event in offense] == ["102", "99", "101", "100"]
+    # A disagreement battle stays visible on its row instead of being dropped.
+    assert offense[0]["perspective_disagreement"] is True
+    assert offense[1]["opponent"] == {"tag": "#2PP", "name": None}
+    assert offense[1]["perspective_disagreement"] is False
+    assert offense[2]["trophy_change"] == 40
     assert [event["battle_id"] for event in defense] == ["200"]
     assert defense[0]["trophy_change"] == -30
+    assert defense[0]["perspective_disagreement"] is False
     assert _screen_events(None) == ([], [])
 
 
@@ -445,6 +483,7 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                     "destruction_percentage": 100,
                     "stars": 3,
                     "trophy_change": 40,
+                    "perspective_disagreement": False,
                 },
                 {
                     "battle_id": "1",
@@ -453,6 +492,7 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                     "destruction_percentage": 80,
                     "stars": 2,
                     "trophy_change": 30,
+                    "perspective_disagreement": False,
                 },
             ]
             assert screen["current_day"]["defense_events"][0]["trophy_change"] == -20

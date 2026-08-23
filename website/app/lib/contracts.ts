@@ -120,6 +120,74 @@ export interface PlayerProfile {
   eligibility: "legend-i" | "uncertain";
 }
 
+export interface ArmyComponent {
+  typedId: string | null;
+  name: string;
+  quantity: number;
+  origin: string;
+}
+
+export interface BattleArmy {
+  state: "decoded" | "partial" | "failed";
+  failureReason: string | null;
+  components: ArmyComponent[];
+  unknownComponents: Array<{
+    numericId: number;
+    quantity: number;
+    section: string;
+    origin: string;
+  }>;
+  decoderVersion: string;
+  catalogVersion: string;
+}
+
+export interface ArmyAnalytics {
+  kind: "army-analytics";
+  selection: {
+    lens: "offense" | "defense";
+    season: string;
+    startDay: number;
+    endDay: number;
+    population: string;
+    category: string;
+    sort: string;
+  };
+  totalAttacks: number;
+  usableArmySample: number;
+  armyStates: Record<string, number>;
+  unknownAffectedAttacks: number;
+  unknownComponentOccurrences: number;
+  perspectiveDisagreementCount: number;
+  missingTrophyMembershipEvidence: number;
+  cohortEvidence: {
+    staleOrUncertainCohortMembers: number;
+    streakExcludedPlayers: number;
+    shieldedPlayerDays: number;
+  };
+  collectionCoverage: { state: string; completedDays: number };
+  freshness: { state: string };
+  reproducibility: {
+    officialSeasonId: string;
+    legendDays: [number, number];
+    snapshotVersions: number[];
+  };
+  versions: { decoder: string; catalog: string; analytics: string };
+  publicationIdentity: string;
+  rows: Array<{
+    key: string;
+    label: string;
+    usageCount: number;
+    usageDenominator: number;
+    usageRate: number;
+    starCounts: [number, number, number, number];
+    starRates: [number, number, number, number];
+    threeStarRate: number;
+    averageStars: number;
+    averageDestruction: number;
+    unknownExcludedAttacks: number;
+  }>;
+}
+
 export interface RankedBattleEvent {
   battleId: string;
   battleTimestamp: string;
@@ -130,6 +198,8 @@ export interface RankedBattleEvent {
   destructionPercentage: number;
   stars: number;
   trophyChange: number;
+  perspectiveDisagreement: boolean;
+  army: BattleArmy | null;
 }
 
 export interface RankedDaySummary {

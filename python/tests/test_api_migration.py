@@ -68,6 +68,16 @@ def migrated_production_database(
                             ROOT / "deploy/migrations/0006_provider_identities.sql"
                         ).read_text(encoding="utf-8")
                     )
+                    connection.execute(
+                        (
+                            ROOT / "deploy/migrations/0007_player_discovery.sql"
+                        ).read_text(encoding="utf-8")
+                    )
+                    connection.execute(
+                        (
+                            ROOT / "deploy/migrations/0008_public_army_analytics.sql"
+                        ).read_text(encoding="utf-8")
+                    )
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -686,3 +696,124 @@ def test_provider_identities_migration_permits_discord_and_stays_reentrant(
                 ("clashlens_python_api", True),
                 ("clashlens_python_worker", False),
             ]
+
+
+def test_public_army_migration_is_forward_only_and_reentrant(database_url: str) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        migration = (
+            ROOT / "deploy/migrations/0008_public_army_analytics.sql"
+        ).read_text(encoding="utf-8")
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(migration)
+            assert (
+                connection.execute(
+                    "SELECT true FROM clash_lens_schema_migrations WHERE version = 8"
+                ).fetchone()
+                is not None
+            )
+            columns = connection.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'battle_army_decodes'
+                  AND column_name IN ('perspective', 'unresolved_components')
+                ORDER BY column_name
+                """
+            ).fetchall()
+            assert [row[0] for row in columns] == [
+                "perspective",
+                "unresolved_components",
+            ]
+            assert connection.execute(
+                "SELECT to_regclass('army_analytics_publications')"
+            ).fetchone()[0] is None
+            assert connection.execute(
+                "SELECT has_table_privilege('clashlens_python_api', "
+                "'army_analytics_battle_facts', 'INSERT')"
+            ).fetchone()[0] is False
+
+
+def test_public_army_migration_cancels_leased_v1_job_and_clears_lease(
+    database_url: str,
+) -> None:
+    schema = f"python_api_leased_v1_{uuid4().hex}"
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        admin.execute(f'CREATE SCHEMA "{schema}"')
+    connection_info = make_conninfo(database_url, options=f"-c search_path={schema}")
+    try:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                (ROOT / "deploy/migrations/0001_collector.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+            migration_0002 = (
+                ROOT / "deploy/migrations/0002_python_layer.sql"
+            ).read_text(encoding="utf-8")
+            connection.execute(migration_0002)
+            connection.execute(migration_0002)
+            connection.execute(
+                (ROOT / "deploy/migrations/0003_regular_poll_dedup.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+            connection.execute(
+                (ROOT / "deploy/migrations/0004_source_parser_v2.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+            connection.execute(
+                (ROOT / "deploy/migrations/0005_army_decoding.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+            connection.execute(
+                (ROOT / "deploy/migrations/0006_provider_identities.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+            connection.execute(
+                (ROOT / "deploy/migrations/0007_player_discovery.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+            job_id = connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json,
+                    processing_version, domain_rule_version, analytics_rule_version,
+                    status, lease_owner, lease_token, lease_expires_at, due_at
+                ) VALUES (
+                    'build_army_analytics', 'build_army_analytics:test-leased-v1',
+                    '{"ranked_day_start":"2026-08-04T05:00:00Z","official_season_id":"1783918800"}'::jsonb,
+                    'clashlens-domain-processing-v1','clashlens-domain-rules-v1','legend-analytics-v1',
+                    'leased','test-owner','test-token', clock_timestamp() + interval '5 minutes',
+                    clock_timestamp()
+                ) RETURNING id
+                """
+            ).fetchone()[0]
+            before = connection.execute(
+                "SELECT status, lease_owner, lease_token, lease_expires_at FROM python_processing_jobs WHERE id = %s",
+                (job_id,),
+            ).fetchone()
+            assert before[0] == "leased"
+            assert before[1] == "test-owner"
+            connection.execute(
+                (ROOT / "deploy/migrations/0008_public_army_analytics.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+            after = connection.execute(
+                "SELECT status, lease_owner, lease_token, lease_expires_at, failure_category FROM python_processing_jobs WHERE id = %s",
+                (job_id,),
+            ).fetchone()
+            assert after[0] == "cancelled"
+            assert after[1] is None
+            assert after[2] is None
+            assert after[3] is None
+            assert after[4] == "superseded_analytics_rule_version"
+            # migration must remain valid under lease check
+            connection.execute("SELECT 1")
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as admin:
+            admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

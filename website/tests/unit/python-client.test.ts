@@ -751,6 +751,8 @@ describe("server-only Python client response boundary", () => {
       destructionPercentage: event.destruction_percentage,
       stars: event.stars,
       trophyChange: event.trophy_change,
+      perspectiveDisagreement: false,
+      army: null,
     });
     expect(mappedCurrentDay.offenseEvents).toEqual(offenseEvents.map(mapExpectedEvent));
     expect(mappedCurrentDay.defenseEvents).toEqual(defenseEvents.map(mapExpectedEvent));
@@ -780,5 +782,405 @@ describe("server-only Python client response boundary", () => {
       createPythonClient().requestRefresh("#2PP", "not-a-uuid"),
     ).rejects.toMatchObject({ status: 400, payload: { error: "invalid_input" } });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  function armyAnalyticsPayload() {
+    return {
+      kind: "army-analytics",
+      total_attacks: 2,
+      usable_army_sample: 2,
+      army_states: { fully_decoded: 1, partial: 1 },
+      unknown_affected_attacks: 1,
+      unknown_component_occurrences: 1,
+      perspective_disagreement_count: 0,
+      missing_trophy_membership_evidence: 3,
+      cohort_evidence: {
+        stale_or_uncertain_cohort_members: 2,
+        streak_excluded_players: 1,
+        shielded_player_days: 3,
+      },
+      collection_coverage: { state: "complete", completed_days: 8 },
+      freshness: { state: "frozen" },
+      reproducibility: {
+        official_season_id: "1783918800",
+        legend_days: [23, 23],
+        snapshot_versions: [4],
+      },
+      versions: {
+        decoder: "army-decoder-v2",
+        catalog: "unit-catalog-v1",
+        analytics: "army-analytics-v2",
+      },
+      publication_identity: "army-publication-abc123-v1",
+      selection: {
+        lens: "offense",
+        season: "1783918800",
+        start_day: 23,
+        end_day: 23,
+        population: "top-100",
+        category: "troops",
+        sort: "usage-rate",
+      },
+      rows: [
+        {
+          key: "troop:58",
+          label: "Ice Golem",
+          usage_count: 2,
+          usage_denominator: 2,
+          usage_rate: 1,
+          star_counts: [0, 0, 0, 2],
+          star_rates: [0, 0, 0, 1],
+          three_star_rate: 1,
+          average_stars: 3,
+          average_destruction: 100,
+          unknown_excluded_attacks: 0,
+        },
+      ],
+    };
+  }
+
+  it("translates a current season with no completed days into the empty-state error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: "no_completed_legend_days",
+            previous_season_id: "1783916800",
+          }),
+          { status: 404, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const mod = await import("../../app/services/python.server");
+    const error = await mod
+      .createPythonClient()
+      .getArmyAnalytics(new URLSearchParams({ season: "current" }))
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(mod.NoCompletedLegendDaysError);
+    expect(error).toMatchObject({ previousSeasonId: "1783916800" });
+  });
+
+  it("maps the army analytics payload and preserves URL-backed state", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(armyAnalyticsPayload()), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    const query = new URLSearchParams({
+      season: "1783918800",
+      lens: "defense",
+      start_day: "3",
+      end_day: "9",
+      population: "band-51-100",
+      category: "equipment-for-hero",
+      sort: "average-destruction",
+    });
+    const mapped = await createPythonClient().getArmyAnalytics(query);
+    expect(fetchMock.mock.calls[0][0]).toBeInstanceOf(URL);
+    expect((fetchMock.mock.calls[0][0] as URL).pathname).toBe("/v1/analytics/armies");
+    expect(mapped).toMatchObject({
+      kind: "army-analytics",
+      totalAttacks: 2,
+      usableArmySample: 2,
+      armyStates: { fully_decoded: 1, partial: 1 },
+      unknownAffectedAttacks: 1,
+      perspectiveDisagreementCount: 0,
+      missingTrophyMembershipEvidence: 3,
+      cohortEvidence: {
+        staleOrUncertainCohortMembers: 2,
+        streakExcludedPlayers: 1,
+        shieldedPlayerDays: 3,
+      },
+      collectionCoverage: { state: "complete", completedDays: 8 },
+      freshness: { state: "frozen" },
+      reproducibility: {
+        officialSeasonId: "1783918800",
+        legendDays: [23, 23],
+        snapshotVersions: [4],
+      },
+      publicationIdentity: "army-publication-abc123-v1",
+      versions: { decoder: "army-decoder-v2", analytics: "army-analytics-v2" },
+      selection: {
+        // The echoed selection is the Python-resolved canonical state, not
+        // just the submitted URL parameters.
+        lens: "offense",
+        season: "1783918800",
+        startDay: 23,
+        endDay: 23,
+        population: "top-100",
+        category: "troops",
+        sort: "usage-rate",
+      },
+    });
+    expect(mapped.rows[0]).toMatchObject({
+      key: "troop:58",
+      usageCount: 2,
+      usageDenominator: 2,
+      threeStarRate: 1,
+      starCounts: [0, 0, 0, 2],
+    });
+  });
+
+  it("rejects an army analytics payload with malformed evidence coverage", async () => {
+    const payload = armyAnalyticsPayload();
+    delete (payload as Record<string, unknown>).cohort_evidence;
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    await expect(
+      createPythonClient().getArmyAnalytics(new URLSearchParams({ season: "x" })),
+    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
+  });
+
+  it.each([
+    [
+      "missing publication identity",
+      (payload: Record<string, unknown>) => {
+        delete payload.publication_identity;
+      },
+    ],
+    [
+      "a truncated star-count vector",
+      (payload: Record<string, unknown>) => {
+        (payload.rows as Array<Record<string, unknown>>)[0].star_counts = [0, 0, 0];
+      },
+    ],
+    [
+      "a malformed row denominator",
+      (payload: Record<string, unknown>) => {
+        (payload.rows as Array<Record<string, unknown>>)[0].usage_denominator = "2";
+      },
+    ],
+  ])("rejects army analytics with %s", async (_name, mutate) => {
+    const payload = armyAnalyticsPayload();
+    mutate(payload);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    await expect(
+      createPythonClient().getArmyAnalytics(new URLSearchParams("season=x")),
+    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
+  });
+
+  it("maps battle armies with known and unknown facts onto player events", async () => {
+    const army = {
+      state: "partial",
+      failure_reason: null,
+      components: [
+        {
+          typed_id: "troop:58",
+          name: "Ice Golem",
+          quantity: 2,
+          origin: "home",
+        },
+      ],
+      unknown_components: [
+        { numeric_id: 9999, quantity: 3, section: "u", origin: "home" },
+      ],
+      decoder_version: "army-decoder-v2",
+      catalog_version: "unit-catalog-v1",
+    };
+    const day = {
+      ranked_day_start: "2026-08-06T05:00:00+00:00",
+      ranked_day_end: null,
+      official_season_id: null,
+      season_day_number: null,
+      version: 1,
+      state: "Complete",
+      confidence: null,
+      completeness: { state: "complete", reason: "Complete." },
+      public_confidence: "high",
+      uncertainty_reasons: [],
+      attack_count: 1,
+      attack_three_star_count: 0,
+      attack_gain: 0,
+      defense_count: null,
+      defense_three_star_count: null,
+      defense_loss: null,
+      net_trophy_change: null,
+      offense_events: [
+        {
+          battle_id: "battle-1",
+          battle_timestamp: "2026-08-06T06:00:00Z",
+          opponent: { tag: "#8PP", name: "Opp" },
+          destruction_percentage: 100,
+          stars: 3,
+          trophy_change: 35,
+          perspective_disagreement: true,
+          army,
+        },
+        {
+          battle_id: "battle-2",
+          battle_timestamp: "2026-08-06T07:00:00Z",
+          opponent: { tag: "#8PY", name: "Calm" },
+          destruction_percentage: 50,
+          stars: 1,
+          trophy_change: 8,
+        },
+      ],
+      defense_events: [],
+    };
+    const payload = {
+      tag: "#2PP",
+      name: "Nova",
+      clan: null,
+      trophies: 6000,
+      observed_at: "2026-08-06T11:59:00+00:00",
+      age_seconds: 60,
+      freshness: "fresh",
+      public_confidence: "high",
+      eligibility: "eligible",
+      screen_ready: {
+        current_day: day,
+        recent_days: [],
+        season_days: [day],
+        season: null,
+        data_quality: [],
+        provenance: {
+          source: "api_player_daily_logs",
+          observed_at: "2026-08-06T11:59:00+00:00",
+          freshness: "fresh",
+          confidence: "high",
+          coverage: "complete",
+          version: "api-player-daily-log-v3",
+        },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    const mapped = await createPythonClient().getPlayer("#2PP");
+    const event = mapped.currentDay?.offenseEvents[0];
+    if (!event) throw new Error("expected an offense event");
+    // Disagreement battles stay visible on their row instead of being dropped.
+    expect(event.perspectiveDisagreement).toBe(true);
+    expect(mapped.currentDay?.offenseEvents[1]?.perspectiveDisagreement).toBe(false);
+    expect(event.army).toEqual({
+      state: "partial",
+      failureReason: null,
+      components: [
+        { typedId: "troop:58", name: "Ice Golem", quantity: 2, origin: "home" },
+      ],
+      unknownComponents: [{ numericId: 9999, quantity: 3, section: "u", origin: "home" }],
+      decoderVersion: "army-decoder-v2",
+      catalogVersion: "unit-catalog-v1",
+    });
+  });
+
+  it("rejects a battle army with a guessed label shape", async () => {
+    const badArmy = {
+      state: "guessed",
+      failure_reason: null,
+      components: [],
+      unknown_components: [],
+      decoder_version: "army-decoder-v2",
+      catalog_version: "unit-catalog-v1",
+    };
+    const day = {
+      ranked_day_start: "2026-08-06T05:00:00+00:00",
+      ranked_day_end: null,
+      official_season_id: null,
+      season_day_number: null,
+      version: 1,
+      state: "Complete",
+      confidence: null,
+      completeness: { state: "complete", reason: "Complete." },
+      public_confidence: "high",
+      uncertainty_reasons: [],
+      attack_count: 1,
+      attack_three_star_count: 0,
+      attack_gain: 0,
+      defense_count: null,
+      defense_three_star_count: null,
+      defense_loss: null,
+      net_trophy_change: null,
+      offense_events: [
+        {
+          battle_id: "battle-1",
+          battle_timestamp: "2026-08-06T06:00:00Z",
+          opponent: { tag: "#8PP", name: "Opp" },
+          destruction_percentage: 100,
+          stars: 3,
+          trophy_change: 35,
+          army: badArmy,
+        },
+      ],
+      defense_events: [],
+    };
+    const payload = {
+      tag: "#2PP",
+      name: "Nova",
+      clan: null,
+      trophies: 6000,
+      observed_at: "2026-08-06T11:59:00+00:00",
+      age_seconds: 60,
+      freshness: "fresh",
+      public_confidence: "high",
+      eligibility: "eligible",
+      screen_ready: {
+        current_day: day,
+        recent_days: [],
+        season_days: [],
+        season: null,
+        data_quality: [],
+        provenance: {
+          source: "api_player_daily_logs",
+          observed_at: "2026-08-06T11:59:00+00:00",
+          freshness: "fresh",
+          confidence: "high",
+          coverage: "complete",
+          version: "api-player-daily-log-v3",
+        },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValueOnce(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
+      status: 502,
+      payload: { error: "malformed" },
+    });
   });
 });

@@ -21,6 +21,11 @@ from .api_db import (
     OperationResult,
     RequestBinding,
 )
+from .army_analytics import (
+    ArmyAnalyticsSelection,
+    ArmyAnalyticsUnavailable,
+    CurrentSeasonEmpty,
+)
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
 from .profile import normalize_player_tag
 from .verification import (
@@ -100,10 +105,13 @@ class ExportBody(StrictBody):
 
 
 class ApiError(Exception):
-    def __init__(self, status_code: int, code: str) -> None:
+    def __init__(
+        self, status_code: int, code: str, *, detail: str | None = None
+    ) -> None:
         super().__init__(code)
         self.status_code = status_code
         self.code = code
+        self.detail = detail
 
 
 class RequestBodyTooLarge(ValueError):
@@ -152,9 +160,10 @@ def create_app(
 
     @app.exception_handler(ApiError)
     async def api_error_handler(_request: Request, error: ApiError) -> JSONResponse:
-        return JSONResponse(
-            status_code=error.status_code, content={"error": error.code}
-        )
+        content: dict[str, str] = {"error": error.code}
+        if error.detail:
+            content["detail"] = error.detail
+        return JSONResponse(status_code=error.status_code, content=content)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -321,6 +330,59 @@ def create_app(
         if result is None:
             raise ApiError(404, "leaderboard_not_found")
         return JSONResponse(status_code=200, content=result)
+
+    @app.get("/v1/analytics/armies")
+    def army_analytics(
+        request: Request,
+        season: str = Query(min_length=1, max_length=80),
+        lens: str = Query(default="offense", max_length=16),
+        start_day: int = Query(default=1, ge=1, le=28),
+        end_day: int = Query(default=28, ge=1, le=28),
+        population: str = Query(default="top-100", max_length=40),
+        category: str = Query(default="troops", max_length=40),
+        sort: str = Query(default="usage-rate", max_length=40),
+    ) -> JSONResponse:
+        _authorize(request, "analytics.read", production_database)
+        try:
+            selection = ArmyAnalyticsSelection.parse(
+                lens=lens, season=season, start_day=start_day, end_day=end_day,
+                population=population, category=category, sort=sort,
+            )
+        except ValueError as error:
+            raise ApiError(422, "invalid_army_analytics_selection") from error
+        try:
+            result = production_database.get_army_analytics(
+                selection, now=current_time()
+            )
+        except CurrentSeasonEmpty as empty:
+            content: dict[str, Any] = {"error": "no_completed_legend_days"}
+            if empty.previous_season_id:
+                content["previous_season_id"] = empty.previous_season_id
+            return JSONResponse(status_code=404, content=content)
+        except ArmyAnalyticsUnavailable as unavailable:
+            raise ApiError(
+                404,
+                "army_analytics_unavailable",
+                detail="unavailable legend days: "
+                + ",".join(str(day) for day in unavailable.affected_days),
+            ) from unavailable
+        if result is None:
+            raise ApiError(404, "army_analytics_unavailable")
+        return JSONResponse(status_code=200, content=_json_safe(result))
+
+    @app.get("/v1/battles/{battle_id}/army")
+    def battle_army(
+        battle_id: int,
+        request: Request,
+        perspective: Literal["attacker", "defender"],
+    ) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        if battle_id < 1:
+            raise ApiError(422, "invalid_request")
+        result = production_database.get_battle_army(battle_id, perspective)
+        if result is None:
+            raise ApiError(404, "battle_army_not_found")
+        return JSONResponse(status_code=200, content=_json_safe(result))
 
     @app.get("/v1/analytics/basic")
     def analytics(request: Request) -> JSONResponse:

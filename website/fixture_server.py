@@ -44,6 +44,7 @@ UUID_PATTERN = re.compile(
 )
 FIXTURE_OBSERVED_AT = "2026-08-05T18:00:00Z"
 FIXTURE_VERSION = "python-fixture-v1"
+FIXTURE_PREVIOUS_SEASON = "1783916800"
 ALLOWED_PROVIDERS = {"discord", "google"}
 JOB_RETENTION_SECONDS = 300
 MAX_JOBS = 1_000
@@ -212,6 +213,83 @@ def entry_for(spec, position, kind="live"):
     }
 
 
+def army_analytics(season, query):
+    """Deterministic completed-day army analytics for one explicit season."""
+
+    def int_param(name, default):
+        try:
+            return int(query.get(name, [str(default)])[0])
+        except ValueError:
+            return default
+
+    selection = {
+        "lens": query.get("lens", ["offense"])[0],
+        "season": season,
+        "start_day": min(max(int_param("start_day", 1), 1), 28),
+        "end_day": min(max(int_param("end_day", 28), 1), 28),
+        "population": query.get("population", ["top-100"])[0],
+        "category": query.get("category", ["troops"])[0],
+        "sort": query.get("sort", ["usage-rate"])[0],
+    }
+    return {
+        "kind": "army-analytics",
+        "selection": selection,
+        "total_attacks": 2,
+        "usable_army_sample": 2,
+        "army_states": {"fully_decoded": 1, "partial": 1},
+        "unknown_affected_attacks": 1,
+        "unknown_component_occurrences": 2,
+        "perspective_disagreement_count": 0,
+        "missing_trophy_membership_evidence": 0,
+        "cohort_evidence": {
+            "stale_or_uncertain_cohort_members": 0,
+            "streak_excluded_players": 0,
+            "shielded_player_days": 2 if selection["population"].startswith("streak-") else 0,
+        },
+        "collection_coverage": {"state": "complete", "completed_days": 8},
+        "freshness": {"state": "frozen"},
+        "reproducibility": {
+            "official_season_id": season,
+            "legend_days": [selection["start_day"], selection["end_day"]],
+            "snapshot_versions": [4],
+        },
+        "versions": {
+            "decoder": "army-decoder-v2",
+            "catalog": "unit-catalog-v1",
+            "analytics": "army-analytics-v2",
+        },
+        "publication_identity": "army-publication-fixture000000000000000000-v1",
+        "rows": [
+            {
+                "key": "troop:58",
+                "label": "Ice Golem",
+                "usage_count": 2,
+                "usage_denominator": 2,
+                "usage_rate": 1.0,
+                "star_counts": [0, 0, 0, 2],
+                "star_rates": [0.0, 0.0, 0.0, 1.0],
+                "three_star_rate": 1.0,
+                "average_stars": 3.0,
+                "average_destruction": 100.0,
+                "unknown_excluded_attacks": 0,
+            },
+            {
+                "key": "troop:97",
+                "label": "Apprentice Warden",
+                "usage_count": 1,
+                "usage_denominator": 2,
+                "usage_rate": 0.5,
+                "star_counts": [0, 1, 0, 0],
+                "star_rates": [0.0, 1.0, 0.0, 0.0],
+                "three_star_rate": 0.0,
+                "average_stars": 1.0,
+                "average_destruction": 49.0,
+                "unknown_excluded_attacks": 0,
+            },
+        ],
+    }
+
+
 def leaderboard(limit, view, offset=0, season=None, day=None):
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
@@ -304,6 +382,9 @@ def day_for(tag):
                 "destruction_percentage": 49,
                 "stars": 1,
                 "trophy_change": 0,
+                # Mirrors production projection of an accepted battle whose
+                # attacker and defender reports disagree.
+                "perspective_disagreement": True,
             },
         ]
         defense_events = [
@@ -763,6 +844,18 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 self.send_json(404, {"error": "missing"})
                 return
             self.send_json(200, leaderboard(limit, view, offset, season, day))
+            return
+        if path == "/v1/analytics/armies":
+            season = query.get("season", ["current"])[0]
+            if season == "current":
+                # The fixture's current season has no completed Legend day;
+                # name the previous season so the page can link to it.
+                self.send_json(
+                    404,
+                    {"error": "no_completed_legend_days", "previous_season_id": FIXTURE_PREVIOUS_SEASON},
+                )
+                return
+            self.send_json(200, army_analytics(season, query))
             return
         if path == "/v1/players/search":
             try:

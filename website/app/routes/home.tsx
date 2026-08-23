@@ -149,6 +149,18 @@ export default function Home() {
 
       {data.error ? <ErrorNotice error={data.error} /> : null}
 
+      <section className="data-section" aria-labelledby="army-analytics-link-title">
+        <div className="section-heading">
+          <h2 id="army-analytics-link-title">Legend army analytics</h2>
+          <Link className="button secondary" to="/analytics/armies">
+            Explore armies →
+          </Link>
+        </div>
+        <p>
+          Compare completed Legend-day attacking armies with explicit evidence coverage.
+        </p>
+      </section>
+
       <section className="data-section" aria-labelledby="live-leaderboard-title">
         <div className="section-heading">
           <h2 id="live-leaderboard-title">Live leaderboard</h2>
