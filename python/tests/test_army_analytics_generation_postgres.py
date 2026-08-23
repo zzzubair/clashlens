@@ -42,11 +42,18 @@ def test_enqueue_uses_global_max_id_for_day_generation(database_url: str) -> Non
                                 evidence_complete, coverage_complete, start_trophies
                             ) VALUES (
                                 %s, %s, %s, %s, 23, 'legend-season-anchor-v1',
-                                'legend-ranked-day-v1', repeat('a', 64), %s,
+                                'legend-ranked-day-v1', %s, %s,
                                 'Complete', 'exact', repeat('b', 64), true, true, 6000
                             ) RETURNING id
                             """,
-                            (player_id, DAY_START, DAY_START + timedelta(days=1), SEASON_ID, version),
+                            (
+                                player_id,
+                                DAY_START,
+                                DAY_START + timedelta(days=1),
+                                SEASON_ID,
+                                str(version) * 64,
+                                version,
+                            ),
                         ).fetchone()[0]
                     )
 
