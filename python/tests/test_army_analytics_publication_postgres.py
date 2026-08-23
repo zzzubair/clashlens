@@ -1082,8 +1082,8 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
 
         # Six distinct battles for two days, all from #2PP attacker.
         rows = [
-            ("#8AA", ts_a1), ("#8AB", ts_a2), ("#8AC", ts_a3),
-            ("#8AD", ts_b1), ("#8AE", ts_b2), ("#8AF", ts_b3),
+            ("#8P0", ts_a1), ("#8P2", ts_a2), ("#8P8", ts_a3),
+            ("#8P9", ts_b1), ("#8PY", ts_b2), ("#8PL", ts_b3),
         ]
         jobs = []
         for key, (opp, ts) in enumerate(rows):
@@ -1109,9 +1109,9 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
             # ---- newly-inserted path: day A published with missing middle ----
             # Events sorted by timestamp, so a2 (missing) propagates unknown to a3.
             a_events = [
-                _event(by_opp["#8AA"], "offense", ts_a1, 2, 60, 10),
-                event_without_change(by_opp["#8AB"], "offense", ts_a2),
-                _event(by_opp["#8AC"], "offense", ts_a3, 2, 60, 5),
+                _event(by_opp["#8P0"], "offense", ts_a1, 2, 60, 10),
+                event_without_change(by_opp["#8P2"], "offense", ts_a2),
+                _event(by_opp["#8P8"], "offense", ts_a3, 2, 60, 5),
             ]
             _publish_day(database, "#2PP", a_events, day_start=day_a, day_number=23)
             assert processor.process_job(_army_job(database), owner="analytics-a").outcome == "processed"
@@ -1121,9 +1121,9 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
                     "WHERE ranked_day_start=%s AND is_current ORDER BY battle_id", (day_a,)
                 ).fetchall()}
             # Current battle (a2) keeps its pre-battle value (6010); subsequent a3 is unknown.
-            assert trophies_a[by_opp["#8AA"]] == 6000
-            assert trophies_a[by_opp["#8AB"]] == 6010
-            assert trophies_a[by_opp["#8AC"]] is None
+            assert trophies_a[by_opp["#8P0"]] == 6000
+            assert trophies_a[by_opp["#8P2"]] == 6010
+            assert trophies_a[by_opp["#8P8"]] is None
             # Existing-row continue path: re-process same missing payload stays unknown.
             with database.pool.connection() as conn:
                 job_a = int(conn.execute("SELECT id FROM python_processing_jobs WHERE work_type='build_army_analytics' ORDER BY id DESC LIMIT 1").fetchone()[0])
@@ -1140,9 +1140,9 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
             assert trophy_a["total_attacks"] == 2  # a3 excluded from trophy range
             # ---- existing-row supersede path: day B valid then corrected to missing ----
             b_events_valid = [
-                _event(by_opp["#8AD"], "offense", ts_b1, 2, 60, 10),
-                _event(by_opp["#8AE"], "offense", ts_b2, 2, 60, 20),
-                _event(by_opp["#8AF"], "offense", ts_b3, 2, 60, 5),
+                _event(by_opp["#8P9"], "offense", ts_b1, 2, 60, 10),
+                _event(by_opp["#8PY"], "offense", ts_b2, 2, 60, 20),
+                _event(by_opp["#8PL"], "offense", ts_b3, 2, 60, 5),
             ]
             _publish_day(database, "#2PP", b_events_valid, day_start=day_b, day_number=24)
             assert processor.process_job(_army_job(database), owner="analytics-b").outcome == "processed"
@@ -1150,18 +1150,18 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
                 trophies_b_valid = {int(bid): t for bid, t in conn.execute(
                     "SELECT battle_id, battle_time_trophies FROM army_analytics_battle_facts WHERE ranked_day_start=%s AND is_current ORDER BY battle_id", (day_b,)
                 ).fetchall()}
-            assert trophies_b_valid[by_opp["#8AD"]] == 6000
-            assert trophies_b_valid[by_opp["#8AE"]] == 6010
-            assert trophies_b_valid[by_opp["#8AF"]] == 6030
+            assert trophies_b_valid[by_opp["#8P9"]] == 6000
+            assert trophies_b_valid[by_opp["#8PY"]] == 6010
+            assert trophies_b_valid[by_opp["#8PL"]] == 6030
             trophy_b_valid = api.get_army_analytics(_selection(population="trophies-5000-9000", start_day=24, end_day=24))
             assert trophy_b_valid is not None
             assert trophy_b_valid["missing_trophy_membership_evidence"] == 0
             assert trophy_b_valid["total_attacks"] == 3
             # Correction where middle battle lacks trophy_change: subsequent becomes unknown via supersede.
             b_events_corrected = [
-                _event(by_opp["#8AD"], "offense", ts_b1, 2, 60, 10),
-                event_without_change(by_opp["#8AE"], "offense", ts_b2),
-                _event(by_opp["#8AF"], "offense", ts_b3, 2, 60, 5),
+                _event(by_opp["#8P9"], "offense", ts_b1, 2, 60, 10),
+                event_without_change(by_opp["#8PY"], "offense", ts_b2),
+                _event(by_opp["#8PL"], "offense", ts_b3, 2, 60, 5),
             ]
             with database.pool.connection() as conn:
                 conn.execute(
@@ -1181,9 +1181,9 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
                 trophies_b_corr = {int(bid): t for bid, t in conn.execute(
                     "SELECT battle_id, battle_time_trophies FROM army_analytics_battle_facts WHERE ranked_day_start=%s AND is_current ORDER BY battle_id", (day_b,)
                 ).fetchall()}
-            assert trophies_b_corr[by_opp["#8AD"]] == 6000
-            assert trophies_b_corr[by_opp["#8AE"]] == 6010
-            assert trophies_b_corr[by_opp["#8AF"]] is None
+            assert trophies_b_corr[by_opp["#8P9"]] == 6000
+            assert trophies_b_corr[by_opp["#8PY"]] == 6010
+            assert trophies_b_corr[by_opp["#8PL"]] is None
             trophy_b_corr = api.get_army_analytics(_selection(population="trophies-5000-9000", start_day=24, end_day=24))
             assert trophy_b_corr is not None
             assert trophy_b_corr["missing_trophy_membership_evidence"] == 1
