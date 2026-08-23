@@ -4882,7 +4882,7 @@ class Database:
             WHERE ranked_day_start = %s
               AND state = 'Complete'
               AND coverage_complete
-            ORDER BY version DESC
+            ORDER BY id DESC
             LIMIT 1
             """,
             (ranked_day_start,),

@@ -155,6 +155,9 @@ WHERE work_type IN ('build_army_analytics','redecode_army');
 -- they cannot linger as unclaimable pending rows. Completed/failed history stays.
 UPDATE python_processing_jobs
 SET status = 'cancelled',
+    lease_owner = NULL,
+    lease_token = NULL,
+    lease_expires_at = NULL,
     failure_category = 'superseded_analytics_rule_version',
     updated_at = clock_timestamp()
 WHERE work_type IN ('build_army_analytics', 'redecode_army')
