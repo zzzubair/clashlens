@@ -217,7 +217,16 @@ def build_army_result(
         star_counts = [counts[index] for index in range(4)]
         star_rates = [count / sample if sample else 0 for count in star_counts]
         typed_ids = key.replace("cc:", "").replace("|", ",").split(",")
-        label = " + ".join(catalog_name(item.split("x", 1)[0]) or item for item in typed_ids)
+
+        def item_label(item: str) -> str:
+            typed_id = item.split("x", 1)[0]
+            name = catalog_name(typed_id)
+            if name is not None:
+                return name
+            suffix = typed_id.split(":", 1)[1] if ":" in typed_id else typed_id
+            return f"Unknown ID {suffix}"
+
+        label = " + ".join(item_label(item) for item in typed_ids)
         rows.append({
             "key": key, "label": label, "usage_count": sample,
             "usage_denominator": len(denominator),

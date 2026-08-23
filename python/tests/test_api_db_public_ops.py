@@ -7,7 +7,7 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 from test_api_migration import migrated_production_database
 
-from clashlens.api_db import ApiDatabase, RequestBinding, _screen_events
+from clashlens.api_db import ApiDatabase, RequestBinding, _public_army, _screen_events
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
 
@@ -278,6 +278,30 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
             ]
         finally:
             database.close()
+
+
+def test_public_army_shows_an_unknown_hero_once_as_unknown() -> None:
+    army = _public_army(
+        (
+            1,
+            "attacker",
+            "partial",
+            None,
+            [],
+            [],
+            [],
+            [],
+            [{"hero": "hero:999", "pet": "pet:9", "equipment": []}],
+            [{"numeric_id": 999, "quantity": 1, "section": "h", "origin": "hero"}],
+            "army-decoder-v2",
+            "unit-catalog-v1",
+        )
+    )
+
+    assert [component["typed_id"] for component in army["components"]] == ["pet:9"]
+    assert army["unknown_components"] == [
+        {"numeric_id": 999, "quantity": 1, "section": "h", "origin": "hero"}
+    ]
 
 
 def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> None:

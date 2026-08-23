@@ -2610,10 +2610,10 @@ def _public_army(row: Any) -> dict[str, Any]:
             if not isinstance(hero, Mapping):
                 continue
             for typed_id in [hero.get("hero"), hero.get("pet"), *(hero.get("equipment") or [])]:
-                if isinstance(typed_id, str):
+                if isinstance(typed_id, str) and (name := catalog_name(typed_id)):
                     components.append({
                         "typed_id": typed_id,
-                        "name": catalog_name(typed_id) or typed_id,
+                        "name": name,
                         "quantity": 1,
                         "origin": "hero",
                     })

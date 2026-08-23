@@ -5034,7 +5034,9 @@ class Database:
                 active_keys.add((battle_id, lens))
                 if existing is not None and _text_value(existing[2]) == input_hash:
                     change = event.get("trophy_change")
-                    if trophies is not None and isinstance(change, int):
+                    if isinstance(change, bool) or not isinstance(change, int):
+                        trophies = None
+                    elif trophies is not None:
                         trophies += change
                     continue
                 supersedes = None
@@ -5072,7 +5074,9 @@ class Database:
                     ),
                 )
                 change = event.get("trophy_change")
-                if trophies is not None and isinstance(change, int):
+                if isinstance(change, bool) or not isinstance(change, int):
+                    trophies = None
+                elif trophies is not None:
                     trophies += change
         # Durable per-day completion marker, atomic with the facts above.
         marker_day = connection.execute(

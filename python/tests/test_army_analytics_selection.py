@@ -210,6 +210,51 @@ def test_unknown_hero_does_not_exclude_unrelated_known_hero_relationship() -> No
     assert row["unknown_excluded_attacks"] == 0
 
 
+def test_unknown_hero_analytics_use_public_unknown_id_label() -> None:
+    fact = _fact(
+        1,
+        state="partial",
+        heroes=[{"hero": "hero:999", "pet": "pet:9", "equipment": []}],
+        unresolved=[
+            {"numeric_id": 999, "quantity": 1, "section": "h", "origin": "hero"}
+        ],
+    )
+
+    heroes = build_army_result([fact], _selection(category="heroes"))
+    assert [(row["key"], row["label"]) for row in heroes["rows"]] == [
+        ("hero:999", "Unknown ID 999")
+    ]
+    relationships = build_army_result([fact], _selection(category="hero-pet"))
+    assert [(row["key"], row["label"]) for row in relationships["rows"]] == [
+        ("hero:999|pet:9", "Unknown ID 999 + Frosty")
+    ]
+
+
+def test_unknown_label_fallback_is_robust_to_colonless_malformed_typed_id() -> None:
+    fact = _fact(
+        1,
+        state="partial",
+        heroes=[{"hero": "badtyped", "pet": None, "equipment": []}],
+        unresolved=[{"numeric_id": 1, "quantity": 1, "section": "h", "origin": "hero"}],
+    )
+    heroes = build_army_result([fact], _selection(category="heroes"))
+    assert [row["label"] for row in heroes["rows"]] == ["Unknown ID badtyped"]
+    # Quantity suffix must not reintroduce the IndexError via x-split then colon-split.
+    fact_cc = _fact(2, cc_troops=[("badtyped", 2)])
+    cc = build_army_result([fact_cc], _selection(category="cc-composition"))
+    assert [row["label"] for row in cc["rows"]] == ["Unknown ID badtyped"]
+    # Valid unknown label stays "Unknown ID <numeric>".
+    valid_unknown = _fact(
+        3,
+        state="partial",
+        heroes=[{"hero": "hero:999", "pet": None, "equipment": []}],
+        unresolved=[{"numeric_id": 999, "quantity": 1, "section": "h", "origin": "hero"}],
+    )
+    assert build_army_result([valid_unknown], _selection(category="heroes"))["rows"][0][
+        "label"
+    ] == "Unknown ID 999"
+
+
 def test_equipment_for_hero_exclusions_scoped_to_confirmed_hero_denominator() -> None:
     # hero:0's unresolved equipment makes that one attack uncertain. Other
     # attacks stay in denominator accounting instead of being published as
