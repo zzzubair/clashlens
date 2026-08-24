@@ -7,10 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -234,6 +237,77 @@ func TestS3ArchiveReusesVerifiedContentAddressedObject(t *testing.T) {
 			t.Fatalf("stored body = %q, want %q", object.body, body)
 		}
 	}
+}
+
+// perfDuplicateArchiveProbeMarker is emitted exactly once by
+// TestS3ArchiveDuplicateStoreProbe so scripts/performance_runner.py can report
+// production s3Archive.store operations without adding a new binary.
+const perfDuplicateArchiveProbeMarker = "PERF_DUPLICATE_ARCHIVE_PROBE "
+
+func TestS3ArchiveDuplicateStoreProbe(t *testing.T) {
+	server, backend := newFakeS3Server(t)
+	archive, err := newS3Archive(strings.TrimPrefix(server.URL, "http://"), false, "evidence", "access", "secret")
+	if err != nil {
+		t.Fatalf("newS3Archive returned an error: %v", err)
+	}
+	body := []byte(`{"items":[]}`)
+	digest := sha256.Sum256(body)
+	hash := hex.EncodeToString(digest[:])
+	objectKey := "sha256/" + hash[:2] + "/" + hash
+
+	duplicates := 4
+	if raw := os.Getenv("CLASHLENS_PERF_DUPLICATE_ARCHIVE_COUNT"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 2 {
+			t.Fatalf("CLASHLENS_PERF_DUPLICATE_ARCHIVE_COUNT = %q, want an integer of at least 2", raw)
+		}
+		duplicates = value
+	}
+	reference, err := archive.store(context.Background(), hash, body)
+	if err != nil {
+		t.Fatalf("first duplicate store returned an error: %v", err)
+	}
+	for index := 1; index < duplicates; index++ {
+		repeat, err := archive.store(context.Background(), hash, body)
+		if err != nil {
+			t.Fatalf("repeated store %d returned an error: %v", index, err)
+		}
+		if repeat != reference {
+			t.Fatalf("repeated store reference = %q, want %q", repeat, reference)
+		}
+	}
+
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	wantSequence := []string{http.MethodHead, http.MethodPut}
+	for index := 1; index < duplicates; index++ {
+		wantSequence = append(wantSequence, http.MethodHead, http.MethodGet)
+	}
+	if got := backend.requests[objectKey]; !slices.Equal(got, wantSequence) {
+		t.Fatalf("duplicate archive requests = %v, want %v", got, wantSequence)
+	}
+	if object := backend.objects[objectKey]; object == nil || object.writes != 1 {
+		t.Fatalf("content-addressed object was conditionally written more than once")
+	}
+	totals := map[string]int{"count": duplicates, "head": 0, "get": 0, "put": 0}
+	for _, method := range backend.requests[objectKey] {
+		switch method {
+		case http.MethodHead:
+			totals["head"]++
+		case http.MethodGet:
+			totals["get"]++
+		case http.MethodPut:
+			totals["put"]++
+		}
+	}
+	if totals["head"] != duplicates || totals["get"] != duplicates-1 || totals["put"] != 1 {
+		t.Fatalf("duplicate archive operation totals = %v, want head=%d get=%d put=1", totals, duplicates, duplicates-1)
+	}
+	payload, err := json.Marshal(totals)
+	if err != nil {
+		t.Fatalf("marshal duplicate archive probe marker: %v", err)
+	}
+	fmt.Println(perfDuplicateArchiveProbeMarker + string(payload))
 }
 
 func TestS3ArchiveRejectsExistingObjectWhoseBytesDoNotMatchHash(t *testing.T) {
