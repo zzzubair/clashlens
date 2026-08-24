@@ -7,7 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/zzzubair/ClashLens/internal/collector"
+	"github.com/zzzubair/clashlens/internal/collector"
 )
 
 func main() {

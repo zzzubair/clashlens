@@ -1,4 +1,4 @@
-module github.com/zzzubair/ClashLens
+module github.com/zzzubair/clashlens
 
 go 1.26
 

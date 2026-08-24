@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/zzzubair/ClashLens/internal/testsupport"
+	"github.com/zzzubair/clashlens/internal/testsupport"
 )
 
 // startVersionTwoStoreWithURL returns a version-two store and its database

@@ -4,7 +4,7 @@ This is the operator runbook for the rootless Podman deployment: the Go
 collector, PostgreSQL, the private Python API and workers, and the website on
 one Fedora host. It describes commands that exist in `deploy.sh`; it is not a
 product roadmap. Current release work is tracked in
-[Issue 31](https://github.com/zzzubair/ClashLens/issues/31).
+[Issue 31](https://github.com/zzzubair/clashlens/issues/31).
 
 The deployment uses direct rootless Podman commands, not Compose. Runtime
 boundaries and data ownership are documented in
