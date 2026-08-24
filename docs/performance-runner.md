@@ -4,7 +4,11 @@
 baseline harness. It creates and drops an isolated schema per sample, applies
 all migrations, serves committed fixtures from a local archive, and runs the
 production collector probe, observation processor, reconciliation, snapshot,
-analytics, army-publication, and API database paths.
+analytics, army-publication, and API database paths. Duplicate-heavy mode also
+runs a focused Go test (`TestS3ArchiveDuplicateStoreProbe`) against the
+production `s3Archive.store` path on a real HTTP fake S3 server and reports its
+conditional PUT plus HEAD/GET verification totals separately from the Python
+archive GET counts; a failed probe or malformed marker fails the run.
 
 ## Prerequisites and limits
 
@@ -46,7 +50,10 @@ Reset and correction use paired committed reset fixtures and production
 `complete_reconciliation`; they do not manufacture ranked-day versions. Their
 army-read section bulk-loads bounded synthetic facts after that production
 seed and records the 28-day Top 1,000, widest trophy range, and Top-1,000
-streak endpoint latency. Each selection retains its production-shaped fact
+streak endpoint latency. The army sample reports its own database snapshot
+(WAL, relation sizes, queues, SQL calls), elapsed time, CPU, and RSS covering
+evidence seeding, fact loading, EXPLAINs, and endpoint materialization before
+the schema is dropped. Each selection retains its production-shaped fact
 materialization `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`, rows scanned, and
 rows returned.
 

@@ -50,6 +50,22 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(completed.stdout, "")
         self.assertIn("database-url", completed.stderr)
 
+    def test_archive_probe_marker_parses_totals(self) -> None:
+        parsed = runner._parse_archive_probe_marker(
+            "go test noise\n" + runner.ARCHIVE_PROBE_MARKER + '{"count":4,"head":5,"get":4,"put":1}\n'
+        )
+        self.assertEqual(parsed, {"count": 4, "head": 5, "get": 4, "put": 1})
+
+    def test_archive_probe_marker_rejects_missing_and_malformed(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "emitted 0 markers"):
+            runner._parse_archive_probe_marker("no marker here")
+        with self.assertRaisesRegex(RuntimeError, "malformed"):
+            runner._parse_archive_probe_marker(runner.ARCHIVE_PROBE_MARKER + "{not json}")
+        with self.assertRaisesRegex(RuntimeError, "integer"):
+            runner._parse_archive_probe_marker(
+                runner.ARCHIVE_PROBE_MARKER + '{"count":4,"head":5,"get":"4","put":1}'
+            )
+
     def test_archive_counts_real_gets(self) -> None:
         from urllib.request import urlopen
 
@@ -96,11 +112,26 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
             self.assertGreater(sample["archive_operations"]["get"], 0)
             queue_rows = sample["database"]["queues"]["python_processing_jobs"]
             self.assertTrue(all("oldest_active_age_seconds" in row for row in queue_rows))
+            if mode == "duplicate-heavy":
+                operations = sample["workload"]["collector_archive_operations"]
+                self.assertTrue(operations["executed"])
+                self.assertEqual(operations["count"], 2)
+                self.assertEqual(operations["head"], 2)
+                self.assertEqual(operations["get"], 1)
+                self.assertEqual(operations["put"], 1)
+                self.assertGreater(operations["elapsed_seconds"], 0)
             if mode in {"reset-boundary", "correction"}:
                 self.assertTrue(sample["workload"]["fanout_evidence"]["matches_expected"])
-                reads = result["army_read_sample"]["selections"]
+                army = result["army_read_sample"]
+                self.assertGreater(army["database"]["wal_bytes"], 0)
+                self.assertGreater(army["database"]["application_sql_calls"], 0)
+                for key in ("elapsed_seconds", "cpu_seconds", "peak_rss_kib"):
+                    self.assertIn(key, army)
+                reads = army["selections"]
                 self.assertEqual(len(reads), 3)
                 self.assertTrue(all(read["rows_scanned"] >= read["rows_returned"] for read in reads))
+                self.assertTrue(all(read["rows_returned"] > 0 for read in reads))
+                self.assertTrue(all(read["endpoint"]["status"] == "returned" for read in reads))
                 self.assertTrue(all("Plan" in read["explain_analyze_buffers"] for read in reads))
                 self.assertLess(sample["workload"]["fact_counts"]["snapshot_entries"], 1000)
 

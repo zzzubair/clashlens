@@ -161,20 +161,6 @@ def _profile_body(tag: str) -> bytes:
     return json.dumps(source, separators=(",", ":")).encode()
 
 
-def _store_profiles(connection_info: str, archive: Any, count: int, prefix: str) -> list[int]:
-    from domain_test_support import store_observation
-
-    jobs = []
-    for index in range(count):
-        tag = _tag(index + 1)
-        _observation, job = store_observation(
-            connection_info, archive, occurrence_key=f"{prefix}-{index}", endpoint="profile",
-            body=_profile_body(tag), observed_at=DAY_START + timedelta(hours=1), normalized_tag=tag,
-        )
-        jobs.append(job)
-    return jobs
-
-
 def _process_jobs(processor: Any, jobs: list[int], prefix: str) -> list[dict[str, Any]]:
     results = []
     for index, job in enumerate(jobs):
@@ -639,20 +625,84 @@ def _collector_probe(skip: bool) -> dict[str, Any]:
     }
 
 
+ARCHIVE_PROBE_MARKER = "PERF_DUPLICATE_ARCHIVE_PROBE "
+
+
+def _parse_archive_probe_marker(output: str) -> dict[str, int]:
+    markers = [
+        line.removeprefix(ARCHIVE_PROBE_MARKER)
+        for line in output.splitlines() if line.startswith(ARCHIVE_PROBE_MARKER)
+    ]
+    if len(markers) != 1:
+        raise RuntimeError(f"archive probe emitted {len(markers)} markers, want exactly 1")
+    try:
+        parsed = json.loads(markers[0])
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"malformed archive probe marker: {error}") from error
+    if not isinstance(parsed, dict) or any(
+        not isinstance(parsed.get(key), int) or isinstance(parsed.get(key), bool)
+        for key in ("count", "head", "get", "put")
+    ):
+        raise RuntimeError("archive probe marker must contain integer count/head/get/put totals")
+    return parsed
+
+
+def _collector_archive_probe(count: int) -> dict[str, Any]:
+    """Probe the production Go s3Archive.store duplicate path via a real HTTP S3 fake."""
+    started = time.perf_counter()
+    completed = subprocess.run(
+        [
+            "go", "test", "./internal/collector",
+            "-run", "^TestS3ArchiveDuplicateStoreProbe$",
+            "-count=1", "-timeout=120s", "-v",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=150,
+        env={**os.environ, "CLASHLENS_PERF_DUPLICATE_ARCHIVE_COUNT": str(count)},
+    )
+    if completed.returncode:
+        raise RuntimeError(
+            "collector archive probe failed:\n"
+            + "stdout[-1000:]: " + completed.stdout[-1000:] + "\n"
+            + "stderr[-1000:]: " + completed.stderr[-1000:]
+        )
+    totals = _parse_archive_probe_marker(completed.stdout)
+    expected = {"count": count, "head": count, "get": count - 1, "put": 1}
+    if totals != expected:
+        raise RuntimeError(f"archive probe totals {totals} do not match expected {expected}")
+    return {
+        "executed": True, "test": "TestS3ArchiveDuplicateStoreProbe", **totals,
+        "elapsed_seconds": time.perf_counter() - started,
+    }
+
+
 def _run_army_read_sample(database_url: str, fact_count: int) -> dict[str, Any]:
     from domain_test_support import domain_database
 
     with domain_database(database_url) as connection_info, archive_server() as archive:
+        wal_start, statement_start = _start_metrics(connection_info)
+        cpu_start = time.process_time()
+        elapsed_start = time.perf_counter()
         database, processor, _metrics = _processor(connection_info, archive)
         try:
-            jobs = _store_reconciliation_population(connection_info, archive, 1)
-            _process_jobs(processor, jobs, "army-read-evidence")
-            _drain(processor, 120)
-            reads = _seed_worst_case_army_reads(connection_info, fact_count)
+            with count_sql_calls() as sql_calls:
+                jobs = _store_reconciliation_population(connection_info, archive, 1)
+                _process_jobs(processor, jobs, "army-read-evidence")
+                _drain(processor, 120)
+                reads = _seed_worst_case_army_reads(connection_info, fact_count)
+            measurements = _db_snapshot(connection_info, wal_start, statement_start)
+            measurements["application_sql_calls"] = sql_calls[0]
             return {
                 "synthetic_fact_limit": fact_count,
                 "selections": reads,
                 "archive_operations": {"get": archive[3].gets, "head": archive[3].heads},
+                "database": measurements,
+                "elapsed_seconds": time.perf_counter() - elapsed_start,
+                "cpu_seconds": time.process_time() - cpu_start,
+                "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
             }
         finally:
             database.close()
@@ -687,6 +737,10 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
 
     started = datetime.now(tz=UTC)
     collector_probe = _collector_probe(arguments.skip_collector_probe)
+    duplicate_archive_probe = (
+        _collector_archive_probe(arguments.duplicate_observations)
+        if arguments.mode == "duplicate-heavy" else None
+    )
     samples = []
     populations = arguments.populations if arguments.mode in {"reset-boundary", "correction"} else [0]
     for population in populations:
@@ -701,6 +755,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                     workload = _run_reset(connection_info, archive, population, True)
                 elif arguments.mode == "duplicate-heavy":
                     workload = _run_duplicate(connection_info, archive, arguments.duplicate_observations)
+                    workload["collector_archive_operations"] = duplicate_archive_probe
                 else:
                     workload = _run_mixed(connection_info, archive, arguments.live_jobs, arguments.backfill_jobs)
             measurements = _db_snapshot(connection_info, wal_start, statement_start)
