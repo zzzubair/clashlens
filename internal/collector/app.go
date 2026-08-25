@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,7 @@ type application struct {
 
 	dependencyReadiness atomic.Value
 	dependencyCheckMu   sync.Mutex
+	lastSpoolCleanupAt  atomic.Int64
 }
 
 type readinessReport struct {
@@ -41,21 +43,58 @@ type readinessReport struct {
 }
 
 func newApplication(ctx context.Context, config collectorConfig, logger *slog.Logger) (*application, error) {
+	if config.archiveRegion == "" {
+		config.archiveRegion = "us-east-1"
+	}
 	store, err := openStoreWithPoolSize(ctx, config.databaseURL, config.schemaVersion, config.databasePoolSize)
 	if err != nil {
+		return nil, err
+	}
+	store.archiveInstanceID = config.archiveInstanceID
+	if err := store.validateArchiveInstance(ctx, config.archiveEndpoint, config.archiveRegion, config.archiveBucket, config.archiveMarkerKey, config.archiveMarkerHash, config.archiveMarkerPayloadVersion); err != nil {
+		store.close()
 		return nil, err
 	}
 	if err := store.validateTrafficGateMode(ctx, config.trafficGateMode); err != nil {
 		store.close()
 		return nil, fmt.Errorf("validate shared traffic gate: %w", err)
 	}
-	archive, err := newS3Archive(
+	archive, err := newS3ArchiveWithRegion(
 		config.archiveEndpoint,
+		config.archiveRegion,
 		config.archiveSecure,
 		config.archiveBucket,
 		config.archiveAccessKey,
 		config.archiveSecretKey,
 	)
+	if err != nil {
+		store.close()
+		return nil, err
+	}
+	archive.maximumBodyBytes = config.maximumResponseBytes
+	archive.catalogueVerified = store.verifiedCatalogue
+	if config.schemaVersion >= 3 && config.spoolRoot != "" {
+		if config.spoolMaxBytes <= 0 {
+			config.spoolMaxBytes = 16 << 30
+		}
+		if config.spoolMaxObjects <= 0 {
+			config.spoolMaxObjects = 1000000
+		}
+		if config.spoolStaleTempAge <= 0 {
+			config.spoolStaleTempAge = 30 * time.Minute
+		}
+		if config.spoolCleanupBatch <= 0 {
+			config.spoolCleanupBatch = 100
+		}
+		if config.spoolSafetyAge <= 0 {
+			config.spoolSafetyAge = 24 * time.Hour
+		}
+		archive.spool, err = newEvidenceSpool(spoolConfig{
+			root: config.spoolRoot, maxBytes: config.spoolMaxBytes,
+			maxObjects: config.spoolMaxObjects, freeSpaceFloor: config.spoolFreeSpaceFloor,
+			freeInodeFloor: config.spoolFreeInodeFloor, staleTempAge: config.spoolStaleTempAge,
+		})
+	}
 	if err != nil {
 		store.close()
 		return nil, err
@@ -109,9 +148,11 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 			return nil, fmt.Errorf("register shared interactive API credential: %w", err)
 		}
 	}
-	if err := archive.verifyWriteCapability(ctx, ownerToken); err != nil {
-		store.close()
-		return nil, fmt.Errorf("collector startup guard failed: %w", err)
+	if archive.spool == nil {
+		if err := archive.verifyWriteCapability(ctx, ownerToken); err != nil {
+			store.close()
+			return nil, fmt.Errorf("collector startup guard failed: %w", err)
+		}
 	}
 	metrics := newCollectorMetrics()
 	archive.observeStage = metrics.recordStageDuration
@@ -147,6 +188,9 @@ func onlyInteractiveKey(keys []APIKey) (APIKey, error) {
 }
 
 func (a *application) close() {
+	if a.archive != nil && a.archive.spool != nil {
+		a.archive.spool.close()
+	}
 	a.store.close()
 }
 
@@ -161,9 +205,18 @@ func (a *application) readiness(ctx context.Context) (readinessReport, error) {
 		Components: map[string]string{
 			"postgresql":           "ready",
 			"archive":              "ready",
+			"remote_archive":       "degraded",
 			"normal_key_pool":      "ready",
 			"interactive_key_pool": "ready",
 		},
+	}
+	if a.archive.spool != nil && a.config.archiveMarkerKey != "" && a.config.archiveMarkerHash != "" {
+		if err := a.archive.markerHealth(ctx, a.config.archiveMarkerKey, a.config.archiveMarkerHash); err == nil {
+			report.Components["remote_archive"] = "ready"
+		} else if strings.Contains(err.Error(), "marker hash mismatch") {
+			report.Ready = false
+			report.Components["remote_archive"] = "not_ready"
+		}
 	}
 	checks := []struct {
 		name string
@@ -171,6 +224,7 @@ func (a *application) readiness(ctx context.Context) (readinessReport, error) {
 	}{
 		{name: "postgresql", err: a.store.ready(ctx)},
 		{name: "archive", err: a.archive.ready(ctx)},
+		{name: "spool", err: a.archive.spoolReady()},
 		{name: "normal_key_pool", err: a.keys.readyForPool(normalPool)},
 		{name: "interactive_key_pool", err: a.keys.readyForPool(interactivePool)},
 	}
@@ -199,8 +253,14 @@ func (a *application) dependenciesReady(ctx context.Context) error {
 	if err := a.store.ready(ctx); err != nil {
 		failures = append(failures, fmt.Errorf("postgresql: %w", err))
 	}
-	if err := a.archive.ready(ctx); err != nil {
-		failures = append(failures, fmt.Errorf("archive: %w", err))
+	// Remote marker health is deliberately not a claim dependency when the
+	// shared spool is active. Keep the legacy test path strict.
+	if a.archive.spool == nil {
+		if err := a.archive.ready(ctx); err != nil {
+			failures = append(failures, fmt.Errorf("archive: %w", err))
+		}
+	} else if err := a.archive.spoolReady(); err != nil {
+		failures = append(failures, fmt.Errorf("spool: %w", err))
 	}
 	err := errors.Join(failures...)
 	a.dependencyReadiness.Store(dependencyReadiness{checkedAt: time.Now(), err: err})
@@ -226,6 +286,25 @@ func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 	}
 	if globalRankingsCreated {
 		a.metrics.recordJob("global_player_rankings", string(normalPool), "scheduled")
+	}
+	if a.archive != nil && a.archive.spool != nil {
+		lastNanos := a.lastSpoolCleanupAt.Load()
+		last := time.Unix(0, lastNanos)
+		if lastNanos == 0 || now.Sub(last) >= a.config.spoolCleanupInterval {
+			cleanupStartedAt := time.Now()
+			_, cleanupErr := a.archive.spool.cleanup(ctx, now, a.config.spoolSafetyAge, a.config.spoolCleanupBatch, a.store.cleanupEligible)
+			if cleanupErr == nil {
+				_, cleanupErr = a.archive.spool.orphanSweep(ctx, now, a.config.spoolOrphanSafetyAge, a.config.spoolCleanupBatch, a.store.catalogueContains, a.store.pendingContains)
+			}
+			if cleanupErr == nil {
+				cleanupErr = a.archive.spool.sweepStale(now)
+			}
+			if cleanupErr != nil && a.logger != nil {
+				a.logger.WarnContext(ctx, "raw-evidence cleanup degraded", "error", cleanupErr)
+			}
+			a.lastSpoolCleanupAt.Store(now.UnixNano())
+			a.metrics.recordStageDuration("spool_cleanup", time.Since(cleanupStartedAt))
+		}
 	}
 	boundary := resetBoundaryAtOrBefore(now)
 	sweepID, created, err := a.store.scheduleResetSweep(ctx, boundary)
@@ -460,7 +539,7 @@ func (a *application) operationalHandler() http.Handler {
 		_ = json.NewEncoder(response).Encode(report)
 	})
 	mux.HandleFunc("GET /metrics", func(response http.ResponseWriter, request *http.Request) {
-		metrics, err := a.metrics.render(request.Context(), a.store, a.keys, time.Now().UTC())
+		metrics, err := a.metrics.render(request.Context(), a.store, a.keys, time.Now().UTC(), a.archive.spool)
 		if err != nil {
 			http.Error(response, "metrics unavailable", http.StatusServiceUnavailable)
 			return

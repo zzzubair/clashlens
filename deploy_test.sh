@@ -195,6 +195,10 @@ case "$verb" in
       if grep -q 'VALUES (8)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '%s\n' 8 >>"$FAKE_STATE/schema_migrations"
       fi
+      if grep -q 'archive_instances' "$FAKE_STATE/stdin/exec-$n"; then
+        printf '3' >"$FAKE_STATE/contract_version"
+        printf '%s\n' 9 >>"$FAKE_STATE/schema_migrations"
+      fi
     fi
     if [[ "$*" == *"SELECT version FROM clash_lens_contract"* ]]; then
       if [[ -f "$FAKE_STATE/contract_version" ]]; then
@@ -512,6 +516,32 @@ printf '%s\n' 'CLASHLENS_API_CPUS=abc' >>"$BADBUDGET_ENV"
 deploy_fails "$BADBUDGET_DIR" "$BADBUDGET_ENV" 'CLASHLENS_API_CPUS' -- up
 [[ ! -s "$BADBUDGET_DIR/podman.log" ]] || fail 'invalid resource budget had podman side effects'
 printf 'ok: resource budgets are required, explicit, and validated before side effects\n'
+
+# ---------------------------------------------------------------------------
+# Scenario A0: v3 stop-migrate-restart wiring owns the shared rw,z spool.
+# ---------------------------------------------------------------------------
+V3_DIR=$(new_scenario)
+V3_ENV="$V3_DIR/app.env"
+write_scenario_env "$V3_ENV" "$V3_DIR/keys"
+cat >>"$V3_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=test-instance-v3
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+EOF
+deploy "$V3_DIR" "$V3_ENV" -- up >/dev/null
+V3_NORM="$V3_DIR/podman.norm.log"
+norm_log "$V3_DIR/podman.log" >"$V3_NORM"
+V3_RUN=$(grep '^run ' "$V3_NORM" | grep 'clashlens-collector:deployment' | tail -n 1)
+[[ "$V3_RUN" == *'CLASHLENS_SCHEMA_VERSION=3'* ]] || fail 'v3 collector contract was not wired'
+[[ "$V3_RUN" == *':/spool:rw,z'* ]] || fail 'collector spool mount is not shared rw,z'
+grep -q 'archive_instances' "$V3_DIR/state/stdin"/exec-* || fail 'migration 0009 was not applied in v3 flow'
+grep -q 'INSERT INTO archive_instances' "$V3_DIR/state/stdin"/exec-* || fail 'archive instance contract was not provisioned'
+grep -q 'chown -R 10001:10001' "$ROOT_DIR/deploy.sh" || fail 'collector spool ownership was not wired'
+log_lacks "$V3_NORM" 'clashlens-python-api.*:/spool' 'private API received the raw spool mount'
+log_lacks "$V3_NORM" 'clashlens-website.*:/spool' 'website received the raw spool mount'
+printf 'ok: v3 migration, ownership, rw,z mount, and runtime isolation are wired\n'
 
 # ---------------------------------------------------------------------------
 # Scenario A: fresh up runs migrations -> roles -> required, without a bridge.
@@ -884,6 +914,10 @@ worker_normalized=$(norm_log <<<"$worker_run")
 [[ "$api_normalized" != *'--publish'* ]] || fail 'API published a host port'
 [[ "$worker_normalized" == *'--network clashlens-private'* ]] || fail 'worker did not use the private network'
 [[ "$worker_normalized" != *'--publish'* ]] || fail 'worker published a host port'
+[[ "$worker_normalized" == *':/spool:rw,z'* ]] || fail 'worker spool mount is not shared rw,z'
+for setting in CLASHLENS_ARCHIVE_INSTANCE_ID CLASHLENS_ARCHIVE_MARKER_KEY CLASHLENS_ARCHIVE_MARKER_HASH CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION CLASHLENS_SPOOL_MAX_BYTES CLASHLENS_SPOOL_MAX_OBJECTS CLASHLENS_SPOOL_FREE_SPACE_FLOOR CLASHLENS_SPOOL_FREE_INODE_FLOOR; do
+  [[ "$worker_normalized" == *"--env $setting"* ]] || fail "worker did not receive $setting"
+done
 
 [[ "$api_normalized" == *'clashlens-python-api-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400'* ]] || \
   fail 'API role database secret was not mounted'

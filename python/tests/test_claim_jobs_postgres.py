@@ -101,16 +101,51 @@ def _insert_observation(connection: psycopg.Connection, *, occurrence_key: str) 
         """,
         (collector_job_id, observed_at, observed_at),
     ).fetchone()[0]
-    observation_id = connection.execute(
+    # Migration 0009 requires a verified catalogue row for every new
+    # observation; fixtures on pre-0009 schemas keep the legacy shape.
+    has_catalogue = connection.execute(
         """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = current_schema() AND table_name = 'archive_catalogue'
+        )
+        """
+    ).fetchone()[0]
+    if has_catalogue:
+        connection.execute(
+            """
+            INSERT INTO archive_instances (
+                instance_id, endpoint, region, bucket, marker_key,
+                marker_hash, marker_payload_version
+            ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
+                      'evidence', 'clashlens/archive-instance.json',
+                      repeat('f', 64), 'v1')
+            ON CONFLICT (instance_id) DO NOTHING
+            """
+        )
+    digest = _hash(archive_reference := f"s3://evidence/{occurrence_key}")
+    catalogue_columns = ""
+    if has_catalogue:
+        connection.execute(
+            """
+            INSERT INTO archive_catalogue (
+                response_hash, archive_reference, byte_size, archive_instance_id
+            ) VALUES (%s, %s, %s, 'fixture-instance')
+            ON CONFLICT (response_hash) DO NOTHING
+            """,
+            (digest, archive_reference, 0),
+        )
+        catalogue_columns = ", archive_catalogue_hash"
+    observation_id = connection.execute(
+        f"""
         INSERT INTO collector_observations (
             occurrence_key, collection_job_id, attempt_id, player_id,
             normalized_tag, endpoint, request_started_at, response_completed_at,
-            http_status, response_hash, archive_reference, collector_version,
-            key_label, evidence_headers
+            http_status, response_hash, archive_reference{catalogue_columns},
+            collector_version, key_label, evidence_headers
         ) VALUES (
-            %s, %s, %s, %s, '#2PP', 'profile', %s, %s, 200, %s, %s,
-            'collector-v1', 'normal-a', '{}'::jsonb
+            %s, %s, %s, %s, '#2PP', 'profile', %s, %s, 200, %s, %s{", %s" if has_catalogue else ""},
+            'collector-v1', 'normal-a', '{{}}'::jsonb
         )
         RETURNING id
         """,
@@ -121,8 +156,9 @@ def _insert_observation(connection: psycopg.Connection, *, occurrence_key: str) 
             player_id,
             observed_at,
             observed_at,
-            _hash(archive_reference := f"s3://evidence/{occurrence_key}"),
+            digest,
             archive_reference,
+            *([digest] if has_catalogue else []),
         ),
     ).fetchone()[0]
     return int(observation_id)
@@ -206,6 +242,7 @@ def test_queue_health_reports_an_empty_active_queue(
             assert database.queue_health() == {
                 "pending": 0,
                 "waiting_retry": 0,
+                "waiting_dependency": 0,
                 "leased": 0,
                 "failed": 0,
                 "failed_count_capped": False,

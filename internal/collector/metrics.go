@@ -129,7 +129,7 @@ func (m *collectorMetrics) recordStageDuration(stage string, duration time.Durat
 	m.mu.Unlock()
 }
 
-func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPool, now time.Time) (string, error) {
+func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPool, now time.Time, spools ...*evidenceSpool) (string, error) {
 	statistics, err := store.queueStatistics(ctx)
 	if err != nil {
 		return "", err
@@ -153,6 +153,32 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	fmt.Fprintf(&output, "clashlens_collector_expired_leases %d\n", statistics.expiredLeases)
 	fmt.Fprintf(&output, "clashlens_collector_failed_jobs %d\n", statistics.failedJobs)
 	fmt.Fprintf(&output, "clashlens_collector_waiting_retries %d\n", statistics.waitingRetries)
+	fmt.Fprintf(&output, "clashlens_collector_waiting_dependencies %d\n", statistics.waitingDependencies)
+	fmt.Fprintf(&output, "clashlens_collector_pending_remote_verifications %d\n", statistics.pendingRemoteVerifications)
+	spool := spoolMetrics{}
+	var orphanCount, orphanBytes int64
+	if len(spools) > 0 && spools[0] != nil {
+		var spoolErr error
+		spool, spoolErr = spools[0].metrics()
+		if spoolErr != nil {
+			return "", fmt.Errorf("read spool metrics: %w", spoolErr)
+		}
+		orphanCount, orphanBytes, spoolErr = spools[0].orphanMetrics(ctx, store.catalogueContains, store.pendingContains)
+		if spoolErr != nil {
+			return "", fmt.Errorf("read orphan metrics: %w", spoolErr)
+		}
+	}
+	fmt.Fprintf(&output, "clashlens_spool_final_bytes %d\n", spool.finalBytes)
+	fmt.Fprintf(&output, "clashlens_spool_temporary_bytes %d\n", spool.temporaryBytes)
+	fmt.Fprintf(&output, "clashlens_spool_high_water_bytes %d\n", spool.highWaterBytes)
+	fmt.Fprintf(&output, "clashlens_spool_final_objects %d\n", spool.finalObjects)
+	fmt.Fprintf(&output, "clashlens_spool_temporary_objects %d\n", spool.temporaryObjects)
+	fmt.Fprintf(&output, "clashlens_spool_reserved_bytes %d\n", spool.reservedBytes)
+	fmt.Fprintf(&output, "clashlens_spool_live_reservations %d\n", spool.reservedObjects)
+	fmt.Fprintf(&output, "clashlens_spool_allocated_bytes %d\n", spool.allocatedBytes)
+	fmt.Fprintf(&output, "clashlens_spool_free_inodes %d\n", spool.freeInodes)
+	fmt.Fprintf(&output, "clashlens_spool_orphan_count %d\n", orphanCount)
+	fmt.Fprintf(&output, "clashlens_spool_orphan_bytes %d\n", orphanBytes)
 	fmt.Fprintf(&output, "clashlens_collector_incomplete_attempts %d\n", statistics.incompleteAttempts)
 	oldestAge := 0.0
 	if statistics.oldestDueAt.Valid && statistics.oldestDueAt.Time.Before(now) {

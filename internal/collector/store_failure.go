@@ -11,6 +11,45 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+func dependencyDeferralCategory(category string) bool {
+	switch category {
+	case "archive_network_uncertain", "archive_unavailable", "archive_missing", "archive_write_failed", "degraded_capacity", "spool_io_failed", "enospc":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *store) recordDependencyFailure(ctx context.Context, job *collectionJob, attemptID int64, endpoint endpointName, category string, nextRetryAt time.Time) error {
+	if s.contractVersion < 3 {
+		return fmt.Errorf("dependency deferral requires contract version 3")
+	}
+	transaction, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("begin dependency deferral: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+	if err := lockCurrentAttemptV2(ctx, transaction, job, attemptID); err != nil {
+		return err
+	}
+	command, err := transaction.Exec(ctx, `
+		UPDATE collector_endpoint_results
+		SET outcome = 'retrying', failure_category = $3,
+			next_retry_at = $4, execution_token = $5
+		WHERE attempt_id = $1 AND endpoint = $2 AND outcome <> 'observed'
+	`, attemptID, string(endpoint), category, nextRetryAt, job.leaseToken)
+	if err != nil {
+		return fmt.Errorf("record dependency deferral: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return errLeaseLost
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("commit dependency deferral: %w", err)
+	}
+	return nil
+}
+
 func (s *store) recordTransportFailure(
 	ctx context.Context,
 	job *collectionJob,
@@ -532,7 +571,7 @@ func (s *store) resolveAttemptV2(
 	}
 
 	rows, err := transaction.Query(ctx, `
-		SELECT endpoint, retry_count, next_retry_at
+		SELECT endpoint, retry_count, next_retry_at, failure_category
 		FROM collector_endpoint_results
 		WHERE attempt_id = $1 AND outcome <> 'observed'
 		ORDER BY endpoint
@@ -542,14 +581,15 @@ func (s *store) resolveAttemptV2(
 		return fmt.Errorf("select version-two incomplete endpoints: %w", err)
 	}
 	type incompleteEndpointV2 struct {
-		name        endpointName
-		retryCount  int
-		nextRetryAt pgtype.Timestamptz
+		name            endpointName
+		retryCount      int
+		nextRetryAt     pgtype.Timestamptz
+		failureCategory pgtype.Text
 	}
 	var incomplete []incompleteEndpointV2
 	for rows.Next() {
 		var endpoint incompleteEndpointV2
-		if err := rows.Scan(&endpoint.name, &endpoint.retryCount, &endpoint.nextRetryAt); err != nil {
+		if err := rows.Scan(&endpoint.name, &endpoint.retryCount, &endpoint.nextRetryAt, &endpoint.failureCategory); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan version-two incomplete endpoint: %w", err)
 		}
@@ -560,6 +600,31 @@ func (s *store) resolveAttemptV2(
 		return fmt.Errorf("read version-two incomplete endpoints: %w", err)
 	}
 	rows.Close()
+	if s.contractVersion >= 3 {
+		var pendingCount int
+		if err := transaction.QueryRow(ctx, `SELECT count(*) FROM collector_endpoint_results WHERE attempt_id = $1 AND outcome = 'pending_remote_verification'`, attemptID).Scan(&pendingCount); err != nil {
+			return fmt.Errorf("count pending raw-evidence handoffs: %w", err)
+		}
+		if pendingCount > 0 {
+			// The deferred attempt is parked without a live lease; the next
+			// claim adopts it under the job-row fence (see prepareAttempt).
+			if _, err := transaction.Exec(ctx, `
+				UPDATE collector_attempts
+				SET status = 'incomplete', completed_at = NULL,
+					lease_owner = NULL, lease_token = NULL, lease_generation = 0
+				WHERE id = $1
+			`, attemptID); err != nil {
+				return err
+			}
+			if _, err := transaction.Exec(ctx, `UPDATE collector_jobs SET status = 'waiting_dependency', due_at = clock_timestamp() + interval '5 seconds', lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = clock_timestamp() WHERE id IN ($1,$2)`, rootJobID, job.id); err != nil {
+				return err
+			}
+			if err := transaction.Commit(ctx); err != nil {
+				return err
+			}
+			return nil
+		}
+	}
 
 	setJobStatuses := func(rootStatus, currentStatus string) error {
 		if rootJobID == job.id {
@@ -704,11 +769,16 @@ func (s *store) resolveAttemptV2(
 	}
 
 	terminal := false
+	hasDependency := false
 	for _, endpoint := range incomplete {
 		if job.workType == "endpoint_retry" && string(endpoint.name) != job.requiredEndpoint.String {
 			continue
 		}
-		if endpoint.retryCount >= maximumRetries {
+		dependency := s.contractVersion >= 3 && dependencyDeferralCategory(endpoint.failureCategory.String)
+		if dependency {
+			hasDependency = true
+		}
+		if endpoint.retryCount >= maximumRetries && !dependency {
 			terminal = true
 			command, err := transaction.Exec(ctx, `
 				UPDATE collector_endpoint_results AS endpoint_result
@@ -734,11 +804,20 @@ func (s *store) resolveAttemptV2(
 		}
 
 		nextRetryCount := endpoint.retryCount + 1
+		if dependency {
+			nextRetryCount = endpoint.retryCount
+		}
 		dueAt := now
 		if endpoint.nextRetryAt.Valid && endpoint.nextRetryAt.Time.After(now) {
 			dueAt = endpoint.nextRetryAt.Time
 		}
 		coalescingKey := "retry:" + strconv.FormatInt(attemptID, 10) + ":" + string(endpoint.name) + ":" + strconv.Itoa(nextRetryCount)
+		if dependency {
+			coalescingKey += ":dependency:" + strconv.FormatInt(now.UnixNano(), 10)
+			if dueAt.Before(now.Add(5 * time.Second)) {
+				dueAt = now.Add(5 * time.Second)
+			}
+		}
 		var normalizedTag any = job.normalizedTag
 		if job.scope == "global" {
 			normalizedTag = nil
@@ -795,7 +874,7 @@ func (s *store) resolveAttemptV2(
 
 		command, err = transaction.Exec(ctx, `
 			UPDATE collector_endpoint_results AS endpoint_result
-			SET outcome = 'retrying', retry_count = $3, next_retry_at = $4
+			SET outcome = 'retrying', retry_count = CASE WHEN $9 THEN retry_count ELSE $3 END, next_retry_at = $4
 			FROM collector_jobs AS current_job
 			WHERE endpoint_result.attempt_id = $1
 				AND endpoint_result.endpoint = $2
@@ -807,7 +886,7 @@ func (s *store) resolveAttemptV2(
 				AND current_job.lease_expires_at > clock_timestamp()
 				AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
 		`, attemptID, string(endpoint.name), nextRetryCount, dueAt, job.id,
-			job.leaseOwner, job.leaseToken, job.leaseGeneration)
+			job.leaseOwner, job.leaseToken, job.leaseGeneration, dependency)
 		if err != nil {
 			return fmt.Errorf("mark version-two endpoint retrying: %w", err)
 		}
@@ -863,6 +942,9 @@ func (s *store) resolveAttemptV2(
 
 	eventType := "retry_scheduled"
 	eventToStatus := "incomplete"
+	if hasDependency {
+		eventType = "dependency_deferred"
+	}
 	if terminal {
 		eventType = "failed"
 		eventToStatus = "failed"
@@ -911,14 +993,20 @@ func (s *store) resolveAttemptV2(
 		`, attemptID, job.id, job.leaseOwner, job.leaseToken, job.leaseGeneration, now); err != nil {
 			return fmt.Errorf("cancel version-two sibling retry jobs: %w", err)
 		}
-		if err := lockCurrentAttemptV2(ctx, transaction, job, attemptID); err != nil {
-			return err
-		}
+		// The initial lockCurrentAttemptV2 holds FOR UPDATE on both rows for
+		// this whole transaction, and the attempt-status update above already
+		// moved the attempt to 'failed', so re-locking here would contradict
+		// its own running/incomplete fence. setJobStatuses re-verifies the
+		// live lease on every statement it runs.
 		if err := setJobStatuses("failed", "failed"); err != nil {
 			return err
 		}
 	} else {
-		if err := setJobStatuses("waiting_retry", "complete"); err != nil {
+		rootStatus := "waiting_retry"
+		if hasDependency {
+			rootStatus = "waiting_dependency"
+		}
+		if err := setJobStatuses(rootStatus, "complete"); err != nil {
 			return err
 		}
 	}

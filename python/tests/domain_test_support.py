@@ -35,6 +35,15 @@ def domain_database(database_url: str) -> Iterator[str]:
             admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
+@contextmanager
+def _connection_scope(connection_info: str, existing: Any | None):
+    if existing is not None:
+        yield existing
+    else:
+        with psycopg.connect(connection_info) as connection:
+            yield connection
+
+
 def store_observation(
     connection_info: str,
     archive_server: tuple[str, str, str, Any],
@@ -52,6 +61,8 @@ def store_observation(
     deduplication_key: str | None = None,
     input_json: str = "{}",
     max_attempts: int = 3,
+    existing_connection: Any | None = None,
+    commit: bool = True,
 ) -> tuple[int, int]:
     digest = hashlib.sha256(body).hexdigest()
     key = f"sha256/{digest[:2]}/{digest}"
@@ -62,7 +73,7 @@ def store_observation(
         "global_player_rankings" if global_scope else "initial_collection"
     )
     scope = "global" if global_scope else "player"
-    with psycopg.connect(connection_info) as connection:
+    with _connection_scope(connection_info, existing_connection) as connection:
         player_id = None
         if normalized_tag is not None:
             player_id = connection.execute(
@@ -101,16 +112,38 @@ def store_observation(
             """,
             (collector_job_id, observed_at, observed_at),
         ).fetchone()[0]
+        # Migration 0009 requires every new observation to reference a verified
+        # catalogue row, so the fixture emulates a contract-v3 collector.
+        connection.execute(
+            """
+            INSERT INTO archive_instances (
+                instance_id, endpoint, region, bucket, marker_key,
+                marker_hash, marker_payload_version
+            ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
+                      'evidence', 'clashlens/archive-instance.json',
+                      repeat('f', 64), 'v1')
+            ON CONFLICT (instance_id) DO NOTHING
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO archive_catalogue (
+                response_hash, archive_reference, byte_size, archive_instance_id
+            ) VALUES (%s, %s, %s, 'fixture-instance')
+            ON CONFLICT (response_hash) DO NOTHING
+            """,
+            (digest, reference, len(body)),
+        )
         observation_id = connection.execute(
             """
             INSERT INTO collector_observations (
                 occurrence_key, collection_job_id, attempt_id, player_id,
                 scope, normalized_tag, endpoint, request_started_at, response_completed_at,
-                http_status, response_hash, archive_reference, collector_version,
-                key_label, evidence_headers
+                http_status, response_hash, archive_reference, archive_catalogue_hash,
+                collector_version, key_label, evidence_headers
             ) VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s - interval '1 second', %s,
-                %s, %s, %s, 'collector-v2', 'normal-a', '{}'::jsonb
+                %s, %s, %s, %s, 'collector-v2', 'normal-a', '{}'::jsonb
             )
             RETURNING id
             """,
@@ -127,6 +160,7 @@ def store_observation(
                 http_status,
                 digest,
                 reference,
+                digest,
             ),
         ).fetchone()[0]
         columns = [
@@ -157,5 +191,6 @@ def store_observation(
             """,
             tuple(values),
         ).fetchone()[0]
-        connection.commit()
+        if commit:
+            connection.commit()
     return int(observation_id), int(job_id)

@@ -22,6 +22,7 @@ type store struct {
 	inactiveCleanupInterval time.Duration
 	lastInactiveCleanupAt   atomic.Int64
 	metrics                 *collectorMetrics
+	archiveInstanceID       string
 }
 
 func openStore(ctx context.Context, databaseURL string, expectedContractVersion int) (*store, error) {

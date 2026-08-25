@@ -301,3 +301,19 @@ define retention and recovery targets and test restoration before relying on
 the deployment for production recovery. The existing Google Cloud raw archive
 is canonical evidence and is not duplicated merely to label the copy a
 backup.
+
+## Raw-evidence spool (contract v3)
+
+`CLASHLENS_SPOOL_ROOT` is a private host directory mounted read-write only at
+`/spool` in the collector and Python worker containers. The root is owned by
+UID/GID `10001`, mode `0700`, and is mounted with Podman `:rw,z`; the private
+API and website receive no spool mount. The spool is bounded processing state,
+not a backup. Its `.locks/` directory contains 4,096 permanent hash stripes and
+`.control/` contains the fsync'd capacity ledger, operation records, and held
+reservations. Contract v3 applies migration `0009_raw_evidence.sql` only after
+stopping the old collector, provisions the immutable `archive_instances` row,
+and restarts the collector with the matching endpoint, signing region, bucket,
+instance ID, and marker contract. A marker outage is degraded telemetry; a
+static contract mismatch is a startup failure. A catalogued response may be cleaned only after remote verification, terminal
+processing, and its safety age. An unverified orphan has the separate orphan
+safety age and must never be confused with pending or catalogued evidence.

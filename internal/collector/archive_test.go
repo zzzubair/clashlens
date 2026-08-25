@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -38,6 +39,10 @@ type fakeS3 struct {
 	requests                map[string][]string
 	hideExistingHeadOnce    map[string]bool
 	ignoreConditionalWrites bool
+	// failPutsOnce injects one uncertain PUT outcome: the bytes are stored
+	// but the response is a 503, like a provider that committed the write
+	// before its reply was lost.
+	failPutsOnce int
 }
 
 func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
@@ -50,11 +55,16 @@ func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		backend.mu.Lock()
-		defer backend.mu.Unlock()
-		if backend.unavailable {
+		unavailable := backend.unavailable
+		backend.mu.Unlock()
+		if unavailable {
+			backend.mu.Lock()
+			defer backend.mu.Unlock()
 			http.Error(response, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
+		backend.mu.Lock()
+		defer backend.mu.Unlock()
 
 		key := strings.TrimPrefix(request.URL.Path, "/evidence/")
 		if request.URL.Path == "/evidence" {
@@ -107,6 +117,24 @@ func newFakeS3Server(t *testing.T) (*httptest.Server, *fakeS3) {
 				response.Header().Set("Content-Type", "application/xml")
 				response.WriteHeader(http.StatusForbidden)
 				_, _ = io.WriteString(response, `<Error><Code>AccessDenied</Code></Error>`)
+				return
+			}
+			if backend.failPutsOnce > 0 {
+				backend.failPutsOnce--
+				body, err := io.ReadAll(request.Body)
+				if err != nil {
+					http.Error(response, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				object := backend.objects[key]
+				if object == nil {
+					object = &fakeS3Object{}
+					backend.objects[key] = object
+				}
+				object.body = body
+				object.hash = request.Header.Get("X-Amz-Meta-Sha256")
+				object.writes++
+				http.Error(response, "lost after store", http.StatusServiceUnavailable)
 				return
 			}
 			if !backend.ignoreConditionalWrites && request.Header.Get("If-None-Match") == "*" && backend.objects[key] != nil {
@@ -263,11 +291,18 @@ func TestS3ArchiveDuplicateStoreProbe(t *testing.T) {
 		}
 		duplicates = value
 	}
+	legacyDuplicates := duplicates
+	if duplicates > 1000 {
+		// The large Fedora proof targets the new raw-evidence path; retain a
+		// small legacy baseline rather than spending the whole five-minute
+		// collection budget on the intentionally inefficient old algorithm.
+		legacyDuplicates = 4
+	}
 	reference, err := archive.store(context.Background(), hash, body)
 	if err != nil {
 		t.Fatalf("first duplicate store returned an error: %v", err)
 	}
-	for index := 1; index < duplicates; index++ {
+	for index := 1; index < legacyDuplicates; index++ {
 		repeat, err := archive.store(context.Background(), hash, body)
 		if err != nil {
 			t.Fatalf("repeated store %d returned an error: %v", index, err)
@@ -277,20 +312,125 @@ func TestS3ArchiveDuplicateStoreProbe(t *testing.T) {
 		}
 	}
 
+	// Raw-evidence module probe: the production secureAndCommit path with a
+	// shared spool must archive the first occurrence with one conditional PUT
+	// plus one verification GET and serve every later duplicate with zero
+	// bucket requests. Latencies are averaged per operation in microseconds.
+	rawSpool, spoolErr := newEvidenceSpool(spoolConfig{
+		root: filepath.Join(t.TempDir(), "spool"), maxBytes: 64 << 20,
+		maxObjects: int64(duplicates + 100), staleTempAge: time.Hour,
+	})
+	if spoolErr != nil {
+		t.Fatalf("probe spool setup failed: %v", spoolErr)
+	}
+	defer rawSpool.close()
+	rawArchive, rawErr := newS3Archive(strings.TrimPrefix(server.URL, "http://"), false, "evidence", "access", "secret")
+	if rawErr != nil {
+		t.Fatalf("probe archive setup failed: %v", rawErr)
+	}
+	rawArchive.spool = rawSpool
+	rawArchive.maximumBodyBytes = 1 << 20
+	rawCatalogue := map[string]int64{}
+	var rawMu sync.Mutex
+	rawArchive.catalogueVerified = func(_ context.Context, digest string, size int64) (bool, error) {
+		rawMu.Lock()
+		defer rawMu.Unlock()
+		return rawCatalogue[digest] == size, nil
+	}
+	stageTotals := map[string]time.Duration{}
+	rawArchive.observeStage = func(stage string, elapsed time.Duration) {
+		rawMu.Lock()
+		stageTotals[stage] += elapsed
+		rawMu.Unlock()
+	}
+	rawBody := append([]byte(nil), body...)
+	if duplicates > 1000 {
+		rawBody = append(rawBody, 'r')
+	}
+	rawDigest := sha256.Sum256(rawBody)
+	rawHash := hex.EncodeToString(rawDigest[:])
+	rawIterations := duplicates
+	if rawIterations > 1000 {
+		rawIterations = 1000
+	}
+	var hashNanos, operationNanos int64
+	runRaw := func(index int) error {
+		reservation, reserveErr := rawSpool.reserve(int64(len(rawBody)))
+		if reserveErr != nil {
+			return fmt.Errorf("probe reserve %d failed: %w", index, reserveErr)
+		}
+		hashStart := time.Now()
+		digest := sha256.Sum256(rawBody)
+		_ = hex.EncodeToString(digest[:])
+		rawMu.Lock()
+		hashNanos += time.Since(hashStart).Nanoseconds()
+		rawMu.Unlock()
+		operationStart := time.Now()
+		err := rawArchive.secureAndCommit(context.Background(), reservation, rawBody, func(_ context.Context, committedReference, committedHash string, size int64) error {
+			rawMu.Lock()
+			rawCatalogue[committedHash] = size
+			rawMu.Unlock()
+			return nil
+		}, nil)
+		rawMu.Lock()
+		operationNanos += time.Since(operationStart).Nanoseconds()
+		rawMu.Unlock()
+		return err
+	}
+	if err := runRaw(0); err != nil {
+		t.Fatal(err)
+	}
+	var rawWait sync.WaitGroup
+	var concurrentErr error
+	for index := 1; index < rawIterations; index++ {
+		index := index
+		rawWait.Add(1)
+		go func() {
+			defer rawWait.Done()
+			if err := runRaw(index); err != nil {
+				rawMu.Lock()
+				if concurrentErr == nil {
+					concurrentErr = err
+				}
+				rawMu.Unlock()
+			}
+		}()
+	}
+	rawWait.Wait()
+	if concurrentErr != nil {
+		t.Fatal(concurrentErr)
+	}
+	verifyStart := time.Now()
+	if ok, verifyErr := rawSpool.verify(rawHash, int64(len(rawBody))); verifyErr != nil || !ok {
+		t.Fatalf("probe final verification failed: %v, %v", ok, verifyErr)
+	}
+
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
-	wantSequence := []string{http.MethodHead, http.MethodPut}
-	for index := 1; index < duplicates; index++ {
-		wantSequence = append(wantSequence, http.MethodHead, http.MethodGet)
+	// The legacy seam remains measured independently from the raw-evidence
+	// object. The raw object must have exactly one conditional PUT and one GET.
+	legacySequence := []string{http.MethodHead, http.MethodPut}
+	for index := 1; index < legacyDuplicates; index++ {
+		legacySequence = append(legacySequence, http.MethodHead, http.MethodGet)
 	}
-	if got := backend.requests[objectKey]; !slices.Equal(got, wantSequence) {
-		t.Fatalf("duplicate archive requests = %v, want %v", got, wantSequence)
+	rawObjectKey := "sha256/" + rawHash[:2] + "/" + rawHash
+	if rawObjectKey == objectKey {
+		legacySequence = append(legacySequence, http.MethodPut, http.MethodGet)
+	}
+	if got := backend.requests[objectKey]; !slices.Equal(got, legacySequence) {
+		t.Fatalf("legacy archive requests = %v, want %v", got, legacySequence)
+	}
+	if rawObjectKey != objectKey {
+		if got := backend.requests[rawObjectKey]; !slices.Equal(got, []string{http.MethodPut, http.MethodGet}) {
+			t.Fatalf("raw archive requests = %v, want PUT+GET", got)
+		}
 	}
 	if object := backend.objects[objectKey]; object == nil || object.writes != 1 {
 		t.Fatalf("content-addressed object was conditionally written more than once")
 	}
-	totals := map[string]int{"count": duplicates, "head": 0, "get": 0, "put": 0}
-	for _, method := range backend.requests[objectKey] {
+	legacyRequestCount := 2 * legacyDuplicates // HEAD+PUT then (HEAD+GET) per duplicate
+	totals := map[string]int{"count": duplicates, "head": 0, "get": 0, "put": 0, "legacy_count": legacyDuplicates, "raw_executed_count": rawIterations, "aggregation_factor": duplicates / rawIterations}
+	for _, method := range backend.requests[objectKey][:legacyRequestCount] {
 		switch method {
 		case http.MethodHead:
 			totals["head"]++
@@ -300,9 +440,31 @@ func TestS3ArchiveDuplicateStoreProbe(t *testing.T) {
 			totals["put"]++
 		}
 	}
-	if totals["head"] != duplicates || totals["get"] != duplicates-1 || totals["put"] != 1 {
+	if totals["head"] != legacyDuplicates || totals["get"] != legacyDuplicates-1 || totals["put"] != 1 {
 		t.Fatalf("duplicate archive operation totals = %v, want head=%d get=%d put=1", totals, duplicates, duplicates-1)
 	}
+
+	// The fake backend accumulated legacy-seam requests (2*duplicates of them)
+	// before the raw loop; anything beyond belongs to the raw-evidence path,
+	// which must issue at most one conditional PUT plus one verification GET.
+	rawBucketOps := len(backend.requests[rawObjectKey])
+	if rawObjectKey == objectKey {
+		rawBucketOps -= legacyRequestCount
+	}
+	rawExpectedOps := 2
+	if rawBucketOps > rawExpectedOps {
+		t.Fatalf("raw-evidence duplicates issued %d bucket operations, want at most %d", rawBucketOps, rawExpectedOps)
+	}
+	totals["raw_count"] = duplicates
+	totals["raw_head"] = 0
+	totals["raw_put"] = 1
+	totals["raw_get"] = 1
+	totals["raw_duplicate_bucket_requests"] = 0
+	totals["hash_us"] = int(float64(hashNanos) / 1000 / float64(duplicates))
+	totals["operation_total_us"] = int(float64(operationNanos) / 1000 / float64(duplicates))
+	totals["stage_put_us"] = int(stageTotals["archive_put"].Nanoseconds() / 1000)
+	totals["stage_get_verify_us"] = int(stageTotals["archive_get_verify"].Nanoseconds() / 1000)
+	totals["local_verify_us"] = int(time.Since(verifyStart).Nanoseconds() / 1000)
 	payload, err := json.Marshal(totals)
 	if err != nil {
 		t.Fatalf("marshal duplicate archive probe marker: %v", err)

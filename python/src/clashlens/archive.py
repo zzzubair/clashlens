@@ -14,8 +14,10 @@ import urllib3
 from minio import Minio
 from minio.error import S3Error
 
+from .spool import Spool, SpoolError
+
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
-DEFAULT_MAX_BODY_BYTES = 2_000_000
+DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_READ_TIMEOUT_SECONDS = 15.0
 DEFAULT_MAX_RETRIES = 1
@@ -106,6 +108,17 @@ class ArchiveReadResult:
     sha256: str
 
 
+@dataclass(frozen=True, slots=True)
+class ArchiveInstanceConfig:
+    instance_id: str
+    endpoint: str
+    region: str
+    bucket: str
+    marker_key: str
+    marker_hash: str
+    marker_payload_version: str
+
+
 class S3ArchiveReader:
     def __init__(
         self,
@@ -115,6 +128,7 @@ class S3ArchiveReader:
         access_key: str,
         secret_key: str,
         secure: bool = True,
+        region: str = "us-east-1",
         allow_insecure_test_origin: bool = False,
         max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
         connect_timeout_seconds: float = DEFAULT_CONNECT_TIMEOUT_SECONDS,
@@ -122,6 +136,10 @@ class S3ArchiveReader:
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
         pool_size: int = DEFAULT_ARCHIVE_POOL_SIZE,
+        instance_id: str = "",
+        marker_key: str = "",
+        marker_hash: str = "",
+        marker_payload_version: str = "",
     ) -> None:
         if not endpoint or "://" in endpoint or "/" in endpoint:
             raise ValueError(
@@ -129,6 +147,13 @@ class S3ArchiveReader:
             )
         if not bucket:
             raise ValueError("archive bucket is required")
+        if not region:
+            raise ValueError("archive signing region is required")
+        configured_instance = any((instance_id, marker_key, marker_hash, marker_payload_version))
+        if configured_instance and not all((instance_id, marker_key, marker_hash, marker_payload_version)):
+            raise ValueError("complete archive instance configuration is required")
+        if configured_instance and not _HASH_RE.fullmatch(marker_hash):
+            raise ValueError("archive marker hash must be lowercase SHA-256")
         if max_body_bytes <= 0:
             raise ValueError("archive body limit must be positive")
         if max_body_bytes > MAX_ARCHIVE_BODY_BYTES:
@@ -161,6 +186,22 @@ class S3ArchiveReader:
         if pool_size > MAX_ARCHIVE_POOL_SIZE:
             raise ValueError("archive pool size exceeds the supported maximum")
         self.bucket = bucket
+        self.region = region
+        self.instance_config = (
+            ArchiveInstanceConfig(
+                instance_id=instance_id,
+                endpoint=endpoint,
+                region=region,
+                bucket=bucket,
+                marker_key=marker_key,
+                marker_hash=marker_hash,
+                marker_payload_version=marker_payload_version,
+            )
+            if configured_instance
+            else None
+        )
+        self._marker_checked_at = 0.0
+        self._marker_error: ArchiveReadError | None = None
         self.secure = secure
         self.max_body_bytes = max_body_bytes
         self.connect_timeout_seconds = connect_timeout_seconds
@@ -193,7 +234,7 @@ class S3ArchiveReader:
             access_key=access_key,
             secret_key=secret_key,
             secure=secure,
-            region="us-east-1",
+            region=region,
             http_client=self.http_client,
         )
 
@@ -203,17 +244,61 @@ class S3ArchiveReader:
         self.http_client.set_pool_acquire_observer(observer)
 
     def check_ready(self) -> bool:
+        # Archive reachability is telemetry in the spool-first worker. Keep
+        # this legacy adapter probe only for callers without a local spool.
         for attempt in range(self.max_retries + 1):
             try:
                 return bool(self.client.bucket_exists(self.bucket))
-            except Exception:  # noqa: BLE001 - readiness must remain a safe boolean
+            except Exception:  # noqa: BLE001 - readiness is a safe boolean
                 if attempt == self.max_retries:
                     return False
                 if self.retry_backoff_seconds:
                     time.sleep(self.retry_backoff_seconds * (attempt + 1))
         return False
 
-    def read_verified(self, reference: str, expected_hash: str) -> ArchiveReadResult:
+    def validate_instance(self, database: Any) -> None:
+        config = self.instance_config
+        if config is None:
+            return
+        validator = getattr(database, "validate_archive_instance", None)
+        if not callable(validator) or not validator(config):
+            raise ValueError("archive instance configuration contradicts PostgreSQL")
+
+    def marker_health(self) -> str:
+        return self.check_marker_health()
+
+    def check_marker_health(self) -> str:
+        config = self.instance_config
+        if config is None:
+            return "unconfigured"
+        now = time.monotonic()
+        if now - self._marker_checked_at < 300:
+            return "terminal" if self._marker_error and not self._marker_error.retryable else ("degraded" if self._marker_error else "ready")
+        self._marker_checked_at = now
+        try:
+            response = self.client.get_object(self.bucket, config.marker_key)
+            try:
+                body = response.read(1_048_577)
+            finally:
+                response.close()
+                response.release_conn()
+            if len(body) > 1_048_576 or hashlib.sha256(body).hexdigest() != config.marker_hash:
+                raise ArchiveReadError("archive_marker_mismatch", "archive marker does not match its configured hash", retryable=False)
+            self._marker_error = None
+        except ArchiveReadError as error:
+            self._marker_error = error
+        except Exception as error:  # noqa: BLE001 - marker health never gates local duplicates
+            self._marker_error = ArchiveReadError("archive_unavailable", "archive marker request failed", retryable=True)
+            del error
+        return "terminal" if self._marker_error and not self._marker_error.retryable else ("degraded" if self._marker_error else "ready")
+
+    def read_verified(
+        self,
+        reference: str,
+        expected_hash: str,
+        *,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> ArchiveReadResult:
         if not _HASH_RE.fullmatch(expected_hash):
             raise ArchiveReadError(
                 "invalid_observation_hash",
@@ -233,8 +318,14 @@ class S3ArchiveReader:
             except ArchiveReadError as error:
                 if not error.retryable or attempt == self.max_retries:
                     raise
+                # Renew the caller's lease before backing off so the wall time
+                # of a bounded provider-outage retry window stays inside it.
+                if heartbeat is not None:
+                    heartbeat()
                 if self.retry_backoff_seconds:
                     time.sleep(self.retry_backoff_seconds * (attempt + 1))
+                if heartbeat is not None:
+                    heartbeat()
         raise AssertionError("unreachable archive retry loop")
 
     def _read_once(
@@ -264,32 +355,25 @@ class S3ArchiveReader:
         except ArchiveReadError:
             raise
         except S3Error as error:
-            if (
-                error.code in {"NoSuchKey", "NoSuchObject", "NotFound"}
-                or error.status_code == 404
-            ):
-                raise ArchiveReadError(
-                    "archive_missing",
-                    "immutable archive object was not found",
-                    retryable=True,
-                ) from error
-            raise ArchiveReadError(
-                "archive_unavailable",
-                "S3-compatible archive read failed",
-                retryable=True,
-            ) from error
+            status_code = getattr(error.response, "status", None)
+            if error.code in {"NoSuchKey", "NoSuchObject", "NotFound"} or status_code == 404:
+                raise ArchiveReadError("archive_missing", "immutable archive object was not found", retryable=True) from error
+            if status_code in {401, 403} or error.code in {"AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch"}:
+                raise ArchiveReadError("archive_permission_denied", "archive credential is not authorized", retryable=False) from error
+            if status_code in {301, 307} or error.code in {"NoSuchBucket", "InvalidBucketName", "AuthorizationHeaderMalformed", "PermanentRedirect", "InvalidRegion"}:
+                raise ArchiveReadError("archive_configuration_error", "archive instance configuration was rejected", retryable=False) from error
+            if status_code in {400, 405, 501} or error.code in {"NotImplemented", "InvalidRequest", "MethodNotAllowed"}:
+                raise ArchiveReadError("archive_unsupported", "archive provider does not support the required immutable read", retryable=False) from error
+            if status_code is not None and status_code >= 500:
+                raise ArchiveReadError("archive_unavailable", "S3-compatible archive read failed", retryable=True) from error
+            raise ArchiveReadError("archive_configuration_error", "archive request was rejected", retryable=False) from error
         except Exception as error:
-            if "404" in str(error):
-                raise ArchiveReadError(
-                    "archive_missing",
-                    "immutable archive object was not found",
-                    retryable=True,
-                ) from error
-            raise ArchiveReadError(
-                "archive_unavailable",
-                "S3-compatible archive read failed",
-                retryable=True,
-            ) from error
+            message = str(error).lower()
+            if "404" in message:
+                raise ArchiveReadError("archive_missing", "immutable archive object was not found", retryable=True) from error
+            if any(token in message for token in ("timeout", "timed out", "connection", "reset", "temporarily")):
+                raise ArchiveReadError("archive_unavailable", "S3-compatible archive read failed", retryable=True) from error
+            raise ArchiveReadError("archive_configuration_error", "archive request failed", retryable=False) from error
 
         if len(body) > self.max_body_bytes:
             raise ArchiveReadError(
@@ -305,6 +389,129 @@ class S3ArchiveReader:
                 retryable=False,
             )
         return ArchiveReadResult(body=body, reference=reference, sha256=actual_hash)
+
+
+class SpoolFirstReader:
+    """Read verified evidence locally, repairing from the read-only archive on a miss."""
+
+    def __init__(
+        self,
+        archive: S3ArchiveReader,
+        *,
+        spool_root: str,
+        max_body_bytes: int | None = None,
+        max_bytes: int = 16 << 30,
+        max_objects: int = 1_000_000,
+        free_space_floor: int = 0,
+        free_inode_floor: int = 0,
+        database: Any | None = None,
+        stage_metrics: Any | None = None,
+    ) -> None:
+        self.archive = archive
+        if database is not None:
+            self.archive.validate_instance(database)
+        if getattr(archive, "instance_config", None) is not None and database is None:
+            raise ValueError("PostgreSQL archive instance validation is required")
+        self.spool = Spool(
+            spool_root,
+            max_body_bytes=max_body_bytes or archive.max_body_bytes,
+            max_bytes=max_bytes,
+            max_objects=max_objects,
+            free_space_floor=free_space_floor,
+            free_inode_floor=free_inode_floor,
+        )
+        self.stage_metrics = stage_metrics
+        # Measured evidence counters for the performance runner (#64).
+        self._counters = {
+            "local_hits": 0, "local_misses": 0, "repairs": 0, "provider_errors": 0,
+        }
+
+    def _record_stage(self, stage: str, started_at: float) -> None:
+        if self.stage_metrics is not None:
+            self.stage_metrics.record(stage, time.monotonic() - started_at)
+
+    def counters(self) -> dict[str, int]:
+        return dict(self._counters)
+
+    def stats(self) -> dict[str, int]:
+        return self.spool.stats()
+
+    @property
+    def root(self):
+        return self.spool.root
+
+    def set_pool_acquire_observer(self, observer: Callable[[float], None] | None) -> None:
+        self.archive.set_pool_acquire_observer(observer)
+
+    def check_ready(self) -> bool:
+        try:
+            return self.spool.readiness()[0]
+        except (OSError, ValueError, SpoolError):
+            return False
+
+    def readiness(self) -> dict[str, Any]:
+        ready, reason = self.spool.readiness()
+        return {"ready": ready, "component": "spool", "reason": reason, "remote_health": self.archive.check_marker_health()}
+
+    def check_marker_health(self) -> str:
+        return self.archive.check_marker_health()
+
+    def marker_health(self) -> str:
+        return self.archive.check_marker_health()
+
+    def read_verified(
+        self,
+        reference: str,
+        expected_hash: str,
+        *,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> ArchiveReadResult:
+        """Read verified evidence, renewing the worker lease via ``heartbeat``.
+
+        ``heartbeat`` is invoked before each bounded remote retry so a long
+        provider outage cannot outlive the claim's renewed lease window; a
+        lease loss raises through the callback and discards any partial work.
+        """
+        if not _HASH_RE.fullmatch(expected_hash):
+            raise ArchiveReadError("invalid_observation_hash", "observation hash is not a lowercase SHA-256 digest", retryable=False)
+        bucket, _ = _parse_reference(reference)
+        if bucket != self.archive.bucket:
+            raise ArchiveReadError("archive_reference_mismatch", "archive reference bucket does not match configured bucket", retryable=False)
+        verify_started = time.monotonic()
+        local = self.spool.verify(expected_hash)
+        self._record_stage("python_archive_local_verify", verify_started)
+        if local is not None:
+            self._counters["local_hits"] += 1
+            return ArchiveReadResult(body=local, reference=reference, sha256=expected_hash)
+        self._counters["local_misses"] += 1
+        # Bounded remote fallback with lease-aware pacing: each transient
+        # provider failure is followed by a heartbeat renewal so the retry
+        # wall time stays inside the worker's renewed lease window.
+        max_attempts = getattr(self.archive, "max_retries", 0) + 1
+        backoff = getattr(self.archive, "retry_backoff_seconds", 0.0)
+        for attempt in range(max_attempts):
+            try:
+                remote = self.archive.read_verified(reference, expected_hash, heartbeat=heartbeat)
+                break
+            except ArchiveReadError as error:
+                if not error.retryable or attempt == max_attempts - 1:
+                    if error.retryable:
+                        self._counters["provider_errors"] += 1
+                    raise
+                if heartbeat is not None:
+                    heartbeat()
+                if backoff:
+                    time.sleep(backoff)
+                if heartbeat is not None:
+                    heartbeat()
+        try:
+            repair_started = time.monotonic()
+            self.spool.publish(remote.body, expected_hash)
+            self._record_stage("python_archive_repair", repair_started)
+            self._counters["repairs"] += 1
+            return remote
+        except SpoolError as error:
+            raise ArchiveReadError("spool_io_failed", "local evidence repair failed", retryable=True) from error
 
 
 def _parse_reference(reference: str) -> tuple[str, str]:

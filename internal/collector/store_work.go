@@ -97,7 +97,7 @@ WITH candidate AS (
 			SELECT id
 			FROM collector_jobs
 			WHERE capacity_pool = $1
-				AND status = 'pending'
+				AND status IN ('pending', 'waiting_dependency')
 				AND priority = claim_priority.priority
 				AND due_at <= $2
 				ORDER BY due_at, created_at, id
@@ -108,7 +108,7 @@ WITH candidate AS (
 			SELECT id
 			FROM collector_jobs
 			WHERE capacity_pool = $1
-				AND status = 'pending'
+				AND status IN ('pending', 'waiting_dependency')
 				AND priority NOT IN (` + collectorClaimPriorityExclusions + `)
 				AND due_at <= $2
 			ORDER BY due_at, created_at, id
@@ -127,7 +127,7 @@ WITH candidate AS (
 		)
 	) AS pick
 	JOIN collector_jobs AS job ON job.id = pick.id
-	WHERE (job.status = 'pending' AND job.due_at <= $2)
+	WHERE (job.status IN ('pending', 'waiting_dependency') AND job.due_at <= $2)
 		OR (job.status = 'leased' AND job.lease_expires_at <= $2)
 	ORDER BY (
 		job.priority + floor(extract(epoch FROM ($2 - job.created_at)) / 60)::integer * 10
@@ -830,7 +830,33 @@ func (s *store) prepareAttempt(ctx context.Context, job *collectionJob, now time
 	attemptID := existingAttempt.Int64
 	if existingAttempt.Valid && s.contractVersion >= 2 && job.workType != "endpoint_retry" {
 		if err := lockCurrentAttemptV2(ctx, transaction, job, existingAttempt.Int64); err != nil {
-			return 0, nil, err
+			if !errors.Is(err, errLeaseLost) {
+				return 0, nil, err
+			}
+			// A dependency-deferred attempt is requeued without a live
+			// lease. Exactly one claim may adopt it, here inside the claim
+			// transaction while both rows are locked, keeping the fencing.
+			adopted, adoptErr := transaction.Exec(ctx, `
+				UPDATE collector_attempts AS attempt
+				SET lease_owner = $3, lease_token = $4, lease_generation = $5
+				FROM collector_jobs AS current_job
+				WHERE attempt.id = $2
+					AND attempt.job_id = current_job.id
+					AND attempt.status IN ('running', 'incomplete')
+					AND attempt.lease_token IS NULL
+					AND current_job.id = $1
+					AND current_job.lease_owner = $3
+					AND current_job.lease_token = $4
+					AND current_job.lease_generation = $5
+					AND current_job.status = 'leased'
+					AND current_job.result_attempt_id = $2
+			`, job.id, existingAttempt.Int64, job.leaseOwner, job.leaseToken, job.leaseGeneration)
+			if adoptErr != nil {
+				return 0, nil, fmt.Errorf("adopt dependency-deferred collection attempt: %w", adoptErr)
+			}
+			if adopted.RowsAffected() != 1 {
+				return 0, nil, errLeaseLost
+			}
 		}
 	}
 	if !existingAttempt.Valid {

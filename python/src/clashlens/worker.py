@@ -368,10 +368,21 @@ class ObservationProcessor:
             return self._fail(claim, "missing_archive_metadata", retryable=False)
 
         try:
+            # Renew before the spool miss can enter a bounded remote fallback;
+            # the second renewal below fences the result before parsing.
+            renewal_started_at = monotonic()
+            self.database.renew_claim(claim, lease_seconds=lease_seconds)
+            self._record_stage("python_lease_renew", renewal_started_at)
             archive_started_at = monotonic()
             try:
+                def renew_lease() -> None:
+                    # Heartbeat from the reader: keeps the renewed lease window
+                    # ahead of the bounded remote retry wall time. Lease loss
+                    # raises and discards any partial fallback result.
+                    self.database.renew_claim(claim, lease_seconds=lease_seconds)
+
                 archived = self.archive.read_verified(
-                    claim.archive_reference, claim.response_hash
+                    claim.archive_reference, claim.response_hash, heartbeat=renew_lease
                 )
             finally:
                 self._record_stage("python_archive_get_verify", archive_started_at)

@@ -116,6 +116,22 @@ func (s *store) commitObservationV2(
 	if s.metrics != nil {
 		s.metrics.recordStageDuration("observation_job_lock", time.Since(lockStartedAt))
 	}
+	if s.contractVersion >= 3 {
+		if err := s.insertCatalogue(ctx, transaction, hash, archiveReference, int64(len(response.body))); err != nil {
+			return fmt.Errorf("insert verified archive catalogue row: %w", err)
+		}
+		var catalogueHash, catalogueReference, catalogueInstance string
+		var catalogueSize int64
+		if err := transaction.QueryRow(ctx, `SELECT response_hash, archive_reference, byte_size, archive_instance_id FROM archive_catalogue WHERE response_hash = $1`, hash).Scan(&catalogueHash, &catalogueReference, &catalogueSize, &catalogueInstance); err != nil {
+			return fmt.Errorf("read verified archive catalogue row: %w", err)
+		}
+		if catalogueHash != hash || catalogueReference != archiveReference || catalogueSize != int64(len(response.body)) || catalogueInstance != s.archiveInstanceID {
+			return fmt.Errorf("%w: hash=%q reference=%q size=%d instance=%q vs row reference=%q size=%d instance=%q",
+				errArchiveCatalogueContradiction, hash, archiveReference,
+				int64(len(response.body)), s.archiveInstanceID,
+				catalogueReference, catalogueSize, catalogueInstance)
+		}
+	}
 
 	var normalizedTag any = job.normalizedTag
 	if job.scope == "global" {
@@ -123,7 +139,7 @@ func (s *store) commitObservationV2(
 	}
 	occurrenceKey := strconv.FormatInt(attemptID, 10) + ":" + string(endpoint) + ":" + strconv.Itoa(requestCount)
 	var observationID int64
-	err = transaction.QueryRow(ctx, `
+	observationQuery := `
 		INSERT INTO collector_observations (
 			occurrence_key, collection_job_id, attempt_id, scope, player_id,
 			normalized_tag, endpoint, request_method, request_path, request_query,
@@ -141,8 +157,24 @@ func (s *store) commitObservationV2(
 			AND current_job.status = 'leased'
 			AND current_job.lease_expires_at > clock_timestamp()
 		ON CONFLICT (occurrence_key) DO NOTHING
-		RETURNING id
-	`, occurrenceKey, job.id, attemptID, job.scope, job.playerID, normalizedTag,
+		RETURNING id`
+	if s.contractVersion >= 3 {
+		observationQuery = `
+		INSERT INTO collector_observations (
+			occurrence_key, collection_job_id, attempt_id, scope, player_id,
+			normalized_tag, endpoint, request_method, request_path, request_query,
+			request_started_at, response_completed_at, http_status, response_hash,
+			archive_reference, archive_catalogue_hash, paging_envelope_state, collector_version,
+			source_adapter_version, key_label, evidence_headers
+		)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$14,$16,$17,$18,$19,$20
+		FROM collector_jobs AS current_job
+		WHERE current_job.id = $2 AND current_job.lease_owner = $21
+			AND current_job.lease_token = $22 AND current_job.lease_generation = $23
+			AND current_job.status = 'leased' AND current_job.lease_expires_at > clock_timestamp()
+		ON CONFLICT (occurrence_key) DO NOTHING RETURNING id`
+	}
+	err = transaction.QueryRow(ctx, observationQuery, occurrenceKey, job.id, attemptID, job.scope, job.playerID, normalizedTag,
 		string(endpoint), response.request.method, response.request.path,
 		response.request.query, response.requestStartedAt, response.responseCompletedAt,
 		response.statusCode, hash, archiveReference, response.pagingEnvelopeState,
@@ -180,9 +212,16 @@ func (s *store) commitObservationV2(
 			return err
 		}
 	}
-	command, err = transaction.Exec(ctx, `
+	// Contract v3 forbids any non-pending outcome while a pending handoff is
+	// attached, so the verified commit clears the pointer in this same
+	// statement instead of a follow-up update.
+	pendingClear := ""
+	if s.contractVersion >= 3 {
+		pendingClear = "\n\t\t\tpending_remote_verification = NULL,"
+	}
+	endpointUpdate := `
 		UPDATE collector_endpoint_results
-		SET outcome = $4,
+		SET outcome = $4,` + pendingClear + `
 			next_retry_at = $5,
 			request_started_at = $6,
 			response_completed_at = $7,
@@ -211,7 +250,8 @@ func (s *store) commitObservationV2(
 					AND current_job.lease_expires_at > clock_timestamp()
 					AND (current_job.result_attempt_id = $1 OR current_job.parent_attempt_id = $1)
 			)
-	`, attemptID, string(endpoint), job.leaseToken, outcome, nextRetryAt,
+	`
+	command, err = transaction.Exec(ctx, endpointUpdate, attemptID, string(endpoint), job.leaseToken, outcome, nextRetryAt,
 		response.requestStartedAt, response.responseCompletedAt, response.statusCode,
 		hash, archiveReference, observationID, keyLabel, job.id,
 		response.request.method, response.request.path, response.request.query,
@@ -418,9 +458,16 @@ func (s *store) recordStorageFailureV2(
 	if err := lockCurrentLeaseV2(ctx, transaction, job); err != nil {
 		return err
 	}
+	// Contract v3 forbids a non-pending outcome while a pending handoff is
+	// attached. A terminal storage failure clears the pointer in this same
+	// lease-fenced statement so the CHECK passes and no requeue resumes it.
+	pendingClear := ""
+	if s.contractVersion >= 3 {
+		pendingClear = "\n\t\t\tpending_remote_verification = NULL,"
+	}
 	command, err := transaction.Exec(ctx, `
 		UPDATE collector_endpoint_results AS endpoint_result
-		SET outcome = 'storage_failed',
+		SET outcome = 'storage_failed',`+pendingClear+`
 			request_started_at = $4,
 			response_completed_at = $5,
 			http_status = $6,

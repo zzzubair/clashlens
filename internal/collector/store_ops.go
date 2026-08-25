@@ -17,6 +17,8 @@ type queueStatistics struct {
 	expiredLeases                  int64
 	failedJobs                     int64
 	waitingRetries                 int64
+	waitingDependencies            int64
+	pendingRemoteVerifications     int64
 	incompleteAttempts             int64
 	latestProfileAt                pgtype.Timestamptz
 	latestBattleLogAt              pgtype.Timestamptz
@@ -67,7 +69,8 @@ func (s *store) queueStatistics(ctx context.Context) (queueStatistics, error) {
 			count(*) FILTER (WHERE status = 'leased' AND lease_expires_at > now()),
 			count(*) FILTER (WHERE status = 'leased' AND lease_expires_at <= now()),
 			count(*) FILTER (WHERE status = 'failed'),
-			count(*) FILTER (WHERE status = 'waiting_retry')
+			count(*) FILTER (WHERE status = 'waiting_retry'),
+			count(*) FILTER (WHERE status = 'waiting_dependency')
 		FROM collector_jobs
 	`).Scan(
 		&statistics.depth,
@@ -76,8 +79,14 @@ func (s *store) queueStatistics(ctx context.Context) (queueStatistics, error) {
 		&statistics.expiredLeases,
 		&statistics.failedJobs,
 		&statistics.waitingRetries,
+		&statistics.waitingDependencies,
 	); err != nil {
 		return queueStatistics{}, fmt.Errorf("read collector queue statistics: %w", err)
+	}
+	if s.contractVersion >= 3 {
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM collector_endpoint_results WHERE outcome = 'pending_remote_verification'`).Scan(&statistics.pendingRemoteVerifications); err != nil {
+			return queueStatistics{}, fmt.Errorf("read pending raw-evidence statistics: %w", err)
+		}
 	}
 	if err := s.pool.QueryRow(ctx, `
 		SELECT

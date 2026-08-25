@@ -51,10 +51,17 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("database-url", completed.stderr)
 
     def test_archive_probe_marker_parses_totals(self) -> None:
-        parsed = runner._parse_archive_probe_marker(
-            "go test noise\n" + runner.ARCHIVE_PROBE_MARKER + '{"count":4,"head":5,"get":4,"put":1}\n'
+        marker = (
+            '{"count":4,"head":5,"get":4,"put":1,'
+            '"raw_count":4,"raw_head":0,"raw_put":1,"raw_get":1,'
+            '"raw_duplicate_bucket_requests":0,'
+            '"hash_us":3,"operation_total_us":1500,"stage_put_us":900,'
+            '"stage_get_verify_us":400,"local_verify_us":9}'
         )
-        self.assertEqual(parsed, {"count": 4, "head": 5, "get": 4, "put": 1})
+        parsed = runner._parse_archive_probe_marker("go test noise\n" + runner.ARCHIVE_PROBE_MARKER + marker + "\n")
+        self.assertEqual(parsed["count"], 4)
+        self.assertEqual(parsed["raw_head"], 0)
+        self.assertEqual(parsed["raw_duplicate_bucket_requests"], 0)
 
     def test_archive_probe_marker_rejects_missing_and_malformed(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "emitted 0 markers"):
@@ -118,6 +125,12 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 self.assertEqual(operations["count"], 2)
                 self.assertEqual(operations["head"], 2)
                 self.assertEqual(operations["get"], 1)
+                self.assertEqual(operations["raw_put"], 1)
+                self.assertEqual(operations["raw_get"], 1)
+                self.assertEqual(operations["raw_head"], 0)
+                self.assertEqual(operations["raw_duplicate_bucket_requests"], 0)
+                self.assertGreaterEqual(operations["operation_total_us"], 0)
+                self.assertGreaterEqual(operations["stage_put_us"], 0)
                 self.assertEqual(operations["put"], 1)
                 self.assertGreater(operations["elapsed_seconds"], 0)
             if mode in {"reset-boundary", "correction"}:

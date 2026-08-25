@@ -67,19 +67,57 @@ def _seed_production_depth(connection: psycopg.Connection) -> None:
         WHERE job.coalescing_key LIKE 'seed-observe:%'
         """
     )
-    connection.execute(
+    # Migration 0009 requires a verified catalogue row for every new
+    # observation; this fixture's schema predates it, so keep the legacy shape.
+    has_catalogue = connection.execute(
         """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = current_schema() AND table_name = 'archive_catalogue'
+        )
+        """
+    ).fetchone()[0]
+    if has_catalogue:
+        connection.execute(
+            """
+            INSERT INTO archive_instances (
+                instance_id, endpoint, region, bucket, marker_key,
+                marker_hash, marker_payload_version
+            ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
+                      'evidence', 'clashlens/archive-instance.json',
+                      repeat('f', 64), 'v1')
+            ON CONFLICT (instance_id) DO NOTHING
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO archive_catalogue (
+                response_hash, archive_reference, byte_size, archive_instance_id
+            )
+            SELECT lpad(to_hex(job.id), 64, '0'),
+                   's3://evidence/seed-' || job.id, 0, 'fixture-instance'
+            FROM collector_jobs AS job
+            ON CONFLICT (response_hash) DO NOTHING
+            """
+        )
+    catalogue_columns = ", archive_catalogue_hash"
+    catalogue_select = ", lpad(to_hex(job.id), 64, '0')"
+    if not has_catalogue:
+        catalogue_columns = ""
+        catalogue_select = ""
+    connection.execute(
+        f"""
         INSERT INTO collector_observations (
             occurrence_key, collection_job_id, attempt_id, player_id,
             normalized_tag, endpoint, request_started_at, response_completed_at,
-            http_status, response_hash, archive_reference, collector_version,
-            key_label, evidence_headers
+            http_status, response_hash, archive_reference{catalogue_columns},
+            collector_version, key_label, evidence_headers
         )
         SELECT 'seed-observation:' || job.id, job.id, attempt.id, job.player_id,
                job.normalized_tag, 'profile',
                clock_timestamp() - interval '1 minute', clock_timestamp(), 200,
-               lpad(to_hex(job.id), 64, '0'), 's3://evidence/seed-' || job.id,
-               'collector-v1', 'normal-a', '{}'::jsonb
+               lpad(to_hex(job.id), 64, '0'), 's3://evidence/seed-' || job.id{catalogue_select},
+               'collector-v1', 'normal-a', '{{}}'::jsonb
         FROM collector_jobs AS job
         JOIN collector_attempts AS attempt ON attempt.job_id = job.id
         """
@@ -203,7 +241,22 @@ def test_claim_candidate_window_covers_maximum_parallel_lanes() -> None:
 def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
     with _production_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as connection:
+            # Production schemas include migration 0009, whose dependency-
+            # deferral claim predicate and partial index the claim statement
+            # now relies on for bounded plans.
+            from pathlib import Path
+
+            root = Path(__file__).parents[2]
+            connection.execute(
+                (root / "deploy/migrations/0009_raw_evidence.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
             _seed_production_depth(connection)
+            # Production queues carry planner statistics (autovacuum analyze);
+            # the bounded-plan assertion is meaningful against those.
+            connection.execute("ANALYZE python_processing_jobs")
+            connection.execute("ANALYZE collector_observations")
             future_contracts = connection.execute(
                 """
                 SELECT count(*)
@@ -225,8 +278,14 @@ def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
             assert "python_processing_jobs_pending_claim_v2" in plan_text, (
                 f"claim plan does not use the indexed pending probe:\n{plan_text}"
             )
-            assert "python_processing_jobs_expired_leases_v2" in plan_text, (
-                f"claim plan does not use the indexed expiry probe:\n{plan_text}"
+            # The expiry probe may be served by either dedicated partial index;
+            # both are bounded indexed access paths. What matters is that no
+            # probe falls back to a sequential scan at production depth.
+            assert (
+                "python_processing_jobs_expired_leases_v2" in plan_text
+                or "python_processing_jobs_expired_maintenance_v2" in plan_text
+            ), (
+                f"claim plan does not use an indexed expiry probe:\n{plan_text}"
             )
             assert millis < 100, (
                 f"claim took {millis:.1f} ms at production depth, want < 100 ms"

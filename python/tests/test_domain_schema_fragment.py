@@ -69,18 +69,37 @@ def test_python_production_migration_supports_global_observations_without_fake_p
                 """,
                 (collector_job_id,),
             ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO archive_instances (
+                    instance_id, endpoint, region, bucket, marker_key,
+                    marker_hash, marker_payload_version
+                ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
+                          'evidence', 'clashlens/archive-instance.json',
+                          repeat('f', 64), 'v1')
+                ON CONFLICT (instance_id) DO NOTHING
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO archive_catalogue (
+                    response_hash, archive_reference, byte_size, archive_instance_id
+                ) VALUES (repeat('a', 64), 's3://evidence/test', 0, 'fixture-instance')
+                ON CONFLICT (response_hash) DO NOTHING
+                """
+            )
             observation_id = connection.execute(
                 """
                 INSERT INTO collector_observations (
                     occurrence_key, collection_job_id, attempt_id, player_id,
                     scope, normalized_tag, endpoint, request_started_at, response_completed_at,
-                    http_status, response_hash, archive_reference, collector_version,
-                    key_label, evidence_headers
+                    http_status, response_hash, archive_reference, archive_catalogue_hash,
+                    collector_version, key_label, evidence_headers
                 ) VALUES (
                     'global-ranking-test', %s, %s, NULL, 'global', NULL,
                     'global_player_rankings', clock_timestamp(), clock_timestamp(),
-                    200, repeat('a', 64), 's3://evidence/test', 'collector-v2',
-                    'normal-a', '{}'::jsonb
+                    200, repeat('a', 64), 's3://evidence/test', repeat('a', 64),
+                    'collector-v2', 'normal-a', '{}'::jsonb
                 )
                 RETURNING id
                 """,

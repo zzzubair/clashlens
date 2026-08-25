@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -22,38 +23,53 @@ const (
 )
 
 type collectorConfig struct {
-	databaseURL             string
-	schemaVersion           int
-	trafficGateMode         trafficGateMode
-	archiveEndpoint         string
-	archiveSecure           bool
-	archiveBucket           string
-	archiveAccessKey        string
-	archiveSecretKey        string
-	officialAPIOrigin       string
-	officialAPIProxyURL     string
-	allowInsecureTestHTTP   bool
-	enableGlobalRankings    bool
-	keys                    []APIKey
-	requestsPerSecondPerKey int
-	workersPerKey           int
-	databasePoolSize        int
-	pollCycle               time.Duration
-	scheduleBatchSize       int
-	leaseDuration           time.Duration
-	maximumRetries          int
-	retryBaseDelay          time.Duration
-	retryMaximumDelay       time.Duration
-	retryJitterFraction     float64
-	interactiveCooldown     time.Duration
-	schedulerInterval       time.Duration
-	workerIdleInterval      time.Duration
-	connectionTimeout       time.Duration
-	responseHeaderTimeout   time.Duration
-	totalRequestTimeout     time.Duration
-	maximumResponseBytes    int64
-	healthListenAddress     string
-	collectorVersion        string
+	databaseURL                 string
+	schemaVersion               int
+	trafficGateMode             trafficGateMode
+	archiveEndpoint             string
+	archiveRegion               string
+	archiveSecure               bool
+	archiveBucket               string
+	archiveInstanceID           string
+	archiveMarkerKey            string
+	archiveMarkerHash           string
+	archiveMarkerPayloadVersion string
+	spoolRoot                   string
+	spoolMaxBytes               int64
+	spoolMaxObjects             int64
+	spoolFreeSpaceFloor         uint64
+	spoolFreeInodeFloor         uint64
+	spoolSafetyAge              time.Duration
+	spoolOrphanSafetyAge        time.Duration
+	spoolCleanupInterval        time.Duration
+	spoolCleanupBatch           int
+	spoolStaleTempAge           time.Duration
+	archiveAccessKey            string
+	archiveSecretKey            string
+	officialAPIOrigin           string
+	officialAPIProxyURL         string
+	allowInsecureTestHTTP       bool
+	enableGlobalRankings        bool
+	keys                        []APIKey
+	requestsPerSecondPerKey     int
+	workersPerKey               int
+	databasePoolSize            int
+	pollCycle                   time.Duration
+	scheduleBatchSize           int
+	leaseDuration               time.Duration
+	maximumRetries              int
+	retryBaseDelay              time.Duration
+	retryMaximumDelay           time.Duration
+	retryJitterFraction         float64
+	interactiveCooldown         time.Duration
+	schedulerInterval           time.Duration
+	workerIdleInterval          time.Duration
+	connectionTimeout           time.Duration
+	responseHeaderTimeout       time.Duration
+	totalRequestTimeout         time.Duration
+	maximumResponseBytes        int64
+	healthListenAddress         string
+	collectorVersion            string
 }
 
 type maintenanceConfig struct {
@@ -93,34 +109,49 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 		return collectorConfig{}, err
 	}
 	config := collectorConfig{
-		databaseURL:             databaseURL,
-		schemaVersion:           1,
-		trafficGateMode:         bridgeTrafficGateMode,
-		archiveEndpoint:         strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_ENDPOINT")),
-		archiveBucket:           strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_BUCKET")),
-		archiveAccessKey:        archiveAccessKey,
-		archiveSecretKey:        archiveSecretKey,
-		officialAPIOrigin:       strings.TrimSpace(getenv("CLASHLENS_OFFICIAL_API_ORIGIN")),
-		officialAPIProxyURL:     strings.TrimSpace(getenv("CLASHLENS_OFFICIAL_API_PROXY_URL")),
-		requestsPerSecondPerKey: 30,
-		workersPerKey:           8,
-		databasePoolSize:        defaultCollectorDatabasePoolSize,
-		pollCycle:               5 * time.Minute,
-		scheduleBatchSize:       1000,
-		leaseDuration:           30 * time.Second,
-		maximumRetries:          4,
-		retryBaseDelay:          500 * time.Millisecond,
-		retryMaximumDelay:       30 * time.Second,
-		retryJitterFraction:     0.2,
-		interactiveCooldown:     30 * time.Second,
-		schedulerInterval:       time.Second,
-		workerIdleInterval:      250 * time.Millisecond,
-		connectionTimeout:       3 * time.Second,
-		responseHeaderTimeout:   5 * time.Second,
-		totalRequestTimeout:     10 * time.Second,
-		maximumResponseBytes:    4 << 20,
-		healthListenAddress:     strings.TrimSpace(getenv("CLASHLENS_HEALTH_LISTEN")),
-		collectorVersion:        strings.TrimSpace(getenv("CLASHLENS_COLLECTOR_VERSION")),
+		databaseURL:                 databaseURL,
+		schemaVersion:               1,
+		trafficGateMode:             bridgeTrafficGateMode,
+		archiveEndpoint:             strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_ENDPOINT")),
+		archiveRegion:               strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_REGION")),
+		archiveBucket:               strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_BUCKET")),
+		archiveInstanceID:           strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_INSTANCE_ID")),
+		archiveMarkerKey:            strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_MARKER_KEY")),
+		archiveMarkerHash:           strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_MARKER_HASH")),
+		archiveMarkerPayloadVersion: strings.TrimSpace(getenv("CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION")),
+		spoolRoot:                   strings.TrimSpace(getenv("CLASHLENS_SPOOL_ROOT")),
+		spoolMaxBytes:               16 << 30,
+		spoolMaxObjects:             1000000,
+		spoolFreeSpaceFloor:         1 << 30,
+		spoolFreeInodeFloor:         10000,
+		spoolSafetyAge:              24 * time.Hour,
+		spoolOrphanSafetyAge:        24 * time.Hour,
+		spoolCleanupInterval:        10 * time.Minute,
+		spoolCleanupBatch:           100,
+		spoolStaleTempAge:           30 * time.Minute,
+		archiveAccessKey:            archiveAccessKey,
+		archiveSecretKey:            archiveSecretKey,
+		officialAPIOrigin:           strings.TrimSpace(getenv("CLASHLENS_OFFICIAL_API_ORIGIN")),
+		officialAPIProxyURL:         strings.TrimSpace(getenv("CLASHLENS_OFFICIAL_API_PROXY_URL")),
+		requestsPerSecondPerKey:     30,
+		workersPerKey:               8,
+		databasePoolSize:            defaultCollectorDatabasePoolSize,
+		pollCycle:                   5 * time.Minute,
+		scheduleBatchSize:           1000,
+		leaseDuration:               30 * time.Second,
+		maximumRetries:              4,
+		retryBaseDelay:              500 * time.Millisecond,
+		retryMaximumDelay:           30 * time.Second,
+		retryJitterFraction:         0.2,
+		interactiveCooldown:         30 * time.Second,
+		schedulerInterval:           time.Second,
+		workerIdleInterval:          250 * time.Millisecond,
+		connectionTimeout:           3 * time.Second,
+		responseHeaderTimeout:       5 * time.Second,
+		totalRequestTimeout:         10 * time.Second,
+		maximumResponseBytes:        4 << 20,
+		healthListenAddress:         strings.TrimSpace(getenv("CLASHLENS_HEALTH_LISTEN")),
+		collectorVersion:            strings.TrimSpace(getenv("CLASHLENS_COLLECTOR_VERSION")),
 	}
 	if config.officialAPIOrigin == "" {
 		config.officialAPIOrigin = "https://api.clashofclans.com"
@@ -188,8 +219,70 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	if err := optionalInt(getenv, "CLASHLENS_MAXIMUM_RETRIES", &config.maximumRetries); err != nil {
 		return collectorConfig{}, err
 	}
-	if err := optionalInt64(getenv, "CLASHLENS_MAXIMUM_RESPONSE_BYTES", &config.maximumResponseBytes); err != nil {
+	if value := strings.TrimSpace(getenv("CLASHLENS_MAX_BODY_BYTES")); value != "" {
+		if err := optionalInt64(getenv, "CLASHLENS_MAX_BODY_BYTES", &config.maximumResponseBytes); err != nil {
+			return collectorConfig{}, err
+		}
+	} else if err := optionalInt64(getenv, "CLASHLENS_MAXIMUM_RESPONSE_BYTES", &config.maximumResponseBytes); err != nil {
 		return collectorConfig{}, err
+	}
+	config.spoolRoot = strings.TrimSpace(config.spoolRoot)
+	if config.archiveRegion == "" {
+		config.archiveRegion = "us-east-1"
+	}
+	for _, setting := range []struct {
+		name   string
+		target *time.Duration
+	}{
+		{name: "CLASHLENS_SPOOL_SAFETY_AGE_SECONDS", target: &config.spoolSafetyAge},
+		{name: "CLASHLENS_SPOOL_ORPHAN_SAFETY_AGE_SECONDS", target: &config.spoolOrphanSafetyAge},
+		{name: "CLASHLENS_SPOOL_CLEANUP_INTERVAL_SECONDS", target: &config.spoolCleanupInterval},
+		{name: "CLASHLENS_SPOOL_STALE_TEMP_AGE_SECONDS", target: &config.spoolStaleTempAge},
+	} {
+		if value := strings.TrimSpace(getenv(setting.name)); value != "" {
+			seconds, parseError := strconv.Atoi(value)
+			if parseError != nil || seconds <= 0 {
+				return collectorConfig{}, fmt.Errorf("%s must be a positive integer", setting.name)
+			}
+			*setting.target = time.Duration(seconds) * time.Second
+		}
+	}
+	if err := optionalInt64(getenv, "CLASHLENS_SPOOL_MAX_BYTES", &config.spoolMaxBytes); err != nil {
+		return collectorConfig{}, err
+	}
+	if err := optionalInt64(getenv, "CLASHLENS_SPOOL_MAX_OBJECTS", &config.spoolMaxObjects); err != nil {
+		return collectorConfig{}, err
+	}
+	var freeSpaceFloor, freeInodeFloor int64
+	freeSpaceFloor, freeInodeFloor = int64(config.spoolFreeSpaceFloor), int64(config.spoolFreeInodeFloor)
+	if err := optionalInt64(getenv, "CLASHLENS_SPOOL_FREE_SPACE_FLOOR", &freeSpaceFloor); err != nil {
+		return collectorConfig{}, err
+	}
+	if err := optionalInt64(getenv, "CLASHLENS_SPOOL_FREE_INODE_FLOOR", &freeInodeFloor); err != nil {
+		return collectorConfig{}, err
+	}
+	config.spoolFreeSpaceFloor, config.spoolFreeInodeFloor = uint64(freeSpaceFloor), uint64(freeInodeFloor)
+	if err := optionalInt(getenv, "CLASHLENS_SPOOL_CLEANUP_BATCH", &config.spoolCleanupBatch); err != nil {
+		return collectorConfig{}, err
+	}
+	if config.schemaVersion >= 3 {
+		if config.spoolRoot == "" {
+			return collectorConfig{}, errors.New("CLASHLENS_SPOOL_ROOT is required for schema version 3")
+		}
+		if config.archiveInstanceID == "" || config.archiveMarkerKey == "" || config.archiveMarkerPayloadVersion == "" || len(config.archiveMarkerHash) != sha256HexLength {
+			return collectorConfig{}, errors.New("archive instance ID and marker contract are required for schema version 3")
+		}
+		if _, err := hex.DecodeString(config.archiveMarkerHash); err != nil {
+			return collectorConfig{}, errors.New("archive marker hash must be lowercase SHA-256")
+		}
+	}
+	if config.spoolRoot != "" {
+		if err := validateSpoolRoot(config.spoolRoot); err != nil {
+			return collectorConfig{}, err
+		}
+		if config.spoolOrphanSafetyAge < config.spoolStaleTempAge || config.spoolOrphanSafetyAge < config.leaseDuration*time.Duration(config.maximumRetries+1) {
+			return collectorConfig{}, errors.New("spool orphan safety age must cover retry and stale-temporary windows")
+		}
 	}
 	if err := optionalInt(getenv, "CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", &config.requestsPerSecondPerKey); err != nil {
 		return collectorConfig{}, err
