@@ -350,9 +350,6 @@ func TestS3ArchiveDuplicateStoreProbe(t *testing.T) {
 	rawDigest := sha256.Sum256(rawBody)
 	rawHash := hex.EncodeToString(rawDigest[:])
 	rawIterations := duplicates
-	if rawIterations > 1000 {
-		rawIterations = 1000
-	}
 	var hashNanos, operationNanos int64
 	runRaw := func(index int) error {
 		reservation, reserveErr := rawSpool.reserve(int64(len(rawBody)))
