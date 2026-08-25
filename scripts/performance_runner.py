@@ -884,7 +884,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
     collector_probe = _collector_probe(arguments.skip_collector_probe)
     duplicate_archive_probe = (
         _collector_archive_probe(arguments.duplicate_observations)
-        if arguments.mode == "duplicate-heavy" and not arguments.skip_collector_probe else None
+        if arguments.mode == "duplicate-heavy" else None
     )
     samples = []
     populations = arguments.populations if arguments.mode in {"reset-boundary", "correction"} else [0]
