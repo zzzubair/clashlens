@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -346,4 +347,158 @@ func TestEvidenceSpoolSubstitutionRaceIsRejected(t *testing.T) {
 		t.Fatalf("substituted directory was populated: %q", got)
 	}
 	_ = evidence
+}
+
+func TestEvidenceSpoolRejectsSymlinkedRootParent(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(real, 0700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newEvidenceSpool(spoolConfig{root: filepath.Join(link, "spool"), maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour}); err == nil {
+		t.Fatal("symlinked root parent accepted")
+	}
+}
+
+func TestEvidenceSpoolListingConsumersDoNotFollowSubstitution(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	spool, err := newEvidenceSpool(spoolConfig{root: root, maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.close()
+	outside := filepath.Join(t.TempDir(), "outside")
+	body := bytes.Repeat([]byte("o"), 8192)
+	if err := os.WriteFile(outside, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	staleTime := time.Now().Add(-2 * time.Hour)
+	if err := os.Symlink(outside, filepath.Join(root, "tmp", "substituted.tmp")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(root, "tmp", "substituted.tmp"), staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := spool.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := spool.ledger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.TemporaryBytes != 0 || ledger.TemporaryObjects != 0 {
+		t.Fatalf("reconcile followed substituted symlink into the ledger: %+v", ledger)
+	}
+	if err := spool.sweepStale(time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(outside)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("outside target disturbed by sweep: %v", err)
+	}
+}
+
+func TestEvidenceSpoolAbandonFailureKeepsReservationAlive(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-based unlink injection requires a non-root tester")
+	}
+	root := filepath.Join(t.TempDir(), "spool")
+	spool, err := newEvidenceSpool(spoolConfig{root: root, maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.close()
+	reservation, err := spool.reserve(1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.Repeat([]byte("x"), 2048)
+	tempPath := filepath.Join(root, "tmp", "abandoned.tmp")
+	if err := os.WriteFile(tempPath, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	tmpDir := filepath.Join(root, "tmp")
+	if err := os.Chmod(tmpDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(tmpDir, 0700)
+	// Unlink now fails and the abandoned-transfer ledger read is unreadable,
+	// so the whole abandonment must fail instead of silently losing bytes.
+	capacityPath := filepath.Join(root, ".control", "capacity.json")
+	if err := os.WriteFile(capacityPath, []byte("corrupted"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := spool.removeOrAbandonTemporary(tempPath); err == nil {
+		t.Fatal("failed abandonment did not propagate an error")
+	}
+	if reservation.released {
+		t.Fatal("reservation released despite failed abandonment transfer")
+	}
+	if _, statErr := os.Stat(reservation.path); statErr != nil {
+		t.Fatalf("reservation record vanished: %v", statErr)
+	}
+	if _, statErr := os.Stat(tempPath); statErr != nil {
+		t.Fatalf("surviving temporary vanished during failed transfer: %v", statErr)
+	}
+	// Once the ledger is readable again the transfer succeeds durably and
+	// only then may the reservation be released.
+	if err := os.Remove(capacityPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(tmpDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := reservation.discardFailedTemporary(tempPath); err != nil {
+		t.Fatalf("discard after recovery failed: %v", err)
+	}
+	if !reservation.released {
+		t.Fatal("reservation not released after durable transfer")
+	}
+}
+
+func TestEvidenceSpoolReconcileDoesNotDoubleCountBoundTemporary(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	spool, err := newEvidenceSpool(spoolConfig{root: root, maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.close()
+	tempPath := filepath.Join(root, "tmp", "bound.tmp")
+	boundBody := bytes.Repeat([]byte("b"), 4096)
+	if err := os.WriteFile(tempPath, boundBody, 0600); err != nil {
+		t.Fatal(err)
+	}
+	const limit = 8192
+	recordPath := filepath.Join(root, ".control", "reservations", "manual.json")
+	recordFile, err := os.OpenFile(recordPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recordFile.Close()
+	fmt.Fprintf(recordFile, `{"limit":%d,"temporary_path":%q}`, limit, tempPath)
+	if err := syscall.Flock(int(recordFile.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = syscall.Flock(int(recordFile.Fd()), syscall.LOCK_UN) }()
+	if err := spool.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := spool.ledger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.ReservedBytes != limit || ledger.ReservedObjects != 1 {
+		t.Fatalf("reserved accounting wrong: %+v", ledger)
+	}
+	if ledger.TemporaryBytes != 0 || ledger.TemporaryObjects != 0 {
+		t.Fatalf("live reservation-bound temp double-counted as temporary: %+v", ledger)
+	}
+	expectedHighWater := ledger.FinalBytes + ledger.TemporaryBytes + ledger.AbandonedTempBytes + ledger.ReservedBytes
+	if ledger.HighWaterBytes < expectedHighWater {
+		t.Fatalf("high water below components: %+v", ledger)
+	}
 }

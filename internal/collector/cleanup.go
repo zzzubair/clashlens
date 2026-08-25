@@ -29,7 +29,7 @@ func (s *evidenceSpool) cleanup(ctx context.Context, now time.Time, safetyAge ti
 			if count >= batch || entry.IsDir() || len(entry.Name()) != sha256HexLength {
 				continue
 			}
-			info, statErr := entry.Info()
+			info, statErr := statSpoolRelative(s.cfg.root, filepath.Join("sha256", prefix.Name(), entry.Name()), false)
 			if statErr != nil || now.Sub(info.ModTime()) < safetyAge {
 				continue
 			}

@@ -153,9 +153,22 @@ func mkdirAllSpoolRelative(root, path string, mode uint32) error {
 	return nil
 }
 
+// spoolListEntry carries only the dirent-derived name and type. It
+// deliberately exposes no Info(): DirEntry.Info() performs a path-based
+// lstat whose lookup symlink substitution could redirect outside the
+// trusted descriptor; callers needing metadata must use statSpoolRelative
+// on the known relative name.
+type spoolListEntry struct {
+	name  string
+	isDir bool
+}
+
+func (e spoolListEntry) Name() string { return e.name }
+func (e spoolListEntry) IsDir() bool  { return e.isDir }
+
 // listSpoolRelative lists a descendant directory through a trusted root
-// descriptor. Entries never contain absolute paths.
-func listSpoolRelative(root, dir string) ([]os.DirEntry, error) {
+// descriptor. Entries never contain absolute paths or lazy metadata.
+func listSpoolRelative(root, dir string) ([]spoolListEntry, error) {
 	fd, err := openSpoolRelative(root, dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -163,11 +176,18 @@ func listSpoolRelative(root, dir string) ([]os.DirEntry, error) {
 		}
 		return nil, err
 	}
-	// Name the file handle after the real directory so DirEntry.Info()
-	// resolves against the validated root instead of an unrelated CWD.
-	file := os.NewFile(uintptr(fd), filepath.Join(root, dir))
+	file := os.NewFile(uintptr(fd), dir)
 	defer file.Close()
-	return file.ReadDir(-1)
+	raw, err := file.ReadDir(-1)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]spoolListEntry, 0, len(raw))
+	for _, entry := range raw {
+		entryType := entry.Type()
+		entries = append(entries, spoolListEntry{name: entry.Name(), isDir: entryType.IsDir()})
+	}
+	return entries, nil
 }
 
 // openReservationRecordRelative opens a control record read-write through the

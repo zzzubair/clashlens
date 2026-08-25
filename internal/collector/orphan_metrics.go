@@ -40,7 +40,7 @@ func (s *evidenceSpool) orphanMetrics(ctx context.Context, catalogue func(contex
 				return count, bytes, pendingErr
 			}
 			if !inCatalogue && !inPending {
-				if info, statErr := entry.Info(); statErr == nil {
+				if info, statErr := statSpoolRelative(s.cfg.root, filepath.Join("sha256", prefix.Name(), entry.Name()), false); statErr == nil && info.Mode().IsRegular() {
 					count++
 					bytes += info.Size()
 				}

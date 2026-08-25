@@ -114,12 +114,43 @@ type evidenceSpool struct {
 	faults *spoolFaults
 }
 
+// rejectSymlinkedRootComponents walks every existing component of the
+// configured root and refuses symlinked parents. openat2 protects only
+// descendants of the opened root inode, so the root lookup itself is the one
+// place where absolute validation is allowed (and required).
+func rejectSymlinkedRootComponents(root string) error {
+	absolute := filepath.Clean(root)
+	current := string(filepath.Separator)
+	for _, part := range strings.Split(absolute, string(filepath.Separator)) {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Remaining components do not exist yet; newEvidenceSpool
+				// revalidates after creating them.
+				return nil
+			}
+			return fmt.Errorf("inspect spool root component %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("spool root component %s must not be a symlink", current)
+		}
+	}
+	return nil
+}
+
 func validateSpoolRoot(root string) error {
 	if root == "" {
 		return errors.New("spool root is required")
 	}
 	if !filepath.IsAbs(root) || filepath.Clean(root) == "/" {
 		return errors.New("spool root must be an absolute non-root path")
+	}
+	if err := rejectSymlinkedRootComponents(root); err != nil {
+		return err
 	}
 	info, err := os.Lstat(root)
 	if err != nil {
@@ -150,6 +181,11 @@ func newEvidenceSpool(cfg spoolConfig) (*evidenceSpool, error) {
 	}
 	if err := os.Chmod(cfg.root, 0700); err != nil {
 		return nil, fmt.Errorf("protect spool root: %w", err)
+	}
+	// Revalidate every root component now that creation completed; a racing
+	// substitution between validation and MkdirAll must not be trusted.
+	if err := rejectSymlinkedRootComponents(cfg.root); err != nil {
+		return nil, err
 	}
 	for _, dir := range []string{".locks", filepath.Join(".control", "reservations"), filepath.Join(".control", "operations"), "tmp", "sha256"} {
 		full := filepath.Join(cfg.root, dir)
@@ -461,7 +497,7 @@ func (s *evidenceSpool) reconcile() error {
 			}
 			if body, readErr := readSpoolRelative(s.cfg.root, path, 1<<20); readErr == nil && json.Unmarshal(body, &record) == nil && record.TemporaryPath != "" {
 				if safeErr := safeSpoolPath(s.cfg.root, record.TemporaryPath); safeErr == nil {
-					info, statErr := statSpoolRelative(s.cfg.root, record.TemporaryPath, true)
+					info, statErr := statSpoolRelative(s.cfg.root, record.TemporaryPath, false)
 					if statErr == nil {
 						operationTempBytes += info.Size()
 						operationTempObjects++
@@ -477,15 +513,15 @@ func (s *evidenceSpool) reconcile() error {
 	}
 	entries, _ := listSpoolRelative(s.cfg.root, "tmp")
 	for _, entry := range entries {
-		info, e := entry.Info()
-		if e == nil {
-			relative := filepath.Join("tmp", entry.Name())
-			if coveredTempPaths[relative] || coveredTempPaths[filepath.Join(s.cfg.root, relative)] {
-				// A live writer's reservation covers this temporary file.
-				ledger.TemporaryBytes += info.Size()
-				ledger.TemporaryObjects++
-				continue
-			}
+		relative := filepath.Join("tmp", entry.Name())
+		if coveredTempPaths[relative] || coveredTempPaths[filepath.Join(s.cfg.root, relative)] {
+			// A live writer's reservation covers this temporary file; its
+			// size already sits in ReservedBytes, so counting it here too
+			// would double-count against admission.
+			continue
+		}
+		info, e := statSpoolRelative(s.cfg.root, relative, false)
+		if e == nil && info.Mode().IsRegular() {
 			// Unreferenced temporary debris stays durably accounted as
 			// abandoned until stale cleanup reclaims it. Dead-operation temps
 			// removed above are subtracted from this classification.
@@ -717,33 +753,57 @@ func (r *spoolReservation) bindTemporaryPath(tempPath string) error {
 	return r.file.Sync()
 }
 
-func (s *evidenceSpool) removeOrAbandonTemporary(tempPath string) {
+func (s *evidenceSpool) removeOrAbandonTemporary(tempPath string) error {
 	if err := s.lockCapacity(); err != nil {
-		return
+		return err
 	}
 	defer s.unlockCapacity()
-	s.removeOrAbandonTemporaryLocked(tempPath)
+	return s.removeOrAbandonTemporaryLocked(tempPath)
 }
 
 // removeOrAbandonTemporaryLocked deletes a failed temporary file while the
 // capacity lock is held; if deletion fails, its actual size transfers into
 // the durable abandoned-temporary ledger so admission keeps accounting for it.
-func (s *evidenceSpool) removeOrAbandonTemporaryLocked(tempPath string) {
-	if unlinkErr := unlinkSpoolRelative(s.cfg.root, tempPath); unlinkErr == nil || os.IsNotExist(unlinkErr) {
-		return
+// Any failure is returned so callers can keep the covering reservation alive:
+// releasing it would free capacity that the surviving temporary still holds.
+func (s *evidenceSpool) removeOrAbandonTemporaryLocked(tempPath string) error {
+	unlinkErr := unlinkSpoolRelative(s.cfg.root, tempPath)
+	if unlinkErr == nil || os.IsNotExist(unlinkErr) {
+		return nil
 	}
 	info, statErr := statSpoolRelative(s.cfg.root, tempPath, true)
 	if statErr != nil {
-		return
+		if os.IsNotExist(statErr) {
+			return nil
+		}
+		return statErr
 	}
 	ledger, ledgerErr := s.ledger()
 	if ledgerErr != nil {
-		return
+		return ledgerErr
 	}
 	ledger.AbandonedTempBytes += info.Size()
 	ledger.AbandonedTempObjects++
 	ledger.HighWaterBytes = maxInt64(ledger.HighWaterBytes, ledger.FinalBytes+ledger.TemporaryBytes+ledger.AbandonedTempBytes+ledger.ReservedBytes)
-	_ = s.writeLedger(ledger)
+	return s.writeLedger(ledger)
+}
+
+// discardFailedTemporary removes the failed temporary or transfers its size
+// into the durable abandoned ledger, then releases the reservation. When the
+// transfer fails the reservation stays alive — its limit keeps covering the
+// leaked temporary — and the error propagates to the caller.
+func (r *spoolReservation) discardFailedTemporary(tempPath string) error {
+	if err := r.spool.removeOrAbandonTemporary(tempPath); err != nil {
+		return err
+	}
+	return r.release()
+}
+
+func (r *spoolReservation) discardFailedTemporaryLocked(tempPath string) error {
+	if err := r.spool.removeOrAbandonTemporaryLocked(tempPath); err != nil {
+		return err
+	}
+	return r.releaseLocked()
 }
 
 func (s *evidenceSpool) beginOperation(hash, temporaryPath string) (*os.File, string, error) {
@@ -814,8 +874,9 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 	}
 	if err := reservation.bindTemporaryPath(tempPath); err != nil {
 		_ = file.Close()
-		s.removeOrAbandonTemporary(tempPath)
-		_ = reservation.release()
+		if abandonErr := reservation.discardFailedTemporary(tempPath); abandonErr != nil {
+			return localEvidence{}, abandonErr
+		}
 		return localEvidence{}, err
 	}
 	hash := sha256.New()
@@ -828,8 +889,9 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 	}
 	if err != nil || written > reservation.limit {
 		_ = file.Close()
-		s.removeOrAbandonTemporary(tempPath)
-		_ = reservation.release()
+		if abandonErr := reservation.discardFailedTemporary(tempPath); abandonErr != nil {
+			return localEvidence{}, abandonErr
+		}
 		if written > reservation.limit {
 			err = errors.New("evidence body exceeds configured limit")
 		}
@@ -846,56 +908,64 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 		fileSyncErr = closeErr
 	}
 	if fileSyncErr != nil || err != nil {
-		s.removeOrAbandonTemporary(tempPath)
-		_ = reservation.release()
+		if abandonErr := reservation.discardFailedTemporary(tempPath); abandonErr != nil {
+			return localEvidence{}, abandonErr
+		}
 		return localEvidence{}, fileSyncErr
 	}
 	digest := hex.EncodeToString(hash.Sum(nil))
 	stripeIndex, err := s.stripeIndex(digest)
 	if err != nil {
-		s.removeOrAbandonTemporary(tempPath)
-		_ = reservation.release()
+		if abandonErr := reservation.discardFailedTemporary(tempPath); abandonErr != nil {
+			return localEvidence{}, abandonErr
+		}
 		return localEvidence{}, err
 	}
 	heldIndex := -1
 	if len(heldStripe) > 0 {
 		heldIndex, err = s.heldStripeIndex(heldStripe[0])
 		if err != nil || heldIndex != stripeIndex {
-			s.removeOrAbandonTemporary(tempPath)
-			_ = reservation.release()
+			if abandonErr := reservation.discardFailedTemporary(tempPath); abandonErr != nil {
+				return localEvidence{}, abandonErr
+			}
 			return localEvidence{}, errors.New("held spool stripe does not match evidence hash")
 		}
 	}
 	if heldIndex != stripeIndex {
 		if err := s.lockStripe(stripeIndex, true); err != nil {
-			s.removeOrAbandonTemporary(tempPath)
-			_ = reservation.release()
+			if abandonErr := reservation.discardFailedTemporary(tempPath); abandonErr != nil {
+				return localEvidence{}, abandonErr
+			}
 			return localEvidence{}, err
 		}
 		defer s.unlockStripe(stripeIndex)
 	}
 	operation, operationPath, err := s.beginOperation(digest, tempPath)
 	if err != nil {
-		s.removeOrAbandonTemporary(tempPath)
-		_ = reservation.release()
+		if abandonErr := reservation.discardFailedTemporary(tempPath); abandonErr != nil {
+			return localEvidence{}, abandonErr
+		}
 		return localEvidence{}, err
 	}
 	defer func() { _ = s.finishOperation(operation, operationPath) }()
 	if err := s.lockCapacity(); err != nil {
-		s.removeOrAbandonTemporary(tempPath)
-		_ = reservation.release()
+		if abandonErr := reservation.discardFailedTemporary(tempPath); abandonErr != nil {
+			return localEvidence{}, abandonErr
+		}
 		return localEvidence{}, err
 	}
 	defer s.unlockCapacity()
 	final := s.finalPath(digest)
 	if err := safeSpoolPath(s.cfg.root, final); err != nil {
-		s.removeOrAbandonTemporaryLocked(tempPath)
-		_ = reservation.releaseLocked()
+		if abandonErr := reservation.discardFailedTemporaryLocked(tempPath); abandonErr != nil {
+			return localEvidence{}, abandonErr
+		}
 		return localEvidence{}, err
 	}
 	if err := mkdirAllSpoolRelative(s.cfg.root, filepath.Dir(final), 0700); err != nil {
-		s.removeOrAbandonTemporaryLocked(tempPath)
-		_ = reservation.releaseLocked()
+		if abandonErr := reservation.discardFailedTemporaryLocked(tempPath); abandonErr != nil {
+			return localEvidence{}, abandonErr
+		}
 		return localEvidence{}, err
 	}
 	_, statErr := statSpoolRelative(s.cfg.root, filepath.Join("sha256", digest[:2], digest), false)
@@ -909,11 +979,14 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 	var replacedSize int64
 	if created {
 		if err := promote(); err != nil && !os.IsExist(err) {
-			s.removeOrAbandonTemporaryLocked(tempPath)
-			_ = reservation.releaseLocked()
+			if abandonErr := reservation.discardFailedTemporaryLocked(tempPath); abandonErr != nil {
+				return localEvidence{}, abandonErr
+			}
 			return localEvidence{}, err
 		}
-		s.removeOrAbandonTemporaryLocked(tempPath)
+		if abandonErr := s.removeOrAbandonTemporaryLocked(tempPath); abandonErr != nil {
+			return localEvidence{}, abandonErr
+		}
 		if err := s.syncDir(filepath.Dir(final)); err != nil {
 			_ = reservation.releaseLocked()
 			return localEvidence{}, err
@@ -930,17 +1003,22 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 				return localEvidence{}, removeErr
 			}
 			if err := promote(); err != nil {
-				s.removeOrAbandonTemporaryLocked(tempPath)
-				_ = reservation.releaseLocked()
+				if abandonErr := reservation.discardFailedTemporaryLocked(tempPath); abandonErr != nil {
+					return localEvidence{}, abandonErr
+				}
 				return localEvidence{}, err
 			}
-			s.removeOrAbandonTemporaryLocked(tempPath)
+			if abandonErr := s.removeOrAbandonTemporaryLocked(tempPath); abandonErr != nil {
+				return localEvidence{}, abandonErr
+			}
 			if err := s.syncDir(filepath.Dir(final)); err != nil {
 				_ = reservation.releaseLocked()
 				return localEvidence{}, err
 			}
 		} else {
-			s.removeOrAbandonTemporaryLocked(tempPath)
+			if abandonErr := s.removeOrAbandonTemporaryLocked(tempPath); abandonErr != nil {
+				return localEvidence{}, abandonErr
+			}
 		}
 	}
 	ledger, err := s.ledger()
@@ -1059,8 +1137,8 @@ func (s *evidenceSpool) sweepStale(now time.Time) error {
 	removed := int64(0)
 	removedBytes := int64(0)
 	for _, e := range entries {
-		info, er := e.Info()
-		if er != nil || now.Sub(info.ModTime()) <= s.cfg.staleTempAge {
+		info, er := statSpoolRelative(s.cfg.root, filepath.Join("tmp", e.Name()), false)
+		if er != nil || !info.Mode().IsRegular() || now.Sub(info.ModTime()) <= s.cfg.staleTempAge {
 			continue
 		}
 		temporaryPath := filepath.Join(s.cfg.root, "tmp", e.Name())
