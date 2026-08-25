@@ -189,6 +189,19 @@ func (w *worker) collectEndpoint(
 	endpoint endpointName,
 ) error {
 	for {
+		rawArchive, rawEnabled := w.archive.(rawEvidenceStore)
+		if productionArchive, ok := w.archive.(*s3Archive); ok && productionArchive.spool == nil {
+			rawEnabled = false
+		}
+		if rawEnabled {
+			resumed, resumeErr := w.resumePendingEndpoint(ctx, rawArchive, job, attemptID, endpoint)
+			if resumed {
+				return resumeErr
+			}
+			if resumeErr != nil {
+				return resumeErr
+			}
+		}
 		var key APIKey
 		var err error
 		if job.pool == interactivePool || job.retryClass == "recovery" {
@@ -208,6 +221,22 @@ func (w *worker) collectEndpoint(
 		if err != nil {
 			return err
 		}
+		var reservation *spoolReservation
+		rawArchive, rawEnabled = w.archive.(rawEvidenceStore)
+		if productionArchive, ok := w.archive.(*s3Archive); ok && productionArchive.spool == nil {
+			rawEnabled = false
+		}
+		if rawEnabled {
+			reservation, err = rawArchive.reserve(ctx)
+			if err != nil {
+				nextRetryAt := w.config.retryPolicy.nextRetryAt(time.Now().UTC(), requestCount, "")
+				if dependencyErr := w.store.recordDependencyFailure(ctx, job, attemptID, endpoint, "degraded_capacity", nextRetryAt); dependencyErr != nil {
+					return errors.Join(err, dependencyErr)
+				}
+				w.config.metrics.recordStorageError("degraded_capacity")
+				return err
+			}
+		}
 		w.config.metrics.recordAPIRequest(string(endpoint), string(job.pool))
 
 		response, err := w.api.fetch(ctx, endpoint, job.normalizedTag, key.Secret)
@@ -222,6 +251,9 @@ func (w *worker) collectEndpoint(
 		}
 		w.config.metrics.recordStageDuration("official_api_"+string(endpoint), duration)
 		if err != nil {
+			if reservation != nil {
+				_ = reservation.release()
+			}
 			failedAt := time.Now().UTC()
 			nextRetryAt := w.config.retryPolicy.nextRetryAt(failedAt, requestCount, "")
 			w.config.metrics.recordAPIOutcome(string(endpoint), transportFailureCategory(err))
@@ -287,16 +319,46 @@ func (w *worker) collectEndpoint(
 				return err
 			}
 		}
+		outcome := "observed"
+		var nextRetryAt *time.Time
+		if retryableHTTPStatus(response.statusCode) {
+			w.config.metrics.recordRetry(string(endpoint))
+			retryAt := w.config.retryPolicy.nextRetryAt(response.responseCompletedAt, requestCount, response.headers["Retry-After"])
+			nextRetryAt = &retryAt
+			outcome = "retrying"
+		}
+		if authenticationFailure {
+			w.config.metrics.recordRetry(string(endpoint))
+			retryAt := response.responseCompletedAt
+			nextRetryAt = &retryAt
+			outcome = "retrying"
+		}
 		digest := sha256.Sum256(response.body)
 		hash := hex.EncodeToString(digest[:])
 		archiveStartedAt := time.Now()
-		archiveReference, err := w.archive.store(ctx, hash, response.body)
+		var archiveReference string
+		if rawEnabled {
+			err = rawArchive.secureAndCommit(ctx, reservation, response.body, func(commitCtx context.Context, reference, committedHash string, _ int64) error {
+				archiveReference = reference
+				return w.store.commitObservation(commitCtx, job, attemptID, endpoint, requestCount, response, committedHash, reference, w.config.collectorVersion, key.Label, outcome, nextRetryAt)
+			}, func(pendingCtx context.Context, pendingHash, pendingReference string, pendingSize int64, pendingResponse officialResponse, _ string) error {
+				return w.store.setPendingRemoteVerification(pendingCtx, job, attemptID, endpoint, pendingHash, pendingReference, pendingSize, requestCount, pendingResponse, key.Label)
+			}, response)
+		} else {
+			archiveReference, err = w.archive.store(ctx, hash, response.body)
+		}
 		w.config.metrics.recordStageDuration("archive_write", time.Since(archiveStartedAt))
-		if err != nil {
-			failureCategory := "archive_write_failed"
-			if errors.Is(err, errArchiveChecksumMismatch) {
-				failureCategory = "archive_checksum_mismatch"
+		if rawEnabled && err == nil {
+			if authenticationFailure {
+				continue
 			}
+			return nil
+		}
+		if err != nil {
+			if errors.Is(err, errPendingRemoteVerification) {
+				return err
+			}
+			failureCategory := archiveFailureCategory(err)
 			w.config.metrics.recordStorageError(failureCategory)
 			w.config.metrics.recordRetry(string(endpoint))
 			if w.config.logger != nil {
@@ -324,24 +386,6 @@ func (w *worker) collectEndpoint(
 			)
 		}
 
-		outcome := "observed"
-		var nextRetryAt *time.Time
-		if retryableHTTPStatus(response.statusCode) {
-			w.config.metrics.recordRetry(string(endpoint))
-			retryAt := w.config.retryPolicy.nextRetryAt(
-				response.responseCompletedAt,
-				requestCount,
-				response.headers["Retry-After"],
-			)
-			nextRetryAt = &retryAt
-			outcome = "retrying"
-		}
-		if authenticationFailure {
-			w.config.metrics.recordRetry(string(endpoint))
-			retryAt := response.responseCompletedAt
-			nextRetryAt = &retryAt
-			outcome = "retrying"
-		}
 		observationCommitStartedAt := time.Now()
 		err = w.store.commitObservation(
 			ctx,

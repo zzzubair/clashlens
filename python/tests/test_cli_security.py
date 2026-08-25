@@ -12,6 +12,7 @@ from clashlens.cli import (
     _archive,
     _file_value,
     _load_hmac_keys,
+    _run_ready,
     build_parser,
     main,
 )
@@ -342,3 +343,67 @@ def test_current_season_republication_command_rejects_unbounded_batches(
             ]
         )
     assert excinfo.value.code == 2
+
+
+def _ready_namespace() -> Namespace:
+    return Namespace(
+        database_url="postgresql://stub",
+        database_url_file="",
+        expected_contract_version=3,
+        archive_endpoint="archive.example.test:9000",
+        archive_bucket="evidence",
+        archive_region="us-east-1",
+        archive_access_key="access",
+        archive_secret_key="secret",
+        archive_insecure_test_only=False,
+    )
+
+
+class _ReadyDatabaseStub:
+    def __init__(self, _url: str) -> None:
+        pass
+
+    def is_ready(self, *, expected_contract_version: int) -> bool:
+        del expected_contract_version
+        return True
+
+    def close(self) -> None:
+        return None
+
+
+class _ReadyArchiveStub:
+    def __init__(self, remote_health: str) -> None:
+        self._remote_health = remote_health
+
+    def check_ready(self) -> bool:
+        return True
+
+    def readiness(self) -> dict[str, object]:
+        return {"ready": True}
+
+    def check_marker_health(self) -> str:
+        return self._remote_health
+
+
+@pytest.mark.parametrize(
+    ("remote_health", "expected_exit"),
+    [("terminal", 1), ("degraded", 0), ("ready", 0)],
+)
+def test_cli_ready_fails_on_terminal_marker_mismatch_only(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    remote_health: str,
+    expected_exit: int,
+) -> None:
+    monkeypatch.setattr("clashlens.cli.Database", _ReadyDatabaseStub)
+    monkeypatch.setattr(
+        "clashlens.cli._archive",
+        lambda _arguments, **_kwargs: _ReadyArchiveStub(remote_health),
+    )
+
+    exit_code = _run_ready(_ready_namespace())
+
+    assert exit_code == expected_exit
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["remote_health"] == remote_health
+    assert payload["status"] == ("ready" if expected_exit == 0 else "not_ready")

@@ -24,7 +24,7 @@ import uvicorn
 
 from .api import create_app
 from .api_db import ApiDatabase
-from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader
+from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
 from .db import MAX_POOL_SIZE, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
 from .profile import normalize_player_tag
@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _database_argument(ready)
     _archive_arguments(ready)
-    ready.add_argument("--expected-contract-version", type=int, default=2)
+    ready.add_argument("--expected-contract-version", type=int, default=3)
 
     queue_status = subparsers.add_parser(
         "queue-status", help="report aggregate production worker queue health"
@@ -273,7 +273,12 @@ def _run_worker(arguments: argparse.Namespace) -> int:
     _install_shutdown_handlers(stop_requested)
     try:
         stage_metrics = StageMetrics()
-        archive = _archive(arguments, pool_size=archive_pool_size)
+        try:
+            archive = _archive(arguments, pool_size=archive_pool_size, database=database)
+        except TypeError as error:
+            if "database" not in str(error):
+                raise
+            archive = _archive(arguments, pool_size=archive_pool_size)
         set_archive_pool_observer = getattr(
             archive, "set_pool_acquire_observer", None
         )
@@ -291,9 +296,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
 
         def process_batch() -> list[ProcessResult]:
             nonlocal next_queue_maintenance_at
-            # Archive-backed jobs must remain pending while the object store is
-            # unavailable. Check before maintenance as well as before either
-            # claim path so an outage cannot consume attempts or lease work.
+            # Local spool and PostgreSQL own claim readiness. Remote marker
+            # health is telemetry; known local duplicates remain processable.
             if not archive.check_ready():
                 return []
             current_time = monotonic()
@@ -354,6 +358,10 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                                 database, "pool_health", dict
                             )(),
                             "stages": stage_metrics.snapshot(),
+                            "archive": {
+                                "spool": getattr(archive, "readiness", lambda: {"ready": True})(),
+                                "remote_health": getattr(archive, "check_marker_health", lambda: "unconfigured")(),
+                            },
                         }
                     ),
                     flush=True,
@@ -369,6 +377,10 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     "results": [asdict(result) for result in recent_results],
                     "database_pool": getattr(database, "pool_health", dict)(),
                     "stages": stage_metrics.snapshot(),
+                    "archive": {
+                        "spool": getattr(archive, "readiness", lambda: {"ready": True})(),
+                        "remote_health": getattr(archive, "check_marker_health", lambda: "unconfigured")(),
+                    },
                 }
             )
         )
@@ -380,14 +392,20 @@ def _run_worker(arguments: argparse.Namespace) -> int:
 def _run_ready(arguments: argparse.Namespace) -> int:
     database = Database(_database_url(arguments))
     try:
-        archive = _archive(arguments)
+        archive = _archive(arguments, database=database)
         if not database.is_ready(
             expected_contract_version=arguments.expected_contract_version
         ):
             return 1
         if not archive.check_ready():
             return 1
-        print(json.dumps({"status": "ready"}))
+        remote_health = getattr(archive, "check_marker_health", lambda: "unconfigured")()
+        if remote_health == "terminal":
+            # A marker mismatch is terminal configuration drift, not an outage;
+            # readiness must fail so the operator resolves it before workers run.
+            print(json.dumps({"status": "not_ready", "spool": getattr(archive, "readiness", lambda: {"ready": True})(), "remote_health": remote_health}))
+            return 1
+        print(json.dumps({"status": "ready", "spool": getattr(archive, "readiness", lambda: {"ready": True})(), "remote_health": remote_health}))
         return 0
     finally:
         database.close()
@@ -419,6 +437,7 @@ def _archive_arguments(parser: argparse.ArgumentParser) -> None:
         "--archive-bucket",
         default=os.environ.get("CLASHLENS_ARCHIVE_BUCKET", "evidence"),
     )
+    parser.add_argument("--archive-region", default=os.environ.get("CLASHLENS_ARCHIVE_REGION", "us-east-1"))
     parser.add_argument(
         "--archive-access-key",
         default=os.environ.get("CLASHLENS_ARCHIVE_ACCESS_KEY", ""),
@@ -437,10 +456,19 @@ def _archive_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--archive-secure", action="store_true", default=True)
     parser.add_argument("--archive-insecure-test-only", action="store_true")
+    parser.add_argument("--spool-root", default=os.environ.get("CLASHLENS_SPOOL_ROOT", ""))
+    parser.add_argument("--spool-max-bytes", type=int, default=int(os.environ.get("CLASHLENS_SPOOL_MAX_BYTES", str(16 << 30))))
+    parser.add_argument("--spool-max-objects", type=int, default=int(os.environ.get("CLASHLENS_SPOOL_MAX_OBJECTS", "1000000")))
+    parser.add_argument("--spool-free-space-floor", type=int, default=int(os.environ.get("CLASHLENS_SPOOL_FREE_SPACE_FLOOR", "0")))
+    parser.add_argument("--spool-free-inode-floor", type=int, default=int(os.environ.get("CLASHLENS_SPOOL_FREE_INODE_FLOOR", "0")))
+    parser.add_argument("--archive-instance-id", default=os.environ.get("CLASHLENS_ARCHIVE_INSTANCE_ID", ""))
+    parser.add_argument("--archive-marker-key", default=os.environ.get("CLASHLENS_ARCHIVE_MARKER_KEY", ""))
+    parser.add_argument("--archive-marker-hash", default=os.environ.get("CLASHLENS_ARCHIVE_MARKER_HASH", ""))
+    parser.add_argument("--archive-marker-payload-version", default=os.environ.get("CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION", ""))
     parser.add_argument(
         "--archive-max-body-bytes",
         type=int,
-        default=int(os.environ.get("CLASHLENS_ARCHIVE_MAX_BODY_BYTES", "2000000")),
+        default=int(os.environ.get("CLASHLENS_MAX_BODY_BYTES", os.environ.get("CLASHLENS_ARCHIVE_MAX_BODY_BYTES", "4194304"))),
     )
     parser.add_argument(
         "--archive-connect-timeout-seconds",
@@ -464,7 +492,7 @@ def _archive_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _archive(arguments: argparse.Namespace, *, pool_size: int = 4) -> S3ArchiveReader:
+def _archive(arguments: argparse.Namespace, *, pool_size: int = 4, database: Database | None = None) -> S3ArchiveReader | SpoolFirstReader:
     if not arguments.archive_endpoint:
         raise ValueError("archive endpoint is required")
     access_key = _file_value(
@@ -479,9 +507,10 @@ def _archive(arguments: argparse.Namespace, *, pool_size: int = 4) -> S3ArchiveR
     )
     if not access_key or not secret_key:
         raise ValueError("archive access and secret key are required")
-    return S3ArchiveReader(
+    archive = S3ArchiveReader(
         endpoint=arguments.archive_endpoint,
         bucket=arguments.archive_bucket,
+        region=arguments.archive_region,
         access_key=access_key,
         secret_key=secret_key,
         secure=not arguments.archive_insecure_test_only,
@@ -492,7 +521,23 @@ def _archive(arguments: argparse.Namespace, *, pool_size: int = 4) -> S3ArchiveR
         max_retries=arguments.archive_max_retries,
         retry_backoff_seconds=arguments.archive_retry_backoff_seconds,
         pool_size=pool_size,
+        instance_id=arguments.archive_instance_id,
+        marker_key=arguments.archive_marker_key,
+        marker_hash=arguments.archive_marker_hash,
+        marker_payload_version=arguments.archive_marker_payload_version,
     )
+    if arguments.spool_root:
+        return SpoolFirstReader(
+            archive,
+            spool_root=arguments.spool_root,
+            max_body_bytes=arguments.archive_max_body_bytes,
+            max_bytes=arguments.spool_max_bytes,
+            max_objects=arguments.spool_max_objects,
+            free_space_floor=arguments.spool_free_space_floor,
+            free_inode_floor=arguments.spool_free_inode_floor,
+            database=database,
+        )
+    return archive
 
 
 def _database_url(arguments: argparse.Namespace) -> str:

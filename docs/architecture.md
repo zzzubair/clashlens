@@ -96,7 +96,11 @@ not internal IDs.
 
 The raw archive owns untouched official response bodies. Content-address each
 body by a cryptographic hash and retain one immutable body per hash while
-allowing many observation occurrences to reference it. Observation metadata is
+allowing many observation occurrences to reference it. The collector and Python
+workers share a bounded UID/GID-10001 spool at `sha256/<prefix>/<hash>`; fixed
+`flock` stripes protect reads, repair, promotion, and cleanup, while PostgreSQL
+`archive_catalogue` rows prove remote read-back before new observations commit.
+Observation metadata is
 append-only and records request scope, timing, status, response hash, archive
 reference, and source/collector provenance. Never overwrite evidence with a
 later response; track processing state separately.

@@ -5,14 +5,18 @@ import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 
 import pytest
+from minio.error import S3Error
 
 from clashlens.archive import (
     MAX_ARCHIVE_BODY_BYTES,
     ArchiveReadError,
+    ArchiveReadResult,
     S3ArchiveReader,
+    SpoolFirstReader,
     _BoundedResponse,
 )
 
@@ -60,6 +64,27 @@ def archive_server():
         server.server_close()
 
 
+def test_spool_reader_requires_matching_database_archive_instance_before_reuse(tmp_path: Path) -> None:
+    reader = S3ArchiveReader(
+        endpoint="archive.example.test:9000",
+        bucket="evidence",
+        region="fr-par",
+        access_key="test",
+        secret_key="test",
+        instance_id="instance-1",
+        marker_key="clashlens/marker.json",
+        marker_hash="a" * 64,
+        marker_payload_version="v1",
+    )
+
+    class Database:
+        def validate_archive_instance(self, _config: object) -> bool:
+            return False
+
+    with pytest.raises(ValueError, match="archive instance configuration"):
+        SpoolFirstReader(reader, spool_root=str(tmp_path / "spool"), database=Database())
+
+
 def test_s3_archive_reader_fetches_bytes_and_checks_sha256_before_json_parse(
     archive_server,
 ) -> None:
@@ -98,6 +123,25 @@ def test_s3_archive_reader_classifies_tampered_bytes(archive_server) -> None:
 
     with pytest.raises(ArchiveReadError, match="archive_checksum_mismatch"):
         reader.read_verified(reference, digest)
+
+
+@pytest.mark.parametrize(
+    ("code", "status", "retryable"),
+    [("AccessDenied", 403, False), ("NotImplemented", 501, False), ("InternalError", 500, True)],
+)
+def test_s3_archive_reader_classifies_provider_failures(code: str, status: int, retryable: bool) -> None:
+    reader = S3ArchiveReader(
+        endpoint="archive.example.test:9000",
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        max_retries=0,
+    )
+    error = S3Error(SimpleNamespace(status=status), code, "failure", "/object", "request", "host")
+    reader.client.get_object = lambda _bucket, _key: (_ for _ in ()).throw(error)  # type: ignore[method-assign]
+    with pytest.raises(ArchiveReadError) as captured:
+        reader.read_verified("s3://evidence/object", "a" * 64)
+    assert captured.value.retryable is retryable
 
 
 def test_s3_archive_reader_classifies_missing_object(archive_server) -> None:
@@ -271,3 +315,77 @@ def test_s3_archive_reader_rejects_unbounded_resource_settings() -> None:
             secret_key="test",
             read_timeout_seconds=301,
         )
+
+
+
+class _FlakyArchive:
+    """Archive stub that fails with a retryable error N times, then succeeds."""
+
+    max_body_bytes = 1024
+
+    max_retries = 2
+    retry_backoff_seconds = 0.01
+
+    def __init__(self, body: bytes, transient_failures: int) -> None:
+        self.body = body
+        self.remaining = transient_failures
+        self.heartbeats = 0
+        self.bucket = "bucket"
+
+    def set_pool_acquire_observer(self, observer):
+        pass
+
+    def read_verified(self, reference, expected_hash, *, heartbeat=None):
+        if heartbeat is not None:
+            heartbeat()  # renewal before the backoff window
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise ArchiveReadError("archive_unavailable", "transient outage", retryable=True)
+        return ArchiveReadResult(body=self.body, reference=reference, sha256=expected_hash)
+
+
+class LeaseLost(Exception):
+    pass
+
+
+def test_spool_first_renews_lease_across_remote_retries(tmp_path: Path) -> None:
+    from clashlens.spool import Spool as _Spool  # noqa: F401  (import sanity)
+
+    body = b"heartbeat body"
+    digest = hashlib.sha256(body).hexdigest()
+    reference = f"s3://bucket/sha256/{digest[:2]}/{digest}"
+    archive = _FlakyArchive(body, transient_failures=2)
+
+    reader = SpoolFirstReader(archive, spool_root=str(tmp_path / "spool"))
+    heartbeats: list[int] = []
+    result = reader.read_verified(reference, digest, heartbeat=lambda: heartbeats.append(1))
+
+    assert result.body == body
+    # At least one renewal around each transient retry window; the exact count
+    # depends on the reader's pacing, but a single-shot fallback must never
+    # pass through without renewals when transient failures occurred.
+    assert len(heartbeats) >= 2, "lease renewals must accompany remote retries"
+    assert archive.remaining == 0
+
+
+def test_spool_first_lease_loss_discards_the_fallback_result(tmp_path: Path) -> None:
+    from clashlens.spool import Spool
+
+    body = b"lease lost mid-fallback"
+    digest = hashlib.sha256(body).hexdigest()
+    reference = f"s3://bucket/sha256/{digest[:2]}/{digest}"
+
+    class LeaseLosingArchive(_FlakyArchive):
+        def read_verified(self, reference, expected_hash, *, heartbeat=None):
+            def lose():
+                raise LeaseLost("lease expired during remote fallback")
+
+            return super().read_verified(reference, expected_hash, heartbeat=lose)
+
+    archive = LeaseLosingArchive(body, transient_failures=1)
+    reader = SpoolFirstReader(archive, spool_root=str(tmp_path / "spool"))
+
+    with pytest.raises(LeaseLost):
+        reader.read_verified(reference, digest, heartbeat=lambda: None)
+    # Nothing was repaired locally and no result survived.
+    assert Spool(str(tmp_path / "spool"), max_body_bytes=1024).verify(digest) is None

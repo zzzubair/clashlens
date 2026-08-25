@@ -12,6 +12,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0006_provider_identities.sql"
   "$ROOT_DIR/deploy/migrations/0007_player_discovery.sql"
   "$ROOT_DIR/deploy/migrations/0008_public_army_analytics.sql"
+  "$ROOT_DIR/deploy/migrations/0009_raw_evidence.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -278,6 +279,11 @@ validate_common_settings() {
   for name in "${required[@]}"; do
     required_setting "$name"
   done
+  if [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]]; then
+    for name in CLASHLENS_ARCHIVE_REGION CLASHLENS_ARCHIVE_INSTANCE_ID CLASHLENS_ARCHIVE_MARKER_KEY CLASHLENS_ARCHIVE_MARKER_HASH CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION; do
+      required_setting "$name"
+    done
+  fi
 
   url_safe_password POSTGRES_PASSWORD
   url_safe_password CLASHLENS_COLLECTOR_DB_PASSWORD
@@ -325,6 +331,14 @@ validate_common_settings() {
     die "CLASHLENS_OFFICIAL_API_PROXY_URL must be an HTTP(S) origin with a plain host and optional port, without credentials or a path"
   [[ "$CLASHLENS_ARCHIVE_ENDPOINT" != *"://"* ]] || die "CLASHLENS_ARCHIVE_ENDPOINT must be a host:port endpoint"
   [[ "$CLASHLENS_ARCHIVE_ENDPOINT" != */* ]] || die "CLASHLENS_ARCHIVE_ENDPOINT must not contain a path"
+  [[ "$CLASHLENS_ARCHIVE_ENDPOINT" =~ ^[A-Za-z0-9._:-]+$ ]] || die "CLASHLENS_ARCHIVE_ENDPOINT contains unsafe characters"
+  [[ "$CLASHLENS_ARCHIVE_BUCKET" =~ ^[A-Za-z0-9._-]{3,63}$ ]] || die "CLASHLENS_ARCHIVE_BUCKET is malformed"
+  if [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]]; then
+    [[ "$CLASHLENS_ARCHIVE_INSTANCE_ID" =~ ^[A-Za-z0-9._:-]{1,128}$ ]] || die "CLASHLENS_ARCHIVE_INSTANCE_ID is malformed"
+    [[ "$CLASHLENS_ARCHIVE_MARKER_KEY" =~ ^[A-Za-z0-9._/-]+$ && "$CLASHLENS_ARCHIVE_MARKER_KEY" != /* && "$CLASHLENS_ARCHIVE_MARKER_KEY" != *..* && -n "$CLASHLENS_ARCHIVE_MARKER_KEY" ]] || die "CLASHLENS_ARCHIVE_MARKER_KEY is unsafe"
+    [[ "$CLASHLENS_ARCHIVE_MARKER_HASH" =~ ^[0-9a-f]{64}$ ]] || die "CLASHLENS_ARCHIVE_MARKER_HASH must be lowercase SHA-256"
+    [[ "$CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION" =~ ^[A-Za-z0-9._-]{1,32}$ ]] || die "CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION is malformed"
+  fi
 
   [[ "$CLASHLENS_API_KEY_HOST_DIR" == /* ]] || die "CLASHLENS_API_KEY_HOST_DIR must be an absolute directory"
   [[ "$CLASHLENS_HEALTH_HOST" == "127.0.0.1" ]] || die "CLASHLENS_HEALTH_HOST must be 127.0.0.1"
@@ -472,6 +486,16 @@ ensure_volume() {
   fi
 }
 
+runtime_contract_version() { [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && printf '3' || printf '2'; }
+
+ensure_spool_root() {
+  [[ "$CLASHLENS_SPOOL_ROOT" = /* && "$CLASHLENS_SPOOL_ROOT" != "/" ]] || die "CLASHLENS_SPOOL_ROOT must be an absolute non-root path"
+  [[ ! -L "$CLASHLENS_SPOOL_ROOT" ]] || die "CLASHLENS_SPOOL_ROOT must not be a symlink"
+  mkdir -p "$CLASHLENS_SPOOL_ROOT/.control/reservations" "$CLASHLENS_SPOOL_ROOT/.locks" "$CLASHLENS_SPOOL_ROOT/tmp" "$CLASHLENS_SPOOL_ROOT/sha256"
+  chmod 700 "$CLASHLENS_SPOOL_ROOT" "$CLASHLENS_SPOOL_ROOT/.control" "$CLASHLENS_SPOOL_ROOT/.control/reservations" "$CLASHLENS_SPOOL_ROOT/.locks" "$CLASHLENS_SPOOL_ROOT/tmp" "$CLASHLENS_SPOOL_ROOT/sha256"
+  chown -R 10001:10001 "$CLASHLENS_SPOOL_ROOT" 2>/dev/null || true
+}
+
 ensure_postgres() {
   replace_secret_value clashlens-postgres-password "$POSTGRES_PASSWORD"
   if container_exists "$POSTGRES_CONTAINER"; then
@@ -556,8 +580,16 @@ schema_migration_applied() {
 
 require_current_schema() {
   local required_version=${#MIGRATION_FILES[@]}
+  [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] || required_version=$((required_version - 1))
   schema_migration_applied "$required_version" || \
     die "forward migration $required_version is required; run up first"
+}
+
+ensure_archive_instance_contract() {
+  [[ "$(contract_version)" == "3" ]] || return 0
+  local sql
+  sql="INSERT INTO archive_instances (instance_id, endpoint, region, bucket, marker_key, marker_hash, marker_payload_version) VALUES ('${CLASHLENS_ARCHIVE_INSTANCE_ID//\'/\'\'}', '${CLASHLENS_ARCHIVE_ENDPOINT//\'/\'\'}', '${CLASHLENS_ARCHIVE_REGION//\'/\'\'}', '${CLASHLENS_ARCHIVE_BUCKET//\'/\'\'}', '${CLASHLENS_ARCHIVE_MARKER_KEY//\'/\'\'}', '${CLASHLENS_ARCHIVE_MARKER_HASH//\'/\'\'}', '${CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION//\'/\'\'}') ON CONFLICT (instance_id) DO UPDATE SET endpoint = EXCLUDED.endpoint, region = EXCLUDED.region, bucket = EXCLUDED.bucket, marker_key = EXCLUDED.marker_key, marker_hash = EXCLUDED.marker_hash, marker_payload_version = EXCLUDED.marker_payload_version WHERE archive_instances.endpoint = EXCLUDED.endpoint AND archive_instances.region = EXCLUDED.region AND archive_instances.bucket = EXCLUDED.bucket AND archive_instances.marker_key = EXCLUDED.marker_key AND archive_instances.marker_hash = EXCLUDED.marker_hash AND archive_instances.marker_payload_version = EXCLUDED.marker_payload_version;"
+  printf '%s\n' "$sql" | "$PODMAN_BIN" exec --interactive "$POSTGRES_CONTAINER" psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"
 }
 
 apply_pending_forward_migrations() {
@@ -565,6 +597,7 @@ apply_pending_forward_migrations() {
   for ((index = 1; index < ${#MIGRATION_FILES[@]}; index++)); do
     version=$((index + 1))
     migration_file=${MIGRATION_FILES[$index]}
+    if (( version == 9 )) && [[ -z "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]]; then continue; fi
     if ! schema_migration_applied "$version"; then
       if (( version == 4 )); then
         # Parser v2 changes the interpretation of source rows. Drain the old
@@ -578,7 +611,7 @@ apply_pending_forward_migrations() {
 }
 
 # Detect the deployed contract explicitly. An empty or failing read means the
-# database has no contract yet; anything outside 1 or 2 is unsupported.
+# database has no contract yet; anything outside 1, 2, or 3 is unsupported.
 contract_version() {
   local version
   version=$("$PODMAN_BIN" exec "$POSTGRES_CONTAINER" \
@@ -591,6 +624,9 @@ contract_version() {
       ;;
     1|2)
       printf '%s\n' "$version"
+      ;;
+    3)
+      [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && printf '%s\n' "$version" || printf 'unknown\n'
       ;;
     *)
       printf 'unknown\n'
@@ -683,6 +719,7 @@ collector_env_args() {
   result+=(--env "CLASHLENS_INTERACTIVE_API_KEY_FILES=$CLASHLENS_INTERACTIVE_API_KEY_FILES")
   result+=(--env "CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=$CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE")
   result+=(--env "CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081")
+  result+=(--env "CLASHLENS_SPOOL_ROOT=/spool")
 }
 
 collector_secret_args() {
@@ -731,6 +768,7 @@ collector_credential_secret_args() {
 # URL. It is replaced and its admin secret is removed immediately after the
 # contract advances, so no long-lived runtime container holds the admin URL.
 collector_run() {
+  ensure_spool_root
   local container=$1
   local schema_version=$2
   local traffic_mode=$3
@@ -761,6 +799,7 @@ collector_run() {
     --name "$container" \
     --network "$NETWORK_NAME" \
     "${env_args[@]}" \
+    --volume "$CLASHLENS_SPOOL_ROOT:/spool:rw,z" \
     --publish "$CLASHLENS_HEALTH_HOST:$CLASHLENS_HEALTH_PORT:8081/tcp" \
     --read-only \
     --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
@@ -784,13 +823,15 @@ start_bridge_collector() {
 }
 
 start_required_collector() {
-  collector_run "$COLLECTOR_CONTAINER" 2 required false
+  ensure_spool_root
+  collector_run "$COLLECTOR_CONTAINER" "$(runtime_contract_version)" required false
 }
 
 enable_global_rankings() {
   # A worker-only rollback may intentionally run without a local collector image.
   image_exists || return 1
-  collector_run "$COLLECTOR_CONTAINER" 2 required true
+  ensure_spool_root
+  collector_run "$COLLECTOR_CONTAINER" "$(runtime_contract_version)" required true
   wait_for_collector
 }
 
@@ -822,7 +863,7 @@ require_python_runtime() {
 
   local version
   version=$(contract_version)
-  [[ "$version" == "2" ]] || die "production contract version 2 is required (found $version)"
+  [[ "$version" == "$(runtime_contract_version)" ]] || die "production contract version $(runtime_contract_version) is required (found $version)"
   require_current_schema
 
   python_image_exists || die "python image is missing; run python-up first"
@@ -989,7 +1030,7 @@ validate_provider_secret_content() {
       die "$name must contain a deployment value"
       ;;
   esac
-  [[ "$raw" =~ ^[!-~]{1,512}$ ]] || \
+  [[ "$raw" =~ ^[[:graph:]]{1,512}$ ]] || \
     die "$name must contain 1-512 printable characters with no whitespace or control characters"
 }
 
@@ -1020,7 +1061,7 @@ require_website_runtime() {
   "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1 || die "private network is missing; run up first"
   local version
   version=$(contract_version)
-  [[ "$version" == "2" ]] || die "production contract version 2 is required (found $version)"
+  [[ "$version" == "$(runtime_contract_version)" ]] || die "production contract version $(runtime_contract_version) is required (found $version)"
   container_running "$PYTHON_API_CONTAINER" || die "private Python API is not running; run python-up first"
   "$PODMAN_BIN" healthcheck run "$PYTHON_API_CONTAINER" >/dev/null 2>&1 || die "private Python API is not healthy; run python-up first"
   website_image_exists || die "website image is missing; run website-up first"
@@ -1122,8 +1163,20 @@ start_python_workers() {
       --name "${PYTHON_WORKER_CONTAINER}-${i}" \
       --network "$NETWORK_NAME" \
       "${env_args[@]}" \
+      --volume "$CLASHLENS_SPOOL_ROOT:/spool:rw,z" \
       --env CLASHLENS_ARCHIVE_ENDPOINT \
+      --env CLASHLENS_ARCHIVE_REGION \
       --env CLASHLENS_ARCHIVE_BUCKET \
+      --env CLASHLENS_ARCHIVE_INSTANCE_ID \
+      --env CLASHLENS_ARCHIVE_MARKER_KEY \
+      --env CLASHLENS_ARCHIVE_MARKER_HASH \
+      --env CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION \
+      --env CLASHLENS_SPOOL_ROOT=/spool \
+      --env CLASHLENS_MAX_BODY_BYTES \
+      --env CLASHLENS_SPOOL_MAX_BYTES \
+      --env CLASHLENS_SPOOL_MAX_OBJECTS \
+      --env CLASHLENS_SPOOL_FREE_SPACE_FLOOR \
+      --env CLASHLENS_SPOOL_FREE_INODE_FLOOR \
       --read-only \
       --tmpfs /tmp:rw,noexec,nosuid,nodev,size=32m \
       --cap-drop all \
@@ -1131,7 +1184,7 @@ start_python_workers() {
       --memory "$CLASHLENS_WORKER_MEMORY" \
       --pids-limit "$CLASHLENS_WORKER_PIDS" \
       --cpus "$CLASHLENS_WORKER_CPUS" \
-      --health-cmd "python -m clashlens.cli ready --expected-contract-version 2" \
+      --health-cmd "python -m clashlens.cli ready --expected-contract-version $(runtime_contract_version)" \
       --health-interval 30s \
       --health-timeout 20s \
       --health-retries 3 \
@@ -1293,6 +1346,12 @@ CLASHLENS_WORKER_CONCURRENCY=${CLASHLENS_WORKER_CONCURRENCY:-1}
 CLASHLENS_WORKER_DATABASE_POOL_SIZE=${CLASHLENS_WORKER_DATABASE_POOL_SIZE:-4}
 CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=${CLASHLENS_WORKER_ARCHIVE_POOL_SIZE:-4}
 CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=${CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE:-16}
+CLASHLENS_SPOOL_ROOT=${CLASHLENS_SPOOL_ROOT:-/tmp/clashlens-spool}
+CLASHLENS_SPOOL_MAX_BYTES=${CLASHLENS_SPOOL_MAX_BYTES:-17179869184}
+CLASHLENS_SPOOL_MAX_OBJECTS=${CLASHLENS_SPOOL_MAX_OBJECTS:-1000000}
+CLASHLENS_SPOOL_FREE_SPACE_FLOOR=${CLASHLENS_SPOOL_FREE_SPACE_FLOOR:-1073741824}
+CLASHLENS_SPOOL_FREE_INODE_FLOOR=${CLASHLENS_SPOOL_FREE_INODE_FLOOR:-10000}
+CLASHLENS_MAX_BODY_BYTES=${CLASHLENS_MAX_BODY_BYTES:-4194304}
 HEALTH_HOST=$CLASHLENS_HEALTH_HOST
 HEALTH_PORT=$CLASHLENS_HEALTH_PORT
 WORKER_STOP_GRACE=$((CLASHLENS_WORKER_LEASE_SECONDS + 10))
@@ -1311,7 +1370,7 @@ case "$command" in
         apply_initial_contract
         printf 'database initialized; data volume is %s\n' "$POSTGRES_VOLUME"
         ;;
-      1|2)
+      1|2|3)
         die "database is already initialized at contract version $version; use up or restart"
         ;;
       *)
@@ -1340,7 +1399,7 @@ case "$command" in
         version=2
         fresh_bootstrap=true
       ;;
-      1|2) ;;
+      1|2|3) ;;
       *)
         die "unsupported contract version $version"
         ;;
@@ -1355,19 +1414,22 @@ case "$command" in
       start_bridge_collector
       wait_for_collector
       apply_pending_forward_migrations
+      ensure_archive_instance_contract
       configure_runtime_roles
       stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
       secret_rm clashlens-bridge-database-url
-    elif [[ "$version" == "2" && "$fresh_bootstrap" != true ]]; then
+    elif [[ ("$version" == "2" || "$version" == "3") && "$fresh_bootstrap" != true ]]; then
       # Migration 0007 exposes work older collectors interpret incorrectly.
       # Drain them only while installing that migration; ordinary up preserves workers.
-      if ! schema_migration_applied 7; then
+      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9); then
         stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
         stop_all_worker_containers
       fi
       apply_pending_forward_migrations
+      ensure_archive_instance_contract
       configure_runtime_roles
     fi
+    ensure_archive_instance_contract
     start_required_collector
     wait_for_collector
     printf 'collector is ready at http://%s:%s/readyz\n' "$HEALTH_HOST" "$HEALTH_PORT"
@@ -1388,7 +1450,7 @@ case "$command" in
     ensure_postgres
     wait_for_postgres
     version=$(contract_version)
-    [[ "$version" == "2" ]] || die "restart requires contract version 2 (found $version); run up first"
+    [[ "$version" == "$(runtime_contract_version)" ]] || die "restart requires contract version $(runtime_contract_version) (found $version); run up first"
     require_current_schema
     image_exists || die "collector image is missing; run up first"
     start_required_collector

@@ -17,5 +17,6 @@ RUN apk add --no-cache ca-certificates \
 
 COPY --from=build /out/collector /usr/local/bin/collector
 
-USER collector:collector
+VOLUME ["/spool"]
+USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/collector"]

@@ -1,14 +1,19 @@
 # Performance runner
 
 `scripts/performance_runner.py` is the PostgreSQL-backed issue #60 Step 1
-baseline harness. It creates and drops an isolated schema per sample, applies
+baseline and issue #64 raw-evidence harness. `scripts/fedora_probe.sh` is the
+checked-in Fedora entrypoint; it requires an explicit disposable PostgreSQL
+URL and retains a JSON artifact under `results/`. It creates and drops an isolated schema per sample, applies
 all migrations, serves committed fixtures from a local archive, and runs the
 production collector probe, observation processor, reconciliation, snapshot,
 analytics, army-publication, and API database paths. Duplicate-heavy mode also
 runs a focused Go test (`TestS3ArchiveDuplicateStoreProbe`) against the
 production `s3Archive.store` path on a real HTTP fake S3 server and reports its
-conditional PUT plus HEAD/GET verification totals separately from the Python
-archive GET counts; a failed probe or malformed marker fails the run.
+conditional PUT plus GET verification totals separately from the Python
+archive GET counts; a failed probe or malformed marker fails the run. Samples
+also retain evidence novelty, pending/orphan, local-hit/repair, conditional
+PUT/verification-GET, and bounded spool-capacity fields for the raw-evidence
+contract.
 
 ## Prerequisites and limits
 
@@ -23,6 +28,17 @@ archive GET counts; a failed probe or malformed marker fails the run.
   workload is 1,000 facts; `--army-facts` accepts 1 through 100,000. The army
   read workload runs in reset and correction modes and creates 28 Top-1,000
   snapshots plus synthetic facts in the disposable schema.
+- Duplicate-heavy mode distributes occurrences across ~200 tracked players
+  (~125 responses each) so duplicate writes match the production multi-player
+  shape instead of concentrating on one row. `--lanes` (1-64) sets the
+  processing concurrency used for both the PostgreSQL/archive pools and the
+  job executor. `--duplicate-cycles` (1-4) repeats the duplicate window over
+  the same spool: cycle one carries the ~1% hash-novelty sample and later
+  cycles are 100% verified-duplicate steady state. With more than one cycle
+  the workload reports per-cycle elapsed times plus a conservative
+  `daily_288_cycle_projection_seconds` (median cycle × 288 five-minute
+  intervals) as the 24h-equivalent aggregate; every executed response still
+  runs the full raw-evidence/local/Python/PostgreSQL semantics.
 - `pg_stat_statements` is optional. Its SQL-call delta is `null` when the
   extension is unavailable; the in-process Cursor call count remains present.
 - RSS is process maximum RSS, not a per-sample instantaneous value. Image
@@ -83,6 +99,11 @@ Run focused checks from the repository root:
 
 ```sh
 python3 -m unittest scripts/test_performance_runner.py -v
+
+# Fedora target-host probe; never point this at production data.
+CLASHLENS_TEST_DATABASE_URL=postgresql://... \\
+  CLASHLENS_FEDORA_PROBE_OUTPUT=/home/clashlens/step2-results/duplicates.json \\
+  scripts/fedora_probe.sh duplicate-heavy --duplicate-observations 25024
 ```
 
 Without `CLASHLENS_TEST_DATABASE_URL`, PostgreSQL checks are skipped. A skip is

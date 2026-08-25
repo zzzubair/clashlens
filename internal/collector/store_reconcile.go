@@ -362,6 +362,16 @@ func readPythonBridge(ctx context.Context, connection *pgx.Conn, observationID i
 }
 
 func (s *store) proveObservationCommit(ctx context.Context, connection *pgx.Conn, intent observationCommitIntent) (commitProofOutcome, error) {
+	if s.contractVersion >= 3 {
+		var catalogueHash, reference, instance string
+		var size int64
+		if err := connection.QueryRow(ctx, `SELECT response_hash, archive_reference, byte_size, archive_instance_id FROM archive_catalogue WHERE response_hash = $1`, intent.hash).Scan(&catalogueHash, &reference, &size, &instance); err != nil {
+			return commitProofUnknown, err
+		}
+		if catalogueHash != intent.hash || reference != intent.archiveReference || size != int64(len(intent.response.body)) || instance != s.archiveInstanceID {
+			return commitProofUnknown, errors.New("catalogue commit proof does not match intent")
+		}
+	}
 	if _, _, err := readCurrentMutationState(ctx, connection, &intent.job, intent.attemptID); err != nil {
 		return commitProofUnknown, err
 	}
