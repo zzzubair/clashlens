@@ -73,6 +73,10 @@ type spoolReservation struct {
 	path     string
 	limit    int64
 	released bool
+	// temporaryPath is bound into the record once the temp file exists so
+	// crash reconciliation can distinguish a live writer's temporary file
+	// from abandoned debris.
+	temporaryPath string
 }
 type spoolFaults struct {
 	// writeFileErr replaces the temp-body write result (short write, ENOSPC).
@@ -140,29 +144,48 @@ func newEvidenceSpool(cfg spoolConfig) (*evidenceSpool, error) {
 	if err := validateSpoolRoot(cfg.root); err != nil {
 		return nil, err
 	}
-	for _, dir := range []string{cfg.root, filepath.Join(cfg.root, ".locks"), filepath.Join(cfg.root, ".control"), filepath.Join(cfg.root, ".control", "reservations"), filepath.Join(cfg.root, ".control", "operations"), filepath.Join(cfg.root, "tmp"), filepath.Join(cfg.root, "sha256")} {
-		if info, statErr := os.Lstat(dir); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+	// Root establishment is the single allowed absolute-path operation.
+	if err := os.MkdirAll(cfg.root, 0700); err != nil {
+		return nil, fmt.Errorf("create spool root: %w", err)
+	}
+	if err := os.Chmod(cfg.root, 0700); err != nil {
+		return nil, fmt.Errorf("protect spool root: %w", err)
+	}
+	for _, dir := range []string{".locks", filepath.Join(".control", "reservations"), filepath.Join(".control", "operations"), "tmp", "sha256"} {
+		full := filepath.Join(cfg.root, dir)
+		if info, statErr := statSpoolRelative(cfg.root, full, false); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
 			return nil, errors.New("symlink beneath spool root")
 		}
-		if err := os.MkdirAll(dir, 0700); err != nil {
+		if err := mkdirAllSpoolRelative(cfg.root, full, 0700); err != nil {
 			return nil, fmt.Errorf("create spool directory: %w", err)
 		}
-		if err := os.Chmod(dir, 0700); err != nil {
+		if err := chmodSpoolRelative(cfg.root, full, 0700); err != nil {
 			return nil, fmt.Errorf("protect spool directory: %w", err)
 		}
 	}
-	capacity, err := os.OpenFile(filepath.Join(cfg.root, ".control", "capacity.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	capacityDescriptor, err := openSpoolRelative(cfg.root, filepath.Join(".control", "capacity.lock"), syscall.O_CREAT|syscall.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
+	capacity := os.NewFile(uintptr(capacityDescriptor), filepath.Join(cfg.root, ".control", "capacity.lock"))
+	if capacity == nil {
+		_ = syscall.Close(capacityDescriptor)
+		return nil, errors.New("open spool capacity lock")
+	}
 	result := &evidenceSpool{cfg: cfg, capacity: capacity}
 	for i := 0; i < spoolStripeCount; i++ {
-		file, err := os.OpenFile(filepath.Join(cfg.root, ".locks", fmt.Sprintf("%04x", i)), os.O_CREATE|os.O_RDWR, 0600)
+		descriptor, err := openSpoolRelative(cfg.root, filepath.Join(".locks", fmt.Sprintf("%04x", i)), syscall.O_CREAT|syscall.O_RDWR, 0600)
 		if err != nil {
 			result.close()
 			return nil, err
 		}
-		result.locks = append(result.locks, file)
+		lock := os.NewFile(uintptr(descriptor), filepath.Join(cfg.root, ".locks", fmt.Sprintf("%04x", i)))
+		if lock == nil {
+			_ = syscall.Close(descriptor)
+			result.close()
+			return nil, errors.New("open spool stripe lock")
+		}
+		result.locks = append(result.locks, lock)
 	}
 	if err := result.reconcile(); err != nil {
 		result.close()
@@ -201,15 +224,21 @@ func (s *evidenceSpool) heldStripeIndex(stripe *os.File) (int, error) {
 func (s *evidenceSpool) finalPath(hash string) string {
 	return filepath.Join(s.cfg.root, "sha256", hash[:2], hash)
 }
+
+// safeSpoolPath rejects escape or symlink substitution by walking every
+// component through the trusted root descriptor instead of absolute paths.
 func safeSpoolPath(root, path string) error {
 	relative, err := filepath.Rel(root, path)
 	if err != nil || strings.HasPrefix(relative, "..") {
 		return errors.New("spool path escapes root")
 	}
-	current := root
+	current := "."
 	for _, part := range strings.Split(relative, string(os.PathSeparator)) {
+		if part == "." || part == "" {
+			continue
+		}
 		current = filepath.Join(current, part)
-		info, statErr := os.Lstat(current)
+		info, statErr := statSpoolRelative(root, current, false)
 		if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("symlink beneath spool root")
 		}
@@ -266,14 +295,6 @@ func (s *evidenceSpool) lockStripe(index int, exclusive bool) error {
 func (s *evidenceSpool) unlockStripe(index int) {
 	_ = syscall.Flock(int(s.locks[index].Fd()), syscall.LOCK_UN)
 	s.stripeMu[index].Unlock()
-}
-func syncDir(path string) error {
-	file, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	return file.Sync()
 }
 
 // syncDir is the fault-injection seam for directory fsync failures.
@@ -375,34 +396,9 @@ func (s *evidenceSpool) reconcile() error {
 	}
 	defer s.unlockCapacity()
 	var ledger spoolLedger
-	prefixes, err := listSpoolRelative(s.cfg.root, "sha256")
-	if err != nil {
-		return err
-	}
-	for _, prefix := range prefixes {
-		if !prefix.IsDir() || len(prefix.Name()) != 2 {
-			continue
-		}
-		entries, _ := listSpoolRelative(s.cfg.root, filepath.Join("sha256", prefix.Name()))
-		for _, entry := range entries {
-			if entry.IsDir() || len(entry.Name()) != 64 {
-				continue
-			}
-			info, e := statSpoolRelative(s.cfg.root, filepath.Join("sha256", prefix.Name(), entry.Name()), false)
-			if e == nil && info.Mode().IsRegular() {
-				ledger.FinalBytes += info.Size()
-				ledger.FinalObjects++
-			}
-		}
-	}
-	entries, _ := listSpoolRelative(s.cfg.root, "tmp")
-	for _, entry := range entries {
-		info, e := entry.Info()
-		if e == nil {
-			ledger.TemporaryBytes += info.Size()
-			ledger.TemporaryObjects++
-		}
-	}
+	// Live reservation records cover their bound temporary files; unlocked
+	// (dead) reservation records are crash debris and are removed.
+	coveredTempPaths := map[string]bool{}
 	records, _ := listSpoolRelative(s.cfg.root, filepath.Join(".control", "reservations"))
 	for _, entry := range records {
 		if !strings.HasSuffix(entry.Name(), ".json") {
@@ -421,10 +417,34 @@ func (s *evidenceSpool) reconcile() error {
 		_ = file.Close()
 		ledger.ReservedObjects++
 		var record struct {
-			Limit int64 `json:"limit"`
+			Limit         int64  `json:"limit"`
+			TemporaryPath string `json:"temporary_path"`
 		}
 		if body, readErr := readSpoolRelative(s.cfg.root, path, 1<<20); readErr == nil && json.Unmarshal(body, &record) == nil {
 			ledger.ReservedBytes += record.Limit
+			if record.TemporaryPath != "" {
+				coveredTempPaths[record.TemporaryPath] = true
+			}
+		}
+	}
+	prefixes, err := listSpoolRelative(s.cfg.root, "sha256")
+	if err != nil {
+		return err
+	}
+	for _, prefix := range prefixes {
+		if !prefix.IsDir() || len(prefix.Name()) != 2 {
+			continue
+		}
+		entries, _ := listSpoolRelative(s.cfg.root, filepath.Join("sha256", prefix.Name()))
+		for _, entry := range entries {
+			if entry.IsDir() || len(entry.Name()) != 64 {
+				continue
+			}
+			info, e := statSpoolRelative(s.cfg.root, filepath.Join("sha256", prefix.Name(), entry.Name()), false)
+			if e == nil && info.Mode().IsRegular() {
+				ledger.FinalBytes += info.Size()
+				ledger.FinalObjects++
+			}
 		}
 	}
 	operationTempBytes, operationTempObjects := int64(0), int64(0)
@@ -455,20 +475,44 @@ func (s *evidenceSpool) reconcile() error {
 		}
 		_ = file.Close()
 	}
-	ledger.TemporaryBytes = maxInt64(0, ledger.TemporaryBytes-operationTempBytes)
-	ledger.TemporaryObjects = maxInt64(0, ledger.TemporaryObjects-operationTempObjects)
+	entries, _ := listSpoolRelative(s.cfg.root, "tmp")
+	for _, entry := range entries {
+		info, e := entry.Info()
+		if e == nil {
+			relative := filepath.Join("tmp", entry.Name())
+			if coveredTempPaths[relative] || coveredTempPaths[filepath.Join(s.cfg.root, relative)] {
+				// A live writer's reservation covers this temporary file.
+				ledger.TemporaryBytes += info.Size()
+				ledger.TemporaryObjects++
+				continue
+			}
+			// Unreferenced temporary debris stays durably accounted as
+			// abandoned until stale cleanup reclaims it. Dead-operation temps
+			// removed above are subtracted from this classification.
+			abandonedBytes := info.Size()
+			taken := minInt64(abandonedBytes, operationTempBytes)
+			operationTempBytes -= taken
+			abandonedBytes -= taken
+			ledger.AbandonedTempBytes += abandonedBytes
+			if operationTempObjects > 0 {
+				operationTempObjects--
+			} else {
+				ledger.AbandonedTempObjects++
+			}
+		}
+	}
 	ledger.ReservedInodes = ledger.ReservedObjects
 	ledger.HighWaterBytes = ledger.FinalBytes + ledger.TemporaryBytes + ledger.AbandonedTempBytes + ledger.ReservedBytes
 	return s.writeLedger(ledger)
 }
 
 func (s *evidenceSpool) reservationLocked() bool {
-	entries, err := os.ReadDir(filepath.Join(s.cfg.root, ".control", "reservations"))
+	entries, err := listSpoolRelative(s.cfg.root, filepath.Join(".control", "reservations"))
 	if err != nil {
 		return false
 	}
 	for _, entry := range entries {
-		file, openErr := os.OpenFile(filepath.Join(s.cfg.root, ".control", "reservations", entry.Name()), os.O_RDWR, 0600)
+		file, openErr := openReservationRecordRelative(s.cfg.root, filepath.Join(".control", "reservations", entry.Name()))
 		if openErr != nil {
 			continue
 		}
@@ -482,7 +526,7 @@ func (s *evidenceSpool) reservationLocked() bool {
 }
 
 func (s *evidenceSpool) deadReservationExists() bool {
-	entries, err := os.ReadDir(filepath.Join(s.cfg.root, ".control", "reservations"))
+	entries, err := listSpoolRelative(s.cfg.root, filepath.Join(".control", "reservations"))
 	if err != nil {
 		return false
 	}
@@ -490,7 +534,7 @@ func (s *evidenceSpool) deadReservationExists() bool {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
-		file, openErr := os.OpenFile(filepath.Join(s.cfg.root, ".control", "reservations", entry.Name()), os.O_RDWR, 0600)
+		file, openErr := openReservationRecordRelative(s.cfg.root, filepath.Join(".control", "reservations", entry.Name()))
 		if openErr != nil {
 			continue
 		}
@@ -507,6 +551,13 @@ func (s *evidenceSpool) deadReservationExists() bool {
 
 func maxInt64(left, right int64) int64 {
 	if left > right {
+		return left
+	}
+	return right
+}
+
+func minInt64(left, right int64) int64 {
+	if left < right {
 		return left
 	}
 	return right
@@ -642,6 +693,59 @@ func (r *spoolReservation) releaseLocked() error {
 	return nil
 }
 
+// bindTemporaryPath records the live temporary path on the reservation
+// record under the capacity lock, matching the Python runtime's contract.
+func (r *spoolReservation) bindTemporaryPath(tempPath string) error {
+	if r == nil || r.released {
+		return nil
+	}
+	r.temporaryPath = tempPath
+	if err := r.spool.lockCapacity(); err != nil {
+		return err
+	}
+	defer r.spool.unlockCapacity()
+	record := fmt.Sprintf(`{"limit":%d,"created_at":%d,"temporary_path":%q}`, r.limit, time.Now().UnixNano(), tempPath)
+	if _, err := r.file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(r.file, "%s", record); err != nil {
+		return err
+	}
+	if err := r.file.Truncate(int64(len(record))); err != nil {
+		return err
+	}
+	return r.file.Sync()
+}
+
+func (s *evidenceSpool) removeOrAbandonTemporary(tempPath string) {
+	if err := s.lockCapacity(); err != nil {
+		return
+	}
+	defer s.unlockCapacity()
+	s.removeOrAbandonTemporaryLocked(tempPath)
+}
+
+// removeOrAbandonTemporaryLocked deletes a failed temporary file while the
+// capacity lock is held; if deletion fails, its actual size transfers into
+// the durable abandoned-temporary ledger so admission keeps accounting for it.
+func (s *evidenceSpool) removeOrAbandonTemporaryLocked(tempPath string) {
+	if unlinkErr := unlinkSpoolRelative(s.cfg.root, tempPath); unlinkErr == nil || os.IsNotExist(unlinkErr) {
+		return
+	}
+	info, statErr := statSpoolRelative(s.cfg.root, tempPath, true)
+	if statErr != nil {
+		return
+	}
+	ledger, ledgerErr := s.ledger()
+	if ledgerErr != nil {
+		return
+	}
+	ledger.AbandonedTempBytes += info.Size()
+	ledger.AbandonedTempObjects++
+	ledger.HighWaterBytes = maxInt64(ledger.HighWaterBytes, ledger.FinalBytes+ledger.TemporaryBytes+ledger.AbandonedTempBytes+ledger.ReservedBytes)
+	_ = s.writeLedger(ledger)
+}
+
 func (s *evidenceSpool) beginOperation(hash, temporaryPath string) (*os.File, string, error) {
 	path := filepath.Join(s.cfg.root, ".control", "operations", uuid.NewString()+".json")
 	fileDescriptor, err := openSpoolRelative(s.cfg.root, path, syscall.O_CREAT|syscall.O_EXCL|os.O_RDWR, 0600)
@@ -689,7 +793,7 @@ func (s *evidenceSpool) finishOperation(file *os.File, path string) error {
 	if err := unlinkSpoolRelative(s.cfg.root, path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return syncDir(filepath.Dir(path))
+	return s.syncDir(filepath.Dir(path))
 }
 
 func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, heldStripe ...*os.File) (localEvidence, error) {
@@ -708,6 +812,12 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 		_ = reservation.release()
 		return localEvidence{}, errors.New("open spool temporary file")
 	}
+	if err := reservation.bindTemporaryPath(tempPath); err != nil {
+		_ = file.Close()
+		s.removeOrAbandonTemporary(tempPath)
+		_ = reservation.release()
+		return localEvidence{}, err
+	}
 	hash := sha256.New()
 	written, err := io.CopyN(io.MultiWriter(file, hash), body, reservation.limit+1)
 	if err == io.EOF {
@@ -718,7 +828,7 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 	}
 	if err != nil || written > reservation.limit {
 		_ = file.Close()
-		_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+		s.removeOrAbandonTemporary(tempPath)
 		_ = reservation.release()
 		if written > reservation.limit {
 			err = errors.New("evidence body exceeds configured limit")
@@ -736,14 +846,14 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 		fileSyncErr = closeErr
 	}
 	if fileSyncErr != nil || err != nil {
-		_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+		s.removeOrAbandonTemporary(tempPath)
 		_ = reservation.release()
 		return localEvidence{}, fileSyncErr
 	}
 	digest := hex.EncodeToString(hash.Sum(nil))
 	stripeIndex, err := s.stripeIndex(digest)
 	if err != nil {
-		_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+		s.removeOrAbandonTemporary(tempPath)
 		_ = reservation.release()
 		return localEvidence{}, err
 	}
@@ -751,14 +861,14 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 	if len(heldStripe) > 0 {
 		heldIndex, err = s.heldStripeIndex(heldStripe[0])
 		if err != nil || heldIndex != stripeIndex {
-			_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+			s.removeOrAbandonTemporary(tempPath)
 			_ = reservation.release()
 			return localEvidence{}, errors.New("held spool stripe does not match evidence hash")
 		}
 	}
 	if heldIndex != stripeIndex {
 		if err := s.lockStripe(stripeIndex, true); err != nil {
-			_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+			s.removeOrAbandonTemporary(tempPath)
 			_ = reservation.release()
 			return localEvidence{}, err
 		}
@@ -766,25 +876,25 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 	}
 	operation, operationPath, err := s.beginOperation(digest, tempPath)
 	if err != nil {
-		_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+		s.removeOrAbandonTemporary(tempPath)
 		_ = reservation.release()
 		return localEvidence{}, err
 	}
 	defer func() { _ = s.finishOperation(operation, operationPath) }()
 	if err := s.lockCapacity(); err != nil {
-		_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+		s.removeOrAbandonTemporary(tempPath)
 		_ = reservation.release()
 		return localEvidence{}, err
 	}
 	defer s.unlockCapacity()
 	final := s.finalPath(digest)
 	if err := safeSpoolPath(s.cfg.root, final); err != nil {
-		_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+		s.removeOrAbandonTemporaryLocked(tempPath)
 		_ = reservation.releaseLocked()
 		return localEvidence{}, err
 	}
 	if err := mkdirAllSpoolRelative(s.cfg.root, filepath.Dir(final), 0700); err != nil {
-		_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+		s.removeOrAbandonTemporaryLocked(tempPath)
 		_ = reservation.releaseLocked()
 		return localEvidence{}, err
 	}
@@ -799,11 +909,11 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 	var replacedSize int64
 	if created {
 		if err := promote(); err != nil && !os.IsExist(err) {
-			_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+			s.removeOrAbandonTemporaryLocked(tempPath)
 			_ = reservation.releaseLocked()
 			return localEvidence{}, err
 		}
-		_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+		s.removeOrAbandonTemporaryLocked(tempPath)
 		if err := s.syncDir(filepath.Dir(final)); err != nil {
 			_ = reservation.releaseLocked()
 			return localEvidence{}, err
@@ -820,17 +930,17 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 				return localEvidence{}, removeErr
 			}
 			if err := promote(); err != nil {
-				_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+				s.removeOrAbandonTemporaryLocked(tempPath)
 				_ = reservation.releaseLocked()
 				return localEvidence{}, err
 			}
-			_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+			s.removeOrAbandonTemporaryLocked(tempPath)
 			if err := s.syncDir(filepath.Dir(final)); err != nil {
 				_ = reservation.releaseLocked()
 				return localEvidence{}, err
 			}
 		} else {
-			_ = unlinkSpoolRelative(s.cfg.root, tempPath)
+			s.removeOrAbandonTemporaryLocked(tempPath)
 		}
 	}
 	ledger, err := s.ledger()

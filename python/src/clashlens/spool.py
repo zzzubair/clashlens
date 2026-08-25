@@ -29,20 +29,6 @@ class SpoolError(RuntimeError):
     pass
 
 
-def _sync_directory(path: Path) -> None:
-    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-
-
-def _locked_file(path: Path, flags: int, mode: int = 0o600) -> int:
-    return os.open(path, flags | os.O_NOFOLLOW, mode)
-
-
-def _directory_fd(path: Path) -> int:
-    return os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
 
 def _fsync_dir(fd: int) -> None:
     os.fsync(fd)
@@ -64,20 +50,6 @@ def validate_root(root: str | Path) -> Path:
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.is_symlink():
         raise ValueError("spool root must not be a symlink")
-    for child in (".locks", ".control/reservations", ".control/operations", "tmp", "sha256"):
-        directory = path
-        for part in child.split("/"):
-            directory = directory / part
-            if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
-                raise ValueError("spool control path must be a real directory")
-            directory.mkdir(mode=0o700, exist_ok=True)
-    for index in range(STRIPE_COUNT):
-        lock = path / ".locks" / f"{index:04x}"
-        fd = _locked_file(lock, os.O_CREAT | os.O_RDWR)
-        os.close(fd)
-    capacity = path / ".control" / "capacity.lock"
-    fd = _locked_file(capacity, os.O_CREAT | os.O_RDWR)
-    os.close(fd)
     return path
 
 
@@ -108,9 +80,65 @@ class Spool:
         # this inode with O_NOFOLLOW so no absolute traversal can be
         # redirected by a substitution race after startup validation.
         self._root_fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        self._capacity = _locked_file(self.root / ".control" / "capacity.lock", os.O_RDWR)
+        try:
+            self._ensure_descendants()
+            self._capacity = self._child_fd("capacity.lock", os.O_RDWR, ".control")
+        except BaseException:
+            os.close(self._root_fd)
+            raise
         self._capacity_mutex = threading.RLock()
         self.reconcile()
+
+    def _ensure_descendants(self) -> None:
+        """Create control, lock, temporary, and final directories relative to
+        the trusted root descriptor; never through absolute descendant paths."""
+        chains = (
+            (".locks",),
+            (".control", "reservations"),
+            (".control", "operations"),
+            ("tmp",),
+            ("sha256",),
+        )
+        for chain in chains:
+            fd = os.dup(self._root_fd)
+            try:
+                for part in chain:
+                    try:
+                        os.mkdir(part, 0o700, dir_fd=fd)
+                    except FileExistsError:
+                        pass
+                    nxt = os.open(
+                        part,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                        dir_fd=fd,
+                    )
+                    os.close(fd)
+                    fd = nxt
+            finally:
+                os.close(fd)
+        control_fd = self._sub_dir_fd(".control")
+        try:
+            descriptor = os.open(
+                "capacity.lock",
+                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=control_fd,
+            )
+            os.close(descriptor)
+        finally:
+            os.close(control_fd)
+        locks_fd = self._sub_dir_fd(".locks")
+        try:
+            for index in range(STRIPE_COUNT):
+                descriptor = os.open(
+                    f"{index:04x}",
+                    os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=locks_fd,
+                )
+                os.close(descriptor)
+        finally:
+            os.close(locks_fd)
 
     def close(self) -> None:
         os.close(self._capacity)
@@ -292,7 +320,7 @@ class Spool:
         fds: list[int] = []
         try:
             for index in range(STRIPE_COUNT):
-                fd = _locked_file(self.root / ".locks" / f"{index:04x}", os.O_RDWR)
+                fd = self._child_fd(f"{index:04x}", os.O_RDWR, ".locks")
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 fds.append(fd)
             with self._capacity_lock():

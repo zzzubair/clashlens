@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -79,6 +80,144 @@ func TestEvidenceSpoolConcurrentWritersConverge(t *testing.T) {
 	}
 	if ledger.FinalObjects != 1 || ledger.ReservedObjects != 0 {
 		t.Fatalf("ledger = %+v, want one final and no reservations", ledger)
+	}
+}
+
+func TestEvidenceSpoolRejectsSymlinkedControlDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	spool, err := newEvidenceSpool(spoolConfig{root: root, maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spool.close()
+	outside := filepath.Join(t.TempDir(), "outside-control")
+	if err := os.Mkdir(outside, 0700); err != nil {
+		t.Fatal(err)
+	}
+	control := filepath.Join(root, ".control")
+	if err := os.Rename(control, control+".real"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, control); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = os.Remove(control)
+		_ = os.Rename(control+".real", control)
+	}()
+	if _, err := newEvidenceSpool(spoolConfig{root: root, maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour}); err == nil {
+		t.Fatal("symlinked .control accepted")
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatalf("outside target was populated: %v %v", entries, err)
+	}
+}
+
+func TestEvidenceSpoolRejectsSymlinkedLockDirectory(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "spool")
+	spool, err := newEvidenceSpool(spoolConfig{root: root, maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spool.close()
+	outside := filepath.Join(t.TempDir(), "outside-locks")
+	if err := os.Mkdir(outside, 0700); err != nil {
+		t.Fatal(err)
+	}
+	locks := filepath.Join(root, ".locks")
+	if err := os.Rename(locks, locks+".real"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, locks); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = os.Remove(locks)
+		_ = os.Rename(locks+".real", locks)
+	}()
+	if _, err := newEvidenceSpool(spoolConfig{root: root, maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour}); err == nil {
+		t.Fatal("symlinked .locks accepted")
+	}
+	if entries, err := os.ReadDir(outside); err != nil || len(entries) != 0 {
+		t.Fatalf("outside lock directory was populated: %v %v", entries, err)
+	}
+}
+
+func TestEvidenceSpoolWriteFailureTransfersAbandonedTempBytes(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-based unlink injection requires a non-root tester")
+	}
+	root := filepath.Join(t.TempDir(), "spool")
+	spool, err := newEvidenceSpool(spoolConfig{root: root, maxBytes: 4096, maxObjects: 10, staleTempAge: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.close()
+	// Create a real temporary file exactly like a failed writer would, then
+	// deny directory write permission so its deletion genuinely fails.
+	tempPath := filepath.Join(root, "tmp", "abandoned.tmp")
+	descriptor, err := openSpoolRelative(root, tempPath, syscall.O_CREAT|syscall.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := bytes.Repeat([]byte("x"), 2048)
+	file := os.NewFile(uintptr(descriptor), tempPath)
+	if _, err := file.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	tmpDir := filepath.Join(root, "tmp")
+	if err := os.Chmod(tmpDir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(tmpDir, 0700)
+	reservation, err := spool.reserve(int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The shared failure path of write(): try to delete the temporary file,
+	// then release the reservation whatever happened.
+	spool.removeOrAbandonTemporary(tempPath)
+	if err := reservation.release(); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := spool.ledger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ledger.AbandonedTempObjects != 1 || ledger.AbandonedTempBytes != int64(len(body)) {
+		t.Fatalf("ledger after failed unlink = %+v, want one abandoned object with %d bytes", ledger, len(body))
+	}
+	if _, statErr := os.Stat(tempPath); statErr != nil {
+		t.Fatalf("surviving temporary file vanished: %v", statErr)
+	}
+	// Admission must count the abandoned bytes against the configured maximum.
+	if _, err := spool.reserve(4096); err == nil {
+		t.Fatal("admission ignored abandoned temporary bytes")
+	}
+	// Reconciliation is idempotent for the crash-before-promotion state.
+	before := ledger.AbandonedTempBytes
+	if err := spool.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	reconciled, err := spool.ledger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.AbandonedTempBytes != before || reconciled.AbandonedTempObjects != 1 {
+		t.Fatalf("reconcile changed abandoned accounting: %+v", reconciled)
+	}
+	// Stale cleanup reclaims the unremovable temporary file and its accounting.
+	os.Chmod(tmpDir, 0700)
+	if err := spool.sweepStale(time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	finalLedger, err := spool.ledger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalLedger.AbandonedTempObjects != 0 || finalLedger.AbandonedTempBytes != 0 {
+		t.Fatalf("stale sweep left abandoned accounting: %+v", finalLedger)
 	}
 }
 

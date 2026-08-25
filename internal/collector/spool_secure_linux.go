@@ -35,6 +35,18 @@ func openSpoolRelative(root, path string, flags int, mode uint32) (int, error) {
 	})
 }
 
+// chmodSpoolRelative re-applies the private directory mode through a trusted
+// root descriptor; mkdirat modes are umask-sensitive.
+func chmodSpoolRelative(root, path string, mode uint32) error {
+	fd, err := openSpoolRelative(root, path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	return file.Chmod(os.FileMode(mode))
+}
+
 func linkSpoolRelative(root, source, destination string) error {
 	sourceDir, err := openSpoolRelative(root, filepath.Dir(source), unix.O_PATH|unix.O_DIRECTORY, 0)
 	if err != nil {

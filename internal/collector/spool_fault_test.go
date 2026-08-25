@@ -308,7 +308,7 @@ func TestSpoolForcedProcessDeathReconcilesWithoutLiveReservationLoss(t *testing.
 	if ledger.ReservedBytes != 0 || ledger.ReservedObjects != 0 {
 		t.Fatalf("dead reservations survived reconciliation: %+v", ledger)
 	}
-	if ledger.TemporaryBytes != 4096 || ledger.TemporaryObjects != 1 {
+	if ledger.AbandonedTempBytes != 4096 || ledger.AbandonedTempObjects != 1 {
 		t.Fatalf("abandoned crash-child temporary not accounted: %+v", ledger)
 	}
 	prefixes, err := os.ReadDir(filepath.Join(root, "sha256"))

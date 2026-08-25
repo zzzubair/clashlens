@@ -231,3 +231,35 @@ def test_spool_rejects_symlink_substitution_race(tmp_path: Path) -> None:
         spool.verify(digest)
     # The outside directory was never populated through the link.
     assert not any(outside.iterdir())
+
+
+def _substituted_reopen(tmp_path: Path, control: str) -> None:
+    """Close a spool, swap one trusted top-level directory for a symlink to an
+    outside directory, and prove reopening refuses and never populates it."""
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    body = b"substitution guard"
+    digest = hashlib.sha256(body).hexdigest()
+    spool.publish(body, digest)
+    spool.close()
+
+    outside = tmp_path / f"outside-{control.strip('.')}"
+    outside.mkdir(mode=0o700)
+    swapped = root / control
+    swapped.rename(swapped.with_name("real"))
+    swapped.symlink_to(outside, target_is_directory=True)
+    try:
+        with pytest.raises((OSError, ValueError, SpoolError)):
+            Spool(root, max_body_bytes=1024)
+        assert not any(outside.iterdir())
+    finally:
+        swapped.unlink()
+        swapped.with_name("real").rename(swapped)
+
+
+def test_reopen_rejects_symlinked_control_directory(tmp_path: Path) -> None:
+    _substituted_reopen(tmp_path, ".control")
+
+
+def test_reopen_rejects_symlinked_lock_directory(tmp_path: Path) -> None:
+    _substituted_reopen(tmp_path, ".locks")
