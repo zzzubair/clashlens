@@ -153,7 +153,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                 assert connection.execute(
                     "SELECT snapshot_state FROM boundary_publication_generations WHERE id = %s",
                     (generation[0],),
-                ).fetchone()[0].decode() == "published"
+                ).fetchone()[0] == "published"
                 army_job_id = int(
                     connection.execute(
                         "SELECT id FROM python_processing_jobs WHERE work_type = 'build_army_analytics'"
@@ -166,7 +166,7 @@ def test_boundary_generation_coalesces_population_and_corrections(
                 assert connection.execute(
                     "SELECT army_state FROM boundary_publication_generations WHERE id = %s",
                     (generation[0],),
-                ).fetchone()[0].decode() == "published"
+                ).fetchone()[0] == "published"
 
                 # A published generation is immutable. A changed member creates
                 # one superseding generation and does not create per-player jobs.
