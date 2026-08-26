@@ -10,7 +10,8 @@ func TestLeaseHeartbeatPreventsReclaimWhileWorkerMakesProgress(t *testing.T) {
 	databaseURL := startContractDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	store, err := openStore(ctx, databaseURL, 1)
+	// Keep the heartbeat connection independent from the competing claimant.
+	store, err := openStore(ctx, databaseURL, 2)
 	if err != nil {
 		t.Fatalf("openStore returned an error: %v", err)
 	}

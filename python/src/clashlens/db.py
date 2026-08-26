@@ -3929,15 +3929,6 @@ class Database:
             """,
             (member_status, generation[0], player_id, member_status),
         )
-        if state == "complete":
-            connection.execute(
-                """
-                UPDATE boundary_publication_generations
-                SET snapshot_state = 'ready', updated_at = clock_timestamp()
-                WHERE id = %s AND snapshot_state = 'pending'
-                """,
-                (generation[0],),
-            )
         self._try_enqueue_boundary_artifacts(
             connection, boundary_at=boundary_at, generation_id=int(generation[0])
         )
@@ -4975,9 +4966,15 @@ class Database:
                     WHERE reset_sweep_id = %s
                 )
                   AND state = 'complete'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM boundary_publication_generation_members
+                      WHERE generation_id = %s
+                        AND ranked_day_version_id IS NOT NULL
+                  )
                 LIMIT 1
                 """,
-                (sweep_id,),
+                (sweep_id, generation_id),
             ).fetchone()
             if complete_baseline is not None:
                 connection.execute(
@@ -5754,7 +5751,7 @@ class Database:
                     connection,
                     claim,
                     str(ranked_day_str),
-                    allow_empty=generation_row is not None and season_id_row is None,
+                    allow_empty=generation_row is not None,
                     official_season_id=str(season_id),
                 )
                 self._build_army_season(connection, claim, str(season_id))
