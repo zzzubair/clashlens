@@ -13,7 +13,6 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0007_player_discovery.sql"
   "$ROOT_DIR/deploy/migrations/0008_public_army_analytics.sql"
   "$ROOT_DIR/deploy/migrations/0009_raw_evidence.sql"
-  "$ROOT_DIR/deploy/migrations/0010_boundary_publication_coordinator.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -581,6 +580,7 @@ schema_migration_applied() {
 
 require_current_schema() {
   local required_version=${#MIGRATION_FILES[@]}
+  [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] || required_version=$((required_version - 1))
   schema_migration_applied "$required_version" || \
     die "forward migration $required_version is required; run up first"
 }

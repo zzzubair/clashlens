@@ -106,11 +106,6 @@ func (s *store) scheduleDueRegular(ctx context.Context, now time.Time, cycle tim
 	if batchSize < 1 {
 		return 0, errors.New("scheduler batch size must be positive")
 	}
-	if allowed, err := s.regularAdmissionAllowed(ctx, now); err != nil {
-		return 0, err
-	} else if !allowed {
-		return 0, nil
-	}
 
 	cycleStart := now.Truncate(cycle)
 	nextCycleStart := cycleStart.Add(cycle)
