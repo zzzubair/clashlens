@@ -294,8 +294,11 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
             recorded["process_until_idle"] = kwargs
             return []
 
-    def fake_database(_url: str, *, max_size: int) -> PoolRecordingDatabase:
+    def fake_database(
+        _url: str, *, max_size: int, expected_contract_version: int
+    ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
+        recorded["expected_contract_version"] = expected_contract_version
         database = PoolRecordingDatabase(_url, max_size=max_size)
         recorded["database"] = database
         return database
@@ -312,6 +315,7 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
 
     assert result == 0
     assert recorded["database_max_size"] == 4
+    assert recorded["expected_contract_version"] == 4
     assert recorded["archive_pool_size"] == 4
     assert recorded["process_until_idle"]["owner"] == "cli-worker"
     assert recorded["process_until_idle"]["max_jobs"] == 3
@@ -329,8 +333,11 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
         def __init__(self, _database: object, _archive: object) -> None:
             return
 
-    def fake_database(_url: str, *, max_size: int) -> PoolRecordingDatabase:
+    def fake_database(
+        _url: str, *, max_size: int, expected_contract_version: int
+    ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
+        recorded["expected_contract_version"] = expected_contract_version
         database = PoolRecordingDatabase(_url, max_size=max_size)
         recorded["database"] = database
         return database
@@ -367,6 +374,7 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
 
     assert result == 0
     assert recorded["database_max_size"] == 8
+    assert recorded["expected_contract_version"] == 4
     assert recorded["archive_pool_size"] == 4
     assert recorded["concurrent_args"] == {
         "concurrency": 3,
@@ -383,8 +391,11 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
         def __init__(self, _database: object, _archive: object) -> None:
             return
 
-    def fake_database(_url: str, *, max_size: int) -> PoolRecordingDatabase:
+    def fake_database(
+        _url: str, *, max_size: int, expected_contract_version: int
+    ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
+        recorded["expected_contract_version"] = expected_contract_version
         return PoolRecordingDatabase(_url, max_size=max_size)
 
     def fake_archive(_arguments: object, *, pool_size: int = 4) -> PoolRecordingArchive:
@@ -411,4 +422,5 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
 
     assert result == 0
     assert recorded["database_max_size"] == 6
+    assert recorded["expected_contract_version"] == 4
     assert recorded["archive_pool_size"] == 12

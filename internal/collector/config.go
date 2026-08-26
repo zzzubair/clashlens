@@ -267,10 +267,10 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	}
 	if config.schemaVersion >= 3 {
 		if config.spoolRoot == "" {
-			return collectorConfig{}, errors.New("CLASHLENS_SPOOL_ROOT is required for schema version 3")
+			return collectorConfig{}, errors.New("CLASHLENS_SPOOL_ROOT is required for schema version 4")
 		}
 		if config.archiveInstanceID == "" || config.archiveMarkerKey == "" || config.archiveMarkerPayloadVersion == "" || len(config.archiveMarkerHash) != sha256HexLength {
-			return collectorConfig{}, errors.New("archive instance ID and marker contract are required for schema version 3")
+			return collectorConfig{}, errors.New("archive instance ID and marker contract are required for schema version 4")
 		}
 		if _, err := hex.DecodeString(config.archiveMarkerHash); err != nil {
 			return collectorConfig{}, errors.New("archive marker hash must be lowercase SHA-256")

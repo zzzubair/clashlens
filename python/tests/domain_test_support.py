@@ -17,7 +17,9 @@ def text(value: Any) -> Any:
 
 
 @contextmanager
-def domain_database(database_url: str) -> Iterator[str]:
+def domain_database(
+    database_url: str, *, include_coordinator: bool = False
+) -> Iterator[str]:
     schema = f"python_domain_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
         admin.execute(f'CREATE SCHEMA "{schema}"')
@@ -26,6 +28,8 @@ def domain_database(database_url: str) -> Iterator[str]:
         root = Path(__file__).parents[2]
         migrations_dir = root / "deploy" / "migrations"
         sql_files = sorted(migrations_dir.glob("*.sql"))
+        if not include_coordinator:
+            sql_files = [path for path in sql_files if path.name < "0011_"]
         with psycopg.connect(connection_info, autocommit=True) as connection:
             for path in sql_files:
                 connection.execute(path.read_text(encoding="utf-8"))

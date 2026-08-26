@@ -13,6 +13,8 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0007_player_discovery.sql"
   "$ROOT_DIR/deploy/migrations/0008_public_army_analytics.sql"
   "$ROOT_DIR/deploy/migrations/0009_raw_evidence.sql"
+  "$ROOT_DIR/deploy/migrations/0010_boundary_publication_coordinator.sql"
+  "$ROOT_DIR/deploy/migrations/0011_boundary_publication_contract.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -78,9 +80,9 @@ Commands:
   init                         Create private Podman resources; apply migration
                                0001 only on an absent database.
   up                           Build the collector image, migrate the contract
-                               to version 2 (bridge -> 0002 -> runtime roles),
+                               to version 4 (stop -> migrate -> restart),
                                and start the required collector.
-  restart                      Start-only recovery for an existing version-2
+  restart                      Start-only recovery for an existing version-4
                                stack: never builds and never runs SQL.
   build-collector              Build the immutable collector image only.
   build-python                 Build the immutable Python image only.
@@ -486,7 +488,7 @@ ensure_volume() {
   fi
 }
 
-runtime_contract_version() { [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && printf '3' || printf '2'; }
+runtime_contract_version() { printf '4'; }
 
 ensure_spool_root() {
   [[ "$CLASHLENS_SPOOL_ROOT" = /* && "$CLASHLENS_SPOOL_ROOT" != "/" ]] || die "CLASHLENS_SPOOL_ROOT must be an absolute non-root path"
@@ -580,13 +582,12 @@ schema_migration_applied() {
 
 require_current_schema() {
   local required_version=${#MIGRATION_FILES[@]}
-  [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] || required_version=$((required_version - 1))
   schema_migration_applied "$required_version" || \
     die "forward migration $required_version is required; run up first"
 }
 
 ensure_archive_instance_contract() {
-  [[ "$(contract_version)" == "3" ]] || return 0
+  [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] || return 0
   local sql
   sql="INSERT INTO archive_instances (instance_id, endpoint, region, bucket, marker_key, marker_hash, marker_payload_version) VALUES ('${CLASHLENS_ARCHIVE_INSTANCE_ID//\'/\'\'}', '${CLASHLENS_ARCHIVE_ENDPOINT//\'/\'\'}', '${CLASHLENS_ARCHIVE_REGION//\'/\'\'}', '${CLASHLENS_ARCHIVE_BUCKET//\'/\'\'}', '${CLASHLENS_ARCHIVE_MARKER_KEY//\'/\'\'}', '${CLASHLENS_ARCHIVE_MARKER_HASH//\'/\'\'}', '${CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION//\'/\'\'}') ON CONFLICT (instance_id) DO UPDATE SET endpoint = EXCLUDED.endpoint, region = EXCLUDED.region, bucket = EXCLUDED.bucket, marker_key = EXCLUDED.marker_key, marker_hash = EXCLUDED.marker_hash, marker_payload_version = EXCLUDED.marker_payload_version WHERE archive_instances.endpoint = EXCLUDED.endpoint AND archive_instances.region = EXCLUDED.region AND archive_instances.bucket = EXCLUDED.bucket AND archive_instances.marker_key = EXCLUDED.marker_key AND archive_instances.marker_hash = EXCLUDED.marker_hash AND archive_instances.marker_payload_version = EXCLUDED.marker_payload_version;"
   printf '%s\n' "$sql" | "$PODMAN_BIN" exec --interactive "$POSTGRES_CONTAINER" psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"
@@ -611,7 +612,7 @@ apply_pending_forward_migrations() {
 }
 
 # Detect the deployed contract explicitly. An empty or failing read means the
-# database has no contract yet; anything outside 1, 2, or 3 is unsupported.
+# database has no contract yet; anything outside 1 through 4 is unsupported.
 contract_version() {
   local version
   version=$("$PODMAN_BIN" exec "$POSTGRES_CONTAINER" \
@@ -627,6 +628,9 @@ contract_version() {
       ;;
     3)
       [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && printf '%s\n' "$version" || printf 'unknown\n'
+      ;;
+    4)
+      printf '%s\n' "$version"
       ;;
     *)
       printf 'unknown\n'
@@ -1370,7 +1374,7 @@ case "$command" in
         apply_initial_contract
         printf 'database initialized; data volume is %s\n' "$POSTGRES_VOLUME"
         ;;
-      1|2|3)
+      1|2|3|4)
         die "database is already initialized at contract version $version; use up or restart"
         ;;
       *)
@@ -1399,7 +1403,7 @@ case "$command" in
         version=2
         fresh_bootstrap=true
       ;;
-      1|2|3) ;;
+      1|2|3|4) ;;
       *)
         die "unsupported contract version $version"
         ;;
@@ -1418,10 +1422,10 @@ case "$command" in
       configure_runtime_roles
       stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
       secret_rm clashlens-bridge-database-url
-    elif [[ ("$version" == "2" || "$version" == "3") && "$fresh_bootstrap" != true ]]; then
-      # Migration 0007 exposes work older collectors interpret incorrectly.
-      # Drain them only while installing that migration; ordinary up preserves workers.
-      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9); then
+    elif [[ ("$version" == "2" || "$version" == "3" || "$version" == "4") && "$fresh_bootstrap" != true ]]; then
+      # Migrations 0007, 0009, 0010, and 0011 change claim/publication
+      # contracts. Stop every old worker before applying any of them.
+      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9) || ! schema_migration_applied 10 || ! schema_migration_applied 11; then
         stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
         stop_all_worker_containers
       fi

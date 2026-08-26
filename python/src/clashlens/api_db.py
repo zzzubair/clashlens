@@ -110,7 +110,7 @@ class ApiDatabase:
             ).fetchone()
             return bool(
                 row is not None
-                and int(row[0]) == expected_contract_version
+                and int(row[0]) >= expected_contract_version
                 and row[1]
                 and row[2]
                 and row[3]
@@ -677,8 +677,7 @@ class ApiDatabase:
                     (account_id, provider),
                 ).fetchone()
                 collision = (owner is not None and int(owner[0]) != account_id) or (
-                    current is not None
-                    and _text(current[0]) != provider_subject
+                    current is not None and _text(current[0]) != provider_subject
                 )
                 if collision:
                     result = OperationResult(
@@ -762,9 +761,7 @@ class ApiDatabase:
                     (account_id, provider, provider_subject),
                 ).fetchone()
                 if owned is None:
-                    result = OperationResult(
-                        404, {"error": "provider_not_linked"}
-                    )
+                    result = OperationResult(404, {"error": "provider_not_linked"})
                     self._complete_request(connection, binding.request_id, result)
                     return result
                 remaining = self._account_providers(connection, account_id)
@@ -1027,8 +1024,9 @@ class ApiDatabase:
                 and isinstance(battle.get("battle_id"), (int, str))
                 and str(battle["battle_id"]).isdigit()
             }
-            army_rows = connection.execute(
-                """
+            army_rows = (
+                connection.execute(
+                    """
                 SELECT battle_id, perspective, status, failure_category,
                        home_troops, spells, siege, cc_troops, heroes,
                        unresolved_components, decoder_version, catalog_version
@@ -1036,18 +1034,22 @@ class ApiDatabase:
                 WHERE battle_id = ANY(%s::bigint[]) AND is_active
                   AND decoder_version = %s AND catalog_version = %s
                 """,
-                (list(battle_ids), DECODER_VERSION, CATALOG_VERSION),
-            ).fetchall() if battle_ids else []
+                    (list(battle_ids), DECODER_VERSION, CATALOG_VERSION),
+                ).fetchall()
+                if battle_ids
+                else []
+            )
             armies = {
-                (str(row[0]), _text(row[1])): _public_army(row)
-                for row in army_rows
+                (str(row[0]), _text(row[1])): _public_army(row) for row in army_rows
             }
             display_logs = deepcopy(daily_logs)
             for day in display_logs:
                 for battle in day.get("battles", []):
                     if not isinstance(battle, dict):
                         continue
-                    perspective = "attacker" if battle.get("lens") == "offense" else "defender"
+                    perspective = (
+                        "attacker" if battle.get("lens") == "offense" else "defender"
+                    )
                     army = armies.get((str(battle.get("battle_id")), perspective))
                     if army is not None:
                         battle["army"] = army
@@ -1120,7 +1122,9 @@ class ApiDatabase:
                 for battle in day.get("battles", []):
                     if not isinstance(battle, dict):
                         continue
-                    perspective = "attacker" if battle.get("lens") == "offense" else "defender"
+                    perspective = (
+                        "attacker" if battle.get("lens") == "offense" else "defender"
+                    )
                     army = armies.get((str(battle.get("battle_id")), perspective))
                     if army is not None:
                         battle["army"] = army
@@ -1313,31 +1317,52 @@ class ApiDatabase:
                 age = max(0.0, (now.astimezone(UTC) - observed_at).total_seconds())
                 age_seconds = int(age)
                 freshness = "fresh" if age <= freshness_seconds else "stale"
-                entries.append({
-                    "position": int(row[6]), "tag": _text(row[0]),
-                    "name": _text(row[1]), "trophies": int(row[2]),
-                    "observed_at": observed_at.isoformat(), "age_seconds": age_seconds,
-                    "freshness": freshness, "confidence": _text(row[4]),
-                    "public_confidence": _public_confidence(True, _text(row[4])),
-                    "clan": None if row[5] is None else _text(row[5]),
-                    "official_rank": None,
-                })
+                entries.append(
+                    {
+                        "position": int(row[6]),
+                        "tag": _text(row[0]),
+                        "name": _text(row[1]),
+                        "trophies": int(row[2]),
+                        "observed_at": observed_at.isoformat(),
+                        "age_seconds": age_seconds,
+                        "freshness": freshness,
+                        "confidence": _text(row[4]),
+                        "public_confidence": _public_confidence(True, _text(row[4])),
+                        "clan": None if row[5] is None else _text(row[5]),
+                        "official_rank": None,
+                    }
+                )
             page_count = (total_entries + limit - 1) // limit
             page = offset // limit + 1
             return {
-                "kind": "live", "ordering_rule_version": "tracked-trophies-md5-v1",
+                "kind": "live",
+                "ordering_rule_version": "tracked-trophies-md5-v1",
                 "generated_at": now.astimezone(UTC).isoformat(),
                 "tracked_population": tracked_population,
-                "total_entries": total_entries, "page": page, "page_size": limit,
-                "page_count": page_count, "has_previous": page > 1,
+                "total_entries": total_entries,
+                "page": page,
+                "page_size": limit,
+                "page_count": page_count,
+                "has_previous": page > 1,
                 "has_next": page < page_count,
-                "coverage": {"state": "partial", "tracked_players": tracked_population,
-                    "measured_percent": (100.0 * total_entries / tracked_population if tracked_population else 0.0),
-                    "note": "Tracked-player publication; complete Legend I coverage is not claimed."},
-                "provenance": {"source": "current accepted player profiles",
+                "coverage": {
+                    "state": "partial",
+                    "tracked_players": tracked_population,
+                    "measured_percent": (
+                        100.0 * total_entries / tracked_population
+                        if tracked_population
+                        else 0.0
+                    ),
+                    "note": "Tracked-player publication; complete Legend I coverage is not claimed.",
+                },
+                "provenance": {
+                    "source": "current accepted player profiles",
                     "observed_at": now.astimezone(UTC).isoformat(),
-                    "freshness": "stale" if stale_count else "fresh", "confidence": "partial",
-                    "coverage": "partial", "version": "tracked-trophies-md5-v1"},
+                    "freshness": "stale" if stale_count else "fresh",
+                    "confidence": "partial",
+                    "coverage": "partial",
+                    "version": "tracked-trophies-md5-v1",
+                },
                 "quality_states": ["partial"] + (["stale"] if stale_count else []),
                 "entries": entries,
             }
@@ -1358,33 +1383,72 @@ class ApiDatabase:
             raise ValueError("season and day must be supplied together")
         now = datetime.now(UTC) if now is None else now
         with self.pool.connection() as connection:
-            locator = connection.execute(
+            coordinator_exists, snapshots_exist = connection.execute(
                 """
-                WITH publications AS (
+                SELECT to_regclass('boundary_publication_generations') IS NOT NULL
+                           AND to_regclass('boundary_publication_manifest_rows') IS NOT NULL,
+                       to_regclass('leaderboard_snapshots') IS NOT NULL
+                """
+            ).fetchone()
+            legacy_publications = """
+                SELECT 'legacy'::text AS source, leaderboard.id,
+                       leaderboard.boundary_at, leaderboard.version, 0 AS generation,
+                       selector.official_season_id, selector.season_day_number
+                FROM api_frozen_leaderboards AS leaderboard
+                JOIN LATERAL (
+                    SELECT day.official_season_id, day.season_day_number
+                    FROM ranked_day_versions AS day
+                    WHERE day.ranked_day_end = leaderboard.boundary_at
+                    ORDER BY day.id DESC LIMIT 1
+                ) AS selector ON true
+            """
+            if coordinator_exists:
+                v2_publications = """
                     SELECT 'v2'::text AS source, snapshot.id, snapshot.boundary_at,
-                           snapshot.version, day.official_season_id,
-                           day.season_day_number
+                           snapshot.version, COALESCE(generation.generation, 0) AS generation,
+                           COALESCE(generation_day.official_season_id, source_day.official_season_id) AS official_season_id,
+                           COALESCE(generation_day.season_day_number, source_day.season_day_number) AS season_day_number
                     FROM leaderboard_snapshots AS snapshot
-                    JOIN ranked_day_versions AS day
-                      ON day.id = snapshot.source_ranked_day_version_id
+                    LEFT JOIN ranked_day_versions AS source_day
+                      ON source_day.id = snapshot.source_ranked_day_version_id
+                    LEFT JOIN boundary_publication_generations AS generation
+                      ON generation.snapshot_id = snapshot.id
+                    LEFT JOIN LATERAL (
+                        SELECT ranked.official_season_id, ranked.season_day_number
+                        FROM boundary_publication_manifest_rows AS member
+                        JOIN ranked_day_versions AS ranked
+                          ON ranked.id = member.ranked_day_version_id
+                        WHERE member.manifest_id = generation.snapshot_manifest_id
+                        ORDER BY ranked.id DESC LIMIT 1
+                    ) AS generation_day ON true
                     WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
-                    UNION ALL
-                    SELECT 'legacy', leaderboard.id, leaderboard.boundary_at,
-                           leaderboard.version, selector.official_season_id,
-                           selector.season_day_number
-                    FROM api_frozen_leaderboards AS leaderboard
-                    JOIN LATERAL (
-                        SELECT day.official_season_id, day.season_day_number
-                        FROM ranked_day_versions AS day
-                        WHERE day.ranked_day_end = leaderboard.boundary_at
-                        ORDER BY day.id DESC LIMIT 1
-                    ) AS selector ON true
-                ), selected AS (
+                      AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
+                """
+            elif snapshots_exist:
+                v2_publications = """
+                    SELECT 'v2'::text AS source, snapshot.id, snapshot.boundary_at,
+                           snapshot.version, 0 AS generation, source_day.official_season_id,
+                           source_day.season_day_number
+                    FROM leaderboard_snapshots AS snapshot
+                    LEFT JOIN ranked_day_versions AS source_day
+                      ON source_day.id = snapshot.source_ranked_day_version_id
+                    WHERE snapshot.snapshot_kind = 'frozen' AND snapshot.state = 'published'
+                """
+            else:
+                v2_publications = ""
+            publications = (
+                v2_publications + " UNION ALL " + legacy_publications
+                if v2_publications
+                else legacy_publications
+            )
+            locator = connection.execute(
+                f"""
+                WITH publications AS ({publications}), selected AS (
                     SELECT * FROM publications
                     WHERE (%s::text IS NULL OR
                            (official_season_id = %s AND season_day_number = %s))
                     ORDER BY boundary_at DESC, (source = 'v2') DESC,
-                             version DESC, id DESC LIMIT 1
+                             version DESC, generation DESC, id DESC LIMIT 1
                 )
                 SELECT selected.source, selected.id,
                        (SELECT json_build_object(
@@ -1392,13 +1456,13 @@ class ApiDatabase:
                                    'season_day_number', p.season_day_number)
                         FROM publications p WHERE p.boundary_at < selected.boundary_at
                         ORDER BY p.boundary_at DESC, (p.source = 'v2') DESC,
-                                 p.version DESC, p.id DESC LIMIT 1),
+                                 p.version DESC, p.generation DESC, p.id DESC LIMIT 1),
                        (SELECT json_build_object(
                                    'official_season_id', p.official_season_id,
                                    'season_day_number', p.season_day_number)
                         FROM publications p WHERE p.boundary_at > selected.boundary_at
                         ORDER BY p.boundary_at, (p.source = 'v2') DESC,
-                                 p.version DESC, p.id DESC LIMIT 1)
+                                 p.version DESC, p.generation DESC, p.id DESC LIMIT 1)
                 FROM selected
                 """,
                 (official_season_id, official_season_id, season_day_number),
@@ -1407,26 +1471,58 @@ class ApiDatabase:
                 return None
             snapshot = None
             if _text(locator[0]) == "v2":
-                snapshot = connection.execute(
+                if coordinator_exists:
+                    snapshot_query = """
+                        SELECT snapshot.id, snapshot.boundary_at, snapshot.version,
+                               snapshot.ordering_rule_version,
+                               snapshot.freshness_rule_version,
+                               snapshot.measured_coverage,
+                               snapshot.eligible_population_count,
+                               snapshot.included_entry_count, snapshot.stale_entry_count,
+                               snapshot.fresh_entry_count, snapshot.excluded_missing_count,
+                               snapshot.excluded_invalid_count,
+                               snapshot.excluded_malformed_count,
+                               snapshot.excluded_conflicting_count,
+                               COALESCE(generation_day.official_season_id, source_day.official_season_id) AS official_season_id,
+                               COALESCE(generation_day.season_day_number, source_day.season_day_number) AS season_day_number
+                        FROM leaderboard_snapshots AS snapshot
+                        LEFT JOIN ranked_day_versions AS source_day
+                          ON source_day.id = snapshot.source_ranked_day_version_id
+                        LEFT JOIN boundary_publication_generations AS generation
+                          ON generation.snapshot_id = snapshot.id
+                        LEFT JOIN LATERAL (
+                            SELECT ranked.official_season_id, ranked.season_day_number
+                            FROM boundary_publication_manifest_rows AS member
+                            JOIN ranked_day_versions AS ranked
+                              ON ranked.id = member.ranked_day_version_id
+                            WHERE member.manifest_id = generation.snapshot_manifest_id
+                            ORDER BY ranked.id DESC LIMIT 1
+                        ) AS generation_day ON true
+                        WHERE snapshot.id = %s
+                          AND (generation.id IS NULL OR generation.snapshot_state <> 'superseded')
+                        ORDER BY generation.generation DESC NULLS LAST
+                        LIMIT 1
                     """
-                    SELECT snapshot.id, snapshot.boundary_at, snapshot.version,
-                           snapshot.ordering_rule_version,
-                           snapshot.freshness_rule_version,
-                           snapshot.measured_coverage,
-                           snapshot.eligible_population_count,
-                           snapshot.included_entry_count, snapshot.stale_entry_count,
-                           snapshot.fresh_entry_count, snapshot.excluded_missing_count,
-                           snapshot.excluded_invalid_count,
-                           snapshot.excluded_malformed_count,
-                           snapshot.excluded_conflicting_count,
-                           day.official_season_id, day.season_day_number
-                    FROM leaderboard_snapshots AS snapshot
-                    JOIN ranked_day_versions AS day
-                      ON day.id = snapshot.source_ranked_day_version_id
-                    WHERE snapshot.id = %s
-                    """,
-                    (locator[1],),
-                ).fetchone()
+                else:
+                    snapshot_query = """
+                        SELECT snapshot.id, snapshot.boundary_at, snapshot.version,
+                               snapshot.ordering_rule_version,
+                               snapshot.freshness_rule_version,
+                               snapshot.measured_coverage,
+                               snapshot.eligible_population_count,
+                               snapshot.included_entry_count, snapshot.stale_entry_count,
+                               snapshot.fresh_entry_count, snapshot.excluded_missing_count,
+                               snapshot.excluded_invalid_count,
+                               snapshot.excluded_malformed_count,
+                               snapshot.excluded_conflicting_count,
+                               source_day.official_season_id,
+                               source_day.season_day_number
+                        FROM leaderboard_snapshots AS snapshot
+                        LEFT JOIN ranked_day_versions AS source_day
+                          ON source_day.id = snapshot.source_ranked_day_version_id
+                        WHERE snapshot.id = %s
+                    """
+                snapshot = connection.execute(snapshot_query, (locator[1],)).fetchone()
                 assert snapshot is not None
                 snapshot = (*snapshot, locator[2], locator[3])
             if snapshot is None:
@@ -1481,45 +1577,84 @@ class ApiDatabase:
                 page_count = (total_entries + limit - 1) // limit
                 page = offset // limit + 1
                 return {
-                    "kind": "frozen", "snapshot_id": str(legacy[1]),
+                    "kind": "frozen",
+                    "snapshot_id": str(legacy[1]),
                     "boundary_at": boundary_at.isoformat(),
                     "reset_at": boundary_at.isoformat(),
                     "official_season_id": _text(legacy[6]),
                     "season_day_number": int(legacy[7]),
                     "season_start_at": season_start.isoformat(),
                     "season_end_at": season_end.isoformat(),
-                    "previous_snapshot": legacy[8], "next_snapshot": legacy[9],
-                    "generated_at": boundary_at.isoformat(), "version": int(legacy[3]),
+                    "previous_snapshot": legacy[8],
+                    "next_snapshot": legacy[9],
+                    "generated_at": boundary_at.isoformat(),
+                    "version": int(legacy[3]),
                     "ordering_rule_version": _text(legacy[4]),
-                    "tracked_population": population, "total_entries": total_entries,
-                    "page": page, "page_size": limit, "page_count": page_count,
-                    "has_previous": page > 1, "has_next": page < page_count,
-                    "coverage": {"state": "partial", "tracked_players": population,
-                        "measured_percent": measured * 100 if measured <= 1 else measured,
-                        "note": "Published frozen snapshot coverage is measured from its accepted population."},
-                    "provenance": {"source": "published frozen leaderboard snapshot",
+                    "tracked_population": population,
+                    "total_entries": total_entries,
+                    "page": page,
+                    "page_size": limit,
+                    "page_count": page_count,
+                    "has_previous": page > 1,
+                    "has_next": page < page_count,
+                    "coverage": {
+                        "state": "partial",
+                        "tracked_players": population,
+                        "measured_percent": measured * 100
+                        if measured <= 1
+                        else measured,
+                        "note": "Published frozen snapshot coverage is measured from its accepted population.",
+                    },
+                    "provenance": {
+                        "source": "published frozen leaderboard snapshot",
                         "observed_at": boundary_at.isoformat(),
                         "freshness": "stale" if int(legacy[11]) else "fresh",
-                        "confidence": "partial", "coverage": "partial",
-                        "version": _text(legacy[4])},
-                    "quality_states": ["partial"] + (["stale"] if int(legacy[11]) else []),
-                    "entries": [{
-                        "position": int(row[0]), "tag": _text(row[1]),
-                        "name": None if row[2] is None else _text(row[2]),
-                        "clan": None if row[3] is None else _text(row[3]),
-                        "trophies": int(row[4]),
-                        "observed_at": row[5].astimezone(UTC).isoformat(),
-                        "age_seconds": max(0, int((now.astimezone(UTC) - row[5].astimezone(UTC)).total_seconds())),
-                        "freshness": _text(row[6]), "confidence": _text(row[7]),
-                        "public_confidence": _public_snapshot_confidence(_text(row[7])),
-                        "official_rank": None if row[8] is None else int(row[8]),
-                    } for row in rows],
+                        "confidence": "partial",
+                        "coverage": "partial",
+                        "version": _text(legacy[4]),
+                    },
+                    "quality_states": ["partial"]
+                    + (["stale"] if int(legacy[11]) else []),
+                    "entries": [
+                        {
+                            "position": int(row[0]),
+                            "tag": _text(row[1]),
+                            "name": None if row[2] is None else _text(row[2]),
+                            "clan": None if row[3] is None else _text(row[3]),
+                            "trophies": int(row[4]),
+                            "observed_at": row[5].astimezone(UTC).isoformat(),
+                            "age_seconds": max(
+                                0,
+                                int(
+                                    (
+                                        now.astimezone(UTC) - row[5].astimezone(UTC)
+                                    ).total_seconds()
+                                ),
+                            ),
+                            "freshness": _text(row[6]),
+                            "confidence": _text(row[7]),
+                            "public_confidence": _public_snapshot_confidence(
+                                _text(row[7])
+                            ),
+                            "official_rank": None if row[8] is None else int(row[8]),
+                        }
+                        for row in rows
+                    ],
                 }
             total_entries = int(snapshot[7])
             if offset and offset >= total_entries:
                 return None
-            rows = connection.execute(
+            profile_identity_clause = (
                 """
+                version.id = entry.profile_version_id
+                   OR (entry.profile_version_id IS NULL
+                       AND version.observation_id = entry.profile_observation_id)
+                """
+                if coordinator_exists
+                else "version.observation_id = entry.profile_observation_id"
+            )
+            rows = connection.execute(
+                f"""
                 SELECT entry.position, player.normalized_tag, profile.name,
                        entry.trophies, entry.profile_observed_at,
                        entry.profile_freshness, entry.profile_confidence,
@@ -1529,7 +1664,7 @@ class ApiDatabase:
                 LEFT JOIN LATERAL (
                     SELECT version.name, version.profile_json -> 'clan' ->> 'name' AS clan
                     FROM player_profile_versions AS version
-                    WHERE version.observation_id = entry.profile_observation_id
+                    WHERE {profile_identity_clause}
                     ORDER BY version.id DESC LIMIT 1
                 ) AS profile ON true
                 WHERE entry.snapshot_id = %s
@@ -1544,34 +1679,64 @@ class ApiDatabase:
             page_count = (total_entries + limit - 1) // limit
             page = offset // limit + 1
             return {
-                "kind": "frozen", "snapshot_id": str(snapshot[0]),
-                "boundary_at": boundary_at.isoformat(), "reset_at": boundary_at.isoformat(),
-                "official_season_id": _text(snapshot[14]), "season_day_number": int(snapshot[15]),
-                "season_start_at": season_start.isoformat(), "season_end_at": season_end.isoformat(),
-                "previous_snapshot": snapshot[16], "next_snapshot": snapshot[17],
-                "generated_at": boundary_at.isoformat(), "version": int(snapshot[2]),
+                "kind": "frozen",
+                "snapshot_id": str(snapshot[0]),
+                "boundary_at": boundary_at.isoformat(),
+                "reset_at": boundary_at.isoformat(),
+                "official_season_id": _text(snapshot[14]),
+                "season_day_number": int(snapshot[15]),
+                "season_start_at": season_start.isoformat(),
+                "season_end_at": season_end.isoformat(),
+                "previous_snapshot": snapshot[16],
+                "next_snapshot": snapshot[17],
+                "generated_at": boundary_at.isoformat(),
+                "version": int(snapshot[2]),
                 "ordering_rule_version": _text(snapshot[3]),
-                "tracked_population": int(snapshot[6]), "total_entries": total_entries,
-                "page": page, "page_size": limit, "page_count": page_count,
-                "has_previous": page > 1, "has_next": page < page_count,
-                "coverage": {"state": "partial", "tracked_players": int(snapshot[6]),
+                "tracked_population": int(snapshot[6]),
+                "total_entries": total_entries,
+                "page": page,
+                "page_size": limit,
+                "page_count": page_count,
+                "has_previous": page > 1,
+                "has_next": page < page_count,
+                "coverage": {
+                    "state": "partial",
+                    "tracked_players": int(snapshot[6]),
                     "measured_percent": measured * 100 if measured <= 1 else measured,
-                    "note": "Published frozen snapshot coverage is measured from its accepted population."},
-                "provenance": {"source": "published frozen leaderboard snapshot",
+                    "note": "Published frozen snapshot coverage is measured from its accepted population.",
+                },
+                "provenance": {
+                    "source": "published frozen leaderboard snapshot",
                     "observed_at": boundary_at.isoformat(),
                     "freshness": "stale" if int(snapshot[8]) else "fresh",
-                    "confidence": "partial", "coverage": "partial", "version": _text(snapshot[3])},
+                    "confidence": "partial",
+                    "coverage": "partial",
+                    "version": _text(snapshot[3]),
+                },
                 "quality_states": ["partial"] + (["stale"] if int(snapshot[8]) else []),
-                "entries": [{
-                    "position": int(row[0]), "tag": _text(row[1]),
-                    "name": None if row[2] is None else _text(row[2]), "trophies": int(row[3]),
-                    "observed_at": row[4].astimezone(UTC).isoformat(),
-                    "age_seconds": max(0, int((now.astimezone(UTC) - row[4].astimezone(UTC)).total_seconds())),
-                    "freshness": _text(row[5]), "confidence": _text(row[6]),
-                    "public_confidence": _public_snapshot_confidence(_text(row[6])),
-                    "official_rank": None if row[7] is None else int(row[7]),
-                    "clan": None if row[8] is None else _text(row[8]),
-                } for row in rows],
+                "entries": [
+                    {
+                        "position": int(row[0]),
+                        "tag": _text(row[1]),
+                        "name": None if row[2] is None else _text(row[2]),
+                        "trophies": int(row[3]),
+                        "observed_at": row[4].astimezone(UTC).isoformat(),
+                        "age_seconds": max(
+                            0,
+                            int(
+                                (
+                                    now.astimezone(UTC) - row[4].astimezone(UTC)
+                                ).total_seconds()
+                            ),
+                        ),
+                        "freshness": _text(row[5]),
+                        "confidence": _text(row[6]),
+                        "public_confidence": _public_snapshot_confidence(_text(row[6])),
+                        "official_rank": None if row[7] is None else int(row[7]),
+                        "clan": None if row[8] is None else _text(row[8]),
+                    }
+                    for row in rows
+                ],
             }
 
     def get_army_analytics(
@@ -1677,17 +1842,28 @@ class ApiDatabase:
                       AND lens=%s AND is_current
                     ORDER BY battle_id
                     """,
-                    (resolved.season, resolved.start_day, resolved.end_day, resolved.lens),
+                    (
+                        resolved.season,
+                        resolved.start_day,
+                        resolved.end_day,
+                        resolved.lens,
+                    ),
                 ).fetchall()
                 facts = [
                     {
-                        "id": int(row[0]), "battle_id": int(row[1]),
+                        "id": int(row[0]),
+                        "battle_id": int(row[1]),
                         "population_player_id": int(row[2]),
                         "battle_time_trophies": None if row[3] is None else int(row[3]),
-                        "stars": int(row[4]), "destruction_percentage": int(row[5]),
-                        "army_state": _text(row[6]), "failure_reason": None if row[7] is None else _text(row[7]),
-                        "home_troops": row[8], "spells": row[9], "siege": row[10],
-                        "cc_troops": row[11], "heroes": row[12],
+                        "stars": int(row[4]),
+                        "destruction_percentage": int(row[5]),
+                        "army_state": _text(row[6]),
+                        "failure_reason": None if row[7] is None else _text(row[7]),
+                        "home_troops": row[8],
+                        "spells": row[9],
+                        "siege": row[10],
+                        "cc_troops": row[11],
+                        "heroes": row[12],
                         "unresolved_components": row[13],
                         "perspective_disagreement": bool(row[14]),
                         "input_hash": _text(row[15]),
@@ -1702,15 +1878,24 @@ class ApiDatabase:
                 cohort_evidence: dict[str, int] | None = None
                 if population.startswith("trophies-"):
                     minimum, maximum = map(int, population.split("-")[1:])
-                    missing_trophies = sum(fact["battle_time_trophies"] is None for fact in facts)
-                    facts = [fact for fact in facts if fact["battle_time_trophies"] is not None and minimum <= fact["battle_time_trophies"] <= maximum]
+                    missing_trophies = sum(
+                        fact["battle_time_trophies"] is None for fact in facts
+                    )
+                    facts = [
+                        fact
+                        for fact in facts
+                        if fact["battle_time_trophies"] is not None
+                        and minimum <= fact["battle_time_trophies"] <= maximum
+                    ]
                 else:
                     streak = population.startswith("streak-top-")
                     boundary_by_day = {
                         day: day_starts[day] + timedelta(days=1)
                         for day in range(resolved.start_day, resolved.end_day + 1)
                     }
-                    needed_days = list(boundary_by_day) if streak else [resolved.end_day]
+                    needed_days = (
+                        list(boundary_by_day) if streak else [resolved.end_day]
+                    )
                     snapshots = connection.execute(
                         """
                         SELECT DISTINCT ON (boundary_at)
@@ -1732,7 +1917,9 @@ class ApiDatabase:
                     ]
                     if unavailable_days:
                         raise ArmyAnalyticsUnavailable(unavailable_days)
-                    snapshot_ids = [by_boundary[boundary_by_day[day]][0] for day in needed_days]
+                    snapshot_ids = [
+                        by_boundary[boundary_by_day[day]][0] for day in needed_days
+                    ]
                     snapshot_versions = [
                         by_boundary[boundary_by_day[day]][1] for day in needed_days
                     ]
@@ -1744,21 +1931,29 @@ class ApiDatabase:
                             WHERE snapshot_id=ANY(%s::bigint[]) AND position<=%s
                               AND freshness='fresh' AND confidence='confirmed'
                             GROUP BY player_id HAVING count(DISTINCT snapshot_id)=%s
-                            """, (snapshot_ids, limit, len(snapshot_ids)),
+                            """,
+                            (snapshot_ids, limit, len(snapshot_ids)),
                         ).fetchall()
                     else:
                         if population.startswith("top-"):
                             low, high = 1, int(population.removeprefix("top-"))
                         else:
-                            low, high = map(int, population.removeprefix("band-").split("-"))
+                            low, high = map(
+                                int, population.removeprefix("band-").split("-")
+                            )
                         members = connection.execute(
                             """
                             SELECT player_id FROM leaderboard_snapshot_entries
                             WHERE snapshot_id=%s AND position BETWEEN %s AND %s
-                            """, (snapshot_ids[0], low, high),
+                            """,
+                            (snapshot_ids[0], low, high),
                         ).fetchall()
                     member_ids = {int(row[0]) for row in members}
-                    facts = [fact for fact in facts if fact["population_player_id"] in member_ids]
+                    facts = [
+                        fact
+                        for fact in facts
+                        if fact["population_player_id"] in member_ids
+                    ]
                     excluded_players = 0
                     shielded_player_days = 0
                     if population.startswith("streak-top-"):
@@ -1867,17 +2062,32 @@ class ApiDatabase:
                     "legend_days": [resolved.start_day, resolved.end_day],
                     "snapshot_versions": snapshot_versions,
                 }
-                source_hash = hashlib.sha256(json.dumps({
-                    "selection": requested,
-                    "facts": [(fact["id"], fact["input_hash"]) for fact in facts],
-                    "snapshots": snapshot_ids,
-                }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                source_hash = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "selection": requested,
+                            "facts": [
+                                (fact["id"], fact["input_hash"]) for fact in facts
+                            ],
+                            "snapshots": snapshot_ids,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
                 # The result hash covers both the aggregates and the retained
                 # source-evidence hash, so corrected inputs always change the
                 # published identity.
-                result_hash = hashlib.sha256(json.dumps({
-                    "result": result, "source_evidence": source_hash,
-                }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                result_hash = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "result": result,
+                            "source_evidence": source_hash,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
                 result["reproducibility"]["source_evidence_hash"] = source_hash
                 # Anonymous reads are calculated on the spot and never
                 # persist a row per URL selection. The public identity is
@@ -1885,14 +2095,20 @@ class ApiDatabase:
                 # hash (which already covers the source-evidence hash), so the
                 # same retained inputs reproduce it and corrected inputs
                 # change it without any database writes.
-                publication_key = hashlib.sha256(json.dumps(requested, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+                publication_key = hashlib.sha256(
+                    json.dumps(
+                        requested, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
                 result["selection"] = requested
                 result["publication_identity"] = (
                     f"army-publication-{publication_key[:24]}-{result_hash[:16]}"
                 )
                 return result
 
-    def get_battle_army(self, battle_id: int, perspective: str) -> dict[str, Any] | None:
+    def get_battle_army(
+        self, battle_id: int, perspective: str
+    ) -> dict[str, Any] | None:
         with self.pool.connection() as connection:
             row = connection.execute(
                 """
@@ -2593,12 +2809,14 @@ def _public_army(row: Any) -> dict[str, Any]:
             if not isinstance(fact, (list, tuple)) or len(fact) < 3:
                 continue
             typed_id, quantity, origin = str(fact[0]), int(fact[1]), str(fact[2])
-            result.append({
-                "typed_id": typed_id,
-                "name": catalog_name(typed_id) or typed_id,
-                "quantity": quantity,
-                "origin": origin,
-            })
+            result.append(
+                {
+                    "typed_id": typed_id,
+                    "name": catalog_name(typed_id) or typed_id,
+                    "quantity": quantity,
+                    "origin": origin,
+                }
+            )
         return result
 
     status = _text(row[2])
@@ -2609,14 +2827,20 @@ def _public_army(row: Any) -> dict[str, Any]:
         for hero in row[8]:
             if not isinstance(hero, Mapping):
                 continue
-            for typed_id in [hero.get("hero"), hero.get("pet"), *(hero.get("equipment") or [])]:
+            for typed_id in [
+                hero.get("hero"),
+                hero.get("pet"),
+                *(hero.get("equipment") or []),
+            ]:
                 if isinstance(typed_id, str) and (name := catalog_name(typed_id)):
-                    components.append({
-                        "typed_id": typed_id,
-                        "name": name,
-                        "quantity": 1,
-                        "origin": "hero",
-                    })
+                    components.append(
+                        {
+                            "typed_id": typed_id,
+                            "name": name,
+                            "quantity": 1,
+                            "origin": "hero",
+                        }
+                    )
     unknown = row[9] if isinstance(row[9], list) else []
     return {
         "state": status,

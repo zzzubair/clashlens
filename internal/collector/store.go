@@ -106,16 +106,63 @@ func (s *store) scheduleDueRegular(ctx context.Context, now time.Time, cycle tim
 	if batchSize < 1 {
 		return 0, errors.New("scheduler batch size must be positive")
 	}
+	if s.contractVersion < 4 {
+		if allowed, err := s.regularAdmissionAllowed(ctx, now); err != nil {
+			return 0, err
+		} else if !allowed {
+			return 0, nil
+		}
+	}
 
 	cycleStart := now.Truncate(cycle)
+	boundary := boundaryAdmissionBoundary(now)
 	nextCycleStart := cycleStart.Add(cycle)
 	cycleSeconds := int64(cycle / time.Second)
 	var created int
-	if err := s.pool.QueryRow(ctx, `
-		WITH due AS MATERIALIZED (
+	gateCTE, fromPlayers, wherePlayers := "", "FROM players", "WHERE active"
+	if s.contractVersion >= 4 {
+		gateCTE = `gate_lock AS (
+			SELECT pg_advisory_xact_lock(hashtextextended($8::text, 0))
+		), older_reset AS (
+			WITH RECURSIVE lineage(job_id) AS (
+				SELECT job.id
+				FROM collector_jobs AS job
+				JOIN collector_reset_sweeps AS sweep ON sweep.id = job.sweep_id
+				WHERE sweep.boundary_at < $7::timestamptz
+				  AND job.work_type IN ('reset_baseline','reset_profile')
+				UNION
+				SELECT child.id
+				FROM collector_jobs AS child
+				JOIN collector_attempts AS parent_attempt ON parent_attempt.id = child.parent_attempt_id
+				JOIN lineage AS parent ON parent.job_id = parent_attempt.job_id
+			)
+			SELECT count(*) FILTER (
+				WHERE job.status IN ('pending','leased','waiting_retry','waiting_dependency')
+			) > 0 AS blocked
+			FROM collector_jobs AS job
+			JOIN lineage ON lineage.job_id = job.id
+		), gate AS (
+			SELECT CASE
+				WHEN older_reset.blocked THEN false
+				WHEN $6::timestamptz < $7::timestamptz - interval '5 minutes' THEN true
+				WHEN $6::timestamptz >= $7::timestamptz THEN COALESCE((
+					SELECT safe_handoff
+					FROM collector_boundary_admission
+					WHERE boundary_at = $7::timestamptz
+					FOR UPDATE
+				), false)
+				ELSE false
+			END AS allowed
+			FROM gate_lock CROSS JOIN older_reset
+		), `
+		fromPlayers = "FROM players CROSS JOIN gate"
+		wherePlayers = "WHERE gate.allowed AND active"
+	}
+	query := fmt.Sprintf(`
+		WITH %sdue AS MATERIALIZED (
 			SELECT id, normalized_tag, next_due_at
-			FROM players
-			WHERE active AND next_due_at <= $1
+			%s
+			%s AND next_due_at <= $1
 			ORDER BY next_due_at, id
 			FOR NO KEY UPDATE SKIP LOCKED
 			LIMIT $2
@@ -135,14 +182,19 @@ func (s *store) scheduleDueRegular(ctx context.Context, now time.Time, cycle tim
 			UPDATE players AS player
 			SET next_due_at = $4::timestamptz + CASE
 				WHEN $5::bigint < 1 THEN interval '0 seconds'
-				ELSE ((player.id - 1) % $5::bigint) * interval '1 second'
+				ELSE ((player.id - 1) %% $5::bigint) * interval '1 second'
 			END
 			FROM due
 			WHERE player.id = due.id
 			RETURNING player.id
 		)
 		SELECT count(*) FROM inserted
-	`, now, batchSize, cycleStart.Unix(), nextCycleStart, cycleSeconds).Scan(&created); err != nil {
+		`, gateCTE, fromPlayers, wherePlayers)
+	args := []any{now, batchSize, cycleStart.Unix(), nextCycleStart, cycleSeconds}
+	if s.contractVersion >= 4 {
+		args = append(args, now.UTC().Format(time.RFC3339), boundary.UTC().Format(time.RFC3339), boundaryAdmissionLockKey(boundary))
+	}
+	if err := s.pool.QueryRow(ctx, query, args...).Scan(&created); err != nil {
 		return 0, fmt.Errorf("schedule due regular polls: %w", err)
 	}
 	return created, nil

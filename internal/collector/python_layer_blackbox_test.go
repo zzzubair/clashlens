@@ -36,7 +36,6 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = connection.Close(context.Background()) })
 	applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", "0003_regular_poll_dedup.sql"))
-
 	archive, backend := newFakeS3Server(t)
 	profileBody, err := os.ReadFile(filepath.Join(repositoryRootForTest(t), "python", "testdata", "legend_i_profile_v1.json"))
 	if err != nil {
@@ -99,6 +98,30 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 		nil,
 	); err != nil {
 		t.Fatalf("commit production Go→Python handoff: %v", err)
+	}
+	// The worker image is contract-4 only; migrate after the collector has
+	// written its v2 observation so this remains a genuine handoff test.
+	for _, migration := range []string{
+		"0004_source_parser_v2.sql",
+		"0005_army_decoding.sql",
+		"0006_provider_identities.sql",
+		"0007_player_discovery.sql",
+		"0008_public_army_analytics.sql",
+		"0009_raw_evidence.sql",
+		"0010_boundary_publication_coordinator.sql",
+		"0011_boundary_publication_contract.sql",
+	} {
+		applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", migration))
+	}
+	boundary := boundaryAdmissionBoundary(now)
+	if _, err := collectorStore.pool.Exec(ctx, `
+		INSERT INTO collector_boundary_admission (
+			boundary_at, regular_drain_complete, reset_drain_complete,
+			safe_handoff, state
+		) VALUES ($1, true, true, true, 'safe_handoff')
+		ON CONFLICT (boundary_at) DO UPDATE SET safe_handoff = true, state = 'safe_handoff'
+	`, boundary); err != nil {
+		t.Fatalf("seed worker handoff: %v", err)
 	}
 
 	environment := map[string]string{
