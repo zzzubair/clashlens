@@ -124,16 +124,10 @@ def _process_snapshot_and_analytics(
             SELECT id, version, input_hash, state
             FROM leaderboard_snapshots
             WHERE snapshot_kind = 'frozen'
-              AND source_ranked_day_version_id = (
-                  SELECT (input_json->>'ranked_day_version_id')::bigint
-                  FROM python_processing_jobs
-                  WHERE id = %s
-              )
               AND state = 'building'
             ORDER BY version DESC, id DESC
             LIMIT 1
             """,
-            (snapshot_job_id,),
         ).fetchone()
         assert snapshot is not None
         analytics_jobs = connection.execute(

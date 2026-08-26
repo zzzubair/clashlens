@@ -268,6 +268,29 @@ func (a *application) dependenciesReady(ctx context.Context) error {
 }
 
 func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
+	// Reset admission is prepared before regular work is considered. This
+	// prevents priority ordering from allowing a regular poll to overlap the
+	// reset baseline cycle.
+	boundaryAvailable, err := a.store.boundaryAdmissionAvailable(ctx)
+	if err != nil {
+		return err
+	}
+	var sweepID int64
+	var created bool
+	if boundaryAvailable {
+		sweepID, created, err = a.store.prepareBoundaryAdmission(ctx, now)
+	} else {
+		boundary := resetBoundaryAtOrBefore(now)
+		sweepID, created, err = a.store.scheduleResetSweep(ctx, boundary)
+	}
+	if err != nil {
+		return err
+	}
+
+	regularAdmissionAllowed, err := a.store.regularAdmissionAllowed(ctx, now)
+	if err != nil {
+		return err
+	}
 	schedulerStartedAt := time.Now()
 	scheduled, err := a.store.scheduleDueRegular(ctx, now, a.config.pollCycle, a.config.scheduleBatchSize)
 	a.metrics.recordStageDuration("schedule_due_regular", time.Since(schedulerStartedAt))
@@ -278,7 +301,7 @@ func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 		a.metrics.recordJob("regular_poll", string(normalPool), "scheduled")
 	}
 	var globalRankingsCreated bool
-	if a.config.enableGlobalRankings {
+	if regularAdmissionAllowed && a.config.enableGlobalRankings {
 		globalRankingsCreated, err = a.store.scheduleGlobalRankings(ctx, now, 5*time.Minute)
 		if err != nil {
 			return err
@@ -305,11 +328,6 @@ func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 			a.lastSpoolCleanupAt.Store(now.UnixNano())
 			a.metrics.recordStageDuration("spool_cleanup", time.Since(cleanupStartedAt))
 		}
-	}
-	boundary := resetBoundaryAtOrBefore(now)
-	sweepID, created, err := a.store.scheduleResetSweep(ctx, boundary)
-	if err != nil {
-		return err
 	}
 	a.logger.InfoContext(
 		ctx,
