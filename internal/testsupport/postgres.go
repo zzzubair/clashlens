@@ -21,7 +21,7 @@ func StartPostgres(t testing.TB) string {
 		Database("clashlens").
 		Username("postgres").
 		Password("postgres").
-		Locale("C").
+		Locale("C.UTF-8").
 		Logger(io.Discard).
 		RuntimePath(filepath.Join(root, "runtime")).
 		DataPath(filepath.Join(root, "data")).

@@ -2,6 +2,9 @@ package collector
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -252,9 +255,15 @@ func (s *store) scheduleResetSweep(ctx context.Context, boundary time.Time) (int
 		return 0, false, fmt.Errorf("begin reset sweep transaction: %w", err)
 	}
 	defer func() { _ = transaction.Rollback(ctx) }()
+	if _, err := transaction.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
+	`, boundaryAdmissionLockKey(boundary)); err != nil {
+		return 0, false, fmt.Errorf("lock reset boundary: %w", err)
+	}
 
 	var sweepID int64
 	created := true
+	allowRootRepair := true
 	err = transaction.QueryRow(ctx, `
 		INSERT INTO collector_reset_sweeps (boundary_at)
 		VALUES ($1)
@@ -273,16 +282,54 @@ func (s *store) scheduleResetSweep(ctx context.Context, boundary time.Time) (int
 	} else if err != nil {
 		return 0, false, fmt.Errorf("create reset sweep: %w", err)
 	}
+	if contractVersion >= 4 {
+		var state string
+		stateErr := transaction.QueryRow(ctx, `
+			SELECT state FROM collector_boundary_admission
+			WHERE boundary_at = $1
+			FOR UPDATE
+		`, boundary).Scan(&state)
+		if stateErr == nil {
+			allowRootRepair = state != "reset_draining" && state != "safe_handoff"
+		} else if !errors.Is(stateErr, pgx.ErrNoRows) {
+			return 0, false, fmt.Errorf("read reset admission state: %w", stateErr)
+		}
+	}
 
 	if contractVersion >= 2 {
-		// A retry repairs work that was not committed before a scheduler restart.
-		// The sweep ID and each baseline identity remain stable across retries.
-		if _, err := transaction.Exec(ctx, `
-			INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
-			SELECT $1, id FROM players WHERE active
-			ON CONFLICT (sweep_id, player_id) DO NOTHING
-		`, sweepID); err != nil {
-			return 0, false, fmt.Errorf("fix paired reset sweep membership: %w", err)
+		// Once reset draining begins the root is immutable. Do not repair its
+		// generation or children after the handoff fence has started.
+		if !allowRootRepair {
+			if err := transaction.Commit(ctx); err != nil {
+				return 0, false, fmt.Errorf("commit reset admission repair fence: %w", err)
+			}
+			return sweepID, created, nil
+		}
+		// Membership is captured only when the sweep row is first created. A
+		// retry repairs children for that immutable population but never adds
+		// players who became active after the reset boundary was admitted.
+		if created {
+			if _, err := transaction.Exec(ctx, `
+				INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
+				SELECT $1, id FROM players WHERE active
+				ON CONFLICT (sweep_id, player_id) DO NOTHING
+			`, sweepID); err != nil {
+				return 0, false, fmt.Errorf("capture paired reset sweep membership: %w", err)
+			}
+		}
+		if contractVersion >= 4 {
+			if _, err := transaction.Exec(ctx, `
+				UPDATE collector_reset_sweeps
+				SET membership_captured_at = COALESCE(membership_captured_at, clock_timestamp())
+				WHERE id = $1
+			`, sweepID); err != nil {
+				return 0, false, fmt.Errorf("capture reset membership timestamp: %w", err)
+			}
+		}
+		if contractVersion >= 4 {
+			if err := ensureBoundaryGeneration(ctx, transaction, boundary, sweepID); err != nil {
+				return 0, false, err
+			}
 		}
 		if _, err := transaction.Exec(ctx, `
 			INSERT INTO collector_reset_baseline_sweeps (
@@ -363,6 +410,91 @@ func (s *store) scheduleResetSweep(ctx context.Context, boundary time.Time) (int
 		return 0, false, fmt.Errorf("commit reset sweep: %w", err)
 	}
 	return sweepID, created, nil
+}
+
+func ensureBoundaryGeneration(
+	ctx context.Context, transaction pgx.Tx, boundary time.Time, sweepID int64,
+) error {
+	rows, err := transaction.Query(ctx, `
+		SELECT player_id
+		FROM collector_reset_sweep_members
+		WHERE sweep_id = $1
+		ORDER BY player_id
+	`, sweepID)
+	if err != nil {
+		return fmt.Errorf("read frozen reset membership: %w", err)
+	}
+	playerIDs := make([]int64, 0)
+	for rows.Next() {
+		var playerID int64
+		if err := rows.Scan(&playerID); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan frozen reset membership: %w", err)
+		}
+		playerIDs = append(playerIDs, playerID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("read frozen reset membership rows: %w", err)
+	}
+	rows.Close()
+	population, err := json.Marshal(playerIDs)
+	if err != nil {
+		return fmt.Errorf("encode frozen reset membership: %w", err)
+	}
+	digest := sha256.Sum256(population)
+	populationHash := hex.EncodeToString(digest[:])
+	targetAt := boundary.Add(5 * time.Minute)
+	if boundary.Weekday() == time.Monday {
+		targetAt = boundary.Add(10 * time.Minute)
+	}
+	var generationID int64
+	generationCaptured := false
+	err = transaction.QueryRow(ctx, `
+		INSERT INTO boundary_publication_generations (
+			boundary_at, generation, sweep_id, ordering_rule_version,
+			freshness_rule_version, expected_population_count,
+			expected_population_hash, membership_rule_version,
+			snapshot_rule_version, army_rule_version, target_rule, target_at
+		) VALUES ($1, 1, $2, 'legend-snapshot-order-v1',
+		          'legend-profile-freshness-v1', $3, $4,
+		          'active-members-v1', 'legend-analytics-v1',
+		          'army-analytics-v2', 'boundary-delay-v1', $5)
+		ON CONFLICT (boundary_at, generation) DO NOTHING
+		RETURNING id
+	`, boundary, sweepID, len(playerIDs), populationHash, targetAt).Scan(&generationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if err := transaction.QueryRow(ctx, `
+			SELECT id, membership_captured_at IS NOT NULL
+			FROM boundary_publication_generations
+			WHERE boundary_at = $1 AND generation = 1
+			FOR UPDATE
+		`, boundary).Scan(&generationID, &generationCaptured); err != nil {
+			return fmt.Errorf("find boundary generation: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("create boundary generation: %w", err)
+	}
+	if !generationCaptured {
+		if _, err := transaction.Exec(ctx, `
+			INSERT INTO boundary_publication_generation_members
+				(generation_id, player_id)
+			SELECT $1, player_id
+			FROM collector_reset_sweep_members
+			WHERE sweep_id = $2
+			ON CONFLICT (generation_id, player_id) DO NOTHING
+		`, generationID, sweepID); err != nil {
+			return fmt.Errorf("copy boundary generation membership: %w", err)
+		}
+	}
+	if _, err := transaction.Exec(ctx, `
+		UPDATE boundary_publication_generations
+		SET membership_captured_at = COALESCE(membership_captured_at, clock_timestamp())
+		WHERE id = $1
+	`, generationID); err != nil {
+		return fmt.Errorf("capture boundary generation membership timestamp: %w", err)
+	}
+	return nil
 }
 
 func (s *store) currentContractVersion(ctx context.Context) (int, error) {

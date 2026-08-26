@@ -25,7 +25,7 @@ import uvicorn
 from .api import create_app
 from .api_db import ApiDatabase
 from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
-from .db import MAX_POOL_SIZE, Database
+from .db import CONTRACT_VERSION, MAX_POOL_SIZE, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
 from .profile import normalize_player_tag
 from .verification import (
@@ -101,9 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--archive-pool-size",
         type=_bounded_int("archive pool size", 1, MAX_ARCHIVE_POOL_SIZE),
         default=None,
-        help=(
-            "archive HTTP connection pool size (default: max(4, concurrency))"
-        ),
+        help=("archive HTTP connection pool size (default: max(4, concurrency))"),
     )
 
     ready = subparsers.add_parser(
@@ -111,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _database_argument(ready)
     _archive_arguments(ready)
-    ready.add_argument("--expected-contract-version", type=int, default=3)
+    ready.add_argument("--expected-contract-version", type=int, default=4)
 
     queue_status = subparsers.add_parser(
         "queue-status", help="report aggregate production worker queue health"
@@ -194,10 +192,13 @@ def build_parser() -> argparse.ArgumentParser:
     recover_discord.add_argument("--discord-user-id", required=True)
     recover_discord.add_argument("--operator", required=True)
     recover_discord.add_argument("--reason", required=True)
-    recover_discord.add_argument("--official-key-file",
-                                 default=os.environ.get("CLASHLENS_OFFICIAL_KEY_FILE", ""))
-    recover_discord.add_argument("--official-proxy-url",
-                                 default=os.environ.get("CLASHLENS_OFFICIAL_PROXY_URL", ""))
+    recover_discord.add_argument(
+        "--official-key-file", default=os.environ.get("CLASHLENS_OFFICIAL_KEY_FILE", "")
+    )
+    recover_discord.add_argument(
+        "--official-proxy-url",
+        default=os.environ.get("CLASHLENS_OFFICIAL_PROXY_URL", ""),
+    )
 
     return parser
 
@@ -268,20 +269,27 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         if arguments.archive_pool_size is not None
         else (max(4, concurrency) if concurrency > 1 else 4)
     )
-    database = Database(_database_url(arguments), max_size=database_pool_size)
+    database = Database(
+        _database_url(arguments),
+        max_size=database_pool_size,
+        expected_contract_version=CONTRACT_VERSION,
+    )
+    assert_contract_version = getattr(database, "assert_contract_version", None)
+    if callable(assert_contract_version):
+        assert_contract_version(CONTRACT_VERSION)
     stop_requested = Event()
     _install_shutdown_handlers(stop_requested)
     try:
         stage_metrics = StageMetrics()
         try:
-            archive = _archive(arguments, pool_size=archive_pool_size, database=database)
+            archive = _archive(
+                arguments, pool_size=archive_pool_size, database=database
+            )
         except TypeError as error:
             if "database" not in str(error):
                 raise
             archive = _archive(arguments, pool_size=archive_pool_size)
-        set_archive_pool_observer = getattr(
-            archive, "set_pool_acquire_observer", None
-        )
+        set_archive_pool_observer = getattr(archive, "set_pool_acquire_observer", None)
         if callable(set_archive_pool_observer):
             set_archive_pool_observer(
                 lambda duration: stage_metrics.record(
@@ -289,18 +297,26 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 )
             )
         processor = ObservationProcessor(database, archive)
+        reevaluate = getattr(database, "reevaluate_boundary_publications", None)
+        if callable(reevaluate):
+            reevaluate()
         if isinstance(processor, ObservationProcessor):
             processor.stage_metrics = stage_metrics
             database.stage_metrics = stage_metrics
         next_queue_maintenance_at = float("-inf")
+        next_publication_reevaluation_at = float("-inf")
 
         def process_batch() -> list[ProcessResult]:
-            nonlocal next_queue_maintenance_at
+            nonlocal next_queue_maintenance_at, next_publication_reevaluation_at
             # Local spool and PostgreSQL own claim readiness. Remote marker
             # health is telemetry; known local duplicates remain processable.
             if not archive.check_ready():
                 return []
             current_time = monotonic()
+            if current_time >= next_publication_reevaluation_at:
+                if callable(reevaluate):
+                    reevaluate()
+                next_publication_reevaluation_at = current_time + 10
             if current_time >= next_queue_maintenance_at:
                 maintenance_started_at = monotonic()
                 database.maintain_queue(max_jobs=100)
@@ -354,13 +370,17 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                         {
                             "event": "worker_health",
                             "queue": getattr(database, "queue_health", dict)(),
-                            "database_pool": getattr(
-                                database, "pool_health", dict
-                            )(),
+                            "database_pool": getattr(database, "pool_health", dict)(),
                             "stages": stage_metrics.snapshot(),
                             "archive": {
-                                "spool": getattr(archive, "readiness", lambda: {"ready": True})(),
-                                "remote_health": getattr(archive, "check_marker_health", lambda: "unconfigured")(),
+                                "spool": getattr(
+                                    archive, "readiness", lambda: {"ready": True}
+                                )(),
+                                "remote_health": getattr(
+                                    archive,
+                                    "check_marker_health",
+                                    lambda: "unconfigured",
+                                )(),
                             },
                         }
                     ),
@@ -378,8 +398,12 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                     "database_pool": getattr(database, "pool_health", dict)(),
                     "stages": stage_metrics.snapshot(),
                     "archive": {
-                        "spool": getattr(archive, "readiness", lambda: {"ready": True})(),
-                        "remote_health": getattr(archive, "check_marker_health", lambda: "unconfigured")(),
+                        "spool": getattr(
+                            archive, "readiness", lambda: {"ready": True}
+                        )(),
+                        "remote_health": getattr(
+                            archive, "check_marker_health", lambda: "unconfigured"
+                        )(),
                     },
                 }
             )
@@ -399,13 +423,33 @@ def _run_ready(arguments: argparse.Namespace) -> int:
             return 1
         if not archive.check_ready():
             return 1
-        remote_health = getattr(archive, "check_marker_health", lambda: "unconfigured")()
+        remote_health = getattr(
+            archive, "check_marker_health", lambda: "unconfigured"
+        )()
         if remote_health == "terminal":
             # A marker mismatch is terminal configuration drift, not an outage;
             # readiness must fail so the operator resolves it before workers run.
-            print(json.dumps({"status": "not_ready", "spool": getattr(archive, "readiness", lambda: {"ready": True})(), "remote_health": remote_health}))
+            print(
+                json.dumps(
+                    {
+                        "status": "not_ready",
+                        "spool": getattr(
+                            archive, "readiness", lambda: {"ready": True}
+                        )(),
+                        "remote_health": remote_health,
+                    }
+                )
+            )
             return 1
-        print(json.dumps({"status": "ready", "spool": getattr(archive, "readiness", lambda: {"ready": True})(), "remote_health": remote_health}))
+        print(
+            json.dumps(
+                {
+                    "status": "ready",
+                    "spool": getattr(archive, "readiness", lambda: {"ready": True})(),
+                    "remote_health": remote_health,
+                }
+            )
+        )
         return 0
     finally:
         database.close()
@@ -437,7 +481,10 @@ def _archive_arguments(parser: argparse.ArgumentParser) -> None:
         "--archive-bucket",
         default=os.environ.get("CLASHLENS_ARCHIVE_BUCKET", "evidence"),
     )
-    parser.add_argument("--archive-region", default=os.environ.get("CLASHLENS_ARCHIVE_REGION", "us-east-1"))
+    parser.add_argument(
+        "--archive-region",
+        default=os.environ.get("CLASHLENS_ARCHIVE_REGION", "us-east-1"),
+    )
     parser.add_argument(
         "--archive-access-key",
         default=os.environ.get("CLASHLENS_ARCHIVE_ACCESS_KEY", ""),
@@ -456,19 +503,54 @@ def _archive_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--archive-secure", action="store_true", default=True)
     parser.add_argument("--archive-insecure-test-only", action="store_true")
-    parser.add_argument("--spool-root", default=os.environ.get("CLASHLENS_SPOOL_ROOT", ""))
-    parser.add_argument("--spool-max-bytes", type=int, default=int(os.environ.get("CLASHLENS_SPOOL_MAX_BYTES", str(16 << 30))))
-    parser.add_argument("--spool-max-objects", type=int, default=int(os.environ.get("CLASHLENS_SPOOL_MAX_OBJECTS", "1000000")))
-    parser.add_argument("--spool-free-space-floor", type=int, default=int(os.environ.get("CLASHLENS_SPOOL_FREE_SPACE_FLOOR", "0")))
-    parser.add_argument("--spool-free-inode-floor", type=int, default=int(os.environ.get("CLASHLENS_SPOOL_FREE_INODE_FLOOR", "0")))
-    parser.add_argument("--archive-instance-id", default=os.environ.get("CLASHLENS_ARCHIVE_INSTANCE_ID", ""))
-    parser.add_argument("--archive-marker-key", default=os.environ.get("CLASHLENS_ARCHIVE_MARKER_KEY", ""))
-    parser.add_argument("--archive-marker-hash", default=os.environ.get("CLASHLENS_ARCHIVE_MARKER_HASH", ""))
-    parser.add_argument("--archive-marker-payload-version", default=os.environ.get("CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION", ""))
+    parser.add_argument(
+        "--spool-root", default=os.environ.get("CLASHLENS_SPOOL_ROOT", "")
+    )
+    parser.add_argument(
+        "--spool-max-bytes",
+        type=int,
+        default=int(os.environ.get("CLASHLENS_SPOOL_MAX_BYTES", str(16 << 30))),
+    )
+    parser.add_argument(
+        "--spool-max-objects",
+        type=int,
+        default=int(os.environ.get("CLASHLENS_SPOOL_MAX_OBJECTS", "1000000")),
+    )
+    parser.add_argument(
+        "--spool-free-space-floor",
+        type=int,
+        default=int(os.environ.get("CLASHLENS_SPOOL_FREE_SPACE_FLOOR", "0")),
+    )
+    parser.add_argument(
+        "--spool-free-inode-floor",
+        type=int,
+        default=int(os.environ.get("CLASHLENS_SPOOL_FREE_INODE_FLOOR", "0")),
+    )
+    parser.add_argument(
+        "--archive-instance-id",
+        default=os.environ.get("CLASHLENS_ARCHIVE_INSTANCE_ID", ""),
+    )
+    parser.add_argument(
+        "--archive-marker-key",
+        default=os.environ.get("CLASHLENS_ARCHIVE_MARKER_KEY", ""),
+    )
+    parser.add_argument(
+        "--archive-marker-hash",
+        default=os.environ.get("CLASHLENS_ARCHIVE_MARKER_HASH", ""),
+    )
+    parser.add_argument(
+        "--archive-marker-payload-version",
+        default=os.environ.get("CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION", ""),
+    )
     parser.add_argument(
         "--archive-max-body-bytes",
         type=int,
-        default=int(os.environ.get("CLASHLENS_MAX_BODY_BYTES", os.environ.get("CLASHLENS_ARCHIVE_MAX_BODY_BYTES", "4194304"))),
+        default=int(
+            os.environ.get(
+                "CLASHLENS_MAX_BODY_BYTES",
+                os.environ.get("CLASHLENS_ARCHIVE_MAX_BODY_BYTES", "4194304"),
+            )
+        ),
     )
     parser.add_argument(
         "--archive-connect-timeout-seconds",
@@ -492,7 +574,12 @@ def _archive_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def _archive(arguments: argparse.Namespace, *, pool_size: int = 4, database: Database | None = None) -> S3ArchiveReader | SpoolFirstReader:
+def _archive(
+    arguments: argparse.Namespace,
+    *,
+    pool_size: int = 4,
+    database: Database | None = None,
+) -> S3ArchiveReader | SpoolFirstReader:
     if not arguments.archive_endpoint:
         raise ValueError("archive endpoint is required")
     access_key = _file_value(
@@ -639,17 +726,15 @@ def _run_recover_discord(arguments: argparse.Namespace) -> int:
     if not UUID_PATTERN.fullmatch(arguments.target_account_public_id):
         print(json.dumps({"status": "invalid_request"}))
         return 1
-    if not arguments.discord_user_id.isdigit() or not 17 <= len(
-        arguments.discord_user_id
-    ) <= 20:
+    if (
+        not arguments.discord_user_id.isdigit()
+        or not 17 <= len(arguments.discord_user_id) <= 20
+    ):
         print(json.dumps({"status": "invalid_request"}))
         return 1
-    if (
-        not 1 <= len(arguments.operator) <= 255
-        or any(
-            character.isspace() or not character.isprintable()
-            for character in arguments.operator
-        )
+    if not 1 <= len(arguments.operator) <= 255 or any(
+        character.isspace() or not character.isprintable()
+        for character in arguments.operator
     ):
         print(json.dumps({"status": "invalid_request"}))
         return 1

@@ -93,7 +93,7 @@ func TestInteractiveIntentsCoalesceAndRecentSuccessSatisfiesRefresh(t *testing.T
 	}
 }
 
-func TestResetSweepFixesActiveMembershipAndCreatesProfileOnlyJobs(t *testing.T) {
+func TestResetSweepKeepsMembershipFrozenAcrossEligibilityChanges(t *testing.T) {
 	databaseURL := startContractDatabase(t)
 	ctx := context.Background()
 	store, err := openStore(ctx, databaseURL, 1)
@@ -155,7 +155,7 @@ func TestResetSweepFixesActiveMembershipAndCreatesProfileOnlyJobs(t *testing.T) 
 		t.Fatalf("count invalid reset jobs: %v", err)
 	}
 	if members != 2 || jobs != 2 || nonProfileJobs != 0 {
-		t.Fatalf("reset outputs = %d members, %d jobs, %d invalid jobs; want 2, 2, 0", members, jobs, nonProfileJobs)
+		t.Fatalf("reset outputs = %d members, %d jobs, %d invalid jobs; want original frozen population 2, 2, 0", members, jobs, nonProfileJobs)
 	}
 }
 
@@ -216,8 +216,8 @@ func TestVersionTwoResetSweepRetryRepairsLateOrMissingPairedWork(t *testing.T) {
 	`, sweepID).Scan(&members, &baselines, &jobs); err != nil {
 		t.Fatalf("read repaired paired reset work: %v", err)
 	}
-	if members != 2 || baselines != 2 || jobs != 2 {
-		t.Fatalf("repaired reset work = %d members, %d baselines, %d jobs; want 2, 2, 2", members, baselines, jobs)
+	if members != 1 || baselines != 1 || jobs != 1 {
+		t.Fatalf("repaired reset work = %d members, %d baselines, %d jobs; want original frozen population 1, 1, 1", members, baselines, jobs)
 	}
 	var duplicateGroups int
 	if err := store.pool.QueryRow(ctx, `

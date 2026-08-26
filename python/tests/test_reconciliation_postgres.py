@@ -94,6 +94,26 @@ def _seed_reset_collection_identity(
             ).fetchone()[0]
         else:
             baseline_sweep_id, reset_sweep_id = int(baseline[0]), int(baseline[1])
+        connection.execute(
+            """
+            INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
+            VALUES (%s, %s)
+            ON CONFLICT (sweep_id, player_id) DO NOTHING
+            """,
+            (reset_sweep_id, player_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO collector_boundary_admission (
+                boundary_at, reset_sweep_id, regular_drain_complete,
+                reset_drain_complete, safe_handoff, state
+            ) VALUES (%s, %s, true, true, true, 'safe_handoff')
+            ON CONFLICT (boundary_at) DO UPDATE
+                SET reset_sweep_id = EXCLUDED.reset_sweep_id,
+                    safe_handoff = true, state = 'safe_handoff'
+            """,
+            (boundary, reset_sweep_id),
+        )
         root_job_id = connection.execute(
             """
             INSERT INTO collector_jobs (
@@ -215,7 +235,7 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
     database_url: str,
     archive_server,
 ) -> None:
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         _start_profile, _start_battle, start_profile_job, start_battle_job = (
             _store_baseline_pair(
                 connection_info,
@@ -281,23 +301,20 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     SELECT id, work_type, deduplication_key, input_json
                     FROM python_processing_jobs
                     WHERE work_type = 'build_snapshot'
-                      AND input_json->>'ranked_day_version_id' = (
-                        SELECT id::text FROM ranked_day_versions WHERE version = 1
-                    )
+                      AND input_json->>'generation' = '1'
+                      AND input_json->>'boundary_at' = %s
                     ORDER BY id
-                    """
+                    """,
+                    (DAY_END.strftime("%Y-%m-%dT%H:%M:%SZ"),),
                 ).fetchall()
-            assert [(text(row[1]), text(row[2])) for row in first_dependent_jobs] == [
-                ("build_snapshot", "build_snapshot:ranked-day-version:1"),
-            ]
-            assert [row[3] for row in first_dependent_jobs] == [
-                {
-                    "boundary_at": "2026-08-05T05:00:00Z",
-                    "player_id": 1,
-                    "ranked_day_start": "2026-08-04T05:00:00Z",
-                    "ranked_day_version_id": 1,
-                },
-            ]
+            assert len(first_dependent_jobs) == 1
+            assert text(first_dependent_jobs[0][2]).startswith(
+                "build_snapshot:boundary:2026-08-05T05:00:00Z:gen:1:manifest:"
+            )
+            assert first_dependent_jobs[0][3]["boundary_at"] == "2026-08-05T05:00:00Z"
+            assert first_dependent_jobs[0][3]["generation"] == 1
+            assert first_dependent_jobs[0][3]["manifest_id"] > 0
+            assert len(first_dependent_jobs[0][3]["manifest_digest"]) == 64
             first_snapshot_id, first_analytics_job_id = _process_snapshot_and_analytics(
                 connection_info,
                 database,
@@ -323,6 +340,14 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     """,
                     (first_snapshot_id, first_snapshot_id + 1),
                 ).fetchall()
+                first_event = connection.execute(
+                    """
+                    SELECT boundary_at, generation, snapshot_id, snapshot_input_hash
+                    FROM boundary_publication_events
+                    WHERE boundary_at = %s AND generation = 1
+                    """,
+                    (DAY_END,),
+                ).fetchone()
             assert first_analytics is not None
             assert text(first_analytics[2]) == "complete"
             assert first_analytics[0]["snapshot_id"] == first_snapshot_id
@@ -331,7 +356,23 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 "published",
                 "published",
             ]
-
+            assert first_event is None
+            with database.pool.connection() as connection:
+                first_army_job = connection.execute(
+                    """
+                    SELECT id
+                    FROM python_processing_jobs
+                    WHERE work_type = 'build_army_analytics'
+                      AND input_json->>'generation' = '1'
+                      AND input_json->>'boundary_at' = %s
+                    """,
+                    (DAY_END.strftime("%Y-%m-%dT%H:%M:%SZ"),),
+                ).fetchone()
+            assert first_army_job is not None
+            first_army = processor.process_job(
+                int(first_army_job[0]), owner="army-first"
+            )
+            assert first_army is not None and first_army.outcome == "processed"
             (
                 corrected_profile,
                 corrected_battle,
@@ -352,6 +393,16 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 assert result is not None and result.outcome == "processed"
 
             with database.pool.connection() as connection:
+                correction = connection.execute(
+                    """
+                    SELECT count(*), max(generation_id), max(affected_artifacts)
+                    FROM boundary_publication_corrections
+                    WHERE boundary_at = %s
+                    """,
+                    (DAY_END,),
+                ).fetchone()
+                assert correction[0] == 1
+                assert correction[2] == ["army"]
                 second_job_row = connection.execute(
                     """
                     SELECT id
@@ -369,15 +420,32 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             second = processor.process_job(second_job, owner="reconcile-correction")
             assert second is not None and second.outcome == "processed"
             with database.pool.connection() as connection:
+                correction = connection.execute(
+                    """
+                    SELECT count(*), max(affected_artifacts)
+                    FROM boundary_publication_corrections
+                    WHERE boundary_at = %s
+                    """,
+                    (DAY_END,),
+                ).fetchone()
+                assert correction[0] == 1
+                assert set(correction[1]) == {"snapshot", "army"}
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM boundary_publication_corrections WHERE boundary_at = %s",
+                        (DAY_END,),
+                    ).fetchone()[0]
+                    == 1
+                )
                 second_dependent_jobs = connection.execute(
                     """
                     SELECT id, work_type FROM python_processing_jobs
                     WHERE work_type = 'build_snapshot'
-                      AND input_json->>'ranked_day_version_id' = (
-                        SELECT id::text FROM ranked_day_versions WHERE version = 2
-                    )
+                      AND input_json->>'generation' = '2'
+                      AND input_json->>'boundary_at' = %s
                     ORDER BY id
-                    """
+                    """,
+                    (DAY_END.strftime("%Y-%m-%dT%H:%M:%SZ"),),
                 ).fetchall()
             assert len(second_dependent_jobs) == 1
             assert text(second_dependent_jobs[0][1]) == "build_snapshot"
@@ -451,19 +519,24 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     """
                     SELECT work_type, count(*)
                     FROM python_processing_jobs
-                    WHERE work_type IN ('build_snapshot', 'build_analytics')
+                    WHERE work_type = 'build_analytics'
+                       OR (work_type = 'build_snapshot'
+                           AND input_json->>'boundary_at' = %s)
                     GROUP BY work_type
                     ORDER BY work_type
-                    """
+                    """,
+                    (DAY_END.strftime("%Y-%m-%dT%H:%M:%SZ"),),
                 ).fetchall()
                 snapshot_job_sets = connection.execute(
                     """
-                    SELECT input_json->>'ranked_day_version_id', work_type, count(*)
+                    SELECT input_json->>'generation', work_type, count(*)
                     FROM python_processing_jobs
                     WHERE work_type = 'build_snapshot'
-                    GROUP BY input_json->>'ranked_day_version_id', work_type
-                    ORDER BY input_json->>'ranked_day_version_id', work_type
-                    """
+                      AND input_json->>'boundary_at' = %s
+                    GROUP BY input_json->>'generation', work_type
+                    ORDER BY input_json->>'generation', work_type
+                    """,
+                    (DAY_END.strftime("%Y-%m-%dT%H:%M:%SZ"),),
                 ).fetchall()
                 analytics_job_sets = connection.execute(
                     """
@@ -736,7 +809,7 @@ def test_postgres_persists_complete_inferred_shield_evidence(
     database_url: str,
     archive_server,
 ) -> None:
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         _start_profile, _start_battle, start_profile_job, start_battle_job = (
             _store_baseline_pair(
                 connection_info,
@@ -837,7 +910,7 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
 ) -> None:
     """Selected source identity is normalized and published without losing evidence."""
 
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         _start_profile, _start_battle, start_profile_job, start_battle_job = (
             _store_baseline_pair(
                 connection_info,
@@ -1057,7 +1130,7 @@ def test_completion_binds_coverage_chain_to_sweep_battle_log_observation_ids(
     database_url: str,
     archive_server,
 ) -> None:
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         _start_profile, start_battle, start_profile_job, start_battle_job = (
             _store_baseline_pair(
                 connection_info,
