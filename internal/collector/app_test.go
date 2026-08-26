@@ -43,6 +43,49 @@ func TestSchedulerDoesNotScheduleGlobalRankingsWhenBetaGateIsDisabled(t *testing
 	}
 }
 
+func TestSchedulerKeepsGlobalRankingsAvailableDuringRegularDrain(t *testing.T) {
+	ctx := context.Background()
+	databaseURL := startBoundaryAdmissionDatabase(t)
+	store, err := openStore(ctx, databaseURL, 4)
+	if err != nil {
+		t.Fatalf("openStore returned an error: %v", err)
+	}
+	defer store.close()
+	now := time.Date(2026, time.August, 5, 4, 57, 0, 0, time.UTC)
+	boundary := resetBoundaryAtOrBefore(now)
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO collector_boundary_admission (
+			boundary_at, state, regular_drain_complete
+		) VALUES ($1, 'regular_draining', false)
+	`, boundary); err != nil {
+		t.Fatalf("insert draining admission: %v", err)
+	}
+	app := &application{
+		config: collectorConfig{
+			pollCycle:            5 * time.Minute,
+			scheduleBatchSize:    10,
+			enableGlobalRankings: true,
+		},
+		store:   store,
+		metrics: newCollectorMetrics(),
+		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := app.schedulerOnce(ctx, now); err != nil {
+		t.Fatalf("schedulerOnce returned an error: %v", err)
+	}
+	var globalJobs, regularJobs int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE work_type = 'global_player_rankings'),
+		       count(*) FILTER (WHERE work_type = 'regular_poll')
+		FROM collector_jobs
+	`).Scan(&globalJobs, &regularJobs); err != nil {
+		t.Fatalf("count scheduled jobs: %v", err)
+	}
+	if globalJobs != 1 || regularJobs != 0 {
+		t.Fatalf("scheduled jobs = global %d regular %d, want 1 and 0", globalJobs, regularJobs)
+	}
+}
+
 func TestSchedulerSchedulesGlobalRankingsWhenBetaGateIsEnabled(t *testing.T) {
 	ctx := context.Background()
 	store := startVersionTwoStore(t, ctx)

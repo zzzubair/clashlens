@@ -287,10 +287,6 @@ func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 		return err
 	}
 
-	regularAdmissionAllowed, err := a.store.regularAdmissionAllowed(ctx, now)
-	if err != nil {
-		return err
-	}
 	schedulerStartedAt := time.Now()
 	scheduled, err := a.store.scheduleDueRegular(ctx, now, a.config.pollCycle, a.config.scheduleBatchSize)
 	a.metrics.recordStageDuration("schedule_due_regular", time.Since(schedulerStartedAt))
@@ -301,7 +297,9 @@ func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 		a.metrics.recordJob("regular_poll", string(normalPool), "scheduled")
 	}
 	var globalRankingsCreated bool
-	if regularAdmissionAllowed && a.config.enableGlobalRankings {
+	if a.config.enableGlobalRankings {
+		// Global rankings are an explicit population-wide root, not a regular
+		// player descendant. Keep it available while regular admission drains.
 		globalRankingsCreated, err = a.store.scheduleGlobalRankings(ctx, now, 5*time.Minute)
 		if err != nil {
 			return err

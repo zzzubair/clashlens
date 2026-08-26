@@ -57,7 +57,7 @@ DEFAULT_PARSER_VERSION = SOURCE_PARSER_VERSION
 DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
 ANALYTICS_RULE_VERSION = "legend-analytics-v1"
 ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
-CONTRACT_VERSION = 3
+CONTRACT_VERSION = 4
 DEFAULT_POOL_SIZE = 4
 MAX_POOL_SIZE = 64
 
@@ -76,7 +76,10 @@ SUPPORTED_WORK_TYPES = (
 
 
 def _supported_job_filter(
-    alias: str, *, denormalized_contract: bool = True
+    alias: str,
+    *,
+    denormalized_contract: bool = True,
+    supports_coordinator: bool = False,
 ) -> tuple[str, list[Any]]:
     """Parameterized SQL predicate for jobs this worker image may claim.
 
@@ -91,6 +94,15 @@ def _supported_job_filter(
     """
     source_clauses: list[str] = []
     params: list[Any] = []
+    coordinator_input_shape = "TRUE"
+    if supports_coordinator:
+        coordinator_input_shape = f"""(
+            {alias}.input_json ? 'generation' AND {alias}.input_json ? 'manifest_id'
+        AND {alias}.input_json ? 'manifest_digest'
+        AND ({alias}.input_json->>'generation') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'manifest_id') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'manifest_digest') ~ '^[0-9a-f]{{64}}$'
+    )"""
     for contract in SOURCE_OBSERVATION_CONTRACTS:
         if denormalized_contract:
             source_clauses.append(
@@ -126,15 +138,23 @@ def _supported_job_filter(
             )
         )
     source_contract = " OR ".join(source_clauses)
-    analytics_input_shape = f"""{alias}.input_json ? 'snapshot_id'
-        AND {alias}.input_json ? 'snapshot_version'
-        AND {alias}.input_json ? 'snapshot_input_hash'
-        AND {alias}.input_json ? 'source_ranked_day_version_id'
+    analytics_input_shape = f"""(
+        {alias}.input_json ? 'snapshot_id' AND {alias}.input_json ? 'snapshot_version'
+        AND {alias}.input_json ? 'snapshot_input_hash' AND {alias}.input_json ? 'source_ranked_day_version_id'
         AND ({alias}.input_json->>'snapshot_id') ~ '^[1-9][0-9]*$'
         AND ({alias}.input_json->>'snapshot_version') ~ '^[1-9][0-9]*$'
-        AND ({alias}.input_json->>'source_ranked_day_version_id')
-            ~ '^[1-9][0-9]*$'
-        AND length({alias}.input_json->>'snapshot_input_hash') > 0"""
+        AND ({alias}.input_json->>'source_ranked_day_version_id') ~ '^[1-9][0-9]*$'
+        AND length({alias}.input_json->>'snapshot_input_hash') > 0
+    ) OR (
+        {alias}.input_json ? 'snapshot_id' AND {alias}.input_json ? 'snapshot_version'
+        AND {alias}.input_json ? 'snapshot_input_hash' AND {alias}.input_json ? 'generation'
+        AND {alias}.input_json ? 'manifest_id' AND {alias}.input_json ? 'manifest_digest'
+        AND ({alias}.input_json->>'snapshot_id') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'snapshot_version') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'generation') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'manifest_id') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'manifest_digest') ~ '^[0-9a-f]{{64}}$'
+    )"""
     return (
         f"""(
             ({alias}.work_type = ANY(%s::text[])
@@ -149,6 +169,7 @@ def _supported_job_filter(
                 AND {alias}.processing_version = %s
                 AND {alias}.domain_rule_version = %s
                 AND {alias}.analytics_rule_version = %s
+                AND {coordinator_input_shape}
                 AND (
                     {alias}.work_type = 'build_snapshot'
                     OR (
@@ -159,7 +180,14 @@ def _supported_job_filter(
             OR ({alias}.work_type = ANY(%s::text[])
                 AND {alias}.processing_version = %s
                 AND {alias}.domain_rule_version = %s
-                AND {alias}.analytics_rule_version = %s))
+                AND {alias}.analytics_rule_version = %s
+                AND (
+                    {alias}.work_type = 'redecode_army'
+                    OR (
+                        {alias}.work_type = 'build_army_analytics'
+                        AND {coordinator_input_shape}
+                    )
+                )))
         """,
         [
             list(SUPPORTED_WORK_TYPES[:2]),
@@ -187,6 +215,7 @@ def _supported_claim_filter(
     observation_alias: str,
     *,
     denormalized_contract: bool = True,
+    supports_coordinator: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """Parameterized supported-job predicate for the claim SELECT.
 
@@ -203,6 +232,15 @@ def _supported_claim_filter(
     # collector_observations. This keeps claim plans bounded at any depth.
     source_clauses: list[str] = []
     params: dict[str, Any] = {}
+    coordinator_input_shape = "TRUE"
+    if supports_coordinator:
+        coordinator_input_shape = f"""(
+            {alias}.input_json ? 'generation' AND {alias}.input_json ? 'manifest_id'
+        AND {alias}.input_json ? 'manifest_digest'
+        AND ({alias}.input_json->>'generation') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'manifest_id') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'manifest_digest') ~ '^[0-9a-f]{{64}}$'
+    )"""
     for contract in SOURCE_OBSERVATION_CONTRACTS:
         prefix = f"source_contract_{len(params)}"
         if denormalized_contract:
@@ -232,15 +270,23 @@ def _supported_claim_filter(
             }
         )
     source_contract = " OR ".join(source_clauses)
-    analytics_input_shape = f"""{alias}.input_json ? 'snapshot_id'
-        AND {alias}.input_json ? 'snapshot_version'
-        AND {alias}.input_json ? 'snapshot_input_hash'
-        AND {alias}.input_json ? 'source_ranked_day_version_id'
+    analytics_input_shape = f"""(
+        {alias}.input_json ? 'snapshot_id' AND {alias}.input_json ? 'snapshot_version'
+        AND {alias}.input_json ? 'snapshot_input_hash' AND {alias}.input_json ? 'source_ranked_day_version_id'
         AND ({alias}.input_json->>'snapshot_id') ~ '^[1-9][0-9]*$'
         AND ({alias}.input_json->>'snapshot_version') ~ '^[1-9][0-9]*$'
-        AND ({alias}.input_json->>'source_ranked_day_version_id')
-            ~ '^[1-9][0-9]*$'
-        AND length({alias}.input_json->>'snapshot_input_hash') > 0"""
+        AND ({alias}.input_json->>'source_ranked_day_version_id') ~ '^[1-9][0-9]*$'
+        AND length({alias}.input_json->>'snapshot_input_hash') > 0
+    ) OR (
+        {alias}.input_json ? 'snapshot_id' AND {alias}.input_json ? 'snapshot_version'
+        AND {alias}.input_json ? 'snapshot_input_hash' AND {alias}.input_json ? 'generation'
+        AND {alias}.input_json ? 'manifest_id' AND {alias}.input_json ? 'manifest_digest'
+        AND ({alias}.input_json->>'snapshot_id') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'snapshot_version') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'generation') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'manifest_id') ~ '^[1-9][0-9]*$'
+        AND ({alias}.input_json->>'manifest_digest') ~ '^[0-9a-f]{{64}}$'
+    )"""
     return (
         f"""(
             ({alias}.work_type = ANY(%(source_work_types)s::text[])
@@ -255,6 +301,7 @@ def _supported_claim_filter(
                 AND {alias}.processing_version = %(processing_version)s
                 AND {alias}.domain_rule_version = %(domain_rule_version)s
                 AND {alias}.analytics_rule_version = %(analytics_rule_version)s
+                AND {coordinator_input_shape}
                 AND (
                     {alias}.work_type = 'build_snapshot'
                     OR (
@@ -265,7 +312,14 @@ def _supported_claim_filter(
             OR ({alias}.work_type = ANY(%(army_work_types)s::text[])
                 AND {alias}.processing_version = %(processing_version)s
                 AND {alias}.domain_rule_version = %(domain_rule_version)s
-                AND {alias}.analytics_rule_version = %(army_analytics_rule_version)s))
+                AND {alias}.analytics_rule_version = %(army_analytics_rule_version)s
+                AND (
+                    {alias}.work_type = 'redecode_army'
+                    OR (
+                        {alias}.work_type = 'build_army_analytics'
+                        AND {coordinator_input_shape}
+                    )
+                )))
         """,
         {
             "source_work_types": list(SUPPORTED_WORK_TYPES[:2]),
@@ -308,6 +362,7 @@ def _claim_select_statement(
     job_id: int | None = None,
     supports_dependency: bool = True,
     denormalized_contract: bool = True,
+    supports_coordinator: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """The bounded claim SELECT and its named parameters.
 
@@ -327,6 +382,7 @@ def _claim_select_statement(
         "job",
         "source_observation",
         denormalized_contract=denormalized_contract,
+        supports_coordinator=supports_coordinator,
     )
     params: dict[str, Any] = {**supported_params}
     if job_id is not None:
@@ -341,9 +397,12 @@ def _claim_select_statement(
     # only generation 1, so it cannot interpret new v2 rows with its old
     # adapter during a staggered deployment. This image retains generation 1
     # for queued work and deterministic v1 replay.
-    dependency_filter = "job.state = 'waiting_dependency' OR " if supports_dependency else ""
+    dependency_filter = (
+        "job.state = 'waiting_dependency' OR " if supports_dependency else ""
+    )
     dependency_column = "job.dependency_deferral_count" if supports_dependency else "0"
-    job_filter = f"""job.claim_compatibility_version IN (1, 2, 3)
+    claim_versions = "1, 2, 3, 4" if supports_coordinator else "1, 2, 3"
+    job_filter = f"""job.claim_compatibility_version IN ({claim_versions})
         AND ({dependency_filter}job.attempt_count < job.max_attempts)
         AND {supported_filter}"""
     if job_id is not None:
@@ -489,7 +548,13 @@ class Claim:
 
 
 class Database:
-    def __init__(self, database_url: str, *, max_size: int = DEFAULT_POOL_SIZE) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        max_size: int = DEFAULT_POOL_SIZE,
+        expected_contract_version: int | None = None,
+    ) -> None:
         if max_size < 1:
             raise ValueError("database pool size must be positive")
         if max_size > MAX_POOL_SIZE:
@@ -517,19 +582,49 @@ class Database:
                 """
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'python_processing_jobs_worker'
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'python_processing_jobs_worker'
                       AND column_name = 'dependency_deferral_count'
                 )
                 """
+            ).fetchone()[0]
+            denormalized_contract = connection.execute(
+                """
+                SELECT count(*) = 3
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'python_processing_jobs_worker'
+                  AND column_name IN ('endpoint', 'endpoint_version', 'schema_version')
+                """
+            ).fetchone()[0]
+            contract_version = connection.execute(
+                "SELECT COALESCE((SELECT version FROM clash_lens_contract WHERE singleton), 0)"
             ).fetchone()[0]
         if missing_worker_view:
             self.pool.close()
             raise RuntimeError(
                 "required python_processing_jobs_worker view is unavailable"
             )
+        if (
+            expected_contract_version is not None
+            and int(contract_version) != expected_contract_version
+        ):
+            self.pool.close()
+            raise RuntimeError(
+                "compiled Python contract version does not match database"
+            )
         self._jobs_relation = "python_processing_jobs_worker"
+        self._contract_version = int(contract_version)
         self._supports_dependency_deferral = bool(dependency_column)
+        self._supports_denormalized_contract = bool(denormalized_contract)
+        self._supports_coordinator_contract = self._contract_version >= 4
         self._dependency_support_probed = True
+
+    def assert_contract_version(self, expected_contract_version: int) -> None:
+        if self._contract_version != expected_contract_version:
+            raise RuntimeError(
+                "compiled Python contract version does not match database"
+            )
 
     def _ensure_dependency_support_probed(self) -> None:
         """Probe dependency-deferral support once, lazily.
@@ -545,12 +640,23 @@ class Database:
                 """
                 SELECT EXISTS (
                     SELECT 1 FROM information_schema.columns
-                    WHERE table_name = 'python_processing_jobs_worker'
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'python_processing_jobs_worker'
                       AND column_name = 'dependency_deferral_count'
                 )
                 """
             ).fetchone()[0]
+            denormalized_contract = connection.execute(
+                """
+                SELECT count(*) = 3
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'python_processing_jobs_worker'
+                  AND column_name IN ('endpoint', 'endpoint_version', 'schema_version')
+                """
+            ).fetchone()[0]
         self._supports_dependency_deferral = bool(dependency_column)
+        self._supports_denormalized_contract = bool(denormalized_contract)
         self._dependency_support_probed = True
 
     @contextmanager
@@ -869,7 +975,10 @@ class Database:
                     self._jobs_relation,
                     job_id=job_id,
                     supports_dependency=self._supports_dependency_deferral,
-                    denormalized_contract=self._supports_dependency_deferral,
+                    denormalized_contract=self._supports_denormalized_contract,
+                    supports_coordinator=getattr(
+                        self, "_supports_coordinator_contract", False
+                    ),
                 )
                 row = connection.execute(claim_statement, claim_params).fetchone()
                 if row is None:
@@ -902,11 +1011,16 @@ class Database:
                     }
                 )
                 token = uuid4().hex
-                dependency_claim = self._supports_dependency_deferral and data["state"] == "waiting_dependency"
-                attempt_number = int(connection.execute(
-                    "SELECT COALESCE(max(attempt_number), 0) + 1 FROM python_processing_attempts WHERE job_id = %s",
-                    (data["job_id"],),
-                ).fetchone()[0])
+                dependency_claim = (
+                    self._supports_dependency_deferral
+                    and _text_value(data["state"]) == "waiting_dependency"
+                )
+                attempt_number = int(
+                    connection.execute(
+                        "SELECT COALESCE(max(attempt_number), 0) + 1 FROM python_processing_attempts WHERE job_id = %s",
+                        (data["job_id"],),
+                    ).fetchone()[0]
+                )
                 # Stale marking keys on the attempts sequence, not the retry
                 # budget: dependency deferrals leave attempt_count untouched
                 # but their abandoned running rows must still be closed out.
@@ -1016,7 +1130,9 @@ class Database:
             raise ValueError("maintenance job limit must be positive")
         self._ensure_dependency_support_probed()
         supported_filter, supported_params = _supported_job_filter(
-            "job", denormalized_contract=self._supports_dependency_deferral
+            "job",
+            denormalized_contract=self._supports_denormalized_contract,
+            supports_coordinator=getattr(self, "_supports_coordinator_contract", False),
         )
         with self._timed_connection() as connection:
             with connection.transaction():
@@ -2535,7 +2651,9 @@ class Database:
 
     def complete_snapshot(self, claim: Claim) -> None:
         generation_input = claim.input_json.get("generation")
-        generation_number = int(generation_input) if generation_input is not None else None
+        generation_number = (
+            int(generation_input) if generation_input is not None else None
+        )
         ranked_day_version_id = (
             int(claim.input_json["ranked_day_version_id"])
             if generation_number is None
@@ -2548,20 +2666,14 @@ class Database:
                 if boundary_text is None:
                     raise ValueError("snapshot boundary is required")
                 boundary_at = datetime.fromisoformat(str(boundary_text)).astimezone(UTC)
-                if generation_number is not None:
-                    target_at = boundary_at + timedelta(
-                        minutes=10 if boundary_at.weekday() == 0 else 5
-                    )
-                    now_row = connection.execute("SELECT clock_timestamp()").fetchone()
-                    assert now_row is not None
-                    if now_row[0] < target_at:
-                        raise ValueError("snapshot publication target dependency is not ready")
                 generation_row = None
+                manifest_digest_value = None
                 if generation_number is not None:
                     generation_row = connection.execute(
                         """
                         SELECT id, snapshot_state, expected_population_count,
-                               expected_population_hash
+                               expected_population_hash, snapshot_manifest_id,
+                               target_at, target_rule, snapshot_rule_version
                         FROM boundary_publication_generations
                         WHERE boundary_at = %s AND generation = %s
                         FOR UPDATE
@@ -2569,26 +2681,93 @@ class Database:
                         (boundary_at, generation_number),
                     ).fetchone()
                     if generation_row is None:
-                        raise ValueError("boundary publication generation does not exist")
-                    if _text_value(generation_row[1]) not in {"ready", "building", "published"}:
+                        raise ValueError(
+                            "boundary publication generation does not exist"
+                        )
+                    if _text_value(generation_row[1]) in {"superseded", "published"}:
+                        self._finish_claim(
+                            connection,
+                            claim,
+                            job,
+                            state="complete",
+                            outcome="stale_superseded",
+                        )
+                        return
+                    if _text_value(generation_row[1]) != "ready":
                         raise ValueError("boundary snapshot is not ready")
+                    target_at = generation_row[5]
+                    if _text_value(generation_row[6]) != "boundary-delay-v1":
+                        raise ValueError("unsupported boundary target rule")
+                    if _text_value(generation_row[7]) != ANALYTICS_RULE_VERSION:
+                        raise ValueError("unsupported boundary snapshot rule")
+                    now_row = connection.execute("SELECT clock_timestamp()").fetchone()
+                    assert now_row is not None
+                    if now_row[0] < target_at:
+                        raise ValueError(
+                            "snapshot publication target dependency is not ready"
+                        )
+                    manifest_id = (
+                        int(generation_row[4])
+                        if generation_row[4] is not None
+                        else None
+                    )
+                    if manifest_id is None:
+                        raise ValueError("boundary snapshot manifest is not frozen")
+                    if int(claim.input_json.get("manifest_id", 0)) != manifest_id:
+                        raise ValueError(
+                            "boundary snapshot manifest identity does not match"
+                        )
+                    manifest_digest = connection.execute(
+                        "SELECT digest FROM boundary_publication_manifests WHERE id = %s",
+                        (manifest_id,),
+                    ).fetchone()
+                    if manifest_digest is None or _text_value(
+                        manifest_digest[0]
+                    ) != claim.input_json.get("manifest_digest"):
+                        raise ValueError(
+                            "boundary snapshot manifest digest does not match"
+                        )
+                    manifest_digest_value = _text_value(manifest_digest[0])
+                    official_identity = connection.execute(
+                        """
+                        SELECT DISTINCT input_identity->>'official_top200_version_id'
+                        FROM boundary_publication_manifest_rows
+                        WHERE manifest_id = %s
+                        """,
+                        (manifest_id,),
+                    ).fetchall()
+                    official_version_input = next(
+                        (
+                            int(row[0])
+                            for row in official_identity
+                            if row[0] is not None
+                        ),
+                        None,
+                    )
                     source_row = connection.execute(
                         """
                         SELECT ranked.id, ranked.ranked_day_start,
                                ranked.ranked_day_end, ranked.input_hash, ranked.version
-                        FROM boundary_publication_generation_members AS member
+                        FROM boundary_publication_manifest_rows AS manifest
                         JOIN ranked_day_versions AS ranked
-                          ON ranked.id = member.ranked_day_version_id
-                        WHERE member.generation_id = %s
+                          ON ranked.id = manifest.ranked_day_version_id
+                        WHERE manifest.manifest_id = %s
                         ORDER BY ranked.id DESC
                         LIMIT 1
                         """,
-                        (generation_row[0],),
+                        (manifest_id,),
                     ).fetchone()
                     if source_row is None:
-                        raise ValueError("boundary publication has no ranked-day input")
-                    ranked_day_version_id = int(source_row[0])
-                    ranked_day = source_row[1:]
+                        ranked_day_version_id = None
+                        ranked_day = (
+                            boundary_at - timedelta(days=1),
+                            boundary_at,
+                            "",
+                            0,
+                        )
+                    else:
+                        ranked_day_version_id = int(source_row[0])
+                        ranked_day = source_row[1:]
                     if ranked_day[1] != boundary_at:
                         raise ValueError("snapshot boundary does not match generation")
                     connection.execute(
@@ -2600,6 +2779,7 @@ class Database:
                         (generation_row[0],),
                     )
                 else:
+                    official_version_input = None
                     assert ranked_day_version_id is not None
                     ranked_day = connection.execute(
                         """
@@ -2609,49 +2789,70 @@ class Database:
                         (ranked_day_version_id,),
                     ).fetchone()
                     if ranked_day is None:
-                        raise ValueError("ranked-day version for snapshot does not exist")
+                        raise ValueError(
+                            "ranked-day version for snapshot does not exist"
+                        )
                     if boundary_at != ranked_day[1]:
                         raise ValueError(
                             "snapshot boundary does not match ranked-day boundary"
                         )
 
-                # Select the newest accepted profile version first, then test its
-                # historical eligibility. A newer ineligible version therefore
-                # blocks an older eligible version, while current player effects
-                # and every post-boundary version remain outside this snapshot.
-                profile_rows = connection.execute(
-                    """
-                    WITH accepted_profiles AS (
-                        SELECT DISTINCT ON (v.player_id)
-                               p.id, p.normalized_tag, v.trophies,
-                               v.observation_id, v.observed_at,
-                               v.eligibility_state
-                        FROM player_profile_versions AS v
-                        JOIN players AS p ON p.id = v.player_id
-                        WHERE v.observed_at <= %s
-                          AND v.source_contract_state = 'accepted'
-                        ORDER BY v.player_id, v.observed_at DESC, v.id DESC
-                    )
-                    SELECT id, normalized_tag, trophies, observation_id,
-                           observed_at, eligibility_state
-                    FROM accepted_profiles
-                    WHERE eligibility_state = 'eligible'
-                      AND (
-                          %s::bigint IS NULL
-                          OR id IN (
-                              SELECT player_id
-                              FROM boundary_publication_generation_members
-                              WHERE generation_id = %s
-                          )
-                      )
-                    ORDER BY id
-                    """,
-                    (
-                        boundary_at,
-                        generation_row[0] if generation_row is not None else None,
-                        generation_row[0] if generation_row is not None else None,
-                    ),
-                ).fetchall()
+                profile_version_ids: dict[int, int] = {}
+                if generation_row is None:
+                    # Direct snapshots use the newest accepted historical
+                    # profile. Coordinated snapshots never execute this query:
+                    # their manifest is the complete profile input.
+                    profile_rows = connection.execute(
+                        """
+                        WITH accepted_profiles AS (
+                            SELECT DISTINCT ON (v.player_id)
+                                   p.id, p.normalized_tag, v.trophies,
+                                   v.observation_id, v.observed_at,
+                                   v.eligibility_state
+                            FROM player_profile_versions AS v
+                            JOIN players AS p ON p.id = v.player_id
+                            WHERE v.observed_at <= %s
+                              AND v.source_contract_state = 'accepted'
+                            ORDER BY v.player_id, v.observed_at DESC, v.id DESC
+                        )
+                        SELECT id, normalized_tag, trophies, observation_id,
+                               observed_at, eligibility_state
+                        FROM accepted_profiles
+                        WHERE eligibility_state = 'eligible'
+                        ORDER BY id
+                        """,
+                        (boundary_at,),
+                    ).fetchall()
+                else:
+                    manifest_profiles = connection.execute(
+                        """
+                        SELECT player_id, input_identity->'profile_snapshot',
+                               input_identity->>'profile_version_id'
+                        FROM boundary_publication_manifest_rows
+                        WHERE manifest_id = %s
+                        """,
+                        (generation_row[4],),
+                    ).fetchall()
+                    profile_version_ids = {
+                        int(row[0]): int(row[2])
+                        for row in manifest_profiles
+                        if row[2] is not None
+                    }
+                    profile_rows = [
+                        (
+                            int(row[0]),
+                            _text_value(row[1]["tag"]),
+                            int(row[1]["trophies"]),
+                            int(row[1]["observation_id"]),
+                            datetime.fromisoformat(
+                                str(row[1]["observed_at"])
+                            ).astimezone(UTC),
+                            _text_value(row[1]["eligibility_state"]),
+                        )
+                        for row in manifest_profiles
+                        if isinstance(row[1], dict)
+                        and _text_value(row[1].get("eligibility_state")) == "eligible"
+                    ]
 
                 official_rows = connection.execute(
                     """
@@ -2662,6 +2863,7 @@ class Database:
                         JOIN official_top200_entries AS e ON e.version_id = v.id
                         WHERE a.outcome = 'official_observed'
                           AND v.observed_at <= %s
+                          AND (%s::bigint IS NULL OR v.id = %s)
                         GROUP BY v.id, v.observed_at
                         HAVING count(*) = 200
                            AND count(DISTINCT e.rank) = 200
@@ -2678,12 +2880,34 @@ class Database:
                     JOIN official_top200_versions AS v ON v.id = e.version_id
                     JOIN latest_complete AS latest ON latest.id = v.id
                     """,
-                    (boundary_at,),
+                    (boundary_at, official_version_input, official_version_input),
                 ).fetchall()
                 official_by_player = {
                     int(row[0]): (int(row[1]), int(row[2]), row[3])
                     for row in official_rows
                 }
+                if generation_row is not None:
+                    manifest_officials = connection.execute(
+                        """
+                        SELECT player_id, input_identity->>'official_rank',
+                               input_identity->>'official_rank_observed_at',
+                               input_identity->>'official_top200_version_id'
+                        FROM boundary_publication_manifest_rows
+                        WHERE manifest_id = %s
+                        """,
+                        (generation_row[4],),
+                    ).fetchall()
+                    official_by_player = {
+                        int(row[0]): (
+                            int(row[1]),
+                            int(row[3]),
+                            datetime.fromisoformat(str(row[2])).astimezone(UTC),
+                        )
+                        for row in manifest_officials
+                        if row[1] is not None
+                        and row[2] is not None
+                        and row[3] is not None
+                    }
 
                 entries: list[dict[str, Any]] = []
                 for row in profile_rows:
@@ -2699,6 +2923,7 @@ class Database:
                             "tag": _text_value(row[1]),
                             "trophies": int(row[2]),
                             "observation_id": int(row[3]),
+                            "profile_version_id": profile_version_ids.get(int(row[0])),
                             "observed_at": row[4],
                             "age_seconds": age_seconds,
                             "freshness": freshness,
@@ -2831,20 +3056,78 @@ class Database:
                     ),
                 ).fetchone()
                 assert quality_row is not None
-                quality = {
-                    "eligible_population_count": (
-                        int(generation_row[2])
-                        if generation_row is not None
-                        else int(quality_row[0])
-                    ),
-                    "included_entry_count": int(quality_row[1]),
-                    "stale_entry_count": int(quality_row[2]),
-                    "fresh_entry_count": int(quality_row[3]),
-                    "excluded_missing_count": int(quality_row[4]),
-                    "excluded_invalid_count": int(quality_row[5]),
-                    "excluded_malformed_count": int(quality_row[6]),
-                    "excluded_conflicting_count": int(quality_row[7]),
-                }
+                if generation_row is not None:
+                    manifest_quality = connection.execute(
+                        """
+                        SELECT player_id, classification
+                        FROM boundary_publication_manifest_rows
+                        WHERE manifest_id = %s
+                        """,
+                        (generation_row[4],),
+                    ).fetchall()
+                    included_players = {int(entry["player_id"]) for entry in entries}
+                    by_classification: dict[str, int] = {}
+                    excluded_classification: dict[str, int] = {}
+                    for player_id, classification in manifest_quality:
+                        name = _text_value(classification)
+                        by_classification[name] = by_classification.get(name, 0) + 1
+                        if int(player_id) not in included_players:
+                            excluded_classification[name] = (
+                                excluded_classification.get(name, 0) + 1
+                            )
+                    if sum(by_classification.values()) != int(generation_row[2]):
+                        raise ValueError(
+                            "snapshot manifest coverage does not match expected population"
+                        )
+                    if len(entries) + sum(excluded_classification.values()) != int(
+                        generation_row[2]
+                    ):
+                        raise ValueError("snapshot output coverage is not reconciled")
+                    quality = {
+                        "expected_population_count": int(generation_row[2]),
+                        "classification_counts": by_classification,
+                        "excluded_classification_counts": excluded_classification,
+                        "eligible_population_count": int(generation_row[2]),
+                        "included_entry_count": len(entries),
+                        "stale_entry_count": sum(
+                            entry["freshness"] == "stale" for entry in entries
+                        ),
+                        "fresh_entry_count": sum(
+                            entry["freshness"] == "fresh" for entry in entries
+                        ),
+                        "excluded_missing_count": excluded_classification.get(
+                            "Missing", 0
+                        ),
+                        "excluded_unavailable_count": excluded_classification.get(
+                            "Unavailable", 0
+                        )
+                        + excluded_classification.get("Failed", 0),
+                        "excluded_invalid_count": 0,
+                        "excluded_malformed_count": excluded_classification.get(
+                            "Malformed", 0
+                        ),
+                        "excluded_conflicting_count": 0,
+                        "excluded_partial_count": excluded_classification.get(
+                            "Partial", 0
+                        ),
+                        "excluded_inconsistent_count": excluded_classification.get(
+                            "Inconsistent", 0
+                        ),
+                    }
+                else:
+                    quality = {
+                        "eligible_population_count": int(quality_row[0]),
+                        "included_entry_count": int(quality_row[1]),
+                        "stale_entry_count": int(quality_row[2]),
+                        "fresh_entry_count": int(quality_row[3]),
+                        "excluded_missing_count": int(quality_row[4]),
+                        "excluded_unavailable_count": 0,
+                        "excluded_invalid_count": int(quality_row[5]),
+                        "excluded_malformed_count": int(quality_row[6]),
+                        "excluded_conflicting_count": int(quality_row[7]),
+                        "excluded_partial_count": 0,
+                        "excluded_inconsistent_count": 0,
+                    }
                 if quality["included_entry_count"] != len(entries):
                     raise ValueError("snapshot quality count does not match entries")
                 coverage = (
@@ -2885,36 +3168,13 @@ class Database:
                     for entry in entries
                 ]
                 if generation_row is not None:
-                    member_inputs = connection.execute(
-                        """
-                        SELECT player_id, ranked_day_version_id,
-                               ranked_day_input_hash, status
-                        FROM boundary_publication_generation_members
-                        WHERE generation_id = %s
-                        ORDER BY player_id
-                        """,
-                        (generation_row[0],),
-                    ).fetchall()
                     hash_payload = {
-                        "boundary_at": boundary_at.astimezone(UTC).isoformat(),
-                        "generation": generation_number,
-                        "expected_population_count": int(generation_row[2]),
-                        "expected_population_hash": _text_value(generation_row[3]),
-                        "ordering_rule_version": SNAPSHOT_ORDERING_RULE_VERSION,
-                        "freshness_rule_version": FRESHNESS_RULE_VERSION,
-                        "member_inputs": [
-                            {
-                                "player_id": int(row[0]),
-                                "ranked_day_version_id": (
-                                    int(row[1]) if row[1] is not None else None
-                                ),
-                                "ranked_day_input_hash": (
-                                    _text_value(row[2]) if row[2] is not None else None
-                                ),
-                                "status": _text_value(row[3]),
-                            }
-                            for row in member_inputs
-                        ],
+                        "manifest_digest": manifest_digest_value,
+                        "rule_versions": {
+                            "ordering_rule_version": SNAPSHOT_ORDERING_RULE_VERSION,
+                            "freshness_rule_version": FRESHNESS_RULE_VERSION,
+                            "analytics_rule_version": _text_value(generation_row[7]),
+                        },
                         "entries": hash_entries,
                         "quality": quality,
                     }
@@ -2941,7 +3201,11 @@ class Database:
                         connection,
                         snapshot_kind="frozen",
                         boundary_at=boundary_at,
-                        ranked_day_version_id=ranked_day_version_id,
+                        ranked_day_version_id=(
+                            None
+                            if generation_row is not None
+                            else ranked_day_version_id
+                        ),
                         entries=entries,
                         coverage=coverage,
                         quality=quality,
@@ -2953,7 +3217,9 @@ class Database:
                     connection,
                     snapshot_kind="live",
                     boundary_at=boundary_at,
-                    ranked_day_version_id=ranked_day_version_id,
+                    ranked_day_version_id=(
+                        None if generation_row is not None else ranked_day_version_id
+                    ),
                     entries=entries,
                     coverage=coverage,
                     quality=quality,
@@ -2965,17 +3231,40 @@ class Database:
                         """
                         UPDATE boundary_publication_generations
                         SET snapshot_id = %s, snapshot_input_hash = %s,
+                            snapshot_coverage = %s,
                             updated_at = clock_timestamp()
                         WHERE id = %s AND snapshot_state = 'building'
                         """,
-                        (frozen_snapshot_id, input_hash, generation_row[0]),
+                        (
+                            frozen_snapshot_id,
+                            input_hash,
+                            Jsonb(quality),
+                            generation_row[0],
+                        ),
                     )
                 self._enqueue_snapshot_analytics(
                     connection,
                     snapshot_id=frozen_snapshot_id,
                     snapshot_version=frozen_snapshot_version,
                     snapshot_input_hash=input_hash,
-                    ranked_day_version_id=ranked_day_version_id,
+                    ranked_day_version_id=(
+                        None if generation_row is not None else ranked_day_version_id
+                    ),
+                    generation_number=generation_number,
+                    manifest_id=(
+                        int(generation_row[4]) if generation_row is not None else None
+                    ),
+                    manifest_digest=(
+                        _text_value(
+                            connection.execute(
+                                "SELECT digest FROM boundary_publication_manifests WHERE id = %s",
+                                (generation_row[4],),
+                            ).fetchone()[0]
+                        )
+                        if generation_row is not None
+                        else None
+                    ),
+                    boundary_at=(boundary_at if generation_row is not None else None),
                     period_start=ranked_day[0],
                     period_end=ranked_day[1],
                 )
@@ -2983,11 +3272,374 @@ class Database:
                     connection, claim, job, state="complete", outcome="processed"
                 )
 
+    def reevaluate_boundary_publications(self) -> int:
+        """Recover ready coordinator generations after worker restart/handoff."""
+        with self.pool.connection() as connection:
+            if (
+                connection.execute(
+                    "SELECT to_regclass(current_schema() || '.boundary_publication_generations')"
+                ).fetchone()[0]
+                is None
+            ):
+                return 0
+            with connection.transaction():
+                generations = connection.execute(
+                    """
+                    SELECT id, boundary_at
+                    FROM boundary_publication_generations
+                    WHERE snapshot_state IN ('pending', 'ready')
+                       OR army_state IN ('pending', 'ready')
+                    ORDER BY boundary_at, generation
+                    FOR UPDATE
+                    """
+                ).fetchall()
+                for generation_id, boundary_at in generations:
+                    self._try_enqueue_boundary_artifacts(
+                        connection,
+                        boundary_at=boundary_at,
+                        generation_id=int(generation_id),
+                    )
+                corrections = connection.execute(
+                    """
+                    SELECT source_generation_id
+                    FROM boundary_publication_corrections
+                    WHERE state IN ('queued', 'pending_inputs')
+                    ORDER BY requested_at, id
+                    FOR UPDATE SKIP LOCKED
+                    """
+                ).fetchall()
+                for (source_generation_id,) in corrections:
+                    self._maybe_emit_boundary_signal(
+                        connection, generation_id=int(source_generation_id)
+                    )
+                return len(generations) + len(corrections)
+
+    @staticmethod
+    def _create_boundary_artifact_identity(
+        connection: Any,
+        *,
+        generation_id: int,
+        artifact_kind: str,
+        manifest_id: int,
+        input_hash: str,
+        source_identity: dict[str, Any],
+    ) -> int:
+        row = connection.execute(
+            """
+            INSERT INTO boundary_publication_artifact_identities
+                (generation_id, artifact_kind, manifest_id, input_hash, source_identity)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (generation_id, artifact_kind, manifest_id) DO NOTHING
+            RETURNING id
+            """,
+            (
+                generation_id,
+                artifact_kind,
+                manifest_id,
+                input_hash,
+                Jsonb(source_identity),
+            ),
+        ).fetchone()
+        if row is None:
+            row = connection.execute(
+                """
+                SELECT id, input_hash, source_identity
+                FROM boundary_publication_artifact_identities
+                WHERE generation_id = %s AND artifact_kind = %s AND manifest_id = %s
+                FOR UPDATE
+                """,
+                (generation_id, artifact_kind, manifest_id),
+            ).fetchone()
+            if (
+                row is None
+                or _text_value(row[1]) != input_hash
+                or dict(row[2]) != source_identity
+            ):
+                raise ValueError("boundary publication artifact identity conflict")
+        return int(row[0])
+
+    def _maybe_emit_boundary_signal(self, connection: Any, generation_id: int) -> None:
+        boundary_row = connection.execute(
+            "SELECT boundary_at FROM boundary_publication_generations WHERE id = %s",
+            (generation_id,),
+        ).fetchone()
+        if boundary_row is None:
+            return
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"boundary-publication:{boundary_row[0].astimezone(UTC).isoformat()}",),
+        )
+        row = connection.execute(
+            """
+            SELECT boundary_at, generation, snapshot_id,
+                   snapshot_input_hash, snapshot_analytics_publication_id,
+                   army_publication_id, supersedes_id,
+                   snapshot_manifest_id, army_manifest_id,
+                   correction_state, army_input_hash,
+                   snapshot_rule_version, army_rule_version,
+                   ordering_rule_version, freshness_rule_version
+            FROM boundary_publication_generations
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (generation_id,),
+        ).fetchone()
+        if row is None or any(value is None for value in row[2:6]):
+            return
+        identities = connection.execute(
+            """
+            SELECT count(*)
+            FROM boundary_publication_artifact_identities
+            WHERE (id, artifact_kind, manifest_id, input_hash) IN (
+                (%s, 'analytics', %s, %s),
+                (%s, 'army', %s, %s)
+            )
+            """,
+            (row[4], row[7], _text_value(row[3]), row[5], row[8], _text_value(row[10])),
+        ).fetchone()
+        if identities is None or int(identities[0]) != 2:
+            return
+        connection.execute(
+            """
+            INSERT INTO boundary_publication_events (
+                boundary_at, generation, snapshot_id, snapshot_input_hash,
+                snapshot_analytics_publication_id, army_publication_id,
+                superseded_generation, manifest_ids, rule_versions
+            ) VALUES (%s, %s, %s, %s, %s, %s,
+                      (SELECT generation FROM boundary_publication_generations WHERE id = %s),
+                      %s, %s)
+            ON CONFLICT (boundary_at, generation) DO NOTHING
+            """,
+            (
+                row[0],
+                int(row[1]),
+                int(row[2]),
+                _text_value(row[3]),
+                int(row[4]),
+                int(row[5]),
+                row[6],
+                Jsonb(
+                    {
+                        "snapshot": int(row[7]) if row[7] is not None else None,
+                        "army": int(row[8]) if row[8] is not None else None,
+                    }
+                ),
+                Jsonb(
+                    {
+                        "ordering_rule_version": _text_value(row[13]),
+                        "freshness_rule_version": _text_value(row[14]),
+                        "analytics_rule_version": _text_value(row[11]),
+                        "army_analytics_rule_version": _text_value(row[12]),
+                    }
+                ),
+            ),
+        )
+        if _text_value(row[9]) in {"none", "active", "finalized"}:
+            connection.execute(
+                "UPDATE boundary_publication_generations SET correction_state = 'finalized', updated_at = clock_timestamp() WHERE id = %s",
+                (generation_id,),
+            )
+            connection.execute(
+                """
+                UPDATE boundary_publication_corrections
+                SET state = 'finalized', finalized_at = clock_timestamp()
+                WHERE generation_id = %s AND state = 'active'
+                """,
+                (generation_id,),
+            )
+            queued = connection.execute(
+                """
+                SELECT id, affected_artifacts, pending_inputs
+                FROM boundary_publication_corrections
+                WHERE boundary_at = %s AND state IN ('queued', 'pending_inputs')
+                ORDER BY requested_at, id
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+                """,
+                (row[0],),
+            ).fetchone()
+            if queued is not None:
+                source = connection.execute(
+                    """
+                    SELECT sweep_id, expected_population_count, expected_population_hash,
+                           ordering_rule_version, freshness_rule_version,
+                           generation + 1, membership_rule_version,
+                           snapshot_rule_version, army_rule_version,
+                           target_rule, target_at
+                    FROM boundary_publication_generations
+                    WHERE id = %s
+                    FOR UPDATE
+                    """,
+                    (generation_id,),
+                ).fetchone()
+                assert source is not None
+                pending_inputs = queued[2] if isinstance(queued[2], list) else []
+                pending_ready = True
+                for pending in pending_inputs:
+                    pending_version = (
+                        pending.get("ranked_day_version_id")
+                        if isinstance(pending, dict)
+                        else None
+                    )
+                    if pending_version is None:
+                        continue
+                    pending_state = connection.execute(
+                        "SELECT state FROM ranked_day_versions WHERE id = %s",
+                        (pending_version,),
+                    ).fetchone()
+                    if pending_state is None or _text_value(pending_state[0]) not in {
+                        "Complete",
+                        "Partial",
+                        "Failed",
+                        "Missing",
+                        "Unavailable",
+                        "Inconsistent",
+                        "Malformed",
+                    }:
+                        pending_ready = False
+                        break
+                if not pending_ready:
+                    connection.execute(
+                        "UPDATE boundary_publication_corrections SET state = 'pending_inputs' WHERE id = %s",
+                        (queued[0],),
+                    )
+                    return
+                connection.execute(
+                    "UPDATE boundary_publication_corrections SET state = 'activation' WHERE id = %s",
+                    (queued[0],),
+                )
+                new = connection.execute(
+                    """
+                    INSERT INTO boundary_publication_generations (
+                        boundary_at, generation, sweep_id, ordering_rule_version,
+                        freshness_rule_version, expected_population_count,
+                        expected_population_hash, membership_rule_version,
+                        snapshot_rule_version, army_rule_version,
+                        target_rule, target_at, supersedes_id, source_generation_id,
+                        correction_state, affected_artifacts
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', %s)
+                    RETURNING id
+                    """,
+                    (
+                        row[0],
+                        int(source[5]),
+                        source[0],
+                        source[3],
+                        source[4],
+                        source[1],
+                        source[2],
+                        source[6],
+                        source[7],
+                        source[8],
+                        source[9],
+                        source[10],
+                        generation_id,
+                        generation_id,
+                        queued[1],
+                    ),
+                ).fetchone()
+                assert new is not None
+                new_id = int(new[0])
+                connection.execute(
+                    "UPDATE boundary_publication_corrections SET state = 'inheritance' WHERE id = %s",
+                    (queued[0],),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO boundary_publication_generation_members
+                        (generation_id, player_id, ranked_day_version_id,
+                         ranked_day_input_hash, status, snapshot_status, army_status)
+                    SELECT %s, player_id, ranked_day_version_id,
+                           ranked_day_input_hash, status, snapshot_status, army_status
+                    FROM boundary_publication_generation_members
+                    WHERE generation_id = %s
+                    """,
+                    (new_id, generation_id),
+                )
+                for pending in queued[2] if isinstance(queued[2], list) else []:
+                    pending_version = pending.get("ranked_day_version_id")
+                    pending_snapshot_status = self._boundary_snapshot_status(
+                        connection,
+                        player_id=int(pending["player_id"]),
+                        ranked_day_version_id=int(pending_version),
+                        boundary_at=row[0],
+                    )
+                    pending_army_status = self._boundary_army_status(
+                        connection,
+                        player_id=int(pending["player_id"]),
+                        ranked_day_version_id=int(pending_version),
+                        snapshot_status=pending_snapshot_status,
+                    )
+                    connection.execute(
+                        """
+                        UPDATE boundary_publication_generation_members
+                        SET ranked_day_version_id = %s, ranked_day_input_hash = %s,
+                            status = 'terminal', snapshot_status = %s,
+                            army_status = %s, updated_at = clock_timestamp()
+                        WHERE generation_id = %s AND player_id = %s
+                        """,
+                        (
+                            pending_version,
+                            pending.get("input_hash"),
+                            pending_snapshot_status,
+                            pending_army_status,
+                            new_id,
+                            pending.get("player_id"),
+                        ),
+                    )
+                connection.execute(
+                    "UPDATE boundary_publication_generations SET membership_captured_at = clock_timestamp() WHERE id = %s",
+                    (new_id,),
+                )
+                affected = [_text_value(value) for value in (queued[1] or [])]
+                if "snapshot" not in affected:
+                    connection.execute(
+                        """
+                        UPDATE boundary_publication_generations AS target
+                        SET snapshot_state = source.snapshot_state,
+                            snapshot_id = source.snapshot_id,
+                            snapshot_input_hash = source.snapshot_input_hash,
+                            snapshot_manifest_id = source.snapshot_manifest_id,
+                            snapshot_analytics_publication_id = source.snapshot_analytics_publication_id,
+                            snapshot_coverage = source.snapshot_coverage
+                        FROM boundary_publication_generations AS source
+                        WHERE target.id = %s AND source.id = %s
+                        """,
+                        (new_id, generation_id),
+                    )
+                if "army" not in affected:
+                    connection.execute(
+                        """
+                        UPDATE boundary_publication_generations AS target
+                        SET army_state = source.army_state,
+                            army_input_hash = source.army_input_hash,
+                            army_manifest_id = source.army_manifest_id,
+                            army_publication_id = source.army_publication_id,
+                            army_coverage = source.army_coverage
+                        FROM boundary_publication_generations AS source
+                        WHERE target.id = %s AND source.id = %s
+                        """,
+                        (new_id, generation_id),
+                    )
+                # Unaffected artifacts retain the exact immutable publication
+                # identity. Only the affected artifact receives a new identity.
+                connection.execute(
+                    "UPDATE boundary_publication_corrections SET state = 'active', generation_id = %s, started_at = clock_timestamp() WHERE id = %s",
+                    (new_id, queued[0]),
+                )
+                self._try_enqueue_boundary_artifacts(
+                    connection, boundary_at=row[0], generation_id=new_id
+                )
+
     def complete_analytics(self, claim: Claim) -> None:
         snapshot_id = _positive_int_input(claim.input_json, "snapshot_id")
         snapshot_version = _positive_int_input(claim.input_json, "snapshot_version")
-        source_ranked_day_version_id = _positive_int_input(
-            claim.input_json, "source_ranked_day_version_id"
+        source_value = claim.input_json.get("source_ranked_day_version_id")
+        generation_input = claim.input_json.get("generation")
+        source_ranked_day_version_id = (
+            _positive_int_input(claim.input_json, "source_ranked_day_version_id")
+            if source_value is not None and generation_input is None
+            else None
         )
         snapshot_input_hash = _hash_input(
             claim.input_json.get("snapshot_input_hash"), "snapshot_input_hash"
@@ -3018,17 +3670,32 @@ class Database:
                     SELECT id, generation, snapshot_state
                     FROM boundary_publication_generations
                     WHERE snapshot_id = %s
+                    ORDER BY generation DESC
+                    LIMIT 1
                     FOR UPDATE
                     """,
                     (snapshot_id,),
                 ).fetchone()
-                if boundary_generation is not None and _text_value(boundary_generation[2]) == "superseded":
-                    raise ValueError("boundary publication generation is superseded")
+                if boundary_generation is not None and _text_value(
+                    boundary_generation[2]
+                ) in {"superseded", "published"}:
+                    self._finish_claim(
+                        connection,
+                        claim,
+                        job,
+                        state="complete",
+                        outcome="stale_superseded",
+                    )
+                    return
                 if int(snapshot[2]) != snapshot_version:
                     raise ValueError(
                         "analytics snapshot version does not match its input"
                     )
-                if int(snapshot[5]) != source_ranked_day_version_id:
+                if (
+                    source_ranked_day_version_id is not None
+                    and snapshot[5] is not None
+                    and int(snapshot[5]) != source_ranked_day_version_id
+                ):
                     raise ValueError(
                         "analytics ranked-day source does not match its snapshot"
                     )
@@ -3059,6 +3726,10 @@ class Database:
                         raise ValueError(
                             "published frozen snapshot has incomplete analytics"
                         )
+                    if boundary_generation is not None:
+                        self._maybe_emit_boundary_signal(
+                            connection, int(boundary_generation[0])
+                        )
                     self._finish_claim(
                         connection, claim, job, state="complete", outcome="processed"
                     )
@@ -3066,14 +3737,17 @@ class Database:
                 if _text_value(snapshot[4]) != "building":
                     raise ValueError("frozen snapshot is not available for analytics")
 
-                ranked_day = connection.execute(
-                    """
-                    SELECT ranked_day_start, ranked_day_end
-                    FROM ranked_day_versions
-                    WHERE id = %s
-                    """,
-                    (source_ranked_day_version_id,),
-                ).fetchone()
+                ranked_day = None
+                if source_ranked_day_version_id is not None:
+                    ranked_day = connection.execute(
+                        "SELECT ranked_day_start, ranked_day_end FROM ranked_day_versions WHERE id = %s",
+                        (source_ranked_day_version_id,),
+                    ).fetchone()
+                if ranked_day is None and boundary_generation is not None:
+                    ranked_day = connection.execute(
+                        "SELECT boundary_at - interval '1 day', boundary_at FROM boundary_publication_generations WHERE id = %s",
+                        (boundary_generation[0],),
+                    ).fetchone()
                 if ranked_day is None:
                     raise ValueError("ranked-day version for analytics does not exist")
                 period_start = ranked_day[0]
@@ -3235,7 +3909,18 @@ class Database:
                         "snapshot_id": snapshot_id,
                         "snapshot_version": snapshot_version,
                         "snapshot_input_hash": snapshot_input_hash,
-                        "source_ranked_day_version_id": source_ranked_day_version_id,
+                        **(
+                            {
+                                "source_ranked_day_version_id": source_ranked_day_version_id
+                            }
+                            if source_ranked_day_version_id is not None
+                            else {}
+                        ),
+                        **(
+                            {"generation": int(boundary_generation[1])}
+                            if boundary_generation is not None
+                            else {}
+                        ),
                         "lens": lens,
                         "population_filter": population_filter,
                         "period_start": period_start.astimezone(UTC).isoformat(),
@@ -3415,30 +4100,51 @@ class Database:
                     (snapshot[1], snapshot_id),
                 )
                 if boundary_generation is not None:
+                    summary_ids = [
+                        int(row[0])
+                        for row in connection.execute(
+                            "SELECT id FROM analytics_summaries WHERE snapshot_id = %s ORDER BY lens, id",
+                            (snapshot_id,),
+                        ).fetchall()
+                    ]
+                    analytics_identity = self._create_boundary_artifact_identity(
+                        connection,
+                        generation_id=int(boundary_generation[0]),
+                        artifact_kind="analytics",
+                        manifest_id=int(
+                            connection.execute(
+                                "SELECT snapshot_manifest_id FROM boundary_publication_generations WHERE id = %s",
+                                (boundary_generation[0],),
+                            ).fetchone()[0]
+                        ),
+                        input_hash=_text_value(snapshot[6]),
+                        source_identity={
+                            "snapshot_id": snapshot_id,
+                            "summary_ids": summary_ids,
+                        },
+                    )
                     published_generation = connection.execute(
                         """
                         UPDATE boundary_publication_generations
-                        SET snapshot_state = 'published', updated_at = clock_timestamp()
+                        SET snapshot_state = 'published',
+                            snapshot_analytics_publication_id = %s,
+                            updated_at = clock_timestamp()
                         WHERE id = %s AND snapshot_state = 'building'
-                        RETURNING id, generation, snapshot_id, snapshot_input_hash
-                        """,
-                        (boundary_generation[0],),
-                    ).fetchone()
-                    if published_generation is None:
-                        raise ValueError("boundary publication generation fence was lost")
-                    connection.execute(
-                        """
-                        INSERT INTO boundary_publication_events (
-                            boundary_at, generation, snapshot_id, snapshot_input_hash
-                        ) VALUES (%s, %s, %s, %s)
-                        ON CONFLICT (boundary_at, generation) DO NOTHING
+                          AND snapshot_manifest_id = %s
+                        RETURNING id
                         """,
                         (
-                            snapshot[1],
-                            int(published_generation[1]),
-                            int(published_generation[2]),
-                            _text_value(published_generation[3]),
+                            analytics_identity,
+                            boundary_generation[0],
+                            int(claim.input_json["manifest_id"]),
                         ),
+                    ).fetchone()
+                    if published_generation is None:
+                        raise ValueError(
+                            "boundary publication generation fence was lost"
+                        )
+                    self._maybe_emit_boundary_signal(
+                        connection, int(boundary_generation[0])
                     )
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
@@ -3477,10 +4183,18 @@ class Database:
             with connection.transaction():
                 self._lock_live_claim(connection, claim)
                 self._ensure_dependency_support_probed()
-                dependency = self._supports_dependency_deferral and retryable and category in {
-                    "archive_unavailable", "archive_missing", "spool_io_failed",
-                    "degraded_capacity", "archive_network_uncertain",
-                }
+                dependency = (
+                    self._supports_dependency_deferral
+                    and retryable
+                    and category
+                    in {
+                        "archive_unavailable",
+                        "archive_missing",
+                        "spool_io_failed",
+                        "degraded_capacity",
+                        "archive_network_uncertain",
+                    }
+                )
                 # Ordinary budget ordinal: a resumed dependency claim re-runs
                 # its original slot, so it does not advance the counter.
                 effective_attempt = claim.attempt_count + (
@@ -3489,8 +4203,16 @@ class Database:
                 should_retry = dependency or (
                     retryable and effective_attempt < claim.max_attempts
                 )
-                state = "waiting_dependency" if dependency else ("waiting_retry" if should_retry else "failed")
-                outcome = "dependency_deferred" if dependency else ("retryable_failure" if should_retry else "durable_failure")
+                state = (
+                    "waiting_dependency"
+                    if dependency
+                    else ("waiting_retry" if should_retry else "failed")
+                )
+                outcome = (
+                    "dependency_deferred"
+                    if dependency
+                    else ("retryable_failure" if should_retry else "durable_failure")
+                )
                 connection.execute(
                     """
                     UPDATE python_processing_attempts
@@ -3507,11 +4229,19 @@ class Database:
                         claim.lease_token,
                     ),
                 )
-                dependency_set = """
+                dependency_set = (
+                    """
                         due_at = CASE WHEN %s THEN clock_timestamp() + (LEAST(300, (2 ^ LEAST(dependency_deferral_count, 8))) * interval '1 second') ELSE due_at END,
-                        dependency_deferral_count = dependency_deferral_count + CASE WHEN %s THEN 1 ELSE 0 END,""" if self._supports_dependency_deferral else """
+                        dependency_deferral_count = dependency_deferral_count + CASE WHEN %s THEN 1 ELSE 0 END,"""
+                    if self._supports_dependency_deferral
+                    else """
                         due_at = CASE WHEN %s THEN clock_timestamp() + interval '1 second' ELSE due_at END,"""
-                dependency_params = (should_retry, dependency) if self._supports_dependency_deferral else (should_retry,)
+                )
+                dependency_params = (
+                    (should_retry, dependency)
+                    if self._supports_dependency_deferral
+                    else (should_retry,)
+                )
                 completed = connection.execute(
                     f"""
                     UPDATE {self._jobs_relation}
@@ -3739,6 +4469,17 @@ class Database:
             json.dumps(fingerprint_data, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
+        if getattr(self, "_supports_coordinator_contract", False):
+            current_member = connection.execute(
+                """
+                SELECT 1
+                FROM collector_reset_sweep_members
+                WHERE sweep_id = %s AND player_id = %s
+                """,
+                (reset_sweep_id, root_player_id),
+            ).fetchone()
+            if current_member is None:
+                return
         locked = connection.execute(
             "SELECT clashlens_lock_reset_baseline_v2(%s)",
             (baseline_id,),
@@ -3897,15 +4638,18 @@ class Database:
                 supersedes_id=None,
             )
             generation = (generation_id, "pending", "pending")
-        if _text_value(generation[1]) == "superseded" and _text_value(generation[2]) == "superseded":
+        if (
+            _text_value(generation[1]) == "superseded"
+            and _text_value(generation[2]) == "superseded"
+        ):
             return
 
         if state == "failed":
-            member_status = "unavailable"
+            snapshot_status = army_status = "unavailable"
         else:
             ranked_state = connection.execute(
                 """
-                SELECT ranked.state
+                SELECT ranked.id
                 FROM boundary_publication_generation_members AS member
                 JOIN ranked_day_versions AS ranked
                   ON ranked.id = member.ranked_day_version_id
@@ -3913,21 +4657,40 @@ class Database:
                 """,
                 (generation[0], player_id),
             ).fetchone()
-            member_status = (
-                "terminal"
-                if ranked_state is not None
-                and _text_value(ranked_state[0])
-                in {"Complete", "Partial", "Inconsistent", "Malformed"}
+            ranked_version_id = int(ranked_state[0]) if ranked_state else None
+            snapshot_status = (
+                self._boundary_snapshot_status(
+                    connection,
+                    player_id=player_id,
+                    ranked_day_version_id=ranked_version_id,
+                    boundary_at=boundary_at,
+                )
+                if ranked_version_id is not None
                 else "pending"
             )
+            army_status = (
+                self._boundary_army_status(
+                    connection,
+                    player_id=player_id,
+                    ranked_day_version_id=ranked_version_id,
+                    snapshot_status=snapshot_status,
+                )
+                if ranked_version_id is not None
+                else "pending"
+            )
+        member_status = (
+            "unavailable"
+            if snapshot_status == "unavailable"
+            else ("terminal" if snapshot_status != "pending" else "pending")
+        )
         connection.execute(
             """
             UPDATE boundary_publication_generation_members
-            SET status = %s, updated_at = clock_timestamp()
+            SET status = %s, snapshot_status = %s, army_status = %s,
+                updated_at = clock_timestamp()
             WHERE generation_id = %s AND player_id = %s
-              AND status IS DISTINCT FROM %s
             """,
-            (member_status, generation[0], player_id, member_status),
+            (member_status, snapshot_status, army_status, generation[0], player_id),
         )
         self._try_enqueue_boundary_artifacts(
             connection, boundary_at=boundary_at, generation_id=int(generation[0])
@@ -4475,13 +5238,13 @@ class Database:
             "evidence": evidence,
         }
 
-    @staticmethod
     def _publish_snapshot_kind(
+        self,
         connection: Any,
         *,
         snapshot_kind: str,
         boundary_at: datetime,
-        ranked_day_version_id: int,
+        ranked_day_version_id: int | None,
         entries: list[dict[str, Any]],
         coverage: float,
         quality: dict[str, int],
@@ -4545,84 +5308,167 @@ class Database:
             ).fetchone()
             assert next_version_row is not None
             snapshot_version = int(next_version_row[0])
-            snapshot = connection.execute(
-                """
-                INSERT INTO leaderboard_snapshots (
-                    snapshot_kind, boundary_at, version, correction_of_id,
-                    ordering_rule_version, freshness_rule_version, state,
-                    source_ranked_day_version_id, measured_coverage,
-                    stale_entry_count, input_hash,
-                    eligible_population_count, included_entry_count,
-                    fresh_entry_count, excluded_missing_count,
-                    excluded_invalid_count, excluded_malformed_count,
-                    excluded_conflicting_count
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, 'building', %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                RETURNING id
-                """,
-                (
-                    snapshot_kind,
-                    boundary_at,
-                    snapshot_version,
-                    prior[0] if prior is not None else None,
-                    SNAPSHOT_ORDERING_RULE_VERSION,
-                    FRESHNESS_RULE_VERSION,
-                    ranked_day_version_id,
-                    coverage,
-                    quality["stale_entry_count"],
-                    input_hash,
-                    quality["eligible_population_count"],
-                    quality["included_entry_count"],
-                    quality["fresh_entry_count"],
-                    quality["excluded_missing_count"],
-                    quality["excluded_invalid_count"],
-                    quality["excluded_malformed_count"],
-                    quality["excluded_conflicting_count"],
-                ),
-            ).fetchone()
+            if getattr(self, "_supports_coordinator_contract", False):
+                snapshot = connection.execute(
+                    """
+                    INSERT INTO leaderboard_snapshots (
+                        snapshot_kind, boundary_at, version, correction_of_id,
+                        ordering_rule_version, freshness_rule_version, state,
+                        source_ranked_day_version_id, measured_coverage,
+                        stale_entry_count, input_hash,
+                        eligible_population_count, included_entry_count,
+                        fresh_entry_count, excluded_missing_count,
+                        excluded_unavailable_count, excluded_invalid_count,
+                        excluded_malformed_count, excluded_partial_count,
+                        excluded_inconsistent_count, excluded_conflicting_count
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, 'building', %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    RETURNING id
+                    """,
+                    (
+                        snapshot_kind,
+                        boundary_at,
+                        snapshot_version,
+                        prior[0] if prior is not None else None,
+                        SNAPSHOT_ORDERING_RULE_VERSION,
+                        FRESHNESS_RULE_VERSION,
+                        ranked_day_version_id,
+                        coverage,
+                        quality["stale_entry_count"],
+                        input_hash,
+                        quality["eligible_population_count"],
+                        quality["included_entry_count"],
+                        quality["fresh_entry_count"],
+                        quality["excluded_missing_count"],
+                        quality["excluded_unavailable_count"],
+                        quality["excluded_invalid_count"],
+                        quality["excluded_malformed_count"],
+                        quality["excluded_partial_count"],
+                        quality["excluded_inconsistent_count"],
+                        quality["excluded_conflicting_count"],
+                    ),
+                ).fetchone()
+            else:
+                snapshot = connection.execute(
+                    """
+                    INSERT INTO leaderboard_snapshots (
+                        snapshot_kind, boundary_at, version, correction_of_id,
+                        ordering_rule_version, freshness_rule_version, state,
+                        source_ranked_day_version_id, measured_coverage,
+                        stale_entry_count, input_hash,
+                        eligible_population_count, included_entry_count,
+                        fresh_entry_count, excluded_missing_count,
+                        excluded_invalid_count, excluded_malformed_count,
+                        excluded_conflicting_count
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, 'building', %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    RETURNING id
+                    """,
+                    (
+                        snapshot_kind,
+                        boundary_at,
+                        snapshot_version,
+                        prior[0] if prior is not None else None,
+                        SNAPSHOT_ORDERING_RULE_VERSION,
+                        FRESHNESS_RULE_VERSION,
+                        ranked_day_version_id,
+                        coverage,
+                        quality["stale_entry_count"],
+                        input_hash,
+                        quality["eligible_population_count"],
+                        quality["included_entry_count"],
+                        quality["fresh_entry_count"],
+                        quality["excluded_missing_count"],
+                        quality["excluded_invalid_count"],
+                        quality["excluded_malformed_count"],
+                        quality["excluded_conflicting_count"],
+                    ),
+                ).fetchone()
             assert snapshot is not None
             snapshot_id = int(snapshot[0])
         for position, entry in enumerate(entries, start=1):
             official = entry["official"]
-            connection.execute(
-                """
-                INSERT INTO leaderboard_snapshot_entries (
-                    snapshot_id, position, player_id, trophies,
-                    trophy_observation_id, trophy_observed_at,
-                    observation_age_seconds, freshness, confidence, tie_hash,
-                    profile_observation_id, profile_observed_at,
-                    profile_age_seconds, profile_freshness, profile_confidence,
-                    official_rank, official_rank_version_id,
-                    official_rank_observed_at
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s
+            if getattr(self, "_supports_coordinator_contract", False):
+                connection.execute(
+                    """
+                    INSERT INTO leaderboard_snapshot_entries (
+                        snapshot_id, position, player_id, profile_version_id, trophies,
+                        trophy_observation_id, trophy_observed_at,
+                        observation_age_seconds, freshness, confidence, tie_hash,
+                        profile_observation_id, profile_observed_at,
+                        profile_age_seconds, profile_freshness, profile_confidence,
+                        official_rank, official_rank_version_id,
+                        official_rank_observed_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (snapshot_id, position) DO NOTHING
+                    """,
+                    (
+                        snapshot_id,
+                        position,
+                        entry["player_id"],
+                        entry.get("profile_version_id"),
+                        entry["trophies"],
+                        entry["observation_id"],
+                        entry["observed_at"],
+                        entry["age_seconds"],
+                        entry["freshness"],
+                        entry["confidence"],
+                        entry["tie_hash"],
+                        entry["observation_id"],
+                        entry["observed_at"],
+                        entry["age_seconds"],
+                        entry["freshness"],
+                        entry["confidence"],
+                        official[0] if official is not None else None,
+                        official[1] if official is not None else None,
+                        official[2] if official is not None else None,
+                    ),
                 )
-                ON CONFLICT (snapshot_id, position) DO NOTHING
-                """,
-                (
-                    snapshot_id,
-                    position,
-                    entry["player_id"],
-                    entry["trophies"],
-                    entry["observation_id"],
-                    entry["observed_at"],
-                    entry["age_seconds"],
-                    entry["freshness"],
-                    entry["confidence"],
-                    entry["tie_hash"],
-                    entry["observation_id"],
-                    entry["observed_at"],
-                    entry["age_seconds"],
-                    entry["freshness"],
-                    entry["confidence"],
-                    official[0] if official is not None else None,
-                    official[1] if official is not None else None,
-                    official[2] if official is not None else None,
-                ),
-            )
+            else:
+                connection.execute(
+                    """
+                    INSERT INTO leaderboard_snapshot_entries (
+                        snapshot_id, position, player_id, trophies,
+                        trophy_observation_id, trophy_observed_at,
+                        observation_age_seconds, freshness, confidence, tie_hash,
+                        profile_observation_id, profile_observed_at,
+                        profile_age_seconds, profile_freshness, profile_confidence,
+                        official_rank, official_rank_version_id,
+                        official_rank_observed_at
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s
+                    )
+                    ON CONFLICT (snapshot_id, position) DO NOTHING
+                    """,
+                    (
+                        snapshot_id,
+                        position,
+                        entry["player_id"],
+                        entry["trophies"],
+                        entry["observation_id"],
+                        entry["observed_at"],
+                        entry["age_seconds"],
+                        entry["freshness"],
+                        entry["confidence"],
+                        entry["tie_hash"],
+                        entry["observation_id"],
+                        entry["observed_at"],
+                        entry["age_seconds"],
+                        entry["freshness"],
+                        entry["confidence"],
+                        official[0] if official is not None else None,
+                        official[1] if official is not None else None,
+                        official[2] if official is not None else None,
+                    ),
+                )
         if publish:
             connection.execute(
                 """
@@ -4650,9 +5496,13 @@ class Database:
         snapshot_id: int,
         snapshot_version: int,
         snapshot_input_hash: str,
-        ranked_day_version_id: int,
+        ranked_day_version_id: int | None,
         period_start: datetime,
         period_end: datetime,
+        generation_number: int | None = None,
+        manifest_id: int | None = None,
+        manifest_digest: str | None = None,
+        boundary_at: datetime | None = None,
     ) -> None:
         deduplication_key = (
             f"build_analytics:snapshot:{int(snapshot_id)}:v{int(snapshot_version)}:"
@@ -4674,7 +5524,26 @@ class Database:
                         "snapshot_id": int(snapshot_id),
                         "snapshot_version": int(snapshot_version),
                         "snapshot_input_hash": snapshot_input_hash,
-                        "source_ranked_day_version_id": int(ranked_day_version_id),
+                        **(
+                            {"source_ranked_day_version_id": int(ranked_day_version_id)}
+                            if ranked_day_version_id is not None
+                            else {}
+                        ),
+                        **(
+                            {
+                                "generation": int(generation_number),
+                                "manifest_id": int(manifest_id),
+                                "manifest_digest": manifest_digest,
+                                "boundary_at": boundary_at.astimezone(UTC).strftime(
+                                    "%Y-%m-%dT%H:%M:%SZ"
+                                ),
+                            }
+                            if generation_number is not None
+                            and manifest_id is not None
+                            and manifest_digest is not None
+                            and boundary_at is not None
+                            else {}
+                        ),
                         "period_start": period_start.astimezone(UTC).strftime(
                             "%Y-%m-%dT%H:%M:%SZ"
                         ),
@@ -4734,8 +5603,8 @@ class Database:
                 ),
             )
 
-    @staticmethod
     def _publish_player_daily_log(
+        self,
         connection: Any,
         *,
         player_id: int,
@@ -4831,40 +5700,62 @@ class Database:
             if public_state == "Complete":
                 public_state = "Partial"
             partial_reasons.append("battle_event_projection_incomplete")
-        connection.execute(
-            """
-            INSERT INTO api_player_daily_logs (
-                player_id, ranked_day_start, version, state, coverage,
-                adjustments, battles, partial_reasons, ranked_day_end,
-                official_season_id, season_day_number, confidence,
-                attack_count, attack_three_star_count, attack_gain,
-                defense_count, defense_three_star_count, defense_loss,
-                net_trophy_change
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (player_id, ranked_day_start, version) DO NOTHING
-            """,
-            (
-                player_id,
-                ranked_day_start,
-                version_number,
-                public_state,
-                "complete" if result.coverage_complete else "partial",
-                Jsonb(adjustments),
-                Jsonb(battles),
-                Jsonb(partial_reasons),
-                ranked_day_end,
-                official_season_id,
-                season_day_number,
-                result.confidence,
-                result.attack_count,
-                attack_three_star_count,
-                result.attack_trophy_gain,
-                result.defense_count,
-                defense_three_star_count,
-                defense_loss,
-                result.net_trophy_change,
-            ),
+        daily_log_values = (
+            player_id,
+            ranked_day_start,
+            version_number,
+            public_state,
+            "complete" if result.coverage_complete else "partial",
+            Jsonb(adjustments),
+            Jsonb(battles),
+            Jsonb(partial_reasons),
+            ranked_day_end,
+            official_season_id,
+            season_day_number,
+            result.confidence,
+            result.attack_count,
+            attack_three_star_count,
+            result.attack_trophy_gain,
+            result.defense_count,
+            defense_three_star_count,
+            defense_loss,
+            result.net_trophy_change,
         )
+        if getattr(self, "_supports_coordinator_contract", False):
+            connection.execute(
+                """
+                INSERT INTO api_player_daily_logs (
+                    player_id, ranked_day_start, ranked_day_version_id, version, state, coverage,
+                    adjustments, battles, partial_reasons, ranked_day_end,
+                    official_season_id, season_day_number, confidence,
+                    attack_count, attack_three_star_count, attack_gain,
+                    defense_count, defense_three_star_count, defense_loss,
+                    net_trophy_change
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (player_id, ranked_day_start, version) DO NOTHING
+                """,
+                (
+                    player_id,
+                    ranked_day_start,
+                    ranked_day_version_id,
+                    *daily_log_values[2:],
+                ),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO api_player_daily_logs (
+                    player_id, ranked_day_start, version, state, coverage,
+                    adjustments, battles, partial_reasons, ranked_day_end,
+                    official_season_id, season_day_number, confidence,
+                    attack_count, attack_three_star_count, attack_gain,
+                    defense_count, defense_three_star_count, defense_loss,
+                    net_trophy_change
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (player_id, ranked_day_start, version) DO NOTHING
+                """,
+                daily_log_values,
+            )
 
     @staticmethod
     def _boundary_population_hash(player_ids: list[int]) -> str:
@@ -4881,15 +5772,22 @@ class Database:
         player_ids: list[int],
         generation: int,
         supersedes_id: int | None,
+        pending_inputs: list[dict[str, Any]] | None = None,
     ) -> tuple[int, int]:
         population_hash = self._boundary_population_hash(player_ids)
+        target_at = boundary_at + timedelta(
+            minutes=10 if boundary_at.weekday() == 0 else 5
+        )
         row = connection.execute(
             """
             INSERT INTO boundary_publication_generations (
                 boundary_at, generation, sweep_id, ordering_rule_version,
                 freshness_rule_version, expected_population_count,
-                expected_population_hash, supersedes_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                expected_population_hash, membership_rule_version,
+                snapshot_rule_version, army_rule_version, target_rule, target_at,
+                supersedes_id, source_generation_id,
+                correction_state, affected_artifacts
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id, generation
             """,
             (
@@ -4900,11 +5798,38 @@ class Database:
                 FRESHNESS_RULE_VERSION,
                 len(player_ids),
                 population_hash,
+                "active-members-v1",
+                ANALYTICS_RULE_VERSION,
+                ARMY_ANALYTICS_RULE_VERSION,
+                "boundary-delay-v1",
+                target_at,
                 supersedes_id,
+                supersedes_id,
+                "active" if supersedes_id is not None else "none",
+                ["snapshot", "army"] if supersedes_id is not None else [],
             ),
         ).fetchone()
+        if row is None:
+            row = connection.execute(
+                """
+                SELECT id, generation, expected_population_count,
+                       expected_population_hash, sweep_id
+                FROM boundary_publication_generations
+                WHERE boundary_at = %s AND generation = %s
+                FOR UPDATE
+                """,
+                (boundary_at, generation),
+            ).fetchone()
         assert row is not None
         generation_id = int(row[0])
+        if len(row) > 2 and (
+            int(row[2]) != len(player_ids)
+            or _text_value(row[3]) != population_hash
+            or int(row[4]) != sweep_id
+        ):
+            raise ValueError(
+                "boundary generation inputs conflict with captured membership"
+            )
         if supersedes_id is None:
             connection.execute(
                 """
@@ -4922,25 +5847,535 @@ class Database:
                 """
                 INSERT INTO boundary_publication_generation_members (
                     generation_id, player_id, ranked_day_version_id,
-                    ranked_day_input_hash, status
+                    ranked_day_input_hash, status, snapshot_status, army_status
                 )
                 SELECT %s, player_id, ranked_day_version_id,
-                       ranked_day_input_hash, status
+                       ranked_day_input_hash, status, snapshot_status, army_status
                 FROM boundary_publication_generation_members
                 WHERE generation_id = %s
                 ON CONFLICT DO NOTHING
                 """,
                 (generation_id, supersedes_id),
             )
+        for pending in pending_inputs or []:
+            pending_version = pending.get("ranked_day_version_id")
+            pending_snapshot_status = self._boundary_snapshot_status(
+                connection,
+                player_id=int(pending["player_id"]),
+                ranked_day_version_id=int(pending_version),
+                boundary_at=boundary_at,
+            )
+            pending_army_status = self._boundary_army_status(
+                connection,
+                player_id=int(pending["player_id"]),
+                ranked_day_version_id=int(pending_version),
+                snapshot_status=pending_snapshot_status,
+            )
+            connection.execute(
+                """
+                UPDATE boundary_publication_generation_members
+                SET ranked_day_version_id = %s, ranked_day_input_hash = %s,
+                    status = 'terminal', snapshot_status = %s,
+                    army_status = %s, updated_at = clock_timestamp()
+                WHERE generation_id = %s AND player_id = %s
+                """,
+                (
+                    pending_version,
+                    pending.get("input_hash"),
+                    pending_snapshot_status,
+                    pending_army_status,
+                    generation_id,
+                    pending.get("player_id"),
+                ),
+            )
+        connection.execute(
+            """
+            UPDATE boundary_publication_generations
+            SET membership_captured_at = COALESCE(membership_captured_at, clock_timestamp())
+            WHERE id = %s
+            """,
+            (generation_id,),
+        )
         return generation_id, int(row[1])
+
+    def _freeze_boundary_manifest(
+        self,
+        connection: Any,
+        *,
+        generation_id: int,
+        artifact_kind: str,
+    ) -> tuple[int, str] | None:
+        """Freeze one sorted coordinator input before creating its job.
+
+        The row and digest are persisted together. Once inserted, the manifest
+        trigger makes both the population and its selected inputs immutable;
+        retrying callers therefore reuse the same identity instead of
+        reconstructing inputs from live eligibility tables.
+        """
+        existing = connection.execute(
+            """
+            SELECT id, digest
+            FROM boundary_publication_manifests
+            WHERE generation_id = %s AND artifact_kind = %s
+            FOR UPDATE
+            """,
+            (generation_id, artifact_kind),
+        ).fetchone()
+        if existing is not None:
+            return int(existing[0]), _text_value(existing[1])
+        generation = connection.execute(
+            """
+            SELECT boundary_at, generation, ordering_rule_version, freshness_rule_version,
+                   snapshot_rule_version, army_rule_version
+            FROM boundary_publication_generations
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (generation_id,),
+        ).fetchone()
+        if generation is None:
+            return None
+        official_version_id = None
+        if artifact_kind == "snapshot":
+            official_version = connection.execute(
+                """
+                SELECT v.id
+                FROM official_top200_versions AS v
+                JOIN official_top200_attempts AS a ON a.id = v.attempt_id
+                JOIN official_top200_entries AS e ON e.version_id = v.id
+                WHERE a.outcome = 'official_observed' AND v.observed_at <= %s
+                GROUP BY v.id, v.observed_at
+                HAVING count(*) = 200 AND count(DISTINCT e.rank) = 200
+                   AND min(e.rank) = 1 AND max(e.rank) = 200
+                ORDER BY v.observed_at DESC, v.id DESC
+                LIMIT 1
+                """,
+                (generation[0],),
+            ).fetchone()
+            official_version_id = int(official_version[0]) if official_version else None
+        members = connection.execute(
+            """
+            SELECT player_id, ranked_day_version_id, ranked_day_input_hash,
+                   snapshot_status, army_status
+            FROM boundary_publication_generation_members
+            WHERE generation_id = %s
+            ORDER BY player_id, ranked_day_version_id NULLS FIRST, ranked_day_input_hash NULLS FIRST
+            """,
+            (generation_id,),
+        ).fetchall()
+        manifest_rows: list[dict[str, Any]] = []
+        for ordinal, row in enumerate(members, start=1):
+            player_id = int(row[0])
+            version_id = int(row[1]) if row[1] is not None else None
+            input_hash = _text_value(row[2]) if row[2] is not None else None
+            status = _text_value(row[3] if artifact_kind == "snapshot" else row[4])
+            classification = {
+                "complete": "Complete",
+                "partial": "Partial",
+                "failed": "Failed",
+                "missing": "Missing",
+                "unavailable": "Unavailable",
+                "inconsistent": "Inconsistent",
+                "malformed": "Malformed",
+            }.get(status, "Pending")
+            if (
+                status in {"complete", "partial", "inconsistent", "malformed"}
+                and version_id is not None
+            ):
+                if artifact_kind == "snapshot":
+                    classification = {
+                        "complete": "Complete",
+                        "partial": "Partial",
+                        "missing": "Missing",
+                        "unavailable": "Unavailable",
+                        "inconsistent": "Inconsistent",
+                        "malformed": "Malformed",
+                    }.get(
+                        self._boundary_snapshot_status(
+                            connection,
+                            player_id=player_id,
+                            ranked_day_version_id=version_id,
+                            boundary_at=generation[0],
+                        ),
+                        "Missing",
+                    )
+                elif status == "partial":
+                    classification = "Partial"
+                else:
+                    state_row = connection.execute(
+                        "SELECT state FROM ranked_day_versions WHERE id = %s",
+                        (version_id,),
+                    ).fetchone()
+                    state = (
+                        _text_value(state_row[0])
+                        if state_row is not None
+                        else "Malformed"
+                    )
+                    classification = (
+                        state
+                        if state in {"Complete", "Partial", "Malformed", "Inconsistent"}
+                        else "Partial"
+                    )
+            identity = {
+                "artifact_kind": artifact_kind,
+                "generation": int(generation[1]),
+                "player_id": player_id,
+                "ranked_day_version_id": version_id,
+                "input_hash": input_hash,
+                "classification": classification,
+            }
+            if artifact_kind == "snapshot":
+                identity["official_top200_version_id"] = official_version_id
+                official_entry = None
+                if official_version_id is not None:
+                    official_entry = connection.execute(
+                        """
+                        SELECT rank, observed_at
+                        FROM official_top200_entries
+                        WHERE version_id = %s AND player_id = %s
+                        """,
+                        (official_version_id, player_id),
+                    ).fetchone()
+                identity["official_rank"] = (
+                    int(official_entry[0]) if official_entry else None
+                )
+                identity["official_rank_observed_at"] = (
+                    official_entry[1].astimezone(UTC).isoformat()
+                    if official_entry
+                    else None
+                )
+                profile = connection.execute(
+                    """
+                    SELECT id, observation_id, observed_at, profile_json, normalized_tag,
+                           name, trophies, eligibility_state
+                    FROM player_profile_versions
+                    WHERE player_id = %s AND observed_at <= %s
+                      AND source_contract_state = 'accepted'
+                    ORDER BY observed_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (player_id, generation[0]),
+                ).fetchone()
+                if profile is not None:
+                    identity["profile_version_id"] = int(profile[0])
+                    identity["profile_input_hash"] = hashlib.sha256(
+                        json.dumps(
+                            profile[3], sort_keys=True, separators=(",", ":")
+                        ).encode("utf-8")
+                    ).hexdigest()
+                    identity["profile_snapshot"] = {
+                        "observation_id": int(profile[1]),
+                        "tag": _text_value(profile[4]),
+                        "name": profile[5],
+                        "trophies": int(profile[6]),
+                        "observed_at": profile[2].astimezone(UTC).isoformat(),
+                        "eligibility_state": _text_value(profile[7]),
+                        "profile_json": profile[3],
+                    }
+                else:
+                    identity["profile_version_id"] = None
+                    identity["profile_input_hash"] = None
+            if artifact_kind == "army" and version_id is not None:
+                ranked_identity = connection.execute(
+                    """
+                    SELECT input_evidence, coverage_evidence, start_baseline_id,
+                           end_baseline_id
+                    FROM ranked_day_versions WHERE id = %s
+                    """,
+                    (version_id,),
+                ).fetchone()
+                if ranked_identity is not None:
+                    identity.update(
+                        {
+                            "input_evidence": ranked_identity[0],
+                            "coverage_evidence": ranked_identity[1],
+                            "start_baseline_id": ranked_identity[2],
+                            "end_baseline_id": ranked_identity[3],
+                        }
+                    )
+                daily_log = connection.execute(
+                    "SELECT id, battles FROM api_player_daily_logs WHERE ranked_day_version_id = %s ORDER BY id DESC LIMIT 1",
+                    (version_id,),
+                ).fetchone()
+                identity["daily_log_id"] = int(daily_log[0]) if daily_log else None
+                battle_ids: list[int] = []
+                decode_ids: list[int] = []
+                if daily_log is not None and isinstance(daily_log[1], list):
+                    battle_ids = [
+                        int(event["battle_id"])
+                        for event in daily_log[1]
+                        if isinstance(event, dict)
+                        and str(event.get("battle_id", "")).isdigit()
+                    ]
+                    if battle_ids:
+                        decode_ids = [
+                            int(row[0])
+                            for row in connection.execute(
+                                """
+                                SELECT id FROM battle_army_decodes
+                                WHERE battle_id = ANY(%s::bigint[]) AND is_active
+                                  AND decoder_version = %s AND catalog_version = %s
+                                ORDER BY id
+                                """,
+                                (battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                            ).fetchall()
+                        ]
+                evidence_ids: list[int] = []
+                if daily_log is not None and isinstance(daily_log[1], list):
+                    for event in daily_log[1]:
+                        if (
+                            not isinstance(event, dict)
+                            or not str(event.get("battle_id", "")).isdigit()
+                        ):
+                            continue
+                        perspective = (
+                            "attacker" if event.get("lens") == "offense" else "defender"
+                        )
+                        evidence_row = connection.execute(
+                            """
+                            SELECT perspective.evidence_id
+                            FROM battle_perspectives AS perspective
+                            WHERE perspective.battle_id = %s
+                              AND perspective.perspective = %s
+                            """,
+                            (int(event["battle_id"]), perspective),
+                        ).fetchone()
+                        if evidence_row is not None:
+                            evidence_ids.append(int(evidence_row[0]))
+                identity["battle_ids"] = sorted(set(battle_ids))
+                identity["decode_ids"] = decode_ids
+                identity["evidence_ids"] = sorted(set(evidence_ids))
+            manifest_rows.append(identity)
+        season_inputs = None
+        if artifact_kind == "army":
+            season_row = connection.execute(
+                """
+                SELECT official_season_id
+                FROM ranked_day_versions
+                WHERE id = ANY(%s::bigint[])
+                ORDER BY id
+                LIMIT 1
+                """,
+                ([row[1] for row in members if row[1] is not None],),
+            ).fetchone()
+            if season_row is not None:
+                season_versions = connection.execute(
+                    """
+                    SELECT id
+                    FROM ranked_day_versions
+                    WHERE official_season_id = %s
+                      AND state = 'Complete' AND coverage_complete
+                    ORDER BY id
+                    """,
+                    (season_row[0],),
+                ).fetchall()
+                season_version_ids = [int(row[0]) for row in season_versions]
+                season_logs = connection.execute(
+                    """
+                    SELECT DISTINCT ON (ranked_day_version_id) id, battles
+                    FROM api_player_daily_logs
+                    WHERE ranked_day_version_id = ANY(%s::bigint[])
+                      AND state = 'Complete' AND coverage = 'complete'
+                    ORDER BY ranked_day_version_id, version DESC, id DESC
+                    """,
+                    (season_version_ids,),
+                ).fetchall()
+                season_daily_log_ids = [int(row[0]) for row in season_logs]
+                season_battle_ids = sorted(
+                    {
+                        int(event["battle_id"])
+                        for row in season_logs
+                        for event in (row[1] if isinstance(row[1], list) else [])
+                        if isinstance(event, dict)
+                        and str(event.get("battle_id", "")).isdigit()
+                    }
+                )
+                season_decode_ids = [
+                    int(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT id
+                        FROM battle_army_decodes
+                        WHERE battle_id = ANY(%s::bigint[])
+                          AND decoder_version = %s AND catalog_version = %s
+                          AND is_active
+                        ORDER BY id
+                        """,
+                        (season_battle_ids, DECODER_VERSION, CATALOG_VERSION),
+                    ).fetchall()
+                ]
+                season_evidence_ids = [
+                    int(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT DISTINCT evidence_id
+                        FROM battle_perspectives
+                        WHERE battle_id = ANY(%s::bigint[])
+                        ORDER BY evidence_id
+                        """,
+                        (season_battle_ids,),
+                    ).fetchall()
+                ]
+                season_inputs = {
+                    "ranked_version_ids": season_version_ids,
+                    "daily_log_ids": season_daily_log_ids,
+                    "battle_ids": season_battle_ids,
+                    "decode_ids": season_decode_ids,
+                    "evidence_ids": season_evidence_ids,
+                }
+        rule_versions = {
+            "ordering_rule_version": _text_value(generation[2]),
+            "freshness_rule_version": _text_value(generation[3]),
+            "analytics_rule_version": (
+                _text_value(generation[5])
+                if artifact_kind == "army"
+                else _text_value(generation[4])
+            ),
+            **({"season_inputs": season_inputs} if season_inputs is not None else {}),
+        }
+        digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "generation": int(generation[1]),
+                    "artifact_kind": artifact_kind,
+                    "rule_versions": rule_versions,
+                    "rows": manifest_rows,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        manifest = connection.execute(
+            """
+            INSERT INTO boundary_publication_manifests
+                (generation_id, artifact_kind, rule_versions, digest)
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (generation_id, artifact_kind, Jsonb(rule_versions), digest),
+        ).fetchone()
+        assert manifest is not None
+        manifest_id = int(manifest[0])
+        for ordinal, identity in enumerate(manifest_rows, start=1):
+            connection.execute(
+                """
+                INSERT INTO boundary_publication_manifest_rows
+                    (manifest_id, ordinal, player_id, ranked_day_version_id,
+                     input_hash, classification, unavailable_reason, input_identity)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    manifest_id,
+                    ordinal,
+                    identity["player_id"],
+                    identity["ranked_day_version_id"],
+                    identity["input_hash"],
+                    identity["classification"],
+                    "reset_baseline_failed"
+                    if identity["classification"] == "Unavailable"
+                    else None,
+                    Jsonb(identity),
+                ),
+            )
+        connection.execute(
+            """
+            UPDATE boundary_publication_manifests
+            SET rows_sealed = true, frozen_at = clock_timestamp(),
+                enqueued_at = clock_timestamp()
+            WHERE id = %s AND NOT rows_sealed
+            """,
+            (manifest_id,),
+        )
+        column = (
+            "snapshot_manifest_id"
+            if artifact_kind == "snapshot"
+            else "army_manifest_id"
+        )
+        connection.execute(
+            f"UPDATE boundary_publication_generations SET {column} = %s, updated_at = clock_timestamp() WHERE id = %s",
+            (manifest_id, generation_id),
+        )
+        return manifest_id, digest
+
+    def _inherit_deferred_army_successor_snapshot(
+        self, connection: Any, *, generation_id: int
+    ) -> bool:
+        target = connection.execute(
+            """
+            SELECT source_generation_id, snapshot_state, snapshot_manifest_id,
+                   affected_artifacts
+            FROM boundary_publication_generations
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (generation_id,),
+        ).fetchone()
+        if target is None or _text_value(target[1]) != "pending":
+            return False
+        if [_text_value(value) for value in (target[3] or [])] != ["army"]:
+            return False
+        if target[0] is None or target[2] is not None:
+            return False
+        if (
+            connection.execute(
+                """
+            SELECT 1
+            FROM boundary_publication_corrections
+            WHERE source_generation_id = %s
+              AND state IN ('queued', 'pending_inputs', 'active')
+            LIMIT 1
+            """,
+                (generation_id,),
+            ).fetchone()
+            is not None
+        ):
+            return False
+        source = connection.execute(
+            """
+            SELECT snapshot_state, snapshot_id, snapshot_input_hash,
+                   snapshot_manifest_id, snapshot_analytics_publication_id,
+                   snapshot_coverage
+            FROM boundary_publication_generations
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (target[0],),
+        ).fetchone()
+        if (
+            source is None
+            or _text_value(source[0]) not in {"published", "superseded"}
+            or any(value is None for value in source[1:5])
+        ):
+            return False
+        connection.execute(
+            """
+            UPDATE boundary_publication_generations
+            SET snapshot_state = %s,
+                snapshot_id = %s,
+                snapshot_input_hash = %s,
+                snapshot_manifest_id = %s,
+                snapshot_analytics_publication_id = %s,
+                snapshot_coverage = %s,
+                updated_at = clock_timestamp()
+            WHERE id = %s
+              AND snapshot_state = 'pending'
+              AND snapshot_manifest_id IS NULL
+              AND affected_artifacts = ARRAY['army']::text[]
+            """,
+            ("published", *source[1:5], Jsonb(source[5]), generation_id),
+        )
+        return True
 
     def _try_enqueue_boundary_artifacts(
         self, connection: Any, *, boundary_at: datetime, generation_id: int
     ) -> None:
+        self._inherit_deferred_army_successor_snapshot(
+            connection, generation_id=generation_id
+        )
         generation = connection.execute(
             """
             SELECT id, generation, sweep_id, snapshot_state, army_state,
-                   expected_population_count
+                   expected_population_count, affected_artifacts, target_at, target_rule
             FROM boundary_publication_generations
             WHERE id = %s
             FOR UPDATE
@@ -4954,47 +6389,69 @@ class Database:
         if sweep_id is None:
             return
 
-        # Member status is updated at the event that changes that member. Do
-        # not rescan and rewrite the whole frozen population here.
-        if _text_value(generation[3]) == "pending":
-            complete_baseline = connection.execute(
-                """
-                SELECT 1
-                FROM reset_baseline_evidence
-                WHERE reset_baseline_sweep_id IN (
-                    SELECT id FROM collector_reset_baseline_sweeps
-                    WHERE reset_sweep_id = %s
-                )
-                  AND state = 'complete'
-                  AND EXISTS (
-                      SELECT 1
-                      FROM boundary_publication_generation_members
-                      WHERE generation_id = %s
-                        AND ranked_day_version_id IS NOT NULL
-                  )
-                LIMIT 1
-                """,
-                (sweep_id, generation_id),
-            ).fetchone()
-            if complete_baseline is not None:
-                connection.execute(
-                    """
-                    UPDATE boundary_publication_generations
-                    SET snapshot_state = 'ready', updated_at = clock_timestamp()
-                    WHERE id = %s AND snapshot_state = 'pending'
-                    """,
-                    (generation_id,),
-                )
-        snapshot_state = connection.execute(
-            "SELECT snapshot_state FROM boundary_publication_generations WHERE id = %s",
+        # The collector owns this handoff. Test fixtures that do not create a
+        # gate row retain the historical direct coordinator seam.
+        handoff = connection.execute(
+            "SELECT safe_handoff FROM collector_boundary_admission WHERE boundary_at = %s",
+            (boundary_at,),
+        ).fetchone()
+        if handoff is None:
+            if getattr(self, "_supports_coordinator_contract", False):
+                return
+        elif not bool(handoff[0]):
+            return
+        classifications = connection.execute(
+            """
+            SELECT count(*) AS member_count,
+                   count(*) FILTER (WHERE snapshot_status = 'pending') AS snapshot_pending,
+                   count(*) FILTER (WHERE army_status = 'pending') AS army_pending,
+                   count(*) FILTER (WHERE snapshot_status NOT IN
+                       ('complete','partial','failed','missing','unavailable','inconsistent','malformed','pending')) AS bad_snapshot,
+                   count(*) FILTER (WHERE army_status NOT IN
+                       ('complete','partial','failed','missing','unavailable','inconsistent','malformed','pending')) AS bad_army
+            FROM boundary_publication_generation_members
+            WHERE generation_id = %s
+            """,
             (generation_id,),
         ).fetchone()
-        assert snapshot_state is not None
-        if _text_value(snapshot_state[0]) == "ready":
-            boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            snapshot_due_at = boundary_at + timedelta(
-                minutes=10 if boundary_at.weekday() == 0 else 5
+        assert classifications is not None
+        member_count, snapshot_pending, army_pending, bad_snapshot, bad_army = (
+            int(value) for value in classifications
+        )
+        if member_count != int(generation[5]) or bad_snapshot or bad_army:
+            return
+        boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if _text_value(generation[8]) != "boundary-delay-v1":
+            return
+        target = generation[7]
+        now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+        if now < target:
+            return
+        affected_artifacts = [_text_value(value) for value in (generation[6] or [])]
+        if snapshot_pending == 0 and _text_value(generation[3]) == "pending":
+            connection.execute(
+                "UPDATE boundary_publication_generations SET snapshot_state = 'ready', updated_at = clock_timestamp() WHERE id = %s AND snapshot_state = 'pending'",
+                (generation_id,),
             )
+        if army_pending == 0 and _text_value(generation[4]) == "pending":
+            connection.execute(
+                "UPDATE boundary_publication_generations SET army_state = 'ready', updated_at = clock_timestamp() WHERE id = %s AND army_state = 'pending'",
+                (generation_id,),
+            )
+        snapshot = connection.execute(
+            "SELECT snapshot_state, snapshot_manifest_id FROM boundary_publication_generations WHERE id = %s FOR UPDATE",
+            (generation_id,),
+        ).fetchone()
+        if (
+            snapshot_pending == 0
+            and snapshot is not None
+            and _text_value(snapshot[0]) == "ready"
+            and (not affected_artifacts or "snapshot" in affected_artifacts)
+        ):
+            manifest = self._freeze_boundary_manifest(
+                connection, generation_id=generation_id, artifact_kind="snapshot"
+            )
+            assert manifest is not None
             connection.execute(
                 """
                 INSERT INTO python_processing_jobs_worker (
@@ -5005,35 +6462,36 @@ class Database:
                 ON CONFLICT (deduplication_key) DO NOTHING
                 """,
                 (
-                    f"build_snapshot:boundary:{boundary_text}:gen:{generation_number}",
-                    Jsonb({"boundary_at": boundary_text, "generation": generation_number}),
-                    snapshot_due_at,
+                    f"build_snapshot:boundary:{boundary_text}:gen:{generation_number}:manifest:{manifest[1]}",
+                    Jsonb(
+                        {
+                            "boundary_at": boundary_text,
+                            "generation": generation_number,
+                            "manifest_id": manifest[0],
+                            "manifest_digest": manifest[1],
+                        }
+                    ),
+                    target,
                     DEFAULT_PARSER_VERSION,
                     PROCESSING_VERSION,
                     DOMAIN_RULE_VERSION,
                     ANALYTICS_RULE_VERSION,
                 ),
             )
-
-        incomplete = connection.execute(
-            """
-            SELECT 1
-            FROM boundary_publication_generation_members
-            WHERE generation_id = %s AND status = 'pending'
-            LIMIT 1
-            """,
+        army = connection.execute(
+            "SELECT army_state, army_manifest_id FROM boundary_publication_generations WHERE id = %s FOR UPDATE",
             (generation_id,),
         ).fetchone()
-        if incomplete is None and _text_value(generation[4]) == "pending":
-            connection.execute(
-                """
-                UPDATE boundary_publication_generations
-                SET army_state = 'ready', updated_at = clock_timestamp()
-                WHERE id = %s AND army_state = 'pending'
-                """,
-                (generation_id,),
+        if (
+            army_pending == 0
+            and army is not None
+            and _text_value(army[0]) == "ready"
+            and (not affected_artifacts or "army" in affected_artifacts)
+        ):
+            manifest = self._freeze_boundary_manifest(
+                connection, generation_id=generation_id, artifact_kind="army"
             )
-            boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            assert manifest is not None
             connection.execute(
                 """
                 INSERT INTO python_processing_jobs_worker (
@@ -5044,14 +6502,114 @@ class Database:
                 ON CONFLICT (deduplication_key) DO NOTHING
                 """,
                 (
-                    f"build_army_analytics:boundary:{boundary_text}:gen:{generation_number}",
-                    Jsonb({"boundary_at": boundary_text, "generation": generation_number}),
+                    f"build_army_analytics:boundary:{boundary_text}:gen:{generation_number}:manifest:{manifest[1]}",
+                    Jsonb(
+                        {
+                            "boundary_at": boundary_text,
+                            "generation": generation_number,
+                            "manifest_id": manifest[0],
+                            "manifest_digest": manifest[1],
+                        }
+                    ),
                     DEFAULT_PARSER_VERSION,
                     PROCESSING_VERSION,
                     DOMAIN_RULE_VERSION,
                     ARMY_ANALYTICS_RULE_VERSION,
                 ),
             )
+
+    @staticmethod
+    def _boundary_snapshot_status(
+        connection: Any,
+        *,
+        player_id: int,
+        ranked_day_version_id: int,
+        boundary_at: datetime | None = None,
+    ) -> str:
+        ranked = connection.execute(
+            "SELECT state FROM ranked_day_versions WHERE id = %s AND player_id = %s",
+            (ranked_day_version_id, player_id),
+        ).fetchone()
+        status = {
+            "Complete": "complete",
+            "Partial": "partial",
+            "Inconsistent": "inconsistent",
+            "Malformed": "malformed",
+        }.get(_text_value(ranked[0]) if ranked else "", "pending")
+        if status != "complete":
+            return status
+        profile = connection.execute(
+            """
+            SELECT 1
+            FROM player_profile_versions
+            WHERE player_id = %s
+              AND source_contract_state = 'accepted'
+              AND (%s::timestamptz IS NULL OR observed_at <= %s)
+            ORDER BY observed_at DESC, id DESC
+            LIMIT 1
+            """,
+            (player_id, boundary_at, boundary_at),
+        ).fetchone()
+        return "complete" if profile is not None else "missing"
+
+    def _boundary_army_status(
+        self,
+        connection: Any,
+        *,
+        player_id: int,
+        ranked_day_version_id: int,
+        snapshot_status: str,
+    ) -> str:
+        if snapshot_status in {"pending", "unavailable", "missing", "failed"}:
+            return (
+                "unavailable"
+                if snapshot_status in {"unavailable", "missing", "failed"}
+                else "pending"
+            )
+        daily_log = connection.execute(
+            """
+            SELECT battles, state, coverage
+            FROM api_player_daily_logs
+            WHERE player_id = %s AND ranked_day_version_id = %s
+            ORDER BY version DESC LIMIT 1
+            """,
+            (player_id, ranked_day_version_id),
+        ).fetchone()
+        # Coordinated publication requires daily-log evidence before army
+        # readiness; direct legacy reconciliation retains its old fallback.
+        if daily_log is None:
+            return (
+                "pending"
+                if getattr(self, "_supports_coordinator_contract", False)
+                else snapshot_status
+            )
+        daily_state = _text_value(daily_log[1])
+        daily_coverage = _text_value(daily_log[2])
+        if daily_state == "Partial":
+            return "partial"
+        if daily_state != "Complete" or daily_coverage != "complete":
+            return "pending"
+        battle_ids = [
+            int(event["battle_id"])
+            for event in (daily_log[0] if isinstance(daily_log[0], list) else [])
+            if isinstance(event, dict) and str(event.get("battle_id", "")).isdigit()
+        ]
+        if not battle_ids:
+            return "complete"
+        decoded = connection.execute(
+            """
+            SELECT count(DISTINCT battle_id)
+            FROM battle_army_decodes
+            WHERE battle_id = ANY(%s::bigint[]) AND is_active
+              AND decoder_version = %s AND catalog_version = %s
+            """,
+            (battle_ids, DECODER_VERSION, CATALOG_VERSION),
+        ).fetchone()
+        return (
+            snapshot_status
+            if decoded is not None and int(decoded[0]) == len(set(battle_ids))
+            else "pending"
+        )
 
     def _record_boundary_generation(
         self,
@@ -5093,7 +6651,9 @@ class Database:
             return True
         current = connection.execute(
             """
-            SELECT id, generation, snapshot_state, army_state
+            SELECT id, generation, snapshot_state, army_state,
+                   correction_state, snapshot_manifest_id, army_manifest_id,
+                   affected_artifacts
             FROM boundary_publication_generations
             WHERE boundary_at = %s
               AND snapshot_state <> 'superseded'
@@ -5143,13 +6703,162 @@ class Database:
                 or int(prior_member[0]) != int(ranked_day_version_id)
                 or _text_value(prior_member[1]) != ranked_day_input_hash
             )
-            frozen = _text_value(current[2]) == "published" or _text_value(current[3]) == "published"
-            if changed and frozen:
+            frozen_artifacts = [
+                kind
+                for kind, manifest_id in (
+                    ("snapshot", current[5]),
+                    ("army", current[6]),
+                )
+                if manifest_id is not None
+            ]
+            correction_active = _text_value(current[4]) == "active"
+            if correction_active and current[7] and not (changed and frozen_artifacts):
+                affected = {_text_value(value) for value in current[7]}
+                frozen_artifacts = [
+                    kind for kind in frozen_artifacts if kind in affected
+                ]
+            elif changed and frozen_artifacts:
+                # A ranked-day source feeds both artifacts. Once either
+                # manifest has frozen, reprocess both instead of inheriting an
+                # army identity built from the previous source version.
+                frozen_artifacts = ["snapshot", "army"]
+            fully_published = (
+                _text_value(current[2]) == "published"
+                and _text_value(current[3]) == "published"
+            )
+            active_target_correction = connection.execute(
+                """
+                SELECT id
+                FROM boundary_publication_corrections
+                WHERE generation_id = %s AND state = 'active'
+                FOR UPDATE
+                """,
+                (generation_id,),
+            ).fetchone()
+            if (
+                changed
+                and active_target_correction is not None
+                and not frozen_artifacts
+            ):
+                snapshot_status = self._boundary_snapshot_status(
+                    connection,
+                    player_id=player_id,
+                    ranked_day_version_id=ranked_day_version_id,
+                    boundary_at=boundary_at,
+                )
+                army_status = self._boundary_army_status(
+                    connection,
+                    player_id=player_id,
+                    ranked_day_version_id=ranked_day_version_id,
+                    snapshot_status=snapshot_status,
+                )
+                connection.execute(
+                    """
+                    UPDATE boundary_publication_generation_members
+                    SET ranked_day_version_id = %s, ranked_day_input_hash = %s,
+                        status = %s, snapshot_status = %s, army_status = %s,
+                        updated_at = clock_timestamp()
+                    WHERE generation_id = %s AND player_id = %s
+                    """,
+                    (
+                        ranked_day_version_id,
+                        ranked_day_input_hash,
+                        "terminal" if snapshot_status != "pending" else "pending",
+                        snapshot_status,
+                        army_status,
+                        generation_id,
+                        player_id,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE boundary_publication_generations
+                    SET affected_artifacts = ARRAY(
+                            SELECT DISTINCT unnest(affected_artifacts || ARRAY['snapshot']::text[])
+                        ),
+                        updated_at = clock_timestamp()
+                    WHERE id = %s
+                    """,
+                    (generation_id,),
+                )
+                connection.execute(
+                    """
+                    UPDATE boundary_publication_corrections
+                    SET affected_artifacts = ARRAY(
+                            SELECT DISTINCT unnest(affected_artifacts || ARRAY['snapshot']::text[])
+                        )
+                    WHERE id = %s
+                    """,
+                    (active_target_correction[0],),
+                )
+                self._try_enqueue_boundary_artifacts(
+                    connection, boundary_at=boundary_at, generation_id=generation_id
+                )
+                return True
+            if (
+                changed
+                and frozen_artifacts
+                and (correction_active or not fully_published)
+            ):
+                # Keep the changed input only in the correction queue. The
+                # captured generation member remains immutable; the queued
+                # successor applies this input before it seals inheritance.
+                pending_input = {
+                    "player_id": player_id,
+                    "ranked_day_version_id": ranked_day_version_id,
+                    "input_hash": ranked_day_input_hash,
+                }
+                queued = connection.execute(
+                    """
+                    SELECT id
+                    FROM boundary_publication_corrections
+                    WHERE boundary_at = %s AND source_generation_id = %s
+                      AND state IN ('queued', 'pending_inputs')
+                    ORDER BY id DESC
+                    LIMIT 1
+                    FOR UPDATE
+                    """,
+                    (boundary_at, generation_id),
+                ).fetchone()
+                correction_artifacts = frozen_artifacts
+                if queued is None:
+                    connection.execute(
+                        """
+                        INSERT INTO boundary_publication_corrections
+                            (boundary_at, source_generation_id, affected_artifacts, pending_inputs)
+                        VALUES (%s, %s, %s, %s)
+                        """,
+                        (
+                            boundary_at,
+                            generation_id,
+                            correction_artifacts,
+                            Jsonb([pending_input]),
+                        ),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE boundary_publication_corrections
+                        SET affected_artifacts = ARRAY(
+                                SELECT DISTINCT unnest(affected_artifacts || %s::text[])
+                            ),
+                            pending_inputs = pending_inputs || %s::jsonb
+                        WHERE id = %s
+                        """,
+                        (correction_artifacts, Jsonb([pending_input]), queued[0]),
+                    )
+                return True
+            if (
+                changed
+                and not correction_active
+                and frozen_artifacts
+                and fully_published
+            ):
                 connection.execute(
                     """
                     UPDATE boundary_publication_generations
                     SET snapshot_state = 'superseded', army_state = 'superseded',
-                        updated_at = clock_timestamp()
+                        correction_state = 'finalized', updated_at = clock_timestamp()
                     WHERE id = %s
                     """,
                     (generation_id,),
@@ -5170,40 +6879,76 @@ class Database:
                     player_ids=[int(row[0]) for row in frozen_members],
                     generation=generation + 1,
                     supersedes_id=int(current[0]),
+                    pending_inputs=[
+                        {
+                            "player_id": player_id,
+                            "ranked_day_version_id": ranked_day_version_id,
+                            "input_hash": ranked_day_input_hash,
+                        }
+                    ],
                 )
-        ranked_state_row = connection.execute(
-            "SELECT state FROM ranked_day_versions WHERE id = %s",
-            (ranked_day_version_id,),
-        ).fetchone()
-        ranked_state = (
-            _text_value(ranked_state_row[0]) if ranked_state_row is not None else None
+                affected = frozen_artifacts or ["snapshot", "army"]
+                connection.execute(
+                    "UPDATE boundary_publication_generations SET affected_artifacts = %s WHERE id = %s",
+                    (affected, generation_id),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO boundary_publication_corrections
+                        (boundary_at, source_generation_id, generation_id,
+                         affected_artifacts, state, started_at)
+                    VALUES (%s, %s, %s, %s, 'active', clock_timestamp())
+                    """,
+                    (boundary_at, current[0], generation_id, affected),
+                )
+        snapshot_status = self._boundary_snapshot_status(
+            connection,
+            player_id=player_id,
+            ranked_day_version_id=ranked_day_version_id,
+            boundary_at=boundary_at,
         )
-        member_status = (
-            "terminal"
-            if ranked_state in {"Complete", "Partial", "Inconsistent", "Malformed"}
-            else "pending"
+        army_status = self._boundary_army_status(
+            connection,
+            player_id=player_id,
+            ranked_day_version_id=ranked_day_version_id,
+            snapshot_status=snapshot_status,
         )
-        connection.execute(
+        member_status = "terminal" if snapshot_status != "pending" else "pending"
+        updated_member = connection.execute(
             """
-            INSERT INTO boundary_publication_generation_members (
-                generation_id, player_id, ranked_day_version_id,
-                ranked_day_input_hash, status
-            ) VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (generation_id, player_id) DO UPDATE SET
-                ranked_day_version_id = EXCLUDED.ranked_day_version_id,
-                ranked_day_input_hash = EXCLUDED.ranked_day_input_hash,
-                status = EXCLUDED.status, updated_at = clock_timestamp()
+            UPDATE boundary_publication_generation_members
+            SET ranked_day_version_id = %s, ranked_day_input_hash = %s,
+                status = %s, snapshot_status = %s, army_status = %s,
+                updated_at = clock_timestamp()
+            WHERE generation_id = %s AND player_id = %s
             """,
-            (generation_id, player_id, ranked_day_version_id, ranked_day_input_hash, member_status),
+            (
+                ranked_day_version_id,
+                ranked_day_input_hash,
+                member_status,
+                snapshot_status,
+                army_status,
+                generation_id,
+                player_id,
+            ),
         )
-        if member_status == "terminal":
+        if updated_member.rowcount == 0:
             connection.execute(
                 """
-                UPDATE boundary_publication_generations
-                SET snapshot_state = 'ready', updated_at = clock_timestamp()
-                WHERE id = %s AND snapshot_state = 'pending'
+                INSERT INTO boundary_publication_generation_members (
+                    generation_id, player_id, ranked_day_version_id,
+                    ranked_day_input_hash, status, snapshot_status, army_status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
                 """,
-                (generation_id,),
+                (
+                    generation_id,
+                    player_id,
+                    ranked_day_version_id,
+                    ranked_day_input_hash,
+                    member_status,
+                    snapshot_status,
+                    army_status,
+                ),
             )
         self._try_enqueue_boundary_artifacts(
             connection, boundary_at=boundary_at, generation_id=generation_id
@@ -5438,7 +7183,12 @@ class Database:
                     exact_army_id = int(existing[0])
                 active = connection.execute(
                     "SELECT id, evidence_id, raw_code, identity_hash, status FROM battle_army_decodes WHERE battle_id = %s AND perspective = %s AND decoder_version = %s AND catalog_version = %s AND is_active = true",
-                    (battle_id, perspective, decoded.decoder_version, decoded.catalog_version),
+                    (
+                        battle_id,
+                        perspective,
+                        decoded.decoder_version,
+                        decoded.catalog_version,
+                    ),
                 ).fetchone()
                 raw_cmp_equal = False
                 if active is not None:
@@ -5452,7 +7202,11 @@ class Database:
                     if (
                         int(active[1]) == int(evidence_id)
                         and raw_cmp_equal
-                        and (active[3] is None if decoded.identity_hash is None else _text_value(active[3]) == decoded.identity_hash)
+                        and (
+                            active[3] is None
+                            if decoded.identity_hash is None
+                            else _text_value(active[3]) == decoded.identity_hash
+                        )
                         and _text_value(active[4]) == decoded.status
                     ):
                         continue
@@ -5521,15 +7275,17 @@ class Database:
                             ]
                         ),
                         Jsonb([h.raw_m for h in decoded.heroes if h.raw_m]),
-                        Jsonb([
-                            {
-                                "numeric_id": fact.numeric_id,
-                                "quantity": fact.quantity,
-                                "section": fact.section,
-                                "origin": fact.origin,
-                            }
-                            for fact in decoded.unknown
-                        ]),
+                        Jsonb(
+                            [
+                                {
+                                    "numeric_id": fact.numeric_id,
+                                    "quantity": fact.quantity,
+                                    "section": fact.section,
+                                    "origin": fact.origin,
+                                }
+                                for fact in decoded.unknown
+                            ]
+                        ),
                         supersedes,
                     ),
                 )
@@ -5537,7 +7293,12 @@ class Database:
                 failure: DecodeFailure = decoded  # type: ignore[assignment]
                 active = connection.execute(
                     "SELECT id, evidence_id, raw_code, failure_category FROM battle_army_decodes WHERE battle_id = %s AND perspective = %s AND decoder_version = %s AND catalog_version = %s AND is_active = true",
-                    (battle_id, perspective, failure.decoder_version, failure.catalog_version),
+                    (
+                        battle_id,
+                        perspective,
+                        failure.decoder_version,
+                        failure.catalog_version,
+                    ),
                 ).fetchone()
                 raw_cmp_equal = False
                 if active is not None:
@@ -5588,32 +7349,271 @@ class Database:
         for (day_start,) in day_rows:
             self._enqueue_army_analytics(connection, ranked_day_start=day_start)
 
+    def _boundary_army_manifest_needs_correction(
+        self, connection: Any, *, manifest_id: int
+    ) -> bool:
+        rows = connection.execute(
+            """
+            SELECT player_id, ranked_day_version_id, input_identity
+            FROM boundary_publication_manifest_rows
+            WHERE manifest_id = %s
+            ORDER BY ordinal
+            """,
+            (manifest_id,),
+        ).fetchall()
+        for player_id, version_id, identity in rows:
+            expected = {
+                int(value)
+                for value in (
+                    identity.get("decode_ids", []) if isinstance(identity, dict) else []
+                )
+                if str(value).isdigit()
+            }
+            expected_battles = {
+                int(value)
+                for value in (
+                    identity.get("battle_ids", []) if isinstance(identity, dict) else []
+                )
+                if str(value).isdigit()
+            }
+            actual: set[int] = set()
+            if version_id is not None:
+                daily = connection.execute(
+                    """
+                    SELECT battles
+                    FROM api_player_daily_logs
+                    WHERE player_id = %s AND ranked_day_version_id = %s
+                    ORDER BY version DESC LIMIT 1
+                    """,
+                    (player_id, version_id),
+                ).fetchone()
+                for event in daily[0] if daily and isinstance(daily[0], list) else []:
+                    if not isinstance(event, dict) or event.get("included") is False:
+                        continue
+                    battle_id = event.get("battle_id")
+                    lens = event.get("lens")
+                    if (
+                        not str(battle_id).isdigit()
+                        or int(battle_id) not in expected_battles
+                        or lens not in {"offense", "defense"}
+                    ):
+                        continue
+                    perspective = "attacker" if lens == "offense" else "defender"
+                    decode = connection.execute(
+                        """
+                        SELECT id
+                        FROM battle_army_decodes
+                        WHERE battle_id = %s AND perspective = %s
+                          AND is_active AND decoder_version = %s AND catalog_version = %s
+                        """,
+                        (int(battle_id), perspective, DECODER_VERSION, CATALOG_VERSION),
+                    ).fetchone()
+                    if decode is not None:
+                        actual.add(int(decode[0]))
+            if actual != expected:
+                return True
+        return False
+
+    def _queue_boundary_army_correction(
+        self,
+        connection: Any,
+        *,
+        boundary_at: datetime,
+        generation_id: int,
+        defer_inheritance: bool = False,
+    ) -> None:
+        affected = ["army"]
+        queued = connection.execute(
+            """
+            SELECT id
+            FROM boundary_publication_corrections
+            WHERE boundary_at = %s AND source_generation_id = %s
+              AND state IN ('queued', 'pending_inputs')
+            ORDER BY id DESC LIMIT 1
+            FOR UPDATE
+            """,
+            (boundary_at, generation_id),
+        ).fetchone()
+        if queued is not None:
+            connection.execute(
+                """
+                UPDATE boundary_publication_corrections
+                SET affected_artifacts = ARRAY(
+                        SELECT DISTINCT unnest(affected_artifacts || %s::text[])
+                    )
+                WHERE id = %s
+                """,
+                (affected, queued[0]),
+            )
+            connection.execute(
+                "UPDATE boundary_publication_corrections SET pending_inputs = pending_inputs || %s::jsonb WHERE id = %s",
+                (Jsonb([{"kind": "decode"}]), queued[0]),
+            )
+            return
+        current = connection.execute(
+            """
+            SELECT snapshot_state, army_state, army_manifest_id, generation
+            FROM boundary_publication_generations
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (generation_id,),
+        ).fetchone()
+        if (
+            current is None
+            or current[2] is None
+            or _text_value(current[1]) == "superseded"
+        ):
+            return
+        if (
+            _text_value(current[0]) == "published"
+            and _text_value(current[1]) == "published"
+        ):
+            connection.execute(
+                """
+                UPDATE boundary_publication_generations
+                SET snapshot_state = 'superseded', army_state = 'superseded',
+                    correction_state = 'finalized', updated_at = clock_timestamp()
+                WHERE id = %s
+                """,
+                (generation_id,),
+            )
+            player_ids = [
+                int(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT player_id
+                    FROM boundary_publication_generation_members
+                    WHERE generation_id = %s ORDER BY player_id
+                    """,
+                    (generation_id,),
+                ).fetchall()
+            ]
+            new_id, _new_generation = self._create_boundary_generation(
+                connection,
+                boundary_at=boundary_at,
+                sweep_id=int(
+                    connection.execute(
+                        "SELECT sweep_id FROM boundary_publication_generations WHERE id = %s",
+                        (generation_id,),
+                    ).fetchone()[0]
+                ),
+                player_ids=player_ids,
+                generation=int(current[3]) + 1,
+                supersedes_id=generation_id,
+            )
+            connection.execute(
+                "UPDATE boundary_publication_generations SET affected_artifacts = %s WHERE id = %s",
+                (affected, new_id),
+            )
+            if not defer_inheritance:
+                connection.execute(
+                    """
+                    UPDATE boundary_publication_generations AS target
+                    SET snapshot_state = 'published',
+                        snapshot_id = source.snapshot_id,
+                        snapshot_input_hash = source.snapshot_input_hash,
+                        snapshot_manifest_id = source.snapshot_manifest_id,
+                        snapshot_analytics_publication_id = source.snapshot_analytics_publication_id,
+                        snapshot_coverage = source.snapshot_coverage
+                    FROM boundary_publication_generations AS source
+                    WHERE target.id = %s AND source.id = %s
+                    """,
+                    (new_id, generation_id),
+                )
+            connection.execute(
+                """
+                INSERT INTO boundary_publication_corrections
+                    (boundary_at, source_generation_id, generation_id,
+                     affected_artifacts, state, started_at)
+                VALUES (%s, %s, %s, %s, 'active', clock_timestamp())
+                """,
+                (boundary_at, generation_id, new_id, affected),
+            )
+            return
+        connection.execute(
+            """
+            INSERT INTO boundary_publication_corrections
+                (boundary_at, source_generation_id, affected_artifacts, pending_inputs)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (boundary_at, generation_id, affected, Jsonb([{"kind": "decode"}])),
+        )
+
     def _enqueue_army_analytics(
         self, connection: Any, *, ranked_day_start: datetime
     ) -> None:
         ranked_day_start = ranked_day_start.astimezone(UTC)
-        coordinator = connection.execute(
-            """
-            SELECT id, generation
-            FROM boundary_publication_generations
-            WHERE boundary_at = %s
-              AND snapshot_state <> 'superseded'
-              AND army_state <> 'superseded'
-            ORDER BY generation DESC
-            LIMIT 1
-            """,
-            (ranked_day_start + timedelta(days=1),),
-        ).fetchone()
+        coordinator = None
+        boundary_at = ranked_day_start + timedelta(days=1)
+        if getattr(self, "_supports_coordinator_contract", False):
+            connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"boundary-publication:{boundary_at.isoformat()}",),
+            )
+            coordinator = connection.execute(
+                """
+                SELECT id, generation, snapshot_state, army_state,
+                       army_manifest_id
+                FROM boundary_publication_generations
+                WHERE boundary_at = %s
+                  AND snapshot_state <> 'superseded'
+                  AND army_state <> 'superseded'
+                ORDER BY generation DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (boundary_at,),
+            ).fetchone()
         if coordinator is not None:
+            generation_id = int(coordinator[0])
+            members = connection.execute(
+                """
+                SELECT player_id, ranked_day_version_id, snapshot_status
+                FROM boundary_publication_generation_members
+                WHERE generation_id = %s AND ranked_day_version_id IS NOT NULL
+                FOR UPDATE
+                """,
+                (generation_id,),
+            ).fetchall()
+            for player_id, version_id, snapshot_status in members:
+                army_status = self._boundary_army_status(
+                    connection,
+                    player_id=int(player_id),
+                    ranked_day_version_id=int(version_id),
+                    snapshot_status=_text_value(snapshot_status),
+                )
+                connection.execute(
+                    """
+                    UPDATE boundary_publication_generation_members
+                    SET army_status = %s, updated_at = clock_timestamp()
+                    WHERE generation_id = %s AND player_id = %s
+                    """,
+                    (army_status, generation_id, int(player_id)),
+                )
+            if (
+                not getattr(self, "_disable_decode_corrections", False)
+                and _text_value(coordinator[3]) in {"ready", "building", "published"}
+                and coordinator[4] is not None
+                and self._boundary_army_manifest_needs_correction(
+                    connection, manifest_id=int(coordinator[4])
+                )
+            ):
+                self._queue_boundary_army_correction(
+                    connection,
+                    boundary_at=boundary_at,
+                    generation_id=generation_id,
+                    defer_inheritance=True,
+                )
             self._try_enqueue_boundary_artifacts(
                 connection,
-                boundary_at=ranked_day_start + timedelta(days=1),
-                generation_id=int(coordinator[0]),
+                boundary_at=boundary_at,
+                generation_id=generation_id,
             )
             return
-        # Decode-driven historical/test work predates boundary coordination and
-        # retains its existing per-day job shape. Reconciliation never calls
-        # this fallback, so new boundary publication cannot fan out here.
+        # Decode-driven historical/test work without a reset coordinator
+        # retains its existing per-day shape. Coordinated boundaries return
+        # above and can only enqueue manifest-identified army work.
         completed = connection.execute(
             """
             SELECT id, official_season_id
@@ -5683,10 +7683,13 @@ class Database:
                     boundary_text = claim.input_json.get("boundary_at")
                     if boundary_text is None:
                         raise ValueError("army boundary is required")
-                    boundary_at = datetime.fromisoformat(str(boundary_text)).astimezone(UTC)
+                    boundary_at = datetime.fromisoformat(str(boundary_text)).astimezone(
+                        UTC
+                    )
                     generation_row = connection.execute(
                         """
-                        SELECT id, generation, sweep_id, snapshot_state, army_state
+                        SELECT id, generation, sweep_id, snapshot_state, army_state,
+                               army_manifest_id, army_rule_version, target_at, target_rule
                         FROM boundary_publication_generations
                         WHERE boundary_at = %s AND generation = %s
                         FOR UPDATE
@@ -5694,11 +7697,57 @@ class Database:
                         (boundary_at, int(generation_input)),
                     ).fetchone()
                     if generation_row is None:
-                        raise ValueError("boundary publication generation does not exist")
+                        raise ValueError(
+                            "boundary publication generation does not exist"
+                        )
+                    if _text_value(generation_row[4]) in {"superseded", "published"}:
+                        self._finish_claim(
+                            connection,
+                            claim,
+                            job,
+                            state="complete",
+                            outcome="stale_superseded",
+                        )
+                        return
                     if _text_value(generation_row[4]) not in {"ready", "building"}:
-                        raise ValueError("boundary army generation is stale or superseded")
+                        raise ValueError(
+                            "boundary army generation is stale or superseded"
+                        )
                     if _text_value(generation_row[3]) == "superseded":
-                        raise ValueError("boundary publication generation is superseded")
+                        raise ValueError(
+                            "boundary publication generation is superseded"
+                        )
+                    manifest_id = (
+                        int(generation_row[5])
+                        if generation_row[5] is not None
+                        else None
+                    )
+                    if (
+                        manifest_id is None
+                        or int(claim.input_json.get("manifest_id", 0)) != manifest_id
+                    ):
+                        raise ValueError(
+                            "boundary army manifest identity does not match"
+                        )
+                    manifest_digest = connection.execute(
+                        "SELECT digest FROM boundary_publication_manifests WHERE id = %s",
+                        (manifest_id,),
+                    ).fetchone()
+                    if manifest_digest is None or _text_value(
+                        manifest_digest[0]
+                    ) != claim.input_json.get("manifest_digest"):
+                        raise ValueError("boundary army manifest digest does not match")
+                    if _text_value(generation_row[6]) != claim.analytics_rule_version:
+                        raise ValueError("boundary army rule version does not match")
+                    if _text_value(generation_row[8]) != "boundary-delay-v1":
+                        raise ValueError("unsupported boundary target rule")
+                    now_row = connection.execute("SELECT clock_timestamp()").fetchone()
+                    assert now_row is not None
+                    if now_row[0] < generation_row[7]:
+                        raise ValueError(
+                            "army publication target dependency is not ready"
+                        )
+                    manifest_digest_value = _text_value(manifest_digest[0])
                     connection.execute(
                         """
                         UPDATE boundary_publication_generations
@@ -5711,13 +7760,15 @@ class Database:
                         """
                         SELECT 1
                         FROM boundary_publication_generation_members
-                        WHERE generation_id = %s AND status = 'pending'
+                        WHERE generation_id = %s AND army_status = 'pending'
                         LIMIT 1
                         """,
                         (generation_row[0],),
                     ).fetchone()
                     if pending_members is not None:
-                        raise ValueError("boundary army publication dependency is not terminal")
+                        raise ValueError(
+                            "boundary army publication dependency is not terminal"
+                        )
                     ranked_day_str = (boundary_at - timedelta(days=1)).strftime(
                         "%Y-%m-%dT%H:%M:%SZ"
                     )
@@ -5746,70 +7797,240 @@ class Database:
                     raise ValueError(
                         "army analytics requires ranked-day and season inputs"
                     )
-                self._build_army_facts(connection, str(ranked_day_str))
+                manifest_members = None
+                manifest_versions = None
+                manifest_decodes = None
+                manifest_daily_logs = None
+                season_inputs = None
+                if generation_row is not None:
+                    manifest_rows = connection.execute(
+                        "SELECT player_id, ranked_day_version_id, input_identity->'decode_ids', input_identity FROM boundary_publication_manifest_rows WHERE manifest_id = %s ORDER BY ordinal",
+                        (manifest_id,),
+                    ).fetchall()
+                    manifest_rules = connection.execute(
+                        "SELECT rule_versions FROM boundary_publication_manifests WHERE id = %s",
+                        (manifest_id,),
+                    ).fetchone()
+                    if manifest_rules and isinstance(manifest_rules[0], dict):
+                        season_inputs = manifest_rules[0].get("season_inputs")
+                    if season_inputs is None:
+                        season_inputs = {}
+                    manifest_members = [int(row[0]) for row in manifest_rows]
+                    manifest_versions = [
+                        int(row[1]) for row in manifest_rows if row[1] is not None
+                    ]
+                    manifest_decodes = [
+                        int(decode_id)
+                        for row in manifest_rows
+                        for decode_id in (row[2] or [])
+                    ]
+                    manifest_daily_logs = [
+                        int(row[3]["daily_log_id"])
+                        for row in manifest_rows
+                        if isinstance(row[3], dict)
+                        and row[3].get("daily_log_id") is not None
+                    ]
+                    manifest_evidence = [
+                        int(evidence_id)
+                        for row in manifest_rows
+                        for evidence_id in (
+                            row[3].get("evidence_ids", [])
+                            if isinstance(row[3], dict)
+                            else []
+                        )
+                    ]
+                else:
+                    manifest_evidence = None
+                self._build_army_facts(
+                    connection,
+                    str(ranked_day_str),
+                    member_ids=manifest_members,
+                    ranked_version_ids=manifest_versions,
+                    decode_ids=manifest_decodes,
+                    evidence_ids=manifest_evidence,
+                    daily_log_ids=manifest_daily_logs,
+                )
                 self._build_army_day(
                     connection,
                     claim,
                     str(ranked_day_str),
+                    member_ids=manifest_members,
+                    ranked_version_ids=manifest_versions,
+                    decode_ids=manifest_decodes,
+                    evidence_ids=manifest_evidence,
                     allow_empty=generation_row is not None,
                     official_season_id=str(season_id),
                 )
-                self._build_army_season(connection, claim, str(season_id))
+                self._build_army_season(
+                    connection,
+                    claim,
+                    str(season_id),
+                    **(
+                        {
+                            "ranked_version_ids": [
+                                int(value)
+                                for value in season_inputs.get("ranked_version_ids", [])
+                            ],
+                            "daily_log_ids": [
+                                int(value)
+                                for value in season_inputs.get("daily_log_ids", [])
+                            ],
+                            "decode_ids": [
+                                int(value)
+                                for value in season_inputs.get("decode_ids", [])
+                            ],
+                            "evidence_ids": [
+                                int(value)
+                                for value in season_inputs.get("evidence_ids", [])
+                            ],
+                            "battle_ids": [
+                                int(value)
+                                for value in season_inputs.get("battle_ids", [])
+                            ],
+                        }
+                        if isinstance(season_inputs, dict)
+                        else {}
+                    ),
+                )
                 if generation_row is not None:
-                    member_inputs = connection.execute(
+                    day_output = connection.execute(
                         """
-                        SELECT player_id, ranked_day_version_id,
-                               ranked_day_input_hash, status
-                        FROM boundary_publication_generation_members
-                        WHERE generation_id = %s
-                        ORDER BY player_id
+                        SELECT exact_trophies, result_hash, input_hash, version
+                        FROM army_analytics_day_summaries
+                        WHERE ranked_day_start = %s
+                          AND decoder_version = %s
+                          AND catalog_version = %s
+                          AND analytics_rule_version = %s
+                          AND is_published
+                        ORDER BY exact_trophies, version
                         """,
-                        (generation_row[0],),
+                        (
+                            datetime.fromisoformat(str(ranked_day_str)).astimezone(UTC),
+                            DECODER_VERSION,
+                            CATALOG_VERSION,
+                            _text_value(generation_row[6]),
+                        ),
+                    ).fetchall()
+                    season_output = connection.execute(
+                        """
+                        SELECT exact_trophies, result_hash, input_hash, version
+                        FROM army_analytics_season_summaries
+                        WHERE official_season_id = %s
+                          AND decoder_version = %s
+                          AND catalog_version = %s
+                          AND analytics_rule_version = %s
+                          AND is_published
+                        ORDER BY exact_trophies, version
+                        """,
+                        (
+                            str(season_id),
+                            DECODER_VERSION,
+                            CATALOG_VERSION,
+                            _text_value(generation_row[6]),
+                        ),
                     ).fetchall()
                     army_hash = hashlib.sha256(
                         json.dumps(
                             {
-                                "boundary_at": claim.input_json.get("boundary_at"),
-                                "generation": int(generation_input),
-                                "analytics_rule_version": ARMY_ANALYTICS_RULE_VERSION,
-                                "decoder_version": DECODER_VERSION,
-                                "catalog_version": CATALOG_VERSION,
-                                "member_inputs": [
-                                    [
-                                        int(row[0]),
-                                        int(row[1]) if row[1] is not None else None,
-                                        _text_value(row[2]) if row[2] is not None else None,
-                                        _text_value(row[3]),
-                                    ]
-                                    for row in member_inputs
-                                ],
+                                "manifest_digest": manifest_digest_value,
+                                "rule_versions": {
+                                    "army_rule_version": _text_value(generation_row[6]),
+                                    "decoder_version": DECODER_VERSION,
+                                    "catalog_version": CATALOG_VERSION,
+                                },
+                                "output": {
+                                    "day": [list(row) for row in day_output],
+                                    "season": [list(row) for row in season_output],
+                                },
                             },
                             sort_keys=True,
                             separators=(",", ":"),
+                            default=str,
                         ).encode("utf-8")
                     ).hexdigest()
+                    army_identity = self._create_boundary_artifact_identity(
+                        connection,
+                        generation_id=int(generation_row[0]),
+                        artifact_kind="army",
+                        manifest_id=int(manifest_id),
+                        input_hash=army_hash,
+                        source_identity={
+                            "ranked_day_start": str(ranked_day_str),
+                            "decoder_version": DECODER_VERSION,
+                            "catalog_version": CATALOG_VERSION,
+                        },
+                    )
                     published_army = connection.execute(
                         """
                         UPDATE boundary_publication_generations
                         SET army_state = 'published', army_input_hash = %s,
+                            army_publication_id = %s,
+                            army_coverage = jsonb_build_object(
+                                'expected', (SELECT count(*) FROM boundary_publication_generation_members WHERE generation_id = %s),
+                                'included', (SELECT count(*) FROM boundary_publication_generation_members WHERE generation_id = %s AND army_status IN ('complete','partial')),
+                                'excluded', (SELECT count(*) FROM boundary_publication_generation_members WHERE generation_id = %s AND army_status NOT IN ('complete','partial')),
+                                'terminal', (SELECT count(*) FROM boundary_publication_generation_members WHERE generation_id = %s AND army_status <> 'pending'),
+                                'classifications', (SELECT COALESCE(jsonb_object_agg(army_status, count), '{}'::jsonb) FROM (SELECT army_status, count(*) FROM boundary_publication_generation_members WHERE generation_id = %s GROUP BY army_status) AS counts)
+                            ),
                             updated_at = clock_timestamp()
                         WHERE id = %s AND army_state = 'building'
+                          AND army_manifest_id = %s
                         RETURNING id
                         """,
-                        (army_hash, generation_row[0]),
+                        (
+                            army_hash,
+                            army_identity,
+                            generation_row[0],
+                            generation_row[0],
+                            generation_row[0],
+                            generation_row[0],
+                            generation_row[0],
+                            generation_row[0],
+                            manifest_id,
+                        ),
                     ).fetchone()
                     if published_army is None:
                         raise ValueError("boundary army publication fence was lost")
+                    self._maybe_emit_boundary_signal(connection, int(generation_row[0]))
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
                 )
 
-    def _build_army_facts(self, connection: Any, ranked_day_str: str) -> None:
+    def _build_army_facts(
+        self,
+        connection: Any,
+        ranked_day_str: str,
+        *,
+        member_ids: list[int] | None = None,
+        ranked_version_ids: list[int] | None = None,
+        decode_ids: list[int] | None = None,
+        evidence_ids: list[int] | None = None,
+        daily_log_ids: list[int] | None = None,
+    ) -> None:
         ranked_day_start = datetime.fromisoformat(ranked_day_str).astimezone(UTC)
         # Published daily logs own the canonical per-lens battle events;
         # ranked_day_versions contributes the battle-time starting trophies.
+        version_filter = ""
+        version_params: tuple[Any, ...] = ()
+        daily_log_filter = ""
+        daily_log_params: tuple[Any, ...] = ()
+        ranked_state_filter = "AND rv.state = 'Complete' AND rv.coverage_complete"
+        daily_state_filter = "AND d.state = 'Complete' AND d.coverage = 'complete'"
+        decode_lookup_filter = "AND is_active"
+        decode_lookup_params: tuple[Any, ...] = ()
+        if decode_ids is not None:
+            decode_lookup_filter = "AND id = ANY(%s::bigint[])"
+            decode_lookup_params = (decode_ids,)
+        if daily_log_ids is not None:
+            daily_log_filter = "AND d.id = ANY(%s::bigint[])"
+            daily_log_params = (daily_log_ids,)
+            ranked_state_filter = ""
+            daily_state_filter = ""
+        if getattr(self, "_supports_coordinator_contract", False):
+            version_filter = "AND (%s::bigint[] IS NULL OR d.ranked_day_version_id = ANY(%s::bigint[]))"
+            version_params = (ranked_version_ids, ranked_version_ids)
         versions = connection.execute(
-            """
+            f"""
             SELECT DISTINCT ON (d.player_id)
                    rv.id, d.player_id, d.battles, d.official_season_id,
                    d.season_day_number, rv.start_trophies
@@ -5817,15 +8038,34 @@ class Database:
             JOIN ranked_day_versions AS rv
               ON rv.player_id = d.player_id
              AND rv.ranked_day_start = d.ranked_day_start
-             AND rv.state = 'Complete' AND rv.coverage_complete
+             {ranked_state_filter}
             WHERE d.ranked_day_start = %s
-              AND d.state = 'Complete' AND d.coverage = 'complete'
+              {daily_state_filter}
+              AND (%s::bigint[] IS NULL OR d.player_id = ANY(%s::bigint[]))
+              {version_filter}
+              {daily_log_filter}
+              AND (%s::bigint[] IS NULL OR rv.id = ANY(%s::bigint[]))
             ORDER BY d.player_id, d.version DESC, rv.version DESC
             """,
-            (ranked_day_start,),
+            (
+                ranked_day_start,
+                member_ids,
+                member_ids,
+                *version_params,
+                *daily_log_params,
+                ranked_version_ids,
+                ranked_version_ids,
+            ),
         ).fetchall()
         active_keys: set[tuple[int, str]] = set()
-        for version_id, player_id, battles, season_id, day_number, start_trophies in versions:
+        for (
+            version_id,
+            player_id,
+            battles,
+            season_id,
+            day_number,
+            start_trophies,
+        ) in versions:
             if not isinstance(battles, list):
                 continue
             # A missing day-start trophy keeps battle-time membership unknown;
@@ -5833,25 +8073,39 @@ class Database:
             # trophy-range filters report it as missing evidence.
             trophies = int(start_trophies) if start_trophies is not None else None
             events = [
-                event for event in battles
-                if isinstance(event, dict) and event.get("included") is not False
+                event
+                for event in battles
+                if isinstance(event, dict)
+                and event.get("included") is not False
                 and event.get("lens") in {"offense", "defense"}
                 and str(event.get("battle_id", "")).isdigit()
             ]
-            events.sort(key=lambda event: (str(event.get("battle_timestamp", "")), int(event["battle_id"])))
+            events.sort(
+                key=lambda event: (
+                    str(event.get("battle_timestamp", "")),
+                    int(event["battle_id"]),
+                )
+            )
             for event in events:
                 battle_id = int(event["battle_id"])
                 lens = str(event["lens"])
                 perspective = "attacker" if lens == "offense" else "defender"
                 decode = connection.execute(
-                    """
+                    f"""
                     SELECT id, evidence_id, status, failure_category, home_troops,
                            spells, siege, cc_troops, heroes, unresolved_components
                     FROM battle_army_decodes
-                    WHERE battle_id=%s AND perspective=%s AND is_active
+                    WHERE battle_id=%s AND perspective=%s
                       AND decoder_version=%s AND catalog_version=%s
+                      {decode_lookup_filter}
                     """,
-                    (battle_id, perspective, DECODER_VERSION, CATALOG_VERSION),
+                    (
+                        battle_id,
+                        perspective,
+                        DECODER_VERSION,
+                        CATALOG_VERSION,
+                        *decode_lookup_params,
+                    ),
                 ).fetchone()
                 evidence = connection.execute(
                     """
@@ -5859,22 +8113,28 @@ class Database:
                     FROM legend_battles b JOIN battle_perspectives p
                       ON p.battle_id=b.id AND p.perspective=%s
                     WHERE b.id=%s
+                      AND (%s::bigint[] IS NULL OR p.evidence_id = ANY(%s::bigint[]))
                     """,
-                    (perspective, battle_id),
+                    (perspective, battle_id, evidence_ids, evidence_ids),
                 ).fetchone()
                 if evidence is None:
                     continue
                 state = (
                     _text_value(decode[3])
                     if decode and _text_value(decode[2]) == "failed" and decode[3]
-                    else _text_value(decode[2]) if decode else "decode_missing"
+                    else _text_value(decode[2])
+                    if decode
+                    else "decode_missing"
                 )
                 payload = {
                     "source_ranked_day_version_id": int(version_id),
-                    "battle_id": battle_id, "lens": lens,
-                    "battle_time_trophies": trophies, "event": event,
+                    "battle_id": battle_id,
+                    "lens": lens,
+                    "battle_time_trophies": trophies,
+                    "event": event,
                     "decode_id": int(decode[0]) if decode else None,
-                    "perspective_disagreement": _text_value(evidence[1]) == "disagreement",
+                    "perspective_disagreement": _text_value(evidence[1])
+                    == "disagreement",
                 }
                 input_hash = hashlib.sha256(
                     json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
@@ -5883,7 +8143,8 @@ class Database:
                     """
                     SELECT id, version, input_hash FROM army_analytics_battle_facts
                     WHERE battle_id=%s AND lens=%s AND is_current
-                    """, (battle_id, lens),
+                    """,
+                    (battle_id, lens),
                 ).fetchone()
                 active_keys.add((battle_id, lens))
                 if existing is not None and _text_value(existing[2]) == input_hash:
@@ -5913,18 +8174,30 @@ class Database:
                     ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (
-                        battle_id, int(evidence[0]), int(decode[0]) if decode else None,
-                        int(version_id), ranked_day_start, _text_value(season_id),
-                        int(day_number), lens, int(player_id), trophies,
-                        int(event.get("stars") or 0), int(event.get("destruction_percentage") or 0),
-                        state, _text_value(decode[3]) if decode and decode[3] else None,
+                        battle_id,
+                        int(evidence[0]),
+                        int(decode[0]) if decode else None,
+                        int(version_id),
+                        ranked_day_start,
+                        _text_value(season_id),
+                        int(day_number),
+                        lens,
+                        int(player_id),
+                        trophies,
+                        int(event.get("stars") or 0),
+                        int(event.get("destruction_percentage") or 0),
+                        state,
+                        _text_value(decode[3]) if decode and decode[3] else None,
                         Jsonb(decode[4] or []) if decode else Jsonb([]),
                         Jsonb(decode[5] or []) if decode else Jsonb([]),
                         Jsonb(decode[6] or []) if decode else Jsonb([]),
                         Jsonb(decode[7] or []) if decode else Jsonb([]),
                         Jsonb(decode[8] or []) if decode else Jsonb([]),
                         Jsonb(decode[9] or []) if decode else Jsonb([]),
-                        _text_value(evidence[1]) == "disagreement", input_hash, version, supersedes,
+                        _text_value(evidence[1]) == "disagreement",
+                        input_hash,
+                        version,
+                        supersedes,
                     ),
                 )
                 change = event.get("trophy_change")
@@ -5933,15 +8206,20 @@ class Database:
                 elif trophies is not None:
                     trophies += change
         # Durable per-day completion marker, atomic with the facts above.
+        marker_filter = "AND state = 'Complete' AND coverage = 'complete'"
+        marker_params: tuple[Any, ...] = (ranked_day_start,)
+        if ranked_version_ids is not None:
+            marker_filter = "AND ranked_day_version_id = ANY(%s::bigint[])"
+            marker_params = (ranked_day_start, ranked_version_ids)
         marker_day = connection.execute(
-            """
+            f"""
             SELECT DISTINCT official_season_id, season_day_number
             FROM api_player_daily_logs
             WHERE ranked_day_start = %s
-              AND state = 'Complete' AND coverage = 'complete'
+              {marker_filter}
             LIMIT 1
             """,
-            (ranked_day_start,),
+            marker_params,
         ).fetchone()
         if marker_day is not None:
             marker_rows = connection.execute(
@@ -5955,7 +8233,10 @@ class Database:
             ).fetchall()
             marker_hash = hashlib.sha256(
                 json.dumps(
-                    [[int(r[0]), _text_value(r[1]), _text_value(r[2])] for r in marker_rows],
+                    [
+                        [int(r[0]), _text_value(r[1]), _text_value(r[2])]
+                        for r in marker_rows
+                    ],
                     separators=(",", ":"),
                 ).encode()
             ).hexdigest()
@@ -5971,7 +8252,12 @@ class Database:
                     fact_input_hash = EXCLUDED.fact_input_hash,
                     completed_at = clock_timestamp()
                 """,
-                (ranked_day_start, _text_value(marker_day[0]), int(marker_day[1]), marker_hash),
+                (
+                    ranked_day_start,
+                    _text_value(marker_day[0]),
+                    int(marker_day[1]),
+                    marker_hash,
+                ),
             )
         current = connection.execute(
             "SELECT id, battle_id, lens FROM army_analytics_battle_facts WHERE ranked_day_start=%s AND is_current",
@@ -6007,7 +8293,9 @@ class Database:
             season_id, season_start = _text_value(anchor[1]), anchor[3]
         season_day = (ranked_day_start - season_start).days + 1
         if not 1 <= season_day <= 28:
-            raise ValueError("dependency_not_ready: ranked day is outside confirmed season")
+            raise ValueError(
+                "dependency_not_ready: ranked day is outside confirmed season"
+            )
         return season_id, season_day
 
     def _build_army_day(
@@ -6016,6 +8304,10 @@ class Database:
         claim: Claim,
         ranked_day_str: str,
         *,
+        member_ids: list[int] | None = None,
+        ranked_version_ids: list[int] | None = None,
+        decode_ids: list[int] | None = None,
+        evidence_ids: list[int] | None = None,
         allow_empty: bool = False,
         official_season_id: str | None = None,
     ) -> None:
@@ -6038,17 +8330,29 @@ class Database:
                 "dependency_not_ready: army analytics day is not completed"
             )
         # coverage gate: must have at least one Complete version or no pending collection
+        decode_filter = "AND bad.is_active"
+        decode_params: tuple[Any, ...] = ()
+        if decode_ids is not None:
+            decode_filter = "AND bad.id = ANY(%s::bigint[])"
+            decode_params = (decode_ids,)
+        completed_filter = "AND state = 'Complete' AND coverage_complete"
+        completed_params: tuple[Any, ...] = (ranked_day_start,)
+        lateral_version_filter = "AND state = 'Complete' AND coverage_complete"
+        if ranked_version_ids is not None:
+            completed_filter = ""
+            lateral_version_filter = ""
+            completed_filter = "AND id = ANY(%s::bigint[])"
+            completed_params = (ranked_day_start, ranked_version_ids)
         completed = connection.execute(
-            """
+            f"""
             SELECT official_season_id
             FROM ranked_day_versions
             WHERE ranked_day_start = %s
-              AND state = 'Complete'
-              AND coverage_complete
+              {completed_filter}
             ORDER BY version DESC
             LIMIT 1
             """,
-            (ranked_day_start,),
+            completed_params,
         ).fetchone()
         if completed is None:
             if not allow_empty or official_season_id is None:
@@ -6057,7 +8361,7 @@ class Database:
             official_season_id = _text_value(completed[0])
 
         rows = connection.execute(
-            """
+            f"""
             SELECT b.id, bad.id, be.stars, be.destruction_percentage,
                    bad.status, bad.failure_category, bad.home_troops,
                    bad.spells, bad.heroes, bad.siege, bad.cc_troops,
@@ -6065,20 +8369,33 @@ class Database:
             FROM legend_battles b
             JOIN battle_perspectives p ON p.battle_id=b.id AND p.perspective='attacker'
             JOIN battle_evidence be ON be.id=p.evidence_id
-            LEFT JOIN battle_army_decodes bad ON bad.battle_id=b.id AND bad.perspective='attacker' AND bad.is_active AND bad.decoder_version=%s AND bad.catalog_version=%s
+            LEFT JOIN battle_army_decodes bad ON bad.battle_id=b.id AND bad.perspective='attacker' AND bad.decoder_version=%s AND bad.catalog_version=%s {decode_filter}
             LEFT JOIN LATERAL (
                 SELECT start_trophies
                 FROM ranked_day_versions
                 WHERE player_id = b.attacker_player_id
                   AND ranked_day_start = b.ranked_day_start
-                  AND state = 'Complete'
-                  AND coverage_complete
+                  {lateral_version_filter}
+                  AND (%s::bigint[] IS NULL OR ranked_day_versions.id = ANY(%s::bigint[]))
                 ORDER BY version DESC
                 LIMIT 1
             ) rdv ON true
             WHERE b.ranked_day_start=%s
+              AND (%s::bigint[] IS NULL OR b.attacker_player_id = ANY(%s::bigint[]))
+              AND (%s::bigint[] IS NULL OR be.id = ANY(%s::bigint[]))
             """,
-            (DECODER_VERSION, CATALOG_VERSION, ranked_day_start),
+            (
+                DECODER_VERSION,
+                CATALOG_VERSION,
+                *decode_params,
+                ranked_version_ids,
+                ranked_version_ids,
+                ranked_day_start,
+                member_ids,
+                member_ids,
+                evidence_ids,
+                evidence_ids,
+            ),
         ).fetchall()
 
         all_battles: list[dict[str, Any]] = []
@@ -6257,7 +8574,9 @@ class Database:
 
         # per-trophy cohorts (only known trophies)
         for trophies, all_for_trophy in cohorts.items():
-            decoded_for_trophy = [b for b in all_for_trophy if b["status"] in {"decoded", "partial"}]
+            decoded_for_trophy = [
+                b for b in all_for_trophy if b["status"] in {"decoded", "partial"}
+            ]
             cid = upsert_summary(trophies, all_for_trophy, decoded_for_trophy)
             self._insert_army_breakdowns(
                 connection,
@@ -6286,7 +8605,18 @@ class Database:
             ),
         )
 
-    def _build_army_season(self, connection: Any, claim: Claim, season_id: str) -> None:
+    def _build_army_season(
+        self,
+        connection: Any,
+        claim: Claim,
+        season_id: str,
+        *,
+        ranked_version_ids: list[int] | None = None,
+        daily_log_ids: list[int] | None = None,
+        decode_ids: list[int] | None = None,
+        evidence_ids: list[int] | None = None,
+        battle_ids: list[int] | None = None,
+    ) -> None:
         from collections import defaultdict
 
         connection.execute(
@@ -6295,12 +8625,24 @@ class Database:
                 f"army-season:{season_id}:{claim.analytics_rule_version}:{CATALOG_VERSION}:{DECODER_VERSION}",
             ),
         )
-        # only completed days
-        day_rows = connection.execute(
-            "SELECT DISTINCT ranked_day_start FROM ranked_day_versions WHERE official_season_id=%s AND state='Complete' AND coverage_complete=true ORDER BY ranked_day_start",
-            (season_id,),
-        ).fetchall()
-        if not day_rows:
+        # Coordinated season inputs are pinned in the army manifest. Direct
+        # historical work retains the live completed-day selector.
+        if ranked_version_ids is not None:
+            day_rows = connection.execute(
+                """
+                SELECT DISTINCT ranked_day_start
+                FROM ranked_day_versions
+                WHERE id = ANY(%s::bigint[])
+                ORDER BY ranked_day_start
+                """,
+                (ranked_version_ids,),
+            ).fetchall()
+        else:
+            day_rows = connection.execute(
+                "SELECT DISTINCT ranked_day_start FROM ranked_day_versions WHERE official_season_id=%s AND state='Complete' AND coverage_complete=true ORDER BY ranked_day_start",
+                (season_id,),
+            ).fetchall()
+        if not day_rows and ranked_version_ids is None:
             season_start_row = connection.execute(
                 "SELECT current_start FROM legend_season_anchors WHERE current_league_season_id=%s",
                 (season_id,),
@@ -6328,9 +8670,32 @@ class Database:
         if not day_rows:
             # no completed days, nothing to publish
             return
-        # fetch battles for those completed days only
+        # Fetch only the rows pinned by a coordinator manifest. Direct
+        # historical work retains the live completed-day selectors.
+        season_decode_filter = "AND bad.is_active"
+        season_decode_params: tuple[Any, ...] = ()
+        season_ranked_state_filter = "AND state = 'Complete' AND coverage_complete"
+        season_version_filter = ""
+        season_version_params: tuple[Any, ...] = ()
+        season_battle_filter = ""
+        season_battle_params: tuple[Any, ...] = ()
+        season_evidence_filter = ""
+        season_evidence_params: tuple[Any, ...] = ()
+        if decode_ids is not None:
+            season_decode_filter = "AND bad.id = ANY(%s::bigint[])"
+            season_decode_params = (decode_ids,)
+        if ranked_version_ids is not None:
+            season_version_filter = "AND ranked_day_versions.id = ANY(%s::bigint[])"
+            season_version_params = (ranked_version_ids,)
+            season_ranked_state_filter = ""
+        if battle_ids is not None:
+            season_battle_filter = "AND b.id = ANY(%s::bigint[])"
+            season_battle_params = (battle_ids,)
+        if evidence_ids is not None:
+            season_evidence_filter = "AND be.id = ANY(%s::bigint[])"
+            season_evidence_params = (evidence_ids,)
         rows = connection.execute(
-            """
+            f"""
             SELECT b.id, bad.id, be.stars, be.destruction_percentage,
                    bad.status, bad.failure_category, bad.home_troops,
                    bad.spells, bad.heroes, bad.siege, bad.cc_troops,
@@ -6338,20 +8703,30 @@ class Database:
             FROM legend_battles b
             JOIN battle_perspectives p ON p.battle_id=b.id AND p.perspective='attacker'
             JOIN battle_evidence be ON be.id=p.evidence_id
-            LEFT JOIN battle_army_decodes bad ON bad.battle_id=b.id AND bad.perspective='attacker' AND bad.is_active AND bad.decoder_version=%s AND bad.catalog_version=%s
+            LEFT JOIN battle_army_decodes bad ON bad.battle_id=b.id AND bad.perspective='attacker' AND bad.decoder_version=%s AND bad.catalog_version=%s {season_decode_filter}
             LEFT JOIN LATERAL (
                 SELECT start_trophies
                 FROM ranked_day_versions
                 WHERE player_id = b.attacker_player_id
                   AND ranked_day_start = b.ranked_day_start
-                  AND state = 'Complete'
-                  AND coverage_complete
+                  {season_ranked_state_filter}
+                  {season_version_filter}
                 ORDER BY version DESC
                 LIMIT 1
             ) rdv ON true
             WHERE b.ranked_day_start = ANY(%s::timestamptz[])
+              {season_battle_filter}
+              {season_evidence_filter}
             """,
-            (DECODER_VERSION, CATALOG_VERSION, [r[0] for r in day_rows]),
+            (
+                DECODER_VERSION,
+                CATALOG_VERSION,
+                *season_decode_params,
+                *season_version_params,
+                [r[0] for r in day_rows],
+                *season_battle_params,
+                *season_evidence_params,
+            ),
         ).fetchall()
 
         all_battles: list[dict[str, Any]] = []
@@ -6519,7 +8894,9 @@ class Database:
             n=len(overall_decoded),
         )
         for trophies, all_for_trophy in cohorts.items():
-            decoded_for_trophy = [b for b in all_for_trophy if b["status"] in {"decoded", "partial"}]
+            decoded_for_trophy = [
+                b for b in all_for_trophy if b["status"] in {"decoded", "partial"}
+            ]
             sid = upsert_season_summary(trophies, all_for_trophy, decoded_for_trophy)
             self._insert_army_breakdowns(
                 connection,
@@ -6571,7 +8948,9 @@ class Database:
 
         def star_stats(
             matching: list[dict[str, Any]],
-        ) -> tuple[dict[str, int], dict[str, float], float | None, float | None, float | None]:
+        ) -> tuple[
+            dict[str, int], dict[str, float], float | None, float | None, float | None
+        ]:
             cnt = Counter()
             total_dest = 0
             three = 0
@@ -6589,7 +8968,8 @@ class Database:
             three_star_rate = (three / len(matching)) if matching else None
             avg_stars = (
                 sum(stars * count for stars, count in cnt.items()) / len(matching)
-                if matching else None
+                if matching
+                else None
             )
             return star_counts, star_rates, avg_dest, three_star_rate, avg_stars
 
@@ -6698,7 +9078,9 @@ class Database:
                 usage_rate = (usage / hero_cnt) if hero_cnt else None
             else:
                 usage_rate = (usage / n) if n else None
-            star_counts, star_rates, avg_dest, three_star_rate, avg_stars = star_stats(matching)
+            star_counts, star_rates, avg_dest, three_star_rate, avg_stars = star_stats(
+                matching
+            )
             connection.execute(
                 """
                 INSERT INTO army_analytics_breakdowns (summary_kind, summary_id, category, typed_id, hero_typed_id, combination_key, usage_count, usage_rate, star_counts, star_rates, avg_destruction, three_star_rate, avg_stars, usage_denominator, evidence)
@@ -6719,7 +9101,9 @@ class Database:
                     avg_dest,
                     three_star_rate,
                     avg_stars,
-                    hero_cnt if category == "equipment_for_hero" and hero_typed_id else n,
+                    hero_cnt
+                    if category == "equipment_for_hero" and hero_typed_id
+                    else n,
                 ),
             )
 
