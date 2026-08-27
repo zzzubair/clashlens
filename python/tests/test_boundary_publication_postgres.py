@@ -1423,18 +1423,15 @@ def test_all_unavailable_boundary_publishes_empty_army_with_anchor_metadata(
                     ).fetchone()[0]
                     == 0
                 )
-                summary = connection.execute(
-                    """
-                    SELECT official_season_id, total_attacks, sample_size,
-                           excluded_attacks
-                    FROM army_analytics_day_summaries
-                    WHERE ranked_day_start = %s AND exact_trophies = -1
-                    """,
-                    (DAY_START,),
-                ).fetchone()
-                assert summary is not None
-                assert text(summary[0]) == "test-current"
-                assert tuple(summary[1:]) == (0, 0, 0)
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_day_summaries"
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_season_summaries"
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_breakdowns"
+                ).fetchone()[0] == 0
                 generation = connection.execute(
                     """
                     SELECT army_state

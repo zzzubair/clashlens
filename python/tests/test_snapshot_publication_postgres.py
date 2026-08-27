@@ -285,6 +285,148 @@ def _process_rankings(
         database.close()
 
 
+def _snapshot_insert_calls(connection_info: str) -> int | None:
+    try:
+        with psycopg.connect(connection_info) as connection:
+            return int(
+                connection.execute(
+                    """
+                    SELECT COALESCE(sum(calls), 0)::bigint
+                    FROM pg_stat_statements
+                    WHERE query ILIKE '%INSERT INTO leaderboard_snapshot_entries%'
+                    """
+                ).fetchone()[0]
+            )
+    except (
+        psycopg.errors.ObjectNotInPrerequisiteState,
+        psycopg.errors.UndefinedTable,
+    ):
+        return None
+
+
+def _publish_snapshot_population(
+    connection_info: str,
+    archive_server,
+    count: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[int, int]:
+    observation_id, _job_id = store_observation(
+        connection_info,
+        archive_server,
+        occurrence_key=f"snapshot-set-based-{count}",
+        endpoint="profile",
+        body=_profile_body(trophies=6000),
+        observed_at=datetime(2026, 8, 5, 4, tzinfo=UTC),
+        normalized_tag="#SEED",
+    )
+    with psycopg.connect(connection_info) as connection:
+        player_ids = [
+            int(row[0])
+            for row in connection.execute(
+                """
+                INSERT INTO players (normalized_tag, active)
+                SELECT '#S' || %s::text || lpad(g::text, 6, '0'), false
+                FROM generate_series(1, %s) AS g
+                RETURNING id
+                """,
+                (count, count),
+            ).fetchall()
+        ]
+        boundary = datetime(2026, 8, 5, 5, tzinfo=UTC) + timedelta(days=count)
+        entries = [
+            {
+                "player_id": player_id,
+                "profile_version_id": None,
+                "trophies": 6000 - position,
+                "observation_id": observation_id,
+                "observed_at": boundary,
+                "age_seconds": 0,
+                "freshness": "fresh",
+                "confidence": "confirmed",
+                "tie_hash": f"{position:064x}",
+                "official": None,
+                "tag": f"#S{position:06d}",
+            }
+            for position, player_id in enumerate(player_ids, start=1)
+        ]
+        quality = {
+            "eligible_population_count": count,
+            "included_entry_count": count,
+            "stale_entry_count": 0,
+            "fresh_entry_count": count,
+            "excluded_missing_count": 0,
+            "excluded_unavailable_count": 0,
+            "excluded_invalid_count": 0,
+            "excluded_malformed_count": 0,
+            "excluded_partial_count": 0,
+            "excluded_inconsistent_count": 0,
+            "excluded_conflicting_count": 0,
+        }
+        calls = [0]
+        original_execute = psycopg.Cursor.execute
+
+        def counted_execute(cursor, *args, **kwargs):
+            calls[0] += 1
+            return original_execute(cursor, *args, **kwargs)
+
+        monkeypatch.setattr(psycopg.Cursor, "execute", counted_execute)
+        database = Database(connection_info)
+        try:
+            before_pg = _snapshot_insert_calls(connection_info)
+            before_app = calls[0]
+            database._publish_snapshot_kind(
+                connection,
+                snapshot_kind="frozen",
+                boundary_at=boundary,
+                ranked_day_version_id=None,
+                entries=entries,
+                coverage=1.0,
+                quality=quality,
+                input_hash=f"{count:064x}",
+                publish=False,
+            )
+            connection.commit()
+        finally:
+            database.close()
+        after_pg = _snapshot_insert_calls(connection_info)
+        return (
+            calls[0] - before_app,
+            None if before_pg is None or after_pg is None else after_pg - before_pg,
+        )
+
+
+def test_snapshot_entry_statements_are_bounded_as_population_grows(
+    database_url: str,
+    archive_server,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        small_app, small_postgres = _publish_snapshot_population(
+            connection_info, archive_server, 2, monkeypatch
+        )
+        large_app, large_postgres = _publish_snapshot_population(
+            connection_info, archive_server, 5, monkeypatch
+        )
+        assert small_app <= 10 and large_app <= 10
+        assert large_app <= small_app + 1
+        with psycopg.connect(connection_info) as connection:
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM leaderboard_snapshot_entries"
+                ).fetchone()[0]
+                == 7
+            )
+        if small_postgres is not None:
+            assert small_postgres <= 1
+        if large_postgres is not None:
+            assert large_postgres <= 1
+        if small_postgres is None or large_postgres is None:
+            pytest.skip(
+                "pg_stat_statements is unavailable; PostgreSQL statement ceilings not asserted"
+            )
+        assert large_postgres <= small_postgres + 1
+
+
 def test_snapshot_uses_only_profile_evidence_observed_at_or_before_boundary(
     database_url: str,
     archive_server,

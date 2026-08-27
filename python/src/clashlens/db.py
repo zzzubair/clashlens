@@ -5390,85 +5390,92 @@ class Database:
                 ).fetchone()
             assert snapshot is not None
             snapshot_id = int(snapshot[0])
-        for position, entry in enumerate(entries, start=1):
-            official = entry["official"]
-            if getattr(self, "_supports_coordinator_contract", False):
-                connection.execute(
-                    """
-                    INSERT INTO leaderboard_snapshot_entries (
-                        snapshot_id, position, player_id, profile_version_id, trophies,
-                        trophy_observation_id, trophy_observed_at,
-                        observation_age_seconds, freshness, confidence, tie_hash,
-                        profile_observation_id, profile_observed_at,
-                        profile_age_seconds, profile_freshness, profile_confidence,
-                        official_rank, official_rank_version_id,
-                        official_rank_observed_at
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s
-                    )
-                    ON CONFLICT (snapshot_id, position) DO NOTHING
-                    """,
-                    (
-                        snapshot_id,
-                        position,
-                        entry["player_id"],
-                        entry.get("profile_version_id"),
-                        entry["trophies"],
-                        entry["observation_id"],
-                        entry["observed_at"],
-                        entry["age_seconds"],
-                        entry["freshness"],
-                        entry["confidence"],
-                        entry["tie_hash"],
-                        entry["observation_id"],
-                        entry["observed_at"],
-                        entry["age_seconds"],
-                        entry["freshness"],
-                        entry["confidence"],
-                        official[0] if official is not None else None,
-                        official[1] if official is not None else None,
-                        official[2] if official is not None else None,
-                    ),
+        entry_rows = [
+            {
+                "position": position,
+                "player_id": int(entry["player_id"]),
+                "profile_version_id": entry.get("profile_version_id"),
+                "trophies": int(entry["trophies"]),
+                "observation_id": int(entry["observation_id"]),
+                "observed_at": entry["observed_at"].astimezone(UTC).isoformat(),
+                "age_seconds": int(entry["age_seconds"]),
+                "freshness": entry["freshness"],
+                "confidence": entry["confidence"],
+                "tie_hash": entry["tie_hash"],
+                "official_rank": (
+                    entry["official"][0] if entry["official"] is not None else None
+                ),
+                "official_rank_version_id": (
+                    entry["official"][1] if entry["official"] is not None else None
+                ),
+                "official_rank_observed_at": (
+                    entry["official"][2].astimezone(UTC).isoformat()
+                    if entry["official"] is not None
+                    else None
+                ),
+            }
+            for position, entry in enumerate(entries, start=1)
+        ]
+        if getattr(self, "_supports_coordinator_contract", False):
+            connection.execute(
+                """
+                INSERT INTO leaderboard_snapshot_entries (
+                    snapshot_id, position, player_id, profile_version_id, trophies,
+                    trophy_observation_id, trophy_observed_at,
+                    observation_age_seconds, freshness, confidence, tie_hash,
+                    profile_observation_id, profile_observed_at,
+                    profile_age_seconds, profile_freshness, profile_confidence,
+                    official_rank, official_rank_version_id,
+                    official_rank_observed_at
                 )
-            else:
-                connection.execute(
-                    """
-                    INSERT INTO leaderboard_snapshot_entries (
-                        snapshot_id, position, player_id, trophies,
-                        trophy_observation_id, trophy_observed_at,
-                        observation_age_seconds, freshness, confidence, tie_hash,
-                        profile_observation_id, profile_observed_at,
-                        profile_age_seconds, profile_freshness, profile_confidence,
-                        official_rank, official_rank_version_id,
-                        official_rank_observed_at
-                    ) VALUES (
-                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, %s, %s, %s, %s, %s, %s, %s
-                    )
-                    ON CONFLICT (snapshot_id, position) DO NOTHING
-                    """,
-                    (
-                        snapshot_id,
-                        position,
-                        entry["player_id"],
-                        entry["trophies"],
-                        entry["observation_id"],
-                        entry["observed_at"],
-                        entry["age_seconds"],
-                        entry["freshness"],
-                        entry["confidence"],
-                        entry["tie_hash"],
-                        entry["observation_id"],
-                        entry["observed_at"],
-                        entry["age_seconds"],
-                        entry["freshness"],
-                        entry["confidence"],
-                        official[0] if official is not None else None,
-                        official[1] if official is not None else None,
-                        official[2] if official is not None else None,
-                    ),
+                SELECT %s, row.position, row.player_id, row.profile_version_id,
+                       row.trophies, row.observation_id, row.observed_at,
+                       row.age_seconds, row.freshness, row.confidence, row.tie_hash,
+                       row.observation_id, row.observed_at, row.age_seconds,
+                       row.freshness, row.confidence, row.official_rank,
+                       row.official_rank_version_id, row.official_rank_observed_at
+                FROM jsonb_to_recordset(%s::jsonb) AS row(
+                    position integer, player_id bigint, profile_version_id bigint,
+                    trophies integer, observation_id bigint, observed_at timestamptz,
+                    age_seconds integer, freshness text, confidence text,
+                    tie_hash text, official_rank integer,
+                    official_rank_version_id bigint,
+                    official_rank_observed_at timestamptz
                 )
+                ON CONFLICT (snapshot_id, position) DO NOTHING
+                """,
+                (snapshot_id, Jsonb(entry_rows)),
+            )
+        else:
+            connection.execute(
+                """
+                INSERT INTO leaderboard_snapshot_entries (
+                    snapshot_id, position, player_id, trophies,
+                    trophy_observation_id, trophy_observed_at,
+                    observation_age_seconds, freshness, confidence, tie_hash,
+                    profile_observation_id, profile_observed_at,
+                    profile_age_seconds, profile_freshness, profile_confidence,
+                    official_rank, official_rank_version_id,
+                    official_rank_observed_at
+                )
+                SELECT %s, row.position, row.player_id, row.trophies,
+                       row.observation_id, row.observed_at, row.age_seconds,
+                       row.freshness, row.confidence, row.tie_hash,
+                       row.observation_id, row.observed_at, row.age_seconds,
+                       row.freshness, row.confidence, row.official_rank,
+                       row.official_rank_version_id, row.official_rank_observed_at
+                FROM jsonb_to_recordset(%s::jsonb) AS row(
+                    position integer, player_id bigint, trophies integer,
+                    observation_id bigint, observed_at timestamptz,
+                    age_seconds integer, freshness text, confidence text,
+                    tie_hash text, official_rank integer,
+                    official_rank_version_id bigint,
+                    official_rank_observed_at timestamptz
+                )
+                ON CONFLICT (snapshot_id, position) DO NOTHING
+                """,
+                (snapshot_id, Jsonb(entry_rows)),
+            )
         if publish:
             connection.execute(
                 """
@@ -7801,20 +7808,12 @@ class Database:
                 manifest_versions = None
                 manifest_decodes = None
                 manifest_daily_logs = None
-                season_inputs = None
+                manifest_battles = None
                 if generation_row is not None:
                     manifest_rows = connection.execute(
                         "SELECT player_id, ranked_day_version_id, input_identity->'decode_ids', input_identity FROM boundary_publication_manifest_rows WHERE manifest_id = %s ORDER BY ordinal",
                         (manifest_id,),
                     ).fetchall()
-                    manifest_rules = connection.execute(
-                        "SELECT rule_versions FROM boundary_publication_manifests WHERE id = %s",
-                        (manifest_id,),
-                    ).fetchone()
-                    if manifest_rules and isinstance(manifest_rules[0], dict):
-                        season_inputs = manifest_rules[0].get("season_inputs")
-                    if season_inputs is None:
-                        season_inputs = {}
                     manifest_members = [int(row[0]) for row in manifest_rows]
                     manifest_versions = [
                         int(row[1]) for row in manifest_rows if row[1] is not None
@@ -7830,6 +7829,15 @@ class Database:
                         if isinstance(row[3], dict)
                         and row[3].get("daily_log_id") is not None
                     ]
+                    manifest_battles = [
+                        int(battle_id)
+                        for row in manifest_rows
+                        for battle_id in (
+                            row[3].get("battle_ids", [])
+                            if isinstance(row[3], dict)
+                            else []
+                        )
+                    ]
                     manifest_evidence = [
                         int(evidence_id)
                         for row in manifest_rows
@@ -7841,6 +7849,16 @@ class Database:
                     ]
                 else:
                     manifest_evidence = None
+                ranked_day_start = datetime.fromisoformat(
+                    str(ranked_day_str)
+                ).astimezone(UTC)
+                season_id = self._ensure_army_day_dependency(
+                    connection,
+                    ranked_day_start,
+                    ranked_version_ids=manifest_versions,
+                    allow_empty=generation_row is not None,
+                    official_season_id=str(season_id),
+                )
                 self._build_army_facts(
                     connection,
                     str(ranked_day_str),
@@ -7849,86 +7867,17 @@ class Database:
                     decode_ids=manifest_decodes,
                     evidence_ids=manifest_evidence,
                     daily_log_ids=manifest_daily_logs,
-                )
-                self._build_army_day(
-                    connection,
-                    claim,
-                    str(ranked_day_str),
-                    member_ids=manifest_members,
-                    ranked_version_ids=manifest_versions,
-                    decode_ids=manifest_decodes,
-                    evidence_ids=manifest_evidence,
-                    allow_empty=generation_row is not None,
-                    official_season_id=str(season_id),
-                )
-                self._build_army_season(
-                    connection,
-                    claim,
-                    str(season_id),
-                    **(
-                        {
-                            "ranked_version_ids": [
-                                int(value)
-                                for value in season_inputs.get("ranked_version_ids", [])
-                            ],
-                            "daily_log_ids": [
-                                int(value)
-                                for value in season_inputs.get("daily_log_ids", [])
-                            ],
-                            "decode_ids": [
-                                int(value)
-                                for value in season_inputs.get("decode_ids", [])
-                            ],
-                            "evidence_ids": [
-                                int(value)
-                                for value in season_inputs.get("evidence_ids", [])
-                            ],
-                            "battle_ids": [
-                                int(value)
-                                for value in season_inputs.get("battle_ids", [])
-                            ],
-                        }
-                        if isinstance(season_inputs, dict)
-                        else {}
-                    ),
+                    battle_ids=manifest_battles,
                 )
                 if generation_row is not None:
-                    day_output = connection.execute(
+                    marker = connection.execute(
                         """
-                        SELECT exact_trophies, result_hash, input_hash, version
-                        FROM army_analytics_day_summaries
+                        SELECT fact_input_hash
+                        FROM army_analytics_completed_days
                         WHERE ranked_day_start = %s
-                          AND decoder_version = %s
-                          AND catalog_version = %s
-                          AND analytics_rule_version = %s
-                          AND is_published
-                        ORDER BY exact_trophies, version
                         """,
-                        (
-                            datetime.fromisoformat(str(ranked_day_str)).astimezone(UTC),
-                            DECODER_VERSION,
-                            CATALOG_VERSION,
-                            _text_value(generation_row[6]),
-                        ),
-                    ).fetchall()
-                    season_output = connection.execute(
-                        """
-                        SELECT exact_trophies, result_hash, input_hash, version
-                        FROM army_analytics_season_summaries
-                        WHERE official_season_id = %s
-                          AND decoder_version = %s
-                          AND catalog_version = %s
-                          AND analytics_rule_version = %s
-                          AND is_published
-                        ORDER BY exact_trophies, version
-                        """,
-                        (
-                            str(season_id),
-                            DECODER_VERSION,
-                            CATALOG_VERSION,
-                            _text_value(generation_row[6]),
-                        ),
-                    ).fetchall()
+                        (ranked_day_start,),
+                    ).fetchone()
                     army_hash = hashlib.sha256(
                         json.dumps(
                             {
@@ -7939,13 +7888,15 @@ class Database:
                                     "catalog_version": CATALOG_VERSION,
                                 },
                                 "output": {
-                                    "day": [list(row) for row in day_output],
-                                    "season": [list(row) for row in season_output],
+                                    "day_fact_input_hash": (
+                                        _text_value(marker[0])
+                                        if marker is not None
+                                        else None
+                                    ),
                                 },
                             },
                             sort_keys=True,
                             separators=(",", ":"),
-                            default=str,
                         ).encode("utf-8")
                     ).hexdigest()
                     army_identity = self._create_boundary_artifact_identity(
@@ -7996,6 +7947,44 @@ class Database:
                     connection, claim, job, state="complete", outcome="processed"
                 )
 
+    def _ensure_army_day_dependency(
+        self,
+        connection: Any,
+        ranked_day_start: datetime,
+        *,
+        ranked_version_ids: list[int] | None,
+        allow_empty: bool,
+        official_season_id: str,
+    ) -> str:
+        """Keep the completed-day gate without rebuilding legacy rollups."""
+        ranked_day_start = ranked_day_start.astimezone(UTC)
+        now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
+        if ranked_day_start >= now or ranked_day_start + timedelta(days=1) > now:
+            raise ValueError(
+                "dependency_not_ready: army analytics day is not completed"
+            )
+        completed_filter = "AND state = 'Complete' AND coverage_complete"
+        completed_params: tuple[Any, ...] = (ranked_day_start,)
+        if ranked_version_ids is not None:
+            completed_filter = "AND id = ANY(%s::bigint[])"
+            completed_params = (ranked_day_start, ranked_version_ids)
+        completed = connection.execute(
+            f"""
+            SELECT official_season_id
+            FROM ranked_day_versions
+            WHERE ranked_day_start = %s
+              {completed_filter}
+            ORDER BY version DESC
+            LIMIT 1
+            """,
+            completed_params,
+        ).fetchone()
+        if completed is None:
+            if not allow_empty:
+                raise ValueError("dependency_not_ready: ranked day is not complete")
+            return official_season_id
+        return _text_value(completed[0])
+
     def _build_army_facts(
         self,
         connection: Any,
@@ -8006,6 +7995,7 @@ class Database:
         decode_ids: list[int] | None = None,
         evidence_ids: list[int] | None = None,
         daily_log_ids: list[int] | None = None,
+        battle_ids: list[int] | None = None,
     ) -> None:
         ranked_day_start = datetime.fromisoformat(ranked_day_str).astimezone(UTC)
         # Published daily logs own the canonical per-lens battle events;
@@ -8016,11 +8006,6 @@ class Database:
         daily_log_params: tuple[Any, ...] = ()
         ranked_state_filter = "AND rv.state = 'Complete' AND rv.coverage_complete"
         daily_state_filter = "AND d.state = 'Complete' AND d.coverage = 'complete'"
-        decode_lookup_filter = "AND is_active"
-        decode_lookup_params: tuple[Any, ...] = ()
-        if decode_ids is not None:
-            decode_lookup_filter = "AND id = ANY(%s::bigint[])"
-            decode_lookup_params = (decode_ids,)
         if daily_log_ids is not None:
             daily_log_filter = "AND d.id = ANY(%s::bigint[])"
             daily_log_params = (daily_log_ids,)
@@ -8057,21 +8042,16 @@ class Database:
                 ranked_version_ids,
             ),
         ).fetchall()
-        active_keys: set[tuple[int, str]] = set()
-        for (
-            version_id,
-            player_id,
-            battles,
-            season_id,
-            day_number,
-            start_trophies,
-        ) in versions:
+        # Load every input relation once. The Python pass below only preserves
+        # the existing event ordering and input-hash semantics; all writes are
+        # bulk statements outside the per-event loop.
+        streams: list[tuple[Any, ...]] = []
+        pinned_battle_ids = set(battle_ids) if battle_ids is not None else None
+        selected_battle_ids: set[int] = set()
+        perspectives: set[str] = set()
+        for version_id, player_id, battles, season_id, day_number, start_trophies in versions:
             if not isinstance(battles, list):
                 continue
-            # A missing day-start trophy keeps battle-time membership unknown;
-            # the fact is retained so cohort filters still include it and only
-            # trophy-range filters report it as missing evidence.
-            trophies = int(start_trophies) if start_trophies is not None else None
             events = [
                 event
                 for event in battles
@@ -8079,6 +8059,10 @@ class Database:
                 and event.get("included") is not False
                 and event.get("lens") in {"offense", "defense"}
                 and str(event.get("battle_id", "")).isdigit()
+                and (
+                    pinned_battle_ids is None
+                    or int(event["battle_id"]) in pinned_battle_ids
+                )
             ]
             events.sort(
                 key=lambda event: (
@@ -8086,125 +8070,241 @@ class Database:
                     int(event["battle_id"]),
                 )
             )
+            streams.append(
+                (version_id, player_id, season_id, day_number, start_trophies, events)
+            )
+            for event in events:
+                selected_battle_ids.add(int(event["battle_id"]))
+                perspectives.add(
+                    "attacker" if event["lens"] == "offense" else "defender"
+                )
+        battle_id_values = sorted(selected_battle_ids)
+        perspective_values = sorted(perspectives)
+        lens_values = [
+            "offense" if perspective == "attacker" else "defense"
+            for perspective in perspective_values
+        ]
+        decode_filter = "AND is_active"
+        decode_params: tuple[Any, ...] = ()
+        if decode_ids is not None:
+            decode_filter = "AND id = ANY(%s::bigint[])"
+            decode_params = (decode_ids,)
+        decode_rows = connection.execute(
+            f"""
+            SELECT battle_id, perspective, id, evidence_id, status, failure_category,
+                   home_troops, spells, siege, cc_troops, heroes, unresolved_components
+            FROM battle_army_decodes
+            WHERE battle_id = ANY(%s::bigint[])
+              AND perspective = ANY(%s::text[])
+              AND decoder_version = %s AND catalog_version = %s
+              {decode_filter}
+            """,
+            (
+                battle_id_values,
+                perspective_values,
+                DECODER_VERSION,
+                CATALOG_VERSION,
+                *decode_params,
+            ),
+        ).fetchall()
+        decodes = {
+            (
+                int(row[0]),
+                "offense" if _text_value(row[1]) == "attacker" else "defense",
+            ): row
+            for row in decode_rows
+        }
+        evidence_rows = connection.execute(
+            """
+            SELECT p.battle_id, p.perspective, p.evidence_id,
+                   b.disagreement_state
+            FROM legend_battles AS b
+            JOIN battle_perspectives AS p ON p.battle_id = b.id
+            WHERE b.id = ANY(%s::bigint[])
+              AND p.perspective = ANY(%s::text[])
+              AND (%s::bigint[] IS NULL OR p.evidence_id = ANY(%s::bigint[]))
+            """,
+            (battle_id_values, perspective_values, evidence_ids, evidence_ids),
+        ).fetchall()
+        evidence = {
+            (
+                int(row[0]),
+                "offense" if _text_value(row[1]) == "attacker" else "defense",
+            ): row
+            for row in evidence_rows
+        }
+        fact_rows_by_key = connection.execute(
+            """
+            SELECT fact.battle_id, fact.lens, max(fact.version),
+                   current_fact.id, current_fact.input_hash
+            FROM army_analytics_battle_facts AS fact
+            LEFT JOIN army_analytics_battle_facts AS current_fact
+              ON current_fact.battle_id = fact.battle_id
+             AND current_fact.lens = fact.lens
+             AND current_fact.is_current
+            WHERE fact.battle_id = ANY(%s::bigint[])
+              AND fact.lens = ANY(%s::text[])
+            GROUP BY fact.battle_id, fact.lens, current_fact.id,
+                     current_fact.input_hash
+            """,
+            (battle_id_values, lens_values),
+        ).fetchall()
+        fact_history = {
+            (int(row[0]), _text_value(row[1])): {
+                "latest_version": int(row[2]),
+                "current": (
+                    {
+                        "id": int(row[3]),
+                        "input_hash": _text_value(row[4]),
+                    }
+                    if row[3] is not None
+                    else None
+                ),
+            }
+            for row in fact_rows_by_key
+        }
+        active_keys: set[tuple[int, str]] = set()
+        superseded_ids: list[int] = []
+        fact_rows: list[dict[str, Any]] = []
+        for version_id, player_id, season_id, day_number, start_trophies, events in streams:
+            trophies = int(start_trophies) if start_trophies is not None else None
             for event in events:
                 battle_id = int(event["battle_id"])
                 lens = str(event["lens"])
-                perspective = "attacker" if lens == "offense" else "defender"
-                decode = connection.execute(
-                    f"""
-                    SELECT id, evidence_id, status, failure_category, home_troops,
-                           spells, siege, cc_troops, heroes, unresolved_components
-                    FROM battle_army_decodes
-                    WHERE battle_id=%s AND perspective=%s
-                      AND decoder_version=%s AND catalog_version=%s
-                      {decode_lookup_filter}
-                    """,
-                    (
-                        battle_id,
-                        perspective,
-                        DECODER_VERSION,
-                        CATALOG_VERSION,
-                        *decode_lookup_params,
-                    ),
-                ).fetchone()
-                evidence = connection.execute(
-                    """
-                    SELECT p.evidence_id, b.disagreement_state
-                    FROM legend_battles b JOIN battle_perspectives p
-                      ON p.battle_id=b.id AND p.perspective=%s
-                    WHERE b.id=%s
-                      AND (%s::bigint[] IS NULL OR p.evidence_id = ANY(%s::bigint[]))
-                    """,
-                    (perspective, battle_id, evidence_ids, evidence_ids),
-                ).fetchone()
-                if evidence is None:
+                key = (battle_id, lens)
+                evidence_row = evidence.get(key)
+                if evidence_row is None:
                     continue
+                decode = decodes.get(key)
                 state = (
-                    _text_value(decode[3])
-                    if decode and _text_value(decode[2]) == "failed" and decode[3]
-                    else _text_value(decode[2])
-                    if decode
-                    else "decode_missing"
+                    _text_value(decode[5])
+                    if decode and _text_value(decode[4]) == "failed" and decode[5]
+                    else _text_value(decode[4]) if decode else "decode_missing"
                 )
+                disagreement = _text_value(evidence_row[3]) == "disagreement"
                 payload = {
                     "source_ranked_day_version_id": int(version_id),
                     "battle_id": battle_id,
                     "lens": lens,
                     "battle_time_trophies": trophies,
                     "event": event,
-                    "decode_id": int(decode[0]) if decode else None,
-                    "perspective_disagreement": _text_value(evidence[1])
-                    == "disagreement",
+                    "decode_id": int(decode[2]) if decode else None,
+                    "perspective_disagreement": disagreement,
                 }
                 input_hash = hashlib.sha256(
                     json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
                 ).hexdigest()
-                existing = connection.execute(
-                    """
-                    SELECT id, version, input_hash FROM army_analytics_battle_facts
-                    WHERE battle_id=%s AND lens=%s AND is_current
-                    """,
-                    (battle_id, lens),
-                ).fetchone()
-                active_keys.add((battle_id, lens))
-                if existing is not None and _text_value(existing[2]) == input_hash:
+                active_keys.add(key)
+                history = fact_history.get(key)
+                existing = history["current"] if history is not None else None
+                if existing is not None and existing["input_hash"] == input_hash:
                     change = event.get("trophy_change")
                     if isinstance(change, bool) or not isinstance(change, int):
                         trophies = None
                     elif trophies is not None:
                         trophies += change
                     continue
-                supersedes = None
-                version = 1
-                if existing is not None:
-                    supersedes, version = int(existing[0]), int(existing[1]) + 1
-                    connection.execute(
-                        "UPDATE army_analytics_battle_facts SET is_current=false WHERE id=%s",
-                        (supersedes,),
-                    )
-                connection.execute(
-                    """
-                    INSERT INTO army_analytics_battle_facts (
-                        battle_id, evidence_id, decode_id, source_ranked_day_version_id,
-                        ranked_day_start, official_season_id, season_day_number, lens,
-                        population_player_id, battle_time_trophies, stars,
-                        destruction_percentage, army_state, failure_reason, home_troops,
-                        spells, siege, cc_troops, heroes, unresolved_components,
-                        perspective_disagreement, input_hash, version, supersedes_id
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    """,
-                    (
-                        battle_id,
-                        int(evidence[0]),
-                        int(decode[0]) if decode else None,
-                        int(version_id),
-                        ranked_day_start,
-                        _text_value(season_id),
-                        int(day_number),
-                        lens,
-                        int(player_id),
-                        trophies,
-                        int(event.get("stars") or 0),
-                        int(event.get("destruction_percentage") or 0),
-                        state,
-                        _text_value(decode[3]) if decode and decode[3] else None,
-                        Jsonb(decode[4] or []) if decode else Jsonb([]),
-                        Jsonb(decode[5] or []) if decode else Jsonb([]),
-                        Jsonb(decode[6] or []) if decode else Jsonb([]),
-                        Jsonb(decode[7] or []) if decode else Jsonb([]),
-                        Jsonb(decode[8] or []) if decode else Jsonb([]),
-                        Jsonb(decode[9] or []) if decode else Jsonb([]),
-                        _text_value(evidence[1]) == "disagreement",
-                        input_hash,
-                        version,
-                        supersedes,
-                    ),
+                supersedes = existing["id"] if existing is not None else None
+                if supersedes is not None:
+                    superseded_ids.append(supersedes)
+                fact_rows.append(
+                    {
+                        "battle_id": battle_id,
+                        "evidence_id": int(evidence_row[2]),
+                        "decode_id": int(decode[2]) if decode else None,
+                        "source_ranked_day_version_id": int(version_id),
+                        "official_season_id": _text_value(season_id),
+                        "season_day_number": int(day_number),
+                        "lens": lens,
+                        "population_player_id": int(player_id),
+                        "battle_time_trophies": trophies,
+                        "stars": int(event.get("stars") or 0),
+                        "destruction_percentage": int(
+                            event.get("destruction_percentage") or 0
+                        ),
+                        "army_state": state,
+                        "failure_reason": (
+                            _text_value(decode[5]) if decode and decode[5] else None
+                        ),
+                        "home_troops": (decode[6] or []) if decode else [],
+                        "spells": (decode[7] or []) if decode else [],
+                        "siege": (decode[8] or []) if decode else [],
+                        "cc_troops": (decode[9] or []) if decode else [],
+                        "heroes": (decode[10] or []) if decode else [],
+                        "unresolved_components": (
+                            (decode[11] or []) if decode else []
+                        ),
+                        "perspective_disagreement": disagreement,
+                        "input_hash": input_hash,
+                        "version": (
+                            history["latest_version"] + 1
+                            if history is not None
+                            else 1
+                        ),
+                        "supersedes_id": supersedes,
+                    }
                 )
                 change = event.get("trophy_change")
                 if isinstance(change, bool) or not isinstance(change, int):
                     trophies = None
                 elif trophies is not None:
                     trophies += change
+        if superseded_ids:
+            connection.execute(
+                "UPDATE army_analytics_battle_facts SET is_current=false WHERE id = ANY(%s::bigint[])",
+                (superseded_ids,),
+            )
+        if fact_rows:
+            connection.execute(
+                """
+                INSERT INTO army_analytics_battle_facts (
+                    battle_id, evidence_id, decode_id, source_ranked_day_version_id,
+                    ranked_day_start, official_season_id, season_day_number, lens,
+                    population_player_id, battle_time_trophies, stars,
+                    destruction_percentage, army_state, failure_reason, home_troops,
+                    spells, siege, cc_troops, heroes, unresolved_components,
+                    perspective_disagreement, input_hash, version, supersedes_id
+                )
+                SELECT row.battle_id, row.evidence_id, row.decode_id,
+                       row.source_ranked_day_version_id, %s, row.official_season_id,
+                       row.season_day_number, row.lens, row.population_player_id,
+                       row.battle_time_trophies, row.stars, row.destruction_percentage,
+                       row.army_state, row.failure_reason, row.home_troops,
+                       row.spells, row.siege, row.cc_troops, row.heroes,
+                       row.unresolved_components, row.perspective_disagreement,
+                       row.input_hash, row.version, row.supersedes_id
+                FROM jsonb_to_recordset(%s::jsonb) AS row(
+                    battle_id bigint, evidence_id bigint, decode_id bigint,
+                    source_ranked_day_version_id bigint, official_season_id text,
+                    season_day_number integer, lens text, population_player_id bigint,
+                    battle_time_trophies integer, stars integer,
+                    destruction_percentage integer, army_state text,
+                    failure_reason text, home_troops jsonb, spells jsonb,
+                    siege jsonb, cc_troops jsonb, heroes jsonb,
+                    unresolved_components jsonb, perspective_disagreement boolean,
+                    input_hash text, version integer, supersedes_id bigint
+                )
+                """,
+                (ranked_day_start, Jsonb(fact_rows)),
+            )
+        connection.execute(
+            """
+            UPDATE army_analytics_battle_facts AS fact
+            SET is_current = false
+            WHERE fact.ranked_day_start = %s AND fact.is_current
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM unnest(%s::bigint[], %s::text[]) AS active(battle_id, lens)
+                  WHERE active.battle_id = fact.battle_id
+                    AND active.lens = fact.lens
+              )
+            """,
+            (
+                ranked_day_start,
+                [battle_id for battle_id, _lens in active_keys],
+                [lens for _battle_id, lens in active_keys],
+            ),
+        )
         # Durable per-day completion marker, atomic with the facts above.
         marker_filter = "AND state = 'Complete' AND coverage = 'complete'"
         marker_params: tuple[Any, ...] = (ranked_day_start,)
@@ -8259,16 +8359,6 @@ class Database:
                     marker_hash,
                 ),
             )
-        current = connection.execute(
-            "SELECT id, battle_id, lens FROM army_analytics_battle_facts WHERE ranked_day_start=%s AND is_current",
-            (ranked_day_start,),
-        ).fetchall()
-        for fact_id, battle_id, lens in current:
-            if (int(battle_id), _text_value(lens)) not in active_keys:
-                connection.execute(
-                    "UPDATE army_analytics_battle_facts SET is_current=false WHERE id=%s",
-                    (fact_id,),
-                )
 
     def _season_metadata_for_ranked_day(
         self, connection: Any, ranked_day_start: datetime

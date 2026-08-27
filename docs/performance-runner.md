@@ -61,7 +61,7 @@ uv run --locked --python 3.12 ../scripts/performance_runner.py duplicate-heavy \
 uv run --locked --python 3.12 ../scripts/performance_runner.py mixed-backfill \
   --live-jobs 20 --backfill-jobs 100 --output ../results/mixed.json
 uv run --locked --python 3.12 ../scripts/performance_runner.py coordinator-12500 \
-  --army-facts 1 --lanes 1 --output ../results/coordinator-12500.json
+  --army-facts 1 --lanes 1 --post-fix --output ../results/coordinator-12500.json
 ```
 
 Reset and correction use paired committed reset fixtures and production
@@ -91,11 +91,15 @@ measures production claim and replay processing order, not the public replay
 request operation. Synthetic army rows preserve the production query shape but
 are not official observations.
 
-The known-bad source refuses reset or correction populations of 12,500 or
-more. `--post-fix` remains reserved for a future Step 4 writer rollout; the
-`coordinator-12500` mode is a bounded PostgreSQL-only cardinality proof and
-must not be read as enabling the full reset writer. Population validation does
-not apply to duplicate-heavy or mixed-backfill modes.
+Reset and correction populations of 12,500 or more require `--post-fix`.
+The flag verifies the checked-in snapshot and army writers contain bounded
+bulk-write shapes before allowing the target reset. `coordinator-12500` runs
+those real Python writers against the isolated PostgreSQL workload; it is not a
+SQL-only cardinality shortcut. Each snapshot kind uses one application and one
+PostgreSQL statement for entries; army facts use one set-based input read per
+relation and fixed bulk writes (insert, supersede, stale deactivation, and the
+completion marker). Population validation does not apply to duplicate-heavy or
+mixed-backfill modes.
 
 Run focused checks from the repository root:
 
