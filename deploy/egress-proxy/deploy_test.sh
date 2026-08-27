@@ -26,8 +26,8 @@ fi
 FAKE_DOCKER_LOG="$DOCKER_LOG" \
   DOCKER_BIN="$FAKE_DOCKER" \
   PROXY_STATE_DIR="$WORK_DIR" \
-  PROXY_LISTEN_IP=100.108.3.103 \
-  PROXY_CLIENT_IP=100.115.149.49 \
+  PROXY_LISTEN_IP=100.64.0.1 \
+  PROXY_CLIENT_IP=100.64.0.2 \
   PROXY_PORT=3129 \
   "$ROOT_DIR/deploy.sh" up >/dev/null
 
@@ -49,11 +49,11 @@ run_line=$(grep '^run ' "$DOCKER_LOG")
   exit 1
 }
 
-grep -q '^Allow 100.115.149.49$' "$WORK_DIR/tinyproxy.conf" || {
+grep -q '^Allow 100.64.0.2$' "$WORK_DIR/tinyproxy.conf" || {
   printf 'proxy client restriction is missing\n' >&2
   exit 1
 }
-grep -q '^Listen 100.108.3.103$' "$WORK_DIR/tinyproxy.conf" || {
+grep -q '^Listen 100.64.0.1$' "$WORK_DIR/tinyproxy.conf" || {
   printf 'proxy does not listen on the configured Tailscale address\n' >&2
   exit 1
 }

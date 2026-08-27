@@ -115,8 +115,8 @@ func TestLoadConfigRejectsInsecureOfficialOriginWithoutExplicitTestFlag(t *testi
 func TestLoadConfigRejectsOfficialAPIProxyWithCredentialsOrPath(t *testing.T) {
 	t.Parallel()
 	for _, proxyURL := range []string{
-		"http://user:password@100.108.3.103:3128",
-		"http://100.108.3.103:3128/proxy",
+		"http://user:password@100.64.0.1:3128",
+		"http://100.64.0.1:3128/proxy",
 	} {
 		t.Run(proxyURL, func(t *testing.T) {
 			environment := validConfigEnvironment()

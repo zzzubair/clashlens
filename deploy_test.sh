@@ -316,7 +316,7 @@ CLASHLENS_ARCHIVE_SECRET_KEY=collector-archive-secret-do-not-print
 CLASHLENS_WORKER_ARCHIVE_ACCESS_KEY=worker-archive-access
 CLASHLENS_WORKER_ARCHIVE_SECRET_KEY=worker-archive-secret-do-not-print
 CLASHLENS_OFFICIAL_API_ORIGIN=https://api.clashofclans.com
-CLASHLENS_OFFICIAL_API_PROXY_URL=http://100.108.3.103:3128
+CLASHLENS_OFFICIAL_API_PROXY_URL=http://100.64.0.1:3128
 CLASHLENS_API_KEY_HOST_DIR=$keydir
 CLASHLENS_NORMAL_API_KEY_FILES=normal-1=/run/secrets/normal-1,normal-2=/run/secrets/normal-2,normal-3=/run/secrets/normal-3,normal-4=/run/secrets/normal-4
 CLASHLENS_INTERACTIVE_API_KEY_FILES=interactive-1=/run/secrets/interactive-1
@@ -653,7 +653,7 @@ required_normalized=$required_run
 [[ "$required_normalized" == *'--env CLASHLENS_SHARED_TRAFFIC_GATE_MODE=required'* ]] || fail 'required collector mode is missing'
 [[ "$required_normalized" == *'--env CLASHLENS_OFFICIAL_API_ORIGIN=https://api.clashofclans.com'* ]] || \
   fail 'collector did not receive the official API origin through its runtime setting'
-[[ "$required_normalized" == *'--env CLASHLENS_OFFICIAL_API_PROXY_URL=http://100.108.3.103:3128'* ]] || \
+[[ "$required_normalized" == *'--env CLASHLENS_OFFICIAL_API_PROXY_URL=http://100.64.0.1:3128'* ]] || \
   fail 'collector did not receive the fixed-egress proxy through its runtime setting'
 [[ "$required_normalized" == *'--env CLASHLENS_NORMAL_API_KEY_FILES=normal-1=/run/secrets/normal-1,normal-2=/run/secrets/normal-2,normal-3=/run/secrets/normal-3,normal-4=/run/secrets/normal-4'* ]] || \
   fail 'collector did not receive the normal API key file list'
@@ -945,7 +945,7 @@ done
   fail 'API HMAC key ID setting is missing'
 [[ "$api_normalized" == *'--env CLASHLENS_OFFICIAL_KEY_FILE=/run/secrets/interactive-1'* ]] || \
   fail 'API official key file setting is missing'
-[[ "$api_normalized" == *'--env CLASHLENS_OFFICIAL_PROXY_URL=http://100.108.3.103:3128'* ]] || \
+[[ "$api_normalized" == *'--env CLASHLENS_OFFICIAL_PROXY_URL=http://100.64.0.1:3128'* ]] || \
   fail 'API did not receive the fixed-egress proxy URL'
 [[ "$api_normalized" != *'--env CLASHLENS_INTERACTIVE_API_KEY_FILE='* && "$api_normalized" != *'--env CLASHLENS_OFFICIAL_API_PROXY_URL='* ]] || \
   fail 'API received a legacy CLI env name'

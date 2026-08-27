@@ -125,7 +125,7 @@ python3 -m unittest scripts/test_performance_runner.py -v
 
 # Fedora target-host probe; never point this at production data.
 CLASHLENS_TEST_DATABASE_URL=postgresql://... \\
-  CLASHLENS_FEDORA_PROBE_OUTPUT=/home/clashlens/step2-results/duplicates.json \\
+  CLASHLENS_FEDORA_PROBE_OUTPUT=/tmp/clashlens-step2-results/duplicates.json \\
   scripts/fedora_probe.sh duplicate-heavy --duplicate-observations 25024
 ```
 
