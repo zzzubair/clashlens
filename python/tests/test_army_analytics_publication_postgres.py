@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from threading import Lock
 
 import pytest
 from domain_test_support import domain_database, store_observation, text
@@ -14,6 +16,7 @@ from clashlens.army_analytics import (
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
     CurrentSeasonEmpty,
+    build_army_result,
 )
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
@@ -138,7 +141,11 @@ def _army_job(database: Database) -> int:
 
 
 def _seed_frozen_snapshot(
-    database: Database, entries: list[tuple[int, int]], *, stale_first: bool = False
+    database: Database,
+    entries: list[tuple[int, int]],
+    *,
+    stale_first: bool = False,
+    version: int = 1,
 ) -> int:
     """entries: ordered (player_id,) by position starting at 1."""
     with database.pool.connection() as connection:
@@ -150,10 +157,10 @@ def _seed_frozen_snapshot(
             INSERT INTO leaderboard_snapshots (
                 snapshot_kind, boundary_at, version, ordering_rule_version,
                 freshness_rule_version, state, measured_coverage, stale_entry_count
-            ) VALUES ('frozen', %s, 1, 'ordering-v1', 'freshness-v1', 'published', 1.0, 0)
+            ) VALUES ('frozen', %s, %s, 'ordering-v1', 'freshness-v1', 'published', 1.0, 0)
             RETURNING id
             """,
-            (DAY_START + timedelta(days=1),),
+            (DAY_START + timedelta(days=1), version),
         ).fetchone()[0]
         for position, (player_id,) in enumerate(entries, start=1):
             snapshot_position = position if position == 1 else position + 4
@@ -191,6 +198,24 @@ def _selection(**changes) -> ArmyAnalyticsSelection:
     }
     values.update(changes)
     return ArmyAnalyticsSelection.parse(**values)
+
+
+def test_army_cache_is_bounded_thread_safe_and_returns_copies() -> None:
+    api = ApiDatabase.__new__(ApiDatabase)
+    api._army_cache_capacity = 2
+    api._army_cache = OrderedDict()
+    api._army_cache_lock = Lock()
+    first = {"publication_identity": "one", "rows": [{"key": "troop:1"}]}
+    api._army_cache_put(("selection-one",), first)
+    hit = api._army_cache_get(("selection-one",))
+    assert hit == first
+    assert hit is not first
+    hit["rows"].clear()
+    assert api._army_cache_get(("selection-one",))["rows"]
+    assert api._army_cache_get(("selection-two",)) is None
+    api._army_cache_put(("selection-two",), {"publication_identity": "two"})
+    api._army_cache_put(("selection-three",), {"publication_identity": "three"})
+    assert api._army_cache_get(("selection-one",)) is None
 
 
 def test_publication_writer_serves_reproducible_perspective_results(
@@ -277,7 +302,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
             assert facts[(attacker_vs_defender, "offense")][3] == 6000
             assert facts[(attacker_vs_other, "offense")][3] == 6035
 
-            api = ApiDatabase(ci)
+            api = ApiDatabase(ci, army_cache_capacity=0)
             fact_queries: list[str] = []
             original_connection = api.pool.connection
 
@@ -317,6 +342,92 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 identity = first["publication_identity"]
                 assert identity.startswith("army-publication-")
                 assert first["reproducibility"]["official_season_id"] == SEASON_ID
+                # Golden-check the SQL aggregate against the retained reducer.
+                with database.pool.connection() as connection:
+                    selected_rows = connection.execute(
+                        """
+                        SELECT id, battle_id, population_player_id,
+                               battle_time_trophies, stars,
+                               destruction_percentage, army_state,
+                               failure_reason, home_troops,
+                               unresolved_components,
+                               perspective_disagreement, input_hash,
+                               source_ranked_day_version_id
+                        FROM army_analytics_battle_facts
+                        WHERE official_season_id = %s
+                          AND season_day_number = %s AND lens = %s
+                          AND is_current
+                          AND battle_time_trophies BETWEEN %s AND %s
+                        ORDER BY battle_id
+                        """,
+                        (SEASON_ID, DAY_NUMBER, "offense", 5000, 9000),
+                    ).fetchall()
+                expected_facts = [
+                    {
+                        "id": int(row[0]),
+                        "battle_id": int(row[1]),
+                        "population_player_id": int(row[2]),
+                        "battle_time_trophies": None if row[3] is None else int(row[3]),
+                        "stars": int(row[4]),
+                        "destruction_percentage": int(row[5]),
+                        "army_state": text(row[6]),
+                        "failure_reason": None if row[7] is None else text(row[7]),
+                        "home_troops": row[8],
+                        "spells": [],
+                        "siege": [],
+                        "cc_troops": [],
+                        "heroes": [],
+                        "unresolved_components": row[9],
+                        "perspective_disagreement": bool(row[10]),
+                        "input_hash": text(row[11]),
+                        "source_ranked_day_version_id": int(row[12]),
+                    }
+                    for row in selected_rows
+                ]
+                expected = build_army_result(expected_facts, selection)
+                expected["missing_trophy_membership_evidence"] = 0
+                expected["cohort_evidence"] = {
+                    "stale_or_uncertain_cohort_members": 0,
+                    "streak_excluded_players": 0,
+                    "shielded_player_days": 0,
+                }
+                expected["reproducibility"] = {
+                    "official_season_id": SEASON_ID,
+                    "legend_days": [DAY_NUMBER, DAY_NUMBER],
+                    "snapshot_versions": [],
+                }
+                expected_source_hash = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "selection": selection.as_dict(),
+                            "facts": [
+                                (fact["id"], fact["input_hash"])
+                                for fact in expected_facts
+                            ],
+                            "snapshots": [],
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                expected_result_hash = hashlib.sha256(
+                    json.dumps(
+                        {"result": expected, "source_evidence": expected_source_hash},
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                expected["reproducibility"]["source_evidence_hash"] = expected_source_hash
+                expected["selection"] = selection.as_dict()
+                selection_hash = hashlib.sha256(
+                    json.dumps(
+                        selection.as_dict(), sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
+                expected["publication_identity"] = (
+                    f"army-publication-{selection_hash[:24]}-{expected_result_hash[:16]}"
+                )
+                assert first == expected
                 category_columns = {
                     "troops": "home_troops",
                     "spells": "spells",
@@ -336,6 +447,22 @@ def test_publication_writer_serves_reproducible_perspective_results(
                         _selection(category=category)
                     )
                     assert category_result is not None
+                    if category == "troops":
+                        # SQL returns one aggregate row, never selected fact
+                        # payload rows or unrelated component JSON.
+                        aggregate_queries = [
+                            query
+                            for query in fact_queries
+                            if "jsonb_array_elements" in query
+                        ]
+                        assert len(aggregate_queries) == 1
+                        aggregate_query = aggregate_queries[0]
+                        assert "SELECT component.key, count(*)" in aggregate_query
+                        for other_column in (
+                            "spells", "siege", "cc_troops", "heroes"
+                        ):
+                            assert other_column not in aggregate_query
+                        continue
                     assert len(
                         [query for query in fact_queries if "count(*) FILTER" in query]
                     ) == 1
@@ -352,6 +479,47 @@ def test_publication_writer_serves_reproducible_perspective_results(
                         "home_troops", "spells", "siege", "cc_troops", "heroes"
                     } - {component_column}:
                         assert f"{other_column} AS component_payload" not in payload_query
+
+                # Malformed component entries are skipped exactly like the
+                # Python reducer while the aggregate still returns one row.
+                with database.pool.connection() as connection:
+                    original_troops = connection.execute(
+                        """
+                        SELECT home_troops
+                        FROM army_analytics_battle_facts
+                        WHERE battle_id = %s AND lens = 'offense' AND is_current
+                        """,
+                        (attacker_vs_defender,),
+                    ).fetchone()[0]
+                    connection.execute(
+                        """
+                        UPDATE army_analytics_battle_facts
+                        SET home_troops = %s::jsonb
+                        WHERE battle_id = %s AND lens = 'offense' AND is_current
+                        """,
+                        (
+                            json.dumps(
+                                [["badtyped", 1], ["badtyped", 2], {}, [], "bad"]
+                            ),
+                            attacker_vs_defender,
+                        ),
+                    )
+                malformed = api.get_army_analytics(selection)
+                assert malformed is not None
+                malformed_row = next(
+                    row for row in malformed["rows"] if row["key"] == "badtyped"
+                )
+                assert malformed_row["usage_count"] == 1
+                assert malformed_row["label"] == "Unknown ID badtyped"
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        """
+                        UPDATE army_analytics_battle_facts
+                        SET home_troops = %s::jsonb
+                        WHERE battle_id = %s AND lens = 'offense' AND is_current
+                        """,
+                        (json.dumps(original_troops), attacker_vs_defender),
+                    )
 
                 # Reads calculate from retained facts without persistent
                 # per-selection storage. Identical inputs keep one identity;
@@ -416,7 +584,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     attacker_id = connection.execute(
                         "SELECT id FROM players WHERE normalized_tag = '#2PP'"
                     ).fetchone()[0]
-                _seed_frozen_snapshot(
+                snapshot_id = _seed_frozen_snapshot(
                     database, [(defender_id,), (attacker_id,)]
                 )
                 top5 = api.get_army_analytics(_selection(lens="defense", population="top-5"))
@@ -432,14 +600,31 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 assert top5_offense is not None
                 assert top5_offense["total_attacks"] == 0
                 assert top5_offense["rows"] == []
-                payload_queries = [
-                    query for query in fact_queries if "SELECT id, battle_id" in query
+                aggregate_queries = [
+                    query
+                    for query in fact_queries
+                    if "jsonb_array_elements" in query
                 ]
-                assert len(payload_queries) == 1
-                assert "population_player_id = ANY(%s::bigint[])" in payload_queries[0]
-                assert "battle_time_trophies BETWEEN" not in payload_queries[0]
-                assert "home_troops AS component_payload" in payload_queries[0]
-                assert "heroes" not in payload_queries[0]
+                assert len(aggregate_queries) == 1
+                assert "population_player_id = ANY(%s::bigint[])" in aggregate_queries[0]
+                assert "battle_time_trophies BETWEEN" not in aggregate_queries[0]
+                assert "home_troops AS component_payload" not in aggregate_queries[0]
+                assert "heroes" not in aggregate_queries[0]
+                expected_top_source_hash = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "selection": _selection(population="top-5").as_dict(),
+                            "facts": [],
+                            "snapshots": [snapshot_id],
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                assert (
+                    top5_offense["reproducibility"]["source_evidence_hash"]
+                    == expected_top_source_hash
+                )
 
                 # A withheld day inside the range names the affected day.
                 with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
@@ -779,7 +964,7 @@ def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
             observed_at=ts2 + timedelta(minutes=1), normalized_tag="#2PP",
         )
         database, processor = _processor(ci, archive_server)
-        api = ApiDatabase(ci)
+        api = ApiDatabase(ci, army_cache_capacity=2)
         try:
             for index, job in enumerate((j1, j2)):
                 processor.process_job(job, owner=f"ingest-{index}")
@@ -840,6 +1025,17 @@ def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
             assert top5 is not None
             assert top5["total_attacks"] == 2
             assert top5["missing_trophy_membership_evidence"] == 0
+            cached_top5 = api.get_army_analytics(_selection(population="top-5"))
+            assert cached_top5 == top5
+            _seed_frozen_snapshot(
+                database,
+                [(defender_id,), (attacker_id,)],
+                version=2,
+            )
+            changed_top5 = api.get_army_analytics(_selection(population="top-5"))
+            assert changed_top5 is not None
+            assert changed_top5["total_attacks"] == 0
+            assert changed_top5["publication_identity"] != top5["publication_identity"]
         finally:
             api.close()
             database.close()
@@ -907,6 +1103,8 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
             selection = _selection()
             first = api.get_army_analytics(selection)
             assert first is not None
+            cached = api.get_army_analytics(selection)
+            assert cached == first
 
             # A corrected source with identical aggregates still changes the
             # identity because retained source evidence changed.
@@ -1194,7 +1392,13 @@ def _seed_frozen_snapshot_at(
 
 
 def _mark_shielded(
-    database: Database, player_tag: str, day_start: datetime, day_number: int
+    database: Database,
+    player_tag: str,
+    day_start: datetime,
+    day_number: int,
+    *,
+    version: int = 2,
+    shield_state: str = "inferred_shielded",
 ) -> None:
     with database.pool.connection() as connection:
         player_id = connection.execute(
@@ -1211,9 +1415,9 @@ def _mark_shielded(
                 shield_duration_days
             ) VALUES (
                 %s, %s, %s, %s, %s, 'legend-season-anchor-v1',
-                'legend-ranked-day-v1', repeat('d', 64), 2,
+                'legend-ranked-day-v1', repeat('d', 63) || right(%s::text, 1), %s,
                 'Complete', 'exact', repeat('b', 64), true, true,
-                'inferred_shielded', 1
+                %s, 1
             )
             """,
             (
@@ -1222,6 +1426,9 @@ def _mark_shielded(
                 day_start + timedelta(days=1),
                 SEASON_ID,
                 day_number,
+                str(version),
+                version,
+                shield_state,
             ),
         )
 
@@ -1244,7 +1451,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             observed_at=ts2 + timedelta(minutes=1), normalized_tag="#2PP",
         )
         database, processor = _processor(ci, archive_server)
-        api = ApiDatabase(ci)
+        api = ApiDatabase(ci, army_cache_capacity=2)
         try:
             for index, job in enumerate((j1, j2)):
                 assert processor.process_job(job, owner=f"ingest-{index}").outcome in (
@@ -1322,6 +1529,45 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             assert evidence["stale_or_uncertain_cohort_members"] == 1
             # Shielded-day evidence counts only confirmed members' member-days.
             assert evidence["shielded_player_days"] == 1
+            cached_streak = api.get_army_analytics(
+                _selection(population="streak-top-5", start_day=23, end_day=24)
+            )
+            assert cached_streak == streak
+            cached_streak["rows"].clear()
+            assert api.get_army_analytics(
+                _selection(population="streak-top-5", start_day=23, end_day=24)
+            )["rows"]
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE ranked_day_versions
+                    SET shield_state = 'not_shielded'
+                    WHERE player_id = %s AND ranked_day_start = %s
+                      AND version = 2
+                    """,
+                    (attacker_id, DAY_START),
+                )
+            changed_in_place = api.get_army_analytics(
+                _selection(population="streak-top-5", start_day=23, end_day=24)
+            )
+            assert changed_in_place is not None
+            assert (
+                changed_in_place["publication_identity"]
+                != streak["publication_identity"]
+            )
+            _mark_shielded(
+                database,
+                "#2PP",
+                DAY_START,
+                23,
+                version=3,
+                shield_state="not_shielded",
+            )
+            changed_streak = api.get_army_analytics(
+                _selection(population="streak-top-5", start_day=23, end_day=24)
+            )
+            assert changed_streak is not None
+            assert changed_streak["publication_identity"] != streak["publication_identity"]
 
             non_streak = api.get_army_analytics(
                 _selection(population="top-5", start_day=23, end_day=24)

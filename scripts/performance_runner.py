@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import resource
 import subprocess
 import sys
@@ -46,6 +47,7 @@ STEP5_WARMUPS = 5
 STEP5_REQUESTS = 100
 STEP5_ANALYTICS_LANES = 4
 STEP5_P95_TARGET_MS = 200.0
+STEP5_FORCED_MISS_TARGET_SECONDS = 5.0
 STEP5_COLLECTION_LIMIT_SECONDS = 300.0
 STEP5_TROOP_KEYS = tuple(f"troop:{index}" for index in range(27))
 _LANES = 32
@@ -173,8 +175,8 @@ class _ArchiveHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         key = self.path.split("?", 1)[0].removeprefix("/evidence/")
-        body = type(self).objects.get(key)
         with type(self).counter_lock:
+            body = type(self).objects.get(key)
             type(self).gets += 1
         if body is None:
             self.send_response(404)
@@ -193,19 +195,21 @@ class _ArchiveHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_PUT(self) -> None:
+        key = self.path.split("?", 1)[0].removeprefix("/evidence/")
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         with type(self).counter_lock:
             type(self).puts += 1
             if self.headers.get("If-None-Match") == "*":
                 type(self).conditional_puts += 1
-        key = self.path.split("?", 1)[0].removeprefix("/evidence/")
-        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-        if key in type(self).objects:
-            with type(self).counter_lock:
+            conflict = key in type(self).objects
+            if conflict:
                 type(self).conflicts += 1
+            else:
+                type(self).objects[key] = body
+        if conflict:
             self.send_response(412)
             self.end_headers()
             return
-        type(self).objects[key] = body
         self.send_response(200)
         self.end_headers()
 
@@ -1026,8 +1030,13 @@ def _explain_endpoint_statements(
 ) -> list[dict[str, Any]]:
     import psycopg
 
+    from clashlens.api_db import ARMY_ANALYTICS_QUERY_WORK_MEM
+
     plans: list[dict[str, Any]] = []
     with psycopg.connect(connection_info) as connection:
+        connection.execute(
+            f"SET LOCAL work_mem = '{ARMY_ANALYTICS_QUERY_WORK_MEM}'"
+        )
         for statement_id, call in enumerate(calls, 1):
             sql = str(call["sql"]).strip().rstrip(";")
             try:
@@ -1073,20 +1082,27 @@ def _measure_army_pair(
     selection = _step5_selection(spec)
     database = ApiDatabase(connection_info, max_size=1)
     try:
-        # The first untimed warmup is also the production query capture used by
-        # the untimed EXPLAIN diagnostic pass.
+        # The forced miss is also the production query capture used by the
+        # untimed EXPLAIN diagnostic pass; it is excluded from warmups/p95.
+        pressure_before = _memory_pressure()
+        forced_started = time.perf_counter()
         with capture_sql_calls() as calls:
             first = database.get_army_analytics(
                 selection, now=BOUNDARY + timedelta(days=STEP5_DAYS + 1)
             )
-        troop_keys = _step5_result(first, spec, "warmup")
-        if len(calls) == 0:
-            raise RuntimeError(f"army endpoint emitted no SQL for {spec}")
-        for _ in range(warmups - 1):
+        forced_miss_seconds = time.perf_counter() - forced_started
+        pressure_after = _memory_pressure()
+        pressure_delta = _memory_pressure_delta(
+            pressure_before, pressure_after
+        )
+        troop_keys = _step5_result(first, spec, "forced miss")
+        for _ in range(warmups):
             result = database.get_army_analytics(
                 selection, now=BOUNDARY + timedelta(days=STEP5_DAYS + 1)
             )
             _step5_result(result, spec, "warmup")
+        if len(calls) == 0:
+            raise RuntimeError(f"army endpoint emitted no SQL for {spec}")
         diagnostics = _explain_endpoint_statements(
             connection_info,
             calls,
@@ -1106,6 +1122,19 @@ def _measure_army_pair(
             "lens": spec["lens"],
             "warmups": warmups,
             "requests": requests,
+            "forced_miss_seconds": forced_miss_seconds,
+            "forced_miss_target_seconds": STEP5_FORCED_MISS_TARGET_SECONDS,
+            "forced_miss_passed": (
+                forced_miss_seconds < STEP5_FORCED_MISS_TARGET_SECONDS
+                and pressure_delta["swap_used_bytes"] == 0
+                and pressure_before["oom_events_available"] == 1
+                and pressure_after["oom_events_available"] == 1
+                and pressure_delta["oom"] == 0
+                and pressure_delta["oom_kill"] == 0
+            ),
+            "forced_miss_memory_before": pressure_before,
+            "forced_miss_memory_after": pressure_after,
+            "forced_miss_memory_delta": pressure_delta,
             "p95_ms": _p95(latencies),
             "min_ms": min(latencies),
             "max_ms": max(latencies),
@@ -1133,8 +1162,6 @@ def _run_account_read_gate(
     overlap_counts: list[int] | None = None,
     overlap_lock: Lock | None = None,
 ) -> dict[str, Any]:
-    from clashlens.api import create_app
-    from clashlens.api_db import ApiDatabase
     from fastapi.testclient import TestClient
     from test_private_api import (
         DISCORD_CURRENT,
@@ -1145,6 +1172,9 @@ def _run_account_read_gate(
         json_body,
         signed_headers,
     )
+
+    from clashlens.api import create_app
+    from clashlens.api_db import ApiDatabase
 
     database = ApiDatabase(connection_info, max_size=1)
     keys = {
@@ -2433,6 +2463,7 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
     """Run the fixed PR 2 army protocol in one isolated production schema."""
     from domain_test_support import domain_database
 
+    pressure_before = _memory_pressure()
     started = time.perf_counter()
     cpu_start = time.process_time()
     specs = _army_selection_specs()
@@ -2446,6 +2477,10 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
         overlap = _run_step5_overlap(connection_info, archive, specs)
         database = _db_snapshot(connection_info, wal_start, statement_start)
         postgres = _postgres_provenance(connection_info)
+        pressure_after = _memory_pressure()
+        pressure_delta = _memory_pressure_delta(
+            pressure_before, pressure_after
+        )
         active_queue_rows = [
             row
             for queue in database["queues"].values()
@@ -2454,17 +2489,32 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
             in {"pending", "leased", "waiting_retry", "waiting_dependency"}
         ]
         hard_failures = [
+            f"{item['selection']}/{item['lens']} forced miss {item['forced_miss_seconds']:.3f}s >= {STEP5_FORCED_MISS_TARGET_SECONDS}s"
+            for item in reads
+            if not item["forced_miss_passed"]
+        ]
+        hard_failures.extend(
             f"{item['selection']}/{item['lens']} p95 {item['p95_ms']:.3f} >= {STEP5_P95_TARGET_MS}"
             for item in reads
             if not item["target_passed"]
-        ]
+        )
         hard_failures.extend(overlap["hard_failures"])
         if active_queue_rows:
             hard_failures.append(f"queue residue: {active_queue_rows}")
+        if (
+            pressure_before["oom_events_available"] != 1
+            or pressure_after["oom_events_available"] != 1
+        ):
+            hard_failures.append("cgroup OOM counters were unavailable")
+        if any(pressure_delta.values()):
+            hard_failures.append(
+                f"memory pressure increased during workload: {pressure_delta}"
+            )
         return {
             "status": "passed" if not hard_failures else "failed",
             "protocol": {
                 "population": STEP5_POPULATION,
+                "query_work_mem": "256MB",
                 "days": STEP5_DAYS,
                 "facts_per_member_day_per_lens": STEP5_FACTS_PER_MEMBER_DAY,
                 "selected_members": STEP5_SELECTED_MEMBERS,
@@ -2473,6 +2523,7 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
                 "warmups": STEP5_WARMUPS,
                 "requests": STEP5_REQUESTS,
                 "p95_target_ms": STEP5_P95_TARGET_MS,
+                "forced_miss_target_seconds": STEP5_FORCED_MISS_TARGET_SECONDS,
                 "analytics_lanes": STEP5_ANALYTICS_LANES,
                 "duplicate_cycle_observations": DUPLICATE_EXECUTION_CAP,
             },
@@ -2484,6 +2535,9 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
             "elapsed_seconds": time.perf_counter() - started,
             "cpu_seconds": time.process_time() - cpu_start,
             "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "memory_pressure_before": pressure_before,
+            "memory_pressure_after": pressure_after,
+            "memory_pressure_delta": pressure_delta,
             "hard_failures": hard_failures,
             "queue_drained": not active_queue_rows,
         }
@@ -2585,6 +2639,41 @@ def _host_provenance() -> dict[str, Any]:
     }
 
 
+def _memory_pressure() -> dict[str, int]:
+    host = _host_provenance()
+    events: dict[str, int] = {}
+    try:
+        cgroup = next(
+            line.split(":", 2)[2]
+            for line in Path("/proc/self/cgroup").read_text().splitlines()
+            if line.startswith("0::")
+        )
+        event_path = Path("/sys/fs/cgroup") / cgroup.lstrip("/") / "memory.events"
+        events = {
+            key: int(value)
+            for key, value in (
+                line.split() for line in event_path.read_text().splitlines()
+            )
+        }
+    except (OSError, StopIteration, ValueError):
+        events = {}
+    return {
+        "swap_used_bytes": int(host["swap"]["total_used_bytes"]),
+        "oom_events_available": int(bool(events)),
+        "oom": events.get("oom", 0),
+        "oom_kill": events.get("oom_kill", 0),
+    }
+
+
+def _memory_pressure_delta(
+    before: dict[str, int], after: dict[str, int]
+) -> dict[str, int]:
+    return {
+        key: max(0, after.get(key, 0) - before.get(key, 0))
+        for key in ("swap_used_bytes", "oom", "oom_kill")
+    }
+
+
 def _postgres_provenance(connection_info: str) -> dict[str, Any]:
     import psycopg
 
@@ -2643,7 +2732,9 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("--database-url or CLASHLENS_TEST_DATABASE_URL is required")
     if arguments.mode == STEP5_MODE:
         started = datetime.now(tz=UTC)
-        workload = _run_step5_army(arguments.database_url)
+        with count_sql_calls() as sql_calls:
+            workload = _run_step5_army(arguments.database_url)
+        workload["database"]["application_sql_calls"] = sql_calls[0]
         finished = datetime.now(tz=UTC)
         return {
             "schema_version": 5,
@@ -2917,7 +3008,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--analytics-lanes must be positive")
     global _LANES
     _LANES = arguments.lanes
-    if any("=sha256:" not in image for image in arguments.image):
+    if any(
+        re.fullmatch(r"[A-Za-z0-9._-]+=sha256:[0-9a-f]{64}", image) is None
+        for image in arguments.image
+    ):
         parser.error("--image must be NAME=sha256:DIGEST")
     return arguments
 

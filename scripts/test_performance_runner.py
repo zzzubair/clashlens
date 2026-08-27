@@ -103,6 +103,27 @@ class PerformanceRunnerTest(unittest.TestCase):
             ),
         )
 
+    def test_army_mode_rejects_malformed_image_digest(self) -> None:
+        with self.assertRaises(SystemExit):
+            runner.parse_arguments(
+                [
+                    "army-analytics",
+                    "--database-url",
+                    "unused",
+                    "--image",
+                    "postgres=sha256:not-a-digest",
+                ]
+            )
+
+    def test_memory_pressure_delta_never_hides_increases(self) -> None:
+        self.assertEqual(
+            runner._memory_pressure_delta(
+                {"swap_used_bytes": 10, "oom": 2, "oom_kill": 1},
+                {"swap_used_bytes": 14, "oom": 3, "oom_kill": 1},
+            ),
+            {"swap_used_bytes": 4, "oom": 1, "oom_kill": 0},
+        )
+
     def test_writer_guard_rejects_row_at_a_time_sql(self) -> None:
         source = """
         def writer(connection, rows):

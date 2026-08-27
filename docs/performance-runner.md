@@ -77,13 +77,15 @@ legacy army-read section bulk-loads bounded synthetic facts after that
 production seed. The dedicated `army-analytics` mode seeds exactly 12,500
 members across 28 days, eight current facts per member/day/lens, 28,000 missing
 trophies per lens, 28 identical fresh/confirmed Top-1,000 snapshots, and 27
-troop keys. It executes five untimed warmups plus 100 timed calls for each of
-`top-1000`, `trophies-5000-9999`, and `streak-top-1000` in both lenses through
-`ApiDatabase.get_army_analytics`. The first untimed call captures every endpoint
-statement; the runner replays its exact SQL and parameters outside timing with
-`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`. The retained result includes
+troop keys. It executes one timed forced miss (required to stay below five seconds), then
+five untimed warmups plus 100 timed cache-hit calls for each of `top-1000`,
+`trophies-5000-9999`, and `streak-top-1000` in both lenses through
+`ApiDatabase.get_army_analytics`. The forced miss is excluded from the warmed
+p95. Cache misses use the measured 256 MiB query-local PostgreSQL work-memory
+ceiling. Their SQL is captured and replayed under the same setting outside timing
+with `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`. The retained result includes
 selected/scanned/returned rows, p95 and RSS, PostgreSQL settings, host memory,
-swap, and the four-lane 25,024-observation mixed-load gate plus signed account
+forced-miss and whole-run swap/OOM deltas, and the four-lane 25,024-observation mixed-load gate plus signed account
 reads. A p95, overlap, queue, or five-minute violation is retained in the JSON
 artifact and exits nonzero; no index or cache is added by the runner.
 
@@ -128,5 +130,6 @@ Without `CLASHLENS_TEST_DATABASE_URL`, PostgreSQL checks are skipped. A skip is
 not performance acceptance. Database and collector-probe failures return a
 short nonzero diagnostic and do not emit a partial JSON result. Retain real
 Fedora target-host outputs for review. The dedicated `army-analytics` mode
-asserts the 200 ms p95, four-lane overlap, queue-drain, and five-minute gates;
+asserts the warmed 200 ms p95, forced-miss five-second bound, four-lane overlap,
+queue-drain, and five-minute gates;
 its output is retained before a hard-gate failure returns nonzero.
