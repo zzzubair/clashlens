@@ -18,13 +18,27 @@ SPEC.loader.exec_module(runner)
 
 class PerformanceRunnerTest(unittest.TestCase):
     def test_known_bad_target_is_rejected_even_as_one_population(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Step 4"):
+        with self.assertRaisesRegex(ValueError, "post-fix"):
             runner.validate_reset([12_500], False)
 
-    def test_post_fix_flag_requires_real_source_fix(self) -> None:
-        self.assertFalse(runner.post_fix_source_ready())
-        with self.assertRaisesRegex(ValueError, "Step 4"):
-            runner.validate_reset([12_500], True)
+    def test_post_fix_flag_requires_bounded_snapshot_and_army_writers(self) -> None:
+        self.assertTrue(runner.post_fix_source_ready())
+        runner.validate_reset([12_500], True)
+
+    def test_writer_guard_rejects_row_at_a_time_sql(self) -> None:
+        source = """
+        def writer(connection, rows):
+            for row in rows:
+                connection.execute('INSERT INTO entries VALUES (%s)', (row,))
+        """
+        self.assertFalse(
+            runner._bounded_writer_source_ready(source, "writer", "INSERT INTO")
+        )
+
+    def test_statement_metrics_use_public_schema(self) -> None:
+        source = SCRIPT.read_text()
+        self.assertEqual(source.count("FROM public.pg_stat_statements"), 2)
+        self.assertNotIn("FROM pg_stat_statements", source)
 
     def test_non_reset_modes_do_not_validate_reset_population(self) -> None:
         arguments = runner.parse_arguments(
@@ -180,7 +194,7 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                     workload["coordinator_links"],
                     {
                         "sealed_manifests": 2,
-                        "completed_manifest_jobs": 2,
+                        "completed_manifest_jobs": 3,
                         "generation_identities": 2,
                         "publication_signals": 1,
                     },
@@ -189,17 +203,21 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                     workload["coordinator_residue"],
                     {"jobs": 0, "corrections": 0, "generations": 0},
                 )
+                snapshot_coverage = workload["generation"]["snapshot_coverage"]
+                self.assertEqual(snapshot_coverage["expected_population_count"], 12500)
+                self.assertEqual(snapshot_coverage["included_entry_count"], 12500)
+                army_coverage = workload["generation"]["army_coverage"]
                 self.assertEqual(
-                    workload["generation"]["snapshot_coverage"],
-                    {"expected": 12500, "included": 12500, "excluded": 0},
-                )
-                self.assertEqual(
-                    workload["generation"]["army_coverage"],
+                    {
+                        key: army_coverage[key]
+                        for key in ("expected", "included", "excluded")
+                    },
                     {"expected": 12500, "included": 12500, "excluded": 0},
                 )
                 self.assertEqual(
                     workload["coordinator_job_counts"],
                     {
+                        "build_analytics": 1,
                         "build_army_analytics": 1,
                         "build_snapshot": 1,
                     },
@@ -209,7 +227,7 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 self.assertEqual(workload["queue_residue"], [])
                 self.assertEqual(
                     sample["evidence"]["execution_method"],
-                    "bounded PostgreSQL-only coordinator cardinality proof",
+                    "real Python snapshot, analytics, and army writers",
                 )
                 continue
             self.assertTrue(

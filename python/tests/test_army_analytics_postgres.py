@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import domain_database, store_observation
+from psycopg.types.json import Jsonb
 
 from clashlens.archive import S3ArchiveReader
-from clashlens.catalog import CATALOG_HASH, CATALOG_VERSION
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
 
@@ -153,7 +154,208 @@ def _job_id(database: Database) -> int:
         )
 
 
-def test_completed_day_and_season_publish_required_army_metrics(
+def _fact_insert_calls(connection_info: str) -> int | None:
+    try:
+        with psycopg.connect(connection_info) as connection:
+            return int(
+                connection.execute(
+                    """
+                    SELECT COALESCE(sum(calls), 0)::bigint
+                    FROM pg_stat_statements
+                    WHERE query ILIKE '%INSERT INTO army_analytics_battle_facts%'
+                    """
+                ).fetchone()[0]
+            )
+    except (
+        psycopg.errors.ObjectNotInPrerequisiteState,
+        psycopg.errors.UndefinedTable,
+    ):
+        return None
+
+
+def _build_fact_population(
+    database_url: str,
+    archive_server,
+    count: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[int, int, int, tuple]:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            opponents = ["#8PP", "#9PP"]
+            rows = [
+                _battle_row(
+                    opponent=opponents[index],
+                    offset_hours=index + 1,
+                    code=None if index == 0 else FIXTURE_CODE,
+                    stars=index % 4,
+                    destruction=index * 20,
+                )
+                for index in range(count)
+            ]
+            _observation, battle_job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key=f"army-set-based-{count}",
+                endpoint="battle_log",
+                body=json.dumps({"items": rows}).encode(),
+                observed_at=DAY_START + timedelta(hours=6),
+                normalized_tag="#2PP",
+            )
+            assert processor.process_job(
+                battle_job, owner=f"set-based-{count}"
+            ).outcome in {"processed", "processed_with_gaps"}
+            _mark_day_complete(database)
+            with psycopg.connect(connection_info) as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                battle_ids = [
+                    int(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT id FROM legend_battles
+                        WHERE attacker_player_id = %s
+                        ORDER BY id
+                        """,
+                        (player_id,),
+                    ).fetchall()
+                ]
+                assert len(battle_ids) == count
+                events = [
+                    {
+                        "battle_id": battle_id,
+                        "lens": "offense",
+                        "included": True,
+                        "battle_timestamp": (
+                            DAY_START + timedelta(hours=index + 1)
+                        ).isoformat(),
+                        "trophy_change": 20,
+                        "stars": index % 4,
+                        "destruction_percentage": index * 20,
+                    }
+                    for index, battle_id in enumerate(battle_ids)
+                ]
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, version, state, coverage,
+                        adjustments, battles, partial_reasons, ranked_day_end,
+                        official_season_id, season_day_number, confidence,
+                        attack_count, attack_three_star_count, attack_gain,
+                        defense_count, defense_three_star_count, defense_loss,
+                        net_trophy_change
+                    ) VALUES (
+                        %s, %s, 1, 'Complete', 'complete', %s, %s, %s, %s,
+                        %s, 23, 'exact', %s, %s, %s, 0, 0, 0, %s
+                    )
+                    """,
+                    (
+                        player_id,
+                        DAY_START,
+                        Jsonb([]),
+                        Jsonb(events),
+                        Jsonb([]),
+                        DAY_START + timedelta(days=1),
+                        SEASON_ID,
+                        count,
+                        sum(event["stars"] == 3 for event in events),
+                        count * 20,
+                        count * 20,
+                    ),
+                )
+                connection.commit()
+            calls = [0]
+            original_execute = psycopg.Cursor.execute
+
+            def counted_execute(cursor, *args, **kwargs):
+                calls[0] += 1
+                return original_execute(cursor, *args, **kwargs)
+
+            monkeypatch.setattr(psycopg.Cursor, "execute", counted_execute)
+            before_pg = _fact_insert_calls(connection_info)
+            before_app = calls[0]
+            with database.pool.connection() as connection:
+                database._build_army_facts(connection, DAY_START.isoformat())
+                connection.commit()
+            after_app = calls[0]
+            after_pg = _fact_insert_calls(connection_info)
+
+            with psycopg.connect(connection_info) as connection:
+                facts = connection.execute(
+                    "SELECT count(*) FROM army_analytics_battle_facts WHERE is_current"
+                ).fetchone()[0]
+                failed = connection.execute(
+                    """
+                    SELECT decode.id, decode.battle_id
+                    FROM battle_army_decodes AS decode
+                    WHERE decode.status = 'failed'
+                    ORDER BY decode.id
+                    LIMIT 1
+                    """
+                ).fetchone()
+                assert failed is not None
+                connection.execute(
+                    "UPDATE battle_army_decodes SET is_active = false WHERE id = %s",
+                    (failed[0],),
+                )
+                database._build_army_facts(
+                    connection,
+                    DAY_START.isoformat(),
+                    battle_ids=[int(failed[1])],
+                    decode_ids=[int(failed[0])],
+                )
+                connection.commit()
+                failed_fact = connection.execute(
+                    """
+                    SELECT army_state, home_troops, spells, siege, cc_troops,
+                           heroes, unresolved_components, decode_id
+                    FROM army_analytics_battle_facts
+                    WHERE battle_id = %s AND lens = 'offense' AND is_current
+                    """,
+                    (failed[1],),
+                ).fetchone()
+            assert failed_fact is not None
+            return (
+                after_app - before_app,
+                None if before_pg is None or after_pg is None else after_pg - before_pg,
+                int(facts),
+                failed_fact,
+            )
+        finally:
+            database.close()
+
+
+def test_army_fact_statements_are_bounded_and_pinned_failed_decodes_survive(
+    database_url: str,
+    archive_server,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    small_app, small_postgres, small_facts, _small_failed = _build_fact_population(
+        database_url, archive_server, 1, monkeypatch
+    )
+    large_app, large_postgres, large_facts, failed_fact = _build_fact_population(
+        database_url, archive_server, 2, monkeypatch
+    )
+    assert small_app <= 9 and large_app <= 9
+    assert large_app <= small_app + 1
+    assert small_facts == 1
+    assert large_facts == 2
+    assert failed_fact[0] == "missing_army_share_code"
+    assert failed_fact[1:7] == ([], [], [], [], [], [])
+    assert failed_fact[7] is not None
+    if small_postgres is not None:
+        assert small_postgres <= 1
+    if large_postgres is not None:
+        assert large_postgres <= 1
+    if small_postgres is None or large_postgres is None:
+        pytest.skip(
+            "pg_stat_statements is unavailable; PostgreSQL statement ceilings not asserted"
+        )
+    assert large_postgres <= small_postgres + 1
+
+
+def test_completed_day_publishes_facts_without_legacy_rollups(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url) as connection_info:
@@ -182,89 +384,31 @@ def test_completed_day_and_season_publish_required_army_metrics(
             )
 
             with database.pool.connection() as connection:
-                day = connection.execute(
+                facts = connection.execute(
                     """
-                    SELECT id, total_attacks, sample_size, excluded_attacks,
-                           excluded_breakdown, decoder_version,
-                           catalog_version, exact_trophies
-                    FROM army_analytics_day_summaries
-                    WHERE is_published AND exact_trophies = -1
+                    SELECT count(*), count(*) FILTER (WHERE is_current)
+                    FROM army_analytics_battle_facts
                     """
                 ).fetchone()
-                assert day[1:4] == (4, 3, 1)
-                assert day[4] == {"missing_army_share_code": 1}
-                assert text(day[6]) == CATALOG_VERSION
-
-                cohort = connection.execute(
+                assert facts == (0, 0)
+                marker = connection.execute(
                     """
-                    SELECT total_attacks, sample_size, excluded_attacks
-                    FROM army_analytics_day_summaries
-                    WHERE is_published AND exact_trophies = 6000
-                    """
-                ).fetchone()
-                assert cohort == (3, 2, 1)
-                assert (
-                    connection.execute(
-                        """
-                    SELECT count(*) FROM army_analytics_day_summaries
-                    WHERE is_published
-                    """
-                    ).fetchone()[0]
-                    == 2
-                )
-
-                breakdowns = {
-                    (text(row[0]), text(row[1]), text(row[2])): row[3:]
-                    for row in connection.execute(
-                        """
-                        SELECT category, typed_id, combination_key,
-                               usage_count, usage_rate, star_counts,
-                               avg_destruction, three_star_rate, hero_typed_id
-                        FROM army_analytics_breakdowns
-                        WHERE summary_kind = 'day' AND summary_id = %s
-                        """,
-                        (day[0],),
-                    ).fetchall()
-                }
-                assert breakdowns[("home_troop", "troop:58", None)][0:2] == (
-                    3,
-                    1,
-                )
-                siege = breakdowns[("siege", "troop:51", None)]
-                assert siege[0] == 1
-                assert float(siege[1]) == pytest.approx(1 / 3)
-                assert siege[2] == {"0": 0, "1": 0, "2": 1, "3": 0}
-                assert float(siege[3]) == 75
-                assert float(siege[4]) == 0
-                assert breakdowns[("cc_troop", "troop:0", None)][0] == 1
-                assert any(key[0] == "hero_pet" for key in breakdowns)
-                assert any(key[0] == "hero_equipment" for key in breakdowns)
-                assert any(key[0] == "cc_composition" for key in breakdowns)
-                conditional = next(
-                    values
-                    for (category, typed_id, _combo), values in breakdowns.items()
-                    if category == "equipment_for_hero" and typed_id == "equipment:14"
-                )
-                assert conditional[0] == 3
-                assert float(conditional[1]) == 1
-                assert text(conditional[5]) == "hero:0"
-
-                season = connection.execute(
-                    """
-                    SELECT total_attacks, sample_size, excluded_attacks
-                    FROM army_analytics_season_summaries
-                    WHERE is_published AND official_season_id = %s
-                      AND exact_trophies = -1
+                    SELECT official_season_id, season_day_number
+                    FROM army_analytics_completed_days
+                    WHERE ranked_day_start = %s
                     """,
-                    (SEASON_ID,),
+                    (DAY_START,),
                 ).fetchone()
-                assert season == (4, 3, 1)
-
-                catalog = connection.execute(
-                    "SELECT content_hash FROM unit_catalog_versions WHERE version = %s",
-                    (CATALOG_VERSION,),
-                ).fetchone()
-                assert text(catalog[0]) == CATALOG_HASH
+                assert marker is None
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_day_summaries"
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_season_summaries"
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_breakdowns"
+                ).fetchone()[0] == 0
 
             corrected = _battle_row(
                 opponent="#8PP",
@@ -293,15 +437,12 @@ def test_completed_day_and_season_publish_required_army_metrics(
                 == "processed"
             )
             with database.pool.connection() as connection:
-                history = connection.execute(
-                    """
-                    SELECT version, is_published
-                    FROM army_analytics_day_summaries
-                    WHERE exact_trophies = -1
-                    ORDER BY version
-                    """
-                ).fetchall()
-                assert history == [(1, False), (2, True)]
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_day_summaries"
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_season_summaries"
+                ).fetchone()[0] == 0
                 assert (
                     connection.execute(
                         """
@@ -323,7 +464,7 @@ def test_completed_day_and_season_publish_required_army_metrics(
             database.close()
 
 
-def test_all_excluded_cohort_is_published_and_stale_scope_is_retired(
+def test_army_fact_retries_leave_legacy_rollups_untouched(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url) as connection_info:
@@ -361,19 +502,12 @@ def test_all_excluded_cohort_is_published_and_stale_scope_is_retired(
             )
 
             with database.pool.connection() as connection:
-                for table in (
-                    "army_analytics_day_summaries",
-                    "army_analytics_season_summaries",
-                ):
-                    assert connection.execute(
-                        f"""
-                        SELECT total_attacks, sample_size, excluded_attacks,
-                               excluded_breakdown
-                        FROM {table}
-                        WHERE exact_trophies = 6100 AND is_published
-                        """
-                    ).fetchone() == (1, 0, 1, {"missing_army_share_code": 1})
-
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_day_summaries"
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_season_summaries"
+                ).fetchone()[0] == 0
                 player_id = connection.execute(
                     "SELECT id FROM players WHERE normalized_tag = '#2PP'"
                 ).fetchone()[0]
@@ -403,23 +537,17 @@ def test_all_excluded_cohort_is_published_and_stale_scope_is_retired(
                 == "processed"
             )
             with database.pool.connection() as connection:
-                for table in (
-                    "army_analytics_day_summaries",
-                    "army_analytics_season_summaries",
-                ):
-                    assert connection.execute(
-                        f"""
-                        SELECT exact_trophies, is_published
-                        FROM {table}
-                        WHERE exact_trophies IN (6100, 6200)
-                        ORDER BY exact_trophies
-                        """
-                    ).fetchall() == [(6100, False), (6200, True)]
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_day_summaries"
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_season_summaries"
+                ).fetchone()[0] == 0
         finally:
             database.close()
 
 
-def test_day_and_season_build_roll_back_together(
+def test_army_fact_build_rolls_back_atomically(
     database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with domain_database(database_url) as connection_info:
@@ -452,10 +580,10 @@ def test_day_and_season_build_roll_back_together(
             )
             _mark_day_complete(database)
 
-            def fail_season(*_args) -> None:
-                raise ValueError("dependency_not_ready: forced season failure")
+            def fail_day(*_args, **_kwargs) -> None:
+                raise ValueError("dependency_not_ready: forced day failure")
 
-            monkeypatch.setattr(database, "_build_army_season", fail_season)
+            monkeypatch.setattr(database, "_ensure_army_day_dependency", fail_day)
             result = processor.process_job(_job_id(database), owner="atomic-build")
             assert result.outcome == "retrying"
             with database.pool.connection() as connection:

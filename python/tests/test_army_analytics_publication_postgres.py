@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -403,7 +404,11 @@ def _publish_day_correction(
     database: Database,
     player_tag: str,
     events: list[dict],
+    *,
+    version: int = 2,
 ) -> None:
+    result_hash = hashlib.sha256(f"result:{version}".encode()).hexdigest()
+    input_hash = hashlib.sha256(f"input:{version}".encode()).hexdigest()
     with database.pool.connection() as connection:
         player_id = connection.execute(
             "SELECT id FROM players WHERE normalized_tag = %s", (player_tag,)
@@ -418,8 +423,8 @@ def _publish_day_correction(
                 evidence_complete, coverage_complete, start_trophies
             ) VALUES (
                 %s, %s, %s, %s, %s, 'legend-season-anchor-v1',
-                'legend-ranked-day-v1', repeat('f', 64), 2,
-                'Complete', 'exact', repeat('e', 64), true, true, 6000
+                'legend-ranked-day-v1', %s, %s,
+                'Complete', 'exact', %s, true, true, 6000
             )
             """,
             (
@@ -428,6 +433,9 @@ def _publish_day_correction(
                 DAY_START + timedelta(days=1),
                 SEASON_ID,
                 DAY_NUMBER,
+                result_hash,
+                version,
+                input_hash,
             ),
         )
         connection.execute(
@@ -435,11 +443,12 @@ def _publish_day_correction(
             INSERT INTO api_player_daily_logs (
                 player_id, ranked_day_start, version, state, coverage,
                 battles, ranked_day_end, official_season_id, season_day_number
-            ) VALUES (%s, %s, 2, 'Complete', 'complete', %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, 'Complete', 'complete', %s, %s, %s, %s)
             """,
             (
                 player_id,
                 DAY_START,
+                version,
                 json.dumps(events),
                 DAY_START + timedelta(days=1),
                 SEASON_ID,
@@ -447,6 +456,108 @@ def _publish_day_correction(
             ),
         )
         database._enqueue_army_analytics(connection, ranked_day_start=DAY_START)
+
+
+def test_remove_then_reintroduce_preserves_fact_lineage_and_final_marker(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as ci:
+        timestamp = DAY_START + timedelta(hours=1)
+        _, battle_job = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="remove-reintroduce-fact",
+            endpoint="battle_log",
+            body=json.dumps(
+                {"items": [_row(True, "#8PP", FIXTURE_CODE, timestamp, 3, 100)]}
+            ).encode(),
+            observed_at=timestamp + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        database, processor = _processor(ci, archive_server)
+        try:
+            assert (
+                processor.process_job(battle_job, owner="ingest").outcome
+                == "processed"
+            )
+            with database.pool.connection() as connection:
+                battle_id = int(
+                    connection.execute(
+                        "SELECT max(id) FROM legend_battles"
+                    ).fetchone()[0]
+                )
+            event = _event(battle_id, "offense", timestamp, 3, 100, 35)
+            _publish_day(database, "#2PP", [event])
+            assert (
+                processor.process_job(_army_job(database), owner="initial").outcome
+                == "processed"
+            )
+
+            _publish_day_correction(database, "#2PP", [], version=2)
+            assert (
+                processor.process_job(_army_job(database), owner="remove").outcome
+                == "processed"
+            )
+            with database.pool.connection() as connection:
+                removed_facts = connection.execute(
+                    "SELECT count(*) FROM army_analytics_battle_facts WHERE is_current"
+                ).fetchone()[0]
+                removed_marker = connection.execute(
+                    """
+                    SELECT fact_input_hash
+                    FROM army_analytics_completed_days
+                    WHERE ranked_day_start = %s
+                    """,
+                    (DAY_START,),
+                ).fetchone()[0]
+            assert removed_facts == 0
+            assert removed_marker == hashlib.sha256(b"[]").hexdigest()
+
+            _publish_day_correction(database, "#2PP", [event], version=3)
+            assert (
+                processor.process_job(
+                    _army_job(database), owner="reintroduce"
+                ).outcome
+                == "processed"
+            )
+            with database.pool.connection() as connection:
+                history = connection.execute(
+                    """
+                    SELECT version, is_current
+                    FROM army_analytics_battle_facts
+                    WHERE battle_id = %s AND lens = 'offense'
+                    ORDER BY version
+                    """,
+                    (battle_id,),
+                ).fetchall()
+                current = connection.execute(
+                    """
+                    SELECT version, input_hash
+                    FROM army_analytics_battle_facts
+                    WHERE battle_id = %s AND lens = 'offense' AND is_current
+                    """,
+                    (battle_id,),
+                ).fetchone()
+                final_marker = connection.execute(
+                    """
+                    SELECT fact_input_hash
+                    FROM army_analytics_completed_days
+                    WHERE ranked_day_start = %s
+                    """,
+                    (DAY_START,),
+                ).fetchone()[0]
+            assert [(int(row[0]), bool(row[1])) for row in history] == [
+                (1, False),
+                (2, True),
+            ]
+            assert current is not None and int(current[0]) == 2
+            assert final_marker == hashlib.sha256(
+                json.dumps(
+                    [[battle_id, "offense", current[1]]], separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+        finally:
+            database.close()
 
 
 def test_completed_day_without_army_job_is_unavailable_not_false_empty(
