@@ -13,7 +13,10 @@ conditional PUT plus GET verification totals separately from the Python
 archive GET counts; a failed probe or malformed marker fails the run. Samples
 also retain evidence novelty, pending/orphan, local-hit/repair, conditional
 PUT/verification-GET, and bounded spool-capacity fields for the raw-evidence
-contract.
+contract. The `army-analytics` mode is the issue #73 PR 2 target-host protocol:
+it seeds the fixed 12,500-member, 5.6-million-fact workload, exercises the
+production `ApiDatabase.get_army_analytics` path for all six selection/lens
+pairs, and retains query plans and mixed-load evidence.
 
 ## Prerequisites and limits
 
@@ -23,11 +26,14 @@ contract.
   120-second timeout.
 - A disposable UTF-8 PostgreSQL database where the supplied user can create
   schemas. Never point the runner at production. `SQL_ASCII` can return text as
-  bytes and is not representative of the deployed database.
+  bytes and is not representative of the deployed database. The fixed
+  `army-analytics` proof additionally requires containerized PostgreSQL and a
+  user with `pg_read_server_files` (or superuser) so its own cgroup swap/OOM
+  counters can be read from fixed `/sys/fs/cgroup` paths.
 - Enough local space for PostgreSQL WAL and relation growth. The default army
-  workload is 1,000 facts; `--army-facts` accepts 1 through 100,000. The army
-  read workload runs in reset and correction modes and creates 28 Top-1,000
-  snapshots plus synthetic facts in the disposable schema.
+  workload in reset and correction modes is 1,000 facts; `--army-facts` accepts
+  1 through 100,000. The `army-analytics` mode uses its fixed 5.6-million-fact
+  workload and ignores the legacy `--army-facts` setting.
 - Duplicate-heavy mode distributes occurrences across ~200 tracked players
   (~125 responses each) so duplicate writes match the production multi-player
   shape instead of concentrating on one row. `--lanes` (1-64) sets the
@@ -62,18 +68,29 @@ uv run --locked --python 3.12 ../scripts/performance_runner.py mixed-backfill \
   --live-jobs 20 --backfill-jobs 100 --output ../results/mixed.json
 uv run --locked --python 3.12 ../scripts/performance_runner.py coordinator-12500 \
   --army-facts 1 --lanes 1 --post-fix --output ../results/coordinator-12500.json
+
+# Issue #73 PR 2 fixed army read, mixed-load, and query-plan protocol
+uv run --locked --python 3.12 ../scripts/performance_runner.py army-analytics \
+  --output ../results/issue-73-pr2-army.json
 ```
 
 Reset and correction use paired committed reset fixtures and production
 `complete_reconciliation`; they do not manufacture ranked-day versions. Their
-army-read section bulk-loads bounded synthetic facts after that production
-seed and records the 28-day Top 1,000, widest trophy range, and Top-1,000
-streak endpoint latency. The army sample reports its own database snapshot
-(WAL, relation sizes, queues, SQL calls), elapsed time, CPU, and RSS covering
-evidence seeding, fact loading, EXPLAINs, and endpoint materialization before
-the schema is dropped. Each selection retains its production-shaped fact
-materialization `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`, rows scanned, and
-rows returned.
+legacy army-read section bulk-loads bounded synthetic facts after that
+production seed. The dedicated `army-analytics` mode seeds exactly 12,500
+members across 28 days, eight current facts per member/day/lens, 28,000 missing
+trophies per lens, 28 identical fresh/confirmed Top-1,000 snapshots, and 27
+troop keys. It executes one timed forced miss (required to stay below five seconds), then
+five untimed warmups plus 100 timed cache-hit calls for each of `top-1000`,
+`trophies-5000-9999`, and `streak-top-1000` in both lenses through
+`ApiDatabase.get_army_analytics`. The forced miss is excluded from the warmed
+p95. Cache misses use the measured 256 MiB query-local PostgreSQL work-memory
+ceiling. Their SQL is captured and replayed under the same setting outside timing
+with `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`. The retained result includes
+selected/scanned/returned rows, p95 and RSS, PostgreSQL settings, host memory,
+forced-miss and whole-run swap/OOM deltas, and the four-lane 25,024-observation mixed-load gate plus signed account
+reads. A p95, overlap, queue, or five-minute violation is retained in the JSON
+artifact and exits nonzero; no index or cache is added by the runner.
 
 Results include source/dirty state, runner and migration hashes,
 configuration, optional images, PostgreSQL WAL and relation sizes, SQL calls,
@@ -115,5 +132,7 @@ CLASHLENS_TEST_DATABASE_URL=postgresql://... \\
 Without `CLASHLENS_TEST_DATABASE_URL`, PostgreSQL checks are skipped. A skip is
 not performance acceptance. Database and collector-probe failures return a
 short nonzero diagnostic and do not emit a partial JSON result. Retain real
-Fedora target-host outputs for review; the runner does not assert the 200 ms
-p95 target from one local sample.
+Fedora target-host outputs for review. The dedicated `army-analytics` mode
+asserts the warmed 200 ms p95, forced-miss five-second bound, four-lane overlap,
+queue-drain, and five-minute gates;
+its output is retained before a hard-gate failure returns nonzero.

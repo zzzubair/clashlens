@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter, OrderedDict
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from threading import Lock
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -28,6 +30,239 @@ from .verification import KeyAction, VerificationOutcome
 API_CONTRACT_VERSION = 2
 VERIFICATION_RESERVATION_SECONDS = 45
 PLAYER_SCREEN_READY_VERSION = "api-player-daily-log-v3"
+ARMY_ANALYTICS_CACHE_CAPACITY = 128
+ARMY_ANALYTICS_QUERY_WORK_MEM = "256MB"
+
+
+def _build_troops_result_from_sql(
+    summary: tuple[Any, ...], selection: ArmyAnalyticsSelection
+) -> dict[str, Any]:
+    """Build the public troops result from PostgreSQL-owned aggregates."""
+    (
+        total_facts,
+        usable_count,
+        unknown_affected,
+        unknown_occurrences,
+        disagreement_count,
+        state_counts,
+        aggregate_rows,
+    ) = summary
+    states: Counter[str] = Counter(
+        {_text(key): int(value) for key, value in (state_counts or {}).items()}
+    )
+    army_states = {
+        "fully_decoded": states.pop("decoded", 0),
+        "partial": states.pop("partial", 0),
+        "missing_code": states.pop("missing_army_share_code", 0),
+        "empty_code": states.pop("empty_army_share_code", 0),
+        "malformed": states.pop("malformed", 0),
+        "structurally_unsupported": states.pop("structurally_unsupported", 0),
+        **dict(sorted(states.items())),
+    }
+
+    rows = []
+    for aggregate in aggregate_rows or []:
+        key = _text(aggregate["key"])
+        sample = int(aggregate["usage_count"])
+        star_counts = [int(value) for value in aggregate["star_counts"]]
+        star_rates = [count / sample if sample else 0 for count in star_counts]
+        stars = int(aggregate["stars"])
+        destruction = int(aggregate["destruction"])
+        typed_ids = key.replace("cc:", "").replace("|", ",").split(",")
+
+        def item_label(item: str) -> str:
+            typed_id = item.split("x", 1)[0]
+            name = catalog_name(typed_id)
+            if name is not None:
+                return name
+            suffix = typed_id.split(":", 1)[1] if ":" in typed_id else typed_id
+            return f"Unknown ID {suffix}"
+
+        rows.append(
+            {
+                "key": key,
+                "label": " + ".join(item_label(item) for item in typed_ids),
+                "usage_count": sample,
+                "usage_denominator": int(usable_count),
+                "usage_rate": sample / usable_count if usable_count else 0,
+                "star_counts": star_counts,
+                "star_rates": star_rates,
+                "three_star_rate": star_rates[3],
+                "average_stars": stars / sample if sample else 0,
+                "average_destruction": destruction / sample if sample else 0,
+                "unknown_excluded_attacks": 0,
+            }
+        )
+    sort_field = {
+        "usage-rate": "usage_rate",
+        "usage-count": "usage_count",
+        "three-star-rate": "three_star_rate",
+        "average-stars": "average_stars",
+        "average-destruction": "average_destruction",
+    }[selection.sort]
+    rows.sort(key=lambda row: (-float(row[sort_field]), row["key"]))
+    return {
+        "kind": "army-analytics",
+        "total_attacks": int(total_facts),
+        "usable_army_sample": int(usable_count),
+        "army_states": army_states,
+        "army_states_sum_confirmed": sum(army_states.values()) == int(total_facts),
+        "unknown_affected_attacks": int(unknown_affected),
+        "unknown_component_occurrences": int(unknown_occurrences),
+        "perspective_disagreement_count": int(disagreement_count),
+        "missing_trophy_membership_evidence": 0,
+        "collection_coverage": {
+            "state": "complete",
+            "completed_days": selection.end_day - selection.start_day + 1,
+        },
+        "freshness": {"state": "frozen"},
+        "versions": {
+            "decoder": "army-decoder-v2",
+            "catalog": CATALOG_VERSION,
+            "analytics": "army-analytics-v2",
+        },
+        "rows": rows,
+    }
+
+
+def _selected_source_hash(
+    connection: Any,
+    *,
+    fact_filters: list[str],
+    fact_params: list[Any],
+    requested: dict[str, str | int],
+    snapshot_ids: list[int],
+) -> str:
+    """Hash ordered selected evidence in bounded PostgreSQL-built chunks."""
+    digest = hashlib.sha256()
+    digest.update(b'{"facts":[')
+    chunks = connection.execute(
+        f"""
+        SELECT string_agg(
+                   '[' || id::text || ',"' || input_hash || '"]',
+                   ',' ORDER BY battle_id
+               )
+        FROM army_analytics_battle_facts
+        WHERE {" AND ".join(fact_filters)}
+        GROUP BY (battle_id - 1) / 10000
+        ORDER BY (battle_id - 1) / 10000
+        """,
+        tuple(fact_params),
+    )
+    separator = b""
+    for (chunk,) in chunks:
+        digest.update(separator)
+        digest.update(_text(chunk).encode())
+        separator = b","
+    digest.update(b'],"selection":')
+    digest.update(
+        json.dumps(requested, sort_keys=True, separators=(",", ":")).encode()
+    )
+    digest.update(b',"snapshots":')
+    digest.update(json.dumps(snapshot_ids, separators=(",", ":")).encode())
+    digest.update(b"}")
+    return digest.hexdigest()
+
+
+def _query_troops_aggregates(
+    connection: Any,
+    *,
+    fact_filters: list[str],
+    fact_params: list[Any],
+    requested: dict[str, str | int],
+    snapshot_ids: list[int],
+    selection: ArmyAnalyticsSelection,
+) -> tuple[dict[str, Any], str]:
+    """Aggregate the troops projection and source identity inside PostgreSQL."""
+    fact_where = " AND ".join(fact_filters)
+    state_rows = connection.execute(
+        f"""
+        SELECT army_state, count(*),
+               count(*) FILTER (
+                   WHERE CASE
+                       WHEN jsonb_typeof(unresolved_components) = 'array'
+                       THEN jsonb_array_length(unresolved_components) > 0
+                       ELSE false
+                   END
+               ),
+               COALESCE(sum(
+                   CASE WHEN jsonb_typeof(unresolved_components) = 'array'
+                        THEN jsonb_array_length(unresolved_components) ELSE 0 END
+               ), 0),
+               count(*) FILTER (WHERE perspective_disagreement)
+        FROM army_analytics_battle_facts
+        WHERE {fact_where}
+        GROUP BY army_state
+        """,
+        tuple(fact_params),
+    ).fetchall()
+    aggregate_rows = connection.execute(
+        f"""
+        SELECT component.key, count(*),
+               count(*) FILTER (WHERE selected.stars = 0),
+               count(*) FILTER (WHERE selected.stars = 1),
+               count(*) FILTER (WHERE selected.stars = 2),
+               count(*) FILTER (WHERE selected.stars = 3),
+               sum(selected.stars),
+               sum(selected.destruction_percentage)
+        FROM army_analytics_battle_facts AS selected
+        CROSS JOIN LATERAL (
+            SELECT DISTINCT
+                   CASE jsonb_typeof(value -> 0)
+                       WHEN 'boolean' THEN CASE value ->> 0
+                           WHEN 'true' THEN 'True' ELSE 'False' END
+                       WHEN 'null' THEN 'None'
+                       ELSE value ->> 0
+                   END AS key
+            FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(selected.home_troops) = 'array'
+                     THEN selected.home_troops ELSE '[]'::jsonb END
+            ) AS item(value)
+            WHERE CASE WHEN jsonb_typeof(value) = 'array'
+                       THEN jsonb_array_length(value) > 0
+                       ELSE false END
+        ) AS component
+        WHERE {fact_where}
+          AND selected.army_state IN ('decoded', 'partial')
+        GROUP BY component.key
+        ORDER BY component.key
+        """,
+        tuple(fact_params),
+    ).fetchall()
+    state_counts = {_text(row[0]): int(row[1]) for row in state_rows}
+    summary = (
+        sum(state_counts.values()),
+        sum(
+            count
+            for state, count in state_counts.items()
+            if state in {"decoded", "partial"}
+        ),
+        sum(int(row[2]) for row in state_rows),
+        sum(int(row[3]) for row in state_rows),
+        sum(int(row[4]) for row in state_rows),
+        state_counts,
+        [
+            {
+                "key": _text(row[0]),
+                "usage_count": int(row[1]),
+                "star_counts": [int(value) for value in row[2:6]],
+                "stars": int(row[6]),
+                "destruction": int(row[7]),
+            }
+            for row in aggregate_rows
+        ],
+    )
+    return (
+        _build_troops_result_from_sql(summary, selection),
+        _selected_source_hash(
+            connection,
+            fact_filters=fact_filters,
+            fact_params=fact_params,
+            requested=requested,
+            snapshot_ids=snapshot_ids,
+        ),
+    )
+
 
 _ARMY_ANALYTICS_COMPONENT_COLUMN = {
     "troops": "home_troops",
@@ -92,11 +327,17 @@ class ApiDatabase:
         min_size: int = 1,
         max_size: int = 8,
         timeout_seconds: float = 5.0,
+        army_cache_capacity: int = ARMY_ANALYTICS_CACHE_CAPACITY,
     ) -> None:
         if min_size < 0 or max_size < 1 or min_size > max_size:
             raise ValueError("API database pool bounds are invalid")
+        if army_cache_capacity < 0:
+            raise ValueError("army analytics cache capacity is invalid")
         if not 0 < timeout_seconds <= 30:
             raise ValueError("API database pool timeout is invalid")
+        self._army_cache_capacity = army_cache_capacity
+        self._army_cache: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
+        self._army_cache_lock = Lock()
         self.pool = ConnectionPool(
             conninfo=database_url,
             min_size=min_size,
@@ -107,6 +348,25 @@ class ApiDatabase:
 
     def close(self) -> None:
         self.pool.close()
+
+    def _army_cache_get(self, key: tuple[Any, ...]) -> dict[str, Any] | None:
+        if not self._army_cache_capacity:
+            return None
+        with self._army_cache_lock:
+            result = self._army_cache.pop(key, None)
+            if result is None:
+                return None
+            self._army_cache[key] = result
+            return deepcopy(result)
+
+    def _army_cache_put(self, key: tuple[Any, ...], result: dict[str, Any]) -> None:
+        if not self._army_cache_capacity:
+            return
+        with self._army_cache_lock:
+            self._army_cache[key] = deepcopy(result)
+            self._army_cache.move_to_end(key)
+            while len(self._army_cache) > self._army_cache_capacity:
+                self._army_cache.popitem(last=False)
 
     def is_ready(
         self, *, expected_contract_version: int = API_CONTRACT_VERSION
@@ -1824,18 +2084,20 @@ class ApiDatabase:
                     (resolved.season, resolved.start_day, resolved.end_day),
                 ).fetchall()
                 day_starts = {int(row[0]): row[1] for row in day_rows}
-                completed_days = {
-                    int(row[0])
-                    for row in connection.execute(
-                        """
-                        SELECT season_day_number
-                        FROM army_analytics_completed_days
-                        WHERE official_season_id = %s
-                          AND season_day_number BETWEEN %s AND %s
-                        """,
-                        (resolved.season, resolved.start_day, resolved.end_day),
-                    ).fetchall()
-                }
+                completed_day_rows = connection.execute(
+                    """
+                    SELECT season_day_number, fact_input_hash
+                    FROM army_analytics_completed_days
+                    WHERE official_season_id = %s
+                      AND season_day_number BETWEEN %s AND %s
+                    ORDER BY season_day_number
+                    """,
+                    (resolved.season, resolved.start_day, resolved.end_day),
+                ).fetchall()
+                completed_days = {int(row[0]) for row in completed_day_rows}
+                completed_day_signature = tuple(
+                    (int(row[0]), _text(row[1])) for row in completed_day_rows
+                )
                 missing_days = [
                     day
                     for day in range(resolved.start_day, resolved.end_day + 1)
@@ -1849,30 +2111,12 @@ class ApiDatabase:
                 snapshot_ids: list[int] = []
                 missing_trophies = 0
                 member_ids: list[int] | None = None
+                streak_version_digest: str | None = None
                 cohort_evidence: dict[str, int] | None = None
                 minimum: int | None = None
                 maximum: int | None = None
                 if population.startswith("trophies-"):
                     minimum, maximum = map(int, population.split("-")[1:])
-                    missing_trophies = int(
-                        connection.execute(
-                            """
-                            SELECT count(*) FILTER (
-                                       WHERE battle_time_trophies IS NULL
-                                   )
-                            FROM army_analytics_battle_facts
-                            WHERE official_season_id=%s
-                              AND season_day_number BETWEEN %s AND %s
-                              AND lens=%s AND is_current
-                            """,
-                            (
-                                resolved.season,
-                                resolved.start_day,
-                                resolved.end_day,
-                                resolved.lens,
-                            ),
-                        ).fetchone()[0]
-                    )
                 else:
                     streak = population.startswith("streak-top-")
                     boundary_by_day = {
@@ -1959,35 +2203,58 @@ class ApiDatabase:
                         # Shielded-day evidence for confirmed streak members:
                         # one row per member-day whose current ranked-day
                         # version inferred a shield.
-                        if member_ids:
-                            shielded_player_days = int(
-                                connection.execute(
-                                    """
-                                    SELECT count(*) FROM (
-                                        SELECT DISTINCT ON (rv.player_id,
-                                                            rv.ranked_day_start)
-                                               rv.shield_state
+                        if member_ids is not None:
+                            version_row = connection.execute(
+                                """
+                                WITH selected_days AS (
+                                    SELECT unnest(%s::timestamptz[]) AS ranked_day_start
+                                ), current_versions AS (
+                                    SELECT selected.player_id, days.ranked_day_start,
+                                           current_version.id, current_version.shield_state
+                                    FROM unnest(%s::bigint[]) AS selected(player_id)
+                                    CROSS JOIN selected_days AS days
+                                    LEFT JOIN LATERAL (
+                                        SELECT rv.id, rv.shield_state
                                         FROM ranked_day_versions AS rv
-                                        WHERE rv.player_id = ANY(%s::bigint[])
-                                          AND rv.ranked_day_start =
-                                              ANY(%s::timestamptz[])
-                                        ORDER BY rv.player_id, rv.ranked_day_start,
-                                                 rv.version DESC
-                                    ) AS current_version
-                                    WHERE shield_state = 'inferred_shielded'
-                                    """,
-                                    (
-                                        sorted(member_ids),
-                                        [
-                                            day_starts[day]
-                                            for day in range(
-                                                resolved.start_day,
-                                                resolved.end_day + 1,
-                                            )
-                                        ],
-                                    ),
-                                ).fetchone()[0]
-                            )
+                                        WHERE rv.player_id = selected.player_id
+                                          AND rv.ranked_day_start = days.ranked_day_start
+                                        ORDER BY rv.version DESC
+                                        LIMIT 1
+                                    ) AS current_version ON true
+                                )
+                                SELECT count(*) FILTER (
+                                           WHERE shield_state = 'inferred_shielded'
+                                       ),
+                                       encode(
+                                           sha256(convert_to(
+                                               COALESCE(
+                                                   string_agg(
+                                                       COALESCE(id::text, 'null') ||
+                                                       ':' || COALESCE(
+                                                           shield_state, 'null'
+                                                       ),
+                                                       ',' ORDER BY player_id,
+                                                                   ranked_day_start
+                                                   ), ''
+                                               ), 'UTF8'
+                                           )), 'hex'
+                                       )
+                                FROM current_versions
+                                """,
+                                (
+                                    [
+                                        day_starts[day]
+                                        for day in range(
+                                            resolved.start_day,
+                                            resolved.end_day + 1,
+                                        )
+                                    ],
+                                    sorted(member_ids),
+                                ),
+                            ).fetchone()
+                            assert version_row is not None
+                            shielded_player_days = int(version_row[0])
+                            streak_version_digest = _text(version_row[1])
                         stale_or_uncertain_members = int(
                             connection.execute(
                                 """
@@ -2029,6 +2296,45 @@ class ApiDatabase:
                         "streak_excluded_players": excluded_players,
                         "shielded_player_days": shielded_player_days,
                     }
+                cache_key: tuple[Any, ...] = (
+                    json.dumps(
+                        selection.as_dict(), sort_keys=True, separators=(",", ":")
+                    ),
+                    json.dumps(
+                        resolved.as_dict(), sort_keys=True, separators=(",", ":")
+                    ),
+                    completed_day_signature,
+                    tuple(member_ids) if member_ids is not None else None,
+                    tuple(zip(snapshot_ids, snapshot_versions)),
+                    streak_version_digest,
+                )
+                cached = self._army_cache_get(cache_key)
+                if cached is not None:
+                    return cached
+                if resolved.category == "troops":
+                    connection.execute(
+                        f"SET LOCAL work_mem = '{ARMY_ANALYTICS_QUERY_WORK_MEM}'"
+                    )
+                if population.startswith("trophies-"):
+                    missing_trophies = int(
+                        connection.execute(
+                            """
+                            SELECT count(*) FILTER (
+                                       WHERE battle_time_trophies IS NULL
+                                   )
+                            FROM army_analytics_battle_facts
+                            WHERE official_season_id=%s
+                              AND season_day_number BETWEEN %s AND %s
+                              AND lens=%s AND is_current
+                            """,
+                            (
+                                resolved.season,
+                                resolved.start_day,
+                                resolved.end_day,
+                                resolved.lens,
+                            ),
+                        ).fetchone()[0]
+                    )
                 component_column = _ARMY_ANALYTICS_COMPONENT_COLUMN[resolved.category]
                 fact_filters = [
                     "official_season_id = %s",
@@ -2049,52 +2355,76 @@ class ApiDatabase:
                 else:
                     fact_filters.append("population_player_id = ANY(%s::bigint[])")
                     fact_params.append(member_ids)
-                facts_rows = connection.execute(
-                    f"""
-                    SELECT id, battle_id, population_player_id,
-                           battle_time_trophies, stars, destruction_percentage,
-                           army_state, failure_reason,
-                           {component_column} AS component_payload,
-                           unresolved_components, perspective_disagreement,
-                           input_hash, source_ranked_day_version_id
-                    FROM army_analytics_battle_facts
-                    WHERE {" AND ".join(fact_filters)}
-                    ORDER BY battle_id
-                    """,
-                    tuple(fact_params),
-                ).fetchall()
-                facts = []
-                for row in facts_rows:
-                    components = {
-                        "home_troops": [],
-                        "spells": [],
-                        "siege": [],
-                        "cc_troops": [],
-                        "heroes": [],
-                    }
-                    components[component_column] = row[8]
-                    facts.append(
-                        {
-                            "id": int(row[0]),
-                            "battle_id": int(row[1]),
-                            "population_player_id": int(row[2]),
-                            "battle_time_trophies": (
-                                None if row[3] is None else int(row[3])
-                            ),
-                            "stars": int(row[4]),
-                            "destruction_percentage": int(row[5]),
-                            "army_state": _text(row[6]),
-                            "failure_reason": None
-                            if row[7] is None
-                            else _text(row[7]),
-                            **components,
-                            "unresolved_components": row[9],
-                            "perspective_disagreement": bool(row[10]),
-                            "input_hash": _text(row[11]),
-                            "source_ranked_day_version_id": int(row[12]),
-                        }
+                if resolved.category == "troops":
+                    result, source_hash = _query_troops_aggregates(
+                        connection,
+                        fact_filters=fact_filters,
+                        fact_params=fact_params,
+                        requested=requested,
+                        snapshot_ids=snapshot_ids,
+                        selection=resolved,
                     )
-                result = build_army_result(facts, resolved)
+                else:
+                    facts_rows = connection.execute(
+                        f"""
+                        SELECT id, battle_id, population_player_id,
+                               battle_time_trophies, stars, destruction_percentage,
+                               army_state, failure_reason,
+                               {component_column} AS component_payload,
+                               unresolved_components, perspective_disagreement,
+                               input_hash, source_ranked_day_version_id
+                        FROM army_analytics_battle_facts
+                        WHERE {" AND ".join(fact_filters)}
+                        ORDER BY battle_id
+                        """,
+                        tuple(fact_params),
+                    ).fetchall()
+                    facts = []
+                    for row in facts_rows:
+                        components = {
+                            "home_troops": [],
+                            "spells": [],
+                            "siege": [],
+                            "cc_troops": [],
+                            "heroes": [],
+                        }
+                        components[component_column] = row[8]
+                        facts.append(
+                            {
+                                "id": int(row[0]),
+                                "battle_id": int(row[1]),
+                                "population_player_id": int(row[2]),
+                                "battle_time_trophies": (
+                                    None if row[3] is None else int(row[3])
+                                ),
+                                "stars": int(row[4]),
+                                "destruction_percentage": int(row[5]),
+                                "army_state": _text(row[6]),
+                                "failure_reason": None
+                                if row[7] is None
+                                else _text(row[7]),
+                                **components,
+                                "unresolved_components": row[9],
+                                "perspective_disagreement": bool(row[10]),
+                                "input_hash": _text(row[11]),
+                                "source_ranked_day_version_id": int(row[12]),
+                            }
+                        )
+                    result = build_army_result(facts, resolved)
+                    source_hash = hashlib.sha256(
+                        json.dumps(
+                            {
+                                "selection": requested,
+                                "facts": [
+                                    (fact["id"], fact["input_hash"])
+                                    for fact in facts
+                                ],
+                                "snapshots": snapshot_ids,
+                            },
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode()
+                    ).hexdigest()
                 result["missing_trophy_membership_evidence"] = missing_trophies
                 if cohort_evidence is None:
                     cohort_evidence = {
@@ -2108,19 +2438,6 @@ class ApiDatabase:
                     "legend_days": [resolved.start_day, resolved.end_day],
                     "snapshot_versions": snapshot_versions,
                 }
-                source_hash = hashlib.sha256(
-                    json.dumps(
-                        {
-                            "selection": requested,
-                            "facts": [
-                                (fact["id"], fact["input_hash"]) for fact in facts
-                            ],
-                            "snapshots": snapshot_ids,
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ).encode()
-                ).hexdigest()
                 # The result hash covers both the aggregates and the retained
                 # source-evidence hash, so corrected inputs always change the
                 # published identity.
@@ -2150,7 +2467,8 @@ class ApiDatabase:
                 result["publication_identity"] = (
                     f"army-publication-{publication_key[:24]}-{result_hash[:16]}"
                 )
-                return result
+                self._army_cache_put(cache_key, result)
+                return deepcopy(result)
 
     def get_battle_army(
         self, battle_id: int, perspective: str
