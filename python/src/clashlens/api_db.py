@@ -29,6 +29,20 @@ API_CONTRACT_VERSION = 2
 VERIFICATION_RESERVATION_SECONDS = 45
 PLAYER_SCREEN_READY_VERSION = "api-player-daily-log-v3"
 
+_ARMY_ANALYTICS_COMPONENT_COLUMN = {
+    "troops": "home_troops",
+    "spells": "spells",
+    "siege": "siege",
+    "cc-troops": "cc_troops",
+    "cc-composition": "cc_troops",
+    "heroes": "heroes",
+    "pets": "heroes",
+    "equipment": "heroes",
+    "equipment-for-hero": "heroes",
+    "hero-pet": "heroes",
+    "hero-equipment": "heroes",
+}
+
 
 @dataclass(frozen=True, slots=True)
 class AccountContext:
@@ -1830,63 +1844,35 @@ class ApiDatabase:
                 if missing_days:
                     raise ArmyAnalyticsUnavailable(missing_days)
                 requested = resolved.as_dict()
-                facts_rows = connection.execute(
-                    """
-                    SELECT id, battle_id, population_player_id, battle_time_trophies,
-                           stars, destruction_percentage, army_state, failure_reason,
-                           home_troops, spells, siege, cc_troops, heroes,
-                           unresolved_components, perspective_disagreement, input_hash,
-                           source_ranked_day_version_id
-                    FROM army_analytics_battle_facts
-                    WHERE official_season_id=%s AND season_day_number BETWEEN %s AND %s
-                      AND lens=%s AND is_current
-                    ORDER BY battle_id
-                    """,
-                    (
-                        resolved.season,
-                        resolved.start_day,
-                        resolved.end_day,
-                        resolved.lens,
-                    ),
-                ).fetchall()
-                facts = [
-                    {
-                        "id": int(row[0]),
-                        "battle_id": int(row[1]),
-                        "population_player_id": int(row[2]),
-                        "battle_time_trophies": None if row[3] is None else int(row[3]),
-                        "stars": int(row[4]),
-                        "destruction_percentage": int(row[5]),
-                        "army_state": _text(row[6]),
-                        "failure_reason": None if row[7] is None else _text(row[7]),
-                        "home_troops": row[8],
-                        "spells": row[9],
-                        "siege": row[10],
-                        "cc_troops": row[11],
-                        "heroes": row[12],
-                        "unresolved_components": row[13],
-                        "perspective_disagreement": bool(row[14]),
-                        "input_hash": _text(row[15]),
-                        "source_ranked_day_version_id": int(row[16]),
-                    }
-                    for row in facts_rows
-                ]
                 population = resolved.population
                 snapshot_versions: list[int] = []
                 snapshot_ids: list[int] = []
                 missing_trophies = 0
+                member_ids: list[int] | None = None
                 cohort_evidence: dict[str, int] | None = None
+                minimum: int | None = None
+                maximum: int | None = None
                 if population.startswith("trophies-"):
                     minimum, maximum = map(int, population.split("-")[1:])
-                    missing_trophies = sum(
-                        fact["battle_time_trophies"] is None for fact in facts
+                    missing_trophies = int(
+                        connection.execute(
+                            """
+                            SELECT count(*) FILTER (
+                                       WHERE battle_time_trophies IS NULL
+                                   )
+                            FROM army_analytics_battle_facts
+                            WHERE official_season_id=%s
+                              AND season_day_number BETWEEN %s AND %s
+                              AND lens=%s AND is_current
+                            """,
+                            (
+                                resolved.season,
+                                resolved.start_day,
+                                resolved.end_day,
+                                resolved.lens,
+                            ),
+                        ).fetchone()[0]
                     )
-                    facts = [
-                        fact
-                        for fact in facts
-                        if fact["battle_time_trophies"] is not None
-                        and minimum <= fact["battle_time_trophies"] <= maximum
-                    ]
                 else:
                     streak = population.startswith("streak-top-")
                     boundary_by_day = {
@@ -1948,12 +1934,7 @@ class ApiDatabase:
                             """,
                             (snapshot_ids[0], low, high),
                         ).fetchall()
-                    member_ids = {int(row[0]) for row in members}
-                    facts = [
-                        fact
-                        for fact in facts
-                        if fact["population_player_id"] in member_ids
-                    ]
+                    member_ids = sorted({int(row[0]) for row in members})
                     excluded_players = 0
                     shielded_player_days = 0
                     if population.startswith("streak-top-"):
@@ -1974,7 +1955,7 @@ class ApiDatabase:
                                 (snapshot_ids, limit),
                             ).fetchall()
                         }
-                        excluded_players = len(any_snapshot_ids - member_ids)
+                        excluded_players = len(any_snapshot_ids - set(member_ids))
                         # Shielded-day evidence for confirmed streak members:
                         # one row per member-day whose current ranked-day
                         # version inferred a shield.
@@ -2048,6 +2029,71 @@ class ApiDatabase:
                         "streak_excluded_players": excluded_players,
                         "shielded_player_days": shielded_player_days,
                     }
+                component_column = _ARMY_ANALYTICS_COMPONENT_COLUMN[resolved.category]
+                fact_filters = [
+                    "official_season_id = %s",
+                    "season_day_number BETWEEN %s AND %s",
+                    "lens = %s",
+                    "is_current",
+                ]
+                fact_params: list[Any] = [
+                    resolved.season,
+                    resolved.start_day,
+                    resolved.end_day,
+                    resolved.lens,
+                ]
+                if member_ids is None:
+                    assert minimum is not None and maximum is not None
+                    fact_filters.append("battle_time_trophies BETWEEN %s AND %s")
+                    fact_params.extend((minimum, maximum))
+                else:
+                    fact_filters.append("population_player_id = ANY(%s::bigint[])")
+                    fact_params.append(member_ids)
+                facts_rows = connection.execute(
+                    f"""
+                    SELECT id, battle_id, population_player_id,
+                           battle_time_trophies, stars, destruction_percentage,
+                           army_state, failure_reason,
+                           {component_column} AS component_payload,
+                           unresolved_components, perspective_disagreement,
+                           input_hash, source_ranked_day_version_id
+                    FROM army_analytics_battle_facts
+                    WHERE {" AND ".join(fact_filters)}
+                    ORDER BY battle_id
+                    """,
+                    tuple(fact_params),
+                ).fetchall()
+                facts = []
+                for row in facts_rows:
+                    components = {
+                        "home_troops": [],
+                        "spells": [],
+                        "siege": [],
+                        "cc_troops": [],
+                        "heroes": [],
+                    }
+                    components[component_column] = row[8]
+                    facts.append(
+                        {
+                            "id": int(row[0]),
+                            "battle_id": int(row[1]),
+                            "population_player_id": int(row[2]),
+                            "battle_time_trophies": (
+                                None if row[3] is None else int(row[3])
+                            ),
+                            "stars": int(row[4]),
+                            "destruction_percentage": int(row[5]),
+                            "army_state": _text(row[6]),
+                            "failure_reason": None
+                            if row[7] is None
+                            else _text(row[7]),
+                            **components,
+                            "unresolved_components": row[9],
+                            "perspective_disagreement": bool(row[10]),
+                            "input_hash": _text(row[11]),
+                            "source_ranked_day_version_id": int(row[12]),
+                        }
+                    )
                 result = build_army_result(facts, resolved)
                 result["missing_trophy_membership_evidence"] = missing_trophies
                 if cohort_evidence is None:
