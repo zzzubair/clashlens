@@ -1084,14 +1084,14 @@ def _measure_army_pair(
     try:
         # The forced miss is also the production query capture used by the
         # untimed EXPLAIN diagnostic pass; it is excluded from warmups/p95.
-        pressure_before = _memory_pressure()
+        pressure_before = _memory_pressure(connection_info)
         forced_started = time.perf_counter()
         with capture_sql_calls() as calls:
             first = database.get_army_analytics(
                 selection, now=BOUNDARY + timedelta(days=STEP5_DAYS + 1)
             )
         forced_miss_seconds = time.perf_counter() - forced_started
-        pressure_after = _memory_pressure()
+        pressure_after = _memory_pressure(connection_info)
         pressure_delta = _memory_pressure_delta(
             pressure_before, pressure_after
         )
@@ -1126,11 +1126,11 @@ def _measure_army_pair(
             "forced_miss_target_seconds": STEP5_FORCED_MISS_TARGET_SECONDS,
             "forced_miss_passed": (
                 forced_miss_seconds < STEP5_FORCED_MISS_TARGET_SECONDS
-                and pressure_delta["swap_used_bytes"] == 0
-                and pressure_before["oom_events_available"] == 1
-                and pressure_after["oom_events_available"] == 1
-                and pressure_delta["oom"] == 0
-                and pressure_delta["oom_kill"] == 0
+                and pressure_before["process_cgroup_available"] == 1
+                and pressure_after["process_cgroup_available"] == 1
+                and pressure_before["database_cgroup_available"] == 1
+                and pressure_after["database_cgroup_available"] == 1
+                and not any(pressure_delta.values())
             ),
             "forced_miss_memory_before": pressure_before,
             "forced_miss_memory_after": pressure_after,
@@ -2463,7 +2463,7 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
     """Run the fixed PR 2 army protocol in one isolated production schema."""
     from domain_test_support import domain_database
 
-    pressure_before = _memory_pressure()
+    pressure_before = _memory_pressure(database_url)
     started = time.perf_counter()
     cpu_start = time.process_time()
     specs = _army_selection_specs()
@@ -2477,7 +2477,7 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
         overlap = _run_step5_overlap(connection_info, archive, specs)
         database = _db_snapshot(connection_info, wal_start, statement_start)
         postgres = _postgres_provenance(connection_info)
-        pressure_after = _memory_pressure()
+        pressure_after = _memory_pressure(database_url)
         pressure_delta = _memory_pressure_delta(
             pressure_before, pressure_after
         )
@@ -2491,8 +2491,24 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
         hard_failures = [
             f"{item['selection']}/{item['lens']} forced miss {item['forced_miss_seconds']:.3f}s >= {STEP5_FORCED_MISS_TARGET_SECONDS}s"
             for item in reads
-            if not item["forced_miss_passed"]
+            if item["forced_miss_seconds"] >= STEP5_FORCED_MISS_TARGET_SECONDS
         ]
+        for item in reads:
+            before = item["forced_miss_memory_before"]
+            after = item["forced_miss_memory_after"]
+            if any(
+                pressure["process_cgroup_available"] != 1
+                or pressure["database_cgroup_available"] != 1
+                for pressure in (before, after)
+            ):
+                hard_failures.append(
+                    f"{item['selection']}/{item['lens']} forced miss cgroup counters unavailable"
+                )
+            elif any(item["forced_miss_memory_delta"].values()):
+                hard_failures.append(
+                    f"{item['selection']}/{item['lens']} forced miss memory pressure increased: "
+                    f"{item['forced_miss_memory_delta']}"
+                )
         hard_failures.extend(
             f"{item['selection']}/{item['lens']} p95 {item['p95_ms']:.3f} >= {STEP5_P95_TARGET_MS}"
             for item in reads
@@ -2502,10 +2518,12 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
         if active_queue_rows:
             hard_failures.append(f"queue residue: {active_queue_rows}")
         if (
-            pressure_before["oom_events_available"] != 1
-            or pressure_after["oom_events_available"] != 1
+            pressure_before["process_cgroup_available"] != 1
+            or pressure_after["process_cgroup_available"] != 1
+            or pressure_before["database_cgroup_available"] != 1
+            or pressure_after["database_cgroup_available"] != 1
         ):
-            hard_failures.append("cgroup OOM counters were unavailable")
+            hard_failures.append("process or database cgroup counters were unavailable")
         if any(pressure_delta.values()):
             hard_failures.append(
                 f"memory pressure increased during workload: {pressure_delta}"
@@ -2639,38 +2657,72 @@ def _host_provenance() -> dict[str, Any]:
     }
 
 
-def _memory_pressure() -> dict[str, int]:
+def _parse_memory_events(value: str) -> dict[str, int]:
+    return {
+        key: int(count)
+        for key, count in (line.split() for line in value.splitlines())
+    }
+
+
+def _memory_pressure(database_url: str) -> dict[str, int]:
+    import psycopg
+
     host = _host_provenance()
-    events: dict[str, int] = {}
+    process_events: dict[str, int] = {}
+    process_swap = 0
     try:
         cgroup = next(
             line.split(":", 2)[2]
             for line in Path("/proc/self/cgroup").read_text().splitlines()
             if line.startswith("0::")
         )
-        event_path = Path("/sys/fs/cgroup") / cgroup.lstrip("/") / "memory.events"
-        events = {
-            key: int(value)
-            for key, value in (
-                line.split() for line in event_path.read_text().splitlines()
-            )
-        }
+        cgroup_path = Path("/sys/fs/cgroup") / cgroup.lstrip("/")
+        process_events = _parse_memory_events(
+            (cgroup_path / "memory.events").read_text()
+        )
+        process_swap = int((cgroup_path / "memory.swap.current").read_text())
     except (OSError, StopIteration, ValueError):
-        events = {}
+        process_events = {}
+    database_events: dict[str, int] = {}
+    database_swap = 0
+    try:
+        with psycopg.connect(database_url) as connection:
+            row = connection.execute(
+                """
+                SELECT pg_read_file('/sys/fs/cgroup/memory.events'),
+                       pg_read_file('/sys/fs/cgroup/memory.swap.current')
+                """
+            ).fetchone()
+        database_events = _parse_memory_events(_text(row[0]))
+        database_swap = int(_text(row[1]))
+    except (psycopg.Error, ValueError):
+        database_events = {}
     return {
-        "swap_used_bytes": int(host["swap"]["total_used_bytes"]),
-        "oom_events_available": int(bool(events)),
-        "oom": events.get("oom", 0),
-        "oom_kill": events.get("oom_kill", 0),
+        "host_swap_used_bytes": int(host["swap"]["total_used_bytes"]),
+        "process_cgroup_available": int(bool(process_events)),
+        "process_swap_used_bytes": process_swap,
+        "process_oom": process_events.get("oom", 0),
+        "process_oom_kill": process_events.get("oom_kill", 0),
+        "database_cgroup_available": int(bool(database_events)),
+        "database_swap_used_bytes": database_swap,
+        "database_oom": database_events.get("oom", 0),
+        "database_oom_kill": database_events.get("oom_kill", 0),
     }
 
 
 def _memory_pressure_delta(
     before: dict[str, int], after: dict[str, int]
 ) -> dict[str, int]:
+    keys = (
+        "process_swap_used_bytes",
+        "process_oom",
+        "process_oom_kill",
+        "database_swap_used_bytes",
+        "database_oom",
+        "database_oom_kill",
+    )
     return {
-        key: max(0, after.get(key, 0) - before.get(key, 0))
-        for key in ("swap_used_bytes", "oom", "oom_kill")
+        key: max(0, after.get(key, 0) - before.get(key, 0)) for key in keys
     }
 
 
@@ -3037,7 +3089,9 @@ def main(argv: list[str] | None = None) -> int:
             arguments.output.write_text(payload)
         else:
             print(payload, end="")
-        hard_failures = result.get("army_read_sample", {}).get("hard_failures", [])
+        hard_failures = (result.get("army_read_sample") or {}).get(
+            "hard_failures", []
+        )
         if hard_failures:
             print(
                 "performance runner: hard acceptance failures: " + "; ".join(hard_failures[:8]),

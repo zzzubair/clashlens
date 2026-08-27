@@ -26,7 +26,10 @@ pairs, and retains query plans and mixed-load evidence.
   120-second timeout.
 - A disposable UTF-8 PostgreSQL database where the supplied user can create
   schemas. Never point the runner at production. `SQL_ASCII` can return text as
-  bytes and is not representative of the deployed database.
+  bytes and is not representative of the deployed database. The fixed
+  `army-analytics` proof additionally requires containerized PostgreSQL and a
+  user with `pg_read_server_files` (or superuser) so its own cgroup swap/OOM
+  counters can be read from fixed `/sys/fs/cgroup` paths.
 - Enough local space for PostgreSQL WAL and relation growth. The default army
   workload in reset and correction modes is 1,000 facts; `--army-facts` accepts
   1 through 100,000. The `army-analytics` mode uses its fixed 5.6-million-fact

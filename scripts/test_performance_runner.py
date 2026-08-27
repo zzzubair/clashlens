@@ -118,10 +118,31 @@ class PerformanceRunnerTest(unittest.TestCase):
     def test_memory_pressure_delta_never_hides_increases(self) -> None:
         self.assertEqual(
             runner._memory_pressure_delta(
-                {"swap_used_bytes": 10, "oom": 2, "oom_kill": 1},
-                {"swap_used_bytes": 14, "oom": 3, "oom_kill": 1},
+                {
+                    "process_swap_used_bytes": 10,
+                    "process_oom": 2,
+                    "process_oom_kill": 1,
+                    "database_swap_used_bytes": 4,
+                    "database_oom": 0,
+                    "database_oom_kill": 0,
+                },
+                {
+                    "process_swap_used_bytes": 14,
+                    "process_oom": 3,
+                    "process_oom_kill": 1,
+                    "database_swap_used_bytes": 4,
+                    "database_oom": 0,
+                    "database_oom_kill": 1,
+                },
             ),
-            {"swap_used_bytes": 4, "oom": 1, "oom_kill": 0},
+            {
+                "process_swap_used_bytes": 4,
+                "process_oom": 1,
+                "process_oom_kill": 0,
+                "database_swap_used_bytes": 0,
+                "database_oom": 0,
+                "database_oom_kill": 1,
+            },
         )
 
     def test_writer_guard_rejects_row_at_a_time_sql(self) -> None:
