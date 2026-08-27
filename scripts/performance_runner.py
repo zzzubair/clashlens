@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Thread
+from threading import Event, Lock, Thread
 from typing import Any, ClassVar
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,8 +33,21 @@ MODES = (
     "duplicate-heavy",
     "mixed-backfill",
     "coordinator-12500",
+    "army-analytics",
 )
 DUPLICATE_EXECUTION_CAP = 25_024
+STEP5_MODE = "army-analytics"
+STEP5_POPULATION = 12_500
+STEP5_DAYS = 28
+STEP5_FACTS_PER_MEMBER_DAY = 8
+STEP5_SELECTED_MEMBERS = 1_000
+STEP5_MISSING_TROPHY_RATE = 100
+STEP5_WARMUPS = 5
+STEP5_REQUESTS = 100
+STEP5_ANALYTICS_LANES = 4
+STEP5_P95_TARGET_MS = 200.0
+STEP5_COLLECTION_LIMIT_SECONDS = 300.0
+STEP5_TROOP_KEYS = tuple(f"troop:{index}" for index in range(27))
 _LANES = 32
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
 DAY_START = BOUNDARY - timedelta(days=1)
@@ -92,6 +105,28 @@ def _bounded_writer_source_ready(
     return True
 
 
+def _bounded_army_source_ready(source: str) -> bool:
+    """Reject the pre-PR1 season/day/lens-only fact materialization shape."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "get_army_analytics"
+    ]
+    if len(functions) != 1:
+        return False
+    function_source = ast.get_source_segment(source, functions[0]) or ""
+    return (
+        "population_player_id = ANY(%s::bigint[])" in function_source
+        and "battle_time_trophies BETWEEN %s AND %s" in function_source
+        and "component_column" in function_source
+    )
+
+
 def post_fix_source_ready() -> bool:
     """Require coordinator ownership and bounded snapshot/army writers."""
     migrations = "\n".join(
@@ -131,6 +166,7 @@ class _ArchiveHandler(BaseHTTPRequestHandler):
     puts = 0
     conditional_puts = 0
     conflicts = 0
+    counter_lock: ClassVar[Lock] = Lock()
 
     def log_message(self, format: str, *arguments: object) -> None:
         del format, arguments
@@ -138,7 +174,8 @@ class _ArchiveHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         key = self.path.split("?", 1)[0].removeprefix("/evidence/")
         body = type(self).objects.get(key)
-        type(self).gets += 1
+        with type(self).counter_lock:
+            type(self).gets += 1
         if body is None:
             self.send_response(404)
             self.end_headers()
@@ -150,18 +187,21 @@ class _ArchiveHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_HEAD(self) -> None:
-        type(self).heads += 1
+        with type(self).counter_lock:
+            type(self).heads += 1
         self.send_response(200)
         self.end_headers()
 
     def do_PUT(self) -> None:
-        type(self).puts += 1
-        if self.headers.get("If-None-Match") == "*":
-            type(self).conditional_puts += 1
+        with type(self).counter_lock:
+            type(self).puts += 1
+            if self.headers.get("If-None-Match") == "*":
+                type(self).conditional_puts += 1
         key = self.path.split("?", 1)[0].removeprefix("/evidence/")
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         if key in type(self).objects:
-            type(self).conflicts += 1
+            with type(self).counter_lock:
+                type(self).conflicts += 1
             self.send_response(412)
             self.end_headers()
             return
@@ -193,6 +233,29 @@ def count_sql_calls() -> Iterator[list[int]]:
     finally:
         psycopg.Cursor.execute = original_cursor
         psycopg.Cursor.executemany = original_many
+
+
+@contextmanager
+def capture_sql_calls() -> Iterator[list[dict[str, Any]]]:
+    """Capture the SQL and parameters issued by one production API call."""
+    import copy
+
+    import psycopg
+
+    calls: list[dict[str, Any]] = []
+    original_cursor = psycopg.Cursor.execute
+
+    def cursor_execute(cursor: Any, query: Any, params: Any = None, *args: Any, **kwargs: Any) -> Any:
+        text = str(query).strip()
+        if text.upper().startswith(("SELECT", "WITH")):
+            calls.append({"sql": text, "params": copy.deepcopy(params)})
+        return original_cursor(cursor, query, params, *args, **kwargs)
+
+    psycopg.Cursor.execute = cursor_execute
+    try:
+        yield calls
+    finally:
+        psycopg.Cursor.execute = original_cursor
 
 
 @contextmanager
@@ -442,11 +505,52 @@ def _start_metrics(connection_info: str) -> tuple[str, int | None]:
 def _plan_counts(node: dict[str, Any]) -> tuple[int, int]:
     children = node.get("Plans", [])
     if not children:
-        scanned = int(node.get("Actual Rows", 0)) * int(node.get("Actual Loops", 1))
-        scanned += int(node.get("Rows Removed by Filter", 0))
+        loops = int(node.get("Actual Loops", 1))
+        scanned = int(node.get("Actual Rows", 0)) * loops
+        scanned += int(node.get("Rows Removed by Filter", 0)) * loops
         return scanned, int(node.get("Actual Rows", 0))
     scanned = sum(_plan_counts(child)[0] for child in children)
     return scanned, int(node.get("Actual Rows", 0))
+
+
+def _p95(values: list[float]) -> float:
+    if not values:
+        raise ValueError("p95 requires at least one measurement")
+    return sorted(values)[(len(values) * 95 + 99) // 100 - 1]
+
+
+def _army_selection_specs() -> tuple[dict[str, Any], ...]:
+    return tuple(
+        {
+            "selection": population,
+            "lens": lens,
+            "expected_facts": (
+                STEP5_SELECTED_MEMBERS * STEP5_DAYS * STEP5_FACTS_PER_MEMBER_DAY
+                if population != "trophies-5000-9999"
+                else STEP5_DAYS
+                * STEP5_POPULATION
+                * STEP5_FACTS_PER_MEMBER_DAY
+                * (STEP5_MISSING_TROPHY_RATE - 1)
+                // STEP5_MISSING_TROPHY_RATE
+            ),
+        }
+        for population in ("top-1000", "trophies-5000-9999", "streak-top-1000")
+        for lens in ("offense", "defense")
+    )
+
+
+def _json_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (datetime,)):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return value.hex()
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    return str(value)
 
 
 def _query_army_endpoint(
@@ -494,6 +598,797 @@ def _query_army_endpoint(
             }
     finally:
         database.close()
+
+
+def _seed_step5_army_database(
+    connection_info: str, archive: Any
+) -> dict[str, int]:
+    """Seed the fixed issue #73 PR 2 workload with production-shaped rows."""
+    import psycopg
+    from domain_test_support import store_observation
+
+    observation_id, job_id = store_observation(
+        connection_info,
+        archive,
+        occurrence_key="step5-army-fixture",
+        endpoint="profile",
+        body=_profile_body("#F00001"),
+        observed_at=DAY_START,
+        normalized_tag="#F00001",
+    )
+    with psycopg.connect(connection_info) as connection:
+        # This one profile exists only to satisfy the retained battle-evidence
+        # foreign keys; the measured collection cycle owns its own jobs.
+        connection.execute(
+            "UPDATE python_processing_jobs SET status = 'complete' WHERE id = %s",
+            (job_id,),
+        )
+        connection.commit()
+    with psycopg.connect(connection_info) as connection:
+        with connection.transaction():
+            connection.execute(
+                """
+                INSERT INTO players (normalized_tag, active, eligibility_state)
+                SELECT '#S' || lpad(value::text, 5, '0'), true, 'eligible'
+                FROM generate_series(1, %s) AS values(value)
+                ON CONFLICT (normalized_tag) DO UPDATE
+                    SET active = true, eligibility_state = 'eligible'
+                """,
+                (STEP5_POPULATION,),
+            )
+            # Keep the fixture's clan target eligible so profile processing does
+            # not manufacture an unrelated discovery_profile queue entry.
+            connection.execute(
+                """
+                INSERT INTO players (normalized_tag, active, eligibility_state)
+                VALUES ('#2CLAN', true, 'eligible')
+                ON CONFLICT (normalized_tag) DO UPDATE
+                    SET active = true, eligibility_state = 'eligible'
+                """
+            )
+            connection.execute(
+                """
+                CREATE TEMP TABLE perf_step5_players ON COMMIT PRESERVE ROWS AS
+                SELECT row_number() OVER (ORDER BY id)::integer AS ordinal, id
+                FROM players WHERE normalized_tag LIKE '#S%%'
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO legend_battles (ranked_day_start, attacker_player_id,
+                                             defender_player_id)
+                SELECT %s + (day - 1) * interval '1 day', attacker.id, defender.id
+                FROM generate_series(1, %s) AS days(day)
+                CROSS JOIN perf_step5_players AS attacker
+                CROSS JOIN generate_series(0, %s - 1) AS slots(slot)
+                JOIN perf_step5_players AS defender
+                  ON defender.ordinal =
+                     ((attacker.ordinal - 1 + slots.slot + 1) %% %s) + 1
+                """,
+                (
+                    DAY_START,
+                    STEP5_DAYS,
+                    STEP5_FACTS_PER_MEMBER_DAY,
+                    STEP5_POPULATION,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO ranked_day_versions (
+                    player_id, ranked_day_start, ranked_day_end,
+                    official_season_id, season_day_number,
+                    season_anchor_rule_version, reconciliation_rule_version,
+                    result_hash, version, state, confidence,
+                    evidence_complete, coverage_complete, reconciled,
+                    shield_state, input_hash, parser_version, processing_version
+                )
+                SELECT player.id, %s + (days.day - 1) * interval '1 day',
+                       %s + days.day * interval '1 day', '1783918800', days.day,
+                       'step5-anchor-v1', 'step5-reconciliation-v1',
+                       md5(player.id::text || ':' || days.day::text) ||
+                       md5('result:' || player.id::text || ':' || days.day::text),
+                       1, 'Complete', 'exact', true, true, true, 'not_shielded',
+                       md5('input:' || player.id::text || ':' || days.day::text) ||
+                       md5('input-result:' || player.id::text || ':' || days.day::text),
+                       'supercell-source-parser-v2', 'clashlens-domain-processing-v1'
+                FROM perf_step5_players AS selected
+                JOIN players AS player ON player.id = selected.id
+                CROSS JOIN generate_series(1, %s) AS days(day)
+                """,
+                (DAY_START, DAY_START, STEP5_DAYS),
+            )
+            connection.execute(
+                """
+                INSERT INTO army_analytics_completed_days (
+                    ranked_day_start, official_season_id, season_day_number,
+                    fact_input_hash
+                )
+                SELECT %s + (days.day - 1) * interval '1 day', '1783918800', days.day,
+                       md5('completed:' || days.day::text) ||
+                       md5('completed-input:' || days.day::text)
+                FROM generate_series(1, %s) AS days(day)
+                """,
+                (DAY_START, STEP5_DAYS),
+            )
+            connection.execute(
+                """
+                INSERT INTO api_player_daily_logs (
+                    player_id, ranked_day_start, version, state, coverage, battles,
+                    ranked_day_end, official_season_id, season_day_number, confidence,
+                    attack_count, attack_three_star_count, attack_gain,
+                    defense_count, defense_three_star_count, defense_loss,
+                    net_trophy_change
+                )
+                SELECT selected.id, %s + (days.day - 1) * interval '1 day', 1,
+                       'Complete', 'complete', '[]'::jsonb,
+                       %s + days.day * interval '1 day', '1783918800', days.day,
+                       'exact', 8, 2, 160, 8, 2, 80, 80
+                FROM (SELECT id FROM perf_step5_players WHERE ordinal = 1) AS selected
+                CROSS JOIN generate_series(1, %s) AS days(day)
+                """,
+                (DAY_START, DAY_START, STEP5_DAYS),
+            )
+            source_battle = connection.execute(
+                """
+                INSERT INTO legend_battles (
+                    ranked_day_start, attacker_player_id, defender_player_id
+                )
+                SELECT %s - interval '1 day', first_player.id, second_player.id
+                FROM (SELECT id FROM perf_step5_players WHERE ordinal = 1) AS first_player
+                CROSS JOIN (SELECT id FROM perf_step5_players WHERE ordinal = 2) AS second_player
+                RETURNING id
+                """,
+                (DAY_START,),
+            ).fetchone()
+            if source_battle is None:
+                raise RuntimeError("failed to seed army evidence battle")
+            battle_log = connection.execute(
+                """
+                INSERT INTO battle_log_observations (
+                    observation_id, player_id, parser_version, observed_at,
+                    row_count, has_row_gap
+                )
+                SELECT %s, id, 'supercell-source-parser-v2', %s, 1, false
+                FROM players WHERE normalized_tag = '#F00001'
+                RETURNING id
+                """,
+                (observation_id, DAY_START),
+            ).fetchone()
+            if battle_log is None:
+                raise RuntimeError("failed to seed army evidence observation")
+            source_row = connection.execute(
+                """
+                INSERT INTO battle_source_rows (
+                    battle_log_observation_id, source_row_index, outcome, source_json
+                ) VALUES (%s, 0, 'valid_legend', '{}'::jsonb)
+                RETURNING id
+                """,
+                (battle_log[0],),
+            ).fetchone()
+            if source_row is None:
+                raise RuntimeError("failed to seed army evidence source row")
+            evidence = connection.execute(
+                """
+                INSERT INTO battle_evidence (
+                    battle_id, source_row_id, observation_id, reporting_player_id,
+                    perspective, battle_timestamp, stars, destruction_percentage,
+                    army_share_code, reporter_trophies, opponent_trophies,
+                    attacker_gain, defender_loss, trophy_rule_version,
+                    source_observed_at, parser_version
+                )
+                SELECT %s, %s, %s, player.id, 'attacker', %s, 2, 80,
+                       'step5-fixture', 6000, 6000, 20, 20,
+                       'step5-trophy-v1', %s, 'supercell-source-parser-v2'
+                FROM players AS player WHERE player.normalized_tag = '#F00001'
+                RETURNING id
+                """,
+                (
+                    source_battle[0],
+                    source_row[0],
+                    observation_id,
+                    DAY_START,
+                    DAY_START,
+                ),
+            ).fetchone()
+            if evidence is None:
+                raise RuntimeError("failed to seed army evidence")
+            connection.execute(
+                f"""
+                WITH synthetic AS (
+                    SELECT battle.id, days.day, attacker.ordinal, slots.slot,
+                           %s + (days.day - 1) * interval '1 day' AS day_start
+                    FROM generate_series(1, %s) AS days(day)
+                    CROSS JOIN perf_step5_players AS attacker
+                    CROSS JOIN generate_series(0, %s - 1) AS slots(slot)
+                    JOIN perf_step5_players AS defender
+                      ON defender.ordinal =
+                         ((attacker.ordinal - 1 + slots.slot + 1) %% %s) + 1
+                    JOIN legend_battles AS battle
+                      ON battle.ranked_day_start =
+                             %s + (days.day - 1) * interval '1 day'
+                     AND battle.attacker_player_id = attacker.id
+                     AND battle.defender_player_id = defender.id
+                ), day_versions AS (
+                    SELECT season_day_number, min(id) AS id
+                    FROM ranked_day_versions
+                    GROUP BY season_day_number
+                )
+                INSERT INTO army_analytics_battle_facts (
+                    battle_id, evidence_id, source_ranked_day_version_id,
+                    ranked_day_start, official_season_id, season_day_number, lens,
+                    population_player_id, battle_time_trophies, stars,
+                    destruction_percentage, army_state, home_troops,
+                    perspective_disagreement, input_hash, version, is_current
+                )
+                SELECT synthetic.id, %s, day_versions.id, synthetic.day_start,
+                       '1783918800', synthetic.day, lens.value,
+                       CASE WHEN lens.value = 'offense' THEN attacker.id ELSE defender.id END,
+                       CASE WHEN ((synthetic.day - 1) * {STEP5_POPULATION} * {STEP5_FACTS_PER_MEMBER_DAY} +
+                                       (synthetic.ordinal - 1) * {STEP5_FACTS_PER_MEMBER_DAY} + synthetic.slot)
+                                      %% {STEP5_MISSING_TROPHY_RATE} = 0
+                            THEN NULL
+                            ELSE 6000 + (((synthetic.ordinal + synthetic.slot) %% 4000))
+                       END,
+                       2, 80, 'decoded',
+                       jsonb_build_array(jsonb_build_array(
+                           'troop:' || (((synthetic.day - 1) * {STEP5_POPULATION} * {STEP5_FACTS_PER_MEMBER_DAY} +
+                                         (synthetic.ordinal - 1) * {STEP5_FACTS_PER_MEMBER_DAY} + synthetic.slot)
+                                        %% 27)::text, 1)),
+                       false,
+                       md5(synthetic.id::text || lens.value) ||
+                       md5('step5:' || synthetic.id::text || lens.value),
+                       1, true
+                FROM synthetic
+                JOIN day_versions ON day_versions.season_day_number = synthetic.day
+                JOIN legend_battles AS battle ON battle.id = synthetic.id
+                JOIN players AS attacker ON attacker.id = battle.attacker_player_id
+                JOIN players AS defender ON defender.id = battle.defender_player_id
+                CROSS JOIN (VALUES ('offense'), ('defense')) AS lens(value)
+                """,
+                (
+                    DAY_START,
+                    STEP5_DAYS,
+                    STEP5_FACTS_PER_MEMBER_DAY,
+                    STEP5_POPULATION,
+                    DAY_START,
+                    evidence[0],
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO leaderboard_snapshots (
+                    snapshot_kind, boundary_at, version, ordering_rule_version,
+                    freshness_rule_version, state, source_ranked_day_version_id,
+                    measured_coverage, stale_entry_count, published_at, input_hash,
+                    eligible_population_count, included_entry_count, fresh_entry_count,
+                    excluded_missing_count, excluded_invalid_count,
+                    excluded_malformed_count, excluded_conflicting_count
+                )
+                SELECT 'frozen', %s + days.day * interval '1 day', 1,
+                       'step5-order-v1', 'step5-freshness-v1', 'published',
+                       day_versions.id, 1, 0, clock_timestamp(),
+                       md5('snapshot:' || days.day::text) ||
+                       md5('snapshot-input:' || days.day::text),
+                       %s, %s, %s, 0, 0, 0, 0
+                FROM generate_series(1, %s) AS days(day)
+                JOIN (SELECT season_day_number, min(id) AS id
+                      FROM ranked_day_versions GROUP BY season_day_number) AS day_versions
+                  ON day_versions.season_day_number = days.day
+                """,
+                (
+                    DAY_START,
+                    STEP5_POPULATION,
+                    STEP5_SELECTED_MEMBERS,
+                    STEP5_SELECTED_MEMBERS,
+                    STEP5_DAYS,
+                ),
+            )
+            connection.execute(
+                """
+                CREATE TEMP TABLE perf_step5_snapshots ON COMMIT PRESERVE ROWS AS
+                SELECT id, row_number() OVER (ORDER BY boundary_at)::integer AS day
+                FROM leaderboard_snapshots
+                WHERE snapshot_kind = 'frozen' AND state = 'published'
+                  AND boundary_at BETWEEN %s + interval '1 day' AND
+                                         %s + %s * interval '1 day'
+                """,
+                (DAY_START, DAY_START, STEP5_DAYS),
+            )
+            connection.execute(
+                """
+                INSERT INTO leaderboard_snapshot_entries (
+                    snapshot_id, position, player_id, trophies, trophy_observation_id,
+                    trophy_observed_at, observation_age_seconds, freshness, confidence,
+                    tie_hash
+                )
+                SELECT snapshot.id, player.ordinal, player.id,
+                       10000 - player.ordinal, %s, %s, 0, 'fresh', 'confirmed',
+                       md5(player.id::text) || md5('step5-tie:' || player.id::text)
+                FROM perf_step5_snapshots AS snapshot
+                CROSS JOIN perf_step5_players AS player
+                WHERE player.ordinal <= %s
+                """,
+                (observation_id, DAY_START, STEP5_SELECTED_MEMBERS),
+            )
+        with connection.transaction():
+            counts = connection.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM perf_step5_players),
+                    (SELECT count(*) FROM ranked_day_versions
+                     WHERE official_season_id = '1783918800'),
+                    (SELECT count(*) FROM army_analytics_battle_facts
+                     WHERE official_season_id = '1783918800' AND lens = 'offense'
+                       AND is_current),
+                    (SELECT count(*) FROM army_analytics_battle_facts
+                     WHERE official_season_id = '1783918800' AND lens = 'defense'
+                       AND is_current),
+                    (SELECT count(*) FROM army_analytics_battle_facts
+                     WHERE official_season_id = '1783918800' AND lens = 'offense'
+                       AND is_current AND battle_time_trophies IS NULL),
+                    (SELECT count(*) FROM army_analytics_battle_facts
+                     WHERE official_season_id = '1783918800' AND lens = 'defense'
+                       AND is_current AND battle_time_trophies IS NULL),
+                    (SELECT count(*) FROM leaderboard_snapshots
+                     WHERE snapshot_kind = 'frozen' AND state = 'published'),
+                    (SELECT count(*) FROM leaderboard_snapshot_entries),
+                    (SELECT count(*) FROM army_analytics_completed_days
+                     WHERE official_season_id = '1783918800')
+                """
+            ).fetchone()
+            assert counts is not None
+            selected = connection.execute(
+                """
+                SELECT count(*)
+                FROM army_analytics_battle_facts AS fact
+                WHERE fact.official_season_id = '1783918800'
+                  AND fact.is_current AND fact.lens = 'offense'
+                  AND fact.population_player_id IN (
+                      SELECT player_id FROM leaderboard_snapshot_entries
+                      WHERE snapshot_id = (SELECT id FROM perf_step5_snapshots WHERE day = 1)
+                  )
+                """
+            ).fetchone()[0]
+            troop_keys = connection.execute(
+                """
+                SELECT count(DISTINCT fact.home_troops -> 0 ->> 0)
+                FROM army_analytics_battle_facts AS fact
+                WHERE fact.official_season_id = '1783918800'
+                  AND fact.is_current AND fact.lens = 'offense'
+                  AND fact.population_player_id IN (
+                      SELECT player_id FROM leaderboard_snapshot_entries
+                      WHERE snapshot_id = (SELECT id FROM perf_step5_snapshots WHERE day = 1)
+                  )
+                """
+            ).fetchone()[0]
+            expected_facts = STEP5_POPULATION * STEP5_DAYS * STEP5_FACTS_PER_MEMBER_DAY
+            if tuple(map(int, counts)) != (
+                STEP5_POPULATION,
+                STEP5_POPULATION * STEP5_DAYS,
+                expected_facts,
+                expected_facts,
+                expected_facts // STEP5_MISSING_TROPHY_RATE,
+                expected_facts // STEP5_MISSING_TROPHY_RATE,
+                STEP5_DAYS,
+                STEP5_DAYS * STEP5_SELECTED_MEMBERS,
+                STEP5_DAYS,
+            ):
+                raise RuntimeError(f"step5 seed cardinality mismatch: {counts}")
+            if int(selected) != STEP5_SELECTED_MEMBERS * STEP5_DAYS * STEP5_FACTS_PER_MEMBER_DAY:
+                raise RuntimeError(f"step5 selected cardinality mismatch: {selected}")
+            if int(troop_keys) != len(STEP5_TROOP_KEYS):
+                raise RuntimeError(f"step5 troop-key cardinality mismatch: {troop_keys}")
+            return {
+                "population": int(counts[0]),
+                "days": STEP5_DAYS,
+                "facts_per_lens": int(counts[2]),
+                "missing_trophies_per_lens": int(counts[4]),
+                "snapshots": int(counts[6]),
+                "snapshot_entries": int(counts[7]),
+                "completed_days": int(counts[8]),
+                "selected_facts_per_lens": int(selected),
+                "troop_keys": int(troop_keys),
+            }
+
+
+def _step5_selection(spec: dict[str, Any]) -> Any:
+    from clashlens.army_analytics import ArmyAnalyticsSelection
+
+    return ArmyAnalyticsSelection.parse(
+        lens=spec["lens"],
+        season="1783918800",
+        start_day=1,
+        end_day=STEP5_DAYS,
+        population=spec["selection"],
+        category="troops",
+        sort="usage-rate",
+    )
+
+
+def _step5_result(result: dict[str, Any] | None, spec: dict[str, Any], phase: str) -> tuple[str, ...]:
+    if result is None or int(result["total_attacks"]) != spec["expected_facts"]:
+        raise RuntimeError(f"army endpoint {phase} cardinality mismatch for {spec}")
+    keys = tuple(sorted(str(row["key"]) for row in result["rows"]))
+    expected = tuple(sorted(STEP5_TROOP_KEYS))
+    if keys != expected:
+        raise RuntimeError(
+            f"army endpoint {phase} troop keys mismatch for {spec}: {keys} != {expected}"
+        )
+    return keys
+
+
+def _explain_endpoint_statements(
+    connection_info: str,
+    calls: list[dict[str, Any]],
+    *,
+    selection: str,
+    lens: str,
+) -> list[dict[str, Any]]:
+    import psycopg
+
+    plans: list[dict[str, Any]] = []
+    with psycopg.connect(connection_info) as connection:
+        for statement_id, call in enumerate(calls, 1):
+            sql = str(call["sql"]).strip().rstrip(";")
+            try:
+                payload = connection.execute(
+                    "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql,
+                    call["params"],
+                ).fetchone()[0]
+            except psycopg.Error as error:
+                connection.rollback()
+                raise RuntimeError(
+                    f"endpoint statement {selection}/{lens}/{statement_id} could not be explained"
+                ) from error
+            plan = payload[0]["Plan"] if isinstance(payload, list) else payload["Plan"]
+            scanned, returned = _plan_counts(plan)
+            plans.append(
+                {
+                    "correlation": {
+                        "selection": selection,
+                        "lens": lens,
+                        "statement_id": statement_id,
+                    },
+                    "sql": sql,
+                    "parameters": _json_value(call["params"]),
+                    "rows_scanned": scanned,
+                    "rows_returned": returned,
+                    "explain_analyze_buffers": payload,
+                }
+            )
+    return plans
+
+
+def _measure_army_pair(
+    connection_info: str,
+    spec: dict[str, Any],
+    *,
+    warmups: int = STEP5_WARMUPS,
+    requests: int = STEP5_REQUESTS,
+) -> dict[str, Any]:
+    from clashlens.api_db import ApiDatabase
+
+    if warmups != STEP5_WARMUPS or requests != STEP5_REQUESTS:
+        raise ValueError("issue #73 army measurements require five warmups and 100 requests")
+    selection = _step5_selection(spec)
+    database = ApiDatabase(connection_info, max_size=1)
+    try:
+        # The first untimed warmup is also the production query capture used by
+        # the untimed EXPLAIN diagnostic pass.
+        with capture_sql_calls() as calls:
+            first = database.get_army_analytics(
+                selection, now=BOUNDARY + timedelta(days=STEP5_DAYS + 1)
+            )
+        troop_keys = _step5_result(first, spec, "warmup")
+        if len(calls) == 0:
+            raise RuntimeError(f"army endpoint emitted no SQL for {spec}")
+        for _ in range(warmups - 1):
+            result = database.get_army_analytics(
+                selection, now=BOUNDARY + timedelta(days=STEP5_DAYS + 1)
+            )
+            _step5_result(result, spec, "warmup")
+        diagnostics = _explain_endpoint_statements(
+            connection_info,
+            calls,
+            selection=spec["selection"],
+            lens=spec["lens"],
+        )
+        latencies: list[float] = []
+        for _ in range(requests):
+            started = time.perf_counter()
+            result = database.get_army_analytics(
+                selection, now=BOUNDARY + timedelta(days=STEP5_DAYS + 1)
+            )
+            latencies.append((time.perf_counter() - started) * 1000)
+            _step5_result(result, spec, "measurement")
+        return {
+            "selection": spec["selection"],
+            "lens": spec["lens"],
+            "warmups": warmups,
+            "requests": requests,
+            "p95_ms": _p95(latencies),
+            "min_ms": min(latencies),
+            "max_ms": max(latencies),
+            "latencies_ms": latencies,
+            "selected_fact_count": int(first["total_attacks"]),
+            "expected_fact_count": spec["expected_facts"],
+            "troop_keys": list(troop_keys),
+            "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "endpoint_sql": diagnostics,
+            "target_ms": STEP5_P95_TARGET_MS,
+            "target_passed": _p95(latencies) < STEP5_P95_TARGET_MS,
+        }
+    finally:
+        database.close()
+
+
+def _run_account_read_gate(
+    connection_info: str,
+    *,
+    warmups: int = STEP5_WARMUPS,
+    requests: int = STEP5_REQUESTS,
+    processing_started: Event | None = None,
+    cycle_finished: Event | None = None,
+    cycle_failed: Event | None = None,
+    overlap_counts: list[int] | None = None,
+    overlap_lock: Lock | None = None,
+) -> dict[str, Any]:
+    from clashlens.api import create_app
+    from clashlens.api_db import ApiDatabase
+    from fastapi.testclient import TestClient
+    from test_private_api import (
+        DISCORD_CURRENT,
+        NOW,
+        NOW_SECONDS,
+        TS_CURRENT,
+        TS_PREVIOUS,
+        json_body,
+        signed_headers,
+    )
+
+    database = ApiDatabase(connection_info, max_size=1)
+    keys = {
+        ("typescript-website", "current"): TS_CURRENT,
+        ("typescript-website", "previous"): TS_PREVIOUS,
+        ("discord-bot", "current"): DISCORD_CURRENT,
+    }
+    target = "/v1/account"
+    subject = "step5-performance-account"
+    body = json_body({"username": "step5performance", "display_name": "Step 5"})
+    try:
+        app = create_app(
+            database,
+            keys=keys,
+            clock=lambda: NOW_SECONDS,
+            now=lambda: NOW,
+        )
+        with TestClient(app) as client:
+            created = client.post(
+                target,
+                content=body,
+                headers=signed_headers(
+                    target,
+                    method="POST",
+                    body=body,
+                    provider="google",
+                    subject=subject,
+                ),
+            )
+            if created.status_code != 201:
+                raise RuntimeError(f"account warmup creation failed: {created.status_code}")
+            if processing_started is not None:
+                processing_started.wait()
+            if cycle_failed is not None and cycle_failed.is_set():
+                raise RuntimeError("collection cycle failed before processing started")
+            for _ in range(warmups):
+                response = client.get(
+                    target,
+                    headers=signed_headers(target, provider="google", subject=subject),
+                )
+                if response.status_code != 200:
+                    raise RuntimeError(f"account warmup failed: {response.status_code}")
+            latencies: list[float] = []
+            overlap_measurements = 0
+            for _ in range(requests):
+                started = time.perf_counter()
+                response = client.get(
+                    target,
+                    headers=signed_headers(target, provider="google", subject=subject),
+                )
+                elapsed = (time.perf_counter() - started) * 1000
+                latencies.append(elapsed)
+                if response.status_code != 200:
+                    raise RuntimeError(f"account measurement failed: {response.status_code}")
+                if (
+                    processing_started is not None
+                    and cycle_finished is not None
+                    and processing_started.is_set()
+                    and not cycle_finished.is_set()
+                ):
+                    overlap_measurements += 1
+            if overlap_counts is not None:
+                assert overlap_lock is not None
+                with overlap_lock:
+                    overlap_counts[0] = overlap_measurements
+            return {
+                "warmups": warmups,
+                "requests": requests,
+                "p95_ms": _p95(latencies),
+                "min_ms": min(latencies),
+                "max_ms": max(latencies),
+                "latencies_ms": latencies,
+                "target_ms": STEP5_P95_TARGET_MS,
+                "target_passed": _p95(latencies) < STEP5_P95_TARGET_MS,
+                "overlap_measurements": overlap_measurements,
+            }
+    finally:
+        database.close()
+
+
+def _run_step5_overlap(
+    connection_info: str,
+    archive: Any,
+    specs: tuple[dict[str, Any], ...],
+) -> dict[str, Any]:
+    """Run the retained 25,024-observation cycle beside four API lanes."""
+    processing_started = Event()
+    cycle_finished = Event()
+    cycle_failed = Event()
+    overlap_lock = Lock()
+    overlap_counts: dict[str, int] = {f"{s['selection']}/{s['lens']}": 0 for s in specs}
+    account_overlap = [0]
+
+    def duplicate_cycle() -> dict[str, Any]:
+        started = time.perf_counter()
+        try:
+            result = _run_duplicate(
+                connection_info,
+                archive,
+                DUPLICATE_EXECUTION_CAP,
+                cycles=1,
+                processing_started=processing_started,
+            )
+            result["cycle_elapsed_seconds"] = time.perf_counter() - started
+            return result
+        except Exception:
+            cycle_failed.set()
+            processing_started.set()
+            raise
+        finally:
+            cycle_finished.set()
+
+    def analytics_lane(lane_specs: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
+        processing_started.wait()
+        if cycle_failed.is_set():
+            raise RuntimeError("collection cycle failed before processing started")
+        from clashlens.api_db import ApiDatabase
+
+        database = ApiDatabase(connection_info, max_size=1)
+        results: list[dict[str, Any]] = []
+        try:
+            selections = [(spec, _step5_selection(spec)) for spec in lane_specs]
+            for spec, selection in selections:
+                for _ in range(STEP5_WARMUPS):
+                    result = database.get_army_analytics(
+                        selection, now=BOUNDARY + timedelta(days=STEP5_DAYS + 1)
+                    )
+                    _step5_result(result, spec, "mixed warmup")
+            latencies: dict[str, list[float]] = {
+                f"{spec['selection']}/{spec['lens']}": []
+                for spec, _selection in selections
+            }
+            overlaps: dict[str, int] = dict.fromkeys(latencies, 0)
+            last_results: dict[str, dict[str, Any]] = {}
+            # Alternate paired selections so each pair is measured while the
+            # exact collection-processing cycle remains active.
+            for _ in range(STEP5_REQUESTS):
+                for spec, selection in selections:
+                    key = f"{spec['selection']}/{spec['lens']}"
+                    started = time.perf_counter()
+                    result = database.get_army_analytics(
+                        selection, now=BOUNDARY + timedelta(days=STEP5_DAYS + 1)
+                    )
+                    elapsed = (time.perf_counter() - started) * 1000
+                    _step5_result(result, spec, "mixed measurement")
+                    assert result is not None
+                    latencies[key].append(elapsed)
+                    last_results[key] = result
+                    if not cycle_finished.is_set():
+                        overlaps[key] += 1
+            for spec, _selection in selections:
+                key = f"{spec['selection']}/{spec['lens']}"
+                p95 = _p95(latencies[key])
+                with overlap_lock:
+                    overlap_counts[key] += overlaps[key]
+                results.append(
+                    {
+                        "selection": spec["selection"],
+                        "lens": spec["lens"],
+                        "warmups": STEP5_WARMUPS,
+                        "requests": STEP5_REQUESTS,
+                        "p95_ms": p95,
+                        "selected_fact_count": int(last_results[key]["total_attacks"]),
+                        "troop_keys": list(
+                            _step5_result(last_results[key], spec, "mixed result")
+                        ),
+                        "overlap_measurements": overlaps[key],
+                        "target_ms": STEP5_P95_TARGET_MS,
+                        "target_passed": p95 < STEP5_P95_TARGET_MS,
+                    }
+                )
+            return results
+        finally:
+            database.close()
+
+    lane_specs = (
+        (specs[0], specs[4]),
+        (specs[1], specs[5]),
+        (specs[2],),
+        (specs[3],),
+    )
+    with ThreadPoolExecutor(max_workers=6, thread_name_prefix="clashlens-step5") as executor:
+        cycle_future = executor.submit(duplicate_cycle)
+        lane_futures = [executor.submit(analytics_lane, lane) for lane in lane_specs]
+        account_future = executor.submit(
+            _run_account_read_gate,
+            connection_info,
+            processing_started=processing_started,
+            cycle_finished=cycle_finished,
+            cycle_failed=cycle_failed,
+            overlap_counts=account_overlap,
+            overlap_lock=overlap_lock,
+        )
+        cycle = cycle_future.result()
+        lanes = [future.result() for future in lane_futures]
+        account = account_future.result()
+    measurements = {
+        "analytics_lanes": [item for lane in lanes for item in lane],
+        "account": account,
+        "overlap_counts": overlap_counts,
+        "account_overlap_measurements": account_overlap[0],
+        "collection_cycle": cycle,
+    }
+    hard_failures = [
+        f"{key} overlap count {count} < {STEP5_REQUESTS}"
+        for key, count in overlap_counts.items()
+        if count < STEP5_REQUESTS
+    ]
+    cycle_results = cycle.get("results", [])
+    if len(cycle_results) != DUPLICATE_EXECUTION_CAP:
+        hard_failures.append(
+            f"collection processing result count {len(cycle_results)} != {DUPLICATE_EXECUTION_CAP}"
+        )
+    failed_outcomes = sorted(
+        {
+            str(result.get("outcome"))
+            for result in cycle_results
+            if result.get("outcome") != "processed"
+        }
+    )
+    if failed_outcomes:
+        hard_failures.append(
+            "collection processing outcomes were not all processed: "
+            + ",".join(failed_outcomes)
+        )
+    hard_failures.extend(
+        f"{item['selection']}/{item['lens']} mixed p95 {item['p95_ms']:.3f} >= {STEP5_P95_TARGET_MS}"
+        for item in measurements["analytics_lanes"]
+        if not item["target_passed"]
+    )
+    if account["overlap_measurements"] < STEP5_REQUESTS:
+        hard_failures.append(
+            f"account overlap count {account['overlap_measurements']} < {STEP5_REQUESTS}"
+        )
+    if not account["target_passed"]:
+        hard_failures.append(
+            f"account mixed p95 {account['p95_ms']:.3f} >= {STEP5_P95_TARGET_MS}"
+        )
+    if cycle["cycle_elapsed_seconds"] >= STEP5_COLLECTION_LIMIT_SECONDS:
+        hard_failures.append(
+            f"collection cycle {cycle['cycle_elapsed_seconds']:.3f}s >= {STEP5_COLLECTION_LIMIT_SECONDS}s"
+        )
+    measurements["hard_failures"] = hard_failures
+    return measurements
 
 
 def _seed_worst_case_army_reads(
@@ -1226,7 +2121,12 @@ def _run_reset(
 
 
 def _run_duplicate(
-    connection_info: str, archive: Any, count: int, *, cycles: int = 1
+    connection_info: str,
+    archive: Any,
+    count: int,
+    *,
+    cycles: int = 1,
+    processing_started: Event | None = None,
 ) -> dict[str, Any]:
     import psycopg
     from domain_test_support import store_observation
@@ -1267,6 +2167,8 @@ def _run_duplicate(
                     )
                 seed_connection.commit()
             started = time.perf_counter()
+            if processing_started is not None:
+                processing_started.set()
             results.extend(_process_jobs(processor, jobs, f"duplicate-c{cycle}"))
             cycle_elapsed.append(time.perf_counter() - started)
         steady = sorted(cycle_elapsed)[len(cycle_elapsed) // 2]
@@ -1527,6 +2429,66 @@ def _run_army_read_sample(database_url: str, fact_count: int) -> dict[str, Any]:
             database.close()
 
 
+def _run_step5_army(database_url: str) -> dict[str, Any]:
+    """Run the fixed PR 2 army protocol in one isolated production schema."""
+    from domain_test_support import domain_database
+
+    started = time.perf_counter()
+    cpu_start = time.process_time()
+    specs = _army_selection_specs()
+    with (
+        domain_database(database_url, include_coordinator=True) as connection_info,
+        archive_server() as archive,
+    ):
+        wal_start, statement_start = _start_metrics(connection_info)
+        seed = _seed_step5_army_database(connection_info, archive)
+        reads = [_measure_army_pair(connection_info, spec) for spec in specs]
+        overlap = _run_step5_overlap(connection_info, archive, specs)
+        database = _db_snapshot(connection_info, wal_start, statement_start)
+        postgres = _postgres_provenance(connection_info)
+        active_queue_rows = [
+            row
+            for queue in database["queues"].values()
+            for row in queue
+            if row["status"]
+            in {"pending", "leased", "waiting_retry", "waiting_dependency"}
+        ]
+        hard_failures = [
+            f"{item['selection']}/{item['lens']} p95 {item['p95_ms']:.3f} >= {STEP5_P95_TARGET_MS}"
+            for item in reads
+            if not item["target_passed"]
+        ]
+        hard_failures.extend(overlap["hard_failures"])
+        if active_queue_rows:
+            hard_failures.append(f"queue residue: {active_queue_rows}")
+        return {
+            "status": "passed" if not hard_failures else "failed",
+            "protocol": {
+                "population": STEP5_POPULATION,
+                "days": STEP5_DAYS,
+                "facts_per_member_day_per_lens": STEP5_FACTS_PER_MEMBER_DAY,
+                "selected_members": STEP5_SELECTED_MEMBERS,
+                "missing_trophy_rate": f"1/{STEP5_MISSING_TROPHY_RATE}",
+                "troop_keys": len(STEP5_TROOP_KEYS),
+                "warmups": STEP5_WARMUPS,
+                "requests": STEP5_REQUESTS,
+                "p95_target_ms": STEP5_P95_TARGET_MS,
+                "analytics_lanes": STEP5_ANALYTICS_LANES,
+                "duplicate_cycle_observations": DUPLICATE_EXECUTION_CAP,
+            },
+            "seed": seed,
+            "selections": reads,
+            "mixed_load": overlap,
+            "database": database,
+            "postgres": postgres,
+            "elapsed_seconds": time.perf_counter() - started,
+            "cpu_seconds": time.process_time() - cpu_start,
+            "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "hard_failures": hard_failures,
+            "queue_drained": not active_queue_rows,
+        }
+
+
 def _pending_age_seconds(connection_info: str) -> float | None:
     import psycopg
 
@@ -1588,6 +2550,62 @@ def _free_inodes(path: Path) -> int | None:
         return None
 
 
+def _host_provenance() -> dict[str, Any]:
+    memory: dict[str, int] = {}
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            name, value, unit = line.split(maxsplit=2)
+            if name in {"MemTotal:", "MemAvailable:", "SwapTotal:", "SwapFree:"}:
+                memory[name.removesuffix(":").lower()] = int(value) * (
+                    1024 if unit == "kB" else 1
+                )
+    except (OSError, ValueError):
+        memory = {}
+    swap_devices: list[dict[str, int | str]] = []
+    try:
+        for line in Path("/proc/swaps").read_text().splitlines()[1:]:
+            path, _kind, size, used, priority = line.split()
+            swap_devices.append(
+                {
+                    "path": path,
+                    "size_bytes": int(size) * 1024,
+                    "used_bytes": int(used) * 1024,
+                    "priority": int(priority),
+                }
+            )
+    except (OSError, ValueError):
+        swap_devices = []
+    return {
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "cpu_count": os.cpu_count(),
+        "uname": dict(platform.uname()._asdict()),
+        "memory_bytes": memory,
+        "swap": {"devices": swap_devices, "total_used_bytes": sum(item["used_bytes"] for item in swap_devices)},
+    }
+
+
+def _postgres_provenance(connection_info: str) -> dict[str, Any]:
+    import psycopg
+
+    settings = (
+        "server_version",
+        "server_version_num",
+        "shared_buffers",
+        "work_mem",
+        "maintenance_work_mem",
+        "max_connections",
+        "track_io_timing",
+    )
+    with psycopg.connect(connection_info) as connection:
+        version = _text(connection.execute("SELECT version()").fetchone()[0])
+        rows = connection.execute(
+            "SELECT name, setting FROM pg_settings WHERE name = ANY(%s)",
+            (list(settings),),
+        ).fetchall()
+    return {"version": version, "settings": {_text(row[0]): _text(row[1]) for row in rows}}
+
+
 def _provenance(arguments: argparse.Namespace) -> dict[str, Any]:
     migrations = [
         {"name": path.name, "sha256": _sha(path.read_bytes())}
@@ -1600,6 +2618,11 @@ def _provenance(arguments: argparse.Namespace) -> dict[str, Any]:
         "live_jobs": arguments.live_jobs,
         "backfill_jobs": arguments.backfill_jobs,
         "army_facts": arguments.army_facts,
+        "lanes": arguments.lanes,
+        "images": arguments.image,
+        "army_warmups": getattr(arguments, "army_warmups", STEP5_WARMUPS),
+        "army_requests": getattr(arguments, "army_requests", STEP5_REQUESTS),
+        "analytics_lanes": getattr(arguments, "analytics_lanes", STEP5_ANALYTICS_LANES),
     }
     return {
         "source_sha": _git("rev-parse", "HEAD"),
@@ -1611,13 +2634,27 @@ def _provenance(arguments: argparse.Namespace) -> dict[str, Any]:
         ),
         "configuration": configuration,
         "images": arguments.image,
-        "host": {"platform": platform.platform(), "python": platform.python_version()},
+        "host": _host_provenance(),
     }
 
 
 def run(arguments: argparse.Namespace) -> dict[str, Any]:
     if not arguments.database_url:
         raise RuntimeError("--database-url or CLASHLENS_TEST_DATABASE_URL is required")
+    if arguments.mode == STEP5_MODE:
+        started = datetime.now(tz=UTC)
+        workload = _run_step5_army(arguments.database_url)
+        finished = datetime.now(tz=UTC)
+        return {
+            "schema_version": 5,
+            "mode": arguments.mode,
+            "started_at": started.isoformat(),
+            "finished_at": finished.isoformat(),
+            "provenance": _provenance(arguments),
+            "collector_probe": None,
+            "samples": [],
+            "army_read_sample": workload,
+        }
     if arguments.mode in {"reset-boundary", "correction"}:
         validate_reset(arguments.populations, arguments.post_fix)
     from domain_test_support import domain_database
@@ -1838,6 +2875,9 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--army-facts", type=int, default=1_000)
     parser.add_argument("--lanes", type=int, default=32)
     parser.add_argument("--duplicate-cycles", type=int, default=1)
+    parser.add_argument("--army-warmups", type=int, default=STEP5_WARMUPS)
+    parser.add_argument("--army-requests", type=int, default=STEP5_REQUESTS)
+    parser.add_argument("--analytics-lanes", type=int, default=STEP5_ANALYTICS_LANES)
     parser.add_argument("--image", action="append", default=[])
     parser.add_argument("--output", type=Path)
     parser.add_argument(
@@ -1867,6 +2907,14 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--lanes must be between 1 and 64")
     if arguments.duplicate_cycles < 1 or arguments.duplicate_cycles > 4:
         parser.error("--duplicate-cycles must be between 1 and 4")
+    if arguments.mode == STEP5_MODE and (
+        arguments.army_warmups != STEP5_WARMUPS
+        or arguments.army_requests != STEP5_REQUESTS
+        or arguments.analytics_lanes != STEP5_ANALYTICS_LANES
+    ):
+        parser.error("issue #73 army workload requires 4 lanes, 5 warmups, and 100 requests")
+    if arguments.analytics_lanes < 1:
+        parser.error("--analytics-lanes must be positive")
     global _LANES
     _LANES = arguments.lanes
     if any("=sha256:" not in image for image in arguments.image):
@@ -1895,6 +2943,13 @@ def main(argv: list[str] | None = None) -> int:
             arguments.output.write_text(payload)
         else:
             print(payload, end="")
+        hard_failures = result.get("army_read_sample", {}).get("hard_failures", [])
+        if hard_failures:
+            print(
+                "performance runner: hard acceptance failures: " + "; ".join(hard_failures[:8]),
+                file=sys.stderr,
+            )
+            return 2
         return 0
     except (
         RuntimeError,

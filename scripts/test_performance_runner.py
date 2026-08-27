@@ -25,6 +25,84 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertTrue(runner.post_fix_source_ready())
         runner.validate_reset([12_500], True)
 
+    def test_army_mode_freezes_production_protocol(self) -> None:
+        arguments = runner.parse_arguments(
+            ["army-analytics", "--database-url", "unused"]
+        )
+        self.assertEqual(arguments.army_warmups, 5)
+        self.assertEqual(arguments.army_requests, 100)
+        self.assertEqual(arguments.analytics_lanes, 4)
+        self.assertEqual(
+            [(item["selection"], item["lens"]) for item in runner._army_selection_specs()],
+            [
+                ("top-1000", "offense"),
+                ("top-1000", "defense"),
+                ("trophies-5000-9999", "offense"),
+                ("trophies-5000-9999", "defense"),
+                ("streak-top-1000", "offense"),
+                ("streak-top-1000", "defense"),
+            ],
+        )
+        self.assertEqual(
+            [item["expected_facts"] for item in runner._army_selection_specs()],
+            [224_000, 224_000, 2_772_000, 2_772_000, 224_000, 224_000],
+        )
+
+    def test_army_source_guard_rejects_old_broad_materialization(self) -> None:
+        source = (ROOT / "python/src/clashlens/api_db.py").read_text()
+        self.assertTrue(runner._bounded_army_source_ready(source))
+        old_shape = """
+        def get_army_analytics(self, selection):
+            facts = connection.execute(\"\"\"
+                SELECT * FROM army_analytics_battle_facts
+                WHERE official_season_id=%s AND lens=%s AND is_current
+            \"\"\", (selection.season, selection.lens)).fetchall()
+            return filter_members_in_python(facts)
+        """
+        self.assertFalse(runner._bounded_army_source_ready(old_shape))
+
+    def test_army_protocol_rejects_partial_measurement(self) -> None:
+        with self.assertRaises(SystemExit):
+            runner.parse_arguments(
+                [
+                    "army-analytics",
+                    "--database-url",
+                    "unused",
+                    "--analytics-lanes",
+                    "2",
+                ]
+            )
+
+    def test_plan_counts_filter_rows_for_each_actual_loop(self) -> None:
+        scanned, returned = runner._plan_counts(
+            {"Actual Rows": 3, "Actual Loops": 4, "Rows Removed by Filter": 2}
+        )
+        self.assertEqual((scanned, returned), (20, 3))
+
+    def test_provenance_fingerprint_includes_processing_and_image_inputs(self) -> None:
+        arguments = runner.parse_arguments(
+            [
+                "army-analytics",
+                "--database-url",
+                "unused",
+                "--lanes",
+                "7",
+                "--image",
+                "postgres=sha256:" + "a" * 64,
+            ]
+        )
+        provenance = runner._provenance(arguments)
+        self.assertEqual(provenance["configuration"]["lanes"], 7)
+        self.assertEqual(
+            provenance["configuration"]["images"], ["postgres=sha256:" + "a" * 64]
+        )
+        self.assertEqual(
+            provenance["configuration_fingerprint"],
+            runner._sha(
+                json.dumps(provenance["configuration"], sort_keys=True).encode()
+            ),
+        )
+
     def test_writer_guard_rejects_row_at_a_time_sql(self) -> None:
         source = """
         def writer(connection, rows):
@@ -143,6 +221,8 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
 
     def test_all_modes_execute_isolated_real_workloads(self) -> None:
         for mode in runner.MODES:
+            if mode == runner.STEP5_MODE:
+                continue
             command = [
                 sys.executable,
                 str(SCRIPT),
