@@ -113,8 +113,22 @@ class ArmyAnalyticsSelection:
 def build_army_result(
     facts: list[dict[str, Any]], selection: ArmyAnalyticsSelection
 ) -> dict[str, Any]:
-    usable = [fact for fact in facts if fact["army_state"] in {"decoded", "partial"}]
     category = selection.category
+    relationship_category = category in {
+        "hero-pet", "hero-equipment", "equipment-for-hero", "cc-composition"
+    }
+    states: Counter[str] = Counter()
+    aggregates: dict[str, dict[str, Any]] = {}
+    hero_fact_counts: Counter[str] = Counter()
+    hero_unknown_counts: Counter[str] = Counter()
+    unknown_counts: Counter[str] = Counter()
+    unknown_present_counts: Counter[str] = Counter()
+    cc_unknown_count = 0
+    total_facts = 0
+    usable_count = 0
+    unknown_affected = 0
+    unknown_occurrences = 0
+    disagreement_count = 0
 
     def individual_items(fact: dict[str, Any]) -> set[str]:
         field = {
@@ -122,7 +136,10 @@ def build_army_result(
             "cc-troops": "cc_troops",
         }.get(category)
         if field:
-            return {str(item[0]) for item in fact[field] if isinstance(item, list) and item}
+            return {
+                str(item[0]) for item in fact[field]
+                if isinstance(item, list) and item
+            }
         items: set[str] = set()
         for hero in fact["heroes"]:
             if not isinstance(hero, dict):
@@ -145,10 +162,13 @@ def build_army_result(
                 return result
             composition = sorted(
                 (str(item[0]), int(item[1]))
-                for item in fact["cc_troops"] if isinstance(item, list) and len(item) > 1
+                for item in fact["cc_troops"]
+                if isinstance(item, list) and len(item) > 1
             )
             if composition:
-                result.add("cc:" + ",".join(f"{item}x{qty}" for item, qty in composition))
+                result.add(
+                    "cc:" + ",".join(f"{item}x{qty}" for item, qty in composition)
+                )
             return result
         for hero in fact["heroes"]:
             if not isinstance(hero, dict) or not hero.get("hero"):
@@ -164,57 +184,82 @@ def build_army_result(
                 result.update(f"{hero_id}|{item}" for item in equipment)
         return result
 
-    relationship_category = category in {
-        "hero-pet", "hero-equipment", "equipment-for-hero", "cc-composition"
-    }
-    presence = {
-        fact["id"]: relationships(fact) if relationship_category else individual_items(fact)
-        for fact in usable
-    }
-    keys = sorted({key for values in presence.values() for key in values})
+    def unknown_heroes(fact: dict[str, Any]) -> set[str]:
+        if fact["army_state"] == "decoded":
+            return set()
+        suffix = "pet" if category == "hero-pet" else "equipment"
+        return {
+            str(item.get("origin"))[: -len(suffix) - 1]
+            for item in fact["unresolved_components"]
+            if str(item.get("origin", "")).endswith(f":{suffix}")
+        }
 
-    def uncertain(fact: dict[str, Any], key: str) -> bool:
-        if fact["army_state"] == "decoded" or key in presence[fact["id"]]:
-            return False
-        unknown = fact["unresolved_components"]
-        if category == "cc-composition":
-            return any(item.get("section") == "i" for item in unknown)
-        # Unknown evidence is scoped to the hero named by the row: an unknown
-        # hero chip (origin "hero") belongs to a different hero entry and must
-        # not exclude this row's proven relationships.
-        hero_id = key.split("|", 1)[0]
-        if category == "hero-pet":
-            return any(item.get("origin") == f"{hero_id}:pet" for item in unknown)
-        if category in {"hero-equipment", "equipment-for-hero"}:
-            return any(
-                item.get("origin") == f"{hero_id}:equipment" for item in unknown
+    for fact in facts:
+        total_facts += 1
+        state = str(fact["army_state"])
+        states[state] += 1
+        unresolved = fact["unresolved_components"]
+        unknown_affected += bool(unresolved)
+        unknown_occurrences += len(unresolved)
+        disagreement_count += bool(fact["perspective_disagreement"])
+        if state not in {"decoded", "partial"}:
+            continue
+        usable_count += 1
+        values = relationships(fact) if relationship_category else individual_items(fact)
+        for key in values:
+            aggregate = aggregates.setdefault(
+                key,
+                {"usage_count": 0, "star_counts": [0, 0, 0, 0],
+                 "stars": 0, "destruction": 0},
             )
-        return False
+            aggregate["usage_count"] += 1
+            stars = int(fact["stars"])
+            aggregate["star_counts"][stars] += 1
+            aggregate["stars"] += stars
+            aggregate["destruction"] += int(fact["destruction_percentage"])
 
+        if not relationship_category:
+            continue
+        if category == "cc-composition":
+            if state == "partial" and any(
+                item.get("section") == "i" for item in unresolved
+            ):
+                cc_unknown_count += 1
+            continue
+        hero_ids = {
+            str(hero["hero"])
+            for hero in fact["heroes"]
+            if isinstance(hero, dict) and hero.get("hero")
+        }
+        if category == "equipment-for-hero":
+            hero_fact_counts.update(hero_ids)
+        scoped_unknown = unknown_heroes(fact)
+        unknown_counts.update(scoped_unknown)
+        hero_unknown_counts.update(scoped_unknown & hero_ids)
+        unknown_present_counts.update(
+            key for key in values if key.split("|", 1)[0] in scoped_unknown
+        )
+
+    keys = sorted(aggregates)
     rows = []
     for key in keys:
+        aggregate = aggregates[key]
         excluded_unknown = 0
-        if category == "equipment-for-hero":
-            hero_id = key.split("|", 1)[0]
-            hero_facts = [
-                fact for fact in usable
-                if any(hero.get("hero") == hero_id for hero in fact["heroes"] if isinstance(hero, dict))
-            ]
-            denominator = [fact for fact in hero_facts if not uncertain(fact, key)]
-            # Exclusions are measured against the confirmed-hero denominator,
-            # not against every usable attack.
-            excluded_unknown = len(hero_facts) - len(denominator)
+        if category == "cc-composition":
+            excluded_unknown = cc_unknown_count
+            denominator = usable_count - excluded_unknown
         elif relationship_category:
-            denominator = [fact for fact in usable if not uncertain(fact, key)]
-            excluded_unknown = len(usable) - len(denominator)
+            hero_id = key.split("|", 1)[0]
+            if category == "equipment-for-hero":
+                excluded_unknown = hero_unknown_counts[hero_id] - unknown_present_counts[key]
+                denominator = hero_fact_counts[hero_id] - excluded_unknown
+            else:
+                excluded_unknown = unknown_counts[hero_id] - unknown_present_counts[key]
+                denominator = usable_count - excluded_unknown
         else:
-            # Individual denominators use every usable attack, so no attack is
-            # excluded as unknown.
-            denominator = usable
-        matching = [fact for fact in denominator if key in presence[fact["id"]]]
-        counts = Counter(int(fact["stars"]) for fact in matching)
-        sample = len(matching)
-        star_counts = [counts[index] for index in range(4)]
+            denominator = usable_count
+        sample = aggregate["usage_count"]
+        star_counts = aggregate["star_counts"]
         star_rates = [count / sample if sample else 0 for count in star_counts]
         typed_ids = key.replace("cc:", "").replace("|", ",").split(",")
 
@@ -226,15 +271,14 @@ def build_army_result(
             suffix = typed_id.split(":", 1)[1] if ":" in typed_id else typed_id
             return f"Unknown ID {suffix}"
 
-        label = " + ".join(item_label(item) for item in typed_ids)
         rows.append({
-            "key": key, "label": label, "usage_count": sample,
-            "usage_denominator": len(denominator),
-            "usage_rate": sample / len(denominator) if denominator else 0,
+            "key": key, "label": " + ".join(item_label(item) for item in typed_ids),
+            "usage_count": sample, "usage_denominator": denominator,
+            "usage_rate": sample / denominator if denominator else 0,
             "star_counts": star_counts, "star_rates": star_rates,
             "three_star_rate": star_rates[3],
-            "average_stars": sum(int(fact["stars"]) for fact in matching) / sample if sample else 0,
-            "average_destruction": sum(int(fact["destruction_percentage"]) for fact in matching) / sample if sample else 0,
+            "average_stars": aggregate["stars"] / sample if sample else 0,
+            "average_destruction": aggregate["destruction"] / sample if sample else 0,
             "unknown_excluded_attacks": excluded_unknown,
         })
     sort_field = {
@@ -243,7 +287,6 @@ def build_army_result(
         "average-destruction": "average_destruction",
     }[selection.sort]
     rows.sort(key=lambda row: (-float(row[sort_field]), row["key"]))
-    states = Counter(str(fact["army_state"]) for fact in facts)
     army_states = {
         "fully_decoded": states.pop("decoded", 0), "partial": states.pop("partial", 0),
         "missing_code": states.pop("missing_army_share_code", 0),
@@ -253,12 +296,12 @@ def build_army_result(
         **dict(sorted(states.items())),
     }
     return {
-        "kind": "army-analytics", "total_attacks": len(facts),
-        "usable_army_sample": len(usable), "army_states": army_states,
-        "army_states_sum_confirmed": sum(army_states.values()) == len(facts),
-        "unknown_affected_attacks": sum(bool(fact["unresolved_components"]) for fact in facts),
-        "unknown_component_occurrences": sum(len(fact["unresolved_components"]) for fact in facts),
-        "perspective_disagreement_count": sum(bool(fact["perspective_disagreement"]) for fact in facts),
+        "kind": "army-analytics", "total_attacks": total_facts,
+        "usable_army_sample": usable_count, "army_states": army_states,
+        "army_states_sum_confirmed": sum(army_states.values()) == total_facts,
+        "unknown_affected_attacks": unknown_affected,
+        "unknown_component_occurrences": unknown_occurrences,
+        "perspective_disagreement_count": disagreement_count,
         "missing_trophy_membership_evidence": 0,
         "collection_coverage": {"state": "complete", "completed_days": selection.end_day - selection.start_day + 1},
         "freshness": {"state": "frozen"},

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -277,6 +278,25 @@ def test_publication_writer_serves_reproducible_perspective_results(
             assert facts[(attacker_vs_other, "offense")][3] == 6035
 
             api = ApiDatabase(ci)
+            fact_queries: list[str] = []
+            original_connection = api.pool.connection
+
+            @contextmanager
+            def traced_connection():
+                with original_connection() as connection:
+                    class TracedConnection:
+                        def execute(self, query, *args, **kwargs):
+                            sql = str(query)
+                            if "FROM army_analytics_battle_facts" in sql:
+                                fact_queries.append(sql)
+                            return connection.execute(query, *args, **kwargs)
+
+                        def __getattr__(self, name):
+                            return getattr(connection, name)
+
+                    yield TracedConnection()
+
+            api.pool.connection = traced_connection
             try:
                 # Offense lens: partial known component counts individually.
                 selection = _selection()
@@ -297,6 +317,41 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 identity = first["publication_identity"]
                 assert identity.startswith("army-publication-")
                 assert first["reproducibility"]["official_season_id"] == SEASON_ID
+                category_columns = {
+                    "troops": "home_troops",
+                    "spells": "spells",
+                    "siege": "siege",
+                    "cc-troops": "cc_troops",
+                    "cc-composition": "cc_troops",
+                    "heroes": "heroes",
+                    "pets": "heroes",
+                    "equipment": "heroes",
+                    "equipment-for-hero": "heroes",
+                    "hero-pet": "heroes",
+                    "hero-equipment": "heroes",
+                }
+                for category, component_column in category_columns.items():
+                    fact_queries.clear()
+                    category_result = api.get_army_analytics(
+                        _selection(category=category)
+                    )
+                    assert category_result is not None
+                    assert len(
+                        [query for query in fact_queries if "count(*) FILTER" in query]
+                    ) == 1
+                    payload_queries = [
+                        query
+                        for query in fact_queries
+                        if "SELECT id, battle_id" in query
+                    ]
+                    assert len(payload_queries) == 1
+                    payload_query = payload_queries[0]
+                    assert "battle_time_trophies BETWEEN %s AND %s" in payload_query
+                    assert f"{component_column} AS component_payload" in payload_query
+                    for other_column in {
+                        "home_troops", "spells", "siege", "cc_troops", "heroes"
+                    } - {component_column}:
+                        assert f"{other_column} AS component_payload" not in payload_query
 
                 # Reads calculate from retained facts without persistent
                 # per-selection storage. Identical inputs keep one identity;
@@ -323,6 +378,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     ).fetchone()[0] is None
 
                 # Defense lens uses the defender's own accepted report.
+                fact_queries.clear()
                 defense = api.get_army_analytics(
                     _selection(lens="defense", category="siege")
                 )
@@ -333,6 +389,15 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 )
                 assert siege_row["usage_count"] == 1
                 assert siege_row["usage_denominator"] == 1
+                payload_queries = [
+                    query for query in fact_queries if "SELECT id, battle_id" in query
+                ]
+                assert len(payload_queries) == 1
+                assert "siege AS component_payload" in payload_queries[0]
+                assert "home_troops" not in payload_queries[0]
+                assert "spells" not in payload_queries[0]
+                assert "cc_troops" not in payload_queries[0]
+                assert "heroes" not in payload_queries[0]
 
                 # Per-battle army display keeps perspectives separate.
                 attacker_army = api.get_battle_army(attacker_vs_defender, "attacker")
@@ -360,12 +425,21 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 assert top5["reproducibility"]["snapshot_versions"] == [1]
                 # The attacker sits at position 6 of the frozen snapshot, so a
                 # Top-5 offense cohort excludes both of their attacks.
+                fact_queries.clear()
                 top5_offense = api.get_army_analytics(
                     _selection(population="top-5")
                 )
                 assert top5_offense is not None
                 assert top5_offense["total_attacks"] == 0
                 assert top5_offense["rows"] == []
+                payload_queries = [
+                    query for query in fact_queries if "SELECT id, battle_id" in query
+                ]
+                assert len(payload_queries) == 1
+                assert "population_player_id = ANY(%s::bigint[])" in payload_queries[0]
+                assert "battle_time_trophies BETWEEN" not in payload_queries[0]
+                assert "home_troops AS component_payload" in payload_queries[0]
+                assert "heroes" not in payload_queries[0]
 
                 # A withheld day inside the range names the affected day.
                 with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
@@ -397,6 +471,107 @@ def test_publication_writer_serves_reproducible_perspective_results(
             finally:
                 api.close()
         finally:
+            database.close()
+
+
+def test_unselected_fact_correction_does_not_change_selected_result(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = DAY_START + timedelta(hours=1)
+        observations = []
+        for index, attacker in enumerate(("#2PP", "#9PP")):
+            observations.append(
+                store_observation(
+                    ci,
+                    archive_server,
+                    occurrence_key=f"unselected-correction-a{index}",
+                    endpoint="battle_log",
+                    body=json.dumps(
+                        {"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}
+                    ).encode(),
+                    observed_at=ts + timedelta(minutes=index + 1),
+                    normalized_tag=attacker,
+                )[1]
+            )
+        database, processor = _processor(ci, archive_server)
+        api = ApiDatabase(ci)
+        try:
+            for index, job in enumerate(observations):
+                assert processor.process_job(job, owner=f"ingest-{index}").outcome == "processed"
+            with database.pool.connection() as connection:
+                battles = {
+                    text(attacker): int(battle_id)
+                    for attacker, battle_id in connection.execute(
+                        """
+                        SELECT attacker.normalized_tag, battle.id
+                        FROM legend_battles AS battle
+                        JOIN players AS attacker
+                          ON attacker.id = battle.attacker_player_id
+                        """
+                    ).fetchall()
+                }
+                player_ids = {
+                    text(tag): int(player_id)
+                    for tag, player_id in connection.execute(
+                        """
+                        SELECT normalized_tag, id FROM players
+                        WHERE normalized_tag IN ('#2PP', '#9PP')
+                        """
+                    ).fetchall()
+                }
+            for attacker in ("#2PP", "#9PP"):
+                _publish_day(
+                    database,
+                    attacker,
+                    [_event(battles[attacker], "offense", ts, 3, 100, 35)],
+                )
+                job = _army_job(database)
+                assert processor.process_job(job, owner=f"analytics-{attacker}").outcome == "processed"
+            _seed_frozen_snapshot(
+                database, [(player_ids["#2PP"],), (player_ids["#9PP"],)]
+            )
+            selection = _selection(population="top-5")
+            before = api.get_army_analytics(selection)
+            assert before is not None and before["total_attacks"] == 1
+            with database.pool.connection() as connection:
+                before_unselected_hash = connection.execute(
+                    """
+                    SELECT input_hash
+                    FROM army_analytics_battle_facts
+                    WHERE battle_id = %s AND lens = 'offense' AND is_current
+                    """,
+                    (battles["#9PP"],),
+                ).fetchone()[0]
+
+            _publish_day_correction(
+                database,
+                "#9PP",
+                [_event(battles["#9PP"], "offense", ts, 2, 75, 12)],
+            )
+            correction = processor.process_job(
+                _army_job(database), owner="unselected-correction"
+            )
+            assert correction is not None and correction.outcome == "processed"
+            after = api.get_army_analytics(selection)
+            assert after is not None
+            assert after["rows"] == before["rows"]
+            assert after["reproducibility"]["source_evidence_hash"] == before[
+                "reproducibility"
+            ]["source_evidence_hash"]
+            assert after["publication_identity"] == before["publication_identity"]
+            with database.pool.connection() as connection:
+                after_unselected_hash = connection.execute(
+                    """
+                    SELECT input_hash
+                    FROM army_analytics_battle_facts
+                    WHERE battle_id = %s AND lens = 'offense' AND is_current
+                    """,
+                    (battles["#9PP"],),
+                ).fetchone()[0]
+            assert after_unselected_hash != before_unselected_hash
+        finally:
+            api.close()
             database.close()
 
 

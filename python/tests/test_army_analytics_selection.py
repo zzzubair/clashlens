@@ -255,6 +255,30 @@ def test_unknown_label_fallback_is_robust_to_colonless_malformed_typed_id() -> N
     ] == "Unknown ID 999"
 
 
+def test_reducer_visits_each_fact_once_per_nested_collection() -> None:
+    class TrackingFact(dict):
+        hero_reads = 0
+
+        def __getitem__(self, key):
+            if key == "heroes":
+                type(self).hero_reads += 1
+            return super().__getitem__(key)
+
+    fact = TrackingFact(
+        _fact(
+            1,
+            heroes=[
+                {"hero": "hero:0", "pet": None, "equipment": ["equipment:14", "equipment:32"]},
+                {"hero": "hero:1", "pet": None, "equipment": ["equipment:14", "equipment:32"]},
+            ],
+        )
+    )
+    build_army_result([fact], _selection(category="equipment-for-hero"))
+    # The reducer reads the fact's hero collection during the single fact
+    # visit and does not rescan it once per emitted equipment relationship.
+    assert TrackingFact.hero_reads == 2
+
+
 def test_equipment_for_hero_exclusions_scoped_to_confirmed_hero_denominator() -> None:
     # hero:0's unresolved equipment makes that one attack uncertain. Other
     # attacks stay in denominator accounting instead of being published as
