@@ -332,6 +332,28 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(runway["target_used_bytes"], int(expected_capacity * 0.80))
         self.assertTrue(runway["checks"]["usable_capacity_measured"])
 
+    def test_runway_projects_measured_growth_per_interval(self) -> None:
+        filesystem = {
+            "path": "/tmp",
+            "usable_capacity_bytes": 1_000,
+            "raw_capacity_bytes": 1_000,
+            "used_bytes": 100,
+        }
+        runway = runner._runway_inputs(
+            filesystem,
+            filesystem,
+            {"relation_sizes": {"players": {"total_bytes": 100}}, "wal_bytes": 50},
+            {},
+            {},
+            0,
+            measured_intervals=2,
+        )
+
+        self.assertEqual(runway["measured_local_growth_bytes"], 150)
+        self.assertEqual(runway["projected_daily_local_growth_bytes"], 21_600)
+        self.assertEqual(runway["target_used_bytes"], 800)
+        self.assertEqual(runway["target_utilization"], 0.80)
+
     def test_archive_probe_marker_parses_totals(self) -> None:
         marker = (
             '{"count":4,"head":5,"get":4,"put":1,'

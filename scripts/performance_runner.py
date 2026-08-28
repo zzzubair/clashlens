@@ -3097,6 +3097,7 @@ def _runway_inputs(
     relation_start: dict[str, dict[str, Any]],
     spool: dict[str, Any],
     archived_bytes: int,
+    measured_intervals: int = 1,
 ) -> dict[str, Any]:
     relation_growth = sum(
         max(
@@ -3108,7 +3109,7 @@ def _runway_inputs(
     )
     wal_bytes = int(database["wal_bytes"])
     measured_growth = relation_growth + wal_bytes
-    projected_daily_growth = measured_growth * 288
+    projected_daily_growth = measured_growth / measured_intervals * 288
     capacity = int(filesystem_after["usable_capacity_bytes"])
     target = int(capacity * 0.80)
     headroom = max(0, target - int(filesystem_after["used_bytes"]))
@@ -3495,6 +3496,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                 relation_start,
                 spool,
                 archived_bytes,
+                measured_intervals=int(workload.get("measured_cycles", 1)),
             )
             samples.append(
                 {
