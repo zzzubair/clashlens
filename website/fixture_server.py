@@ -43,6 +43,7 @@ UUID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
 FIXTURE_OBSERVED_AT = "2026-08-05T18:00:00Z"
+FIXTURE_GENERATED_AT = "2026-08-05T18:05:00Z"
 FIXTURE_VERSION = "python-fixture-v1"
 FIXTURE_PREVIOUS_SEASON = "1783916800"
 ALLOWED_PROVIDERS = {"discord", "google"}
@@ -231,12 +232,13 @@ def army_analytics(season, query):
         "category": query.get("category", ["troops"])[0],
         "sort": query.get("sort", ["usage-rate"])[0],
     }
-    return {
+    result = {
         "kind": "army-analytics",
         "selection": selection,
         "total_attacks": 2,
         "usable_army_sample": 2,
         "army_states": {"fully_decoded": 1, "partial": 1},
+        "army_states_sum_confirmed": True,
         "unknown_affected_attacks": 1,
         "unknown_component_occurrences": 2,
         "perspective_disagreement_count": 0,
@@ -284,10 +286,17 @@ def army_analytics(season, query):
                 "three_star_rate": 0.0,
                 "average_stars": 1.0,
                 "average_destruction": 49.0,
-                "unknown_excluded_attacks": 0,
+                "unknown_excluded_attacks": 1,
             },
         ],
     }
+    if season == "fixture-false":
+        result["army_states_sum_confirmed"] = False
+    if season == "fixture-partial":
+        result["collection_coverage"] = {"state": "partial", "completed_days": 1}
+    if season == "fixture-stale":
+        result["freshness"] = {"state": "stale"}
+    return result
 
 
 def leaderboard(limit, view, offset=0, season=None, day=None):
@@ -304,7 +313,7 @@ def leaderboard(limit, view, offset=0, season=None, day=None):
     payload = {
         "kind": kind,
         "ordering_rule_version": ordering_rule_version,
-        "generated_at": FIXTURE_OBSERVED_AT,
+        "generated_at": FIXTURE_GENERATED_AT,
         "entries": entries[offset : offset + limit],
         "tracked_population": len(PLAYER_SPECS),
         "total_entries": len(PLAYER_SPECS),
@@ -327,6 +336,11 @@ def leaderboard(limit, view, offset=0, season=None, day=None):
             "coverage": "partial",
             "version": ordering_rule_version,
         },
+        "source_observations": {
+            "oldest_observed_at": FIXTURE_OBSERVED_AT,
+            "newest_observed_at": FIXTURE_OBSERVED_AT,
+            "stale_count": sum(spec[-1] == "stale" for spec in PLAYER_SPECS),
+        } if kind == "live" else None,
         "quality_states": [
             "missing",
             "partial",
@@ -847,6 +861,21 @@ class FixtureHandler(BaseHTTPRequestHandler):
             return
         if path == "/v1/analytics/armies":
             season = query.get("season", ["current"])[0]
+            if season == "fixture-422":
+                self.send_json(422, {"error": "invalid_army_analytics_selection"})
+                return
+            if season == "fixture-framework-422":
+                self.send_json(422, {"error": "invalid_request"})
+                return
+            if season == "fixture-unavailable":
+                self.send_json(
+                    404,
+                    {
+                        "error": "army_analytics_unavailable",
+                        "affected_days": [2, 4],
+                    },
+                )
+                return
             if season == "current":
                 # The fixture's current season has no completed Legend day;
                 # name the previous season so the page can link to it.

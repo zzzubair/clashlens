@@ -83,6 +83,7 @@ STEP5_P95_TARGET_MS = 200.0
 STEP5_FORCED_MISS_TARGET_SECONDS = 5.0
 STEP5_COLLECTION_LIMIT_SECONDS = 300.0
 STEP5_TROOP_KEYS = tuple(f"troop:{index}" for index in range(27))
+BATTLE_FIXTURE = (PYTHON / "testdata" / "legend_i_battle_log_v1.json").read_bytes()
 _LANES = 32
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
 DAY_START = BOUNDARY - timedelta(days=1)
@@ -946,6 +947,47 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
         army_sample = artifact["army_read_sample"]
         require(army_sample, ("database",), "army_read_sample")
         require(army_sample["database"], database_metrics, "army_read_sample database")
+    if mode == "mixed-backfill":
+        require(
+            artifact["provenance"],
+            ("source_sha", "migrations", "configuration_fingerprint"),
+            "mixed-backfill provenance",
+        )
+        workload = artifact["samples"][0].get("workload") if artifact["samples"] else None
+        require(
+            workload,
+            (
+                "completion_order",
+                "completion_counts",
+                "live_queue_latency_seconds",
+                "oldest_active_queue_age_seconds",
+                "elapsed_seconds",
+                "cpu_seconds",
+                "peak_rss_kib",
+                "memory_pressure_delta",
+                "live_latency_contract",
+                "five_minute_contract",
+                "hard_failures",
+                "official_api_traffic",
+            ),
+            "mixed-backfill workload",
+        )
+        require(
+            workload["live_latency_contract"],
+            (
+                "target_seconds",
+                "p95_seconds",
+                "maximum_seconds",
+                "collection_maximum_seconds",
+                "passed",
+            ),
+            "mixed-backfill live latency contract",
+        )
+        require(
+            workload["five_minute_contract"],
+            ("target_seconds", "elapsed_seconds", "passed"),
+            "mixed-backfill five-minute contract",
+        )
 
 
 def _query_army_endpoint(
@@ -2728,49 +2770,236 @@ def _run_mixed(
     from domain_test_support import store_observation
     from psycopg.types.json import Jsonb
 
-    database, processor, metrics, _spool = _processor(connection_info, archive)
+    from clashlens.worker import process_concurrently
+
+    started = time.perf_counter()
+    cpu_start = time.process_time()
+    pressure_before = _memory_pressure(connection_info)
+    wal_start, statement_start, wal_retained_start = _start_metrics(connection_info)
+    database, processor, metrics, spool = _processor(connection_info, archive)
     try:
         jobs: list[tuple[str, int]] = []
+        effective_lanes = min(_LANES, 32)
         for kind, count in (("backfill", backfill), ("live", live)):
             for index in range(count):
                 tag = _tag(index + 1)
-                observation, job = store_observation(
-                    connection_info,
-                    archive,
-                    occurrence_key=f"{kind}-{index}",
-                    endpoint="profile",
-                    body=_profile_body(tag),
-                    observed_at=DAY_START + timedelta(hours=1),
-                    normalized_tag=tag,
-                    deduplication_key=f"perf-{kind}-{index}",
-                )
                 if kind == "backfill":
+                    observation, collection_job = store_observation(
+                        connection_info,
+                        archive,
+                        occurrence_key=f"{kind}-battle-{index}",
+                        endpoint="battle_log",
+                        body=BATTLE_FIXTURE,
+                        observed_at=DAY_START + timedelta(hours=1),
+                        normalized_tag=tag,
+                        deduplication_key=f"perf-{kind}-battle-{index}",
+                    )
+                    seeded = processor.process_job(
+                        collection_job, owner=f"perf-mixed-seed-{index}"
+                    )
+                    if seeded is None or seeded.outcome != "processed":
+                        raise RuntimeError(f"mixed battle seed failed: {seeded}")
                     with psycopg.connect(connection_info) as connection:
-                        connection.execute(
-                            """UPDATE python_processing_jobs SET
-                                observation_id=NULL, replay_observation_id=%s,
-                                work_type='replay_observation', input_json=%s
-                               WHERE id=%s""",
-                            (observation, Jsonb({"replay_request_id": index + 1}), job),
-                        )
-                        connection.commit()
+                        battle_id = connection.execute(
+                            """SELECT battle_id FROM battle_evidence
+                               WHERE observation_id = %s
+                               ORDER BY id LIMIT 1""",
+                            (observation,),
+                        ).fetchone()
+                        if battle_id is None:
+                            raise RuntimeError("mixed battle seed produced no battle")
+                        battle_id = int(battle_id[0])
+                        job = connection.execute(
+                            """INSERT INTO python_processing_jobs (
+                                   work_type, deduplication_key, input_json,
+                                   processing_version, domain_rule_version,
+                                   analytics_rule_version, priority
+                               ) VALUES (
+                                   'redecode_army', %s, %s,
+                                   'clashlens-domain-processing-v1',
+                                   'clashlens-domain-rules-v1', 'army-analytics-v2', 25
+                               ) RETURNING id""",
+                            (
+                                f"redecode_army:army-decoder-v2:unit-catalog-v1:{battle_id}:{battle_id}",
+                                Jsonb({"battle_ids": [battle_id]}),
+                            ),
+                        ).fetchone()
+                        assert job is not None
+                        job = int(job[0])
+                else:
+                    _observation, job = store_observation(
+                        connection_info,
+                        archive,
+                        occurrence_key=f"{kind}-{index}",
+                        endpoint="profile",
+                        body=_profile_body(tag),
+                        observed_at=DAY_START + timedelta(hours=1),
+                        normalized_tag=tag,
+                        deduplication_key=f"perf-{kind}-{index}",
+                    )
                 jobs.append((kind, job))
+        with psycopg.connect(connection_info) as connection:
+            # Battle setup can enqueue collector-owned discovery work for the
+            # fixture's opponent. It is outside this Python queue workload.
+            connection.execute(
+                """UPDATE collector_jobs SET status = 'complete', updated_at = clock_timestamp()
+                   WHERE work_type = 'discovery_profile'
+                     AND status IN ('pending', 'leased', 'waiting_retry')"""
+            )
+            connection.commit()
         by_id = {job: kind for kind, job in jobs}
-        drained = _drain(processor, len(jobs))
-        order = [by_id[item["job_id"]] for item in drained]
+        results = process_concurrently(
+            processor,
+            concurrency=effective_lanes,
+            owner="perf-mixed",
+            max_jobs=len(jobs),
+            lease_seconds=300,
+        )
+        result_by_id = {
+            result.job_id: {
+                "job_id": result.job_id,
+                "outcome": result.outcome,
+                "category": result.category,
+            }
+            for result in results
+        }
+        with psycopg.connect(connection_info) as connection:
+            rows = connection.execute(
+                """SELECT job.id, job.status, job.work_type, job.created_at,
+                          job.completed_at, attempt.started_at
+                   FROM python_processing_jobs AS job
+                   LEFT JOIN LATERAL (
+                       SELECT started_at
+                       FROM python_processing_attempts
+                       WHERE job_id = job.id
+                       ORDER BY attempt_number DESC
+                       LIMIT 1
+                   ) AS attempt ON true
+                   WHERE job.id = ANY(%s::bigint[])""",
+                ([job for _, job in jobs],),
+            ).fetchall()
+        records = []
+        for row in rows:
+            job_id = int(row[0])
+            result = result_by_id.get(job_id)
+            if result is None or row[4] is None:
+                continue
+            records.append(
+                {
+                    **result,
+                    "kind": by_id[job_id],
+                    "work_type": str(row[2]),
+                    "status": str(row[1]),
+                    "completed_at": row[4].astimezone(UTC).isoformat(),
+                    "queue_latency_seconds": max(
+                        0.0,
+                        ((row[5] or row[4]) - row[3]).total_seconds(),
+                    ),
+                    "collection_latency_seconds": max(
+                        0.0, (row[4] - row[3]).total_seconds()
+                    ),
+                }
+            )
+        records.sort(key=lambda item: (item["completed_at"], item["job_id"]))
+        order = [item["kind"] for item in records]
+        live_latencies = sorted(
+            item["queue_latency_seconds"] for item in records if item["kind"] == "live"
+        )
+        live_collection_latencies = [
+            item["collection_latency_seconds"]
+            for item in records
+            if item["kind"] == "live"
+        ]
+        p95_index = max(0, (len(live_latencies) * 95 + 99) // 100 - 1)
+        live_p95 = live_latencies[p95_index] if live_latencies else None
+        live_max = max(live_latencies, default=None)
+        live_collection_max = max(live_collection_latencies, default=None)
+        pressure_after = _memory_pressure(connection_info)
+        pressure_delta = _memory_pressure_delta(pressure_before, pressure_after)
+        database_metrics = _db_snapshot(
+            connection_info,
+            wal_start,
+            statement_start,
+            wal_retained_start=wal_retained_start,
+        )
+        queue_residue = database_metrics["queue_residue"]
+        elapsed_seconds = time.perf_counter() - started
+        live_latency_passed = (
+            len(live_latencies) == live
+            and live_collection_max is not None
+            and live_collection_max <= STEP5_COLLECTION_LIMIT_SECONDS
+        )
+        five_minute_passed = elapsed_seconds <= STEP5_COLLECTION_LIMIT_SECONDS
+        hard_failures = []
+        if len(records) != len(jobs):
+            hard_failures.append(
+                f"mixed processing returned {len(records)} completed results for {len(jobs)} jobs"
+            )
+        hard_failures.extend(
+            f"{item['kind']} job {item['job_id']} result {item['outcome']}/{item['status']}"
+            for item in records
+            if item["outcome"] != "processed" or item["status"] != "complete"
+        )
+        if not live_latency_passed:
+            hard_failures.append("mixed live queue latency exceeded five-minute contract")
+        if not five_minute_passed:
+            hard_failures.append("mixed workload exceeded five-minute collection contract")
+        if queue_residue:
+            hard_failures.append(f"mixed workload left active queue residue: {queue_residue}")
         return {
             "completion_order": order,
+            "completion_counts": {
+                "live": order.count("live"),
+                "backfill": order.count("backfill"),
+            },
             "live_jobs": live,
             "backfill_jobs": backfill,
+            "configured_lanes": _LANES,
+            "effective_lanes": effective_lanes,
             "official_responses": len(jobs),
+            "official_api_traffic": {"requests": 0, "source": "committed fixtures"},
             "live_first_completion_index": order.index("live")
             if "live" in order
             else None,
-            "results": drained,
+            "live_queue_latency_seconds": {
+                "count": len(live_latencies),
+                "p95": live_p95,
+                "maximum": live_max,
+                "collection_maximum": live_collection_max,
+            },
+            "oldest_active_queue_age_seconds": max(
+                (
+                    age
+                    for age in database_metrics["queue_age_seconds"].values()
+                    if age is not None
+                ),
+                default=None,
+            ),
+            "elapsed_seconds": elapsed_seconds,
+            "cpu_seconds": time.process_time() - cpu_start,
+            "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+            "memory_pressure_before": pressure_before,
+            "memory_pressure_after": pressure_after,
+            "memory_pressure_delta": pressure_delta,
+            "live_latency_contract": {
+                "target_seconds": STEP5_COLLECTION_LIMIT_SECONDS,
+                "p95_seconds": live_p95,
+                "maximum_seconds": live_max,
+                "collection_maximum_seconds": live_collection_max,
+                "passed": live_latency_passed,
+            },
+            "five_minute_contract": {
+                "target_seconds": STEP5_COLLECTION_LIMIT_SECONDS,
+                "elapsed_seconds": elapsed_seconds,
+                "passed": five_minute_passed,
+            },
+            "hard_failures": hard_failures,
+            "results": records,
+            "database": database_metrics,
             "stage_metrics": metrics.snapshot(),
-            "spool": _spool.stats(),
-            "evidence_counters": _spool.counters(),
-            "spool_root": str(_spool.spool.root),
+            "spool": spool.stats(),
+            "evidence_counters": spool.counters(),
+            "spool_root": str(spool.spool.root),
         }
     finally:
         database.close()
@@ -3365,6 +3594,11 @@ def _provenance(
         "backfill_jobs": arguments.backfill_jobs,
         "army_facts": arguments.army_facts,
         "lanes": arguments.lanes,
+        "effective_lanes": (
+            min(arguments.lanes, 32)
+            if arguments.mode == "mixed-backfill"
+            else arguments.lanes
+        ),
         "images": arguments.image,
         "army_warmups": getattr(arguments, "army_warmups", STEP5_WARMUPS),
         "army_requests": getattr(arguments, "army_requests", STEP5_REQUESTS),
@@ -3429,6 +3663,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
         else None
     )
     samples = []
+    hard_failures: list[str] = []
     populations = (
         arguments.populations
         if arguments.mode in {"reset-boundary", "correction"}
@@ -3472,6 +3707,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         arguments.live_jobs,
                         arguments.backfill_jobs,
                     )
+                    hard_failures.extend(workload.get("hard_failures", []))
             if arguments.mode == "coordinator-12500":
                 measurements = _db_snapshot(
                     connection_info,
@@ -3656,6 +3892,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
         "collector_probe": collector_probe,
         "samples": samples,
         "army_read_sample": army_read_sample,
+        "hard_failures": hard_failures,
     }
     artifact["artifact_digest"] = _artifact_digest(artifact)
     validate_artifact(artifact)
@@ -3747,8 +3984,9 @@ def main(argv: list[str] | None = None) -> int:
             arguments.output.write_text(payload)
         else:
             print(payload, end="")
-        hard_failures = (result.get("army_read_sample") or {}).get(
-            "hard_failures", []
+        hard_failures = list(result.get("hard_failures", []))
+        hard_failures.extend(
+            (result.get("army_read_sample") or {}).get("hard_failures", [])
         )
         if hard_failures:
             print(

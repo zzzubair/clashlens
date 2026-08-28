@@ -14,6 +14,7 @@ from test_api_migration import migrated_production_database
 
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.army_analytics import ArmyAnalyticsUnavailable, CurrentSeasonEmpty
 from clashlens.hmac_proof import SigningInput, sign
 from clashlens.verification import OfficialVerificationResponse
 
@@ -587,6 +588,94 @@ def test_linked_elsewhere_requires_one_bounded_support_candidate(
                 assert verifier.calls == 2
         finally:
             database.close()
+
+
+def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        payload = {
+            "kind": "army-analytics",
+            "total_attacks": 1,
+            "usable_army_sample": 1,
+            "army_states": {"fully_decoded": 1},
+            "army_states_sum_confirmed": True,
+            "unknown_affected_attacks": 0,
+            "unknown_component_occurrences": 0,
+            "perspective_disagreement_count": 0,
+            "missing_trophy_membership_evidence": 0,
+            "cohort_evidence": {
+                "stale_or_uncertain_cohort_members": 0,
+                "streak_excluded_players": 0,
+                "shielded_player_days": 0,
+            },
+            "collection_coverage": {"state": "complete", "completed_days": 1},
+            "freshness": {"state": "frozen"},
+            "reproducibility": {
+                "official_season_id": "2026-08",
+                "legend_days": [1, 1],
+                "snapshot_versions": [1],
+            },
+            "versions": {
+                "decoder": "army-decoder-v2",
+                "catalog": "unit-catalog-v1",
+                "analytics": "army-analytics-v2",
+            },
+            "publication_identity": "army-publication-test-v1",
+            "selection": {
+                "lens": "offense",
+                "season": "2026-08",
+                "start_day": 1,
+                "end_day": 1,
+                "population": "top-100",
+                "category": "troops",
+                "sort": "usage-rate",
+            },
+            "rows": [],
+        }
+        database.get_army_analytics = lambda _selection, now=None: payload  # type: ignore[method-assign]
+        app = create_app(
+            database=database,
+            keys={("typescript-website", "current"): TS_CURRENT},
+            clock=lambda: NOW_SECONDS,
+            now=lambda: NOW,
+        )
+        target = "/v1/analytics/armies?season=2026-08"
+        with TestClient(app) as client:
+            unauthorized = client.get(target)
+            assert unauthorized.status_code == 401
+            success = client.get(target, headers=signed_headers(target))
+            assert success.status_code == 200
+            assert success.json() == payload
+            for invalid_target in (
+                "/v1/analytics/armies",
+                "/v1/analytics/armies?season=2026-08&lens=invalid",
+            ):
+                invalid = client.get(
+                    invalid_target, headers=signed_headers(invalid_target)
+                )
+                assert invalid.status_code == 422
+
+            database.get_army_analytics = lambda _selection, now=None: (_ for _ in ()).throw(  # type: ignore[method-assign]
+                ArmyAnalyticsUnavailable([2, 4])
+            )
+            unavailable = client.get(target, headers=signed_headers(target))
+            assert unavailable.status_code == 404
+            assert unavailable.json()["affected_days"] == [2, 4]
+
+            database.get_army_analytics = lambda _selection, now=None: (_ for _ in ()).throw(  # type: ignore[method-assign]
+                CurrentSeasonEmpty("2026-07")
+            )
+            empty = client.get(
+                "/v1/analytics/armies?season=current",
+                headers=signed_headers("/v1/analytics/armies?season=current"),
+            )
+            assert empty.status_code == 404
+            assert empty.json() == {
+                "error": "no_completed_legend_days",
+                "previous_season_id": "2026-07",
+            }
 
 
 def test_public_player_read_p95_is_below_200_milliseconds(

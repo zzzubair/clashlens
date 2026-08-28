@@ -25,6 +25,19 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertTrue(runner.post_fix_source_ready())
         runner.validate_reset([12_500], True)
 
+    def test_provenance_effective_lanes_matches_each_mode(self) -> None:
+        for mode, configured, effective in (
+            ("mixed-backfill", 8, 8),
+            ("mixed-backfill", 64, 32),
+            ("army-analytics", 64, 64),
+            ("coordinator-12500", 64, 64),
+            ("duplicate-heavy", 64, 64),
+        ):
+            arguments = runner.parse_arguments([mode, "--lanes", str(configured)])
+            provenance = runner._provenance(arguments)
+            self.assertEqual(provenance["configuration"]["lanes"], configured)
+            self.assertEqual(provenance["configuration"]["effective_lanes"], effective)
+
     def test_duplicate_mode_uses_fixed_endpoint_mix(self) -> None:
         self.assertEqual(runner.DUPLICATE_EXECUTION_CAP, 25_024)
         self.assertEqual(
@@ -539,6 +552,8 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
             ]
             if mode != "coordinator-12500":
                 command.extend(["--populations", "1"])
+            if mode == "mixed-backfill":
+                command.extend(["--lanes", "8"])
             completed = subprocess.run(
                 command,
                 cwd=ROOT,
@@ -617,6 +632,27 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
             self.assertTrue(
                 all("oldest_active_age_seconds" in row for row in queue_rows)
             )
+            if mode == "mixed-backfill":
+                workload = sample["workload"]
+                self.assertEqual(workload["completion_counts"], {"live": 1, "backfill": 1})
+                self.assertEqual(workload["configured_lanes"], 8)
+                self.assertEqual(workload["effective_lanes"], 8)
+                self.assertEqual(
+                    result["provenance"]["configuration"]["effective_lanes"],
+                    workload["effective_lanes"],
+                )
+                self.assertEqual(workload["live_latency_contract"]["passed"], True)
+                self.assertEqual(workload["five_minute_contract"]["passed"], True)
+                self.assertEqual(workload["hard_failures"], [])
+                self.assertEqual(workload["official_api_traffic"]["requests"], 0)
+                self.assertEqual(
+                    {row["work_type"] for row in workload["results"] if row["kind"] == "backfill"},
+                    {"redecode_army"},
+                )
+                self.assertTrue(
+                    all(row["outcome"] == "processed" for row in workload["results"])
+                )
+                self.assertEqual(workload["database"]["queue_residue"], [])
             if mode == "duplicate-heavy":
                 operations = sample["workload"]["collector_archive_operations"]
                 self.assertTrue(operations["executed"])

@@ -124,6 +124,13 @@ jobs:
       - name: Install locked dependencies
         working-directory: website
         run: npm ci
+      - name: Runtime dependency audit (blocking)
+        working-directory: website
+        run: npm audit --omit=dev
+      - name: Full dependency audit (reported)
+        working-directory: website
+        continue-on-error: true
+        run: npm audit
       - name: Test
         working-directory: website
         run: npm test

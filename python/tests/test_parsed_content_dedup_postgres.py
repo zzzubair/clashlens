@@ -62,6 +62,103 @@ def _replay_job(
     ).fetchone()[0]
 
 
+def test_army_backfill_migration_reclassifies_only_0008_jobs_and_live_claims_first(
+    database_url: str, archive_server
+) -> None:
+    with _pre_dedup_database(database_url) as connection_info:
+        _observation_id, battle_job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="army-backfill-battle",
+            endpoint="battle_log",
+            body=BATTLE_FIXTURE.read_bytes(),
+            observed_at=NOW,
+            normalized_tag="#2PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            result = processor.process_job(battle_job_id, owner="army-battle-seed")
+            assert result is not None and result.outcome == "processed"
+        finally:
+            database.close()
+
+        _live_observation_id, live_job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="army-backfill-live-profile",
+            endpoint="profile",
+            body=PROFILE_FIXTURE.read_bytes(),
+            observed_at=NOW,
+            normalized_tag="#2PP",
+        )
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            battle_id = connection.execute(
+                "SELECT battle_id FROM battle_evidence ORDER BY id LIMIT 1"
+            ).fetchone()[0]
+            migration_key = (
+                "redecode_army:army-decoder-v2:unit-catalog-v1:"
+                f"{battle_id}:{battle_id}"
+            )
+            migration_job_id = connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, analytics_rule_version
+                ) VALUES ('redecode_army', %s, %s::jsonb, 'army-analytics-v2')
+                RETURNING id
+                """,
+                (migration_key, json.dumps({"battle_ids": [battle_id]})),
+            ).fetchone()[0]
+            lookalike_job_id = connection.execute(
+                """
+                INSERT INTO python_processing_jobs (
+                    work_type, deduplication_key, input_json, analytics_rule_version
+                ) VALUES ('redecode_army', %s, %s::jsonb, 'army-analytics-v2')
+                RETURNING id
+                """,
+                (
+                    f"{migration_key}-lookalike",
+                    json.dumps({"battle_ids": [battle_id]}),
+                ),
+            ).fetchone()[0]
+
+        root = Path(__file__).parents[2]
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                (root / "deploy/migrations/0012_parsed_content_dedup.sql").read_text()
+            )
+            migration_sql = (root / "deploy/migrations/0013_army_backfill_priority.sql").read_text()
+            connection.execute(migration_sql)
+            priorities_after_first = connection.execute(
+                """
+                SELECT id, priority FROM python_processing_jobs
+                WHERE id IN (%s, %s, %s)
+                """,
+                (migration_job_id, lookalike_job_id, live_job_id),
+            ).fetchall()
+            connection.execute(migration_sql)
+            priorities_after_second = connection.execute(
+                """
+                SELECT id, priority FROM python_processing_jobs
+                WHERE id IN (%s, %s, %s)
+                """,
+                (migration_job_id, lookalike_job_id, live_job_id),
+            ).fetchall()
+        expected_priorities = {
+            migration_job_id: 25,
+            lookalike_job_id: 100,
+            live_job_id: 100,
+        }
+        assert dict(priorities_after_first) == expected_priorities
+        assert dict(priorities_after_second) == expected_priorities
+
+        database, _processor_instance = _processor(connection_info, archive_server)
+        try:
+            claim = database.claim_job(owner="army-backfill-live-claim")
+            assert claim is not None and claim.job_id == live_job_id
+        finally:
+            database.close()
+
+
 def test_snapshot_manifest_uses_owning_ranking_version_observed_at(
     database_url: str, archive_server
 ) -> None:

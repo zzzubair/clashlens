@@ -5,6 +5,12 @@ const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 function emptyLivePayload() {
   return {
     kind: "live",
+    generated_at: "2026-08-06T12:00:00Z",
+    source_observations: {
+      oldest_observed_at: null,
+      newest_observed_at: null,
+      stale_count: 0,
+    },
     tracked_population: 0,
     total_entries: 0,
     page: 1,
@@ -72,9 +78,49 @@ describe("server-only Python client response boundary", () => {
     });
   });
 
+  it("maps an empty live leaderboard without source observations", async () => {
+    const payload = {
+      ...emptyLivePayload(),
+      provenance: { ...emptyLivePayload().provenance, observed_at: null },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    await expect(createPythonClient().getTrackedLeaderboard()).resolves.toMatchObject({
+      entries: [],
+      provenance: { observedAt: null },
+      sourceObservations: {
+        oldestObservedAt: null,
+        newestObservedAt: null,
+        staleCount: 0,
+      },
+    });
+  });
+
   it.each([
     ["wrong requested kind", { ...emptyLivePayload(), kind: "frozen" }],
     ["inconsistent pagination", { ...emptyLivePayload(), page_count: 1 }],
+    [
+      "null provenance with source observations",
+      {
+        ...emptyLivePayload(),
+        source_observations: {
+          oldest_observed_at: "2026-08-06T11:59:00Z",
+          newest_observed_at: "2026-08-06T12:00:00Z",
+          stale_count: 0,
+        },
+        provenance: { ...emptyLivePayload().provenance, observed_at: null },
+      },
+    ],
   ])("rejects %s", async (_name, payload) => {
     vi.stubGlobal(
       "fetch",
@@ -327,6 +373,11 @@ describe("server-only Python client response boundary", () => {
             kind: "live",
             ordering_rule_version: "tracked-trophies-md5-v1",
             generated_at: "2026-08-06T12:00:00+00:00",
+            source_observations: {
+              oldest_observed_at: "2026-08-06T11:59:00+00:00",
+              newest_observed_at: "2026-08-06T12:00:00+00:00",
+              stale_count: 0,
+            },
             tracked_population: 2,
             total_entries: 1,
             page: 1,
@@ -374,8 +425,17 @@ describe("server-only Python client response boundary", () => {
     const { createPythonClient } = await import("../../app/services/python.server");
     await expect(createPythonClient().getTrackedLeaderboard()).resolves.toMatchObject({
       view: "live",
+      generatedAt: "2026-08-06T12:00:00+00:00",
       coverage: { measuredPercent: 50 },
-      provenance: { version: "tracked-trophies-md5-v1" },
+      provenance: {
+        version: "tracked-trophies-md5-v1",
+        observedAt: "2026-08-06T12:00:00+00:00",
+      },
+      sourceObservations: {
+        oldestObservedAt: "2026-08-06T11:59:00+00:00",
+        newestObservedAt: "2026-08-06T12:00:00+00:00",
+        staleCount: 0,
+      },
     });
   });
 
@@ -524,7 +584,7 @@ describe("server-only Python client response boundary", () => {
     });
   });
 
-  it("maps exact full and profile-only Python player payloads", async () => {
+  it("maps exact player payloads and rejects malformed player provenance", async () => {
     const offenseEvents = [
       {
         battle_id: "attack-8",
@@ -721,6 +781,13 @@ describe("server-only Python client response boundary", () => {
         season_days: [],
       },
     };
+    const nullProvenance = {
+      ...full,
+      screen_ready: {
+        ...full.screen_ready,
+        provenance: { ...full.screen_ready.provenance, observed_at: null },
+      },
+    };
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(full), { status: 200 }))
@@ -728,8 +795,9 @@ describe("server-only Python client response boundary", () => {
       .mockResolvedValueOnce(
         new Response(JSON.stringify(malformedEvents), { status: 200 }),
       )
+      .mockResolvedValueOnce(new Response(JSON.stringify(tooManyEvents), { status: 200 }))
       .mockResolvedValueOnce(
-        new Response(JSON.stringify(tooManyEvents), { status: 200 }),
+        new Response(JSON.stringify(nullProvenance), { status: 200 }),
       );
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
@@ -770,6 +838,11 @@ describe("server-only Python client response boundary", () => {
       status: 502,
       payload: { error: "malformed" },
     });
+    // Shared/player provenance cannot use the live leaderboard's empty-source exception.
+    await expect(createPythonClient().getPlayer("#2PP")).rejects.toMatchObject({
+      status: 502,
+      payload: { error: "malformed" },
+    });
   });
 
   it("rejects a non-canonical refresh UUID before signing or fetch", async () => {
@@ -790,6 +863,7 @@ describe("server-only Python client response boundary", () => {
       total_attacks: 2,
       usable_army_sample: 2,
       army_states: { fully_decoded: 1, partial: 1 },
+      army_states_sum_confirmed: true,
       unknown_affected_attacks: 1,
       unknown_component_occurrences: 1,
       perspective_disagreement_count: 0,
@@ -891,6 +965,7 @@ describe("server-only Python client response boundary", () => {
       totalAttacks: 2,
       usableArmySample: 2,
       armyStates: { fully_decoded: 1, partial: 1 },
+      armyStatesSumConfirmed: true,
       unknownAffectedAttacks: 1,
       perspectiveDisagreementCount: 0,
       missingTrophyMembershipEvidence: 3,
@@ -948,6 +1023,24 @@ describe("server-only Python client response boundary", () => {
   });
 
   it.each([
+    [
+      "wrong army analytics kind",
+      (payload: Record<string, unknown>) => {
+        payload.kind = "army-analytics-v1";
+      },
+    ],
+    [
+      "missing army-state reconciliation flag",
+      (payload: Record<string, unknown>) => {
+        delete payload.army_states_sum_confirmed;
+      },
+    ],
+    [
+      "non-integer army-state count",
+      (payload: Record<string, unknown>) => {
+        (payload.army_states as Record<string, unknown>).partial = "1";
+      },
+    ],
     [
       "missing publication identity",
       (payload: Record<string, unknown>) => {

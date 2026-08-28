@@ -115,10 +115,17 @@ drained by the workload. Collector-owned active residue, including discovery
 profiles, is reported separately by owner and work type because this Python
 runner cannot claim collector work; it must not be read as drained reset work.
 
-Mixed-backfill converts seeded observation jobs into replay jobs directly; it
-measures production claim and replay processing order, not the public replay
-request operation. Synthetic army rows preserve the production query shape but
-are not official observations.
+Mixed-backfill seeds committed battle-log fixtures through the production
+processor, then creates migration-shaped `redecode_army` jobs for those real
+battles and runs live/backfill work through the production worker lanes. Its
+retained workload reports live/backfill completion counts and order, per-live
+queue latency (p95 and maximum), oldest active queue age, elapsed/CPU/RSS/swap/WAL
+measurements, source/configuration provenance, and explicit live-latency and
+five-minute contract results. The mode exits nonzero on any unsuccessful live or
+backfill result, a live job over five minutes, or active queue residue. Backfill
+jobs use the forward-migration class and no official API traffic. `--lanes` is
+accepted up to 64 globally; mixed-backfill reports its effective 32-lane worker
+ceiling in both the workload and configuration fingerprint.
 
 Reset and correction populations of 12,500 or more require `--post-fix`.
 The flag verifies the checked-in snapshot and army writers contain bounded

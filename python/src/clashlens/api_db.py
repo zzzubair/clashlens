@@ -1608,7 +1608,9 @@ class ApiDatabase:
                            count(*) OVER () AS total_entries,
                            count(*) FILTER (
                                WHERE observed_at < %s - make_interval(secs => %s)
-                           ) OVER () AS stale_count
+                           ) OVER () AS stale_count,
+                           min(observed_at) OVER () AS oldest_observed_at,
+                           max(observed_at) OVER () AS newest_observed_at
                     FROM selected
                 ), totals AS (
                     SELECT count(*)::bigint AS tracked_population FROM players WHERE active
@@ -1616,7 +1618,8 @@ class ApiDatabase:
                 SELECT ranked.normalized_tag, ranked.name, ranked.trophies,
                        ranked.observed_at, ranked.eligibility_state, ranked.clan,
                        ranked.position, COALESCE(ranked.total_entries, 0),
-                       COALESCE(ranked.stale_count, 0), totals.tracked_population
+                       COALESCE(ranked.stale_count, 0), ranked.oldest_observed_at,
+                       ranked.newest_observed_at, totals.tracked_population
                 FROM totals
                 LEFT JOIN ranked ON ranked.position > %s AND ranked.position <= %s
                 ORDER BY ranked.position NULLS LAST
@@ -1626,8 +1629,10 @@ class ApiDatabase:
             total_entries = int(rows[0][7]) if rows else 0
             if offset and offset >= total_entries:
                 return None
-            tracked_population = int(rows[0][9])
+            tracked_population = int(rows[0][11])
             stale_count = int(rows[0][8])
+            oldest_observed_at = rows[0][9]
+            newest_observed_at = rows[0][10]
             entries = []
             for row in rows:
                 if row[0] is None:
@@ -1676,11 +1681,28 @@ class ApiDatabase:
                 },
                 "provenance": {
                     "source": "current accepted player profiles",
-                    "observed_at": now.astimezone(UTC).isoformat(),
+                    "observed_at": (
+                        None
+                        if newest_observed_at is None
+                        else newest_observed_at.astimezone(UTC).isoformat()
+                    ),
                     "freshness": "stale" if stale_count else "fresh",
                     "confidence": "partial",
                     "coverage": "partial",
                     "version": "tracked-trophies-md5-v1",
+                },
+                "source_observations": {
+                    "oldest_observed_at": (
+                        None
+                        if oldest_observed_at is None
+                        else oldest_observed_at.astimezone(UTC).isoformat()
+                    ),
+                    "newest_observed_at": (
+                        None
+                        if newest_observed_at is None
+                        else newest_observed_at.astimezone(UTC).isoformat()
+                    ),
+                    "stale_count": stale_count,
                 },
                 "quality_states": ["partial"] + (["stale"] if stale_count else []),
                 "entries": entries,

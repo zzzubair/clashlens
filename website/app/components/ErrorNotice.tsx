@@ -7,6 +7,9 @@ export function ErrorNotice({ error }: { error: WebsiteErrorResponse }) {
       {error.error.retryAfterSeconds ? (
         <span> Retry after about {error.error.retryAfterSeconds} seconds.</span>
       ) : null}
+      {error.error.affectedDays ? (
+        <span> Affected Legend days: {error.error.affectedDays.join(", ")}.</span>
+      ) : null}
     </aside>
   );
 }
