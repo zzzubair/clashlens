@@ -30,6 +30,24 @@ WHERE outcome.parsed_payload_id IS NULL
   AND outcome.response_hash = payload.response_hash
   AND outcome.parser_version = payload.parser_version;
 
+-- Legacy ranking payloads were recorded as valid even when the retained
+-- official attempt was partial. Preserve that evidence before the payload
+-- immutability trigger below is installed.
+UPDATE parsed_source_payloads AS payload
+SET parse_outcome = 'valid_with_gaps'
+WHERE payload.endpoint = 'global_player_rankings'
+  AND payload.parse_outcome = 'valid'
+  AND EXISTS (
+      SELECT 1
+      FROM official_top200_attempts AS attempt
+      JOIN collector_observations AS observation
+        ON observation.id = attempt.observation_id
+      WHERE observation.endpoint = payload.endpoint
+        AND observation.response_hash = payload.response_hash
+        AND attempt.parser_version = payload.parser_version
+        AND attempt.outcome IN ('official_partial', 'official_contract_changed')
+  );
+
 CREATE INDEX IF NOT EXISTS observation_processing_outcomes_payload_v4
     ON observation_processing_outcomes (parsed_payload_id, observation_id);
 
@@ -362,6 +380,8 @@ GRANT SELECT, INSERT ON parsed_source_payloads TO clashlens_python_worker;
 GRANT SELECT, INSERT, UPDATE ON battle_log_observation_rows,
     official_top200_version_entries, official_top200_attempt_entries
     TO clashlens_python_worker;
+GRANT SELECT ON battle_log_observation_source_rows TO clashlens_python_worker;
+GRANT SELECT ON player_profile_effects TO clashlens_python_api;
 DO $$
 DECLARE sequence_name text;
 BEGIN

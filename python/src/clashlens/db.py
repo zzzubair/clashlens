@@ -2037,10 +2037,12 @@ class Database:
                 )
                 profile_version = connection.execute(
                     """
-                    SELECT id
-                    FROM player_profile_versions
-                    WHERE player_id = %s AND semantic_projection = %s
-                    ORDER BY id
+                    SELECT version.id
+                    FROM player_profile_versions AS version
+                    JOIN players AS current_player ON current_player.id = version.player_id
+                    WHERE version.player_id = %s AND version.semantic_projection = %s
+                    ORDER BY (version.id = current_player.current_profile_version_id) DESC,
+                             version.id DESC
                     LIMIT 1
                     """,
                     (player[0], Jsonb(projection)),
@@ -2152,8 +2154,13 @@ class Database:
                                    p.current_observed_at IS NULL
                                    OR p.current_observed_at < effect.observed_at
                                    OR (p.current_observed_at = effect.observed_at
-                                       AND (p.current_profile_version_id IS NULL
-                                            OR p.current_profile_version_id < effect.profile_version_id))
+                                       AND effect.id > COALESCE((
+                                           SELECT max(current_effect.id)
+                                           FROM player_profile_effects AS current_effect
+                                           WHERE current_effect.profile_version_id = p.current_profile_version_id
+                                             AND current_effect.effect_kind = 'current_profile'
+                                             AND current_effect.observed_at = p.current_observed_at
+                                       ), 0))
                                ) AS update_profile
                         FROM player_profile_effects AS effect
                         JOIN player_profile_versions AS version
@@ -7035,9 +7042,11 @@ class Database:
                 if official_version_id is not None:
                     official_entry = connection.execute(
                         """
-                        SELECT rank, observed_at
-                        FROM official_top200_version_entries
-                        WHERE version_id = %s AND player_id = %s
+                        SELECT entry.rank, version.observed_at
+                        FROM official_top200_version_entries AS entry
+                        JOIN official_top200_versions AS version
+                          ON version.id = entry.version_id
+                        WHERE entry.version_id = %s AND entry.player_id = %s
                         """,
                         (official_version_id, player_id),
                     ).fetchone()

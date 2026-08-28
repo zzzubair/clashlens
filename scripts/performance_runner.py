@@ -421,8 +421,14 @@ def _duplicate_fixture_body(
     return (None if endpoint == "global_player_rankings" else _tag(index + 1)), fixture_bodies[endpoint]
 
 
-def _process_jobs(processor: Any, jobs: list[int], prefix: str) -> list[dict[str, Any]]:
-    """Process production-shaped batches with the configured 12 worker lanes."""
+def _process_jobs(
+    processor: Any,
+    jobs: list[int],
+    prefix: str,
+    *,
+    serial: bool = False,
+) -> list[dict[str, Any]]:
+    """Process a batch, preserving reset-pair evidence ordering when needed."""
 
     def process(index: int, job: int) -> tuple[int, dict[str, Any]]:
         started = time.perf_counter()
@@ -438,6 +444,8 @@ def _process_jobs(processor: Any, jobs: list[int], prefix: str) -> list[dict[str
             "elapsed_ms": (time.perf_counter() - started) * 1000,
         }
 
+    if serial:
+        return [process(index, job)[1] for index, job in enumerate(jobs)]
     results: list[tuple[int, dict[str, Any]]] = []
     with ThreadPoolExecutor(
         max_workers=_LANES, thread_name_prefix="clashlens-perf"
@@ -577,6 +585,7 @@ def _db_snapshot(
     wal_start: str,
     statement_start: int | None,
     relation_start: dict[str, dict[str, Any]] | None = None,
+    wal_retained_start: int | None = None,
 ) -> dict[str, Any]:
     import psycopg
 
@@ -615,6 +624,16 @@ def _db_snapshot(
             "SELECT pg_wal_lsn_diff(pg_current_wal_insert_lsn(), %s::pg_lsn)::bigint",
             (wal_start,),
         ).fetchone()[0]
+        retained_wal = int(
+            connection.execute(
+                "SELECT COALESCE(sum(size), 0)::bigint FROM pg_ls_waldir()"
+            ).fetchone()[0]
+        )
+        retained_wal_growth = (
+            None
+            if wal_retained_start is None
+            else max(0, retained_wal - wal_retained_start)
+        )
         queues = {}
         queue_residue = []
         for table in ("collector_jobs", "python_processing_jobs"):
@@ -690,6 +709,8 @@ def _db_snapshot(
     }
     return {
         "wal_bytes": int(wal),
+        "wal_retained_bytes": retained_wal,
+        "wal_retained_growth_bytes": retained_wal_growth,
         "sql_statement_calls": statement_calls,
         "pending_remote_verification": pending_remote,
         "response_counts_by_endpoint": endpoint_counts,
@@ -715,12 +736,17 @@ def _db_snapshot(
     }
 
 
-def _start_metrics(connection_info: str) -> tuple[str, int | None]:
+def _start_metrics(connection_info: str) -> tuple[str, int | None, int]:
     import psycopg
 
     with psycopg.connect(connection_info) as connection:
         wal = _text(
             connection.execute("SELECT pg_current_wal_insert_lsn()::text").fetchone()[0]
+        )
+        retained_wal = int(
+            connection.execute(
+                "SELECT COALESCE(sum(size), 0)::bigint FROM pg_ls_waldir()"
+            ).fetchone()[0]
         )
         try:
             calls = int(
@@ -731,7 +757,7 @@ def _start_metrics(connection_info: str) -> tuple[str, int | None]:
         except psycopg.Error:
             connection.rollback()
             calls = None
-    return wal, calls
+    return wal, calls, retained_wal
 
 
 def _plan_counts(node: dict[str, Any]) -> tuple[int, int]:
@@ -828,9 +854,10 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
         raise TypeError("artifact samples metric must be a list")
     if mode != STEP5_MODE and not samples:
         raise ValueError("artifact missing metrics: samples")
-
     database_metrics = (
         "wal_bytes",
+        "wal_retained_bytes",
+        "wal_retained_growth_bytes",
         "sql_statement_calls",
         "application_sql_calls",
         "pending_remote_verification",
@@ -862,6 +889,14 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             raise ValueError(
                 f"{label} missing metrics: {', '.join(missing_keys)}"
             )
+
+    if mode == "duplicate-heavy":
+        require(artifact["provenance"], ("postgres",), "provenance")
+        require(
+            artifact["provenance"]["postgres"],
+            ("version", "settings"),
+            "provenance.postgres",
+        )
 
     for index, sample in enumerate(samples):
         label = f"sample {index}"
@@ -2305,7 +2340,7 @@ def _run_coordinator_writers(
             "classification_counts": {"Complete": int(counts[1])},
             "identities_frozen": True,
         },
-        "contract": {"database_version": 4, "required_version": 4},
+        "contract": {"database_version": 5, "required_version": 5},
         "coverage": {"expected": population, "included": population, "excluded": 0},
         "publication_identities": int(counts[4]),
         "generation": {
@@ -2365,16 +2400,26 @@ def _run_reset(
         source_jobs = _store_reconciliation_population(
             connection_info, archive, population
         )
-        profile_results = _process_jobs(processor, source_jobs, "reset-evidence")
+        profile_results = _process_jobs(
+            processor, source_jobs, "reset-evidence", serial=True
+        )
         first = _drain(processor, population * 20 + 100)
         if correction:
             correction_jobs = _store_reconciliation_corrections(
                 connection_info, archive, population
             )
             profile_results.extend(
-                _process_jobs(processor, correction_jobs, "correction-evidence")
+                _process_jobs(
+                    processor, correction_jobs, "correction-evidence", serial=True
+                )
             )
             second = _drain(processor, population * 20 + 100)
+            # A correction can be queued after the source reconciliation has
+            # observed the published generation. Re-run the coordinator's
+            # durable recovery seam so that queued work is activated before
+            # asserting the correction generation.
+            database.reevaluate_boundary_publications()
+            second.extend(_drain(processor, population * 20 + 100))
         else:
             second = []
         # Discovery profiles are collector-owned descendants that the bounded
@@ -2878,7 +2923,7 @@ def _run_army_read_sample(database_url: str, fact_count: int) -> dict[str, Any]:
         domain_database(database_url, include_coordinator=True) as connection_info,
         archive_server() as archive,
     ):
-        wal_start, statement_start = _start_metrics(connection_info)
+        wal_start, statement_start, wal_retained_start = _start_metrics(connection_info)
         relation_start = _relation_snapshot(connection_info)
         cpu_start = time.process_time()
         elapsed_start = time.perf_counter()
@@ -2890,7 +2935,11 @@ def _run_army_read_sample(database_url: str, fact_count: int) -> dict[str, Any]:
                 _drain(processor, 120)
                 reads = _seed_worst_case_army_reads(connection_info, fact_count)
             measurements = _db_snapshot(
-                connection_info, wal_start, statement_start, relation_start
+                connection_info,
+                wal_start,
+                statement_start,
+                relation_start,
+                wal_retained_start,
             )
             measurements["application_sql_calls"] = sql_calls[0]
             return {
@@ -2924,13 +2973,17 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
         domain_database(database_url, include_coordinator=True) as connection_info,
         archive_server() as archive,
     ):
-        wal_start, statement_start = _start_metrics(connection_info)
+        wal_start, statement_start, wal_retained_start = _start_metrics(connection_info)
         relation_start = _relation_snapshot(connection_info)
         seed = _seed_step5_army_database(connection_info, archive)
         reads = [_measure_army_pair(connection_info, spec) for spec in specs]
         overlap = _run_step5_overlap(connection_info, archive, specs)
         database = _db_snapshot(
-            connection_info, wal_start, statement_start, relation_start
+            connection_info,
+            wal_start,
+            statement_start,
+            relation_start,
+            wal_retained_start,
         )
         postgres = _postgres_provenance(connection_info)
         pressure_after = _memory_pressure(database_url)
@@ -3118,7 +3171,8 @@ def _runway_inputs(
         for name in database["relation_sizes"]
     )
     wal_bytes = int(database["wal_bytes"])
-    measured_growth = relation_growth + wal_bytes
+    retained_wal_growth = max(0, int(database["wal_retained_growth_bytes"]))
+    measured_growth = relation_growth + retained_wal_growth
     projected_daily_growth = measured_growth / measured_intervals * 288
     capacity = int(filesystem_after["usable_capacity_bytes"])
     target = int(capacity * 0.80)
@@ -3146,6 +3200,7 @@ def _runway_inputs(
         ),
         "postgres_relation_growth_bytes": relation_growth,
         "postgres_wal_bytes": wal_bytes,
+        "postgres_wal_retained_growth_bytes": retained_wal_growth,
         "local_spool_bytes": int(spool.get("final_bytes", 0))
         + int(spool.get("temporary_bytes", 0)),
         "remote_bucket_bytes_excluded": int(archived_bytes),
@@ -3161,6 +3216,7 @@ def _runway_inputs(
             "target_is_80_percent": target == int(capacity * 0.80),
             "relation_sizes_present": bool(database.get("relation_sizes")),
             "wal_present": "wal_bytes" in database,
+            "wal_retained_growth_present": "wal_retained_growth_bytes" in database,
             "spool_reported_separately": True,
             "remote_bucket_excluded": True,
         },
@@ -3292,7 +3348,11 @@ def _postgres_provenance(connection_info: str) -> dict[str, Any]:
     return {"version": version, "settings": {_text(row[0]): _text(row[1]) for row in rows}}
 
 
-def _provenance(arguments: argparse.Namespace) -> dict[str, Any]:
+def _provenance(
+    arguments: argparse.Namespace,
+    *,
+    postgres: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     migrations = [
         {"name": path.name, "sha256": _sha(path.read_bytes())}
         for path in sorted((ROOT / "deploy/migrations").glob("*.sql"))
@@ -3313,7 +3373,7 @@ def _provenance(arguments: argparse.Namespace) -> dict[str, Any]:
         "duplicate_endpoint_mix": dict(DUPLICATE_ENDPOINT_MIX),
         "skip_collector_probe": arguments.skip_collector_probe,
     }
-    return {
+    result = {
         "source_sha": _git("rev-parse", "HEAD"),
         "source_dirty": bool(_git("status", "--porcelain")),
         "runner_sha256": _sha(Path(__file__).read_bytes()),
@@ -3325,11 +3385,15 @@ def _provenance(arguments: argparse.Namespace) -> dict[str, Any]:
         "images": arguments.image,
         "host": _host_provenance(),
     }
+    if postgres is not None:
+        result["postgres"] = postgres
+    return result
 
 
 def run(arguments: argparse.Namespace) -> dict[str, Any]:
     if not arguments.database_url:
         raise RuntimeError("--database-url or CLASHLENS_TEST_DATABASE_URL is required")
+    postgres = _postgres_provenance(arguments.database_url)
     if arguments.mode == STEP5_MODE:
         started = datetime.now(tz=UTC)
         with count_sql_calls() as sql_calls:
@@ -3341,7 +3405,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             "mode": arguments.mode,
             "started_at": started.isoformat(),
             "finished_at": finished.isoformat(),
-            "provenance": _provenance(arguments),
+            "provenance": _provenance(arguments, postgres=postgres),
             "collector_probe": None,
             "samples": [],
             "army_read_sample": workload,
@@ -3379,7 +3443,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             ) as connection_info,
             archive_server() as archive,
         ):
-            wal_start, statement_start = _start_metrics(connection_info)
+            wal_start, statement_start, wal_retained_start = _start_metrics(connection_info)
             relation_start = _relation_snapshot(connection_info)
             filesystem_before = _filesystem_usage(ROOT)
             cpu_start = time.process_time()
@@ -3410,7 +3474,11 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                     )
             if arguments.mode == "coordinator-12500":
                 measurements = _db_snapshot(
-                    connection_info, wal_start, statement_start, relation_start
+                    connection_info,
+                    wal_start,
+                    statement_start,
+                    relation_start,
+                    wal_retained_start,
                 )
                 measurements["application_sql_calls"] = sql_calls[0]
                 filesystem_after = _filesystem_usage(ROOT)
@@ -3444,7 +3512,11 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                 )
                 continue
             measurements = _db_snapshot(
-                connection_info, wal_start, statement_start, relation_start
+                connection_info,
+                wal_start,
+                statement_start,
+                relation_start,
+                wal_retained_start,
             )
             filesystem_after = _filesystem_usage(ROOT)
             measurements["application_sql_calls"] = sql_calls[0]
@@ -3580,7 +3652,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
         "mode": arguments.mode,
         "started_at": started.isoformat(),
         "finished_at": datetime.now(tz=UTC).isoformat(),
-        "provenance": _provenance(arguments),
+        "provenance": _provenance(arguments, postgres=postgres),
         "collector_probe": collector_probe,
         "samples": samples,
         "army_read_sample": army_read_sample,
