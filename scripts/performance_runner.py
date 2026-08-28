@@ -2597,18 +2597,28 @@ def _run_duplicate(
             profile_effects = connection.execute(
                 "SELECT count(*) FROM player_profile_effects"
             ).fetchone()[0]
-            battle_canonical_rows = connection.execute(
-                "SELECT count(*) FROM battle_source_rows WHERE parsed_payload_id IS NOT NULL"
-            ).fetchone()[0]
-            battle_occurrence_rows = connection.execute(
-                "SELECT count(*) FROM battle_log_observation_rows"
-            ).fetchone()[0]
-            ranking_canonical_rows = connection.execute(
-                "SELECT count(*) FROM official_top200_entries WHERE parsed_payload_id IS NOT NULL"
-            ).fetchone()[0]
-            ranking_occurrence_links = connection.execute(
-                "SELECT count(*) FROM official_top200_version_entries"
-            ).fetchone()[0]
+            if getattr(database, "_supports_content_dedup", False):
+                battle_canonical_rows = connection.execute(
+                    "SELECT count(*) FROM battle_source_rows WHERE parsed_payload_id IS NOT NULL"
+                ).fetchone()[0]
+                battle_occurrence_rows = connection.execute(
+                    "SELECT count(*) FROM battle_log_observation_rows"
+                ).fetchone()[0]
+                ranking_canonical_rows = connection.execute(
+                    "SELECT count(*) FROM official_top200_entries WHERE parsed_payload_id IS NOT NULL"
+                ).fetchone()[0]
+                ranking_occurrence_links = connection.execute(
+                    "SELECT count(*) FROM official_top200_version_entries"
+                ).fetchone()[0]
+            else:
+                battle_canonical_rows = 0
+                battle_occurrence_rows = connection.execute(
+                    "SELECT count(*) FROM battle_source_rows"
+                ).fetchone()[0]
+                ranking_canonical_rows = 0
+                ranking_occurrence_links = connection.execute(
+                    "SELECT count(*) FROM official_top200_entries"
+                ).fetchone()[0]
             connection.commit()
         canonical_content = {
             "parsed_payloads_by_endpoint": {

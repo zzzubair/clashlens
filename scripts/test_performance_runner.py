@@ -399,6 +399,47 @@ class PerformanceRunnerTest(unittest.TestCase):
     "set CLASHLENS_TEST_DATABASE_URL for real PostgreSQL workload tests",
 )
 class PerformanceRunnerPostgresTest(unittest.TestCase):
+    def test_duplicate_canonical_metrics_follow_schema_seam(self) -> None:
+        from domain_test_support import domain_database
+
+        metrics = []
+        for include_coordinator in (False, True):
+            with (
+                domain_database(
+                    os.environ["CLASHLENS_TEST_DATABASE_URL"],
+                    include_coordinator=include_coordinator,
+                ) as connection_info,
+                runner.archive_server() as archive,
+            ):
+                workload = runner._run_duplicate(connection_info, archive, 6)
+            metrics.append(workload["canonical_content"])
+
+        self.assertEqual(metrics[0].keys(), metrics[1].keys())
+        self.assertEqual(
+            metrics[0],
+            {
+                "parsed_payloads_by_endpoint": {
+                    "battle_log": 1,
+                    "global_player_rankings": 1,
+                    "profile": 2,
+                },
+                "profile_semantic_versions": 2,
+                "profile_occurrence_effects": 2,
+                "battle_canonical_rows": 0,
+                "battle_occurrence_rows": 4,
+                "ranking_canonical_rows": 0,
+                "ranking_occurrence_links": 400,
+            },
+        )
+        self.assertEqual(
+            metrics[1],
+            {
+                **metrics[0],
+                "battle_canonical_rows": 2,
+                "ranking_canonical_rows": 200,
+            },
+        )
+
     def test_duplicate_exact_bytes_counts_each_variant_in_each_cycle(self) -> None:
         import json
 
