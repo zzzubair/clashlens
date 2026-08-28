@@ -46,7 +46,7 @@ func TestSchedulerDoesNotScheduleGlobalRankingsWhenBetaGateIsDisabled(t *testing
 func TestSchedulerKeepsGlobalRankingsAvailableDuringRegularDrain(t *testing.T) {
 	ctx := context.Background()
 	databaseURL := startBoundaryAdmissionDatabase(t)
-	store, err := openStore(ctx, databaseURL, 4)
+	store, err := openStore(ctx, databaseURL, 5)
 	if err != nil {
 		t.Fatalf("openStore returned an error: %v", err)
 	}

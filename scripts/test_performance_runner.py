@@ -25,6 +25,108 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertTrue(runner.post_fix_source_ready())
         runner.validate_reset([12_500], True)
 
+    def test_duplicate_mode_uses_fixed_endpoint_mix(self) -> None:
+        self.assertEqual(runner.DUPLICATE_EXECUTION_CAP, 25_024)
+        self.assertEqual(
+            runner._duplicate_endpoint_mix(25_024),
+            {
+                "profile": 12_500,
+                "battle_log": 12_500,
+                "global_player_rankings": 24,
+            },
+        )
+        self.assertEqual(
+            runner._duplicate_endpoint_mix(6),
+            {"profile": 2, "battle_log": 2, "global_player_rankings": 2},
+        )
+
+    def test_artifact_validation_rejects_missing_and_old_metrics(self) -> None:
+        artifact = {
+            "schema_version": runner.ARTIFACT_SCHEMA_VERSION,
+            "mode": "duplicate-heavy",
+            "started_at": "now",
+            "finished_at": "now",
+            "provenance": {"postgres": {"version": "test", "settings": {}}},
+            "collector_probe": None,
+            "samples": [
+                {"database": {}, "archive_operations": {}, "storage_runway": {}}
+            ],
+            "army_read_sample": None,
+        }
+        with self.assertRaisesRegex(ValueError, "digest"):
+            runner.validate_artifact(artifact)
+        artifact["artifact_digest"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "digest"):
+            runner.validate_artifact(artifact)
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        self.assertEqual(artifact["artifact_digest"], runner._artifact_digest(artifact))
+        with self.assertRaisesRegex(ValueError, "relation_sizes"):
+            runner.validate_artifact(artifact)
+        artifact["schema_version"] = 4
+        with self.assertRaisesRegex(ValueError, "schema_version"):
+            runner.validate_artifact(artifact)
+
+    def test_duplicate_artifact_rejects_old_per_occurrence_shape(self) -> None:
+        database_keys = (
+            "wal_bytes",
+            "wal_retained_bytes",
+            "wal_retained_growth_bytes",
+            "sql_statement_calls",
+            "application_sql_calls",
+            "pending_remote_verification",
+            "response_counts_by_endpoint",
+            "occurrence_counts_by_endpoint",
+            "relations",
+            "relation_sizes",
+            "relation_stats",
+            "affected_relations",
+            "queues",
+            "queue_age_seconds",
+            "queue_residue",
+        )
+        archive_keys = (
+            "get",
+            "get_bytes",
+            "head",
+            "conditional_put",
+            "put",
+            "put_bytes",
+            "conflicts",
+        )
+        sample = {
+            "database": dict.fromkeys(database_keys),
+            "archive_operations": dict.fromkeys(archive_keys),
+            "storage_runway": {
+                "measured_local_growth_bytes": 0,
+                "days_to_80_percent": None,
+                "checks": {},
+            },
+            "workload": {
+                "response_counts_by_endpoint": {},
+                "occurrence_counts_by_endpoint": {},
+                "fixture_bytes_by_endpoint": {},
+                "exact_bytes": 0,
+                "contract": {
+                    "expected_occurrences": 25_024,
+                    "executed_occurrences": 25_024,
+                    "endpoint_mix": {},
+                },
+            },
+        }
+        artifact = {
+            "schema_version": runner.ARTIFACT_SCHEMA_VERSION,
+            "mode": "duplicate-heavy",
+            "started_at": "now",
+            "finished_at": "now",
+            "provenance": {"postgres": {"version": "test", "settings": {}}},
+            "collector_probe": None,
+            "samples": [sample],
+            "army_read_sample": None,
+        }
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "canonical_content"):
+            runner.validate_artifact(artifact)
+
     def test_army_mode_freezes_production_protocol(self) -> None:
         arguments = runner.parse_arguments(
             ["army-analytics", "--database-url", "unused"]
@@ -206,6 +308,86 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(completed.stdout, "")
         self.assertIn("database-url", completed.stderr)
 
+    def test_runway_uses_measured_user_usable_capacity(self) -> None:
+        usage = runner._filesystem_usage(ROOT)
+        filesystem = os.statvfs(ROOT)
+        raw_capacity = int(filesystem.f_blocks * filesystem.f_frsize)
+        available = int(filesystem.f_bavail * filesystem.f_frsize)
+        expected_capacity = raw_capacity - max(
+            0, int(filesystem.f_bfree - filesystem.f_bavail) * filesystem.f_frsize
+        )
+
+        self.assertEqual(usage["raw_capacity_bytes"], raw_capacity)
+        self.assertEqual(usage["usable_capacity_bytes"], expected_capacity)
+        self.assertEqual(usage["available_bytes"], available)
+        runway = runner._runway_inputs(
+            usage,
+            usage,
+            {
+                "relation_sizes": {},
+                "wal_bytes": 0,
+                "wal_retained_growth_bytes": 0,
+            },
+            {},
+            {},
+            0,
+        )
+        self.assertEqual(runway["filesystem_capacity_bytes"], expected_capacity)
+        self.assertEqual(runway["filesystem_raw_capacity_bytes"], raw_capacity)
+        self.assertEqual(runway["target_utilization"], 0.80)
+        self.assertEqual(runway["target_used_bytes"], int(expected_capacity * 0.80))
+        self.assertTrue(runway["checks"]["usable_capacity_measured"])
+
+    def test_runway_projects_measured_growth_per_interval(self) -> None:
+        filesystem = {
+            "path": "/tmp",
+            "usable_capacity_bytes": 1_000,
+            "raw_capacity_bytes": 1_000,
+            "used_bytes": 100,
+        }
+        runway = runner._runway_inputs(
+            filesystem,
+            filesystem,
+            {
+                "relation_sizes": {"players": {"total_bytes": 100}},
+                "wal_bytes": 50,
+                "wal_retained_growth_bytes": 50,
+            },
+            {},
+            {},
+            0,
+            measured_intervals=2,
+        )
+
+        self.assertEqual(runway["measured_local_growth_bytes"], 150)
+        self.assertEqual(runway["projected_daily_local_growth_bytes"], 21_600)
+        self.assertEqual(runway["target_used_bytes"], 800)
+        self.assertEqual(runway["target_utilization"], 0.80)
+
+    def test_runway_uses_retained_wal_growth_not_generated_lsn_bytes(self) -> None:
+        filesystem = {
+            "path": "/tmp",
+            "usable_capacity_bytes": 1_000,
+            "raw_capacity_bytes": 1_000,
+            "used_bytes": 100,
+        }
+        runway = runner._runway_inputs(
+            filesystem,
+            filesystem,
+            {
+                "relation_sizes": {},
+                "wal_bytes": 500,
+                "wal_retained_bytes": 120,
+                "wal_retained_growth_bytes": 15,
+            },
+            {},
+            {},
+            0,
+        )
+        self.assertEqual(runway["postgres_wal_bytes"], 500)
+        self.assertEqual(runway["postgres_wal_retained_growth_bytes"], 15)
+        self.assertEqual(runway["measured_local_growth_bytes"], 15)
+
     def test_archive_probe_marker_parses_totals(self) -> None:
         marker = (
             '{"count":4,"head":5,"get":4,"put":1,'
@@ -251,6 +433,84 @@ class PerformanceRunnerTest(unittest.TestCase):
     "set CLASHLENS_TEST_DATABASE_URL for real PostgreSQL workload tests",
 )
 class PerformanceRunnerPostgresTest(unittest.TestCase):
+    def test_duplicate_canonical_metrics_follow_schema_seam(self) -> None:
+        from domain_test_support import domain_database
+
+        metrics = []
+        for include_coordinator in (False, True):
+            with (
+                domain_database(
+                    os.environ["CLASHLENS_TEST_DATABASE_URL"],
+                    include_coordinator=include_coordinator,
+                ) as connection_info,
+                runner.archive_server() as archive,
+            ):
+                workload = runner._run_duplicate(connection_info, archive, 6)
+            metrics.append(workload["canonical_content"])
+
+        self.assertEqual(metrics[0].keys(), metrics[1].keys())
+        self.assertEqual(
+            metrics[0],
+            {
+                "parsed_payloads_by_endpoint": {
+                    "battle_log": 1,
+                    "global_player_rankings": 1,
+                    "profile": 2,
+                },
+                "profile_semantic_versions": 2,
+                "profile_occurrence_effects": 2,
+                "battle_canonical_rows": 0,
+                "battle_occurrence_rows": 4,
+                "ranking_canonical_rows": 0,
+                "ranking_occurrence_links": 400,
+            },
+        )
+        self.assertEqual(
+            metrics[1],
+            {
+                **metrics[0],
+                "battle_canonical_rows": 2,
+                "ranking_canonical_rows": 200,
+            },
+        )
+
+    def test_duplicate_exact_bytes_counts_each_variant_in_each_cycle(self) -> None:
+        import json
+
+        from domain_test_support import domain_database
+
+        original_profile_body = runner._profile_body
+        original_fixture_body = runner._duplicate_fixture_body
+        captured_lengths: list[int] = []
+
+        def varied_profile_body(tag: str, variant: int = 0) -> bytes:
+            source = json.loads(original_profile_body(tag, 0))
+            source["name"] += "x" * variant
+            return json.dumps(source, separators=(",", ":")).encode()
+
+        def capture_fixture_body(*args, **kwargs):
+            tag, body = original_fixture_body(*args, **kwargs)
+            captured_lengths.append(len(body))
+            return tag, body
+
+        runner._profile_body = varied_profile_body
+        runner._duplicate_fixture_body = capture_fixture_body
+        try:
+            with (
+                domain_database(
+                    os.environ["CLASHLENS_TEST_DATABASE_URL"], include_coordinator=True
+                ) as connection_info,
+                runner.archive_server() as archive,
+            ):
+                workload = runner._run_duplicate(connection_info, archive, 6, cycles=2)
+        finally:
+            runner._profile_body = original_profile_body
+            runner._duplicate_fixture_body = original_fixture_body
+
+        self.assertEqual(len(captured_lengths), 12)
+        self.assertNotEqual(captured_lengths[0], captured_lengths[1])
+        self.assertEqual(workload["exact_bytes"], sum(captured_lengths))
+
     def test_connection_execute_is_counted_once_by_cursor_hook(self) -> None:
         import psycopg
 
@@ -270,7 +530,7 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 str(SCRIPT),
                 mode,
                 "--duplicate-observations",
-                "2",
+                "6",
                 "--live-jobs",
                 "1",
                 "--backfill-jobs",
@@ -287,9 +547,11 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 stdout=subprocess.PIPE,
             )
             result = json.loads(completed.stdout)
-            self.assertEqual(result["schema_version"], 4)
+            self.assertEqual(result["schema_version"], runner.ARTIFACT_SCHEMA_VERSION)
             sample = result["samples"][0]
             self.assertGreater(sample["database"]["wal_bytes"], 0)
+            self.assertGreaterEqual(sample["database"]["wal_retained_bytes"], 0)
+            self.assertGreaterEqual(sample["database"]["wal_retained_growth_bytes"], 0)
             self.assertGreater(sample["database"]["application_sql_calls"], 0)
             self.assertIn("collector_jobs", sample["database"]["queues"])
             self.assertIn("python_processing_jobs", sample["database"]["queues"])
@@ -299,7 +561,7 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
             if mode == "coordinator-12500":
                 workload = sample["workload"]
                 self.assertEqual(
-                    workload["contract"], {"database_version": 4, "required_version": 4}
+                    workload["contract"], {"database_version": 5, "required_version": 5}
                 )
                 self.assertEqual(
                     workload["coverage"],
@@ -358,9 +620,9 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
             if mode == "duplicate-heavy":
                 operations = sample["workload"]["collector_archive_operations"]
                 self.assertTrue(operations["executed"])
-                self.assertEqual(operations["count"], 2)
-                self.assertEqual(operations["head"], 2)
-                self.assertEqual(operations["get"], 1)
+                self.assertEqual(operations["count"], 6)
+                self.assertEqual(operations["head"], 6)
+                self.assertEqual(operations["get"], 5)
                 self.assertEqual(operations["raw_put"], 1)
                 self.assertEqual(operations["raw_get"], 1)
                 self.assertEqual(operations["raw_head"], 0)
@@ -368,11 +630,28 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 self.assertGreaterEqual(operations["operation_total_us"], 0)
                 self.assertGreaterEqual(operations["stage_put_us"], 0)
                 self.assertEqual(operations["put"], 1)
+                self.assertEqual(
+                    sample["workload"]["occurrence_counts_by_endpoint"],
+                    {"profile": 2, "battle_log": 2, "global_player_rankings": 2},
+                )
+                self.assertEqual(
+                    sample["database"]["response_counts_by_endpoint"],
+                    {"profile": 2, "battle_log": 2, "global_player_rankings": 2},
+                )
                 self.assertGreater(operations["elapsed_seconds"], 0)
             if mode in {"reset-boundary", "correction"}:
                 self.assertTrue(
                     sample["workload"]["fanout_evidence"]["matches_expected"]
                 )
+                if mode == "correction":
+                    self.assertEqual(
+                        [
+                            state["generation"]
+                            for state in sample["workload"]["fanout_evidence"]["generation_states"]
+                            if state["generation"] in {1, 2}
+                        ],
+                        [1, 2],
+                    )
                 army = result["army_read_sample"]
                 self.assertGreater(army["database"]["wal_bytes"], 0)
                 self.assertGreater(army["database"]["application_sql_calls"], 0)

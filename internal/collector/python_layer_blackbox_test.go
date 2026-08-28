@@ -99,7 +99,7 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 	); err != nil {
 		t.Fatalf("commit production Go→Python handoff: %v", err)
 	}
-	// The worker image is contract-4 only; migrate after the collector has
+	// The worker image is contract-v5 only; migrate after the collector has
 	// written its v2 observation so this remains a genuine handoff test.
 	for _, migration := range []string{
 		"0004_source_parser_v2.sql",
@@ -110,6 +110,7 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 		"0009_raw_evidence.sql",
 		"0010_boundary_publication_coordinator.sql",
 		"0011_boundary_publication_contract.sql",
+		"0012_parsed_content_dedup.sql",
 	} {
 		applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", migration))
 	}

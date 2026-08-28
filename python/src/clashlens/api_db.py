@@ -345,6 +345,47 @@ class ApiDatabase:
             timeout=timeout_seconds,
             open=True,
         )
+        self._supports_content_dedup: bool | None = None
+
+    def _current_profile_metadata(self, connection: Any) -> tuple[str, str]:
+        if self._supports_content_dedup is None:
+            self._supports_content_dedup = bool(
+                connection.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM information_schema.columns
+                        WHERE table_schema = current_schema()
+                          AND table_name = 'player_profile_effects'
+                          AND column_name = 'endpoint_version'
+                    )
+                    """
+                ).fetchone()[0]
+            )
+        if not self._supports_content_dedup:
+            return "", (
+                "profile.source_http_status, profile.endpoint_version, "
+                "profile.schema_version, profile.parser_version"
+            )
+        return (
+            """
+                LEFT JOIN LATERAL (
+                    SELECT effect.source_http_status, effect.endpoint_version,
+                           effect.schema_version, effect.parser_version
+                    FROM player_profile_effects AS effect
+                    WHERE effect.profile_version_id = profile.id
+                      AND effect.effect_kind = 'current_profile'
+                    ORDER BY effect.observed_at DESC, effect.id DESC
+                    LIMIT 1
+                ) AS current_effect ON true
+            """,
+            (
+                "COALESCE(current_effect.source_http_status, profile.source_http_status), "
+                "COALESCE(current_effect.endpoint_version, profile.endpoint_version), "
+                "COALESCE(current_effect.schema_version, profile.schema_version), "
+                "COALESCE(current_effect.parser_version, profile.parser_version)"
+            ),
+        )
 
     def close(self) -> None:
         self.pool.close()
@@ -1242,16 +1283,18 @@ class ApiDatabase:
         freshness_seconds: int,
     ) -> dict[str, Any] | None:
         with self.pool.connection() as connection:
+            metadata_join, metadata_columns = self._current_profile_metadata(connection)
             row = connection.execute(
-                """
+                f"""
                 SELECT player.normalized_tag, player.active, player.eligibility_state,
-                       profile.name, profile.trophies, profile.observed_at,
-                       profile.source_http_status, profile.endpoint_version,
-                       profile.schema_version, profile.parser_version,
+                       profile.name, profile.trophies,
+                       player.current_observed_at,
+                       {metadata_columns},
                        profile.profile_json -> 'clan' ->> 'name'
                 FROM players AS player
                 JOIN player_profile_versions AS profile
                     ON profile.id = player.current_profile_version_id
+                {metadata_join}
                 WHERE player.normalized_tag = %s
                   AND profile.source_contract_state = 'accepted'
                 """,
@@ -1499,7 +1542,8 @@ class ApiDatabase:
             rows = connection.execute(
                 """
                 SELECT player.normalized_tag, profile.name, profile.trophies,
-                       profile.observed_at, player.eligibility_state,
+                       player.current_observed_at,
+                       player.eligibility_state,
                        profile.profile_json -> 'clan' ->> 'name'
                 FROM players AS player
                 JOIN player_profile_versions AS profile
@@ -1548,7 +1592,8 @@ class ApiDatabase:
                 """
                 WITH selected AS (
                     SELECT player.normalized_tag, profile.name, profile.trophies,
-                           profile.observed_at, player.eligibility_state,
+                           player.current_observed_at AS observed_at,
+                           player.eligibility_state,
                            profile.profile_json -> 'clan' ->> 'name' AS clan
                     FROM players AS player
                     JOIN player_profile_versions AS profile
@@ -2498,7 +2543,8 @@ class ApiDatabase:
                 """
                 SELECT count(*), avg(profile.trophies),
                        count(*) FILTER (
-                           WHERE profile.observed_at >= %s - make_interval(secs => %s)
+                           WHERE player.current_observed_at
+                                 >= %s - make_interval(secs => %s)
                        )
                 FROM players AS player
                 JOIN player_profile_versions AS profile

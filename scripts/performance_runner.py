@@ -36,7 +36,40 @@ MODES = (
     "coordinator-12500",
     "army-analytics",
 )
-DUPLICATE_EXECUTION_CAP = 25_024
+DUPLICATE_ENDPOINT_MIX = {
+    "profile": 12_500,
+    "battle_log": 12_500,
+    "global_player_rankings": 24,
+}
+DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
+ARTIFACT_SCHEMA_VERSION = 7
+AFFECTED_RELATIONS = (
+    "players",
+    "collector_jobs",
+    "collector_attempts",
+    "collector_endpoint_results",
+    "collector_observations",
+    "archive_catalogue",
+    "python_processing_jobs",
+    "python_processing_attempts",
+    "observation_processing_outcomes",
+    "parsed_source_payloads",
+    "player_profile_versions",
+    "player_profile_effects",
+    "season_anchor_evidence",
+    "battle_log_observations",
+    "battle_source_rows",
+    "legend_battles",
+    "battle_evidence",
+    "battle_perspectives",
+    "known_player_discoveries",
+    "official_top200_attempts",
+    "official_top200_versions",
+    "official_top200_entries",
+    "battle_log_observation_rows",
+    "official_top200_version_entries",
+    "official_top200_attempt_entries",
+)
 STEP5_MODE = "army-analytics"
 STEP5_POPULATION = 12_500
 STEP5_DAYS = 28
@@ -164,8 +197,10 @@ def validate_reset(populations: list[int], post_fix: bool) -> None:
 class _ArchiveHandler(BaseHTTPRequestHandler):
     objects: ClassVar[dict[str, bytes]] = {}
     gets = 0
+    get_bytes = 0
     heads = 0
     puts = 0
+    put_bytes = 0
     conditional_puts = 0
     conflicts = 0
     counter_lock: ClassVar[Lock] = Lock()
@@ -178,6 +213,8 @@ class _ArchiveHandler(BaseHTTPRequestHandler):
         with type(self).counter_lock:
             body = type(self).objects.get(key)
             type(self).gets += 1
+            if body is not None:
+                type(self).get_bytes += len(body)
         if body is None:
             self.send_response(404)
             self.end_headers()
@@ -199,6 +236,7 @@ class _ArchiveHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         with type(self).counter_lock:
             type(self).puts += 1
+            type(self).put_bytes += len(body)
             if self.headers.get("If-None-Match") == "*":
                 type(self).conditional_puts += 1
             conflict = key in type(self).objects
@@ -270,8 +308,10 @@ def archive_server() -> Iterator[tuple[str, str, str, type[_ArchiveHandler]]]:
         {
             "objects": {},
             "gets": 0,
+            "get_bytes": 0,
             "heads": 0,
             "puts": 0,
+            "put_bytes": 0,
             "conditional_puts": 0,
             "conflicts": 0,
         },
@@ -328,8 +368,67 @@ def _profile_body(tag: str, variant: int = 0) -> bytes:
     return json.dumps(source, separators=(",", ":")).encode()
 
 
-def _process_jobs(processor: Any, jobs: list[int], prefix: str) -> list[dict[str, Any]]:
-    """Process production-shaped batches with the configured 12 worker lanes."""
+def _duplicate_endpoint_mix(count: int) -> dict[str, int]:
+    """Return the production mix, balancing smaller test populations."""
+    if count >= DUPLICATE_EXECUTION_CAP:
+        return dict(DUPLICATE_ENDPOINT_MIX)
+    endpoints = tuple(DUPLICATE_ENDPOINT_MIX)
+    base, remainder = divmod(count, len(endpoints))
+    return {
+        endpoint: base + int(index < remainder)
+        for index, endpoint in enumerate(endpoints)
+    }
+
+
+def _duplicate_response_mix(
+    count: int, endpoint_mix: dict[str, int]
+) -> dict[str, int]:
+    """Scale a capped execution mix to the requested response count."""
+    total = sum(endpoint_mix.values())
+    if total == count:
+        return dict(endpoint_mix)
+    result = {endpoint: count * value // total for endpoint, value in endpoint_mix.items()}
+    for endpoint in endpoint_mix:
+        if sum(result.values()) == count:
+            break
+        result[endpoint] += 1
+    return result
+
+
+def _duplicate_fixture_body(
+    endpoint: str,
+    index: int,
+    endpoint_count: int,
+    profile_bodies: dict[tuple[str, int], bytes],
+    fixture_bodies: dict[str, bytes],
+) -> tuple[str | None, bytes]:
+    if endpoint == "profile":
+        window = max(1, endpoint_count // 200)
+        tag = _tag(index // window + 1)
+        variant = (index // window) % 8
+        cache_key = (tag, variant)
+        if cache_key not in profile_bodies:
+            profile_bodies[cache_key] = _profile_body(tag, variant)
+        return tag, profile_bodies[cache_key]
+    if endpoint not in fixture_bodies:
+        fixture_bodies[endpoint] = (
+            PYTHON / "testdata" / (
+                "legend_i_battle_log_v1.json"
+                if endpoint == "battle_log"
+                else "global_top_200_v1.json"
+            )
+        ).read_bytes()
+    return (None if endpoint == "global_player_rankings" else _tag(index + 1)), fixture_bodies[endpoint]
+
+
+def _process_jobs(
+    processor: Any,
+    jobs: list[int],
+    prefix: str,
+    *,
+    serial: bool = False,
+) -> list[dict[str, Any]]:
+    """Process a batch, preserving reset-pair evidence ordering when needed."""
 
     def process(index: int, job: int) -> tuple[int, dict[str, Any]]:
         started = time.perf_counter()
@@ -345,6 +444,8 @@ def _process_jobs(processor: Any, jobs: list[int], prefix: str) -> list[dict[str
             "elapsed_ms": (time.perf_counter() - started) * 1000,
         }
 
+    if serial:
+        return [process(index, job)[1] for index, job in enumerate(jobs)]
     results: list[tuple[int, dict[str, Any]]] = []
     with ThreadPoolExecutor(
         max_workers=_LANES, thread_name_prefix="clashlens-perf"
@@ -422,22 +523,119 @@ def _store_reconciliation_corrections(
     return jobs
 
 
+def _relation_snapshot(connection_info: str) -> dict[str, dict[str, Any]]:
+    """Capture row, DML, and table/index/TOAST metrics for this schema."""
+    import psycopg
+    from psycopg import sql
+
+    def timestamp(value: Any) -> str | None:
+        return None if value is None else value.isoformat()
+
+    with psycopg.connect(connection_info) as connection:
+        rows = connection.execute(
+            """
+            SELECT c.relname, c.oid, c.reltoastrelid,
+                   s.n_live_tup, s.n_dead_tup,
+                   s.n_tup_ins, s.n_tup_upd, s.n_tup_del,
+                   s.last_vacuum, s.last_autovacuum,
+                   s.last_analyze, s.last_autoanalyze,
+                   s.n_mod_since_analyze,
+                   pg_table_size(c.oid), pg_indexes_size(c.oid),
+                   CASE WHEN c.reltoastrelid = 0 THEN 0
+                        ELSE pg_total_relation_size(c.reltoastrelid) END,
+                   pg_total_relation_size(c.oid)
+            FROM pg_class AS c
+            LEFT JOIN pg_stat_all_tables AS s ON s.relid = c.oid
+            WHERE c.relnamespace = current_schema()::regnamespace
+              AND c.relkind IN ('r', 'm')
+            ORDER BY c.relname
+            """
+        ).fetchall()
+        result: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            name = _text(row[0])
+            toast_bytes = int(row[15])
+            result[name] = {
+                "row_count": int(
+                    connection.execute(
+                        sql.SQL("SELECT count(*) FROM {}")
+                        .format(sql.Identifier(name))
+                    ).fetchone()[0]
+                ),
+                "live_tuples": int(row[3] or 0),
+                "dead_tuples": int(row[4] or 0),
+                "rows_inserted_total": int(row[5] or 0),
+                "rows_updated_total": int(row[6] or 0),
+                "rows_deleted_total": int(row[7] or 0),
+                "last_vacuum": timestamp(row[8]),
+                "last_autovacuum": timestamp(row[9]),
+                "last_analyze": timestamp(row[10]),
+                "last_autoanalyze": timestamp(row[11]),
+                "modifications_since_analyze": int(row[12] or 0),
+                "table_bytes": int(row[13]) - toast_bytes,
+                "index_bytes": int(row[14]),
+                "toast_bytes": toast_bytes,
+                "total_bytes": int(row[16]),
+            }
+    return result
+
+
 def _db_snapshot(
-    connection_info: str, wal_start: str, statement_start: int | None
+    connection_info: str,
+    wal_start: str,
+    statement_start: int | None,
+    relation_start: dict[str, dict[str, Any]] | None = None,
+    wal_retained_start: int | None = None,
 ) -> dict[str, Any]:
     import psycopg
+
+    relation_stats = _relation_snapshot(connection_info)
+    now = datetime.now(tz=UTC)
+    for name, current in relation_stats.items():
+        previous = (relation_start or {}).get(name)
+        dml: dict[str, int | None] = {}
+        for label in ("inserted", "updated", "deleted"):
+            total = current[f"rows_{label}_total"]
+            old_total = None if previous is None else previous[f"rows_{label}_total"]
+            dml[label] = None if old_total is None else max(0, total - old_total)
+        current["rows_inserted"] = dml["inserted"]
+        current["rows_updated"] = dml["updated"]
+        current["rows_deleted"] = dml["deleted"]
+        current["dml"] = dml
+        current["autovacuum_lag_seconds"] = (
+            None
+            if current["last_autovacuum"] is None
+            else max(0.0, (now - datetime.fromisoformat(current["last_autovacuum"])).total_seconds())
+        )
+        current["autoanalyze_lag_seconds"] = (
+            None
+            if current["last_autoanalyze"] is None
+            else max(0.0, (now - datetime.fromisoformat(current["last_autoanalyze"])).total_seconds())
+        )
+        current["autovacuum_due"] = current["dead_tuples"] > max(
+            50, int(current["live_tuples"] * 0.2)
+        )
+        current["autoanalyze_due"] = current["modifications_since_analyze"] > max(
+            50, int(current["live_tuples"] * 0.1)
+        )
 
     with psycopg.connect(connection_info) as connection:
         wal = connection.execute(
             "SELECT pg_wal_lsn_diff(pg_current_wal_insert_lsn(), %s::pg_lsn)::bigint",
             (wal_start,),
         ).fetchone()[0]
-        relations = connection.execute(
-            """SELECT relname, pg_total_relation_size(oid) FROM pg_class
-               WHERE relnamespace=current_schema()::regnamespace AND relkind IN ('r','m')
-               ORDER BY relname"""
-        ).fetchall()
+        retained_wal = int(
+            connection.execute(
+                "SELECT COALESCE(sum(size), 0)::bigint FROM pg_ls_waldir()"
+            ).fetchone()[0]
+        )
+        retained_wal_growth = (
+            None
+            if wal_retained_start is None
+            else max(0, retained_wal - wal_retained_start)
+        )
         queues = {}
+        queue_residue = []
         for table in ("collector_jobs", "python_processing_jobs"):
             rows = connection.execute(
                 f"""SELECT status, work_type, count(*),
@@ -457,6 +655,24 @@ def _db_snapshot(
                 }
                 for row in rows
             ]
+            queue_residue.extend(
+                {
+                    "queue": table,
+                    **item,
+                }
+                for item in queues[table]
+                if item["status"]
+                in {"pending", "leased", "waiting_retry", "waiting_dependency"}
+            )
+        endpoint_counts = dict.fromkeys(DUPLICATE_ENDPOINT_MIX, 0)
+        endpoint_counts.update(
+            {
+                _text(row[0]): int(row[1])
+                for row in connection.execute(
+                    "SELECT endpoint, count(*) FROM collector_observations GROUP BY endpoint ORDER BY endpoint"
+                ).fetchall()
+            }
+        )
         pending_remote = 0
         try:
             pending_remote = int(
@@ -478,21 +694,59 @@ def _db_snapshot(
             )
         except psycopg.Error:
             connection.rollback()
-        return {
-            "wal_bytes": int(wal),
-            "sql_statement_calls": statement_calls,
-            "pending_remote_verification": pending_remote,
-            "relations": {_text(row[0]): int(row[1]) for row in relations},
-            "queues": queues,
-        }
+    queue_age = {
+        table: (
+            max(
+                (
+                    item["oldest_active_age_seconds"]
+                    for item in rows
+                    if item["oldest_active_age_seconds"] is not None
+                ),
+                default=None,
+            )
+        )
+        for table, rows in queues.items()
+    }
+    return {
+        "wal_bytes": int(wal),
+        "wal_retained_bytes": retained_wal,
+        "wal_retained_growth_bytes": retained_wal_growth,
+        "sql_statement_calls": statement_calls,
+        "pending_remote_verification": pending_remote,
+        "response_counts_by_endpoint": endpoint_counts,
+        "occurrence_counts_by_endpoint": dict(endpoint_counts),
+        "relations": {
+            name: int(values["total_bytes"])
+            for name, values in relation_stats.items()
+        },
+        "relation_sizes": {
+            name: {
+                key: int(values[key])
+                for key in ("table_bytes", "index_bytes", "toast_bytes", "total_bytes")
+            }
+            for name, values in relation_stats.items()
+        },
+        "relation_stats": relation_stats,
+        "affected_relations": [
+            name for name in AFFECTED_RELATIONS if name in relation_stats
+        ],
+        "queues": queues,
+        "queue_age_seconds": queue_age,
+        "queue_residue": queue_residue,
+    }
 
 
-def _start_metrics(connection_info: str) -> tuple[str, int | None]:
+def _start_metrics(connection_info: str) -> tuple[str, int | None, int]:
     import psycopg
 
     with psycopg.connect(connection_info) as connection:
         wal = _text(
             connection.execute("SELECT pg_current_wal_insert_lsn()::text").fetchone()[0]
+        )
+        retained_wal = int(
+            connection.execute(
+                "SELECT COALESCE(sum(size), 0)::bigint FROM pg_ls_waldir()"
+            ).fetchone()[0]
         )
         try:
             calls = int(
@@ -503,7 +757,7 @@ def _start_metrics(connection_info: str) -> tuple[str, int | None]:
         except psycopg.Error:
             connection.rollback()
             calls = None
-    return wal, calls
+    return wal, calls, retained_wal
 
 
 def _plan_counts(node: dict[str, Any]) -> tuple[int, int]:
@@ -555,6 +809,143 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _json_value(item) for key, item in value.items()}
     return str(value)
+
+
+def _artifact_digest(artifact: dict[str, Any]) -> str:
+    canonical = {
+        key: value for key, value in artifact.items() if key != "artifact_digest"
+    }
+    return _sha(
+        json.dumps(
+            _json_value(canonical), sort_keys=True, separators=(",", ":")
+        ).encode()
+    )
+
+
+def validate_artifact(artifact: dict[str, Any]) -> None:
+    """Reject artifacts that cannot support the current performance review."""
+    if not isinstance(artifact, dict):
+        raise TypeError("artifact must be an object")
+    if artifact.get("schema_version") != ARTIFACT_SCHEMA_VERSION:
+        raise ValueError(
+            "artifact schema_version is missing or old; "
+            f"expected {ARTIFACT_SCHEMA_VERSION}"
+        )
+    if artifact.get("artifact_digest") != _artifact_digest(artifact):
+        raise ValueError("artifact digest is missing or invalid")
+    required = (
+        "artifact_digest",
+        "mode",
+        "started_at",
+        "finished_at",
+        "provenance",
+        "collector_probe",
+        "samples",
+        "army_read_sample",
+    )
+    missing = [key for key in required if key not in artifact]
+    if missing:
+        raise ValueError("artifact missing metrics: " + ", ".join(missing))
+    mode = artifact["mode"]
+    if mode not in MODES:
+        raise ValueError(f"artifact has unknown mode: {mode}")
+    samples = artifact["samples"]
+    if not isinstance(samples, list):
+        raise TypeError("artifact samples metric must be a list")
+    if mode != STEP5_MODE and not samples:
+        raise ValueError("artifact missing metrics: samples")
+    database_metrics = (
+        "wal_bytes",
+        "wal_retained_bytes",
+        "wal_retained_growth_bytes",
+        "sql_statement_calls",
+        "application_sql_calls",
+        "pending_remote_verification",
+        "response_counts_by_endpoint",
+        "occurrence_counts_by_endpoint",
+        "relations",
+        "relation_sizes",
+        "relation_stats",
+        "affected_relations",
+        "queues",
+        "queue_age_seconds",
+        "queue_residue",
+    )
+    archive_metrics = (
+        "get",
+        "get_bytes",
+        "head",
+        "conditional_put",
+        "put",
+        "put_bytes",
+        "conflicts",
+    )
+
+    def require(mapping: Any, keys: tuple[str, ...], label: str) -> None:
+        if not isinstance(mapping, dict):
+            raise TypeError(f"{label} metric must be an object")
+        missing_keys = [key for key in keys if key not in mapping]
+        if missing_keys:
+            raise ValueError(
+                f"{label} missing metrics: {', '.join(missing_keys)}"
+            )
+
+    if mode == "duplicate-heavy":
+        require(artifact["provenance"], ("postgres",), "provenance")
+        require(
+            artifact["provenance"]["postgres"],
+            ("version", "settings"),
+            "provenance.postgres",
+        )
+
+    for index, sample in enumerate(samples):
+        label = f"sample {index}"
+        require(sample, ("database", "archive_operations", "storage_runway"), label)
+        require(sample["database"], database_metrics, f"{label} database")
+        require(
+            sample["archive_operations"], archive_metrics, f"{label} archive_operations"
+        )
+        require(
+            sample["storage_runway"],
+            ("measured_local_growth_bytes", "days_to_80_percent", "checks"),
+            f"{label} storage_runway",
+        )
+        if mode == "duplicate-heavy":
+            require(
+                sample.get("workload"),
+                (
+                    "response_counts_by_endpoint",
+                    "occurrence_counts_by_endpoint",
+                    "fixture_bytes_by_endpoint",
+                    "exact_bytes",
+                    "contract",
+                    "canonical_content",
+                ),
+                f"{label} duplicate workload",
+            )
+            require(
+                sample["workload"]["contract"],
+                ("expected_occurrences", "executed_occurrences", "endpoint_mix"),
+                f"{label} duplicate contract",
+            )
+            require(
+                sample["workload"]["canonical_content"],
+                (
+                    "parsed_payloads_by_endpoint",
+                    "profile_semantic_versions",
+                    "profile_occurrence_effects",
+                    "battle_canonical_rows",
+                    "battle_occurrence_rows",
+                    "ranking_canonical_rows",
+                    "ranking_occurrence_links",
+                ),
+                f"{label} canonical content",
+            )
+
+    if mode == STEP5_MODE:
+        army_sample = artifact["army_read_sample"]
+        require(army_sample, ("database",), "army_read_sample")
+        require(army_sample["database"], database_metrics, "army_read_sample database")
 
 
 def _query_army_endpoint(
@@ -1949,7 +2340,7 @@ def _run_coordinator_writers(
             "classification_counts": {"Complete": int(counts[1])},
             "identities_frozen": True,
         },
-        "contract": {"database_version": 4, "required_version": 4},
+        "contract": {"database_version": 5, "required_version": 5},
         "coverage": {"expected": population, "included": population, "excluded": 0},
         "publication_identities": int(counts[4]),
         "generation": {
@@ -2009,16 +2400,26 @@ def _run_reset(
         source_jobs = _store_reconciliation_population(
             connection_info, archive, population
         )
-        profile_results = _process_jobs(processor, source_jobs, "reset-evidence")
+        profile_results = _process_jobs(
+            processor, source_jobs, "reset-evidence", serial=True
+        )
         first = _drain(processor, population * 20 + 100)
         if correction:
             correction_jobs = _store_reconciliation_corrections(
                 connection_info, archive, population
             )
             profile_results.extend(
-                _process_jobs(processor, correction_jobs, "correction-evidence")
+                _process_jobs(
+                    processor, correction_jobs, "correction-evidence", serial=True
+                )
             )
             second = _drain(processor, population * 20 + 100)
+            # A correction can be queued after the source reconciliation has
+            # observed the published generation. Re-run the coordinator's
+            # durable recovery seam so that queued work is activated before
+            # asserting the correction generation.
+            database.reevaluate_boundary_publications()
+            second.extend(_drain(processor, population * 20 + 100))
         else:
             second = []
         # Discovery profiles are collector-owned descendants that the bounded
@@ -2164,48 +2565,128 @@ def _run_duplicate(
     database, processor, metrics, _spool = _processor(connection_info, archive)
     try:
         executed_count = min(count, DUPLICATE_EXECUTION_CAP)
+        endpoint_mix = _duplicate_endpoint_mix(count)
         results: list[dict[str, Any]] = []
         cycle_elapsed: list[float] = []
-        # Production-shaped multi-hash fixture: occurrences are distributed
-        # across ~200 tracked players (~window occurrences each) instead of
-        # concentrating every write on one player row, which matches the
-        # real duplicate shape where identical responses repeat per player.
-        window = max(1, executed_count // 200)
+        profile_bodies: dict[tuple[str, int], bytes] = {}
+        fixture_bodies: dict[str, bytes] = {}
+        source_bytes: dict[str, int] = {}
+        exact_bytes = 0
+        executed_endpoint_mix: dict[str, int] = dict.fromkeys(endpoint_mix, 0)
         for cycle in range(max(1, cycles)):
-            jobs = []
-            # Cycle 0 seeds the measured novelty sample (~1% new hashes);
-            # every later cycle replays the same hashes as pure duplicates,
-            # which is the steady-state shape of a duplicate-heavy day.
-            # One transaction per cycle models the collector's batched
-            # handoff without a new PostgreSQL connection per response.
+            jobs: list[int] = []
+            position = 0
+            remaining = executed_count
+            # One transaction per cycle models the collector's batched handoff
+            # without a new PostgreSQL connection per response.
             with psycopg.connect(connection_info) as seed_connection:
-                for index in range(executed_count):
-                    tag = _tag(index // window + 1)
-                    variant = ((index // window) % 8) if cycle == 0 else 0
-                    jobs.append(
-                        store_observation(
-                            connection_info,
-                            archive,
-                            occurrence_key=f"duplicate-c{cycle}-{index}",
-                            endpoint="profile",
-                            body=_profile_body(tag, variant),
-                            observed_at=DAY_START + timedelta(hours=1, minutes=index),
-                            normalized_tag=tag,
-                            existing_connection=seed_connection,
-                            commit=False,
-                        )[1]
-                    )
+                for endpoint, planned_count in endpoint_mix.items():
+                    endpoint_count = min(planned_count, remaining)
+                    for index in range(endpoint_count):
+                        tag, body = _duplicate_fixture_body(
+                            endpoint,
+                            index,
+                            planned_count,
+                            profile_bodies,
+                            fixture_bodies,
+                        )
+                        source_bytes[endpoint] = len(body)
+                        exact_bytes += len(body)
+                        jobs.append(
+                            store_observation(
+                                connection_info,
+                                archive,
+                                occurrence_key=f"duplicate-c{cycle}-{position}",
+                                endpoint=endpoint,
+                                body=body,
+                                observed_at=DAY_START
+                                + timedelta(hours=1, minutes=position),
+                                normalized_tag=tag,
+                                existing_connection=seed_connection,
+                                commit=False,
+                            )[1]
+                        )
+                        position += 1
+                    executed_endpoint_mix[endpoint] += endpoint_count
+                    remaining -= endpoint_count
+                    if remaining == 0:
+                        break
                 seed_connection.commit()
             started = time.perf_counter()
             if processing_started is not None:
                 processing_started.set()
             results.extend(_process_jobs(processor, jobs, f"duplicate-c{cycle}"))
             cycle_elapsed.append(time.perf_counter() - started)
+        # Battle processing intentionally creates collector-owned discovery
+        # jobs. Terminalize only these synthetic descendants; the processing
+        # queue itself was drained by the production Python worker.
+        with psycopg.connect(connection_info) as connection:
+            terminalized = connection.execute(
+                """
+                UPDATE collector_jobs
+                SET status = 'complete', updated_at = clock_timestamp()
+                WHERE work_type = 'discovery_profile'
+                  AND status IN ('pending', 'leased', 'waiting_retry')
+                """
+            ).rowcount
+            payload_rows = connection.execute(
+                """
+                SELECT endpoint, count(*)
+                FROM parsed_source_payloads
+                GROUP BY endpoint ORDER BY endpoint
+                """
+            ).fetchall()
+            profile_rows = connection.execute(
+                "SELECT count(*) FROM player_profile_versions"
+            ).fetchone()[0]
+            profile_effects = connection.execute(
+                "SELECT count(*) FROM player_profile_effects"
+            ).fetchone()[0]
+            if getattr(database, "_supports_content_dedup", False):
+                battle_canonical_rows = connection.execute(
+                    "SELECT count(*) FROM battle_source_rows WHERE parsed_payload_id IS NOT NULL"
+                ).fetchone()[0]
+                battle_occurrence_rows = connection.execute(
+                    "SELECT count(*) FROM battle_log_observation_rows"
+                ).fetchone()[0]
+                ranking_canonical_rows = connection.execute(
+                    "SELECT count(*) FROM official_top200_entries WHERE parsed_payload_id IS NOT NULL"
+                ).fetchone()[0]
+                ranking_occurrence_links = connection.execute(
+                    "SELECT count(*) FROM official_top200_version_entries"
+                ).fetchone()[0]
+            else:
+                battle_canonical_rows = 0
+                battle_occurrence_rows = connection.execute(
+                    "SELECT count(*) FROM battle_source_rows"
+                ).fetchone()[0]
+                ranking_canonical_rows = 0
+                ranking_occurrence_links = connection.execute(
+                    "SELECT count(*) FROM official_top200_entries"
+                ).fetchone()[0]
+            connection.commit()
+        canonical_content = {
+            "parsed_payloads_by_endpoint": {
+                _text(row[0]): int(row[1]) for row in payload_rows
+            },
+            "profile_semantic_versions": int(profile_rows),
+            "profile_occurrence_effects": int(profile_effects),
+            "battle_canonical_rows": int(battle_canonical_rows),
+            "battle_occurrence_rows": int(battle_occurrence_rows),
+            "ranking_canonical_rows": int(ranking_canonical_rows),
+            "ranking_occurrence_links": int(ranking_occurrence_links),
+        }
+        cycle_count = max(1, cycles)
+        response_counts = {
+            endpoint: value * cycle_count
+            for endpoint, value in _duplicate_response_mix(count, endpoint_mix).items()
+        }
+        executed_counts = dict(executed_endpoint_mix)
         steady = sorted(cycle_elapsed)[len(cycle_elapsed) // 2]
         return {
             "observations": count,
-            "official_responses": count * max(1, cycles),
-            "executed_observations": executed_count * max(1, cycles),
+            "official_responses": count * cycle_count,
+            "executed_observations": executed_count * cycle_count,
             "measured_cycles": len(cycle_elapsed),
             "cycle_elapsed_seconds": cycle_elapsed,
             "median_cycle_seconds": steady,
@@ -2214,8 +2695,22 @@ def _run_duplicate(
             "aggregation_method": (
                 "exact bounded cycle"
                 if cycles == 1 and count == executed_count
-                else "24h-equivalent aggregate: each response executes the full raw-evidence/local/Python/PostgreSQL semantics; the first cycle carries ~1% hash novelty and later measured cycles are 100% verified-duplicate steady state; the 288-cycle day projection multiplies the median measured five-minute cycle"
+                else "24h-equivalent aggregate: each response executes the full raw-evidence/local/Python/PostgreSQL semantics; the measured fixture hashes are replayed as verified duplicates in later cycles; the 288-cycle day projection multiplies the median measured five-minute cycle"
             ),
+            "endpoint_mix": response_counts,
+            "response_counts_by_endpoint": response_counts,
+            "occurrence_counts_by_endpoint": executed_counts,
+            "fixture_bytes_by_endpoint": source_bytes,
+            "exact_bytes": exact_bytes,
+            "official_api_traffic": {"requests": 0, "source": "committed fixtures"},
+            "canonical_content": canonical_content,
+            "contract": {
+                "expected_occurrences": DUPLICATE_EXECUTION_CAP,
+                "executed_occurrences": executed_count,
+                "matches_expected": count == DUPLICATE_EXECUTION_CAP,
+                "endpoint_mix": dict(DUPLICATE_ENDPOINT_MIX),
+            },
+            "bounded_collector_terminalization": int(terminalized),
             "results": results,
             "stage_metrics": metrics.snapshot(),
             "spool": _spool.stats(),
@@ -2428,7 +2923,8 @@ def _run_army_read_sample(database_url: str, fact_count: int) -> dict[str, Any]:
         domain_database(database_url, include_coordinator=True) as connection_info,
         archive_server() as archive,
     ):
-        wal_start, statement_start = _start_metrics(connection_info)
+        wal_start, statement_start, wal_retained_start = _start_metrics(connection_info)
+        relation_start = _relation_snapshot(connection_info)
         cpu_start = time.process_time()
         elapsed_start = time.perf_counter()
         database, processor, _metrics, _spool = _processor(connection_info, archive)
@@ -2438,7 +2934,13 @@ def _run_army_read_sample(database_url: str, fact_count: int) -> dict[str, Any]:
                 _process_jobs(processor, jobs, "army-read-evidence")
                 _drain(processor, 120)
                 reads = _seed_worst_case_army_reads(connection_info, fact_count)
-            measurements = _db_snapshot(connection_info, wal_start, statement_start)
+            measurements = _db_snapshot(
+                connection_info,
+                wal_start,
+                statement_start,
+                relation_start,
+                wal_retained_start,
+            )
             measurements["application_sql_calls"] = sql_calls[0]
             return {
                 "synthetic_fact_limit": fact_count,
@@ -2471,11 +2973,18 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
         domain_database(database_url, include_coordinator=True) as connection_info,
         archive_server() as archive,
     ):
-        wal_start, statement_start = _start_metrics(connection_info)
+        wal_start, statement_start, wal_retained_start = _start_metrics(connection_info)
+        relation_start = _relation_snapshot(connection_info)
         seed = _seed_step5_army_database(connection_info, archive)
         reads = [_measure_army_pair(connection_info, spec) for spec in specs]
         overlap = _run_step5_overlap(connection_info, archive, specs)
-        database = _db_snapshot(connection_info, wal_start, statement_start)
+        database = _db_snapshot(
+            connection_info,
+            wal_start,
+            statement_start,
+            relation_start,
+            wal_retained_start,
+        )
         postgres = _postgres_provenance(connection_info)
         pressure_after = _memory_pressure(database_url)
         pressure_delta = _memory_pressure_delta(
@@ -2622,6 +3131,98 @@ def _free_inodes(path: Path) -> int | None:
         return None
 
 
+def _filesystem_usage(path: Path) -> dict[str, Any]:
+    """Return measured user-usable capacity and use for ``path``."""
+    filesystem = os.statvfs(path)
+    raw_capacity = int(filesystem.f_blocks * filesystem.f_frsize)
+    available = int(filesystem.f_bavail * filesystem.f_frsize)
+    reserved = max(
+        0, int(filesystem.f_bfree - filesystem.f_bavail) * filesystem.f_frsize
+    )
+    usable_capacity = max(0, raw_capacity - reserved)
+    used = max(0, usable_capacity - available)
+    return {
+        "path": str(path),
+        "capacity_bytes": usable_capacity,
+        "raw_capacity_bytes": raw_capacity,
+        "usable_capacity_bytes": usable_capacity,
+        "available_bytes": available,
+        "used_bytes": used,
+        "used_ratio": used / usable_capacity if usable_capacity else 0.0,
+        "free_inodes": int(filesystem.f_favail),
+    }
+
+
+def _runway_inputs(
+    filesystem_before: dict[str, Any],
+    filesystem_after: dict[str, Any],
+    database: dict[str, Any],
+    relation_start: dict[str, dict[str, Any]],
+    spool: dict[str, Any],
+    archived_bytes: int,
+    measured_intervals: int = 1,
+) -> dict[str, Any]:
+    relation_growth = sum(
+        max(
+            0,
+            int(database["relation_sizes"].get(name, {}).get("total_bytes", 0))
+            - int(relation_start.get(name, {}).get("total_bytes", 0)),
+        )
+        for name in database["relation_sizes"]
+    )
+    wal_bytes = int(database["wal_bytes"])
+    retained_wal_growth = max(0, int(database["wal_retained_growth_bytes"]))
+    measured_growth = relation_growth + retained_wal_growth
+    projected_daily_growth = measured_growth / measured_intervals * 288
+    capacity = int(filesystem_after["usable_capacity_bytes"])
+    target = int(capacity * 0.80)
+    headroom = max(0, target - int(filesystem_after["used_bytes"]))
+    days = (
+        headroom / projected_daily_growth
+        if projected_daily_growth > 0
+        else None
+    )
+    return {
+        "filesystem_path": filesystem_after["path"],
+        "filesystem_capacity_bytes": capacity,
+        "filesystem_usable_capacity_bytes": capacity,
+        "filesystem_raw_capacity_bytes": int(
+            filesystem_after["raw_capacity_bytes"]
+        ),
+        "target_utilization": 0.80,
+        "target_used_bytes": target,
+        "filesystem_used_bytes_before": int(filesystem_before["used_bytes"]),
+        "filesystem_used_bytes_after": int(filesystem_after["used_bytes"]),
+        "filesystem_growth_bytes": max(
+            0,
+            int(filesystem_after["used_bytes"])
+            - int(filesystem_before["used_bytes"]),
+        ),
+        "postgres_relation_growth_bytes": relation_growth,
+        "postgres_wal_bytes": wal_bytes,
+        "postgres_wal_retained_growth_bytes": retained_wal_growth,
+        "local_spool_bytes": int(spool.get("final_bytes", 0))
+        + int(spool.get("temporary_bytes", 0)),
+        "remote_bucket_bytes_excluded": int(archived_bytes),
+        "measured_local_growth_bytes": measured_growth,
+        "projected_daily_local_growth_bytes": projected_daily_growth,
+        "days_to_80_percent": days,
+        "measurement_intervals_per_day": 288,
+        "checks": {
+            "capacity_measured": capacity > 0,
+            "usable_capacity_measured": capacity > 0,
+            "usable_capacity_excludes_reserved": capacity
+            <= int(filesystem_after["raw_capacity_bytes"]),
+            "target_is_80_percent": target == int(capacity * 0.80),
+            "relation_sizes_present": bool(database.get("relation_sizes")),
+            "wal_present": "wal_bytes" in database,
+            "wal_retained_growth_present": "wal_retained_growth_bytes" in database,
+            "spool_reported_separately": True,
+            "remote_bucket_excluded": True,
+        },
+    }
+
+
 def _host_provenance() -> dict[str, Any]:
     memory: dict[str, int] = {}
     try:
@@ -2747,7 +3348,11 @@ def _postgres_provenance(connection_info: str) -> dict[str, Any]:
     return {"version": version, "settings": {_text(row[0]): _text(row[1]) for row in rows}}
 
 
-def _provenance(arguments: argparse.Namespace) -> dict[str, Any]:
+def _provenance(
+    arguments: argparse.Namespace,
+    *,
+    postgres: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     migrations = [
         {"name": path.name, "sha256": _sha(path.read_bytes())}
         for path in sorted((ROOT / "deploy/migrations").glob("*.sql"))
@@ -2764,8 +3369,11 @@ def _provenance(arguments: argparse.Namespace) -> dict[str, Any]:
         "army_warmups": getattr(arguments, "army_warmups", STEP5_WARMUPS),
         "army_requests": getattr(arguments, "army_requests", STEP5_REQUESTS),
         "analytics_lanes": getattr(arguments, "analytics_lanes", STEP5_ANALYTICS_LANES),
+        "duplicate_cycles": arguments.duplicate_cycles,
+        "duplicate_endpoint_mix": dict(DUPLICATE_ENDPOINT_MIX),
+        "skip_collector_probe": arguments.skip_collector_probe,
     }
-    return {
+    result = {
         "source_sha": _git("rev-parse", "HEAD"),
         "source_dirty": bool(_git("status", "--porcelain")),
         "runner_sha256": _sha(Path(__file__).read_bytes()),
@@ -2777,27 +3385,34 @@ def _provenance(arguments: argparse.Namespace) -> dict[str, Any]:
         "images": arguments.image,
         "host": _host_provenance(),
     }
+    if postgres is not None:
+        result["postgres"] = postgres
+    return result
 
 
 def run(arguments: argparse.Namespace) -> dict[str, Any]:
     if not arguments.database_url:
         raise RuntimeError("--database-url or CLASHLENS_TEST_DATABASE_URL is required")
+    postgres = _postgres_provenance(arguments.database_url)
     if arguments.mode == STEP5_MODE:
         started = datetime.now(tz=UTC)
         with count_sql_calls() as sql_calls:
             workload = _run_step5_army(arguments.database_url)
         workload["database"]["application_sql_calls"] = sql_calls[0]
         finished = datetime.now(tz=UTC)
-        return {
-            "schema_version": 5,
+        artifact = {
+            "schema_version": ARTIFACT_SCHEMA_VERSION,
             "mode": arguments.mode,
             "started_at": started.isoformat(),
             "finished_at": finished.isoformat(),
-            "provenance": _provenance(arguments),
+            "provenance": _provenance(arguments, postgres=postgres),
             "collector_probe": None,
             "samples": [],
             "army_read_sample": workload,
         }
+        artifact["artifact_digest"] = _artifact_digest(artifact)
+        validate_artifact(artifact)
+        return artifact
     if arguments.mode in {"reset-boundary", "correction"}:
         validate_reset(arguments.populations, arguments.post_fix)
     from domain_test_support import domain_database
@@ -2828,7 +3443,9 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             ) as connection_info,
             archive_server() as archive,
         ):
-            wal_start, statement_start = _start_metrics(connection_info)
+            wal_start, statement_start, wal_retained_start = _start_metrics(connection_info)
+            relation_start = _relation_snapshot(connection_info)
+            filesystem_before = _filesystem_usage(ROOT)
             cpu_start = time.process_time()
             elapsed_start = time.perf_counter()
             with count_sql_calls() as sql_calls:
@@ -2856,19 +3473,36 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         arguments.backfill_jobs,
                     )
             if arguments.mode == "coordinator-12500":
-                measurements = _db_snapshot(connection_info, wal_start, statement_start)
+                measurements = _db_snapshot(
+                    connection_info,
+                    wal_start,
+                    statement_start,
+                    relation_start,
+                    wal_retained_start,
+                )
                 measurements["application_sql_calls"] = sql_calls[0]
+                filesystem_after = _filesystem_usage(ROOT)
                 samples.append(
                     {
                         "workload": workload,
                         "database": measurements,
                         "archive_operations": {
                             "get": 0,
+                            "get_bytes": 0,
                             "head": 0,
                             "conditional_put": 0,
                             "put": 0,
+                            "put_bytes": 0,
                             "conflicts": 0,
                         },
+                        "storage_runway": _runway_inputs(
+                            filesystem_before,
+                            filesystem_after,
+                            measurements,
+                            relation_start,
+                            {},
+                            0,
+                        ),
                         "evidence": {
                             "execution_method": workload["full_large_reset"]["execution_method"],
                             "writer_guard": post_fix_source_ready(),
@@ -2877,7 +3511,14 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                     }
                 )
                 continue
-            measurements = _db_snapshot(connection_info, wal_start, statement_start)
+            measurements = _db_snapshot(
+                connection_info,
+                wal_start,
+                statement_start,
+                relation_start,
+                wal_retained_start,
+            )
+            filesystem_after = _filesystem_usage(ROOT)
             measurements["application_sql_calls"] = sql_calls[0]
             if "official_responses" not in workload:
                 raise RuntimeError(
@@ -2928,17 +3569,31 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                 int(result.get("outcome") == "retrying")
                 for result in workload.get("results", [])
             )
+            archived_bytes = sum(map(len, archive[3].objects.values()))
+            exact_bytes = int(workload.get("exact_bytes", archived_bytes))
+            storage_runway = _runway_inputs(
+                filesystem_before,
+                filesystem_after,
+                measurements,
+                relation_start,
+                spool,
+                archived_bytes,
+                measured_intervals=int(workload.get("measured_cycles", 1)),
+            )
             samples.append(
                 {
                     "workload": workload,
                     "database": measurements,
                     "archive_operations": {
                         "get": archive[3].gets,
+                        "get_bytes": archive[3].get_bytes,
                         "head": archive[3].heads,
                         "conditional_put": archive[3].conditional_puts,
                         "put": archive[3].puts,
+                        "put_bytes": archive[3].put_bytes,
                         "conflicts": archive[3].conflicts,
                     },
+                    "storage_runway": storage_runway,
                     "evidence": {
                         "response_count": response_count,
                         "executed_responses": executed_count,
@@ -2950,8 +3605,8 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         "novelty_rate": (
                             distinct_hashes / executed_count if executed_count else 0.0
                         ),
-                        "exact_bytes": sum(map(len, archive[3].objects.values())),
-                        "archived_bytes": sum(map(len, archive[3].objects.values())),
+                        "exact_bytes": exact_bytes,
+                        "archived_bytes": archived_bytes,
                         "pending_verification_count": measurements.get(
                             "pending_remote_verification"
                         ),
@@ -2992,16 +3647,19 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
         if arguments.mode in {"reset-boundary", "correction"}
         else None
     )
-    return {
-        "schema_version": 4,
+    artifact = {
+        "schema_version": ARTIFACT_SCHEMA_VERSION,
         "mode": arguments.mode,
         "started_at": started.isoformat(),
         "finished_at": datetime.now(tz=UTC).isoformat(),
-        "provenance": _provenance(arguments),
+        "provenance": _provenance(arguments, postgres=postgres),
         "collector_probe": collector_probe,
         "samples": samples,
         "army_read_sample": army_read_sample,
     }
+    artifact["artifact_digest"] = _artifact_digest(artifact)
+    validate_artifact(artifact)
+    return artifact
 
 
 def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:

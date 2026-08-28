@@ -15,6 +15,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0009_raw_evidence.sql"
   "$ROOT_DIR/deploy/migrations/0010_boundary_publication_coordinator.sql"
   "$ROOT_DIR/deploy/migrations/0011_boundary_publication_contract.sql"
+  "$ROOT_DIR/deploy/migrations/0012_parsed_content_dedup.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -80,9 +81,9 @@ Commands:
   init                         Create private Podman resources; apply migration
                                0001 only on an absent database.
   up                           Build the collector image, migrate the contract
-                               to version 4 (stop -> migrate -> restart),
+                               to version 5 (stop -> migrate -> restart),
                                and start the required collector.
-  restart                      Start-only recovery for an existing version-4
+  restart                      Start-only recovery for an existing version-5
                                stack: never builds and never runs SQL.
   build-collector              Build the immutable collector image only.
   build-python                 Build the immutable Python image only.
@@ -488,7 +489,7 @@ ensure_volume() {
   fi
 }
 
-runtime_contract_version() { printf '4'; }
+runtime_contract_version() { printf '5'; }
 
 ensure_spool_root() {
   [[ "$CLASHLENS_SPOOL_ROOT" = /* && "$CLASHLENS_SPOOL_ROOT" != "/" ]] || die "CLASHLENS_SPOOL_ROOT must be an absolute non-root path"
@@ -600,7 +601,7 @@ apply_pending_forward_migrations() {
     migration_file=${MIGRATION_FILES[$index]}
     if (( version == 9 )) && [[ -z "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]]; then continue; fi
     if ! schema_migration_applied "$version"; then
-      if (( version == 4 )); then
+      if (( version == 4 || version == 12 )); then
         # Parser v2 changes the interpretation of source rows. Drain the old
         # image before installing its claim fence so no retained lease can
         # publish with the superseded interpretation after the migration.
@@ -629,7 +630,7 @@ contract_version() {
     3)
       [[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && printf '%s\n' "$version" || printf 'unknown\n'
       ;;
-    4)
+    4|5)
       printf '%s\n' "$version"
       ;;
     *)
@@ -1374,7 +1375,7 @@ case "$command" in
         apply_initial_contract
         printf 'database initialized; data volume is %s\n' "$POSTGRES_VOLUME"
         ;;
-      1|2|3|4)
+      1|2|3|4|5)
         die "database is already initialized at contract version $version; use up or restart"
         ;;
       *)
@@ -1403,7 +1404,7 @@ case "$command" in
         version=2
         fresh_bootstrap=true
       ;;
-      1|2|3|4) ;;
+      1|2|3|4|5) ;;
       *)
         die "unsupported contract version $version"
         ;;
@@ -1422,10 +1423,10 @@ case "$command" in
       configure_runtime_roles
       stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
       secret_rm clashlens-bridge-database-url
-    elif [[ ("$version" == "2" || "$version" == "3" || "$version" == "4") && "$fresh_bootstrap" != true ]]; then
-      # Migrations 0007, 0009, 0010, and 0011 change claim/publication
-      # contracts. Stop every old worker before applying any of them.
-      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9) || ! schema_migration_applied 10 || ! schema_migration_applied 11; then
+    elif [[ ("$version" == "2" || "$version" == "3" || "$version" == "4" || "$version" == "5") && "$fresh_bootstrap" != true ]]; then
+      # Migrations 0007, 0009, 0010, 0011, and 0012 change claim or
+      # publication contracts. Stop every old worker before applying any.
+      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9) || ! schema_migration_applied 10 || ! schema_migration_applied 11 || ! schema_migration_applied 12; then
         stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
         stop_all_worker_containers
       fi

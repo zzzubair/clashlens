@@ -315,7 +315,7 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
 
     assert result == 0
     assert recorded["database_max_size"] == 4
-    assert recorded["expected_contract_version"] == 4
+    assert recorded["expected_contract_version"] == 5
     assert recorded["archive_pool_size"] == 4
     assert recorded["process_until_idle"]["owner"] == "cli-worker"
     assert recorded["process_until_idle"]["max_jobs"] == 3
@@ -374,7 +374,7 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
 
     assert result == 0
     assert recorded["database_max_size"] == 8
-    assert recorded["expected_contract_version"] == 4
+    assert recorded["expected_contract_version"] == 5
     assert recorded["archive_pool_size"] == 4
     assert recorded["concurrent_args"] == {
         "concurrency": 3,
@@ -422,5 +422,5 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
 
     assert result == 0
     assert recorded["database_max_size"] == 6
-    assert recorded["expected_contract_version"] == 4
+    assert recorded["expected_contract_version"] == 5
     assert recorded["archive_pool_size"] == 12
