@@ -129,7 +129,7 @@ func (s *store) scheduleDueRegular(ctx context.Context, now time.Time, cycle tim
 				FROM collector_jobs AS job
 				JOIN collector_reset_sweeps AS sweep ON sweep.id = job.sweep_id
 				WHERE sweep.boundary_at < $7::timestamptz
-				  AND job.work_type IN ('reset_baseline','reset_profile')
+				  AND job.work_type IN ('reset_baseline','reset_profile','legacy_reset_profile')
 				UNION
 				SELECT child.id
 				FROM collector_jobs AS child

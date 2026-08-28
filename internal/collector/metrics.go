@@ -12,6 +12,8 @@ import (
 
 type collectorMetrics struct {
 	mu               sync.Mutex
+	processIdentity  string
+	processStartedAt time.Time
 	jobs             map[string]uint64
 	apiRequests      map[string]uint64
 	apiOutcomes      map[string]uint64
@@ -35,7 +37,13 @@ type durationHistogram struct {
 }
 
 func newCollectorMetrics() *collectorMetrics {
+	identity, err := randomToken()
+	if err != nil {
+		panic(fmt.Sprintf("generate collector process identity: %v", err))
+	}
 	return &collectorMetrics{
+		processIdentity:  identity,
+		processStartedAt: time.Now().UTC(),
 		jobs:             map[string]uint64{},
 		apiRequests:      map[string]uint64{},
 		apiOutcomes:      map[string]uint64{},
@@ -103,11 +111,11 @@ func (m *collectorMetrics) recordRetry(endpoint string) {
 	m.increment(m.retries, endpoint)
 }
 
-func (m *collectorMetrics) recordQuarantine(label, pool string) {
+func (m *collectorMetrics) recordQuarantine(_ string, pool string) {
 	if m == nil {
 		return
 	}
-	m.increment(m.quarantines, label+"\x00"+pool)
+	m.increment(m.quarantines, pool)
 }
 
 func (m *collectorMetrics) recordStageDuration(stage string, duration time.Duration) {
@@ -148,6 +156,8 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	m.mu.Unlock()
 
 	var output strings.Builder
+	fmt.Fprintf(&output, "clashlens_collector_process_start_time_seconds %d\n", m.processStartedAt.Unix())
+	fmt.Fprintf(&output, "clashlens_collector_process_identity_info{process_id=%q} 1\n", m.processIdentity)
 	fmt.Fprintf(&output, "clashlens_collector_queue_depth %d\n", statistics.depth)
 	fmt.Fprintf(&output, "clashlens_collector_active_leases %d\n", statistics.activeLeases)
 	fmt.Fprintf(&output, "clashlens_collector_expired_leases %d\n", statistics.expiredLeases)
@@ -170,12 +180,15 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	}
 	fmt.Fprintf(&output, "clashlens_spool_final_bytes %d\n", spool.finalBytes)
 	fmt.Fprintf(&output, "clashlens_spool_temporary_bytes %d\n", spool.temporaryBytes)
+	fmt.Fprintf(&output, "clashlens_spool_abandoned_temporary_bytes %d\n", spool.abandonedTemporaryBytes)
 	fmt.Fprintf(&output, "clashlens_spool_high_water_bytes %d\n", spool.highWaterBytes)
 	fmt.Fprintf(&output, "clashlens_spool_final_objects %d\n", spool.finalObjects)
 	fmt.Fprintf(&output, "clashlens_spool_temporary_objects %d\n", spool.temporaryObjects)
+	fmt.Fprintf(&output, "clashlens_spool_abandoned_temporary_objects %d\n", spool.abandonedTemporaryObjects)
 	fmt.Fprintf(&output, "clashlens_spool_reserved_bytes %d\n", spool.reservedBytes)
 	fmt.Fprintf(&output, "clashlens_spool_live_reservations %d\n", spool.reservedObjects)
 	fmt.Fprintf(&output, "clashlens_spool_allocated_bytes %d\n", spool.allocatedBytes)
+	fmt.Fprintf(&output, "clashlens_spool_free_bytes %d\n", spool.freeBytes)
 	fmt.Fprintf(&output, "clashlens_spool_free_inodes %d\n", spool.freeInodes)
 	fmt.Fprintf(&output, "clashlens_spool_orphan_count %d\n", orphanCount)
 	fmt.Fprintf(&output, "clashlens_spool_orphan_bytes %d\n", orphanBytes)
@@ -216,7 +229,7 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	writeFloatMap(&output, "clashlens_collector_api_duration_seconds_sum", []string{"endpoint", "pool"}, apiDurationSum)
 	writeCounterMap(&output, "clashlens_collector_storage_errors_total", []string{"category"}, storageErrors)
 	writeCounterMap(&output, "clashlens_collector_retries_total", []string{"endpoint"}, retries)
-	writeCounterMap(&output, "clashlens_collector_key_quarantines_total", []string{"key_label", "pool"}, quarantines)
+	writeCounterMap(&output, "clashlens_collector_key_quarantines_total", []string{"pool"}, quarantines)
 	writeDurationHistograms(&output, stageDurations)
 	poolStats := store.pool.Stat()
 	fmt.Fprintf(&output, "clashlens_collector_database_pool_max_connections %d\n", poolStats.MaxConns())
@@ -226,33 +239,23 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	fmt.Fprintf(&output, "clashlens_collector_database_pool_cancelled_acquires_total %d\n", poolStats.CanceledAcquireCount())
 	fmt.Fprintf(&output, "clashlens_collector_database_pool_acquire_duration_seconds_total %s\n", strconv.FormatFloat(poolStats.AcquireDuration().Seconds(), 'f', 6, 64))
 
+	keyTotals := map[string]uint64{}
+	keyHealthy := map[string]uint64{}
+	keyRequests := map[string]uint64{}
+	keyCooldown := map[string]float64{}
 	for _, status := range keys.statuses(now) {
-		healthy := 1
-		if status.Quarantined {
-			healthy = 0
+		pool := string(status.Pool)
+		keyTotals[pool]++
+		if !status.Quarantined {
+			keyHealthy[pool]++
 		}
-		fmt.Fprintf(
-			&output,
-			"clashlens_collector_key_healthy{key_label=%q,pool=%q} %d\n",
-			status.Label,
-			status.Pool,
-			healthy,
-		)
-		fmt.Fprintf(
-			&output,
-			"clashlens_collector_key_requests_last_second{key_label=%q,pool=%q} %d\n",
-			status.Label,
-			status.Pool,
-			status.RequestsInLastSecond,
-		)
-		fmt.Fprintf(
-			&output,
-			"clashlens_collector_key_cooldown_seconds{key_label=%q,pool=%q} %s\n",
-			status.Label,
-			status.Pool,
-			strconv.FormatFloat(status.Cooldown.Seconds(), 'f', 3, 64),
-		)
+		keyRequests[pool] += uint64(status.RequestsInLastSecond)
+		keyCooldown[pool] = max(keyCooldown[pool], status.Cooldown.Seconds())
 	}
+	writeCounterMap(&output, "clashlens_collector_keys_total", []string{"pool"}, keyTotals)
+	writeCounterMap(&output, "clashlens_collector_keys_healthy", []string{"pool"}, keyHealthy)
+	writeCounterMap(&output, "clashlens_collector_key_requests_last_second", []string{"pool"}, keyRequests)
+	writeFloatMap(&output, "clashlens_collector_key_cooldown_seconds", []string{"pool"}, keyCooldown)
 	return output.String(), nil
 }
 

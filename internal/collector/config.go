@@ -342,7 +342,7 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	labels := make(map[string]struct{}, len(config.keys))
 	for _, key := range config.keys {
 		if _, duplicate := labels[key.Label]; duplicate {
-			return collectorConfig{}, fmt.Errorf("API key label %q is duplicated", key.Label)
+			return collectorConfig{}, errors.New("API key label is duplicated")
 		}
 		labels[key.Label] = struct{}{}
 	}
@@ -420,11 +420,11 @@ func parseConfiguredKeys(inline, fileSpecs string, pool capacityPool) ([]APIKey,
 		}
 		contents, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("read API key file for label %q: %w", label, err)
+			return nil, fmt.Errorf("read API key file: %w", err)
 		}
 		secret, parseError := parseBearerTokenBytes(contents)
 		if parseError != nil {
-			return nil, fmt.Errorf("API key file for label %q: %w", label, parseError)
+			return nil, fmt.Errorf("parse API key file: %w", parseError)
 		}
 		keys = append(keys, APIKey{Label: label, Secret: secret, Pool: pool})
 	}

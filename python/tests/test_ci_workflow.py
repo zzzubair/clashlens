@@ -68,7 +68,11 @@ def test_python_job_runs_the_complete_suite_against_postgresql() -> None:
     }
     test_step = next(step for step in job["steps"] if step.get("name") == "Tests")
     assert test_step["working-directory"] == "python"
-    assert test_step["run"] == "uv run pytest -q"
+    assert test_step["run"] == (
+        "uv run pytest -q\n"
+        "uv run pytest -q ../scripts/test_operating_check.py\n"
+        "PYTHONPATH=.. uv run pytest -q ../scripts/test_deployment_receipt.py\n"
+    )
 
 
 def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate() -> None:

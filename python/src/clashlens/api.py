@@ -27,6 +27,7 @@ from .army_analytics import (
     CurrentSeasonEmpty,
 )
 from .hmac_proof import InvalidProof, VerifiedProof, verify_proof
+from .operating import ApiMetrics, elapsed
 from .profile import normalize_player_tag
 from .verification import (
     OfficialVerificationResponse,
@@ -135,6 +136,7 @@ def create_app(
     verification_client: OfficialVerifier | None = None,
     official_credential_fingerprint: str | None = None,
     verification_cooldown_seconds: int = 5,
+    api_metrics: ApiMetrics | None = None,
 ) -> FastAPI:
     if not 1 <= max_body_bytes <= _MAX_SUPPORTED_BODY_BYTES:
         raise ValueError("max_body_bytes exceeds the supported maximum")
@@ -156,6 +158,7 @@ def create_app(
 
     production_database = database
     current_time = now or (lambda: datetime.fromtimestamp(int(clock()), tz=UTC))
+    operating_metrics = api_metrics or ApiMetrics()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -192,13 +195,31 @@ def create_app(
 
     @app.middleware("http")
     async def proof_middleware(request: Request, call_next):
+        request_started = time.perf_counter()
+
+        def observed(
+            response: Response,
+            response_bytes: int,
+            *,
+            response_size_limited: bool = False,
+        ) -> Response:
+            operating_metrics.record(
+                request.url.path,
+                response.status_code,
+                elapsed(request_started),
+                response_bytes,
+                response_size_limited=response_size_limited,
+            )
+            return response
+
         try:
             body = await _read_limited_body(request, max_body_bytes)
         except RequestBodyTooLarge:
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=413,
                 content={"error": "request_body_too_large"},
             )
+            return observed(response, len(response.body))
         if request.url.path not in {"/livez", "/readyz"}:
             try:
                 proof = verify_proof(
@@ -210,29 +231,47 @@ def create_app(
                     now=int(clock()),
                 )
             except InvalidProof:
-                return JSONResponse(status_code=401, content={"error": "invalid_proof"})
+                response = JSONResponse(
+                    status_code=401, content={"error": "invalid_proof"}
+                )
+                return observed(response, len(response.body))
             request.state.proof = proof
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            operating_metrics.record(
+                request.url.path,
+                503,
+                elapsed(request_started),
+                0,
+            )
+            raise
         chunks: list[bytes] = []
         response_size = 0
         async for chunk in response.body_iterator:
             encoded = chunk.encode("utf-8") if isinstance(chunk, str) else chunk
             response_size += len(encoded)
             if response_size > max_response_bytes:
-                return JSONResponse(
+                limited = JSONResponse(
                     status_code=503,
                     content={"error": "response_too_large"},
+                )
+                return observed(
+                    limited,
+                    response_size,
+                    response_size_limited=True,
                 )
             chunks.append(encoded)
         headers = dict(response.headers)
         headers.pop("content-length", None)
-        return Response(
+        bounded = Response(
             content=b"".join(chunks),
             status_code=response.status_code,
             headers=headers,
             media_type=response.media_type,
             background=response.background,
         )
+        return observed(bounded, response_size)
 
     @app.get("/livez")
     def live() -> dict[str, bool]:
@@ -250,6 +289,18 @@ def create_app(
             status_code=200 if is_ready else 503,
             content={"ready": is_ready},
         )
+
+    @app.get("/operatorz")
+    def operator(request: Request) -> dict[str, Any]:
+        proof: VerifiedProof = request.state.proof
+        if (
+            proof.caller != "typescript-website"
+            or proof.provider
+            or proof.provider_subject
+        ):
+            raise ApiError(403, "caller_operation_not_authorized")
+        pool_health = getattr(database, "pool_health", dict)()
+        return operating_metrics.snapshot(pool_health)
 
     @app.get("/v1/players/search")
     def search_players(

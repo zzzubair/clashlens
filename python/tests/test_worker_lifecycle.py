@@ -91,6 +91,12 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
 
     monkeypatch.setattr(cli, "_archive", fake_archive)
     monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
+    operating_snapshots: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cli,
+        "write_private_snapshot",
+        lambda path, snapshot: operating_snapshots.append(snapshot),
+    )
     arguments = Namespace(
         database_url="postgresql://prototype@postgres/db",
         database_url_file="",
@@ -103,6 +109,7 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
         concurrency=1,
         database_pool_size=None,
         archive_pool_size=None,
+        operating_snapshot_file="/tmp/clashlens-worker-operating.json",
     )
 
     result = cli._run_worker(arguments)
@@ -117,6 +124,10 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
     )
     assert database.closed is True
     assert database.maintenance_calls == 1
+    assert operating_snapshots[-1]["outcomes"]["processed"] == (
+        cli.MAX_REPORTED_RESULTS + 1
+    )
+    assert operating_snapshots[-1]["process"]["id"]
 
 
 @pytest.mark.parametrize("concurrency", [1, 3])
@@ -254,6 +265,7 @@ def _worker_namespace(**overrides: object) -> Namespace:
         "concurrency": 1,
         "database_pool_size": None,
         "archive_pool_size": None,
+        "operating_snapshot_file": "",
     }
     values.update(overrides)
     return Namespace(**values)

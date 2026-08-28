@@ -3,6 +3,8 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+CANONICAL_REPOSITORY_URL=https://github.com/zzzubair/clashlens
+GIT_BIN=${GIT_BIN:-git}
 MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0001_collector.sql"
   "$ROOT_DIR/deploy/migrations/0002_python_layer.sql"
@@ -21,6 +23,7 @@ MIGRATION_FILES=(
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
 CURL_BIN=${CURL_BIN:-curl}
+PYTHON_BIN=${PYTHON_BIN:-python3}
 
 # These values are deployment metadata, not application credentials.
 NETWORK_NAME=clashlens-private
@@ -89,6 +92,14 @@ Commands:
   build-collector              Build the immutable collector image only.
   build-python                 Build the immutable Python image only.
   build-website                Build the immutable website image only.
+  candidate-prepare            Prepare only the configured disposable
+                               PostgreSQL database through migration 0013.
+  deployment-receipt <scope> <environment> <results-dir>
+                               Write a candidate-preparation or deployed-stack
+                               evidence receipt outside the checkout.
+  operating-check [--previous-snapshot <path>]
+                               Print one bounded private operating snapshot and
+                               exit 0 healthy, 1 objective failure, or 2 unknown.
   python-up                    Build the Python image, then start the private
                                API and the worker replicas.
   python-start                 Start-only path for the private API and worker
@@ -450,6 +461,21 @@ require_rootless_podman() {
   [[ "$rootless" == "true" ]] || die "Podman must run in rootless mode"
 }
 
+source_revision_for_build() {
+  local checkout_status source_revision
+  if ! checkout_status=$("$GIT_BIN" -C "$ROOT_DIR" status --porcelain=v1 --untracked-files=all 2>/dev/null); then
+    die "unable to verify git checkout state"
+  fi
+  [[ -z "$checkout_status" ]] || die "refusing to build from a dirty git checkout"
+
+  if ! source_revision=$("$GIT_BIN" -C "$ROOT_DIR" rev-parse --verify 'HEAD^{commit}' 2>/dev/null); then
+    die "git HEAD is missing or unverifiable"
+  fi
+  [[ "$source_revision" =~ ^[0-9a-f]{40}$ || "$source_revision" =~ ^[0-9a-f]{64}$ ]] || \
+    die "git HEAD is missing or unverifiable"
+  printf '%s' "$source_revision"
+}
+
 container_exists() {
   "$PODMAN_BIN" container exists "$1" >/dev/null 2>&1
 }
@@ -672,27 +698,121 @@ configure_runtime_roles() {
 }
 
 build_collector_image() {
+  local source_revision=${1:-}
+  [[ -n "$source_revision" ]] || source_revision=$(source_revision_for_build)
   "$PODMAN_BIN" build \
     --pull=missing \
     --file "$ROOT_DIR/Containerfile" \
+    --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" \
+    --label "org.opencontainers.image.revision=$source_revision" \
     --tag "$COLLECTOR_IMAGE" \
     "$ROOT_DIR"
 }
 
 build_python_image() {
+  local source_revision=${1:-}
+  [[ -n "$source_revision" ]] || source_revision=$(source_revision_for_build)
   "$PODMAN_BIN" build \
     --pull=missing \
     --file "$ROOT_DIR/python/Containerfile" \
+    --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" \
+    --label "org.opencontainers.image.revision=$source_revision" \
     --tag "$PYTHON_IMAGE" \
     "$ROOT_DIR/python"
 }
 
 build_website_image() {
+  local source_revision=${1:-}
+  [[ -n "$source_revision" ]] || source_revision=$(source_revision_for_build)
   "$PODMAN_BIN" build \
     --pull=missing \
     --file "$ROOT_DIR/website/Containerfile" \
+    --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" \
+    --label "org.opencontainers.image.revision=$source_revision" \
     --tag "$WEBSITE_IMAGE" \
     "$ROOT_DIR/website"
+}
+
+write_deployment_receipt() {
+  local scope=$1 environment=$2 results_dir=$3
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/deployment_receipt.py" \
+    --root "$ROOT_DIR" \
+    --scope "$scope" \
+    --environment "$environment" \
+    --results-dir "$results_dir" \
+    --podman-bin "$PODMAN_BIN" \
+    --git-bin "$GIT_BIN" \
+    --postgres-container "$POSTGRES_CONTAINER" \
+    --postgres-user "$POSTGRES_USER" \
+    --postgres-database "$POSTGRES_DB" \
+    --collector-image "$COLLECTOR_IMAGE" \
+    --python-image "$PYTHON_IMAGE" \
+    --website-image "$WEBSITE_IMAGE" \
+    --collector-container "$COLLECTOR_CONTAINER" \
+    --python-container "$PYTHON_API_CONTAINER" \
+    --website-container "$WEBSITE_CONTAINER" \
+    --safe-config "collector_database_pool_size=$CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE" \
+    --safe-config "spool_free_inode_floor=$CLASHLENS_SPOOL_FREE_INODE_FLOOR" \
+    --safe-config "spool_free_space_floor=$CLASHLENS_SPOOL_FREE_SPACE_FLOOR" \
+    --safe-config "spool_max_body_bytes=$CLASHLENS_MAX_BODY_BYTES" \
+    --safe-config "spool_max_bytes=$CLASHLENS_SPOOL_MAX_BYTES" \
+    --safe-config "spool_max_objects=$CLASHLENS_SPOOL_MAX_OBJECTS" \
+    --safe-config "worker_archive_pool_size=$CLASHLENS_WORKER_ARCHIVE_POOL_SIZE" \
+    --safe-config "worker_concurrency=$CLASHLENS_WORKER_CONCURRENCY" \
+    --safe-config "worker_database_pool_size=$CLASHLENS_WORKER_DATABASE_POOL_SIZE" \
+    --safe-config "worker_lease_seconds=$CLASHLENS_WORKER_LEASE_SECONDS" \
+    --safe-config "worker_replicas=$CLASHLENS_WORKER_REPLICAS"
+}
+
+prepare_candidate_database() {
+  local i name version
+  required_setting CLASHLENS_ARCHIVE_INSTANCE_ID
+  [[ "$NETWORK_NAME" != "clashlens-private" && \
+     "$POSTGRES_VOLUME" != "clashlens-postgres-data" && \
+     "$POSTGRES_CONTAINER" != "clashlens-postgres" && \
+     "$COLLECTOR_CONTAINER" != "clashlens-collector" && \
+     "$PYTHON_API_CONTAINER" != "clashlens-python-api" && \
+     "$PYTHON_WORKER_CONTAINER" != "clashlens-python-worker" && \
+     "$WEBSITE_CONTAINER" != "clashlens-website" ]] || \
+    die "candidate-prepare requires dedicated non-default Podman resource names"
+  container_exists "$POSTGRES_CONTAINER" && \
+    die "candidate-prepare refuses an existing PostgreSQL container"
+  "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1 && \
+    die "candidate-prepare refuses an existing Podman network"
+  "$PODMAN_BIN" volume exists "$POSTGRES_VOLUME" >/dev/null 2>&1 && \
+    die "candidate-prepare refuses an existing PostgreSQL volume"
+  for name in "$COLLECTOR_CONTAINER" "$PYTHON_API_CONTAINER" \
+    "$PYTHON_WORKER_CONTAINER" "$WEBSITE_CONTAINER"; do
+    container_exists "$name" && \
+      die "candidate-prepare refuses an existing application container: $name"
+  done
+  for ((i = 1; i <= WORKER_REPLICA_MAX; i++)); do
+    name="${PYTHON_WORKER_CONTAINER}-${i}"
+    container_exists "$name" && \
+      die "candidate-prepare refuses an existing application container: $name"
+  done
+  initialize_runtime
+  version=$(contract_version)
+  case "$version" in
+    absent)
+      apply_initial_contract
+      ;;
+    1|2|3|4|5)
+      ;;
+    *)
+      die "unsupported contract version $version"
+      ;;
+  esac
+  apply_pending_forward_migrations
+  ensure_archive_instance_contract
+  [[ "$(contract_version)" == "$(runtime_contract_version)" ]] || \
+    die "candidate database did not reach contract version $(runtime_contract_version)"
+  for ((i = 1; i <= ${#MIGRATION_FILES[@]}; i++)); do
+    schema_migration_applied "$i" || \
+      die "candidate database is missing forward migration $i"
+  done
+  printf 'disposable candidate database is ready through migration %s\n' \
+    "${#MIGRATION_FILES[@]}"
 }
 
 image_exists() {
@@ -1201,7 +1321,7 @@ start_python_workers() {
       --restart unless-stopped \
       --label org.clashlens.component=python-worker \
       "${secrets[@]}" \
-      "$PYTHON_IMAGE" worker --owner "production-python-${i}" --max-jobs 100 --lease-seconds "$CLASHLENS_WORKER_LEASE_SECONDS" --concurrency "$CLASHLENS_WORKER_CONCURRENCY" --database-pool-size "$CLASHLENS_WORKER_DATABASE_POOL_SIZE" --archive-pool-size "$CLASHLENS_WORKER_ARCHIVE_POOL_SIZE" --run-forever >/dev/null
+      "$PYTHON_IMAGE" worker --owner "production-python-${i}" --max-jobs 100 --lease-seconds "$CLASHLENS_WORKER_LEASE_SECONDS" --concurrency "$CLASHLENS_WORKER_CONCURRENCY" --database-pool-size "$CLASHLENS_WORKER_DATABASE_POOL_SIZE" --archive-pool-size "$CLASHLENS_WORKER_ARCHIVE_POOL_SIZE" --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever >/dev/null
   done
 }
 
@@ -1314,6 +1434,35 @@ run_collector_command() {
   "$PODMAN_BIN" exec "$COLLECTOR_CONTAINER" /usr/local/bin/collector "$@"
 }
 
+run_operating_check() {
+  local -a previous_args=()
+  if [[ $# == 2 && "$1" == "--previous-snapshot" && -n "$2" ]]; then
+    previous_args=(--previous-snapshot "$2")
+  elif [[ $# != 0 ]]; then
+    die "operating-check accepts only --previous-snapshot <path>"
+  fi
+  env "PYTHONPATH=$ROOT_DIR/python/src" "$PYTHON_BIN" \
+    "$ROOT_DIR/scripts/operating_check.py" \
+    --podman-bin "$PODMAN_BIN" \
+    --curl-bin "$CURL_BIN" \
+    --postgres-container "$POSTGRES_CONTAINER" \
+    --postgres-user "$POSTGRES_USER" \
+    --postgres-database "$POSTGRES_DB" \
+    --collector-metrics-url "http://$HEALTH_HOST:$HEALTH_PORT/metrics" \
+    --python-api-container "$PYTHON_API_CONTAINER" \
+    --api-hmac-caller "$CLASHLENS_HMAC_CALLER" \
+    --api-hmac-key-id "$CLASHLENS_HMAC_KEY_ID" \
+    --api-hmac-secret-file "$CLASHLENS_HMAC_SECRET_FILE" \
+    --python-worker-container "$PYTHON_WORKER_CONTAINER" \
+    --worker-replicas "$CLASHLENS_WORKER_REPLICAS" \
+    --spool-max-body-bytes "$CLASHLENS_MAX_BODY_BYTES" \
+    --spool-max-bytes "$CLASHLENS_SPOOL_MAX_BYTES" \
+    --spool-max-objects "$CLASHLENS_SPOOL_MAX_OBJECTS" \
+    --spool-free-space-floor "$CLASHLENS_SPOOL_FREE_SPACE_FLOOR" \
+    --spool-free-inode-floor "$CLASHLENS_SPOOL_FREE_INODE_FLOOR" \
+    "${previous_args[@]}"
+}
+
 command=${1:-}
 if [[ -z "$command" ]]; then
   usage
@@ -1323,7 +1472,7 @@ shift
 
 full_configuration=false
 case "$command" in
-  init|up|restart|build-collector|build-python|build-website|python-up|python-start|api-start|worker-start|website-up|website-start)
+  init|up|restart|build-collector|build-python|build-website|candidate-prepare|deployment-receipt|operating-check|python-up|python-start|api-start|worker-start|website-up|website-start)
     load_env_file
     full_configuration=true
     ;;
@@ -1469,27 +1618,46 @@ case "$command" in
     ;;
   build-collector)
     [[ $# == 0 ]] || die "build-collector accepts no arguments"
+    source_revision=$(source_revision_for_build)
     require_podman
     require_rootless_podman
-    build_collector_image
+    build_collector_image "$source_revision"
     ;;
   build-python)
     [[ $# == 0 ]] || die "build-python accepts no arguments"
+    source_revision=$(source_revision_for_build)
     require_podman
     require_rootless_podman
-    build_python_image
+    build_python_image "$source_revision"
     ;;
   build-website)
     [[ $# == 0 ]] || die "build-website accepts no arguments"
+    source_revision=$(source_revision_for_build)
     require_podman
     require_rootless_podman
-    build_website_image
+    build_website_image "$source_revision"
+    ;;
+  candidate-prepare)
+    [[ $# == 0 ]] || die "candidate-prepare accepts no arguments"
+    require_podman
+    require_rootless_podman
+    prepare_candidate_database
+    ;;
+  deployment-receipt)
+    [[ $# == 3 ]] || die "deployment-receipt requires <scope> <environment> <results-dir>"
+    require_podman
+    require_rootless_podman
+    write_deployment_receipt "$1" "$2" "$3"
+    ;;
+  operating-check)
+    run_operating_check "$@"
     ;;
   python-up)
     [[ $# == 0 ]] || die "python-up accepts no arguments"
+    source_revision=$(source_revision_for_build)
     require_podman
     require_rootless_podman
-    build_python_image
+    build_python_image "$source_revision"
     python_start
     ;;
   python-start)
@@ -1522,12 +1690,13 @@ case "$command" in
     ;;
   website-up)
     [[ $# == 0 ]] || die "website-up accepts no arguments"
+    source_revision=$(source_revision_for_build)
     require_podman
     require_rootless_podman
     # Reject malformed auth settings before building or replacing anything;
     # a fully absent auth block intentionally leaves public-only mode enabled.
     validate_website_login_config || true
-    build_website_image
+    build_website_image "$source_revision"
     website_start
     ;;
   website-start)

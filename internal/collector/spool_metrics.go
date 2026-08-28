@@ -3,15 +3,18 @@ package collector
 import "syscall"
 
 type spoolMetrics struct {
-	finalBytes       int64
-	temporaryBytes   int64
-	finalObjects     int64
-	temporaryObjects int64
-	reservedBytes    int64
-	reservedObjects  int64
-	highWaterBytes   int64
-	allocatedBytes   uint64
-	freeInodes       uint64
+	finalBytes                int64
+	temporaryBytes            int64
+	abandonedTemporaryBytes   int64
+	finalObjects              int64
+	temporaryObjects          int64
+	abandonedTemporaryObjects int64
+	reservedBytes             int64
+	reservedObjects           int64
+	highWaterBytes            int64
+	allocatedBytes            uint64
+	freeBytes                 uint64
+	freeInodes                uint64
 }
 
 func (s *evidenceSpool) metrics() (spoolMetrics, error) {
@@ -29,10 +32,13 @@ func (s *evidenceSpool) metrics() (spoolMetrics, error) {
 	}
 	return spoolMetrics{
 		finalBytes: ledger.FinalBytes, temporaryBytes: ledger.TemporaryBytes,
-		finalObjects: ledger.FinalObjects, temporaryObjects: ledger.TemporaryObjects,
-		reservedBytes: ledger.ReservedBytes, reservedObjects: ledger.ReservedObjects,
+		abandonedTemporaryBytes: ledger.AbandonedTempBytes,
+		finalObjects:            ledger.FinalObjects, temporaryObjects: ledger.TemporaryObjects,
+		abandonedTemporaryObjects: ledger.AbandonedTempObjects,
+		reservedBytes:             ledger.ReservedBytes, reservedObjects: ledger.ReservedObjects,
 		highWaterBytes: ledger.HighWaterBytes,
-		allocatedBytes: uint64(ledger.FinalBytes + ledger.TemporaryBytes + ledger.ReservedBytes),
+		allocatedBytes: uint64(ledger.FinalBytes + ledger.TemporaryBytes + ledger.AbandonedTempBytes + ledger.ReservedBytes),
+		freeBytes:      stat.Bavail * uint64(stat.Bsize),
 		freeInodes:     stat.Ffree,
 	}, nil
 }

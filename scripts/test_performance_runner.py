@@ -5,8 +5,10 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/performance_runner.py"
@@ -14,6 +16,121 @@ SPEC = importlib.util.spec_from_file_location("performance_runner", SCRIPT)
 assert SPEC and SPEC.loader
 runner = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(runner)
+
+SOURCE_SHA = "01" * 20
+
+
+def _clean_git(*arguments: str) -> str:
+    if arguments[0] == "status":
+        return ""
+    if arguments[0] == "rev-parse":
+        return SOURCE_SHA
+    raise AssertionError(arguments)
+
+
+def _test_postgres() -> dict[str, object]:
+    return {
+        "version": "PostgreSQL 18.6",
+        "settings": {"server_version_num": "180006"},
+        "applied_migration_versions": list(range(1, 14)),
+    }
+
+
+def _provenance(mode: str = "duplicate-heavy", candidate_receipt: Path | None = None) -> dict:
+    argv = [mode]
+    if candidate_receipt is not None:
+        argv.extend(["--candidate-receipt", str(candidate_receipt)])
+    arguments = runner.parse_arguments(argv)
+    with mock.patch.object(runner, "_git", side_effect=_clean_git):
+        return runner._provenance(arguments, postgres=_test_postgres())
+
+
+def _valid_artifact(mode: str = "duplicate-heavy") -> dict:
+    provenance = _provenance(mode)
+    return {
+        "schema_version": runner.ARTIFACT_SCHEMA_VERSION,
+        "mode": mode,
+        "started_at": "2026-08-28T20:00:00+00:00",
+        "finished_at": "2026-08-28T20:00:01+00:00",
+        "provenance": provenance,
+        "execution": provenance["execution"],
+        "prepared_candidate_images": provenance["prepared_candidate_images"],
+        "candidate_receipt": provenance["candidate_receipt"],
+        "official_api_requests": {"count": 0, "source": "committed fixtures"},
+        "collector_probe": None,
+        "samples": [
+            {"database": {}, "archive_operations": {}, "storage_runway": {}}
+        ],
+        "army_read_sample": None,
+        "hard_failures": [],
+    }
+
+
+def _candidate_receipt() -> dict:
+    from scripts import deployment_receipt
+
+    migrations = runner._source_migrations()
+    fields = {
+        name: "1" for name in sorted(deployment_receipt.SAFE_CONFIGURATION_FIELDS)
+    }
+    configuration = {
+        "allowlist_version": "step8-v1",
+        "fields": fields,
+        "fingerprint": "sha256:"
+        + runner._sha(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()),
+    }
+    images = {
+        application: {
+            "requested_reference": f"localhost/clashlens-{application}:deployment",
+            "identity_type": "image_id",
+            "image_id": "sha256:" + "02" * 32,
+            "registry_digest": None,
+            "source_label": deployment_receipt.CANONICAL_REPOSITORY_URL,
+            "revision_label": SOURCE_SHA,
+        }
+        for application in ("collector", "python", "website")
+    }
+    result = {
+        "schema_version": deployment_receipt.SCHEMA_VERSION,
+        "receipt_scope": "candidate-preparation",
+        "environment_identity": "fedora-validation",
+        "production_deployment_status": "not_asserted",
+        "created_at": "2026-08-28T19:00:00+00:00",
+        "source": {
+            "repository_url": deployment_receipt.CANONICAL_REPOSITORY_URL,
+            "revision": SOURCE_SHA,
+            "clean": True,
+            "clean_check": "git-status-porcelain-v1-with-untracked-files",
+        },
+        "migrations": [
+            {"filename": item["name"], "sha256": item["sha256"], "applied": True}
+            for item in migrations
+        ],
+        "configuration": configuration,
+        "application_images": images,
+        "database": {
+            "contract_version": 5,
+            "applied_migration_versions": list(range(1, 14)),
+            "server_version": "18.6",
+            "server_version_num": "180006",
+            "system_identifier": "1234567890",
+            "container_name": "step8-postgres",
+            "database_name": "clashlens",
+            "identity_scope": "disposable_validation_database",
+        },
+        "runtime_versions": {
+            "receipt_python": "3.12.0",
+            "podman": "podman version 5.8.4",
+            "postgresql": "18.6",
+        },
+        "official_api_requests": {
+            "count": 0,
+            "proof": "receipt-command-inspects-images-and-database-only",
+        },
+    }
+    result["receipt_digest"] = deployment_receipt._canonical_digest(result)
+    deployment_receipt.validate_receipt(result, require_digest=True)
+    return result
 
 
 class PerformanceRunnerTest(unittest.TestCase):
@@ -34,9 +151,152 @@ class PerformanceRunnerTest(unittest.TestCase):
             ("duplicate-heavy", 64, 64),
         ):
             arguments = runner.parse_arguments([mode, "--lanes", str(configured)])
-            provenance = runner._provenance(arguments)
+            with mock.patch.object(runner, "_git", side_effect=_clean_git):
+                provenance = runner._provenance(
+                    arguments, postgres=_test_postgres()
+                )
             self.assertEqual(provenance["configuration"]["lanes"], configured)
             self.assertEqual(provenance["configuration"]["effective_lanes"], effective)
+
+    def test_post_fix_is_part_of_configuration_fingerprint(self) -> None:
+        fingerprints = []
+        for post_fix in (False, True):
+            arguments = runner.parse_arguments(
+                ["duplicate-heavy", "--database-url", "unused"]
+                + (["--post-fix"] if post_fix else [])
+            )
+            with mock.patch.object(runner, "_git", side_effect=_clean_git):
+                provenance = runner._provenance(
+                    arguments, postgres=_test_postgres()
+                )
+            self.assertEqual(provenance["configuration"]["post_fix"], post_fix)
+            self.assertEqual(
+                set(provenance["configuration"]), runner.CONFIGURATION_KEYS
+            )
+            fingerprints.append(provenance["configuration_fingerprint"])
+        self.assertNotEqual(*fingerprints)
+
+    def test_result_summary_is_bounded_and_drops_job_identity(self) -> None:
+        summary = runner._result_summary(
+            [
+                {
+                    "job_id": 101,
+                    "outcome": "processed",
+                    "status": "complete",
+                    "work_type": "redecode_army",
+                    "kind": "backfill",
+                    "elapsed_ms": 4.0,
+                },
+                {
+                    "job_id": 102,
+                    "outcome": "retrying",
+                    "status": "waiting_retry",
+                    "work_type": "process_observation",
+                    "kind": "live",
+                    "elapsed_ms": 8.0,
+                },
+            ],
+            expected=2,
+        )
+        self.assertNotIn("job_id", json.dumps(summary))
+        self.assertEqual(summary["count"], 2)
+        self.assertEqual(summary["retry_count"], 1)
+        self.assertEqual(summary["outcomes"]["processed"], 1)
+        self.assertEqual(summary["outcomes"]["retrying"], 1)
+        self.assertEqual(summary["work_types"]["redecode_army"], 1)
+
+    def test_boundary_admission_evidence_is_exact_and_bounded(self) -> None:
+        admitted = {
+            "phase": "admit",
+            "blocked_before_regular_drain": True,
+            "state_before_drain": "regular_draining",
+            "regular_nonterminal_before": 2,
+            "state_after_admission": "reset_draining",
+            "regular_drain_complete": True,
+            "reset_drain_complete": False,
+            "safe_handoff": False,
+            "reset_generation": 1,
+            "regular_nonterminal_after": 0,
+            "reset_nonterminal_after": 3,
+            "membership_count": 3,
+            "reset_root_count": 3,
+            "regular_allowed_during_reset": False,
+            "regular_scheduled_during_reset": 0,
+        }
+        runner._validate_boundary_admission_evidence(admitted, "admit", 3)
+        admitted["membership_count"] = 4
+        with self.assertRaisesRegex(ValueError, "contradicts"):
+            runner._validate_boundary_admission_evidence(admitted, "admit", 3)
+
+    def test_boundary_admission_probe_retains_only_one_marker(self) -> None:
+        handoff = {
+            "phase": "handoff",
+            "state": "safe_handoff",
+            "regular_drain_complete": True,
+            "reset_drain_complete": True,
+            "safe_handoff": True,
+            "reset_generation": 1,
+            "handoff_recorded": True,
+            "regular_nonterminal_count": 0,
+            "reset_nonterminal_count": 0,
+            "membership_count": 1,
+            "completed_reset_root_count": 1,
+            "regular_allowed_after_handoff": True,
+            "regular_scheduled_after_handoff": 1,
+        }
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                "unretained go output\n"
+                + runner._ADMISSION_MARKER
+                + json.dumps(handoff)
+                + "\n"
+            ),
+            stderr="SECRET-raw-stderr",
+        )
+        with mock.patch.object(runner.subprocess, "run", return_value=completed):
+            self.assertEqual(
+                runner._boundary_admission_probe("postgresql://SECRET", "handoff", 1),
+                handoff,
+            )
+
+    def test_artifact_rejects_arbitrary_hard_failure_code(self) -> None:
+        artifact = _valid_artifact()
+        artifact["hard_failures"] = ["job 101 failed: SECRET"]
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "hard failures"):
+            runner.validate_artifact(artifact)
+
+    def test_artifact_rejects_internal_spool_path(self) -> None:
+        artifact = _valid_artifact()
+        artifact["_spool_root"] = "/tmp/high-cardinality-path"
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "internal or per-job details"):
+            runner.validate_artifact(artifact)
+
+    def test_artifact_rejects_unknown_or_sensitive_nested_fields(self) -> None:
+        for section, field, value in (
+            (None, "unexpected", "arbitrary"),
+            ("provenance", "unexpected", "arbitrary"),
+            ("provenance", "database_url", "postgresql://secret@host/db"),
+        ):
+            with self.subTest(section=section, field=field):
+                artifact = _valid_artifact()
+                target = artifact if section is None else artifact[section]
+                target[field] = value
+                artifact["artifact_digest"] = runner._artifact_digest(artifact)
+                with self.assertRaises(ValueError):
+                    runner.validate_artifact(artifact)
+
+    def test_artifact_rejects_unbounded_nested_sequences(self) -> None:
+        artifact = _valid_artifact()
+        artifact["provenance"]["host"]["unexpected"] = list(
+            range(runner.MAX_RETAINED_SEQUENCE + 1)
+        )
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "unbounded sequence"):
+            runner.validate_artifact(artifact)
 
     def test_duplicate_mode_uses_fixed_endpoint_mix(self) -> None:
         self.assertEqual(runner.DUPLICATE_EXECUTION_CAP, 25_024)
@@ -54,18 +314,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         )
 
     def test_artifact_validation_rejects_missing_and_old_metrics(self) -> None:
-        artifact = {
-            "schema_version": runner.ARTIFACT_SCHEMA_VERSION,
-            "mode": "duplicate-heavy",
-            "started_at": "now",
-            "finished_at": "now",
-            "provenance": {"postgres": {"version": "test", "settings": {}}},
-            "collector_probe": None,
-            "samples": [
-                {"database": {}, "archive_operations": {}, "storage_runway": {}}
-            ],
-            "army_read_sample": None,
-        }
+        artifact = _valid_artifact()
         with self.assertRaisesRegex(ValueError, "digest"):
             runner.validate_artifact(artifact)
         artifact["artifact_digest"] = "0" * 64
@@ -126,16 +375,8 @@ class PerformanceRunnerTest(unittest.TestCase):
                 },
             },
         }
-        artifact = {
-            "schema_version": runner.ARTIFACT_SCHEMA_VERSION,
-            "mode": "duplicate-heavy",
-            "started_at": "now",
-            "finished_at": "now",
-            "provenance": {"postgres": {"version": "test", "settings": {}}},
-            "collector_probe": None,
-            "samples": [sample],
-            "army_read_sample": None,
-        }
+        artifact = _valid_artifact()
+        artifact["samples"] = [sample]
         artifact["artifact_digest"] = runner._artifact_digest(artifact)
         with self.assertRaisesRegex(ValueError, "canonical_content"):
             runner.validate_artifact(artifact)
@@ -194,7 +435,7 @@ class PerformanceRunnerTest(unittest.TestCase):
         )
         self.assertEqual((scanned, returned), (20, 3))
 
-    def test_provenance_fingerprint_includes_processing_and_image_inputs(self) -> None:
+    def test_provenance_fingerprint_is_sanitized_and_deterministic(self) -> None:
         arguments = runner.parse_arguments(
             [
                 "army-analytics",
@@ -202,23 +443,24 @@ class PerformanceRunnerTest(unittest.TestCase):
                 "unused",
                 "--lanes",
                 "7",
-                "--image",
-                "postgres=sha256:" + "a" * 64,
             ]
         )
-        provenance = runner._provenance(arguments)
+        with mock.patch.object(runner, "_git", side_effect=_clean_git):
+            provenance = runner._provenance(arguments, postgres=_test_postgres())
         self.assertEqual(provenance["configuration"]["lanes"], 7)
-        self.assertEqual(
-            provenance["configuration"]["images"], ["postgres=sha256:" + "a" * 64]
-        )
+        self.assertNotIn("images", provenance["configuration"])
         self.assertEqual(
             provenance["configuration_fingerprint"],
             runner._sha(
-                json.dumps(provenance["configuration"], sort_keys=True).encode()
+                json.dumps(
+                    provenance["configuration"],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
             ),
         )
 
-    def test_army_mode_rejects_malformed_image_digest(self) -> None:
+    def test_ambiguous_image_option_is_rejected(self) -> None:
         with self.assertRaises(SystemExit):
             runner.parse_arguments(
                 [
@@ -226,9 +468,119 @@ class PerformanceRunnerTest(unittest.TestCase):
                     "--database-url",
                     "unused",
                     "--image",
-                    "postgres=sha256:not-a-digest",
+                    "postgres=sha256:" + "a" * 64,
                 ]
             )
+
+    def test_dirty_source_is_rejected_before_provenance_is_emitted(self) -> None:
+        arguments = runner.parse_arguments(["duplicate-heavy"])
+        with mock.patch.object(
+            runner, "_git", side_effect=lambda *args: " M scripts/performance_runner.py"
+            if args[0] == "status"
+            else SOURCE_SHA,
+        ), self.assertRaisesRegex(RuntimeError, "clean"):
+            runner._provenance(arguments, postgres=_test_postgres())
+
+    def test_execution_images_are_distinct_from_prepared_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.json"
+            path.write_text(json.dumps(_candidate_receipt()), encoding="utf-8")
+            provenance = _provenance(candidate_receipt=path)
+        self.assertEqual(provenance["execution"]["kind"], "host")
+        self.assertEqual(provenance["execution"]["executor_images"], [])
+        self.assertEqual(
+            {item["identity_type"] for item in provenance["prepared_candidate_images"]},
+            {"prepared_candidate_image_id"},
+        )
+        self.assertEqual(
+            provenance["candidate_receipt"]["receipt_digest"],
+            _candidate_receipt()["receipt_digest"],
+        )
+
+    def test_candidate_receipt_stale_or_tampered_provenance_is_rejected(self) -> None:
+        value = _candidate_receipt()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "candidate.json"
+            value["source"]["revision"] = "03" * 20
+            for identity in value["application_images"].values():
+                identity["revision_label"] = "03" * 20
+            from scripts import deployment_receipt
+
+            value["receipt_digest"] = deployment_receipt._canonical_digest(value)
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "candidate receipt"):
+                _provenance(candidate_receipt=path)
+
+            value = _candidate_receipt()
+            value["receipt_digest"] = "sha256:" + "0" * 64
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "candidate receipt"):
+                _provenance(candidate_receipt=path)
+
+    def test_artifact_validation_rejects_contradictory_or_stale_provenance(self) -> None:
+        artifact = _valid_artifact()
+        artifact["execution"] = {"kind": "container", "executor_images": []}
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "execution provenance"):
+            runner.validate_artifact(artifact)
+
+        artifact = _valid_artifact()
+        artifact["provenance"]["runner_sha256"] = "0" * 64
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "runner hash"):
+            runner.validate_artifact(artifact)
+
+    def test_artifact_output_is_complete_and_exclusive(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "artifact.json"
+            runner._write_artifact(path, '{"complete":true}\n')
+            self.assertEqual(path.read_text(encoding="utf-8"), '{"complete":true}\n')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(Path(directory).glob("*.tmp")), [])
+            with self.assertRaisesRegex(RuntimeError, "occupied"):
+                runner._write_artifact(path, '{"replacement":true}\n')
+
+    def test_main_retains_coherent_hard_failure_before_nonzero(self) -> None:
+        artifact = _valid_artifact()
+        artifact["hard_failures"] = ["fixed_acceptance_failure"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "hard-failure.json"
+            with mock.patch.object(runner, "run", return_value=artifact):
+                result = runner.main(
+                    [
+                        "duplicate-heavy",
+                        "--database-url",
+                        "postgresql://fixture.invalid/clashlens",
+                        "--output",
+                        str(path),
+                    ]
+                )
+
+            self.assertEqual(result, 2)
+            self.assertEqual(
+                json.loads(path.read_text(encoding="utf-8"))["hard_failures"],
+                ["fixed_acceptance_failure"],
+            )
+
+    def test_post_reset_army_failure_is_bounded_and_retained(self) -> None:
+        with mock.patch.object(
+            runner,
+            "_run_army_read_sample",
+            side_effect=RuntimeError("SECRET-player-#TAG"),
+        ):
+            result = runner._retained_army_read_sample(
+                "postgresql://fixture.invalid/clashlens", 1
+            )
+
+        self.assertEqual(
+            result,
+            {
+                "status": "failed",
+                "reason": "army_read_sample_unavailable",
+                "hard_failures": ["army_read_sample_unavailable"],
+            },
+        )
+        self.assertNotIn("SECRET", json.dumps(result))
 
     def test_memory_pressure_delta_never_hides_increases(self) -> None:
         self.assertEqual(
@@ -645,13 +997,9 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 self.assertEqual(workload["five_minute_contract"]["passed"], True)
                 self.assertEqual(workload["hard_failures"], [])
                 self.assertEqual(workload["official_api_traffic"]["requests"], 0)
-                self.assertEqual(
-                    {row["work_type"] for row in workload["results"] if row["kind"] == "backfill"},
-                    {"redecode_army"},
-                )
-                self.assertTrue(
-                    all(row["outcome"] == "processed" for row in workload["results"])
-                )
+                self.assertEqual(workload["processing_summary"]["kinds"], {"live": 1, "backfill": 1, "other": 0})
+                self.assertEqual(workload["processing_summary"]["work_types"]["redecode_army"], 1)
+                self.assertEqual(workload["processing_summary"]["outcomes"]["processed"], 2)
                 self.assertEqual(workload["database"]["queue_residue"], [])
             if mode == "duplicate-heavy":
                 operations = sample["workload"]["collector_archive_operations"]

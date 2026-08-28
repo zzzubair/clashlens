@@ -24,6 +24,7 @@ from .army_analytics import (
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION, catalog_name
 from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION
+from .operating import database_pool_health
 from .profile import normalize_player_tag
 from .verification import KeyAction, VerificationOutcome
 
@@ -389,6 +390,9 @@ class ApiDatabase:
 
     def close(self) -> None:
         self.pool.close()
+
+    def pool_health(self) -> dict[str, int]:
+        return database_pool_health(self.pool)
 
     def _army_cache_get(self, key: tuple[Any, ...]) -> dict[str, Any] | None:
         if not self._army_cache_capacity:

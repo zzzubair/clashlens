@@ -195,7 +195,7 @@ case "$verb" in
       if grep -q 'VALUES (8)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '%s\n' 8 >>"$FAKE_STATE/schema_migrations"
       fi
-      if grep -q 'archive_instances' "$FAKE_STATE/stdin/exec-$n"; then
+      if grep -q 'VALUES (9)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '3' >"$FAKE_STATE/contract_version"
         printf '%s\n' 9 >>"$FAKE_STATE/schema_migrations"
       fi
@@ -288,6 +288,38 @@ printf '{"ready":true}\n'
 EOF
 chmod 0700 "$FAKE_BIN/curl"
 
+cat >"$FAKE_BIN/git" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${1:-}" == "-C" ]]; then
+  shift 2
+fi
+case "${1:-}" in
+  status)
+    printf '%s' "${FAKE_GIT_STATUS:-}"
+    ;;
+  rev-parse)
+    [[ -n "${FAKE_GIT_HEAD:-}" ]] || exit 1
+    printf '%s\n' "$FAKE_GIT_HEAD"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+EOF
+chmod 0700 "$FAKE_BIN/git"
+FAKE_GIT_HEAD=0123456789abcdef0123456789abcdef01234567
+FAKE_GIT_STATUS=
+
+cat >"$FAKE_BIN/python3" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$@" >"$FAKE_PYTHON_LOG"
+printf '/retained/clashlens-candidate-preparation.json\n'
+printf 'sha256:%064d\n' 0
+EOF
+chmod 0700 "$FAKE_BIN/python3"
+
 # ---------------------------------------------------------------------------
 # Scenario helpers
 # ---------------------------------------------------------------------------
@@ -371,7 +403,9 @@ deploy() {
   done
   [[ "${1:-}" == "--" ]] && shift
   env FAKE_STATE="$dir/state" FAKE_PODMAN_LOG="$dir/podman.log" \
+    FAKE_PYTHON_LOG="$dir/python.log" PYTHON_BIN="$FAKE_BIN/python3" \
     DEPLOY_ENV_FILE="$envfile" PODMAN_BIN="$FAKE_BIN/podman" CURL_BIN="$FAKE_BIN/curl" \
+    GIT_BIN="$FAKE_BIN/git" FAKE_GIT_HEAD="$FAKE_GIT_HEAD" FAKE_GIT_STATUS="$FAKE_GIT_STATUS" \
     "${extra[@]}" "$ROOT_DIR/deploy.sh" "$@"
 }
 
@@ -530,6 +564,171 @@ printf '%s\n' 'CLASHLENS_API_CPUS=abc' >>"$BADBUDGET_ENV"
 deploy_fails "$BADBUDGET_DIR" "$BADBUDGET_ENV" 'CLASHLENS_API_CPUS' -- up
 [[ ! -s "$BADBUDGET_DIR/podman.log" ]] || fail 'invalid resource budget had podman side effects'
 printf 'ok: resource budgets are required, explicit, and validated before side effects\n'
+
+# ---------------------------------------------------------------------------
+# Guard 6: image builds carry the canonical source and exact clean HEAD.
+# ---------------------------------------------------------------------------
+BUILD_DIR=$(new_scenario)
+BUILD_ENV="$BUILD_DIR/app.env"
+write_scenario_env "$BUILD_ENV" "$BUILD_DIR/keys"
+deploy "$BUILD_DIR" "$BUILD_ENV" -- build-collector >/dev/null
+deploy "$BUILD_DIR" "$BUILD_ENV" -- build-python >/dev/null
+deploy "$BUILD_DIR" "$BUILD_ENV" -- build-website >/dev/null
+BUILD_NORM="$BUILD_DIR/podman.norm.log"
+norm_log "$BUILD_DIR/podman.log" >"$BUILD_NORM"
+for image in clashlens-collector:deployment clashlens-python:deployment clashlens-website:deployment; do
+  build_line=$(grep '^build ' "$BUILD_NORM" | grep -- "$image")
+  [[ "$build_line" == *'--label org.opencontainers.image.source=https://github.com/zzzubair/clashlens'* ]] || \
+    fail "$image build is missing the canonical source label"
+  [[ "$build_line" == *"--label org.opencontainers.image.revision=$FAKE_GIT_HEAD"* ]] || \
+    fail "$image build is missing the exact HEAD revision label"
+done
+printf 'ok: all image builds carry canonical source and exact HEAD labels\n'
+
+DIRTY_DIR=$(new_scenario)
+DIRTY_ENV="$DIRTY_DIR/app.env"
+write_scenario_env "$DIRTY_ENV" "$DIRTY_DIR/keys"
+deploy_fails "$DIRTY_DIR" "$DIRTY_ENV" 'dirty git checkout' FAKE_GIT_STATUS=' M deploy.sh' -- build-collector
+[[ ! -s "$DIRTY_DIR/podman.log" ]] || fail 'dirty checkout refusal had podman side effects'
+
+MISSING_HEAD_DIR=$(new_scenario)
+MISSING_HEAD_ENV="$MISSING_HEAD_DIR/app.env"
+write_scenario_env "$MISSING_HEAD_ENV" "$MISSING_HEAD_DIR/keys"
+deploy_fails "$MISSING_HEAD_DIR" "$MISSING_HEAD_ENV" 'HEAD is missing or unverifiable' FAKE_GIT_HEAD= -- build-python
+[[ ! -s "$MISSING_HEAD_DIR/podman.log" ]] || fail 'missing HEAD refusal had podman side effects'
+printf 'ok: image builds refuse dirty checkouts and missing HEAD before Podman side effects\n'
+
+RECEIPT_DIR=$(new_scenario)
+RECEIPT_ENV="$RECEIPT_DIR/app.env"
+write_scenario_env "$RECEIPT_ENV" "$RECEIPT_DIR/keys"
+mkdir "$RECEIPT_DIR/retained"
+deploy "$RECEIPT_DIR" "$RECEIPT_ENV" -- deployment-receipt \
+  candidate-preparation fedora-validation "$RECEIPT_DIR/retained" >/dev/null
+grep -Fxq "$ROOT_DIR/scripts/deployment_receipt.py" "$RECEIPT_DIR/python.log" || \
+  fail 'deployment-receipt did not use the bounded receipt helper'
+for argument in \
+  candidate-preparation fedora-validation "$RECEIPT_DIR/retained" \
+  localhost/clashlens-collector:deployment localhost/clashlens-python:deployment \
+  localhost/clashlens-website:deployment collector_database_pool_size=16 \
+  spool_max_body_bytes=4194304 worker_concurrency=20; do
+  grep -Fxq "$argument" "$RECEIPT_DIR/python.log" || \
+    fail "deployment-receipt omitted safe argument $argument"
+done
+for forbidden in test-admin-password collector-archive-secret worker-archive-secret; do
+  ! grep -Fq "$forbidden" "$RECEIPT_DIR/python.log" || \
+    fail "deployment-receipt exposed $forbidden"
+done
+printf 'ok: deployment receipt wiring forwards only scope identities and allowlisted configuration\n'
+
+PREVIOUS_SNAPSHOT="$RECEIPT_DIR/retained/previous-operating.json"
+printf '{}\n' >"$PREVIOUS_SNAPSHOT"
+deploy "$RECEIPT_DIR" "$RECEIPT_ENV" -- operating-check \
+  --previous-snapshot "$PREVIOUS_SNAPSHOT" >/dev/null
+for argument in \
+  "$ROOT_DIR/scripts/operating_check.py" \
+  http://127.0.0.1:18081/metrics clashlens-python-api \
+  typescript-website current /run/secrets/clashlens-hmac-current \
+  clashlens-python-worker 4194304 17179869184 1000000 1073741824 10000 \
+  "$PREVIOUS_SNAPSHOT"; do
+  grep -Fxq "$argument" "$RECEIPT_DIR/python.log" || \
+    fail "operating-check omitted bounded argument $argument"
+done
+for forbidden in test-admin-password collector-archive-secret worker-archive-secret; do
+  ! grep -Fq "$forbidden" "$RECEIPT_DIR/python.log" || \
+    fail "operating-check exposed $forbidden"
+done
+printf 'ok: objective operating check wires only private sources and hard bounds\n'
+
+CANDIDATE_DIR=$(new_scenario)
+CANDIDATE_ENV="$CANDIDATE_DIR/app.env"
+write_scenario_env "$CANDIDATE_ENV" "$CANDIDATE_DIR/keys"
+cat >>"$CANDIDATE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-candidate
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-postgres-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-python-api
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-python-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-website
+EOF
+deploy "$CANDIDATE_DIR" "$CANDIDATE_ENV" -- candidate-prepare >/dev/null
+CANDIDATE_NORM="$CANDIDATE_DIR/podman.norm.log"
+norm_log "$CANDIDATE_DIR/podman.log" >"$CANDIDATE_NORM"
+[[ "$(grep -c '^run ' "$CANDIDATE_NORM")" == 1 ]] || \
+  fail 'candidate-prepare started more than its disposable PostgreSQL container'
+grep -q 'postgres:17-alpine' "$CANDIDATE_NORM" || \
+  fail 'candidate-prepare did not start disposable PostgreSQL'
+log_lacks "$CANDIDATE_NORM" '^build ' 'candidate-prepare built an application image'
+[[ "$(cat "$CANDIDATE_DIR/state/contract_version")" == 5 ]] || \
+  fail 'candidate-prepare did not reach contract version 5'
+[[ "$(sort -n -u "$CANDIDATE_DIR/state/schema_migrations" | tr '\n' ' ')" == \
+   '1 2 3 4 5 6 7 8 9 10 11 12 13 ' ]] || \
+  fail 'candidate-prepare did not apply the exact migration set through 0013'
+
+UNSAFE_CANDIDATE_DIR=$(new_scenario)
+UNSAFE_CANDIDATE_ENV="$UNSAFE_CANDIDATE_DIR/app.env"
+write_scenario_env "$UNSAFE_CANDIDATE_ENV" "$UNSAFE_CANDIDATE_DIR/keys"
+cat >>"$UNSAFE_CANDIDATE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-unsafe-candidate
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+EOF
+deploy_fails "$UNSAFE_CANDIDATE_DIR" "$UNSAFE_CANDIDATE_ENV" \
+  'requires dedicated non-default Podman resource names' -- candidate-prepare
+UNSAFE_CANDIDATE_NORM="$UNSAFE_CANDIDATE_DIR/podman.norm.log"
+norm_log "$UNSAFE_CANDIDATE_DIR/podman.log" >"$UNSAFE_CANDIDATE_NORM"
+log_lacks "$UNSAFE_CANDIDATE_NORM" '^network create |^volume create |^run ' \
+  'candidate-prepare mutated Podman before rejecting default resource names'
+
+MISSING_ARCHIVE_DIR=$(new_scenario)
+MISSING_ARCHIVE_ENV="$MISSING_ARCHIVE_DIR/app.env"
+write_scenario_env "$MISSING_ARCHIVE_ENV" "$MISSING_ARCHIVE_DIR/keys"
+cat >>"$MISSING_ARCHIVE_ENV" <<'EOF'
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-missing-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-missing-postgres-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-missing-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-missing-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-missing-python-api
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-missing-python-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-missing-website
+EOF
+deploy_fails "$MISSING_ARCHIVE_DIR" "$MISSING_ARCHIVE_ENV" \
+  'CLASHLENS_ARCHIVE_INSTANCE_ID is required' -- candidate-prepare
+MISSING_ARCHIVE_NORM="$MISSING_ARCHIVE_DIR/podman.norm.log"
+norm_log "$MISSING_ARCHIVE_DIR/podman.log" >"$MISSING_ARCHIVE_NORM"
+log_lacks "$MISSING_ARCHIVE_NORM" '^network create |^volume create |^run ' \
+  'candidate-prepare mutated Podman without the migration-0009 archive identity'
+
+BLOCKED_CANDIDATE_DIR=$(new_scenario)
+BLOCKED_CANDIDATE_ENV="$BLOCKED_CANDIDATE_DIR/app.env"
+write_scenario_env "$BLOCKED_CANDIDATE_ENV" "$BLOCKED_CANDIDATE_DIR/keys"
+cat >>"$BLOCKED_CANDIDATE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-candidate-blocked
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-blocked-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-blocked-postgres-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-blocked-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-blocked-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-blocked-python-api
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-blocked-python-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-blocked-website
+EOF
+mkdir "$BLOCKED_CANDIDATE_DIR/state/containers/clashlens-candidate-blocked-python-worker-1"
+deploy_fails "$BLOCKED_CANDIDATE_DIR" "$BLOCKED_CANDIDATE_ENV" \
+  'refuses an existing application container' -- candidate-prepare
+! grep -q '^run ' "$BLOCKED_CANDIDATE_DIR/podman.log" || \
+  fail 'candidate-prepare started PostgreSQL beside an application container'
+printf 'ok: candidate preparation starts only disposable PostgreSQL and applies every migration\n'
 
 # ---------------------------------------------------------------------------
 # Scenario A0: v5 stop-migrate-restart wiring owns the shared rw,z spool.
@@ -974,7 +1173,7 @@ done
   fail 'worker read-only archive secret secret was not mounted'
 [[ "$worker_normalized" == *'--env CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key'* ]] || \
   fail 'worker archive access key file setting is missing'
-[[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
   fail 'worker did not receive the configured lease, concurrency, and pool bounds'
 [[ "$worker_normalized" == *'ready --expected-contract-version 5'* ]] || \
   fail 'worker health does not use the ready seam'
@@ -1550,11 +1749,11 @@ run_1=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worke
 run_2=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-2 ')
 run_3=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-3 ')
 [[ -n "$run_1" && -n "$run_2" && -n "$run_3" ]] || fail 'not every configured worker replica was started'
-[[ "$run_1" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$run_1" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
   fail 'replica 1 did not receive its unique owner'
-[[ "$run_2" == *'worker --owner production-python-2 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$run_2" == *'worker --owner production-python-2 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
   fail 'replica 2 did not receive its unique owner'
-[[ "$run_3" == *'worker --owner production-python-3 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$run_3" == *'worker --owner production-python-3 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
   fail 'replica 3 did not receive its unique owner'
 for run in "$run_1" "$run_2" "$run_3"; do
   [[ "$run" == *'ready --expected-contract-version 5'* ]] || fail 'a replica health check lost the ready seam'

@@ -27,6 +27,7 @@ from .api_db import ApiDatabase
 from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
 from .db import CONTRACT_VERSION, MAX_POOL_SIZE, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
+from .operating import WorkerMetrics, write_private_snapshot
 from .profile import normalize_player_tag
 from .verification import (
     OfficialVerificationClient,
@@ -103,6 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=("archive HTTP connection pool size (default: max(4, concurrency))"),
     )
+    worker.add_argument("--operating-snapshot-file", default="")
 
     ready = subparsers.add_parser(
         "ready", help="check the production worker database and archive dependencies"
@@ -281,6 +283,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
     _install_shutdown_handlers(stop_requested)
     try:
         stage_metrics = StageMetrics()
+        worker_metrics = WorkerMetrics()
         try:
             archive = _archive(
                 arguments, pool_size=archive_pool_size, database=database
@@ -354,28 +357,46 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         recent_results: deque[ProcessResult] = deque(maxlen=MAX_REPORTED_RESULTS)
         processed_count = 0
         last_health_report = float("-inf")
+
+        def operating_snapshot() -> dict[str, Any]:
+            snapshot = worker_metrics.snapshot(
+                stages=stage_metrics.snapshot(),
+                database_pool=getattr(database, "pool_health", dict)(),
+                queue=getattr(database, "queue_health", dict)(),
+                spool=getattr(archive, "readiness", lambda: {"ready": True})(),
+            )
+            snapshot_file = getattr(arguments, "operating_snapshot_file", "")
+            if snapshot_file:
+                try:
+                    write_private_snapshot(Path(snapshot_file), snapshot)
+                except OSError:
+                    snapshot["snapshot_file_status"] = "unavailable"
+            return snapshot
+
         while not stop_requested.is_set():
             results = process_batch()
             processed_count += len(results)
             recent_results.extend(results)
             for result in results:
+                worker_metrics.record_outcome(result.outcome)
                 print(
                     json.dumps({"event": "job_result", **asdict(result)}),
                     flush=True,
                 )
             current_time = monotonic()
             if current_time - last_health_report >= 60:
+                process_snapshot = operating_snapshot()
                 print(
                     json.dumps(
                         {
                             "event": "worker_health",
-                            "queue": getattr(database, "queue_health", dict)(),
-                            "database_pool": getattr(database, "pool_health", dict)(),
-                            "stages": stage_metrics.snapshot(),
+                            "process": process_snapshot["process"],
+                            "outcomes": process_snapshot["outcomes"],
+                            "queue": process_snapshot["queue"],
+                            "database_pool": process_snapshot["database_pool"],
+                            "stages": process_snapshot["stages"],
                             "archive": {
-                                "spool": getattr(
-                                    archive, "readiness", lambda: {"ready": True}
-                                )(),
+                                "spool": process_snapshot["spool"],
                                 "remote_health": getattr(
                                     archive,
                                     "check_marker_health",
@@ -408,6 +429,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 }
             )
         )
+        operating_snapshot()
         return 0
     finally:
         database.close()

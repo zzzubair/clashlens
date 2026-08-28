@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run issue #60 Step 1 workloads against an isolated PostgreSQL schema."""
+"""Run issue #60 Step 8 workloads against an isolated PostgreSQL schema."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import ast
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -26,7 +27,7 @@ from typing import Any, ClassVar
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = ROOT / "python"
-sys.path[:0] = [str(PYTHON / "src"), str(PYTHON / "tests")]
+sys.path[:0] = [str(ROOT), str(PYTHON / "src"), str(PYTHON / "tests")]
 
 MODES = (
     "reset-boundary",
@@ -42,7 +43,78 @@ DUPLICATE_ENDPOINT_MIX = {
     "global_player_rankings": 24,
 }
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
-ARTIFACT_SCHEMA_VERSION = 7
+ARTIFACT_SCHEMA_VERSION = 8
+REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 14))
+CANONICAL_REPOSITORY_URL = "https://github.com/zzzubair/clashlens"
+CONFIGURATION_KEYS = {
+    "mode",
+    "post_fix",
+    "populations",
+    "duplicate_observations",
+    "live_jobs",
+    "backfill_jobs",
+    "army_facts",
+    "lanes",
+    "effective_lanes",
+    "army_warmups",
+    "army_requests",
+    "analytics_lanes",
+    "duplicate_cycles",
+    "duplicate_endpoint_mix",
+    "skip_collector_probe",
+}
+# Hard failures are an artifact contract, not a log channel.  Keep this
+# vocabulary finite so a player tag, job id, exception, or timing detail can
+# never become retained evidence by accident.
+HARD_FAILURE_CODES = frozenset(
+    {
+        "fixed_acceptance_failure",
+        "reset_generation_count_mismatch",
+        "reset_fanout_mismatch",
+        "reset_non_processed_result",
+        "reset_queue_residue",
+        "army_read_sample_unavailable",
+        "step5_overlap_incomplete",
+        "step5_collection_result_count_mismatch",
+        "step5_non_processed_result",
+        "step5_forced_miss_exceeded",
+        "step5_cgroup_unavailable",
+        "step5_memory_pressure_increased",
+        "step5_p95_exceeded",
+        "step5_account_overlap_incomplete",
+        "step5_account_p95_exceeded",
+        "step5_collection_cycle_too_slow",
+        "mixed_result_count_mismatch",
+        "mixed_non_processed_result",
+        "mixed_live_latency_exceeded",
+        "mixed_collection_latency_exceeded",
+        "mixed_queue_residue",
+        "memory_pressure_unavailable",
+        "memory_pressure_increased",
+        "queue_residue",
+    }
+)
+ALLOWED_HARD_FAILURE_CODES = HARD_FAILURE_CODES
+MAX_RETAINED_FAILURE_CODES = 64
+MAX_COMPLETION_ORDER = 256
+MAX_ARTIFACT_SAMPLES = 32
+MAX_RETAINED_SEQUENCE = 4096
+
+
+def _failure_codes(values: Any) -> list[str]:
+    """Deduplicate and bound the finite acceptance-code vocabulary."""
+    if not isinstance(values, (list, tuple)):
+        return []
+    result: list[str] = []
+    for value in values:
+        if not isinstance(value, str) or value not in HARD_FAILURE_CODES:
+            raise ValueError("unknown hard failure code")
+        if value in result:
+            continue
+        result.append(value)
+        if len(result) == MAX_RETAINED_FAILURE_CODES:
+            break
+    return result
 AFFECTED_RELATIONS = (
     "players",
     "collector_jobs",
@@ -84,6 +156,7 @@ STEP5_FORCED_MISS_TARGET_SECONDS = 5.0
 STEP5_COLLECTION_LIMIT_SECONDS = 300.0
 STEP5_TROOP_KEYS = tuple(f"troop:{index}" for index in range(27))
 BATTLE_FIXTURE = (PYTHON / "testdata" / "legend_i_battle_log_v1.json").read_bytes()
+RANKING_FIXTURE = (PYTHON / "testdata" / "global_top_200_v1.json").read_bytes()
 _LANES = 32
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
 DAY_START = BOUNDARY - timedelta(days=1)
@@ -104,6 +177,30 @@ def _git(*arguments: str) -> str:
         text=True,
         capture_output=True,
     ).stdout.strip()
+
+
+def _source_migrations() -> list[dict[str, str]]:
+    migrations: list[dict[str, str]] = []
+    versions: list[int] = []
+    for path in sorted((ROOT / "deploy/migrations").glob("*.sql")):
+        match = re.fullmatch(r"([0-9]{4})_[a-z0-9_]+\.sql", path.name)
+        if match is None:
+            raise RuntimeError("migration filename is invalid")
+        versions.append(int(match.group(1)))
+        migrations.append({"name": path.name, "sha256": _sha(path.read_bytes())})
+    if tuple(versions) != REQUIRED_MIGRATION_VERSIONS:
+        raise RuntimeError("source migrations are incomplete or out of date")
+    return migrations
+
+
+def _clean_source() -> str:
+    status = _git("status", "--porcelain=v1", "--untracked-files=all")
+    if status:
+        raise RuntimeError("source checkout must be clean")
+    revision = _git("rev-parse", "--verify", "HEAD^{commit}")
+    if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise RuntimeError("source revision is invalid")
+    return revision
 
 
 def _bounded_writer_source_ready(
@@ -182,7 +279,11 @@ def post_fix_source_ready() -> bool:
 
 
 def validate_reset(populations: list[int], post_fix: bool) -> None:
-    if not populations or any(value < 1 for value in populations):
+    if (
+        not populations
+        or len(populations) > MAX_ARTIFACT_SAMPLES
+        or any(value < 1 for value in populations)
+    ):
         raise ValueError("--populations requires positive integers")
     if any(value >= 12_500 for value in populations):
         if not post_fix:
@@ -369,6 +470,35 @@ def _profile_body(tag: str, variant: int = 0) -> bytes:
     return json.dumps(source, separators=(",", ":")).encode()
 
 
+def _seed_fixture_discoveries(
+    connection_info: str, *fixture_bodies: bytes
+) -> int:
+    """Pre-qualify committed fixture discoveries without manufacturing work."""
+    import psycopg
+
+    tags: set[str] = set()
+    for body in fixture_bodies:
+        payload = json.loads(body)
+        for item in payload.get("items", []):
+            tag = item.get("opponentPlayerTag") or item.get("tag")
+            if isinstance(tag, str) and tag:
+                tags.add(tag)
+    if not tags:
+        return 0
+    with psycopg.connect(connection_info) as connection:
+        connection.execute(
+            """
+            INSERT INTO players (normalized_tag, active, eligibility_state)
+            SELECT tag, true, 'eligible' FROM unnest(%s::text[]) AS item(tag)
+            ON CONFLICT (normalized_tag) DO UPDATE
+                SET active = true, eligibility_state = 'eligible'
+            """,
+            (sorted(tags),),
+        )
+        connection.commit()
+    return len(tags)
+
+
 def _duplicate_endpoint_mix(count: int) -> dict[str, int]:
     """Return the production mix, balancing smaller test populations."""
     if count >= DUPLICATE_EXECUTION_CAP:
@@ -459,6 +589,89 @@ def _process_jobs(
     return [result for _, result in sorted(results)]
 
 
+_RESULT_OUTCOMES = (
+    "processed",
+    "processed_with_gaps",
+    "retrying",
+    "failed",
+    "lease_lost",
+    "published",
+    "skipped",
+    "other",
+)
+_RESULT_STATUSES = ("complete", "pending", "leased", "waiting_retry", "waiting_dependency", "failed", "other")
+_RESULT_WORK_TYPES = (
+    "process_observation",
+    "replay_observation",
+    "reconcile_ranked_day",
+    "build_snapshot",
+    "build_analytics",
+    "build_army_analytics",
+    "redecode_army",
+    "reset_baseline",
+    "live",
+    "backfill",
+    "other",
+)
+
+
+def _result_bucket(value: Any, allowed: tuple[str, ...]) -> str:
+    return value if isinstance(value, str) and value in allowed else "other"
+
+
+def _result_summary(results: list[dict[str, Any]], *, expected: int | None = None) -> dict[str, Any]:
+    """Return bounded result evidence without retaining occurrence identities."""
+    outcomes = dict.fromkeys(_RESULT_OUTCOMES, 0)
+    statuses = dict.fromkeys(_RESULT_STATUSES, 0)
+    work_types = dict.fromkeys(_RESULT_WORK_TYPES, 0)
+    kinds = {"live": 0, "backfill": 0, "other": 0}
+    elapsed_ms: list[float] = []
+    for result in results:
+        outcome = _result_bucket(result.get("outcome"), _RESULT_OUTCOMES)
+        outcomes[outcome] += 1
+        status = _result_bucket(result.get("status"), _RESULT_STATUSES)
+        statuses[status] += 1
+        work_type = _result_bucket(result.get("work_type"), _RESULT_WORK_TYPES)
+        work_types[work_type] += 1
+        kind = result.get("kind")
+        kinds[kind if kind in {"live", "backfill"} else "other"] += 1
+        elapsed = result.get("elapsed_ms", result.get("queue_latency_seconds"))
+        if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool):
+            value = float(elapsed)
+            if value >= 0 and math.isfinite(value):
+                elapsed_ms.append(
+                    value
+                    * (
+                        1000
+                        if "queue_latency_seconds" in result
+                        and "elapsed_ms" not in result
+                        else 1
+                    )
+                )
+    elapsed_ms.sort()
+    p95 = None
+    if elapsed_ms:
+        p95 = elapsed_ms[(len(elapsed_ms) * 95 + 99) // 100 - 1]
+    return {
+        "count": len(results),
+        "expected_count": expected,
+        "count_matches_expected": expected is None or len(results) == expected,
+        "outcomes": outcomes,
+        "statuses": statuses,
+        "work_types": work_types,
+        "kinds": kinds,
+        "retry_count": outcomes["retrying"],
+        "completed_count": statuses["complete"] if any("status" in item for item in results) else outcomes["processed"],
+        "failed_count": outcomes["failed"] + outcomes["lease_lost"],
+        "elapsed_ms": {
+            "count": len(elapsed_ms),
+            "sum": sum(elapsed_ms),
+            "maximum": max(elapsed_ms, default=None),
+            "p95_upper": p95,
+        },
+    }
+
+
 def _drain(processor: Any, limit: int) -> list[dict[str, Any]]:
     results = []
     for index in range(limit):
@@ -501,6 +714,159 @@ def _store_reconciliation_population(
             )
             jobs.extend(pair[2:])
     return jobs
+
+
+_ADMISSION_MARKER = "CLASHLENS_STEP8_ADMISSION="
+
+
+def _boundary_admission_probe(
+    connection_info: str, phase: str, population: int
+) -> dict[str, Any]:
+    """Run the production collector admission seam in this disposable schema."""
+    if phase not in {"admit", "handoff"} or not 1 <= population <= 12_500:
+        raise ValueError("boundary admission probe input is invalid")
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "CLASHLENS_STEP8_ADMISSION_DATABASE_URL": connection_info,
+            "CLASHLENS_STEP8_ADMISSION_PHASE": phase,
+            "CLASHLENS_STEP8_ADMISSION_BOUNDARY": BOUNDARY.isoformat().replace(
+                "+00:00", "Z"
+            ),
+            "CLASHLENS_STEP8_ADMISSION_POPULATION": str(population),
+        }
+    )
+    completed = subprocess.run(
+        [
+            "go",
+            "test",
+            "./internal/collector",
+            "-run",
+            "^TestStep8BoundaryAdmissionProbe$",
+            "-count=1",
+            "-v",
+        ],
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("production boundary admission probe failed")
+    markers = [
+        line.removeprefix(_ADMISSION_MARKER)
+        for line in completed.stdout.splitlines()
+        if line.startswith(_ADMISSION_MARKER)
+    ]
+    if len(markers) != 1 or len(markers[0]) > 4096:
+        raise RuntimeError("production boundary admission evidence is unavailable")
+    try:
+        evidence = json.loads(markers[0])
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(
+            "production boundary admission evidence is invalid"
+        ) from error
+    _validate_boundary_admission_evidence(evidence, phase, population)
+    return evidence
+
+
+def _validate_boundary_admission_evidence(
+    evidence: Any, phase: str, population: int
+) -> None:
+    if not isinstance(evidence, dict):
+        raise TypeError("boundary admission evidence must be an object")
+    if phase == "admit":
+        expected = {
+            "phase": "admit",
+            "blocked_before_regular_drain": True,
+            "state_before_drain": "regular_draining",
+            "regular_nonterminal_before": 2,
+            "state_after_admission": "reset_draining",
+            "regular_drain_complete": True,
+            "reset_drain_complete": False,
+            "safe_handoff": False,
+            "reset_generation": 1,
+            "regular_nonterminal_after": 0,
+            "reset_nonterminal_after": population,
+            "membership_count": population,
+            "reset_root_count": population,
+            "regular_allowed_during_reset": False,
+            "regular_scheduled_during_reset": 0,
+        }
+    elif phase == "handoff":
+        expected = {
+            "phase": "handoff",
+            "state": "safe_handoff",
+            "regular_drain_complete": True,
+            "reset_drain_complete": True,
+            "safe_handoff": True,
+            "reset_generation": 1,
+            "handoff_recorded": True,
+            "regular_nonterminal_count": 0,
+            "reset_nonterminal_count": 0,
+            "membership_count": population,
+            "completed_reset_root_count": population,
+            "regular_allowed_after_handoff": True,
+            "regular_scheduled_after_handoff": 1,
+        }
+    else:
+        raise ValueError("boundary admission phase is invalid")
+    if evidence != expected:
+        raise ValueError("boundary admission evidence contradicts the workload")
+
+
+def _store_production_reset_population(
+    connection_info: str, archive: Any, count: int
+) -> tuple[list[int], dict[str, Any]]:
+    """Attach committed observations to production-admitted reset roots."""
+    import psycopg
+    from test_reconciliation_postgres import _store_baseline_pair
+
+    jobs: list[int] = []
+    for index in range(count):
+        pair = _store_baseline_pair(
+            connection_info,
+            archive,
+            key=f"perf-{index}-start",
+            boundary=DAY_START,
+            trophies=6000 + index,
+            empty_battle_log=True,
+            normalized_tag=_tag(index + 1),
+        )
+        jobs.extend(pair[2:])
+    with psycopg.connect(connection_info) as connection:
+        active_count = connection.execute(
+            """UPDATE players SET active = true, eligibility_state = 'eligible',
+                                      next_due_at = NULL
+               WHERE normalized_tag LIKE '#P%'
+               RETURNING id"""
+        ).fetchall()
+        if len(active_count) != count:
+            raise RuntimeError("reset fixture population is incomplete")
+        connection.execute(
+            """UPDATE players SET next_due_at = %s
+               WHERE id = (SELECT min(id) FROM players WHERE active)""",
+            (BOUNDARY,),
+        )
+        connection.commit()
+    admitted = _boundary_admission_probe(connection_info, "admit", count)
+    for index in range(count):
+        pair = _store_baseline_pair(
+            connection_info,
+            archive,
+            key=f"perf-{index}-end",
+            boundary=BOUNDARY,
+            trophies=6040 + index,
+            empty_battle_log=False,
+            normalized_tag=_tag(index + 1),
+            production_admission=True,
+        )
+        jobs.extend(pair[2:])
+    return jobs, {
+        "admit": admitted,
+        "handoff": _boundary_admission_probe(connection_info, "handoff", count),
+    }
 
 
 def _store_reconciliation_corrections(
@@ -823,6 +1189,237 @@ def _artifact_digest(artifact: dict[str, Any]) -> str:
     )
 
 
+_RETAINED_JOB_DETAIL_KEYS = frozenset(
+    {
+        "account_id",
+        "archive_reference",
+        "database_url",
+        "error",
+        "exception",
+        "job_id",
+        "job_ids",
+        "normalized_tag",
+        "player_tag",
+        "results",
+        "request_id",
+        "raw_body",
+        "raw_config",
+        "stderr",
+        "stdout",
+        "profile_results",
+        "dependent_results",
+        "correction_results",
+    }
+)
+
+_ARTIFACT_KEYS = frozenset(
+    {
+        "schema_version",
+        "mode",
+        "started_at",
+        "finished_at",
+        "provenance",
+        "execution",
+        "prepared_candidate_images",
+        "candidate_receipt",
+        "official_api_requests",
+        "collector_probe",
+        "samples",
+        "army_read_sample",
+        "hard_failures",
+        "artifact_digest",
+    }
+)
+_PROVENANCE_KEYS = frozenset(
+    {
+        "source_sha",
+        "source_dirty",
+        "runner_sha256",
+        "migrations",
+        "applied_migration_versions",
+        "configuration_fingerprint",
+        "configuration",
+        "host",
+        "execution",
+        "prepared_candidate_images",
+        "candidate_receipt",
+        "postgres",
+    }
+)
+_STANDARD_SAMPLE_KEYS = frozenset(
+    {
+        "workload",
+        "database",
+        "archive_operations",
+        "storage_runway",
+        "evidence",
+        "spool",
+        "elapsed_seconds",
+        "cpu_seconds",
+        "peak_rss_kib",
+    }
+)
+_COORDINATOR_SAMPLE_KEYS = frozenset(
+    {
+        "workload",
+        "database",
+        "archive_operations",
+        "storage_runway",
+        "evidence",
+        "queue_residue",
+    }
+)
+_RESET_WORKLOAD_KEYS = frozenset(
+    {
+        "status",
+        "hard_failures",
+        "population",
+        "official_responses",
+        "processing_summary",
+        "fact_counts",
+        "fanout_evidence",
+        "boundary_admission",
+        "queue_residue",
+        "fixture_discoveries_prequalified",
+        "stage_metrics",
+        "spool",
+        "evidence_counters",
+        "army_endpoint",
+        "correction_evidence",
+    }
+)
+_DUPLICATE_WORKLOAD_KEYS = frozenset(
+    {
+        "observations",
+        "official_responses",
+        "executed_observations",
+        "measured_cycles",
+        "cycle_elapsed_seconds",
+        "median_cycle_seconds",
+        "daily_288_cycle_projection_seconds",
+        "aggregation_factor",
+        "aggregation_method",
+        "endpoint_mix",
+        "response_counts_by_endpoint",
+        "occurrence_counts_by_endpoint",
+        "fixture_bytes_by_endpoint",
+        "exact_bytes",
+        "official_api_traffic",
+        "canonical_content",
+        "contract",
+        "fixture_discoveries_prequalified",
+        "processing_summary",
+        "stage_metrics",
+        "spool",
+        "evidence_counters",
+        "collector_archive_operations",
+    }
+)
+_MIXED_WORKLOAD_KEYS = frozenset(
+    {
+        "completion_order",
+        "completion_order_complete",
+        "completion_counts",
+        "live_jobs",
+        "backfill_jobs",
+        "configured_lanes",
+        "effective_lanes",
+        "official_responses",
+        "official_api_traffic",
+        "fixture_discoveries_prequalified",
+        "live_first_completion_index",
+        "live_queue_latency_seconds",
+        "oldest_active_queue_age_seconds",
+        "elapsed_seconds",
+        "cpu_seconds",
+        "peak_rss_kib",
+        "memory_pressure_before",
+        "memory_pressure_after",
+        "memory_pressure_delta",
+        "live_latency_contract",
+        "five_minute_contract",
+        "hard_failures",
+        "processing_summary",
+        "database",
+        "stage_metrics",
+        "spool",
+        "evidence_counters",
+    }
+)
+_COORDINATOR_WORKLOAD_KEYS = frozenset(
+    {
+        "population",
+        "official_responses",
+        "coordinator_job_counts",
+        "manifest_publication",
+        "contract",
+        "coverage",
+        "publication_identities",
+        "generation",
+        "coordinator_links",
+        "coordinator_residue",
+        "snapshot_headers",
+        "snapshot_entries",
+        "full_large_reset",
+        "statement_ceiling",
+        "queue_residue",
+        "coordinator_processing",
+    }
+)
+
+
+def _reject_retained_job_details(value: Any) -> None:
+    """Reject unbounded per-job detail anywhere in a retained artifact."""
+    if isinstance(value, dict):
+        if _RETAINED_JOB_DETAIL_KEYS.intersection(value) or any(
+            isinstance(key, str) and key.startswith("_") for key in value
+        ):
+            raise ValueError("artifact retains internal or per-job details")
+        for child in value.values():
+            _reject_retained_job_details(child)
+    elif isinstance(value, list):
+        if len(value) > MAX_RETAINED_SEQUENCE:
+            raise ValueError("artifact retains an unbounded sequence")
+        for child in value:
+            _reject_retained_job_details(child)
+
+
+def _write_artifact(path: Path, payload: str) -> None:
+    """Publish one complete artifact without overwriting retained evidence."""
+    path = path.absolute()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    linked = False
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, path)
+        linked = True
+        temporary.unlink()
+        directory_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except FileExistsError as error:
+        raise RuntimeError("artifact output is already occupied") from error
+    except (OSError, UnicodeError) as error:
+        if linked:
+            path.unlink(missing_ok=True)
+        raise RuntimeError("artifact could not be written atomically") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+
 def validate_artifact(artifact: dict[str, Any]) -> None:
     """Reject artifacts that cannot support the current performance review."""
     if not isinstance(artifact, dict):
@@ -834,15 +1431,23 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
         )
     if artifact.get("artifact_digest") != _artifact_digest(artifact):
         raise ValueError("artifact digest is missing or invalid")
+    _reject_retained_job_details(artifact)
+    if set(artifact) != _ARTIFACT_KEYS:
+        raise ValueError("artifact schema is invalid")
     required = (
         "artifact_digest",
         "mode",
         "started_at",
         "finished_at",
         "provenance",
+        "execution",
+        "prepared_candidate_images",
+        "candidate_receipt",
+        "official_api_requests",
         "collector_probe",
         "samples",
         "army_read_sample",
+        "hard_failures",
     )
     missing = [key for key in required if key not in artifact]
     if missing:
@@ -891,6 +1496,291 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
                 f"{label} missing metrics: {', '.join(missing_keys)}"
             )
 
+    def require_exact(mapping: Any, keys: frozenset[str], label: str) -> None:
+        if not isinstance(mapping, dict) or set(mapping) != keys:
+            raise ValueError(f"{label} schema is invalid")
+
+    def require_failure_codes(value: Any, label: str) -> None:
+        if (
+            not isinstance(value, list)
+            or len(value) > MAX_RETAINED_FAILURE_CODES
+            or any(
+                not isinstance(code, str) or code not in HARD_FAILURE_CODES
+                for code in value
+            )
+            or len(value) != len(set(value))
+        ):
+            raise ValueError(f"{label} hard failures are invalid")
+
+    def require_processing_summary(value: Any, label: str) -> None:
+        expected_keys = {
+            "count",
+            "expected_count",
+            "count_matches_expected",
+            "outcomes",
+            "statuses",
+            "work_types",
+            "kinds",
+            "retry_count",
+            "completed_count",
+            "failed_count",
+            "elapsed_ms",
+        }
+        if not isinstance(value, dict) or set(value) != expected_keys:
+            raise ValueError(f"{label} result summary is invalid")
+        if (
+            set(value["outcomes"]) != set(_RESULT_OUTCOMES)
+            or set(value["statuses"]) != set(_RESULT_STATUSES)
+            or set(value["work_types"]) != set(_RESULT_WORK_TYPES)
+            or set(value["kinds"]) != {"live", "backfill", "other"}
+        ):
+            raise ValueError(f"{label} result distributions are invalid")
+        for distribution_name in ("outcomes", "statuses", "work_types", "kinds"):
+            distribution = value[distribution_name]
+            if any(
+                not isinstance(count, int) or isinstance(count, bool) or count < 0
+                for count in distribution.values()
+            ):
+                raise ValueError(f"{label} result distributions are invalid")
+            if sum(distribution.values()) != value["count"]:
+                raise ValueError(f"{label} result distributions contradict count")
+        if any(
+            not isinstance(value.get(name), int)
+            or isinstance(value.get(name), bool)
+            or value[name] < 0
+            for name in ("count", "retry_count", "completed_count", "failed_count")
+        ):
+            raise ValueError(f"{label} result counts are invalid")
+        if not isinstance(value["count_matches_expected"], bool):
+            raise TypeError(f"{label} result count status is invalid")
+        expected_count = value["expected_count"]
+        if (
+            expected_count is not None
+            and (
+                not isinstance(expected_count, int)
+                or isinstance(expected_count, bool)
+                or expected_count < 0
+            )
+        ) or value["count_matches_expected"] != (
+            expected_count is None or value["count"] == expected_count
+        ):
+            raise ValueError(f"{label} expected result count is invalid")
+        if (
+            value["retry_count"] != value["outcomes"]["retrying"]
+            or value["failed_count"]
+            != value["outcomes"]["failed"] + value["outcomes"]["lease_lost"]
+            or value["completed_count"]
+            != (
+                value["outcomes"]["processed"]
+                if value["statuses"]["other"] == value["count"]
+                else value["statuses"]["complete"]
+            )
+        ):
+            raise ValueError(f"{label} derived result counts are invalid")
+        if not isinstance(value["elapsed_ms"], dict) or set(value["elapsed_ms"]) != {
+            "count",
+            "sum",
+            "maximum",
+            "p95_upper",
+        }:
+            raise ValueError(f"{label} result latency summary is invalid")
+        elapsed = value["elapsed_ms"]
+        if (
+            not isinstance(elapsed["count"], int)
+            or isinstance(elapsed["count"], bool)
+            or not 0 <= elapsed["count"] <= value["count"]
+            or not isinstance(elapsed["sum"], (int, float))
+            or isinstance(elapsed["sum"], bool)
+            or not math.isfinite(float(elapsed["sum"]))
+            or elapsed["sum"] < 0
+            or any(
+                item is not None
+                and (
+                    not isinstance(item, (int, float))
+                    or isinstance(item, bool)
+                    or not math.isfinite(float(item))
+                    or item < 0
+                )
+                for item in (elapsed["maximum"], elapsed["p95_upper"])
+            )
+            or (elapsed["count"] == 0)
+            != (elapsed["maximum"] is None and elapsed["p95_upper"] is None)
+        ):
+            raise ValueError(f"{label} result latency values are invalid")
+
+    provenance = artifact["provenance"]
+    require(
+        provenance,
+        (
+            "source_sha",
+            "source_dirty",
+            "runner_sha256",
+            "migrations",
+            "applied_migration_versions",
+            "configuration_fingerprint",
+            "configuration",
+            "host",
+            "execution",
+            "prepared_candidate_images",
+            "candidate_receipt",
+        ),
+        "provenance",
+    )
+    require_exact(provenance, _PROVENANCE_KEYS, "provenance")
+    source_sha = provenance["source_sha"]
+    if (
+        not isinstance(source_sha, str)
+        or re.fullmatch(r"[0-9a-f]{40}", source_sha) is None
+        or provenance["source_dirty"] is not False
+    ):
+        raise ValueError("provenance source is not a clean exact revision")
+    runner_sha = provenance["runner_sha256"]
+    if (
+        not isinstance(runner_sha, str)
+        or re.fullmatch(r"[0-9a-f]{64}", runner_sha) is None
+        or runner_sha != _sha(Path(__file__).read_bytes())
+    ):
+        raise ValueError("provenance runner hash is stale or invalid")
+    migrations = provenance["migrations"]
+    expected_migrations = _source_migrations()
+    if migrations != expected_migrations:
+        raise ValueError("provenance migration files are stale or invalid")
+    applied = provenance["applied_migration_versions"]
+    if applied != list(REQUIRED_MIGRATION_VERSIONS):
+        raise ValueError("provenance applied migration state is incomplete or invalid")
+    postgres = provenance.get("postgres")
+    require(postgres, ("version", "settings", "applied_migration_versions"), "provenance.postgres")
+    if (
+        not isinstance(postgres["version"], str)
+        or not isinstance(postgres["settings"], dict)
+        or any(
+            not isinstance(key, str) or not isinstance(value, str)
+            for key, value in postgres["settings"].items()
+        )
+    ):
+        raise ValueError("provenance PostgreSQL identity is invalid")
+    if postgres["applied_migration_versions"] != applied:
+        raise ValueError("provenance PostgreSQL migration state contradicts the artifact")
+    configuration = provenance["configuration"]
+    expected_configuration_fingerprint = _sha(
+        json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
+    )
+    if (
+        not isinstance(configuration, dict)
+        or provenance["configuration_fingerprint"] != expected_configuration_fingerprint
+        or set(configuration) != CONFIGURATION_KEYS
+        or configuration["mode"] != mode
+        or not isinstance(configuration["post_fix"], bool)
+        or configuration["duplicate_endpoint_mix"] != dict(DUPLICATE_ENDPOINT_MIX)
+        or not isinstance(configuration["populations"], list)
+        or any(
+            not isinstance(value, int) or isinstance(value, bool)
+            for value in configuration["populations"]
+        )
+        ):
+        raise ValueError("provenance configuration fingerprint is invalid")
+    execution = artifact["execution"]
+    if execution != provenance["execution"]:
+        raise ValueError("artifact execution provenance contradicts its source provenance")
+    if (
+        not isinstance(execution, dict)
+        or set(execution)
+        != {"kind", "executor_images", "host_identity", "runtime", "postgres"}
+        or execution.get("kind") != "host"
+        or execution.get("executor_images") != []
+        or not isinstance(execution.get("host_identity"), dict)
+        or set(execution["host_identity"]) != {"platform", "uname"}
+        or not isinstance(execution.get("runtime"), dict)
+        or set(execution["runtime"]) != {"python"}
+        or execution.get("postgres")
+        != {"version": postgres["version"], "settings": postgres["settings"]}
+        or not isinstance(provenance["host"], dict)
+        or execution["host_identity"]
+        != {
+            "platform": provenance["host"].get("platform"),
+            "uname": provenance["host"].get("uname"),
+        }
+    ):
+        raise ValueError("artifact execution must identify the host executor")
+    if artifact["prepared_candidate_images"] != provenance["prepared_candidate_images"]:
+        raise ValueError("artifact prepared-image provenance contradicts its source provenance")
+    prepared = artifact["prepared_candidate_images"]
+    if not isinstance(prepared, list) or len(prepared) not in {0, 3}:
+        raise ValueError("artifact prepared-image provenance is invalid")
+    applications: set[str] = set()
+    for identity in prepared:
+        if not isinstance(identity, dict):
+            raise TypeError("artifact prepared-image provenance is invalid")
+        if (
+            set(identity)
+            != {
+                "application",
+                "identity_type",
+                "requested_reference",
+                "image_id",
+                "registry_digest",
+                "source_label",
+                "revision_label",
+            }
+            or identity["identity_type"] != "prepared_candidate_image_id"
+            or identity["application"] not in {"collector", "python", "website"}
+            or identity["application"] in applications
+            or not isinstance(identity["image_id"], str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", identity["image_id"]) is None
+            or not isinstance(identity["requested_reference"], str)
+            or re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}",
+                identity["requested_reference"],
+            )
+            is None
+            or not isinstance(identity["source_label"], str)
+            or identity["source_label"] != CANONICAL_REPOSITORY_URL
+            or identity["revision_label"] != source_sha
+        ):
+            raise ValueError("artifact prepared-image provenance is invalid")
+        registry_digest = identity["registry_digest"]
+        if registry_digest is not None and (
+            not isinstance(registry_digest, str)
+            or re.fullmatch(r"(?:[A-Za-z0-9._:/@+-]+@)?sha256:[0-9a-f]{64}", registry_digest)
+            is None
+        ):
+            raise ValueError("artifact prepared-image registry digest is invalid")
+        applications.add(identity["application"])
+    if applications != ({"collector", "python", "website"} if prepared else set()):
+        raise ValueError("artifact prepared-image provenance is incomplete")
+    candidate_receipt = artifact["candidate_receipt"]
+    if candidate_receipt != provenance["candidate_receipt"]:
+        raise ValueError("artifact candidate receipt provenance contradicts its source provenance")
+    if (candidate_receipt is None) != (not prepared):
+        raise ValueError("artifact prepared images require a candidate receipt")
+    if candidate_receipt is not None and (
+        not isinstance(candidate_receipt, dict)
+        or set(candidate_receipt)
+        != {"schema_version", "receipt_scope", "receipt_digest", "source_sha"}
+        or candidate_receipt["schema_version"] != 1
+        or candidate_receipt["receipt_scope"] != "candidate-preparation"
+        or candidate_receipt["source_sha"] != source_sha
+        or not isinstance(candidate_receipt["receipt_digest"], str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", candidate_receipt["receipt_digest"])
+        is None
+    ):
+        raise ValueError("artifact candidate receipt provenance is invalid")
+    if (
+        not isinstance(artifact["official_api_requests"], dict)
+        or artifact["official_api_requests"]
+        != {"count": 0, "source": "committed fixtures"}
+    ):
+        raise ValueError("artifact official API request count is invalid")
+    collector_probe = artifact["collector_probe"]
+    if collector_probe is not None:
+        expected_probe_keys = (
+            frozenset({"executed", "elapsed_seconds", "test"})
+            if collector_probe.get("executed") is True
+            else frozenset({"executed", "reason"})
+        )
+        require_exact(collector_probe, expected_probe_keys, "collector probe")
+    require_failure_codes(artifact["hard_failures"], "artifact")
+
     if mode == "duplicate-heavy":
         require(artifact["provenance"], ("postgres",), "provenance")
         require(
@@ -899,18 +1789,35 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             "provenance.postgres",
         )
 
+    if len(samples) > MAX_ARTIFACT_SAMPLES:
+        raise ValueError("artifact samples are unbounded")
     for index, sample in enumerate(samples):
         label = f"sample {index}"
         require(sample, ("database", "archive_operations", "storage_runway"), label)
         require(sample["database"], database_metrics, f"{label} database")
+        require_exact(sample["database"], frozenset(database_metrics), f"{label} database")
         require(
             sample["archive_operations"], archive_metrics, f"{label} archive_operations"
+        )
+        require_exact(
+            sample["archive_operations"],
+            frozenset(archive_metrics),
+            f"{label} archive_operations",
         )
         require(
             sample["storage_runway"],
             ("measured_local_growth_bytes", "days_to_80_percent", "checks"),
             f"{label} storage_runway",
         )
+        if isinstance(sample.get("workload"), dict) and "hard_failures" in sample["workload"]:
+            require_failure_codes(sample["workload"]["hard_failures"], f"{label} workload")
+        if isinstance(sample.get("workload"), dict) and "processing_summary" in sample["workload"]:
+            summary = sample["workload"]["processing_summary"]
+            if isinstance(summary, dict) and "total" in summary:
+                for name in ("official", "dependent", "correction", "total"):
+                    require_processing_summary(summary.get(name), f"{label} workload {name}")
+            else:
+                require_processing_summary(summary, f"{label} workload")
         if mode == "duplicate-heavy":
             require(
                 sample.get("workload"),
@@ -942,11 +1849,198 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
                 ),
                 f"{label} canonical content",
             )
+            require_processing_summary(
+                sample["workload"].get("processing_summary"),
+                f"{label} workload",
+            )
+            require_exact(
+                sample["workload"],
+                _DUPLICATE_WORKLOAD_KEYS,
+                f"{label} duplicate workload",
+            )
+        if mode == "coordinator-12500":
+            require_exact(sample, _COORDINATOR_SAMPLE_KEYS, label)
+            require_exact(
+                sample["workload"],
+                _COORDINATOR_WORKLOAD_KEYS,
+                f"{label} coordinator workload",
+            )
+        else:
+            require_exact(sample, _STANDARD_SAMPLE_KEYS, label)
 
     if mode == STEP5_MODE:
         army_sample = artifact["army_read_sample"]
         require(army_sample, ("database",), "army_read_sample")
         require(army_sample["database"], database_metrics, "army_read_sample database")
+        if "hard_failures" in army_sample:
+            require_failure_codes(army_sample["hard_failures"], "army_read_sample")
+        require_exact(
+            army_sample,
+            frozenset(
+                {
+                    "status",
+                    "protocol",
+                    "seed",
+                    "selections",
+                    "mixed_load",
+                    "database",
+                    "postgres",
+                    "elapsed_seconds",
+                    "cpu_seconds",
+                    "peak_rss_kib",
+                    "memory_pressure_before",
+                    "memory_pressure_after",
+                    "memory_pressure_delta",
+                    "hard_failures",
+                    "queue_drained",
+                }
+            ),
+            "army_read_sample",
+        )
+    if mode in {"reset-boundary", "correction"}:
+        for index, sample in enumerate(samples):
+            workload = sample.get("workload") if isinstance(sample, dict) else None
+            if not isinstance(workload, dict):
+                raise TypeError(f"sample {index} workload is invalid")
+            require(
+                workload,
+                (
+                    "status",
+                    "hard_failures",
+                    "population",
+                    "processing_summary",
+                    "fact_counts",
+                    "fanout_evidence",
+                    "queue_residue",
+                    "boundary_admission",
+                ),
+                f"sample {index} workload",
+            )
+            require_exact(
+                workload,
+                _RESET_WORKLOAD_KEYS,
+                f"sample {index} reset workload",
+            )
+            summary = workload.get("processing_summary")
+            for name in ("official", "dependent", "correction", "total"):
+                require_processing_summary(
+                    summary.get(name) if isinstance(summary, dict) else None,
+                    f"sample {index} workload {name}",
+                )
+            population = workload["population"]
+            if (
+                not isinstance(population, int)
+                or isinstance(population, bool)
+                or population < 1
+                or workload["status"]
+                != ("passed" if not workload["hard_failures"] else "failed")
+            ):
+                raise ValueError(f"sample {index} reset result is invalid")
+            require(
+                workload["fact_counts"],
+                (
+                    "ranked_day_versions",
+                    "snapshot_headers",
+                    "snapshot_entries",
+                    "analytics_summaries",
+                    "army_facts",
+                ),
+                f"sample {index} reset fact counts",
+            )
+            require(
+                workload["fanout_evidence"],
+                (
+                    "expected",
+                    "matches_expected",
+                    "snapshot_entries_per_population",
+                    "generation_states",
+                ),
+                f"sample {index} reset fanout",
+            )
+            generations = 2 if mode == "correction" else 1
+            expected_counts = {
+                "ranked_day_versions": generations * population,
+                "snapshot_headers": 2 * generations,
+                "snapshot_entries": 2 * generations * population,
+            }
+            actual_counts = {
+                name: workload["fact_counts"][name] for name in expected_counts
+            }
+            generation_states = workload["fanout_evidence"]["generation_states"]
+            if (
+                workload["fanout_evidence"]["expected"] != expected_counts
+                or workload["fanout_evidence"]["matches_expected"]
+                != (actual_counts == expected_counts)
+                or not isinstance(generation_states, list)
+                or len(generation_states) != generations
+                or workload["fanout_evidence"]["snapshot_entries_per_population"]
+                != 2 * len(generation_states)
+                or any(
+                    not isinstance(state, dict)
+                    or set(state) != {"generation", "snapshot_state", "army_state"}
+                    or state["generation"] != position
+                    or state["snapshot_state"] not in {"pending", "ready", "published", "failed", "superseded"}
+                    or state["army_state"] not in {"pending", "ready", "published", "failed", "superseded"}
+                    for position, state in enumerate(generation_states, 1)
+                )
+                or not isinstance(workload["queue_residue"], list)
+                or len(workload["queue_residue"]) > 128
+                or any(
+                    not isinstance(row, dict)
+                    or set(row) != {"owner", "work_type", "count"}
+                    for row in workload["queue_residue"]
+                )
+            ):
+                raise ValueError(f"sample {index} reset fanout evidence is invalid")
+            if mode == "reset-boundary":
+                admission = workload["boundary_admission"]
+                if not isinstance(admission, dict) or set(admission) != {
+                    "admit",
+                    "handoff",
+                }:
+                    raise ValueError(
+                        f"sample {index} boundary admission evidence is invalid"
+                    )
+                _validate_boundary_admission_evidence(
+                    admission["admit"], "admit", population
+                )
+                _validate_boundary_admission_evidence(
+                    admission["handoff"], "handoff", population
+                )
+                if not workload["hard_failures"] and (
+                    actual_counts != expected_counts
+                    or generation_states
+                    != [
+                        {
+                            "generation": 1,
+                            "snapshot_state": "published",
+                            "army_state": "published",
+                        }
+                    ]
+                    or workload["queue_residue"]
+                ):
+                    raise ValueError(
+                        f"sample {index} passing reset evidence is contradictory"
+                    )
+            elif workload["boundary_admission"] is not None:
+                raise ValueError(
+                    f"sample {index} correction admission evidence is invalid"
+                )
+        army_sample = artifact["army_read_sample"]
+        require(army_sample, ("status", "hard_failures"), "army_read_sample")
+        require_failure_codes(army_sample["hard_failures"], "army_read_sample")
+        if army_sample["status"] == "passed":
+            require(
+                army_sample,
+                ("database", "selections", "elapsed_seconds", "cpu_seconds", "peak_rss_kib"),
+                "army_read_sample",
+            )
+        elif army_sample["status"] == "failed":
+            require(army_sample, ("reason",), "army_read_sample")
+            if army_sample["reason"] != "army_read_sample_unavailable":
+                raise ValueError("army_read_sample failure reason is invalid")
+        else:
+            raise ValueError("army_read_sample status is invalid")
     if mode == "mixed-backfill":
         require(
             artifact["provenance"],
@@ -959,6 +2053,8 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             (
                 "completion_order",
                 "completion_counts",
+                "live_jobs",
+                "backfill_jobs",
                 "live_queue_latency_seconds",
                 "oldest_active_queue_age_seconds",
                 "elapsed_seconds",
@@ -969,9 +2065,12 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
                 "five_minute_contract",
                 "hard_failures",
                 "official_api_traffic",
+                "completion_order_complete",
+                "processing_summary",
             ),
             "mixed-backfill workload",
         )
+        require_exact(workload, _MIXED_WORKLOAD_KEYS, "mixed-backfill workload")
         require(
             workload["live_latency_contract"],
             (
@@ -988,6 +2087,42 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             ("target_seconds", "elapsed_seconds", "passed"),
             "mixed-backfill five-minute contract",
         )
+        require_failure_codes(workload["hard_failures"], "mixed-backfill workload")
+        completion_order = workload["completion_order"]
+        if not isinstance(workload.get("completion_order_complete"), bool):
+            raise ValueError("mixed-backfill completion order status is invalid")
+        if not isinstance(workload.get("completion_counts"), dict) or set(
+            workload["completion_counts"]
+        ) != {"live", "backfill"} or any(
+            not isinstance(count, int) or isinstance(count, bool) or count < 0
+            for count in workload["completion_counts"].values()
+        ):
+            raise ValueError("mixed-backfill completion counts are invalid")
+        if completion_order is not None and (
+            not isinstance(completion_order, list)
+            or len(completion_order) > MAX_COMPLETION_ORDER
+            or len(completion_order)
+            > int(workload.get("live_jobs", 0)) + int(workload.get("backfill_jobs", 0))
+            or any(item not in {"live", "backfill"} for item in completion_order)
+            or completion_order.count("live") != int(workload.get("live_jobs", 0))
+            or completion_order.count("backfill") != int(workload.get("backfill_jobs", 0))
+            or workload["completion_counts"] != {
+                "live": completion_order.count("live"),
+                "backfill": completion_order.count("backfill"),
+            }
+        ):
+            raise ValueError("mixed-backfill completion order is invalid")
+        if workload["completion_order_complete"] != (completion_order is not None):
+            raise ValueError("mixed-backfill completion order status contradicts evidence")
+        if completion_order is None and (
+            workload["completion_counts"]
+            != {
+                "live": int(workload.get("live_jobs", -1)),
+                "backfill": int(workload.get("backfill_jobs", -1)),
+            }
+            or sum(workload["completion_counts"].values()) <= MAX_COMPLETION_ORDER
+        ):
+            raise ValueError("mixed-backfill omitted a bounded completion order")
 
 
 def _query_army_endpoint(
@@ -1462,7 +2597,6 @@ def _explain_endpoint_statements(
     lens: str,
 ) -> list[dict[str, Any]]:
     import psycopg
-
     from clashlens.api_db import ARMY_ANALYTICS_QUERY_WORK_MEM
 
     plans: list[dict[str, Any]] = []
@@ -1595,6 +2729,8 @@ def _run_account_read_gate(
     overlap_counts: list[int] | None = None,
     overlap_lock: Lock | None = None,
 ) -> dict[str, Any]:
+    from clashlens.api import create_app
+    from clashlens.api_db import ApiDatabase
     from fastapi.testclient import TestClient
     from test_private_api import (
         DISCORD_CURRENT,
@@ -1605,9 +2741,6 @@ def _run_account_read_gate(
         json_body,
         signed_headers,
     )
-
-    from clashlens.api import create_app
-    from clashlens.api_db import ApiDatabase
 
     database = ApiDatabase(connection_info, max_size=1)
     keys = {
@@ -1711,6 +2844,7 @@ def _run_step5_overlap(
                 cycles=1,
                 processing_started=processing_started,
             )
+            result.pop("_spool_root", None)
             result["cycle_elapsed_seconds"] = time.perf_counter() - started
             return result
         except Exception:
@@ -1811,46 +2945,24 @@ def _run_step5_overlap(
         "account_overlap_measurements": account_overlap[0],
         "collection_cycle": cycle,
     }
-    hard_failures = [
-        f"{key} overlap count {count} < {STEP5_REQUESTS}"
-        for key, count in overlap_counts.items()
-        if count < STEP5_REQUESTS
-    ]
-    cycle_results = cycle.get("results", [])
-    if len(cycle_results) != DUPLICATE_EXECUTION_CAP:
-        hard_failures.append(
-            f"collection processing result count {len(cycle_results)} != {DUPLICATE_EXECUTION_CAP}"
-        )
-    failed_outcomes = sorted(
-        {
-            str(result.get("outcome"))
-            for result in cycle_results
-            if result.get("outcome") != "processed"
-        }
-    )
-    if failed_outcomes:
-        hard_failures.append(
-            "collection processing outcomes were not all processed: "
-            + ",".join(failed_outcomes)
-        )
-    hard_failures.extend(
-        f"{item['selection']}/{item['lens']} mixed p95 {item['p95_ms']:.3f} >= {STEP5_P95_TARGET_MS}"
-        for item in measurements["analytics_lanes"]
-        if not item["target_passed"]
-    )
+    hard_failures = []
+    if any(count < STEP5_REQUESTS for count in overlap_counts.values()):
+        hard_failures.append("step5_overlap_incomplete")
+    cycle_summary = cycle.get("processing_summary", {})
+    cycle_count = int(cycle_summary.get("count", 0))
+    if cycle_count != DUPLICATE_EXECUTION_CAP:
+        hard_failures.append("step5_collection_result_count_mismatch")
+    if int(cycle_summary.get("outcomes", {}).get("processed", 0)) != cycle_count:
+        hard_failures.append("step5_non_processed_result")
+    if any(not item["target_passed"] for item in measurements["analytics_lanes"]):
+        hard_failures.append("step5_p95_exceeded")
     if account["overlap_measurements"] < STEP5_REQUESTS:
-        hard_failures.append(
-            f"account overlap count {account['overlap_measurements']} < {STEP5_REQUESTS}"
-        )
+        hard_failures.append("step5_account_overlap_incomplete")
     if not account["target_passed"]:
-        hard_failures.append(
-            f"account mixed p95 {account['p95_ms']:.3f} >= {STEP5_P95_TARGET_MS}"
-        )
+        hard_failures.append("step5_account_p95_exceeded")
     if cycle["cycle_elapsed_seconds"] >= STEP5_COLLECTION_LIMIT_SECONDS:
-        hard_failures.append(
-            f"collection cycle {cycle['cycle_elapsed_seconds']:.3f}s >= {STEP5_COLLECTION_LIMIT_SECONDS}s"
-        )
-    measurements["hard_failures"] = hard_failures
+        hard_failures.append("step5_collection_cycle_too_slow")
+    measurements["hard_failures"] = _failure_codes(hard_failures)
     return measurements
 
 
@@ -2439,8 +3551,19 @@ def _run_reset(
     database, processor, metrics, _spool = _processor(connection_info, archive)
     database._disable_decode_corrections = True
     try:
-        source_jobs = _store_reconciliation_population(
-            connection_info, archive, population
+        if correction:
+            admission_evidence = None
+            source_jobs = _store_reconciliation_population(
+                connection_info, archive, population
+            )
+        else:
+            source_jobs, admission_evidence = _store_production_reset_population(
+                connection_info, archive, population
+            )
+        # Qualify fixed fixture discoveries only after production membership
+        # capture so the retained population is exactly the requested count.
+        fixture_discoveries = _seed_fixture_discoveries(
+            connection_info, BATTLE_FIXTURE
         )
         profile_results = _process_jobs(
             processor, source_jobs, "reset-evidence", serial=True
@@ -2464,20 +3587,6 @@ def _run_reset(
             second.extend(_drain(processor, population * 20 + 100))
         else:
             second = []
-        # Discovery profiles are collector-owned descendants that the bounded
-        # Python runner cannot execute. Terminalize only these synthetic side
-        # effects and report the count separately from the real coordinator
-        # publication drain.
-        with psycopg.connect(connection_info) as connection:
-            bounded_collector_terminalization = connection.execute(
-                """
-                UPDATE collector_jobs
-                SET status = 'complete', updated_at = clock_timestamp()
-                WHERE work_type = 'discovery_profile'
-                  AND status IN ('pending','leased','waiting_retry')
-                """
-            ).rowcount
-            connection.commit()
         army_endpoint = _query_army_endpoint(connection_info)
         with psycopg.connect(connection_info) as connection:
             counts = connection.execute(
@@ -2533,35 +3642,38 @@ def _run_reset(
         generation_count = int(counts[5])
         generation_states = counts[6]
         generations = 2 if correction else 1
-        if generation_count < generations:
-            raise RuntimeError(
-                f"reset coordinator generation count: expected at least {generations}, got {generation_count}"
-            )
         expected_counts = {
             "ranked_day_versions": generations * population,
-            "snapshot_headers": 2 * generation_count,
-            "snapshot_entries": 2 * generation_count * population,
+            "snapshot_headers": 2 * generations,
+            "snapshot_entries": 2 * generations * population,
         }
         actual_counts = {
             "ranked_day_versions": int(counts[0]),
             "snapshot_headers": int(counts[1]),
             "snapshot_entries": int(counts[2]),
         }
-        if actual_counts != expected_counts:
-            raise RuntimeError(
-                f"reset fan-out mismatch: expected {expected_counts}, got {actual_counts}; states={generation_states}"
-            )
         outcomes = profile_results + first + second
+        hard_failures = []
+        if generation_count != generations:
+            hard_failures.append("reset_generation_count_mismatch")
+        if actual_counts != expected_counts:
+            hard_failures.append("reset_fanout_mismatch")
         if any(result["outcome"] != "processed" for result in outcomes):
-            raise RuntimeError("reset workload contains a non-processed result")
+            hard_failures.append("reset_non_processed_result")
         if active_rows:
-            raise RuntimeError(f"reset queue residue: {active_rows}")
+            hard_failures.append("reset_queue_residue")
+        processing_summary = {
+            "official": _result_summary(profile_results, expected=len(profile_results)),
+            "dependent": _result_summary(first, expected=len(first)),
+            "correction": _result_summary(second, expected=len(second)),
+            "total": _result_summary(outcomes, expected=len(outcomes)),
+        }
         return {
+            "status": "passed" if not hard_failures else "failed",
+            "hard_failures": _failure_codes(hard_failures),
             "population": population,
             "official_responses": len(profile_results),
-            "profile_results": profile_results,
-            "dependent_results": first,
-            "correction_results": second,
+            "processing_summary": processing_summary,
             "fact_counts": {
                 **actual_counts,
                 "analytics_summaries": int(counts[3]),
@@ -2569,10 +3681,14 @@ def _run_reset(
             },
             "fanout_evidence": {
                 "expected": expected_counts,
-                "matches_expected": True,
+                "matches_expected": (
+                    generation_count == generations
+                    and actual_counts == expected_counts
+                ),
                 "snapshot_entries_per_population": 2 * generation_count,
                 "generation_states": generation_states,
             },
+            "boundary_admission": admission_evidence,
             "queue_residue": [
                 {
                     "owner": _text(row[0]),
@@ -2581,11 +3697,11 @@ def _run_reset(
                 }
                 for row in active_rows
             ],
-            "bounded_collector_terminalization": int(bounded_collector_terminalization),
+            "fixture_discoveries_prequalified": fixture_discoveries,
             "stage_metrics": metrics.snapshot(),
             "spool": _spool.stats(),
             "evidence_counters": _spool.counters(),
-            "spool_root": str(_spool.spool.root),
+            "_spool_root": str(_spool.spool.root),
             "army_endpoint": army_endpoint,
             "correction_evidence": correction_evidence,
         }
@@ -2606,6 +3722,9 @@ def _run_duplicate(
 
     database, processor, metrics, _spool = _processor(connection_info, archive)
     try:
+        fixture_discoveries = _seed_fixture_discoveries(
+            connection_info, BATTLE_FIXTURE, RANKING_FIXTURE
+        )
         executed_count = min(count, DUPLICATE_EXECUTION_CAP)
         endpoint_mix = _duplicate_endpoint_mix(count)
         results: list[dict[str, Any]] = []
@@ -2659,18 +3778,7 @@ def _run_duplicate(
                 processing_started.set()
             results.extend(_process_jobs(processor, jobs, f"duplicate-c{cycle}"))
             cycle_elapsed.append(time.perf_counter() - started)
-        # Battle processing intentionally creates collector-owned discovery
-        # jobs. Terminalize only these synthetic descendants; the processing
-        # queue itself was drained by the production Python worker.
         with psycopg.connect(connection_info) as connection:
-            terminalized = connection.execute(
-                """
-                UPDATE collector_jobs
-                SET status = 'complete', updated_at = clock_timestamp()
-                WHERE work_type = 'discovery_profile'
-                  AND status IN ('pending', 'leased', 'waiting_retry')
-                """
-            ).rowcount
             payload_rows = connection.execute(
                 """
                 SELECT endpoint, count(*)
@@ -2725,6 +3833,9 @@ def _run_duplicate(
         }
         executed_counts = dict(executed_endpoint_mix)
         steady = sorted(cycle_elapsed)[len(cycle_elapsed) // 2]
+        processing_summary = _result_summary(
+            results, expected=executed_count * cycle_count
+        )
         return {
             "observations": count,
             "official_responses": count * cycle_count,
@@ -2752,12 +3863,12 @@ def _run_duplicate(
                 "matches_expected": count == DUPLICATE_EXECUTION_CAP,
                 "endpoint_mix": dict(DUPLICATE_ENDPOINT_MIX),
             },
-            "bounded_collector_terminalization": int(terminalized),
-            "results": results,
+            "fixture_discoveries_prequalified": fixture_discoveries,
+            "processing_summary": processing_summary,
             "stage_metrics": metrics.snapshot(),
             "spool": _spool.stats(),
             "evidence_counters": _spool.counters(),
-            "spool_root": str(_spool.spool.root),
+            "_spool_root": str(_spool.spool.root),
         }
     finally:
         database.close()
@@ -2767,10 +3878,9 @@ def _run_mixed(
     connection_info: str, archive: Any, live: int, backfill: int
 ) -> dict[str, Any]:
     import psycopg
+    from clashlens.worker import process_concurrently
     from domain_test_support import store_observation
     from psycopg.types.json import Jsonb
-
-    from clashlens.worker import process_concurrently
 
     started = time.perf_counter()
     cpu_start = time.process_time()
@@ -2778,6 +3888,9 @@ def _run_mixed(
     wal_start, statement_start, wal_retained_start = _start_metrics(connection_info)
     database, processor, metrics, spool = _processor(connection_info, archive)
     try:
+        fixture_discoveries = _seed_fixture_discoveries(
+            connection_info, BATTLE_FIXTURE
+        )
         jobs: list[tuple[str, int]] = []
         effective_lanes = min(_LANES, 32)
         for kind, count in (("backfill", backfill), ("live", live)):
@@ -2838,15 +3951,6 @@ def _run_mixed(
                         deduplication_key=f"perf-{kind}-{index}",
                     )
                 jobs.append((kind, job))
-        with psycopg.connect(connection_info) as connection:
-            # Battle setup can enqueue collector-owned discovery work for the
-            # fixture's opponent. It is outside this Python queue workload.
-            connection.execute(
-                """UPDATE collector_jobs SET status = 'complete', updated_at = clock_timestamp()
-                   WHERE work_type = 'discovery_profile'
-                     AND status IN ('pending', 'leased', 'waiting_retry')"""
-            )
-            connection.commit()
         by_id = {job: kind for kind, job in jobs}
         results = process_concurrently(
             processor,
@@ -2930,24 +4034,32 @@ def _run_mixed(
             and live_collection_max <= STEP5_COLLECTION_LIMIT_SECONDS
         )
         five_minute_passed = elapsed_seconds <= STEP5_COLLECTION_LIMIT_SECONDS
+        processing_summary = _result_summary(records, expected=len(jobs))
         hard_failures = []
         if len(records) != len(jobs):
-            hard_failures.append(
-                f"mixed processing returned {len(records)} completed results for {len(jobs)} jobs"
-            )
-        hard_failures.extend(
-            f"{item['kind']} job {item['job_id']} result {item['outcome']}/{item['status']}"
+            hard_failures.append("mixed_result_count_mismatch")
+        if any(
+            item["outcome"] != "processed" or item["status"] != "complete"
             for item in records
-            if item["outcome"] != "processed" or item["status"] != "complete"
-        )
+        ):
+            hard_failures.append("mixed_non_processed_result")
         if not live_latency_passed:
-            hard_failures.append("mixed live queue latency exceeded five-minute contract")
+            hard_failures.append("mixed_live_latency_exceeded")
         if not five_minute_passed:
-            hard_failures.append("mixed workload exceeded five-minute collection contract")
+            hard_failures.append("mixed_collection_latency_exceeded")
         if queue_residue:
-            hard_failures.append(f"mixed workload left active queue residue: {queue_residue}")
+            hard_failures.append("mixed_queue_residue")
+        completion_order_valid = (
+            len(order) <= MAX_COMPLETION_ORDER
+            and len(order) <= live + backfill
+            and all(item in {"live", "backfill"} for item in order)
+            and order.count("live") == live
+            and order.count("backfill") == backfill
+        )
+        retained_completion_order = order if completion_order_valid else None
         return {
-            "completion_order": order,
+            "completion_order": retained_completion_order,
+            "completion_order_complete": completion_order_valid,
             "completion_counts": {
                 "live": order.count("live"),
                 "backfill": order.count("backfill"),
@@ -2958,8 +4070,9 @@ def _run_mixed(
             "effective_lanes": effective_lanes,
             "official_responses": len(jobs),
             "official_api_traffic": {"requests": 0, "source": "committed fixtures"},
+            "fixture_discoveries_prequalified": fixture_discoveries,
             "live_first_completion_index": order.index("live")
-            if "live" in order
+            if retained_completion_order is not None and "live" in order
             else None,
             "live_queue_latency_seconds": {
                 "count": len(live_latencies),
@@ -2993,13 +4106,13 @@ def _run_mixed(
                 "elapsed_seconds": elapsed_seconds,
                 "passed": five_minute_passed,
             },
-            "hard_failures": hard_failures,
-            "results": records,
+            "hard_failures": _failure_codes(hard_failures),
+            "processing_summary": processing_summary,
             "database": database_metrics,
             "stage_metrics": metrics.snapshot(),
             "spool": spool.stats(),
             "evidence_counters": spool.counters(),
-            "spool_root": str(spool.spool.root),
+            "_spool_root": str(spool.spool.root),
         }
     finally:
         database.close()
@@ -3156,11 +4269,14 @@ def _run_army_read_sample(database_url: str, fact_count: int) -> dict[str, Any]:
         relation_start = _relation_snapshot(connection_info)
         cpu_start = time.process_time()
         elapsed_start = time.perf_counter()
+        _seed_fixture_discoveries(connection_info, BATTLE_FIXTURE)
         database, processor, _metrics, _spool = _processor(connection_info, archive)
         try:
             with count_sql_calls() as sql_calls:
                 jobs = _store_reconciliation_population(connection_info, archive, 1)
-                _process_jobs(processor, jobs, "army-read-evidence")
+                _process_jobs(
+                    processor, jobs, "army-read-evidence", serial=True
+                )
                 _drain(processor, 120)
                 reads = _seed_worst_case_army_reads(connection_info, fact_count)
             measurements = _db_snapshot(
@@ -3184,10 +4300,24 @@ def _run_army_read_sample(database_url: str, fact_count: int) -> dict[str, Any]:
                 "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
                 "spool": _spool.stats(),
                 "evidence_counters": _spool.counters(),
-                "spool_root": str(_spool.spool.root),
             }
         finally:
             database.close()
+
+
+def _retained_army_read_sample(
+    database_url: str, fact_count: int
+) -> dict[str, Any]:
+    """Return a bounded failure sample when the post-reset read gate fails."""
+    try:
+        result = _run_army_read_sample(database_url, fact_count)
+    except Exception:  # noqa: BLE001 - preserve completed reset evidence safely.
+        return {
+            "status": "failed",
+            "reason": "army_read_sample_unavailable",
+            "hard_failures": ["army_read_sample_unavailable"],
+        }
+    return {"status": "passed", "hard_failures": [], **result}
 
 
 def _run_step5_army(database_url: str) -> dict[str, Any]:
@@ -3227,7 +4357,7 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
             in {"pending", "leased", "waiting_retry", "waiting_dependency"}
         ]
         hard_failures = [
-            f"{item['selection']}/{item['lens']} forced miss {item['forced_miss_seconds']:.3f}s >= {STEP5_FORCED_MISS_TARGET_SECONDS}s"
+            "step5_forced_miss_exceeded"
             for item in reads
             if item["forced_miss_seconds"] >= STEP5_FORCED_MISS_TARGET_SECONDS
         ]
@@ -3239,33 +4369,26 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
                 or pressure["database_cgroup_available"] != 1
                 for pressure in (before, after)
             ):
-                hard_failures.append(
-                    f"{item['selection']}/{item['lens']} forced miss cgroup counters unavailable"
-                )
+                hard_failures.append("step5_cgroup_unavailable")
             elif any(item["forced_miss_memory_delta"].values()):
-                hard_failures.append(
-                    f"{item['selection']}/{item['lens']} forced miss memory pressure increased: "
-                    f"{item['forced_miss_memory_delta']}"
-                )
+                hard_failures.append("step5_memory_pressure_increased")
         hard_failures.extend(
-            f"{item['selection']}/{item['lens']} p95 {item['p95_ms']:.3f} >= {STEP5_P95_TARGET_MS}"
+            "step5_p95_exceeded"
             for item in reads
             if not item["target_passed"]
         )
         hard_failures.extend(overlap["hard_failures"])
         if active_queue_rows:
-            hard_failures.append(f"queue residue: {active_queue_rows}")
+            hard_failures.append("queue_residue")
         if (
             pressure_before["process_cgroup_available"] != 1
             or pressure_after["process_cgroup_available"] != 1
             or pressure_before["database_cgroup_available"] != 1
             or pressure_after["database_cgroup_available"] != 1
         ):
-            hard_failures.append("process or database cgroup counters were unavailable")
+            hard_failures.append("memory_pressure_unavailable")
         if any(pressure_delta.values()):
-            hard_failures.append(
-                f"memory pressure increased during workload: {pressure_delta}"
-            )
+            hard_failures.append("memory_pressure_increased")
         return {
             "status": "passed" if not hard_failures else "failed",
             "protocol": {
@@ -3294,7 +4417,7 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
             "memory_pressure_before": pressure_before,
             "memory_pressure_after": pressure_after,
             "memory_pressure_delta": pressure_delta,
-            "hard_failures": hard_failures,
+            "hard_failures": _failure_codes(hard_failures),
             "queue_drained": not active_queue_rows,
         }
 
@@ -3574,7 +4697,76 @@ def _postgres_provenance(connection_info: str) -> dict[str, Any]:
             "SELECT name, setting FROM pg_settings WHERE name = ANY(%s)",
             (list(settings),),
         ).fetchall()
-    return {"version": version, "settings": {_text(row[0]): _text(row[1]) for row in rows}}
+        migration_rows = connection.execute(
+            """
+            SELECT version
+            FROM clash_lens_schema_migrations
+            ORDER BY version
+            """
+        ).fetchall()
+    applied = [int(row[0]) for row in migration_rows]
+    if tuple(applied) != REQUIRED_MIGRATION_VERSIONS:
+        raise RuntimeError("database migrations are incomplete or out of date")
+    return {
+        "version": version,
+        "settings": {_text(row[0]): _text(row[1]) for row in rows},
+        "applied_migration_versions": applied,
+    }
+
+
+def _candidate_receipt_provenance(
+    path: Path | None, source_sha: str, migrations: list[dict[str, str]]
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    if path is None:
+        return [], None
+    try:
+        from scripts import deployment_receipt
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        deployment_receipt.validate_receipt(payload, require_digest=True)
+    except Exception as error:
+        raise RuntimeError("candidate receipt is invalid or unavailable") from error
+    if payload.get("receipt_scope") != "candidate-preparation":
+        raise RuntimeError("candidate receipt has the wrong scope")
+    source = payload.get("source")
+    if not isinstance(source, dict) or source.get("revision") != source_sha:
+        raise RuntimeError("candidate receipt source does not match this checkout")
+    receipt_migrations = payload.get("migrations")
+    if not isinstance(receipt_migrations, list) or len(receipt_migrations) != len(migrations):
+        raise RuntimeError("candidate receipt migrations do not match this checkout")
+    for expected, actual in zip(migrations, receipt_migrations, strict=True):
+        if (
+            not isinstance(actual, dict)
+            or actual.get("filename") != expected["name"]
+            or actual.get("sha256") != expected["sha256"]
+            or actual.get("applied") is not True
+        ):
+            raise RuntimeError("candidate receipt migrations do not match this checkout")
+    application_images = payload.get("application_images")
+    if not isinstance(application_images, dict):
+        raise TypeError("candidate receipt images are unavailable")
+    prepared: list[dict[str, Any]] = []
+    for application in ("collector", "python", "website"):
+        identity = application_images.get(application)
+        if not isinstance(identity, dict):
+            raise TypeError("candidate receipt images are incomplete")
+        prepared.append(
+            {
+                "application": application,
+                "identity_type": "prepared_candidate_image_id",
+                "requested_reference": identity["requested_reference"],
+                "image_id": identity["image_id"],
+                "registry_digest": identity["registry_digest"],
+                "source_label": identity["source_label"],
+                "revision_label": identity["revision_label"],
+            }
+        )
+    return prepared, {
+        "schema_version": payload["schema_version"],
+        "receipt_scope": payload["receipt_scope"],
+        "receipt_digest": payload["receipt_digest"],
+        "source_sha": source_sha,
+    }
 
 
 def _provenance(
@@ -3582,12 +4774,16 @@ def _provenance(
     *,
     postgres: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    migrations = [
-        {"name": path.name, "sha256": _sha(path.read_bytes())}
-        for path in sorted((ROOT / "deploy/migrations").glob("*.sql"))
-    ]
+    source_sha = _clean_source()
+    migrations = _source_migrations()
+    applied_migrations = None
+    if postgres is not None:
+        applied_migrations = postgres.get("applied_migration_versions")
+        if applied_migrations != list(REQUIRED_MIGRATION_VERSIONS):
+            raise RuntimeError("database migration state is incomplete or out of date")
     configuration = {
         "mode": arguments.mode,
+        "post_fix": bool(arguments.post_fix),
         "populations": arguments.populations,
         "duplicate_observations": arguments.duplicate_observations,
         "live_jobs": arguments.live_jobs,
@@ -3599,7 +4795,6 @@ def _provenance(
             if arguments.mode == "mixed-backfill"
             else arguments.lanes
         ),
-        "images": arguments.image,
         "army_warmups": getattr(arguments, "army_warmups", STEP5_WARMUPS),
         "army_requests": getattr(arguments, "army_requests", STEP5_REQUESTS),
         "analytics_lanes": getattr(arguments, "analytics_lanes", STEP5_ANALYTICS_LANES),
@@ -3607,17 +4802,40 @@ def _provenance(
         "duplicate_endpoint_mix": dict(DUPLICATE_ENDPOINT_MIX),
         "skip_collector_probe": arguments.skip_collector_probe,
     }
+    configuration_fingerprint = _sha(
+        json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
+    )
+    host = _host_provenance()
+    prepared_images, candidate_receipt = _candidate_receipt_provenance(
+        getattr(arguments, "candidate_receipt", None), source_sha, migrations
+    )
+    execution = {
+        "kind": "host",
+        "executor_images": [],
+        "host_identity": {
+            "platform": host["platform"],
+            "uname": host["uname"],
+        },
+        "runtime": {"python": host["python"]},
+        "postgres": None
+        if postgres is None
+        else {
+            "version": postgres["version"],
+            "settings": postgres["settings"],
+        },
+    }
     result = {
-        "source_sha": _git("rev-parse", "HEAD"),
-        "source_dirty": bool(_git("status", "--porcelain")),
+        "source_sha": source_sha,
+        "source_dirty": False,
         "runner_sha256": _sha(Path(__file__).read_bytes()),
         "migrations": migrations,
-        "configuration_fingerprint": _sha(
-            json.dumps(configuration, sort_keys=True).encode()
-        ),
+        "applied_migration_versions": applied_migrations,
+        "configuration_fingerprint": configuration_fingerprint,
         "configuration": configuration,
-        "images": arguments.image,
-        "host": _host_provenance(),
+        "host": host,
+        "execution": execution,
+        "prepared_candidate_images": prepared_images,
+        "candidate_receipt": candidate_receipt,
     }
     if postgres is not None:
         result["postgres"] = postgres
@@ -3627,22 +4845,34 @@ def _provenance(
 def run(arguments: argparse.Namespace) -> dict[str, Any]:
     if not arguments.database_url:
         raise RuntimeError("--database-url or CLASHLENS_TEST_DATABASE_URL is required")
-    postgres = _postgres_provenance(arguments.database_url)
+    # Check source and migration inputs before any expensive workload starts;
+    # applied migration state is captured from the isolated schema below.
+    source_sha = _clean_source()
+    migrations = _source_migrations()
+    _candidate_receipt_provenance(
+        getattr(arguments, "candidate_receipt", None), source_sha, migrations
+    )
     if arguments.mode == STEP5_MODE:
         started = datetime.now(tz=UTC)
         with count_sql_calls() as sql_calls:
             workload = _run_step5_army(arguments.database_url)
         workload["database"]["application_sql_calls"] = sql_calls[0]
+        provenance = _provenance(arguments, postgres=workload["postgres"])
         finished = datetime.now(tz=UTC)
         artifact = {
             "schema_version": ARTIFACT_SCHEMA_VERSION,
             "mode": arguments.mode,
             "started_at": started.isoformat(),
             "finished_at": finished.isoformat(),
-            "provenance": _provenance(arguments, postgres=postgres),
+            "provenance": provenance,
+            "execution": provenance["execution"],
+            "prepared_candidate_images": provenance["prepared_candidate_images"],
+            "candidate_receipt": provenance["candidate_receipt"],
+            "official_api_requests": {"count": 0, "source": "committed fixtures"},
             "collector_probe": None,
             "samples": [],
             "army_read_sample": workload,
+            "hard_failures": _failure_codes(workload.get("hard_failures", [])),
         }
         artifact["artifact_digest"] = _artifact_digest(artifact)
         validate_artifact(artifact)
@@ -3664,6 +4894,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
     )
     samples = []
     hard_failures: list[str] = []
+    provenance: dict[str, Any] | None = None
     populations = (
         arguments.populations
         if arguments.mode in {"reset-boundary", "correction"}
@@ -3678,6 +4909,10 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             ) as connection_info,
             archive_server() as archive,
         ):
+            if provenance is None:
+                provenance = _provenance(
+                    arguments, postgres=_postgres_provenance(connection_info)
+                )
             wal_start, statement_start, wal_retained_start = _start_metrics(connection_info)
             relation_start = _relation_snapshot(connection_info)
             filesystem_before = _filesystem_usage(ROOT)
@@ -3707,7 +4942,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         arguments.live_jobs,
                         arguments.backfill_jobs,
                     )
-                    hard_failures.extend(workload.get("hard_failures", []))
+                hard_failures.extend(workload.get("hard_failures", []))
             if arguments.mode == "coordinator-12500":
                 measurements = _db_snapshot(
                     connection_info,
@@ -3761,6 +4996,10 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                     "workload did not report its exact official response count"
                 )
             response_count = int(workload["official_responses"])
+            spool_root_value = workload.pop("_spool_root", None)
+            if not isinstance(spool_root_value, str) or not spool_root_value:
+                raise RuntimeError("workload spool identity is unavailable")
+            spool_root = Path(spool_root_value)
             # Executed responses actually ran through the full pipeline;
             # projected ones are represented by measured-cycle aggregation
             # (duplicate-heavy 24h-equivalent mode). Never mix the two.
@@ -3800,11 +5039,11 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         "collector_local_verify_us": probe["local_verify_us"],
                     }
                 )
-            orphans = _orphan_metrics(connection_info, Path(workload["spool_root"]))
-            retries_measured = sum(
-                int(result.get("outcome") == "retrying")
-                for result in workload.get("results", [])
-            )
+            orphans = _orphan_metrics(connection_info, spool_root)
+            processing_summary = workload.get("processing_summary", {})
+            if "total" in processing_summary:
+                processing_summary = processing_summary["total"]
+            retries_measured = int(processing_summary.get("retry_count", 0))
             archived_bytes = sum(map(len, archive[3].objects.values()))
             exact_bytes = int(workload.get("exact_bytes", archived_bytes))
             storage_runway = _runway_inputs(
@@ -3870,7 +5109,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         "live_reservations": int(spool.get("reserved_objects", 0)),
                         "allocated_blocks": spool.get("allocated_blocks"),
                         "free_inodes": spool.get(
-                            "free_inodes", _free_inodes(Path(workload["spool_root"]))
+                            "free_inodes", _free_inodes(spool_root)
                         ),
                     },
                     "elapsed_seconds": time.perf_counter() - elapsed_start,
@@ -3879,20 +5118,26 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                 }
             )
     army_read_sample = (
-        _run_army_read_sample(arguments.database_url, arguments.army_facts)
+        _retained_army_read_sample(arguments.database_url, arguments.army_facts)
         if arguments.mode in {"reset-boundary", "correction"}
         else None
     )
+    if army_read_sample is not None:
+        hard_failures.extend(army_read_sample["hard_failures"])
     artifact = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "mode": arguments.mode,
         "started_at": started.isoformat(),
         "finished_at": datetime.now(tz=UTC).isoformat(),
-        "provenance": _provenance(arguments, postgres=postgres),
+        "provenance": provenance,
+        "execution": provenance["execution"],
+        "prepared_candidate_images": provenance["prepared_candidate_images"],
+        "candidate_receipt": provenance["candidate_receipt"],
+        "official_api_requests": {"count": 0, "source": "committed fixtures"},
         "collector_probe": collector_probe,
         "samples": samples,
         "army_read_sample": army_read_sample,
-        "hard_failures": hard_failures,
+        "hard_failures": _failure_codes(hard_failures),
     }
     artifact["artifact_digest"] = _artifact_digest(artifact)
     validate_artifact(artifact)
@@ -3916,7 +5161,17 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--army-warmups", type=int, default=STEP5_WARMUPS)
     parser.add_argument("--army-requests", type=int, default=STEP5_REQUESTS)
     parser.add_argument("--analytics-lanes", type=int, default=STEP5_ANALYTICS_LANES)
-    parser.add_argument("--image", action="append", default=[])
+    parser.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="deprecated; candidate image identities must come from --candidate-receipt",
+    )
+    parser.add_argument(
+        "--candidate-receipt",
+        type=Path,
+        help="candidate-preparation receipt for separately reported prepared images",
+    )
     parser.add_argument("--output", type=Path)
     parser.add_argument(
         "--skip-collector-probe", action="store_true", help=argparse.SUPPRESS
@@ -3955,11 +5210,10 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--analytics-lanes must be positive")
     global _LANES
     _LANES = arguments.lanes
-    if any(
-        re.fullmatch(r"[A-Za-z0-9._-]+=sha256:[0-9a-f]{64}", image) is None
-        for image in arguments.image
-    ):
-        parser.error("--image must be NAME=sha256:DIGEST")
+    if arguments.image:
+        parser.error(
+            "--image is deprecated and ambiguous; use --candidate-receipt"
+        )
     return arguments
 
 
@@ -3973,21 +5227,17 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     try:
         import psycopg
-    except ImportError as error:
-        print(f"performance runner: ImportError: {error}", file=sys.stderr)
+    except ImportError:
+        print("performance runner: ImportError", file=sys.stderr)
         return 2
     try:
         result = run(arguments)
         payload = json.dumps(result, indent=2, sort_keys=True) + "\n"
         if arguments.output:
-            arguments.output.parent.mkdir(parents=True, exist_ok=True)
-            arguments.output.write_text(payload)
+            _write_artifact(arguments.output, payload)
         else:
             print(payload, end="")
         hard_failures = list(result.get("hard_failures", []))
-        hard_failures.extend(
-            (result.get("army_read_sample") or {}).get("hard_failures", [])
-        )
         if hard_failures:
             print(
                 "performance runner: hard acceptance failures: " + "; ".join(hard_failures[:8]),
@@ -4002,7 +5252,7 @@ def main(argv: list[str] | None = None) -> int:
         subprocess.SubprocessError,
         psycopg.Error,
     ) as error:
-        print(f"performance runner: {type(error).__name__}: {error}", file=sys.stderr)
+        print(f"performance runner: {type(error).__name__}", file=sys.stderr)
         return 2
 
 

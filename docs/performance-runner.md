@@ -1,9 +1,9 @@
 # Performance runner
 
-`scripts/performance_runner.py` is the PostgreSQL-backed issue #60 Step 1
-baseline and issue #64 raw-evidence harness. `scripts/fedora_probe.sh` is the
-checked-in Fedora entrypoint; it requires an explicit disposable PostgreSQL
-URL and retains a JSON artifact under `results/`. It creates and drops an isolated schema per sample, applies
+`scripts/performance_runner.py` is the PostgreSQL-backed issue #60 Step 8
+evidence harness. `scripts/fedora_probe.sh` is the checked-in Fedora
+entrypoint; it requires an explicit disposable PostgreSQL URL and retains a
+JSON artifact outside the checkout by default. It creates and drops an isolated schema per sample, applies
 all migrations, serves committed fixtures from a local archive, and runs the
 production collector probe, observation processor, reconciliation, snapshot,
 analytics, army-publication, and API database paths. Duplicate-heavy mode also
@@ -18,12 +18,18 @@ it seeds the fixed 12,500-member, 5.6-million-fact workload, exercises the
 production `ApiDatabase.get_army_analytics` path for all six selection/lens
 pairs, and retains query plans and mixed-load evidence.
 
+Set the required `CLASHLENS_CANDIDATE_RECEIPT` to the exact-head
+candidate-preparation receipt. Set `CLASHLENS_FEDORA_RESULTS_DIR` to choose the default retained-results
+directory, or set `CLASHLENS_FEDORA_PROBE_OUTPUT` for one exact output path.
+
 ## Prerequisites and limits
 
 - Python 3.12 and the locked `python/` development environment (`uv sync --locked`).
 - Go 1.26 for the collector-to-Python probe. Its first run downloads the
   embedded PostgreSQL test binary and may need a warm cache to fit the probe's
   120-second timeout.
+- The Fedora entrypoint raises only its own soft open-file limit to 65,536 for
+  the spool's fixed lock-shard set; it does not change host or service limits.
 - A disposable UTF-8 PostgreSQL database where the supplied user can create
   schemas. Never point the runner at production. `SQL_ASCII` can return text as
   bytes and is not representative of the deployed database. The fixed
@@ -50,9 +56,11 @@ pairs, and retains query plans and mixed-load evidence.
   runs the full raw-evidence/local/Python/PostgreSQL semantics.
 - `pg_stat_statements` is optional. Its SQL-call delta is `null` when the
   extension is unavailable; the in-process Cursor call count remains present.
-- RSS is process maximum RSS, not a per-sample instantaneous value. Image
-  digests are operator-supplied provenance and must use
-  `--image NAME=sha256:DIGEST`.
+- RSS is process maximum RSS, not a per-sample instantaneous value. Workloads
+  execute on the host and report `execution.kind: "host"` with an empty
+  `executor_images` list. To correlate a prepared candidate without claiming
+  that it executed the workload, pass a verified candidate-preparation receipt
+  with `--candidate-receipt /retained/receipt.json`.
 
 From `python/`:
 
@@ -62,20 +70,71 @@ export UV_PROJECT_ENVIRONMENT=/tmp/clashlens-python-venv
 export UV_LINK_MODE=copy
 
 uv run --locked --python 3.12 ../scripts/performance_runner.py reset-boundary \
-  --populations 2,4,8 --army-facts 1000 --output ../results/reset.json
+  --populations 2,4,8 --army-facts 1000 --output /retained/reset.json
 uv run --locked --python 3.12 ../scripts/performance_runner.py correction \
-  --populations 2,4,8 --army-facts 1000 --output ../results/correction.json
+  --populations 2,4,8 --army-facts 1000 --output /retained/correction.json
 uv run --locked --python 3.12 ../scripts/performance_runner.py duplicate-heavy \
-  --duplicate-observations 100 --output ../results/duplicates.json
+  --duplicate-observations 100 --output /retained/duplicates.json
 uv run --locked --python 3.12 ../scripts/performance_runner.py mixed-backfill \
-  --live-jobs 20 --backfill-jobs 100 --output ../results/mixed.json
+  --live-jobs 20 --backfill-jobs 100 --output /retained/mixed.json
 uv run --locked --python 3.12 ../scripts/performance_runner.py coordinator-12500 \
-  --army-facts 1 --lanes 1 --post-fix --output ../results/coordinator-12500.json
+  --army-facts 1 --lanes 1 --post-fix --output /retained/coordinator-12500.json
 
 # Issue #73 PR 2 fixed army read, mixed-load, and query-plan protocol
 uv run --locked --python 3.12 ../scripts/performance_runner.py army-analytics \
-  --output ../results/issue-73-pr2-army.json
+  --candidate-receipt /retained/clashlens-candidate-preparation.json \
+  --output /retained/issue-73-pr2-army.json
 ```
+
+The same `--candidate-receipt` option may be used with each workload. The
+receipt must be a schema-1 `candidate-preparation` receipt whose clean source
+SHA, migration filenames/hashes through 0013, application source/revision
+labels, and canonical receipt digest validate against this checkout. The
+runner records those identities under `prepared_candidate_images`; they are
+never placed in `executor_images` for a host-run workload. The old ambiguous
+`--image` option is rejected.
+
+## Step 8 exact-head Fedora evidence
+
+After the three application images and candidate receipt have been produced
+from one clean head, run the four accepted protocols from that same unchanged
+checkout. Use a fresh retained-results directory and a disposable UTF-8
+PostgreSQL database; the output filenames below must not already exist.
+
+```bash
+export CLASHLENS_TEST_DATABASE_URL=postgresql://.../clashlens
+export CLASHLENS_CANDIDATE_RECEIPT=/home/clashlens/results/step8-SHA/clashlens-candidate-preparation-TIMESTAMP-SHA.json
+RESULTS_DIR=/home/clashlens/results/step8-SHA
+
+CLASHLENS_FEDORA_PROBE_OUTPUT="$RESULTS_DIR/reset-boundary.json" \
+  scripts/fedora_probe.sh reset-boundary \
+  --populations 12500 --army-facts 1000 --post-fix
+
+CLASHLENS_FEDORA_PROBE_OUTPUT="$RESULTS_DIR/army-analytics.json" \
+  scripts/fedora_probe.sh army-analytics
+
+CLASHLENS_FEDORA_PROBE_OUTPUT="$RESULTS_DIR/duplicate-heavy.json" \
+  scripts/fedora_probe.sh duplicate-heavy \
+  --duplicate-observations 25024 --duplicate-cycles 2
+
+CLASHLENS_FEDORA_PROBE_OUTPUT="$RESULTS_DIR/mixed-backfill.json" \
+  scripts/fedora_probe.sh mixed-backfill \
+  --live-jobs 20 --backfill-jobs 100 --skip-collector-probe
+```
+
+The reset uses the landed bounded-writer guard before admitting the full
+12,500-player population. Its opt-in Go probe uses the production contract-v5
+admission and scheduler seams in the workload's disposable schema: a transitive
+prior regular lineage blocks the reset, production creates the exact sweep,
+membership, generation, and reset roots, regular scheduling remains blocked,
+and safe handoff reopens scheduling. The duplicate run repeats the accepted 25,024-item
+endpoint mix twice for its 24-hour-equivalent comparison. The mixed run keeps
+the accepted Step 7 20-live/100-backfill protocol; its collector probe is
+skipped because that production-path probe is already exercised by the other
+three exact-head modes. Record each file SHA-256 and internal
+`artifact_digest`, validate each artifact, and compare it with the retained
+Step 1–7 result for that protocol. These are Step 8 measurements, not #31
+launch approval or exact-candidate production evidence.
 
 Reset and correction use paired committed reset fixtures and production
 `complete_reconciliation`; they do not manufacture ranked-day versions. Their
@@ -95,12 +154,14 @@ forced-miss and whole-run swap/OOM deltas, and the four-lane 25,024-observation 
 reads. A p95, overlap, queue, or five-minute violation is retained in the JSON
 artifact and exits nonzero; no index or cache is added by the runner.
 
-Results use artifact schema 7 and include an `artifact_digest` SHA-256 over
+Results use artifact schema 8 and include an `artifact_digest` SHA-256 over
 canonical JSON excluding that field. Artifacts are validated before they are
-printed or written; missing/invalid digests, current metrics, or older artifact
-versions fail the run. They include source/dirty state, runner and migration hashes,
-configuration,
-optional images, generated and retained PostgreSQL WAL and relation sizes,
+printed or written; missing/invalid digests, required metrics, or older artifact
+versions fail the run. They require a clean exact source SHA, the runner hash,
+source migration filenames/hashes and the applied database migration versions
+through 0013, a sanitized configuration fingerprint, host/runtime/PostgreSQL
+execution identity and settings, and fixed workload facts. They include
+generated and retained PostgreSQL WAL and relation sizes,
 per-relation DML and
 vacuum/analyze lag, SQL calls, queue rows and oldest active age, fixed endpoint
 counts, canonical parsed-content/source-row counts, storage-runway inputs,
@@ -108,12 +169,26 @@ fact/publication counts, stage and endpoint latency, archive operations, elapsed
 time, CPU, and RSS. SQL and WAL windows
 include workload seeding as well as production processing. Runway growth uses
 retained WAL directory growth from `pg_ls_waldir()`; generated LSN WAL remains
-reported separately. Reset modes also
-assert the current per-player job, two-header, and quadratic entry counts rather
-than emitting a degraded sample. Python queues are
-drained by the workload. Collector-owned active residue, including discovery
-profiles, is reported separately by owner and work type because this Python
-runner cannot claim collector work; it must not be read as drained reset work.
+reported separately. Reset modes also assert the exact production-admitted
+membership and root count, prior-drain and safe-handoff states, separate
+published snapshot/army readiness, current per-player job, two-header, and
+quadratic entry counts rather than emitting a degraded sample. Python queues
+are drained by the workload. Because official API traffic is forbidden, the
+committed-fixture adapter attaches its two fixed observations and completed
+attempt to each production-created reset root; it does not create the target
+admission, sweep, membership, generation, or roots. Committed battle/ranking
+fixture discoveries are pre-qualified as eligible only after target membership
+capture so they do not change the claimed reset population or manufacture
+collector-only discovery work. Any active collector or Python residue remains
+visible and fails the applicable gate.
+
+Retained processing evidence is aggregate-only: fixed
+outcome/status/work-type distributions, counts, and bounded latency summaries
+replace per-job rows and identifiers. Hard failures use a finite code
+vocabulary. Mixed completion order is retained only when the entire configured
+order fits the schema's 256-item bound; otherwise exact counts remain and
+omission is explicit. `post_fix` is part of the sanitized configuration
+fingerprint.
 
 Mixed-backfill seeds committed battle-log fixtures through the production
 processor, then creates migration-shaped `redecode_army` jobs for those real
@@ -144,14 +219,17 @@ python3 -m unittest scripts/test_performance_runner.py -v
 
 # Fedora target-host probe; never point this at production data.
 CLASHLENS_TEST_DATABASE_URL=postgresql://... \\
-  CLASHLENS_FEDORA_PROBE_OUTPUT=/tmp/clashlens-step2-results/duplicates.json \\
+  CLASHLENS_FEDORA_PROBE_OUTPUT=/tmp/clashlens-step8-results/duplicates.json \\
+  CLASHLENS_CANDIDATE_RECEIPT=/retained/clashlens-candidate-preparation.json \\
   scripts/fedora_probe.sh duplicate-heavy --duplicate-observations 25024
 ```
 
 Without `CLASHLENS_TEST_DATABASE_URL`, PostgreSQL checks are skipped. A skip is
 not performance acceptance. Database and collector-probe failures return a
-short nonzero diagnostic and do not emit a partial JSON result. Retain real
-Fedora target-host outputs for review. The dedicated `army-analytics` mode
+short nonzero diagnostic and do not emit a partial JSON result. The runner
+publishes a complete artifact atomically and exclusively before returning a
+hard workload failure; an occupied output path is rejected. Retain real Fedora
+target-host outputs for review. The dedicated `army-analytics` mode
 asserts the warmed 200 ms p95, forced-miss five-second bound, four-lane overlap,
 queue-drain, and five-minute gates;
 its output is retained before a hard-gate failure returns nonzero.

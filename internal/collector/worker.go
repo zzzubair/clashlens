@@ -266,7 +266,6 @@ func (w *worker) collectEndpoint(
 					"work_type", job.workType,
 					"endpoint", endpoint,
 					"pool", job.pool,
-					"key_label", key.Label,
 					"duration", duration,
 					"category", transportFailureCategory(err),
 				)
@@ -369,7 +368,6 @@ func (w *worker) collectEndpoint(
 					"work_type", job.workType,
 					"endpoint", endpoint,
 					"pool", job.pool,
-					"key_label", key.Label,
 					"status", response.statusCode,
 					"duration", duration,
 					"category", failureCategory,
@@ -412,7 +410,6 @@ func (w *worker) collectEndpoint(
 					"work_type", job.workType,
 					"endpoint", endpoint,
 					"pool", job.pool,
-					"key_label", key.Label,
 					"status", response.statusCode,
 					"duration", duration,
 				)
@@ -438,7 +435,6 @@ func (w *worker) collectEndpoint(
 				"work_type", job.workType,
 				"endpoint", endpoint,
 				"pool", job.pool,
-				"key_label", key.Label,
 				"status", response.statusCode,
 				"duration", duration,
 				"outcome", outcome,

@@ -65,7 +65,7 @@ func (s *store) resetJobsDrained(ctx context.Context, boundary time.Time) (bool,
             FROM collector_jobs AS job
             JOIN collector_reset_sweeps AS sweep ON sweep.id = job.sweep_id
             WHERE sweep.boundary_at = $1
-              AND job.work_type IN ('reset_baseline', 'reset_profile')
+              AND job.work_type IN ('reset_baseline', 'reset_profile', 'legacy_reset_profile')
             UNION
             SELECT child.id
             FROM collector_jobs AS child
@@ -120,7 +120,7 @@ func (s *store) setBoundaryAdmission(
                        WHERE job.status IN ('pending','leased','waiting_retry','waiting_dependency')),
                   (WITH RECURSIVE lineage(job_id) AS (
                        SELECT job.id FROM collector_jobs AS job JOIN collector_reset_sweeps AS sweep ON sweep.id = job.sweep_id
-                       WHERE sweep.boundary_at = $1 AND job.work_type IN ('reset_baseline','reset_profile')
+                       WHERE sweep.boundary_at = $1 AND job.work_type IN ('reset_baseline','reset_profile','legacy_reset_profile')
                        UNION
                        SELECT child.id FROM collector_jobs AS child
                        JOIN collector_attempts AS parent_attempt ON parent_attempt.id = child.parent_attempt_id
@@ -177,7 +177,7 @@ func (s *store) clearBoundarySafeHandoff(ctx context.Context, boundary time.Time
 		), reset_lineage(job_id) AS (
 			SELECT job.id FROM collector_jobs AS job
 			JOIN collector_reset_sweeps AS sweep ON sweep.id = job.sweep_id
-			WHERE sweep.boundary_at = $1 AND job.work_type IN ('reset_baseline','reset_profile')
+			WHERE sweep.boundary_at = $1 AND job.work_type IN ('reset_baseline','reset_profile','legacy_reset_profile')
 			UNION
 			SELECT child.id FROM collector_jobs AS child
 			JOIN collector_attempts AS parent_attempt ON parent_attempt.id = child.parent_attempt_id
@@ -458,7 +458,7 @@ func resetJobsDrainedForBoundariesTx(
 			SELECT job.id FROM collector_jobs AS job
 			JOIN collector_reset_sweeps AS sweep ON sweep.id = job.sweep_id
 			WHERE sweep.boundary_at %s $1
-			  AND job.work_type IN ('reset_baseline','reset_profile')
+			  AND job.work_type IN ('reset_baseline','reset_profile','legacy_reset_profile')
 			UNION
 			SELECT child.id FROM collector_jobs AS child
 			JOIN collector_attempts AS parent_attempt ON parent_attempt.id = child.parent_attempt_id
