@@ -46,7 +46,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             "mode": "duplicate-heavy",
             "started_at": "now",
             "finished_at": "now",
-            "provenance": {},
+            "provenance": {"postgres": {"version": "test", "settings": {}}},
             "collector_probe": None,
             "samples": [
                 {"database": {}, "archive_operations": {}, "storage_runway": {}}
@@ -69,6 +69,8 @@ class PerformanceRunnerTest(unittest.TestCase):
     def test_duplicate_artifact_rejects_old_per_occurrence_shape(self) -> None:
         database_keys = (
             "wal_bytes",
+            "wal_retained_bytes",
+            "wal_retained_growth_bytes",
             "sql_statement_calls",
             "application_sql_calls",
             "pending_remote_verification",
@@ -116,7 +118,7 @@ class PerformanceRunnerTest(unittest.TestCase):
             "mode": "duplicate-heavy",
             "started_at": "now",
             "finished_at": "now",
-            "provenance": {},
+            "provenance": {"postgres": {"version": "test", "settings": {}}},
             "collector_probe": None,
             "samples": [sample],
             "army_read_sample": None,
@@ -321,7 +323,11 @@ class PerformanceRunnerTest(unittest.TestCase):
         runway = runner._runway_inputs(
             usage,
             usage,
-            {"relation_sizes": {}, "wal_bytes": 0},
+            {
+                "relation_sizes": {},
+                "wal_bytes": 0,
+                "wal_retained_growth_bytes": 0,
+            },
             {},
             {},
             0,
@@ -342,7 +348,11 @@ class PerformanceRunnerTest(unittest.TestCase):
         runway = runner._runway_inputs(
             filesystem,
             filesystem,
-            {"relation_sizes": {"players": {"total_bytes": 100}}, "wal_bytes": 50},
+            {
+                "relation_sizes": {"players": {"total_bytes": 100}},
+                "wal_bytes": 50,
+                "wal_retained_growth_bytes": 50,
+            },
             {},
             {},
             0,
@@ -353,6 +363,30 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(runway["projected_daily_local_growth_bytes"], 21_600)
         self.assertEqual(runway["target_used_bytes"], 800)
         self.assertEqual(runway["target_utilization"], 0.80)
+
+    def test_runway_uses_retained_wal_growth_not_generated_lsn_bytes(self) -> None:
+        filesystem = {
+            "path": "/tmp",
+            "usable_capacity_bytes": 1_000,
+            "raw_capacity_bytes": 1_000,
+            "used_bytes": 100,
+        }
+        runway = runner._runway_inputs(
+            filesystem,
+            filesystem,
+            {
+                "relation_sizes": {},
+                "wal_bytes": 500,
+                "wal_retained_bytes": 120,
+                "wal_retained_growth_bytes": 15,
+            },
+            {},
+            {},
+            0,
+        )
+        self.assertEqual(runway["postgres_wal_bytes"], 500)
+        self.assertEqual(runway["postgres_wal_retained_growth_bytes"], 15)
+        self.assertEqual(runway["measured_local_growth_bytes"], 15)
 
     def test_archive_probe_marker_parses_totals(self) -> None:
         marker = (
@@ -516,6 +550,8 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
             self.assertEqual(result["schema_version"], runner.ARTIFACT_SCHEMA_VERSION)
             sample = result["samples"][0]
             self.assertGreater(sample["database"]["wal_bytes"], 0)
+            self.assertGreaterEqual(sample["database"]["wal_retained_bytes"], 0)
+            self.assertGreaterEqual(sample["database"]["wal_retained_growth_bytes"], 0)
             self.assertGreater(sample["database"]["application_sql_calls"], 0)
             self.assertIn("collector_jobs", sample["database"]["queues"])
             self.assertIn("python_processing_jobs", sample["database"]["queues"])
@@ -525,7 +561,7 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
             if mode == "coordinator-12500":
                 workload = sample["workload"]
                 self.assertEqual(
-                    workload["contract"], {"database_version": 4, "required_version": 4}
+                    workload["contract"], {"database_version": 5, "required_version": 5}
                 )
                 self.assertEqual(
                     workload["coverage"],
@@ -607,6 +643,15 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 self.assertTrue(
                     sample["workload"]["fanout_evidence"]["matches_expected"]
                 )
+                if mode == "correction":
+                    self.assertEqual(
+                        [
+                            state["generation"]
+                            for state in sample["workload"]["fanout_evidence"]["generation_states"]
+                            if state["generation"] in {1, 2}
+                        ],
+                        [1, 2],
+                    )
                 army = result["army_read_sample"]
                 self.assertGreater(army["database"]["wal_bytes"], 0)
                 self.assertGreater(army["database"]["application_sql_calls"], 0)
