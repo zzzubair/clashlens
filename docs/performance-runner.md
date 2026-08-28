@@ -95,15 +95,16 @@ forced-miss and whole-run swap/OOM deltas, and the four-lane 25,024-observation 
 reads. A p95, overlap, queue, or five-minute violation is retained in the JSON
 artifact and exits nonzero; no index or cache is added by the runner.
 
-Results use artifact schema 6 and include an `artifact_digest` SHA-256 over
+Results use artifact schema 7 and include an `artifact_digest` SHA-256 over
 canonical JSON excluding that field. Artifacts are validated before they are
 printed or written; missing/invalid digests, current metrics, or older artifact
 versions fail the run. They include source/dirty state, runner and migration hashes,
 configuration,
 optional images, PostgreSQL WAL and relation sizes, per-relation DML and
 vacuum/analyze lag, SQL calls, queue rows and oldest active age, fixed endpoint
-counts, storage-runway inputs, fact/publication counts, stage and endpoint
-latency, archive operations, elapsed time, CPU, and RSS. SQL and WAL windows
+counts, canonical parsed-content/source-row counts, storage-runway inputs,
+fact/publication counts, stage and endpoint latency, archive operations, elapsed
+time, CPU, and RSS. SQL and WAL windows
 include workload seeding as well as production processing. Reset modes also
 assert the current per-player job, two-header, and quadratic entry counts rather
 than emitting a degraded sample. Python queues are

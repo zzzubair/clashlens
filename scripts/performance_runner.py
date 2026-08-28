@@ -42,7 +42,7 @@ DUPLICATE_ENDPOINT_MIX = {
     "global_player_rankings": 24,
 }
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
-ARTIFACT_SCHEMA_VERSION = 6
+ARTIFACT_SCHEMA_VERSION = 7
 AFFECTED_RELATIONS = (
     "players",
     "collector_jobs",
@@ -66,6 +66,9 @@ AFFECTED_RELATIONS = (
     "official_top200_attempts",
     "official_top200_versions",
     "official_top200_entries",
+    "battle_log_observation_rows",
+    "official_top200_version_entries",
+    "official_top200_attempt_entries",
 )
 STEP5_MODE = "army-analytics"
 STEP5_POPULATION = 12_500
@@ -881,6 +884,7 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
                     "fixture_bytes_by_endpoint",
                     "exact_bytes",
                     "contract",
+                    "canonical_content",
                 ),
                 f"{label} duplicate workload",
             )
@@ -888,6 +892,19 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
                 sample["workload"]["contract"],
                 ("expected_occurrences", "executed_occurrences", "endpoint_mix"),
                 f"{label} duplicate contract",
+            )
+            require(
+                sample["workload"]["canonical_content"],
+                (
+                    "parsed_payloads_by_endpoint",
+                    "profile_semantic_versions",
+                    "profile_occurrence_effects",
+                    "battle_canonical_rows",
+                    "battle_occurrence_rows",
+                    "ranking_canonical_rows",
+                    "ranking_occurrence_links",
+                ),
+                f"{label} canonical content",
             )
 
     if mode == STEP5_MODE:
@@ -2509,6 +2526,7 @@ def _run_duplicate(
         profile_bodies: dict[tuple[str, int], bytes] = {}
         fixture_bodies: dict[str, bytes] = {}
         source_bytes: dict[str, int] = {}
+        exact_bytes = 0
         executed_endpoint_mix: dict[str, int] = dict.fromkeys(endpoint_mix, 0)
         for cycle in range(max(1, cycles)):
             jobs: list[int] = []
@@ -2528,6 +2546,7 @@ def _run_duplicate(
                             fixture_bodies,
                         )
                         source_bytes[endpoint] = len(body)
+                        exact_bytes += len(body)
                         jobs.append(
                             store_observation(
                                 connection_info,
@@ -2565,17 +2584,49 @@ def _run_duplicate(
                   AND status IN ('pending', 'leased', 'waiting_retry')
                 """
             ).rowcount
+            payload_rows = connection.execute(
+                """
+                SELECT endpoint, count(*)
+                FROM parsed_source_payloads
+                GROUP BY endpoint ORDER BY endpoint
+                """
+            ).fetchall()
+            profile_rows = connection.execute(
+                "SELECT count(*) FROM player_profile_versions"
+            ).fetchone()[0]
+            profile_effects = connection.execute(
+                "SELECT count(*) FROM player_profile_effects"
+            ).fetchone()[0]
+            battle_canonical_rows = connection.execute(
+                "SELECT count(*) FROM battle_source_rows WHERE parsed_payload_id IS NOT NULL"
+            ).fetchone()[0]
+            battle_occurrence_rows = connection.execute(
+                "SELECT count(*) FROM battle_log_observation_rows"
+            ).fetchone()[0]
+            ranking_canonical_rows = connection.execute(
+                "SELECT count(*) FROM official_top200_entries WHERE parsed_payload_id IS NOT NULL"
+            ).fetchone()[0]
+            ranking_occurrence_links = connection.execute(
+                "SELECT count(*) FROM official_top200_version_entries"
+            ).fetchone()[0]
             connection.commit()
+        canonical_content = {
+            "parsed_payloads_by_endpoint": {
+                _text(row[0]): int(row[1]) for row in payload_rows
+            },
+            "profile_semantic_versions": int(profile_rows),
+            "profile_occurrence_effects": int(profile_effects),
+            "battle_canonical_rows": int(battle_canonical_rows),
+            "battle_occurrence_rows": int(battle_occurrence_rows),
+            "ranking_canonical_rows": int(ranking_canonical_rows),
+            "ranking_occurrence_links": int(ranking_occurrence_links),
+        }
         cycle_count = max(1, cycles)
         response_counts = {
             endpoint: value * cycle_count
             for endpoint, value in _duplicate_response_mix(count, endpoint_mix).items()
         }
         executed_counts = dict(executed_endpoint_mix)
-        exact_bytes = sum(
-            source_bytes.get(endpoint, 0) * value
-            for endpoint, value in executed_counts.items()
-        )
         steady = sorted(cycle_elapsed)[len(cycle_elapsed) // 2]
         return {
             "observations": count,
@@ -2597,6 +2648,7 @@ def _run_duplicate(
             "fixture_bytes_by_endpoint": source_bytes,
             "exact_bytes": exact_bytes,
             "official_api_traffic": {"requests": 0, "source": "committed fixtures"},
+            "canonical_content": canonical_content,
             "contract": {
                 "expected_occurrences": DUPLICATE_EXECUTION_CAP,
                 "executed_occurrences": executed_count,
@@ -3017,17 +3069,23 @@ def _free_inodes(path: Path) -> int | None:
 
 
 def _filesystem_usage(path: Path) -> dict[str, Any]:
-    """Return measured capacity and use for the filesystem hosting ``path``."""
+    """Return measured user-usable capacity and use for ``path``."""
     filesystem = os.statvfs(path)
-    capacity = int(filesystem.f_blocks * filesystem.f_frsize)
+    raw_capacity = int(filesystem.f_blocks * filesystem.f_frsize)
     available = int(filesystem.f_bavail * filesystem.f_frsize)
-    used = max(0, capacity - int(filesystem.f_bfree * filesystem.f_frsize))
+    reserved = max(
+        0, int(filesystem.f_bfree - filesystem.f_bavail) * filesystem.f_frsize
+    )
+    usable_capacity = max(0, raw_capacity - reserved)
+    used = max(0, usable_capacity - available)
     return {
         "path": str(path),
-        "capacity_bytes": capacity,
+        "capacity_bytes": usable_capacity,
+        "raw_capacity_bytes": raw_capacity,
+        "usable_capacity_bytes": usable_capacity,
         "available_bytes": available,
         "used_bytes": used,
-        "used_ratio": used / capacity if capacity else 0.0,
+        "used_ratio": used / usable_capacity if usable_capacity else 0.0,
         "free_inodes": int(filesystem.f_favail),
     }
 
@@ -3039,6 +3097,7 @@ def _runway_inputs(
     relation_start: dict[str, dict[str, Any]],
     spool: dict[str, Any],
     archived_bytes: int,
+    measured_intervals: int = 1,
 ) -> dict[str, Any]:
     relation_growth = sum(
         max(
@@ -3050,8 +3109,8 @@ def _runway_inputs(
     )
     wal_bytes = int(database["wal_bytes"])
     measured_growth = relation_growth + wal_bytes
-    projected_daily_growth = measured_growth * 288
-    capacity = int(filesystem_after["capacity_bytes"])
+    projected_daily_growth = measured_growth / measured_intervals * 288
+    capacity = int(filesystem_after["usable_capacity_bytes"])
     target = int(capacity * 0.80)
     headroom = max(0, target - int(filesystem_after["used_bytes"]))
     days = (
@@ -3062,6 +3121,10 @@ def _runway_inputs(
     return {
         "filesystem_path": filesystem_after["path"],
         "filesystem_capacity_bytes": capacity,
+        "filesystem_usable_capacity_bytes": capacity,
+        "filesystem_raw_capacity_bytes": int(
+            filesystem_after["raw_capacity_bytes"]
+        ),
         "target_utilization": 0.80,
         "target_used_bytes": target,
         "filesystem_used_bytes_before": int(filesystem_before["used_bytes"]),
@@ -3082,6 +3145,9 @@ def _runway_inputs(
         "measurement_intervals_per_day": 288,
         "checks": {
             "capacity_measured": capacity > 0,
+            "usable_capacity_measured": capacity > 0,
+            "usable_capacity_excludes_reserved": capacity
+            <= int(filesystem_after["raw_capacity_bytes"]),
             "target_is_80_percent": target == int(capacity * 0.80),
             "relation_sizes_present": bool(database.get("relation_sizes")),
             "wal_present": "wal_bytes" in database,
@@ -3422,6 +3488,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                 for result in workload.get("results", [])
             )
             archived_bytes = sum(map(len, archive[3].objects.values()))
+            exact_bytes = int(workload.get("exact_bytes", archived_bytes))
             storage_runway = _runway_inputs(
                 filesystem_before,
                 filesystem_after,
@@ -3429,6 +3496,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                 relation_start,
                 spool,
                 archived_bytes,
+                measured_intervals=int(workload.get("measured_cycles", 1)),
             )
             samples.append(
                 {
@@ -3455,7 +3523,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         "novelty_rate": (
                             distinct_hashes / executed_count if executed_count else 0.0
                         ),
-                        "exact_bytes": archived_bytes,
+                        "exact_bytes": exact_bytes,
                         "archived_bytes": archived_bytes,
                         "pending_verification_count": measurements.get(
                             "pending_remote_verification"
