@@ -2079,15 +2079,24 @@ class Database:
                     ).fetchone()
                     assert profile_version is not None
                 profile_version_id = int(profile_version[0])
-                anchor_outcome = (
-                    self._record_season_anchor(connection, profile_version_id, profile)
-                    if created_profile
-                    else (
-                        "conflict"
-                        if profile.source_contract_state == "conflict"
-                        else "not_applicable"
+                if created_profile:
+                    anchor_outcome = self._record_season_anchor(
+                        connection, profile_version_id, profile
                     )
-                )
+                else:
+                    retained_anchor = connection.execute(
+                        "SELECT outcome FROM season_anchor_evidence WHERE profile_version_id = %s",
+                        (profile_version_id,),
+                    ).fetchone()
+                    anchor_outcome = (
+                        _text_value(retained_anchor[0])
+                        if retained_anchor is not None
+                        else (
+                            "conflict"
+                            if profile.source_contract_state == "conflict"
+                            else "not_applicable"
+                        )
+                    )
                 processing_id = self._record_processing_outcome(
                     connection,
                     claim,

@@ -306,6 +306,32 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(completed.stdout, "")
         self.assertIn("database-url", completed.stderr)
 
+    def test_runway_uses_measured_user_usable_capacity(self) -> None:
+        usage = runner._filesystem_usage(ROOT)
+        filesystem = os.statvfs(ROOT)
+        raw_capacity = int(filesystem.f_blocks * filesystem.f_frsize)
+        available = int(filesystem.f_bavail * filesystem.f_frsize)
+        expected_capacity = raw_capacity - max(
+            0, int(filesystem.f_bfree - filesystem.f_bavail) * filesystem.f_frsize
+        )
+
+        self.assertEqual(usage["raw_capacity_bytes"], raw_capacity)
+        self.assertEqual(usage["usable_capacity_bytes"], expected_capacity)
+        self.assertEqual(usage["available_bytes"], available)
+        runway = runner._runway_inputs(
+            usage,
+            usage,
+            {"relation_sizes": {}, "wal_bytes": 0},
+            {},
+            {},
+            0,
+        )
+        self.assertEqual(runway["filesystem_capacity_bytes"], expected_capacity)
+        self.assertEqual(runway["filesystem_raw_capacity_bytes"], raw_capacity)
+        self.assertEqual(runway["target_utilization"], 0.80)
+        self.assertEqual(runway["target_used_bytes"], int(expected_capacity * 0.80))
+        self.assertTrue(runway["checks"]["usable_capacity_measured"])
+
     def test_archive_probe_marker_parses_totals(self) -> None:
         marker = (
             '{"count":4,"head":5,"get":4,"put":1,'
@@ -351,6 +377,43 @@ class PerformanceRunnerTest(unittest.TestCase):
     "set CLASHLENS_TEST_DATABASE_URL for real PostgreSQL workload tests",
 )
 class PerformanceRunnerPostgresTest(unittest.TestCase):
+    def test_duplicate_exact_bytes_counts_each_variant_in_each_cycle(self) -> None:
+        import json
+
+        from domain_test_support import domain_database
+
+        original_profile_body = runner._profile_body
+        original_fixture_body = runner._duplicate_fixture_body
+        captured_lengths: list[int] = []
+
+        def varied_profile_body(tag: str, variant: int = 0) -> bytes:
+            source = json.loads(original_profile_body(tag, 0))
+            source["name"] += "x" * variant
+            return json.dumps(source, separators=(",", ":")).encode()
+
+        def capture_fixture_body(*args, **kwargs):
+            tag, body = original_fixture_body(*args, **kwargs)
+            captured_lengths.append(len(body))
+            return tag, body
+
+        runner._profile_body = varied_profile_body
+        runner._duplicate_fixture_body = capture_fixture_body
+        try:
+            with (
+                domain_database(
+                    os.environ["CLASHLENS_TEST_DATABASE_URL"], include_coordinator=True
+                ) as connection_info,
+                runner.archive_server() as archive,
+            ):
+                workload = runner._run_duplicate(connection_info, archive, 6, cycles=2)
+        finally:
+            runner._profile_body = original_profile_body
+            runner._duplicate_fixture_body = original_fixture_body
+
+        self.assertEqual(len(captured_lengths), 12)
+        self.assertNotEqual(captured_lengths[0], captured_lengths[1])
+        self.assertEqual(workload["exact_bytes"], sum(captured_lengths))
+
     def test_connection_execute_is_counted_once_by_cursor_hook(self) -> None:
         import psycopg
 

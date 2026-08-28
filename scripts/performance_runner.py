@@ -2526,6 +2526,7 @@ def _run_duplicate(
         profile_bodies: dict[tuple[str, int], bytes] = {}
         fixture_bodies: dict[str, bytes] = {}
         source_bytes: dict[str, int] = {}
+        exact_bytes = 0
         executed_endpoint_mix: dict[str, int] = dict.fromkeys(endpoint_mix, 0)
         for cycle in range(max(1, cycles)):
             jobs: list[int] = []
@@ -2545,6 +2546,7 @@ def _run_duplicate(
                             fixture_bodies,
                         )
                         source_bytes[endpoint] = len(body)
+                        exact_bytes += len(body)
                         jobs.append(
                             store_observation(
                                 connection_info,
@@ -2625,10 +2627,6 @@ def _run_duplicate(
             for endpoint, value in _duplicate_response_mix(count, endpoint_mix).items()
         }
         executed_counts = dict(executed_endpoint_mix)
-        exact_bytes = sum(
-            source_bytes.get(endpoint, 0) * value
-            for endpoint, value in executed_counts.items()
-        )
         steady = sorted(cycle_elapsed)[len(cycle_elapsed) // 2]
         return {
             "observations": count,
@@ -3071,17 +3069,23 @@ def _free_inodes(path: Path) -> int | None:
 
 
 def _filesystem_usage(path: Path) -> dict[str, Any]:
-    """Return measured capacity and use for the filesystem hosting ``path``."""
+    """Return measured user-usable capacity and use for ``path``."""
     filesystem = os.statvfs(path)
-    capacity = int(filesystem.f_blocks * filesystem.f_frsize)
+    raw_capacity = int(filesystem.f_blocks * filesystem.f_frsize)
     available = int(filesystem.f_bavail * filesystem.f_frsize)
-    used = max(0, capacity - int(filesystem.f_bfree * filesystem.f_frsize))
+    reserved = max(
+        0, int(filesystem.f_bfree - filesystem.f_bavail) * filesystem.f_frsize
+    )
+    usable_capacity = max(0, raw_capacity - reserved)
+    used = max(0, usable_capacity - available)
     return {
         "path": str(path),
-        "capacity_bytes": capacity,
+        "capacity_bytes": usable_capacity,
+        "raw_capacity_bytes": raw_capacity,
+        "usable_capacity_bytes": usable_capacity,
         "available_bytes": available,
         "used_bytes": used,
-        "used_ratio": used / capacity if capacity else 0.0,
+        "used_ratio": used / usable_capacity if usable_capacity else 0.0,
         "free_inodes": int(filesystem.f_favail),
     }
 
@@ -3105,7 +3109,7 @@ def _runway_inputs(
     wal_bytes = int(database["wal_bytes"])
     measured_growth = relation_growth + wal_bytes
     projected_daily_growth = measured_growth * 288
-    capacity = int(filesystem_after["capacity_bytes"])
+    capacity = int(filesystem_after["usable_capacity_bytes"])
     target = int(capacity * 0.80)
     headroom = max(0, target - int(filesystem_after["used_bytes"]))
     days = (
@@ -3116,6 +3120,10 @@ def _runway_inputs(
     return {
         "filesystem_path": filesystem_after["path"],
         "filesystem_capacity_bytes": capacity,
+        "filesystem_usable_capacity_bytes": capacity,
+        "filesystem_raw_capacity_bytes": int(
+            filesystem_after["raw_capacity_bytes"]
+        ),
         "target_utilization": 0.80,
         "target_used_bytes": target,
         "filesystem_used_bytes_before": int(filesystem_before["used_bytes"]),
@@ -3136,6 +3144,9 @@ def _runway_inputs(
         "measurement_intervals_per_day": 288,
         "checks": {
             "capacity_measured": capacity > 0,
+            "usable_capacity_measured": capacity > 0,
+            "usable_capacity_excludes_reserved": capacity
+            <= int(filesystem_after["raw_capacity_bytes"]),
             "target_is_80_percent": target == int(capacity * 0.80),
             "relation_sizes_present": bool(database.get("relation_sizes")),
             "wal_present": "wal_bytes" in database,
@@ -3476,6 +3487,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                 for result in workload.get("results", [])
             )
             archived_bytes = sum(map(len, archive[3].objects.values()))
+            exact_bytes = int(workload.get("exact_bytes", archived_bytes))
             storage_runway = _runway_inputs(
                 filesystem_before,
                 filesystem_after,
@@ -3509,7 +3521,7 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         "novelty_rate": (
                             distinct_hashes / executed_count if executed_count else 0.0
                         ),
-                        "exact_bytes": archived_bytes,
+                        "exact_bytes": exact_bytes,
                         "archived_bytes": archived_bytes,
                         "pending_verification_count": measurements.get(
                             "pending_remote_verification"
