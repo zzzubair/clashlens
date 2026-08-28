@@ -1,7 +1,7 @@
-import { Form, Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
+import { data, Form, Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import type { ArmyAnalytics, WebsiteErrorResponse } from "../lib/contracts";
+import type { WebsiteErrorResponse } from "../lib/contracts";
 
 const allowed = {
   lens: ["offense", "defense"],
@@ -27,11 +27,7 @@ const allowed = {
   ],
 } as const;
 
-export async function loader({ request }: LoaderFunctionArgs): Promise<{
-  analytics: ArmyAnalytics | null;
-  error: WebsiteErrorResponse | null;
-  seasonEmpty: { previousSeasonId: string | null } | null;
-}> {
+export async function loader({ request }: LoaderFunctionArgs) {
   const source = new URL(request.url).searchParams;
   const query = new URLSearchParams({
     season: source.get("season") ?? "current",
@@ -53,13 +49,58 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<{
     if (cause instanceof python.NoCompletedLegendDaysError) {
       // The current season has no completed Legend day; show the agreed empty
       // state and link to the previous season instead of serving its data.
-      return {
-        analytics: null,
-        error: null,
-        seasonEmpty: { previousSeasonId: cause.previousSeasonId },
-      };
+      return data(
+        {
+          analytics: null,
+          error: null,
+          seasonEmpty: { previousSeasonId: cause.previousSeasonId },
+        },
+        { status: 404 },
+      );
     }
     const { safeWebsiteError } = await import("../server/errors.server");
+    const pythonError = cause as { status?: unknown; payload?: unknown };
+    if (
+      (pythonError.status === 404 || pythonError.status === 422) &&
+      typeof pythonError.status === "number"
+    ) {
+      const payload = pythonError.payload;
+      const payloadError =
+        typeof payload === "object" && payload !== null
+          ? (payload as { error?: unknown }).error
+          : undefined;
+      const error: WebsiteErrorResponse =
+        payloadError === "invalid_army_analytics_selection" ||
+        payloadError === "invalid_request"
+          ? {
+              error: {
+                code: "invalid_input",
+                message: "Check the army analytics selection.",
+              },
+            }
+          : payloadError === "army_analytics_unavailable"
+            ? {
+                error: {
+                  code: "unavailable",
+                  message: "Army analytics are unavailable for the selected Legend days.",
+                },
+              }
+            : safeWebsiteError(cause);
+      if (
+        typeof payload === "object" &&
+        payload !== null &&
+        Array.isArray((payload as { affected_days?: unknown }).affected_days) &&
+        (payload as { affected_days: unknown[] }).affected_days.every((day) =>
+          Number.isSafeInteger(day),
+        )
+      ) {
+        error.error.affectedDays = (payload as { affected_days: number[] }).affected_days;
+      }
+      return data(
+        { analytics: null, error, seasonEmpty: null },
+        { status: pythonError.status },
+      );
+    }
     return { analytics: null, error: safeWebsiteError(cause), seasonEmpty: null };
   }
 }
@@ -150,7 +191,7 @@ export default function ArmyAnalyticsRoute() {
           ) : null}
         </section>
       ) : null}
-      {!analytics && !seasonEmpty ? (
+      {!analytics && !seasonEmpty && !error ? (
         <p>No completed Legend-day army publication is available for this selection.</p>
       ) : null}
       {analytics ? (
@@ -174,7 +215,8 @@ export default function ArmyAnalyticsRoute() {
             {analytics.selection.lens} · {analytics.selection.population}
           </p>
           <p>
-            Army states reconcile:{" "}
+            Army-state counts{" "}
+            {analytics.armyStatesSumConfirmed ? "reconcile" : "do not reconcile"}:{" "}
             {Object.entries(analytics.armyStates)
               .map(([state, count]) => `${state} ${count}`)
               .join(", ")}
@@ -210,6 +252,7 @@ export default function ArmyAnalyticsRoute() {
                   <th>Three-star rate</th>
                   <th>Average stars</th>
                   <th>Average destruction</th>
+                  <th>Unknown-excluded attacks</th>
                 </tr>
               </thead>
               <tbody>
@@ -228,6 +271,7 @@ export default function ArmyAnalyticsRoute() {
                     <td>{formatRate(row.threeStarRate)}</td>
                     <td>{row.averageStars.toFixed(2)}</td>
                     <td>{row.averageDestruction.toFixed(1)}%</td>
+                    <td>{row.unknownExcludedAttacks}</td>
                   </tr>
                 ))}
               </tbody>

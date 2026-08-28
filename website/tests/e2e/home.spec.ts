@@ -62,6 +62,10 @@ test("full live leaderboard presents only the Clash Lens rank and public fields"
   await expect(page.getByText("Official rank", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("Data provenance")).toHaveCount(0);
   await expect(page.getByText("actively tracked Legend I cohort")).toHaveCount(0);
+  await expect(page.getByText(/Generated 2026-08-05 18:05:00 UTC/)).toBeVisible();
+  await expect(
+    page.getByText(/source observations 2026-08-05 18:00:00 UTC/),
+  ).toBeVisible();
   const table = page.getByRole("table", { name: "Live leaderboard" });
   await expect(table.getByRole("link", { name: "View player →" })).toHaveCount(100);
 

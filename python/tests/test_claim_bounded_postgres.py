@@ -610,8 +610,7 @@ def test_declared_claim_priorities_match_enqueue_sites() -> None:
     declared = {
         int(raw.strip(" ()")) for raw in db_module._PYTHON_CLAIM_PRIORITIES.split(",")
     }
-    assert declared == {100}, (
-        "declared Python claim priorities must match every enqueue site "
-        "(db.py, api_db.py, and the Go collector handoff all use the "
-        "migration default priority 100)"
+    assert declared == {25, 100}, (
+        "declared Python claim priorities must match the live and explicit "
+        "backfill enqueue classes"
     )

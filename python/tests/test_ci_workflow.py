@@ -87,11 +87,15 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate() -> None
     ]
     assert commands == [
         "npm ci",
+        "npm audit --omit=dev",
+        "npm audit",
         "npm test",
         "npm run build:verify",
         "npx playwright install --with-deps chromium",
         "npm run test:e2e",
     ]
+    full_audit = next(step for step in job["steps"] if step.get("run") == "npm audit")
+    assert full_audit["continue-on-error"] is True
     assert all(
         step.get("working-directory") == "website"
         for step in job["steps"]

@@ -16,6 +16,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0010_boundary_publication_coordinator.sql"
   "$ROOT_DIR/deploy/migrations/0011_boundary_publication_contract.sql"
   "$ROOT_DIR/deploy/migrations/0012_parsed_content_dedup.sql"
+  "$ROOT_DIR/deploy/migrations/0013_army_backfill_priority.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -606,6 +607,10 @@ apply_pending_forward_migrations() {
         # image before installing its claim fence so no retained lease can
         # publish with the superseded interpretation after the migration.
         stop_all_worker_containers
+      elif (( version == 13 )); then
+        # The army backfill class changes claim ordering; drain old workers
+        # before installing the new priority fence.
+        stop_all_worker_containers
       fi
       apply_migration_file "$migration_file"
     fi
@@ -613,7 +618,7 @@ apply_pending_forward_migrations() {
 }
 
 # Detect the deployed contract explicitly. An empty or failing read means the
-# database has no contract yet; anything outside 1 through 4 is unsupported.
+# database has no contract yet; anything outside 1 through 5 is unsupported.
 contract_version() {
   local version
   version=$("$PODMAN_BIN" exec "$POSTGRES_CONTAINER" \
@@ -1424,9 +1429,9 @@ case "$command" in
       stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
       secret_rm clashlens-bridge-database-url
     elif [[ ("$version" == "2" || "$version" == "3" || "$version" == "4" || "$version" == "5") && "$fresh_bootstrap" != true ]]; then
-      # Migrations 0007, 0009, 0010, 0011, and 0012 change claim or
+      # Migrations 0007, 0009, 0010, 0011, 0012, and 0013 change claim or
       # publication contracts. Stop every old worker before applying any.
-      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9) || ! schema_migration_applied 10 || ! schema_migration_applied 11 || ! schema_migration_applied 12; then
+      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9) || ! schema_migration_applied 10 || ! schema_migration_applied 11 || ! schema_migration_applied 12 || ! schema_migration_applied 13; then
         stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
         stop_all_worker_containers
       fi

@@ -98,6 +98,29 @@ export default function TrackedLeaderboardRoute() {
             <time dateTime={daily.resetAt}>{formatTimestamp(daily.resetAt)}</time>
           </p>
         ) : null}
+        {leaderboard?.view === "live" ? (
+          <p>
+            Generated{" "}
+            <time dateTime={leaderboard.generatedAt}>
+              {formatTimestamp(leaderboard.generatedAt)}
+            </time>
+            {leaderboard.sourceObservations ? (
+              <>
+                {" · "}source observations{" "}
+                {leaderboard.sourceObservations.oldestObservedAt &&
+                leaderboard.sourceObservations.newestObservedAt ? (
+                  <>
+                    {formatTimestamp(leaderboard.sourceObservations.oldestObservedAt)}–
+                    {formatTimestamp(leaderboard.sourceObservations.newestObservedAt)}
+                  </>
+                ) : (
+                  "none"
+                )}
+                {" · "}stale: {leaderboard.sourceObservations.staleCount}
+              </>
+            ) : null}
+          </p>
+        ) : null}
         <nav aria-label="Leaderboard views" className="hero-actions">
           <Link className="button secondary" to={leaderboardUrl("live", 1)}>
             Live

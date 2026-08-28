@@ -20,9 +20,13 @@ export function Provenance({ provenance }: { provenance: DataProvenance }) {
       <div>
         <dt>Observed</dt>
         <dd>
-          <time dateTime={provenance.observedAt}>
-            {formatTimestamp(provenance.observedAt)}
-          </time>
+          {provenance.observedAt ? (
+            <time dateTime={provenance.observedAt}>
+              {formatTimestamp(provenance.observedAt)}
+            </time>
+          ) : (
+            "Unknown"
+          )}
         </dd>
       </div>
       <div>

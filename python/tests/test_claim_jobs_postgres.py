@@ -28,7 +28,9 @@ CURRENT_ANALYTICS_INPUT = {
 
 
 @contextmanager
-def _production_database(database_url: str) -> Iterator[str]:
+def _production_database(
+    database_url: str, *, include_army_migrations: bool = False
+) -> Iterator[str]:
     schema = f"claim_jobs_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
         admin.execute(f'CREATE SCHEMA "{schema}"')
@@ -63,6 +65,13 @@ def _production_database(database_url: str) -> Iterator[str]:
                     encoding="utf-8"
                 )
             )
+            if include_army_migrations:
+                for version in ("0006_provider_identities.sql", "0007_player_discovery.sql", "0008_public_army_analytics.sql"):
+                    connection.execute(
+                        (root / "deploy/migrations" / version).read_text(
+                            encoding="utf-8"
+                        )
+                    )
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -674,6 +683,52 @@ def test_legacy_analytics_job_with_relabeled_version_but_legacy_input_stays_pend
                     )
                     == "pending"
                 )
+        finally:
+            database.close()
+
+
+def test_explicit_live_class_outranks_aged_army_backfill(
+    database_url: str,
+) -> None:
+    with _production_database(
+        database_url, include_army_migrations=True
+    ) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            backfill_job_id = _insert_job(
+                connection,
+                work_type="redecode_army",
+                deduplication_key="historical-army-backfill",
+                input_json={"battle_ids": [1]},
+                priority=25,
+                analytics_rule_version="army-analytics-v2",
+            )
+            connection.execute(
+                "UPDATE python_processing_jobs "
+                "SET created_at = clock_timestamp() - interval '2 hours' "
+                "WHERE id = %s",
+                (backfill_job_id,),
+            )
+            live_observation_id = _insert_observation(
+                connection, occurrence_key="live-before-army-backfill"
+            )
+            live_job_id = _insert_job(
+                connection,
+                work_type="process_observation",
+                deduplication_key="live-before-army-backfill",
+                input_json={},
+                observation_id=live_observation_id,
+                priority=100,
+            )
+            connection.commit()
+
+        database = Database(connection_info)
+        try:
+            live_claim = database.claim_job(owner="live-before-backfill")
+            assert live_claim is not None and live_claim.job_id == live_job_id
+            assert database.scalar(
+                "SELECT status FROM python_processing_jobs WHERE id = %s",
+                (backfill_job_id,),
+            ) == "pending"
         finally:
             database.close()
 

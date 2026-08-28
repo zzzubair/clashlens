@@ -58,6 +58,8 @@ DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
 ANALYTICS_RULE_VERSION = "legend-analytics-v1"
 ARMY_ANALYTICS_RULE_VERSION = "army-analytics-v2"
 CONTRACT_VERSION = 5
+PYTHON_BACKFILL_PRIORITY = 25
+PYTHON_LIVE_PRIORITY = 100
 DEFAULT_POOL_SIZE = 4
 MAX_POOL_SIZE = 64
 
@@ -343,17 +345,11 @@ def _supported_claim_filter(
 # empty queue even while eligible work remains behind it.
 _CLAIM_CANDIDATE_LIMIT = 32
 
-# Priority classes that can appear in the Python queue, discovered from every
-# enqueue site: db.py and api_db.py inserts, the Go collector handoff, and
-# the migration column default all use priority 100. The claim statement
-# probes one indexed range per declared priority; a priority outside this
-# list is still claimed through the catch-all probe, so this list is a
-# fast-path declaration, not a claimability gate. Add a new enqueue priority
-# here (and to the catch-all partial index in migration 0003) so its claims
-# stay on the fast path. TestDeclaredClaimPrioritiesMatchEnqueueSites pins
-# this list to the enqueue sites.
-_PYTHON_CLAIM_PRIORITIES = "(100)"
-_PYTHON_CLAIM_PRIORITY_EXCLUSIONS = "100"
+# Priority classes that can appear in the Python queue. Backfill has its own
+# indexed class so its probe stays bounded without sharing live work's class.
+# The catch-all still claims other operator priorities.
+_PYTHON_CLAIM_PRIORITIES = f"({PYTHON_BACKFILL_PRIORITY}), ({PYTHON_LIVE_PRIORITY})"
+_PYTHON_CLAIM_PRIORITY_EXCLUSIONS = f"{PYTHON_BACKFILL_PRIORITY}, {PYTHON_LIVE_PRIORITY}"
 
 
 def _claim_select_statement(
@@ -387,7 +383,9 @@ def _claim_select_statement(
     params: dict[str, Any] = {**supported_params}
     if job_id is not None:
         params["job_id"] = job_id
-    score = """job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
+    score = f"""CASE WHEN job.priority = {PYTHON_BACKFILL_PRIORITY}
+        THEN 0 ELSE 1 END,
+        job.priority + floor(extract(epoch FROM (statement_timestamp() - job.created_at))
         / 60)::integer * 10"""
     due = """(job.state IN ('pending', 'waiting_retry', 'waiting_dependency')
             AND job.due_at <= statement_timestamp())

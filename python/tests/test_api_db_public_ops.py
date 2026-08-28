@@ -167,6 +167,13 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             assert [entry["tag"] for entry in live["entries"]] == ["#8PY", "#2PP"]
             assert live["kind"] == "live"
             assert live["ordering_rule_version"] == "tracked-trophies-md5-v1"
+            assert live["generated_at"] == NOW.isoformat()
+            assert live["source_observations"] == {
+                "oldest_observed_at": "2026-08-06T12:00:00+00:00",
+                "newest_observed_at": "2026-08-06T12:00:00+00:00",
+                "stale_count": 0,
+            }
+            assert live["provenance"]["observed_at"] == NOW.isoformat()
             assert analytics["population"] == "tracked_players"
             assert analytics["sample_size"] == 2
             assert analytics["classification_state"] == "unclassified"
@@ -596,6 +603,10 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
             assert first["page_count"] == second["page_count"] == 2
             assert first["has_next"] is True and second["has_previous"] is True
             assert first["provenance"]["freshness"] == "stale"
+            assert first["source_observations"]["stale_count"] == 1
+            assert first["source_observations"]["oldest_observed_at"] == "2026-08-06T11:44:59.500000+00:00"
+            assert first["source_observations"]["newest_observed_at"] == "2026-08-06T12:00:00+00:00"
+            assert first["provenance"]["observed_at"] == first["source_observations"]["newest_observed_at"]
             stale_entry = next(
                 entry
                 for entry in first["entries"] + second["entries"]

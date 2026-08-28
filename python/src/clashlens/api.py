@@ -106,12 +106,18 @@ class ExportBody(StrictBody):
 
 class ApiError(Exception):
     def __init__(
-        self, status_code: int, code: str, *, detail: str | None = None
+        self,
+        status_code: int,
+        code: str,
+        *,
+        detail: str | None = None,
+        affected_days: list[int] | None = None,
     ) -> None:
         super().__init__(code)
         self.status_code = status_code
         self.code = code
         self.detail = detail
+        self.affected_days = affected_days
 
 
 class RequestBodyTooLarge(ValueError):
@@ -160,9 +166,11 @@ def create_app(
 
     @app.exception_handler(ApiError)
     async def api_error_handler(_request: Request, error: ApiError) -> JSONResponse:
-        content: dict[str, str] = {"error": error.code}
+        content: dict[str, Any] = {"error": error.code}
         if error.detail:
             content["detail"] = error.detail
+        if error.affected_days is not None:
+            content["affected_days"] = error.affected_days
         return JSONResponse(status_code=error.status_code, content=content)
 
     @app.exception_handler(RequestValidationError)
@@ -174,9 +182,12 @@ def create_app(
     @app.exception_handler(Exception)
     async def safe_error_handler(_request: Request, error: Exception) -> JSONResponse:
         if isinstance(error, ApiError):
-            return JSONResponse(
-                status_code=error.status_code, content={"error": error.code}
-            )
+            content: dict[str, Any] = {"error": error.code}
+            if error.detail:
+                content["detail"] = error.detail
+            if error.affected_days is not None:
+                content["affected_days"] = error.affected_days
+            return JSONResponse(status_code=error.status_code, content=content)
         return JSONResponse(status_code=503, content={"error": "service_unavailable"})
 
     @app.middleware("http")
@@ -365,6 +376,7 @@ def create_app(
                 "army_analytics_unavailable",
                 detail="unavailable legend days: "
                 + ",".join(str(day) for day in unavailable.affected_days),
+                affected_days=unavailable.affected_days,
             ) from unavailable
         if result is None:
             raise ApiError(404, "army_analytics_unavailable")

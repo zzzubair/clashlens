@@ -543,6 +543,7 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
     !isOneOf(payload.kind, ["live", "frozen"] as const) ||
     (view === "live" ? payload.kind !== "live" : payload.kind !== "frozen") ||
     !Array.isArray(payload.entries) ||
+    !isUtcTimestamp(payload.generated_at) ||
     !isInteger(payload.tracked_population) ||
     !isInteger(payload.total_entries) ||
     !isInteger(payload.page) ||
@@ -551,7 +552,9 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
     typeof payload.has_previous !== "boolean" ||
     typeof payload.has_next !== "boolean" ||
     !isSnakeCoverage(payload.coverage) ||
-    !isSnakeProvenance(payload.provenance) ||
+    (payload.kind === "live"
+      ? !isLiveLeaderboardProvenance(payload.provenance, payload.source_observations)
+      : !isSnakeProvenance(payload.provenance)) ||
     !Array.isArray(payload.quality_states) ||
     !payload.quality_states.every((state) =>
       isOneOf(state, [
@@ -585,6 +588,8 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
     payload.entries.length !== expectedEntries
   )
     throw new PythonApiError(502, { error: "malformed" });
+  const sourceObservations =
+    payload.kind === "live" ? mapSourceObservations(payload.source_observations) : null;
   const entries = payload.entries.map((entry, index) => {
     if (
       !isRecord(entry) ||
@@ -689,11 +694,16 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
     page: payload.page,
     pageSize: payload.page_size,
     pageCount: payload.page_count,
+    generatedAt: payload.generated_at,
     hasPrevious: payload.has_previous,
     hasNext: payload.has_next,
     daily,
     coverage: mapSnakeCoverage(payload.coverage),
-    provenance: mapSnakeProvenance(payload.provenance),
+    provenance:
+      payload.kind === "live"
+        ? mapLiveLeaderboardProvenance(payload.provenance, payload.source_observations)
+        : mapSnakeProvenance(payload.provenance as Record<string, unknown>),
+    sourceObservations,
     qualityStates: payload.quality_states as TrackedLeaderboard["qualityStates"],
   };
 }
@@ -804,11 +814,14 @@ function mapBattleArmy(value: unknown): BattleArmy | null {
 function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
   if (
     !isRecord(payload) ||
+    payload.kind !== "army-analytics" ||
     !isRecord(payload.selection) ||
     !Array.isArray(payload.rows) ||
     !isInteger(payload.total_attacks) ||
     !isInteger(payload.usable_army_sample) ||
     !isRecord(payload.army_states) ||
+    !Object.values(payload.army_states).every(isInteger) ||
+    typeof payload.army_states_sum_confirmed !== "boolean" ||
     !isInteger(payload.unknown_affected_attacks) ||
     !isInteger(payload.unknown_component_occurrences) ||
     !isInteger(payload.perspective_disagreement_count) ||
@@ -881,6 +894,12 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       unknownExcludedAttacks: row.unknown_excluded_attacks,
     };
   });
+  const armyStates = Object.fromEntries(
+    Object.entries(payload.army_states).map(([state, count]) => {
+      if (!isInteger(count)) throw new PythonApiError(502, { error: "malformed" });
+      return [state, count];
+    }),
+  );
   return {
     kind: "army-analytics",
     selection: {
@@ -894,7 +913,8 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
     },
     totalAttacks: payload.total_attacks,
     usableArmySample: payload.usable_army_sample,
-    armyStates: payload.army_states as Record<string, number>,
+    armyStates,
+    armyStatesSumConfirmed: payload.army_states_sum_confirmed,
     unknownAffectedAttacks: payload.unknown_affected_attacks,
     unknownComponentOccurrences: payload.unknown_component_occurrences,
     perspectiveDisagreementCount: payload.perspective_disagreement_count,
@@ -1100,11 +1120,31 @@ function isSnakeProvenance(value: unknown): value is Record<string, unknown> {
   return (
     isRecord(value) &&
     isString(value.source) &&
-    isString(value.observed_at) &&
+    isUtcTimestamp(value.observed_at) &&
     isOneOf(value.freshness, ["fresh", "stale", "unknown"] as const) &&
     isOneOf(value.confidence, ["high", "partial", "uncertain"] as const) &&
     isOneOf(value.coverage, ["complete", "partial", "missing", "unknown"] as const) &&
     isString(value.version)
+  );
+}
+
+function isLiveLeaderboardProvenance(
+  value: unknown,
+  sourceObservations: unknown,
+): value is Record<string, unknown> {
+  if (isSnakeProvenance(value)) return true;
+  return (
+    isRecord(value) &&
+    value.observed_at === null &&
+    isString(value.source) &&
+    isOneOf(value.freshness, ["fresh", "stale", "unknown"] as const) &&
+    isOneOf(value.confidence, ["high", "partial", "uncertain"] as const) &&
+    isOneOf(value.coverage, ["complete", "partial", "missing", "unknown"] as const) &&
+    isString(value.version) &&
+    isRecord(sourceObservations) &&
+    sourceObservations.oldest_observed_at === null &&
+    sourceObservations.newest_observed_at === null &&
+    sourceObservations.stale_count === 0
   );
 }
 
@@ -1119,9 +1159,38 @@ function mapSnakeProvenance(value: Record<string, unknown>) {
   };
 }
 
+function mapLiveLeaderboardProvenance(value: unknown, sourceObservations: unknown) {
+  if (!isLiveLeaderboardProvenance(value, sourceObservations))
+    throw new PythonApiError(502, { error: "malformed" });
+  return {
+    source: value.source as string,
+    observedAt: value.observed_at as string | null,
+    freshness: value.freshness as "fresh" | "stale" | "unknown",
+    confidence: value.confidence as "high" | "partial" | "uncertain",
+    coverage: value.coverage as "complete" | "partial" | "missing" | "unknown",
+    version: value.version as string,
+  };
+}
+
 function mapSnakeProvenanceRequired(value: unknown) {
   if (!isSnakeProvenance(value)) throw new PythonApiError(502, { error: "malformed" });
   return mapSnakeProvenance(value);
+}
+
+function mapSourceObservations(value: unknown): TrackedLeaderboard["sourceObservations"] {
+  if (
+    !isRecord(value) ||
+    !(value.oldest_observed_at === null || isUtcTimestamp(value.oldest_observed_at)) ||
+    !(value.newest_observed_at === null || isUtcTimestamp(value.newest_observed_at)) ||
+    !isInteger(value.stale_count) ||
+    value.stale_count < 0
+  )
+    throw new PythonApiError(502, { error: "malformed" });
+  return {
+    oldestObservedAt: value.oldest_observed_at,
+    newestObservedAt: value.newest_observed_at,
+    staleCount: value.stale_count,
+  };
 }
 
 function mapSeason(value: unknown): PlayerPage["season"] {

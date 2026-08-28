@@ -18,12 +18,13 @@ export type WebsiteErrorResponse = {
     message: string;
     retryAfterSeconds?: number;
     fieldErrors?: Record<string, string>;
+    affectedDays?: number[];
   };
 };
 
 export interface DataProvenance {
   source: string;
-  observedAt: string;
+  observedAt: string | null;
   freshness: FreshnessState;
   confidence: ConfidenceState;
   coverage: CoverageState;
@@ -61,6 +62,7 @@ export interface TrackedLeaderboard {
   page: number;
   pageSize: number;
   pageCount: number;
+  generatedAt: string;
   hasPrevious: boolean;
   hasNext: boolean;
   daily:
@@ -79,6 +81,11 @@ export interface TrackedLeaderboard {
     note: string;
   };
   provenance: DataProvenance;
+  sourceObservations: {
+    oldestObservedAt: string | null;
+    newestObservedAt: string | null;
+    staleCount: number;
+  } | null;
   qualityStates: Array<
     | "missing"
     | "partial"
@@ -155,6 +162,7 @@ export interface ArmyAnalytics {
   totalAttacks: number;
   usableArmySample: number;
   armyStates: Record<string, number>;
+  armyStatesSumConfirmed: boolean;
   unknownAffectedAttacks: number;
   unknownComponentOccurrences: number;
   perspectiveDisagreementCount: number;
