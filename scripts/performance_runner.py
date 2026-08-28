@@ -2597,6 +2597,7 @@ def _explain_endpoint_statements(
     lens: str,
 ) -> list[dict[str, Any]]:
     import psycopg
+
     from clashlens.api_db import ARMY_ANALYTICS_QUERY_WORK_MEM
 
     plans: list[dict[str, Any]] = []
@@ -2729,8 +2730,6 @@ def _run_account_read_gate(
     overlap_counts: list[int] | None = None,
     overlap_lock: Lock | None = None,
 ) -> dict[str, Any]:
-    from clashlens.api import create_app
-    from clashlens.api_db import ApiDatabase
     from fastapi.testclient import TestClient
     from test_private_api import (
         DISCORD_CURRENT,
@@ -2741,6 +2740,9 @@ def _run_account_read_gate(
         json_body,
         signed_headers,
     )
+
+    from clashlens.api import create_app
+    from clashlens.api_db import ApiDatabase
 
     database = ApiDatabase(connection_info, max_size=1)
     keys = {
@@ -3878,9 +3880,10 @@ def _run_mixed(
     connection_info: str, archive: Any, live: int, backfill: int
 ) -> dict[str, Any]:
     import psycopg
-    from clashlens.worker import process_concurrently
     from domain_test_support import store_observation
     from psycopg.types.json import Jsonb
+
+    from clashlens.worker import process_concurrently
 
     started = time.perf_counter()
     cpu_start = time.process_time()
