@@ -42,7 +42,7 @@ DUPLICATE_ENDPOINT_MIX = {
     "global_player_rankings": 24,
 }
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
-ARTIFACT_SCHEMA_VERSION = 6
+ARTIFACT_SCHEMA_VERSION = 7
 AFFECTED_RELATIONS = (
     "players",
     "collector_jobs",
@@ -66,6 +66,9 @@ AFFECTED_RELATIONS = (
     "official_top200_attempts",
     "official_top200_versions",
     "official_top200_entries",
+    "battle_log_observation_rows",
+    "official_top200_version_entries",
+    "official_top200_attempt_entries",
 )
 STEP5_MODE = "army-analytics"
 STEP5_POPULATION = 12_500
@@ -881,6 +884,7 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
                     "fixture_bytes_by_endpoint",
                     "exact_bytes",
                     "contract",
+                    "canonical_content",
                 ),
                 f"{label} duplicate workload",
             )
@@ -888,6 +892,19 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
                 sample["workload"]["contract"],
                 ("expected_occurrences", "executed_occurrences", "endpoint_mix"),
                 f"{label} duplicate contract",
+            )
+            require(
+                sample["workload"]["canonical_content"],
+                (
+                    "parsed_payloads_by_endpoint",
+                    "profile_semantic_versions",
+                    "profile_occurrence_effects",
+                    "battle_canonical_rows",
+                    "battle_occurrence_rows",
+                    "ranking_canonical_rows",
+                    "ranking_occurrence_links",
+                ),
+                f"{label} canonical content",
             )
 
     if mode == STEP5_MODE:
@@ -2565,7 +2582,43 @@ def _run_duplicate(
                   AND status IN ('pending', 'leased', 'waiting_retry')
                 """
             ).rowcount
+            payload_rows = connection.execute(
+                """
+                SELECT endpoint, count(*)
+                FROM parsed_source_payloads
+                GROUP BY endpoint ORDER BY endpoint
+                """
+            ).fetchall()
+            profile_rows = connection.execute(
+                "SELECT count(*) FROM player_profile_versions"
+            ).fetchone()[0]
+            profile_effects = connection.execute(
+                "SELECT count(*) FROM player_profile_effects"
+            ).fetchone()[0]
+            battle_canonical_rows = connection.execute(
+                "SELECT count(*) FROM battle_source_rows WHERE parsed_payload_id IS NOT NULL"
+            ).fetchone()[0]
+            battle_occurrence_rows = connection.execute(
+                "SELECT count(*) FROM battle_log_observation_rows"
+            ).fetchone()[0]
+            ranking_canonical_rows = connection.execute(
+                "SELECT count(*) FROM official_top200_entries WHERE parsed_payload_id IS NOT NULL"
+            ).fetchone()[0]
+            ranking_occurrence_links = connection.execute(
+                "SELECT count(*) FROM official_top200_version_entries"
+            ).fetchone()[0]
             connection.commit()
+        canonical_content = {
+            "parsed_payloads_by_endpoint": {
+                _text(row[0]): int(row[1]) for row in payload_rows
+            },
+            "profile_semantic_versions": int(profile_rows),
+            "profile_occurrence_effects": int(profile_effects),
+            "battle_canonical_rows": int(battle_canonical_rows),
+            "battle_occurrence_rows": int(battle_occurrence_rows),
+            "ranking_canonical_rows": int(ranking_canonical_rows),
+            "ranking_occurrence_links": int(ranking_occurrence_links),
+        }
         cycle_count = max(1, cycles)
         response_counts = {
             endpoint: value * cycle_count
@@ -2597,6 +2650,7 @@ def _run_duplicate(
             "fixture_bytes_by_endpoint": source_bytes,
             "exact_bytes": exact_bytes,
             "official_api_traffic": {"requests": 0, "source": "committed fixtures"},
+            "canonical_content": canonical_content,
             "contract": {
                 "expected_occurrences": DUPLICATE_EXECUTION_CAP,
                 "executed_occurrences": executed_count,

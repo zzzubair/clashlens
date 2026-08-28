@@ -206,6 +206,10 @@ case "$verb" in
         printf '%s\n' 11 >>"$FAKE_STATE/schema_migrations"
         printf '4' >"$FAKE_STATE/contract_version"
       fi
+      if grep -q 'VALUES (12)' "$FAKE_STATE/stdin/exec-$n"; then
+        printf '%s\n' 12 >>"$FAKE_STATE/schema_migrations"
+        printf '5' >"$FAKE_STATE/contract_version"
+      fi
     fi
     if [[ "$*" == *"SELECT version FROM clash_lens_contract"* ]]; then
       if [[ -f "$FAKE_STATE/contract_version" ]]; then
@@ -525,7 +529,7 @@ deploy_fails "$BADBUDGET_DIR" "$BADBUDGET_ENV" 'CLASHLENS_API_CPUS' -- up
 printf 'ok: resource budgets are required, explicit, and validated before side effects\n'
 
 # ---------------------------------------------------------------------------
-# Scenario A0: v4 stop-migrate-restart wiring owns the shared rw,z spool.
+# Scenario A0: v5 stop-migrate-restart wiring owns the shared rw,z spool.
 # ---------------------------------------------------------------------------
 V3_DIR=$(new_scenario)
 V3_ENV="$V3_DIR/app.env"
@@ -541,7 +545,7 @@ deploy "$V3_DIR" "$V3_ENV" -- up >/dev/null
 V3_NORM="$V3_DIR/podman.norm.log"
 norm_log "$V3_DIR/podman.log" >"$V3_NORM"
 V3_RUN=$(grep '^run ' "$V3_NORM" | grep 'clashlens-collector:deployment' | tail -n 1)
-[[ "$V3_RUN" == *'CLASHLENS_SCHEMA_VERSION=4'* ]] || fail 'v4 collector contract was not wired'
+[[ "$V3_RUN" == *'CLASHLENS_SCHEMA_VERSION=5'* ]] || fail 'v5 collector contract was not wired'
 [[ "$V3_RUN" == *':/spool:rw,z'* ]] || fail 'collector spool mount is not shared rw,z'
 grep -q 'archive_instances' "$V3_DIR/state/stdin"/exec-* || fail 'migration 0009 was not applied in v3 flow'
 grep -q 'boundary_publication_generations' "$V3_DIR/state/stdin"/exec-* || fail 'migration 0010 was not applied in v3 flow'
@@ -549,7 +553,7 @@ grep -q 'INSERT INTO archive_instances' "$V3_DIR/state/stdin"/exec-* || fail 'ar
 grep -q 'chown -R 10001:10001' "$ROOT_DIR/deploy.sh" || fail 'collector spool ownership was not wired'
 log_lacks "$V3_NORM" 'clashlens-python-api.*:/spool' 'private API received the raw spool mount'
 log_lacks "$V3_NORM" 'clashlens-website.*:/spool' 'website received the raw spool mount'
-printf 'ok: v4 migration, ownership, rw,z mount, and runtime isolation are wired\n'
+printf 'ok: v5 migration, ownership, rw,z mount, and runtime isolation are wired\n'
 
 # ---------------------------------------------------------------------------
 # Scenario A: fresh up runs migrations -> roles -> required, without a bridge.
@@ -598,8 +602,8 @@ required_run=$(grep '^run ' "$FRESH_NORM" | grep 'clashlens-collector:deployment
 [[ -n "$required_run" ]] || fail 'required collector was not started after migration'
 [[ "$required_run" == *'CLASHLENS_SHARED_TRAFFIC_GATE_MODE=required'* ]] || \
   fail 'required collector did not receive the explicit required mode'
-[[ "$required_run" == *'CLASHLENS_SCHEMA_VERSION=4'* ]] || \
-  fail 'required collector did not receive contract version 4'
+[[ "$required_run" == *'CLASHLENS_SCHEMA_VERSION=5'* ]] || \
+  fail 'required collector did not receive contract version 5'
 grep -lq 'boundary_publication_generations' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'migration 0010 was not applied on a fresh database'
 
@@ -649,7 +653,7 @@ required_normalized=$required_run
   fail 'collector archive access key file setting is missing'
 [[ "$required_normalized" == *'--env CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key'* ]] || \
   fail 'collector archive secret key file setting is missing'
-[[ "$required_normalized" == *'--env CLASHLENS_SCHEMA_VERSION=4'* ]] || fail 'required collector schema version is missing'
+[[ "$required_normalized" == *'--env CLASHLENS_SCHEMA_VERSION=5'* ]] || fail 'required collector schema version is missing'
 [[ "$required_normalized" == *'--env CLASHLENS_SHARED_TRAFFIC_GATE_MODE=required'* ]] || fail 'required collector mode is missing'
 [[ "$required_normalized" == *'--env CLASHLENS_OFFICIAL_API_ORIGIN=https://api.clashofclans.com'* ]] || \
   fail 'collector did not receive the official API origin through its runtime setting'
@@ -815,7 +819,7 @@ FAKE_STATE="$V2_DIR/state" FAKE_PODMAN_LOG="$V2_DIR/podman.log" \
   fail 'idempotent v2 up removed a current Python worker'
 if rg -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
   second_up_stdin_count=$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f | wc -l)
-  [[ "$second_up_stdin_count" == "10" ]] || fail 'a recorded forward migration was replayed on second up'
+  [[ "$second_up_stdin_count" == "11" ]] || fail 'a recorded forward migration was replayed on second up'
 fi
 printf 'ok: up on v2 applies only missing forward migrations and starts the required collector\n'
 
@@ -847,13 +851,13 @@ deploy_fails "$INIT_V2_DIR" "$INIT_V2_ENV" 'already initialized' -- init
 printf 'ok: init applies 0001 only on an absent database\n'
 
 # ---------------------------------------------------------------------------
-# Scenario E: restart is a start-only v4 recovery path.
+# Scenario E: restart is a start-only v5 recovery path.
 # ---------------------------------------------------------------------------
 RESTART_DIR=$(new_scenario)
 RESTART_ENV="$RESTART_DIR/app.env"
 write_scenario_env "$RESTART_ENV" "$RESTART_DIR/keys"
-printf '4' >"$RESTART_DIR/state/contract_version"
-printf '11\n' >"$RESTART_DIR/state/schema_migrations"
+printf '5' >"$RESTART_DIR/state/contract_version"
+printf '12\n' >"$RESTART_DIR/state/schema_migrations"
 mkdir -p "$RESTART_DIR/state/images/localhost"
 : >"$RESTART_DIR/state/images/localhost/clashlens-collector:deployment"
 deploy "$RESTART_DIR" "$RESTART_ENV" -- restart >/dev/null
@@ -869,26 +873,26 @@ assert_no_sentinel_in_log "$RESTART_DIR/podman.log"
 RESTART_ABSENT_DIR=$(new_scenario)
 RESTART_ABSENT_ENV="$RESTART_ABSENT_DIR/app.env"
 write_scenario_env "$RESTART_ABSENT_ENV" "$RESTART_ABSENT_DIR/keys"
-deploy_fails "$RESTART_ABSENT_DIR" "$RESTART_ABSENT_ENV" 'restart requires contract version 4' -- restart
+deploy_fails "$RESTART_ABSENT_DIR" "$RESTART_ABSENT_ENV" 'restart requires contract version 5' -- restart
 
 RESTART_UNMIGRATED_DIR=$(new_scenario)
 RESTART_UNMIGRATED_ENV="$RESTART_UNMIGRATED_DIR/app.env"
 write_scenario_env "$RESTART_UNMIGRATED_ENV" "$RESTART_UNMIGRATED_DIR/keys"
-printf '4' >"$RESTART_UNMIGRATED_DIR/state/contract_version"
+printf '5' >"$RESTART_UNMIGRATED_DIR/state/contract_version"
 mkdir -p "$RESTART_UNMIGRATED_DIR/state/images/localhost"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-collector:deployment"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-python:deployment"
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 11 is required' -- restart
+  'forward migration 12 is required' -- restart
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 11 is required' -- python-start
+  'forward migration 12 is required' -- python-start
 
 UNKNOWN_DIR=$(new_scenario)
 UNKNOWN_ENV="$UNKNOWN_DIR/app.env"
 write_scenario_env "$UNKNOWN_ENV" "$UNKNOWN_DIR/keys"
-printf '5' >"$UNKNOWN_DIR/state/contract_version"
+printf '6' >"$UNKNOWN_DIR/state/contract_version"
 deploy_fails "$UNKNOWN_DIR" "$UNKNOWN_ENV" 'unsupported contract version' -- up
-printf 'ok: start-only paths require contract v4 and every forward migration\n'
+printf 'ok: start-only paths require contract v5 and every forward migration\n'
 
 # ---------------------------------------------------------------------------
 # Scenario F: python-up builds then starts API and worker; start paths never
@@ -967,7 +971,7 @@ done
   fail 'worker archive access key file setting is missing'
 [[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
   fail 'worker did not receive the configured lease, concurrency, and pool bounds'
-[[ "$worker_normalized" == *'ready --expected-contract-version 4'* ]] || \
+[[ "$worker_normalized" == *'ready --expected-contract-version 5'* ]] || \
   fail 'worker health does not use the ready seam'
 [[ "$worker_normalized" == *'--memory 384m'* && "$worker_normalized" == *'--pids-limit 256'* && "$worker_normalized" == *'--cpus 1.0'* ]] || \
   fail 'worker did not receive its explicit resource budget'
@@ -1004,8 +1008,8 @@ printf 'ok: Python start paths enable Top-200 only after a healthy compatible wo
 ROLLBACK_DIR=$(new_scenario)
 ROLLBACK_ENV="$ROLLBACK_DIR/app.env"
 write_scenario_env "$ROLLBACK_ENV" "$ROLLBACK_DIR/keys"
-printf '4' >"$ROLLBACK_DIR/state/contract_version"
-printf '11\n' >"$ROLLBACK_DIR/state/schema_migrations"
+printf '5' >"$ROLLBACK_DIR/state/contract_version"
+printf '12\n' >"$ROLLBACK_DIR/state/schema_migrations"
 mkdir -p "$ROLLBACK_DIR/state/networks" "$ROLLBACK_DIR/state/containers" "$ROLLBACK_DIR/state/images/localhost"
 mkdir -p "$ROLLBACK_DIR/state/networks/clashlens-private"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres"
@@ -1364,8 +1368,8 @@ REPLICA_MAX_DIR=$(new_scenario)
 REPLICA_MAX_ENV="$REPLICA_MAX_DIR/app.env"
 write_scenario_env "$REPLICA_MAX_ENV" "$REPLICA_MAX_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=16' >>"$REPLICA_MAX_ENV"
-printf '4' >"$REPLICA_MAX_DIR/state/contract_version"
-printf '11\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
+printf '5' >"$REPLICA_MAX_DIR/state/contract_version"
+printf '12\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_MAX_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1408,8 +1412,8 @@ write_scenario_env "$DEFAULTS_RAW" "$DEFAULTS_DIR/keys"
 grep -v -E 'CLASHLENS_WORKER_(CONCURRENCY|DATABASE_POOL_SIZE|ARCHIVE_POOL_SIZE)=' \
   "$DEFAULTS_RAW" >"$DEFAULTS_ENV"
 chmod 0600 "$DEFAULTS_ENV"
-printf '4' >"$DEFAULTS_DIR/state/contract_version"
-printf '11\n' >"$DEFAULTS_DIR/state/schema_migrations"
+printf '5' >"$DEFAULTS_DIR/state/contract_version"
+printf '12\n' >"$DEFAULTS_DIR/state/schema_migrations"
 mkdir -p "$DEFAULTS_DIR/state/networks/clashlens-private"
 mkdir -p "$DEFAULTS_DIR/state/containers/clashlens-postgres"
 : >"$DEFAULTS_DIR/state/containers/clashlens-postgres.running"
@@ -1429,8 +1433,8 @@ write_scenario_env "$CONCURRENCY_MAX_ENV" "$CONCURRENCY_MAX_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_CONCURRENCY=32' \
   'CLASHLENS_WORKER_DATABASE_POOL_SIZE=64' \
   'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=64' >>"$CONCURRENCY_MAX_ENV"
-printf '4' >"$CONCURRENCY_MAX_DIR/state/contract_version"
-printf '11\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
+printf '5' >"$CONCURRENCY_MAX_DIR/state/contract_version"
+printf '12\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres"
 : >"$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1494,8 +1498,8 @@ REPLICA_DIR=$(new_scenario)
 REPLICA_ENV="$REPLICA_DIR/app.env"
 write_scenario_env "$REPLICA_ENV" "$REPLICA_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=3' >>"$REPLICA_ENV"
-printf '4' >"$REPLICA_DIR/state/contract_version"
-printf '11\n' >"$REPLICA_DIR/state/schema_migrations"
+printf '5' >"$REPLICA_DIR/state/contract_version"
+printf '12\n' >"$REPLICA_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_DIR/state/containers/clashlens-postgres.running"
@@ -1548,7 +1552,7 @@ run_3=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worke
 [[ "$run_3" == *'worker --owner production-python-3 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
   fail 'replica 3 did not receive its unique owner'
 for run in "$run_1" "$run_2" "$run_3"; do
-  [[ "$run" == *'ready --expected-contract-version 4'* ]] || fail 'a replica health check lost the ready seam'
+  [[ "$run" == *'ready --expected-contract-version 5'* ]] || fail 'a replica health check lost the ready seam'
   [[ "$run" == *'--concurrency 20 --database-pool-size 5 --archive-pool-size 20'* ]] || \
     fail 'a replica did not receive the exact configured concurrency and pool sizes'
   [[ "$run" == *'--memory 384m'* && "$run" == *'--pids-limit 256'* && "$run" == *'--cpus 1.0'* ]] || \

@@ -66,6 +66,65 @@ class PerformanceRunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "schema_version"):
             runner.validate_artifact(artifact)
 
+    def test_duplicate_artifact_rejects_old_per_occurrence_shape(self) -> None:
+        database_keys = (
+            "wal_bytes",
+            "sql_statement_calls",
+            "application_sql_calls",
+            "pending_remote_verification",
+            "response_counts_by_endpoint",
+            "occurrence_counts_by_endpoint",
+            "relations",
+            "relation_sizes",
+            "relation_stats",
+            "affected_relations",
+            "queues",
+            "queue_age_seconds",
+            "queue_residue",
+        )
+        archive_keys = (
+            "get",
+            "get_bytes",
+            "head",
+            "conditional_put",
+            "put",
+            "put_bytes",
+            "conflicts",
+        )
+        sample = {
+            "database": dict.fromkeys(database_keys),
+            "archive_operations": dict.fromkeys(archive_keys),
+            "storage_runway": {
+                "measured_local_growth_bytes": 0,
+                "days_to_80_percent": None,
+                "checks": {},
+            },
+            "workload": {
+                "response_counts_by_endpoint": {},
+                "occurrence_counts_by_endpoint": {},
+                "fixture_bytes_by_endpoint": {},
+                "exact_bytes": 0,
+                "contract": {
+                    "expected_occurrences": 25_024,
+                    "executed_occurrences": 25_024,
+                    "endpoint_mix": {},
+                },
+            },
+        }
+        artifact = {
+            "schema_version": runner.ARTIFACT_SCHEMA_VERSION,
+            "mode": "duplicate-heavy",
+            "started_at": "now",
+            "finished_at": "now",
+            "provenance": {},
+            "collector_probe": None,
+            "samples": [sample],
+            "army_read_sample": None,
+        }
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "canonical_content"):
+            runner.validate_artifact(artifact)
+
     def test_army_mode_freezes_production_protocol(self) -> None:
         arguments = runner.parse_arguments(
             ["army-analytics", "--database-url", "unused"]

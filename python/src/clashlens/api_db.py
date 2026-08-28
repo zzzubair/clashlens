@@ -1245,7 +1245,8 @@ class ApiDatabase:
             row = connection.execute(
                 """
                 SELECT player.normalized_tag, player.active, player.eligibility_state,
-                       profile.name, profile.trophies, profile.observed_at,
+                       profile.name, profile.trophies,
+                       player.current_observed_at,
                        profile.source_http_status, profile.endpoint_version,
                        profile.schema_version, profile.parser_version,
                        profile.profile_json -> 'clan' ->> 'name'
@@ -1499,7 +1500,8 @@ class ApiDatabase:
             rows = connection.execute(
                 """
                 SELECT player.normalized_tag, profile.name, profile.trophies,
-                       profile.observed_at, player.eligibility_state,
+                       player.current_observed_at,
+                       player.eligibility_state,
                        profile.profile_json -> 'clan' ->> 'name'
                 FROM players AS player
                 JOIN player_profile_versions AS profile
@@ -1548,7 +1550,8 @@ class ApiDatabase:
                 """
                 WITH selected AS (
                     SELECT player.normalized_tag, profile.name, profile.trophies,
-                           profile.observed_at, player.eligibility_state,
+                           player.current_observed_at AS observed_at,
+                           player.eligibility_state,
                            profile.profile_json -> 'clan' ->> 'name' AS clan
                     FROM players AS player
                     JOIN player_profile_versions AS profile
@@ -2498,7 +2501,8 @@ class ApiDatabase:
                 """
                 SELECT count(*), avg(profile.trophies),
                        count(*) FILTER (
-                           WHERE profile.observed_at >= %s - make_interval(secs => %s)
+                           WHERE player.current_observed_at
+                                 >= %s - make_interval(secs => %s)
                        )
                 FROM players AS player
                 JOIN player_profile_versions AS profile
