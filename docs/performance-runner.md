@@ -34,11 +34,14 @@ pairs, and retains query plans and mixed-load evidence.
   workload in reset and correction modes is 1,000 facts; `--army-facts` accepts
   1 through 100,000. The `army-analytics` mode uses its fixed 5.6-million-fact
   workload and ignores the legacy `--army-facts` setting.
-- Duplicate-heavy mode distributes occurrences across ~200 tracked players
-  (~125 responses each) so duplicate writes match the production multi-player
-  shape instead of concentrating on one row. `--lanes` (1-64) sets the
-  processing concurrency used for both the PostgreSQL/archive pools and the
-  job executor. `--duplicate-cycles` (1-4) repeats the duplicate window over
+- Duplicate-heavy mode uses the fixed 25,024-response production mix: 12,500
+  `profile`, 12,500 `battle_log`, and 24 `global_player_rankings` responses.
+  Smaller requested populations are balanced across those endpoints so a
+  disposable PostgreSQL run exercises each path. Profile occurrences are
+  distributed across ~200 tracked players (~125 responses each) instead of
+  concentrating every write on one row. `--lanes` (1-64) sets the processing
+  concurrency used for both the PostgreSQL/archive pools and the job executor.
+  `--duplicate-cycles` (1-4) repeats the duplicate window over
   the same spool: cycle one carries the ~1% hash-novelty sample and later
   cycles are 100% verified-duplicate steady state. With more than one cycle
   the workload reports per-cycle elapsed times plus a conservative
@@ -92,9 +95,14 @@ forced-miss and whole-run swap/OOM deltas, and the four-lane 25,024-observation 
 reads. A p95, overlap, queue, or five-minute violation is retained in the JSON
 artifact and exits nonzero; no index or cache is added by the runner.
 
-Results include source/dirty state, runner and migration hashes,
-configuration, optional images, PostgreSQL WAL and relation sizes, SQL calls,
-queue rows and oldest active age, fact/publication counts, stage and endpoint
+Results use artifact schema 6 and include an `artifact_digest` SHA-256 over
+canonical JSON excluding that field. Artifacts are validated before they are
+printed or written; missing/invalid digests, current metrics, or older artifact
+versions fail the run. They include source/dirty state, runner and migration hashes,
+configuration,
+optional images, PostgreSQL WAL and relation sizes, per-relation DML and
+vacuum/analyze lag, SQL calls, queue rows and oldest active age, fixed endpoint
+counts, storage-runway inputs, fact/publication counts, stage and endpoint
 latency, archive operations, elapsed time, CPU, and RSS. SQL and WAL windows
 include workload seeding as well as production processing. Reset modes also
 assert the current per-player job, two-header, and quadratic entry counts rather

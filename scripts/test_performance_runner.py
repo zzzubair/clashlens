@@ -25,6 +25,47 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertTrue(runner.post_fix_source_ready())
         runner.validate_reset([12_500], True)
 
+    def test_duplicate_mode_uses_fixed_endpoint_mix(self) -> None:
+        self.assertEqual(runner.DUPLICATE_EXECUTION_CAP, 25_024)
+        self.assertEqual(
+            runner._duplicate_endpoint_mix(25_024),
+            {
+                "profile": 12_500,
+                "battle_log": 12_500,
+                "global_player_rankings": 24,
+            },
+        )
+        self.assertEqual(
+            runner._duplicate_endpoint_mix(6),
+            {"profile": 2, "battle_log": 2, "global_player_rankings": 2},
+        )
+
+    def test_artifact_validation_rejects_missing_and_old_metrics(self) -> None:
+        artifact = {
+            "schema_version": runner.ARTIFACT_SCHEMA_VERSION,
+            "mode": "duplicate-heavy",
+            "started_at": "now",
+            "finished_at": "now",
+            "provenance": {},
+            "collector_probe": None,
+            "samples": [
+                {"database": {}, "archive_operations": {}, "storage_runway": {}}
+            ],
+            "army_read_sample": None,
+        }
+        with self.assertRaisesRegex(ValueError, "digest"):
+            runner.validate_artifact(artifact)
+        artifact["artifact_digest"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "digest"):
+            runner.validate_artifact(artifact)
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        self.assertEqual(artifact["artifact_digest"], runner._artifact_digest(artifact))
+        with self.assertRaisesRegex(ValueError, "relation_sizes"):
+            runner.validate_artifact(artifact)
+        artifact["schema_version"] = 4
+        with self.assertRaisesRegex(ValueError, "schema_version"):
+            runner.validate_artifact(artifact)
+
     def test_army_mode_freezes_production_protocol(self) -> None:
         arguments = runner.parse_arguments(
             ["army-analytics", "--database-url", "unused"]
@@ -270,7 +311,7 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 str(SCRIPT),
                 mode,
                 "--duplicate-observations",
-                "2",
+                "6",
                 "--live-jobs",
                 "1",
                 "--backfill-jobs",
@@ -287,7 +328,7 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 stdout=subprocess.PIPE,
             )
             result = json.loads(completed.stdout)
-            self.assertEqual(result["schema_version"], 4)
+            self.assertEqual(result["schema_version"], runner.ARTIFACT_SCHEMA_VERSION)
             sample = result["samples"][0]
             self.assertGreater(sample["database"]["wal_bytes"], 0)
             self.assertGreater(sample["database"]["application_sql_calls"], 0)
@@ -358,9 +399,9 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
             if mode == "duplicate-heavy":
                 operations = sample["workload"]["collector_archive_operations"]
                 self.assertTrue(operations["executed"])
-                self.assertEqual(operations["count"], 2)
-                self.assertEqual(operations["head"], 2)
-                self.assertEqual(operations["get"], 1)
+                self.assertEqual(operations["count"], 6)
+                self.assertEqual(operations["head"], 6)
+                self.assertEqual(operations["get"], 5)
                 self.assertEqual(operations["raw_put"], 1)
                 self.assertEqual(operations["raw_get"], 1)
                 self.assertEqual(operations["raw_head"], 0)
@@ -368,6 +409,14 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 self.assertGreaterEqual(operations["operation_total_us"], 0)
                 self.assertGreaterEqual(operations["stage_put_us"], 0)
                 self.assertEqual(operations["put"], 1)
+                self.assertEqual(
+                    sample["workload"]["occurrence_counts_by_endpoint"],
+                    {"profile": 2, "battle_log": 2, "global_player_rankings": 2},
+                )
+                self.assertEqual(
+                    sample["database"]["response_counts_by_endpoint"],
+                    {"profile": 2, "battle_log": 2, "global_player_rankings": 2},
+                )
                 self.assertGreater(operations["elapsed_seconds"], 0)
             if mode in {"reset-boundary", "correction"}:
                 self.assertTrue(
