@@ -41,7 +41,7 @@ func startBoundaryAdmissionDatabase(t *testing.T) string {
 func TestResetSweepCapturesGenerationAtomicallyUnderConcurrentSchedulers(t *testing.T) {
 	databaseURL := startBoundaryAdmissionDatabase(t)
 	ctx := context.Background()
-	store, err := openStore(ctx, databaseURL, 4)
+	store, err := openStore(ctx, databaseURL, 5)
 	if err != nil {
 		t.Fatalf("openStore: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestResetSweepCapturesGenerationAtomicallyUnderConcurrentSchedulers(t *test
 func TestResetSweepBaselineRowsStayScopedToCurrentSweep(t *testing.T) {
 	databaseURL := startBoundaryAdmissionDatabase(t)
 	ctx := context.Background()
-	store, err := openStore(ctx, databaseURL, 4)
+	store, err := openStore(ctx, databaseURL, 5)
 	if err != nil {
 		t.Fatalf("openStore: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestResetSweepBaselineRowsStayScopedToCurrentSweep(t *testing.T) {
 func TestRegularAdmissionFailsClosedWithoutAdmissionRow(t *testing.T) {
 	databaseURL := startBoundaryAdmissionDatabase(t)
 	ctx := context.Background()
-	store, err := openStore(ctx, databaseURL, 4)
+	store, err := openStore(ctx, databaseURL, 5)
 	if err != nil {
 		t.Fatalf("openStore: %v", err)
 	}
@@ -269,7 +269,7 @@ func TestCollectorRoleCanCaptureGenerationOneMembership(t *testing.T) {
 func TestBoundaryAdmissionExcludesRegularWorkUntilSafeHandoff(t *testing.T) {
 	databaseURL := startBoundaryAdmissionDatabase(t)
 	ctx := context.Background()
-	store, err := openStore(ctx, databaseURL, 4)
+	store, err := openStore(ctx, databaseURL, 5)
 	if err != nil {
 		t.Fatalf("openStore: %v", err)
 	}
