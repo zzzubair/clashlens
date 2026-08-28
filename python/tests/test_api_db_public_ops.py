@@ -565,8 +565,20 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
                 seed_profile(database, tag, 6000)
             with database.pool.connection() as connection:
                 connection.execute(
-                    """UPDATE player_profile_versions SET observed_at = %s - interval '900.5 seconds'
-                       WHERE player_id = (SELECT id FROM players WHERE normalized_tag = %s)""",
+                    """
+                    WITH stale AS (
+                        UPDATE player_profile_versions
+                        SET observed_at = %s - interval '900.5 seconds'
+                        WHERE player_id = (
+                            SELECT id FROM players WHERE normalized_tag = %s
+                        )
+                        RETURNING player_id, observed_at
+                    )
+                    UPDATE players
+                    SET current_observed_at = stale.observed_at
+                    FROM stale
+                    WHERE players.id = stale.player_id
+                    """,
                     (NOW, tags[0]),
                 )
                 connection.commit()
