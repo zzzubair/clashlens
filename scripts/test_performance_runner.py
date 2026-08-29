@@ -569,6 +569,12 @@ def _valid_army_artifact() -> dict:
 
 
 class PerformanceRunnerTest(unittest.TestCase):
+    def test_step5_troop_keys_use_retained_lexical_order(self) -> None:
+        self.assertEqual(
+            list(runner.STEP5_TROOP_KEYS),
+            sorted(runner.STEP5_TROOP_KEYS),
+        )
+
     def test_known_bad_target_is_rejected_even_as_one_population(self) -> None:
         with self.assertRaisesRegex(ValueError, "post-fix"):
             runner.validate_reset([12_500], False)
