@@ -1782,7 +1782,14 @@ def _public_explain_payload(payload: Any) -> list[dict[str, Any]]:
         raise ValueError("army EXPLAIN payload is invalid")
     envelope = payload[0]
     if not set(envelope).issubset(
-        {"Plan", "Planning", "Planning Time", "Triggers", "Execution Time"}
+        {
+            "Plan",
+            "Planning",
+            "Planning Time",
+            "Triggers",
+            "JIT",
+            "Execution Time",
+        }
     ) or not {"Plan", "Planning Time", "Execution Time"}.issubset(envelope):
         raise ValueError("army EXPLAIN payload retains non-public fields")
     if "Triggers" in envelope and envelope["Triggers"] not in ([], None):
@@ -1842,6 +1849,8 @@ def _public_explain_payload(payload: Any) -> list[dict[str, Any]]:
 
     if "Planning" in envelope:
         discard_fact(envelope["Planning"], "army EXPLAIN planning")
+    if "JIT" in envelope:
+        discard_fact(envelope["JIT"], "army EXPLAIN JIT")
 
     return [
         {

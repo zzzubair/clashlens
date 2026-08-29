@@ -963,6 +963,44 @@ class PerformanceRunnerTest(unittest.TestCase):
         artifact["artifact_digest"] = runner._artifact_digest(artifact)
         runner.validate_artifact(artifact)
 
+    def test_pg18_jit_explain_metadata_is_discarded(self) -> None:
+        raw = [
+            {
+                "Plan": {
+                    "Node Type": "Aggregate",
+                    "Actual Rows": 1,
+                    "Actual Loops": 1,
+                },
+                "Planning Time": 1.0,
+                "JIT": {
+                    "Functions": 3,
+                    "Options": {
+                        "Inlining": False,
+                        "Optimization": False,
+                        "Expressions": True,
+                        "Deforming": True,
+                    },
+                    "Timing": {
+                        "Generation": 0.1,
+                        "Inlining": 0.0,
+                        "Optimization": 0.0,
+                        "Emission": 0.1,
+                    },
+                },
+                "Execution Time": 1.0,
+            }
+        ]
+
+        sanitized = runner._public_explain_payload(raw)
+
+        self.assertEqual(
+            set(sanitized[0]), {"Plan", "Planning Time", "Execution Time"}
+        )
+        self.assertNotIn("JIT", json.dumps(sanitized))
+
+        raw[0]["JIT"]["Functions"] = 4
+        self.assertNotIn("JIT", json.dumps(runner._public_explain_payload(raw)))
+
     def test_nested_reset_army_plan_is_sanitized_and_tampering_rejected(self) -> None:
         raw = [
             {
