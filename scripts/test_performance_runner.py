@@ -1001,6 +1001,76 @@ class PerformanceRunnerTest(unittest.TestCase):
         raw[0]["JIT"]["Functions"] = 4
         self.assertNotIn("JIT", json.dumps(runner._public_explain_payload(raw)))
 
+    def test_pg18_raw_condition_metadata_is_discarded(self) -> None:
+        expression = (
+            "(player_id = ANY ('{"
+            + ",".join(str(index) for index in range(1, 1200))
+            + "}'::bigint[]))"
+        )
+        raw = [
+            {
+                "Plan": {
+                    "Node Type": "Bitmap Heap Scan",
+                    "Actual Rows": 1,
+                    "Actual Loops": 1,
+                    "Recheck Cond": expression,
+                    "Index Cond": "https://internal.example/index/#P00001",
+                    "Filter": "tag=#P00001 secret=not-public",
+                    "Rows Removed by Index Recheck": 0,
+                    "Actual Total Time": -1.0,
+                },
+                "Planning Time": 1.0,
+                "Execution Time": 1.0,
+            }
+        ]
+
+        sanitized = runner._public_explain_payload(raw)
+
+        self.assertEqual(
+            set(sanitized[0]["Plan"]),
+            {"Node Type", "Actual Rows", "Actual Loops"},
+        )
+        rendered = json.dumps(sanitized)
+        for value in (
+            expression,
+            "https://internal.example/index/#P00001",
+            "tag=#P00001 secret=not-public",
+        ):
+            self.assertNotIn(value, rendered)
+
+    def test_discarded_explain_metadata_stays_bounded(self) -> None:
+        def raw_with(value: object) -> list[dict[str, object]]:
+            return [
+                {
+                    "Plan": {
+                        "Node Type": "Aggregate",
+                        "Actual Rows": 1,
+                        "Actual Loops": 1,
+                        "Raw Detail": value,
+                    },
+                    "Planning Time": 1.0,
+                    "Execution Time": 1.0,
+                }
+            ]
+
+        nested: object = "detail"
+        for _ in range(runner.MAX_EXPLAIN_DETAIL_DEPTH + 1):
+            nested = {"nested": nested}
+        cases = (
+            (nested, "too deep"),
+            ("x" * (runner.MAX_EXPLAIN_DETAIL_TEXT + 1), "invalid"),
+            (float("inf"), "invalid"),
+            (float("nan"), "invalid"),
+            ((1, 2), "invalid"),
+            (list(range(runner.MAX_EXPLAIN_DETAIL_SEQUENCE + 1)), "unbounded"),
+            ({str(index): index for index in range(65)}, "unbounded"),
+        )
+        for value, message in cases:
+            with self.subTest(value=type(value).__name__), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                runner._public_explain_payload(raw_with(value))
+
     def test_nested_reset_army_plan_is_sanitized_and_tampering_rejected(self) -> None:
         raw = [
             {

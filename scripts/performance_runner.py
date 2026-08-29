@@ -100,6 +100,14 @@ MAX_RETAINED_FAILURE_CODES = 64
 MAX_COMPLETION_ORDER = 256
 MAX_ARTIFACT_SAMPLES = 32
 MAX_RETAINED_SEQUENCE = 4096
+# Raw EXPLAIN metadata is validated only for safe traversal before discard.
+# Its backend-generated SQL expressions must not use public text semantics.
+MAX_EXPLAIN_DETAIL_DEPTH = 8
+MAX_EXPLAIN_DETAIL_ITEMS = 4096
+MAX_EXPLAIN_DETAIL_SEQUENCE = 4096
+MAX_EXPLAIN_DETAIL_TEXT = 16_384
+MAX_EXPLAIN_DETAIL_KEY = 256
+MAX_EXPLAIN_DETAIL_MAPPING = 64
 
 
 def _failure_codes(values: Any) -> list[str]:
@@ -1795,29 +1803,40 @@ def _public_explain_payload(payload: Any) -> list[dict[str, Any]]:
     if "Triggers" in envelope and envelope["Triggers"] not in ([], None):
         raise ValueError("army EXPLAIN triggers are not public facts")
 
+    discarded_items = 0
+
     def discard_fact(value: Any, label: str, depth: int = 0) -> None:
         """Bound raw EXPLAIN details while keeping them out of the artifact."""
-        if depth > 8:
+        nonlocal discarded_items
+        if depth > MAX_EXPLAIN_DETAIL_DEPTH:
             raise ValueError("army EXPLAIN detail is too deep")
+        discarded_items += 1
+        if discarded_items > MAX_EXPLAIN_DETAIL_ITEMS:
+            raise ValueError("army EXPLAIN detail is unbounded")
         if value is None or isinstance(value, bool):
             return
-        if isinstance(value, (int, float)):
-            _bounded_number(value, label)
+        if isinstance(value, int):
+            return
+        if isinstance(value, float):
+            if not math.isfinite(value):
+                raise ValueError(f"{label} is invalid")
             return
         if isinstance(value, str):
-            _bounded_text(value, label)
+            if len(value) > MAX_EXPLAIN_DETAIL_TEXT:
+                raise ValueError(f"{label} is invalid")
             return
         if isinstance(value, list):
-            if len(value) > MAX_RETAINED_SEQUENCE:
+            if len(value) > MAX_EXPLAIN_DETAIL_SEQUENCE:
                 raise ValueError("army EXPLAIN detail is unbounded")
             for index, child in enumerate(value):
                 discard_fact(child, f"{label}[{index}]", depth + 1)
             return
         if isinstance(value, dict):
-            if len(value) > 64:
+            if len(value) > MAX_EXPLAIN_DETAIL_MAPPING:
                 raise ValueError("army EXPLAIN detail is unbounded")
             for key, child in value.items():
-                _bounded_text(key, f"{label} key", limit=256)
+                if not isinstance(key, str) or len(key) > MAX_EXPLAIN_DETAIL_KEY:
+                    raise ValueError(f"{label} key is invalid")
                 discard_fact(child, f"{label}.{key}", depth + 1)
             return
         raise ValueError("army EXPLAIN detail is invalid")
@@ -1829,6 +1848,8 @@ def _public_explain_payload(payload: Any) -> list[dict[str, Any]]:
         if not {"Node Type", "Actual Rows", "Actual Loops"}.issubset(value):
             raise ValueError("army EXPLAIN plan retains non-public fields")
         for key, child in value.items():
+            if not isinstance(key, str) or len(key) > MAX_EXPLAIN_DETAIL_KEY:
+                raise ValueError("army EXPLAIN plan key is invalid")
             if key not in allowed:
                 discard_fact(child, f"army EXPLAIN {key}")
         node = {
