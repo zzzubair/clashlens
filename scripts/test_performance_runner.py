@@ -1698,13 +1698,17 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertIn("database-url", completed.stderr)
 
     def test_runway_uses_measured_user_usable_capacity(self) -> None:
-        usage = runner._filesystem_usage(ROOT)
         filesystem = os.statvfs(ROOT)
         raw_capacity = int(filesystem.f_blocks * filesystem.f_frsize)
         available = int(filesystem.f_bavail * filesystem.f_frsize)
         expected_capacity = raw_capacity - max(
             0, int(filesystem.f_bfree - filesystem.f_bavail) * filesystem.f_frsize
         )
+
+        # statvfs is live state; keep the helper and expected values on one
+        # snapshot so filesystem churn cannot move one block between reads.
+        with mock.patch.object(runner.os, "statvfs", return_value=filesystem):
+            usage = runner._filesystem_usage(ROOT)
 
         self.assertEqual(usage["raw_capacity_bytes"], raw_capacity)
         self.assertEqual(usage["usable_capacity_bytes"], expected_capacity)
