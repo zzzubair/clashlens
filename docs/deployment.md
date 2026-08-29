@@ -424,8 +424,9 @@ backup.
 
 `CLASHLENS_SPOOL_ROOT` is a private host directory mounted read-write only at
 `/spool` in the collector and Python worker containers. The root is owned by
-UID/GID `10001`, mode `0700`, and is mounted with Podman `:rw,z`; the private
-API and website receive no spool mount. The spool is bounded processing state,
+UID/GID `10001` inside both runtime containers through Podman `keep-id`, mode
+`0700`, and is mounted with Podman `:rw,z`; the host deployment user retains
+ownership. The private API and website receive no spool mount. The spool is bounded processing state,
 not a backup. Its `.locks/` directory contains 4,096 permanent hash stripes and
 `.control/` contains the fsync'd capacity ledger, operation records, and held
 reservations. Contract v3 applies migration `0009_raw_evidence.sql` only after

@@ -969,10 +969,10 @@ norm_log "$V3_DIR/podman.log" >"$V3_NORM"
 V3_RUN=$(grep '^run ' "$V3_NORM" | grep 'clashlens-collector:deployment' | tail -n 1)
 [[ "$V3_RUN" == *'CLASHLENS_SCHEMA_VERSION=5'* ]] || fail 'v5 collector contract was not wired'
 [[ "$V3_RUN" == *':/spool:rw,z'* ]] || fail 'collector spool mount is not shared rw,z'
+[[ "$V3_RUN" == *'--userns keep-id:uid=10001,gid=10001'* ]] || fail 'collector spool owner is not mapped through keep-id'
 grep -q 'archive_instances' "$V3_DIR/state/stdin"/exec-* || fail 'migration 0009 was not applied in v3 flow'
 grep -q 'boundary_publication_generations' "$V3_DIR/state/stdin"/exec-* || fail 'migration 0010 was not applied in v3 flow'
 grep -q 'INSERT INTO archive_instances' "$V3_DIR/state/stdin"/exec-* || fail 'archive instance contract was not provisioned'
-grep -q 'chown -R 10001:10001' "$ROOT_DIR/deploy.sh" || fail 'collector spool ownership was not wired'
 log_lacks "$V3_NORM" 'clashlens-python-api.*:/spool' 'private API received the raw spool mount'
 log_lacks "$V3_NORM" 'clashlens-website.*:/spool' 'website received the raw spool mount'
 printf 'ok: v5 migration, ownership, rw,z mount, and runtime isolation are wired\n'
@@ -1353,6 +1353,7 @@ worker_normalized=$(norm_log <<<"$worker_run")
 [[ "$worker_normalized" == *'--network clashlens-private'* ]] || fail 'worker did not use the private network'
 [[ "$worker_normalized" != *'--publish'* ]] || fail 'worker published a host port'
 [[ "$worker_normalized" == *':/spool:rw,z'* ]] || fail 'worker spool mount is not shared rw,z'
+[[ "$worker_normalized" == *'--userns keep-id:uid=10001,gid=10001'* ]] || fail 'worker spool owner is not mapped through keep-id'
 for setting in CLASHLENS_ARCHIVE_INSTANCE_ID CLASHLENS_ARCHIVE_MARKER_KEY CLASHLENS_ARCHIVE_MARKER_HASH CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION CLASHLENS_SPOOL_MAX_BYTES CLASHLENS_SPOOL_MAX_OBJECTS CLASHLENS_SPOOL_FREE_SPACE_FLOOR CLASHLENS_SPOOL_FREE_INODE_FLOOR; do
   [[ "$worker_normalized" == *"--env $setting"* ]] || fail "worker did not receive $setting"
 done

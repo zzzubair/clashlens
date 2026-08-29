@@ -552,7 +552,6 @@ ensure_spool_root() {
   [[ ! -L "$CLASHLENS_SPOOL_ROOT" ]] || die "CLASHLENS_SPOOL_ROOT must not be a symlink"
   mkdir -p "$CLASHLENS_SPOOL_ROOT/.control/reservations" "$CLASHLENS_SPOOL_ROOT/.locks" "$CLASHLENS_SPOOL_ROOT/tmp" "$CLASHLENS_SPOOL_ROOT/sha256"
   chmod 700 "$CLASHLENS_SPOOL_ROOT" "$CLASHLENS_SPOOL_ROOT/.control" "$CLASHLENS_SPOOL_ROOT/.control/reservations" "$CLASHLENS_SPOOL_ROOT/.locks" "$CLASHLENS_SPOOL_ROOT/tmp" "$CLASHLENS_SPOOL_ROOT/sha256"
-  chown -R 10001:10001 "$CLASHLENS_SPOOL_ROOT" 2>/dev/null || true
 }
 
 ensure_postgres() {
@@ -1030,6 +1029,7 @@ collector_run() {
   "$PODMAN_BIN" run \
     --detach \
     --name "$container" \
+    --userns "keep-id:uid=10001,gid=10001" \
     --network "$NETWORK_NAME" \
     "${env_args[@]}" \
     --volume "$CLASHLENS_SPOOL_ROOT:/spool:rw,z" \
@@ -1404,6 +1404,7 @@ start_python_workers() {
     "$PODMAN_BIN" run \
       --detach \
       --name "${PYTHON_WORKER_CONTAINER}-${i}" \
+      --userns "keep-id:uid=10001,gid=10001" \
       --network "$NETWORK_NAME" \
       "${env_args[@]}" \
       --volume "$CLASHLENS_SPOOL_ROOT:/spool:rw,z" \
