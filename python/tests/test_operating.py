@@ -12,6 +12,7 @@ from clashlens.operating import (
     RELATION_NAMES,
     ApiMetrics,
     WorkerMetrics,
+    api_route,
     build_operating_snapshot,
     database_pool_health,
     write_private_snapshot,
@@ -281,6 +282,21 @@ def _artifact(**changes: object) -> dict[str, object]:
     return artifact
 
 
+@pytest.mark.parametrize(
+    ("path", "route"),
+    (
+        ("/v1/refreshes/refresh-id", "refresh_status"),
+        ("/v1/account/saved-tags", "saved_players"),
+        ("/v1/account/saved-tags/%232PP", "saved_players"),
+        ("/v1/players/%232PP/verifytoken", "verification"),
+    ),
+)
+def test_api_route_uses_shipped_bounded_route_categories(
+    path: str, route: str
+) -> None:
+    assert api_route(path) == route
+
+
 def test_worker_metrics_are_process_scoped_and_bounded(tmp_path) -> None:
     metrics = WorkerMetrics(
         process_id="00000000-0000-4000-8000-000000000081",
@@ -465,6 +481,23 @@ def test_missing_required_fact_and_dynamic_stage_exit_two_without_source_echo() 
     )
     assert result["check"]["exit_code"] == 2
     assert "SECRET" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("invalid_migration", (None, [], "malformed", 1))
+def test_non_mapping_migration_fact_is_bounded_indeterminate(
+    invalid_migration: object,
+) -> None:
+    database = _database()
+    database["migrations"][0] = invalid_migration
+
+    result = _snapshot(database=database)
+
+    assert result["check"] == {
+        "status": "indeterminate",
+        "exit_code": 2,
+        "reasons": ["required_fact_invalid"],
+    }
+    assert result["database"] is None
 
 
 def test_pool_health_keeps_measures_and_zero_fills_only_counters() -> None:

@@ -360,9 +360,11 @@ def api_route(path: str) -> str:
         return "operator"
     if path == "/v1/players/search":
         return "player_search"
+    if path.startswith("/v1/players/") and path.endswith("/verifytoken"):
+        return "verification"
     if path.startswith("/v1/players/") and path.endswith("/refresh"):
         return "player_refresh"
-    if path.startswith("/v1/refresh/"):
+    if path.startswith("/v1/refreshes/"):
         return "refresh_status"
     if path.startswith("/v1/players/"):
         return "player_read"
@@ -378,7 +380,7 @@ def api_route(path: str) -> str:
         return "basic_analytics"
     if path.startswith("/v1/users/"):
         return "public_user"
-    if path.startswith("/v1/account/saved-players"):
+    if path.startswith("/v1/account/saved-tags"):
         return "saved_players"
     if path.startswith("/v1/account/groups"):
         return "groups"
@@ -986,9 +988,9 @@ def _validate_database(value: Any) -> None:
     _timestamp(database["captured_at"])
     _validate_database_identity(database["identity"])
     migrations = database["migrations"]
-    if not isinstance(migrations, list) or [item.get("version") for item in migrations] != list(
-        range(1, 14)
-    ):
+    if not isinstance(migrations, list) or any(
+        not isinstance(item, dict) for item in migrations
+    ) or [item.get("version") for item in migrations] != list(range(1, 14)):
         raise OperatingFactsError("required_fact_invalid")
     for item in migrations:
         _exact_keys(item, ("version", "applied_at"))

@@ -35,4 +35,24 @@ def test_operating_database_snapshot_executes_against_current_migrations(
     assert [item["version"] for item in snapshot["migrations"]] == list(range(1, 14))
     assert snapshot["identity"]["system_identifier"].isdigit()
     assert snapshot["identity"]["database_oid"] > 0
+    assert snapshot["queues"]["collector"]["by_status"] == {
+        "pending": 0,
+        "leased": 0,
+        "waiting_retry": 0,
+        "waiting_dependency": 0,
+        "complete": 0,
+        "failed": 0,
+        "cancelled": 0,
+    }
+    assert snapshot["queues"]["collector"]["oldest_due_seconds"] is None
+    assert snapshot["queues"]["python"]["by_status"] == {
+        "pending": 0,
+        "leased": 0,
+        "waiting_retry": 0,
+        "waiting_dependency": 0,
+        "complete": 0,
+        "failed": 0,
+        "cancelled": 0,
+    }
+    assert snapshot["queues"]["python"]["oldest_due_seconds"] is None
     assert snapshot["boundary"] == {"active_count": 0, "artifacts": []}

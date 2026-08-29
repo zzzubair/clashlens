@@ -112,7 +112,8 @@ collector_queue AS MATERIALIZED (
         count(*) FILTER (
             WHERE status = 'leased' AND lease_expires_at <= clock.captured_at
         )::bigint AS expired_recoverable_leases
-    FROM collector_jobs CROSS JOIN snapshot_clock AS clock
+    FROM snapshot_clock AS clock
+    LEFT JOIN collector_jobs AS job ON true
     GROUP BY clock.captured_at
 ),
 python_queue AS MATERIALIZED (
@@ -142,7 +143,8 @@ python_queue AS MATERIALIZED (
             WHERE status = 'leased' AND lease_expires_at <= clock.captured_at
               AND attempt_count >= max_attempts
         )::bigint AS expired_unrecoverable_leases
-    FROM python_processing_jobs CROSS JOIN snapshot_clock AS clock
+    FROM snapshot_clock AS clock
+    LEFT JOIN python_processing_jobs AS job ON true
     GROUP BY clock.captured_at
 ),
 retained_failures AS MATERIALIZED (
