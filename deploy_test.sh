@@ -1011,6 +1011,10 @@ grep -lq 'ALTER ROLE clashlens_python_api' "$FRESH_DIR/state/stdin"/exec-* 2>/de
   fail 'api role password was not configured through psql stdin'
 role_stdin=$(grep -l 'ALTER ROLE clashlens_collector WITH LOGIN PASSWORD' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null | head -n 1)
 [[ -n "$role_stdin" ]] || fail 'could not locate the role configuration psql stdin'
+grep -Fq 'ALTER FUNCTION clashlens_set_python_job_source_contract() SECURITY DEFINER SET search_path = pg_catalog, public' "$role_stdin" || \
+  fail 'runtime-role setup did not protect the source-contract trigger'
+grep -Fq 'REVOKE ALL ON FUNCTION clashlens_set_python_job_source_contract() FROM PUBLIC' "$role_stdin" || \
+  fail 'runtime-role setup left the source-contract trigger executable by PUBLIC'
 grep -q 'collector-role-password-0123456789' "$role_stdin" || \
   fail 'collector role password did not reach psql stdin'
 grep -q 'worker-role-password-0123456789abcd' "$role_stdin" || \

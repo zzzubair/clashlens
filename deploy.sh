@@ -779,6 +779,8 @@ configure_runtime_roles() {
   sql+=" ALTER ROLE $API_ROLE WITH LOGIN PASSWORD '$CLASHLENS_API_DB_PASSWORD';"
   sql+=" REVOKE ALL PRIVILEGES ON TABLE python_processing_jobs FROM $WORKER_ROLE;"
   sql+=" GRANT SELECT (id, lease_generation) ON TABLE python_processing_jobs TO $WORKER_ROLE;"
+  sql+=" ALTER FUNCTION clashlens_set_python_job_source_contract() SECURITY DEFINER SET search_path = pg_catalog, public;"
+  sql+=" REVOKE ALL ON FUNCTION clashlens_set_python_job_source_contract() FROM PUBLIC;"
   printf '%s\n' "$sql" | "$PODMAN_BIN" exec --interactive "$POSTGRES_CONTAINER" \
     psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"
 }
