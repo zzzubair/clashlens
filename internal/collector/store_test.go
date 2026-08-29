@@ -211,6 +211,32 @@ func TestRequiredTrafficGateRejectsVersionOneContract(t *testing.T) {
 	}
 }
 
+func TestRequiredTrafficGateAcceptsCurrentContractVersion(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx := context.Background()
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect to test PostgreSQL: %v", err)
+	}
+	if _, err := connection.Exec(ctx, `UPDATE clash_lens_contract SET version = 5 WHERE singleton`); err != nil {
+		_ = connection.Close(ctx)
+		t.Fatalf("set current contract version: %v", err)
+	}
+	if err := connection.Close(ctx); err != nil {
+		t.Fatalf("close test PostgreSQL connection: %v", err)
+	}
+
+	store, err := openStore(ctx, databaseURL, 5)
+	if err != nil {
+		t.Fatalf("open current-contract store: %v", err)
+	}
+	t.Cleanup(store.close)
+
+	if err := store.validateTrafficGateMode(ctx, requiredTrafficGateMode); err != nil {
+		t.Fatalf("required traffic-gate rejected current contract version: %v", err)
+	}
+}
+
 func TestBridgeTrafficGateAllowsVersionOneContract(t *testing.T) {
 	databaseURL := startContractDatabase(t)
 	store, err := openStore(context.Background(), databaseURL, 2)
