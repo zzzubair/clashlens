@@ -1638,6 +1638,36 @@ _ARMY_MEMORY_KEYS = frozenset(
 _ARMY_MEMORY_DELTA_KEYS = frozenset(_ARMY_MEMORY_KEYS - {"host_swap_used_bytes", "process_cgroup_available", "database_cgroup_available"})
 
 
+def _army_forced_miss_failures(
+    seconds: float,
+    before: dict[str, int],
+    after: dict[str, int],
+    delta: dict[str, int],
+) -> list[str]:
+    """Derive the bounded forced-miss failure codes from its three gates."""
+    failures: list[str] = []
+    if seconds >= STEP5_FORCED_MISS_TARGET_SECONDS:
+        failures.append("step5_forced_miss_exceeded")
+    if any(
+        pressure["process_cgroup_available"] != 1
+        or pressure["database_cgroup_available"] != 1
+        for pressure in (before, after)
+    ):
+        failures.append("step5_cgroup_unavailable")
+    if any(delta.values()):
+        failures.append("step5_memory_pressure_increased")
+    return failures
+
+
+def _army_forced_miss_passed(
+    seconds: float,
+    before: dict[str, int],
+    after: dict[str, int],
+    delta: dict[str, int],
+) -> bool:
+    return not _army_forced_miss_failures(seconds, before, after, delta)
+
+
 def _bounded_int(value: Any, label: str, *, positive: bool = False) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ValueError(f"{label} is invalid")
@@ -1726,14 +1756,14 @@ def _army_query_identity(sql: Any) -> str:
         return "army_analytics.completed_days"
     if "FROM LEADERBOARD_SNAPSHOTS" in normalized and "DISTINCT ON" in normalized:
         return "army_analytics.published_snapshots"
+    if "FROM LEADERBOARD_SNAPSHOT_ENTRIES" in normalized and "NOT (FRESHNESS" in normalized:
+        return "army_analytics.cohort_quality"
     if "GROUP BY PLAYER_ID HAVING COUNT(DISTINCT SNAPSHOT_ID)" in normalized:
         return "army_analytics.streak_members"
     if "SELECT DISTINCT PLAYER_ID" in normalized and "FROM LEADERBOARD_SNAPSHOT_ENTRIES" in normalized:
         return "army_analytics.streak_candidates"
     if "FROM UNNEST" in normalized and "RANKED_DAY_VERSIONS" in normalized:
         return "army_analytics.streak_shield_state"
-    if "FROM LEADERBOARD_SNAPSHOT_ENTRIES" in normalized and "NOT (FRESHNESS" in normalized:
-        return "army_analytics.cohort_quality"
     if "FROM LEADERBOARD_SNAPSHOT_ENTRIES" in normalized and "POSITION BETWEEN" in normalized:
         return "army_analytics.rank_members"
     if "BATTLE_TIME_TROPHIES IS NULL" in normalized:
@@ -2184,13 +2214,11 @@ def _validate_army_selection(value: Any, spec: dict[str, Any], label: str) -> No
     _bounded_number(value.get("forced_miss_seconds"), f"{label}.forced_miss_seconds")
     _bounded_number(value.get("forced_miss_target_seconds"), f"{label}.forced_miss_target_seconds")
     _validate_memory_facts(value.get("forced_miss_memory_before"), value.get("forced_miss_memory_after"), value.get("forced_miss_memory_delta"), label)
-    forced_passed = (
-        value["forced_miss_seconds"] < STEP5_FORCED_MISS_TARGET_SECONDS
-        and value["forced_miss_memory_before"]["process_cgroup_available"] == 1
-        and value["forced_miss_memory_after"]["process_cgroup_available"] == 1
-        and value["forced_miss_memory_before"]["database_cgroup_available"] == 1
-        and value["forced_miss_memory_after"]["database_cgroup_available"] == 1
-        and not any(value["forced_miss_memory_delta"].values())
+    forced_passed = _army_forced_miss_passed(
+        value["forced_miss_seconds"],
+        value["forced_miss_memory_before"],
+        value["forced_miss_memory_after"],
+        value["forced_miss_memory_delta"],
     )
     if value.get("forced_miss_passed") is not forced_passed:
         raise ValueError(f"{label}.forced_miss_passed is invalid")
@@ -2392,12 +2420,14 @@ def _validate_army_semantics(
     _validate_memory_facts(value["memory_pressure_before"], value["memory_pressure_after"], value["memory_pressure_delta"], label)
     expected_failures: list[str] = []
     for selection in selections:
-        if not selection["forced_miss_passed"]:
-            expected_failures.append("step5_forced_miss_exceeded")
-        if selection["forced_miss_memory_before"]["process_cgroup_available"] != 1 or selection["forced_miss_memory_after"]["process_cgroup_available"] != 1 or selection["forced_miss_memory_before"]["database_cgroup_available"] != 1 or selection["forced_miss_memory_after"]["database_cgroup_available"] != 1:
-            expected_failures.append("step5_cgroup_unavailable")
-        if any(selection["forced_miss_memory_delta"].values()):
-            expected_failures.append("step5_memory_pressure_increased")
+        expected_failures.extend(
+            _army_forced_miss_failures(
+                selection["forced_miss_seconds"],
+                selection["forced_miss_memory_before"],
+                selection["forced_miss_memory_after"],
+                selection["forced_miss_memory_delta"],
+            )
+        )
         if not selection["target_passed"]:
             expected_failures.append("step5_p95_exceeded")
     expected_failures.extend(value["mixed_load"]["hard_failures"])
@@ -3777,13 +3807,11 @@ def _measure_army_pair(
             "requests": requests,
             "forced_miss_seconds": forced_miss_seconds,
             "forced_miss_target_seconds": STEP5_FORCED_MISS_TARGET_SECONDS,
-            "forced_miss_passed": (
-                forced_miss_seconds < STEP5_FORCED_MISS_TARGET_SECONDS
-                and pressure_before["process_cgroup_available"] == 1
-                and pressure_after["process_cgroup_available"] == 1
-                and pressure_before["database_cgroup_available"] == 1
-                and pressure_after["database_cgroup_available"] == 1
-                and not any(pressure_delta.values())
+            "forced_miss_passed": _army_forced_miss_passed(
+                forced_miss_seconds,
+                pressure_before,
+                pressure_after,
+                pressure_delta,
             ),
             "forced_miss_memory_before": pressure_before,
             "forced_miss_memory_after": pressure_after,
@@ -5462,22 +5490,16 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
             if row["status"]
             in {"pending", "leased", "waiting_retry", "waiting_dependency"}
         ]
-        hard_failures = [
-            "step5_forced_miss_exceeded"
-            for item in reads
-            if item["forced_miss_seconds"] >= STEP5_FORCED_MISS_TARGET_SECONDS
-        ]
+        hard_failures: list[str] = []
         for item in reads:
-            before = item["forced_miss_memory_before"]
-            after = item["forced_miss_memory_after"]
-            if any(
-                pressure["process_cgroup_available"] != 1
-                or pressure["database_cgroup_available"] != 1
-                for pressure in (before, after)
-            ):
-                hard_failures.append("step5_cgroup_unavailable")
-            elif any(item["forced_miss_memory_delta"].values()):
-                hard_failures.append("step5_memory_pressure_increased")
+            hard_failures.extend(
+                _army_forced_miss_failures(
+                    item["forced_miss_seconds"],
+                    item["forced_miss_memory_before"],
+                    item["forced_miss_memory_after"],
+                    item["forced_miss_memory_delta"],
+                )
+            )
         hard_failures.extend(
             "step5_p95_exceeded"
             for item in reads

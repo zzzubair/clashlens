@@ -897,6 +897,38 @@ class PerformanceRunnerTest(unittest.TestCase):
         plan = _army_plan("top-1000", "offense", identity, 1)
         self.assertEqual(plan["parameters"]["types"], ["int", "int", "int"])
 
+    def test_streak_member_and_cohort_queries_have_distinct_identities(self) -> None:
+        member_query = """
+            SELECT player_id FROM leaderboard_snapshot_entries
+            WHERE snapshot_id=ANY(%s::bigint[]) AND position<=%s
+              AND freshness='fresh' AND confidence='confirmed'
+            GROUP BY player_id HAVING count(DISTINCT snapshot_id)=%s
+        """
+        cohort_query = """
+            SELECT count(*) FROM (
+                SELECT player_id
+                FROM leaderboard_snapshot_entries
+                WHERE snapshot_id = ANY(%s::bigint[])
+                  AND position <= %s
+                GROUP BY player_id
+                HAVING count(DISTINCT snapshot_id) = %s
+                   AND bool_or(
+                       NOT (freshness = 'fresh' AND confidence = 'confirmed')
+                   )
+            ) AS excluded
+        """
+        member_identity = runner._army_query_identity(member_query)
+        cohort_identity = runner._army_query_identity(cohort_query)
+        self.assertEqual(member_identity, "army_analytics.streak_members")
+        self.assertEqual(cohort_identity, "army_analytics.cohort_quality")
+        self.assertEqual(
+            runner._army_parameter_shape(([101, 202], 1000, 28)),
+            runner._ARMY_QUERY_SHAPES[("streak-top-1000", cohort_identity)],
+        )
+        self.assertEqual(
+            runner._ARMY_QUERY_ORDER["streak-top-1000"][6], cohort_identity
+        )
+
     def test_real_explain_buffers_are_sanitized_before_artifact_validation(self) -> None:
         artifact = _valid_army_artifact()
         plan = artifact["army_read_sample"]["selections"][0]["endpoint_sql"][0]
@@ -1436,6 +1468,65 @@ class PerformanceRunnerTest(unittest.TestCase):
                 "database_oom_kill": 1,
             },
         )
+
+    def test_forced_miss_failure_codes_match_each_gate(self) -> None:
+        memory = _army_memory()
+        cases = (
+            (
+                "elapsed",
+                runner.STEP5_FORCED_MISS_TARGET_SECONDS,
+                deepcopy(memory),
+                deepcopy(memory),
+                {key: 0 for key in runner._ARMY_MEMORY_DELTA_KEYS},
+                ["step5_forced_miss_exceeded"],
+            ),
+            (
+                "cgroup",
+                1.0,
+                {**memory, "database_cgroup_available": 0},
+                {**memory, "database_cgroup_available": 0},
+                {key: 0 for key in runner._ARMY_MEMORY_DELTA_KEYS},
+                ["step5_cgroup_unavailable"],
+            ),
+            (
+                "memory",
+                1.0,
+                deepcopy(memory),
+                {**memory, "process_swap_used_bytes": 1},
+                {
+                    **{key: 0 for key in runner._ARMY_MEMORY_DELTA_KEYS},
+                    "process_swap_used_bytes": 1,
+                },
+                ["step5_memory_pressure_increased"],
+            ),
+        )
+        for name, seconds, before, after, delta, expected in cases:
+            with self.subTest(gate=name):
+                self.assertEqual(
+                    runner._army_forced_miss_failures(seconds, before, after, delta),
+                    expected,
+                )
+                self.assertIs(
+                    runner._army_forced_miss_passed(seconds, before, after, delta),
+                    False,
+                )
+
+                artifact = _valid_army_artifact()
+                army = artifact["army_read_sample"]
+                selection = army["selections"][0]
+                selection["forced_miss_seconds"] = seconds
+                selection["forced_miss_memory_before"] = before
+                selection["forced_miss_memory_after"] = after
+                selection["forced_miss_memory_delta"] = delta
+                selection["forced_miss_passed"] = False
+                army["status"] = "failed"
+                army["hard_failures"] = expected
+                runner._validate_army_semantics(
+                    army,
+                    artifact["provenance"],
+                    expected,
+                    "army sample",
+                )
 
     def test_writer_guard_rejects_row_at_a_time_sql(self) -> None:
         source = """
