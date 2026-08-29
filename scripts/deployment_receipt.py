@@ -15,9 +15,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 CANONICAL_REPOSITORY_URL = "https://github.com/zzzubair/clashlens"
 SCOPES = {"candidate-preparation", "deployed-stack"}
+CANDIDATE_SCOPE_LABEL_KEY = "org.clashlens.scope"
+CANDIDATE_SCOPE_LABEL_VALUE = "candidate"
+CANDIDATE_SCOPE_LABEL = (
+    f"{CANDIDATE_SCOPE_LABEL_KEY}={CANDIDATE_SCOPE_LABEL_VALUE}"
+)
+CANDIDATE_RECEIPT_OFFICIAL_API_PROOF = (
+    "receipt-command-inspects-images-database-and-bounded-candidate-resources-only"
+)
 SAFE_CONFIGURATION_FIELDS = {
     "collector_database_pool_size",
     "spool_free_inode_floor",
@@ -48,6 +56,16 @@ _POSTGRES_VERSION = re.compile(
 )
 _POSTGRES_VERSION_NUM = re.compile(r"[0-9]{1,10}\Z")
 _SYSTEM_IDENTIFIER = re.compile(r"[0-9]{1,20}\Z")
+_DEFAULT_RESOURCE_NAMES = {
+    "network": "clashlens-private",
+    "volume": "clashlens-postgres-data",
+    "postgres_container": "clashlens-postgres",
+    "collector": "clashlens-collector",
+    "python": "clashlens-python-api",
+    "worker": "clashlens-python-worker",
+    "website": "clashlens-website",
+}
+_WORKER_REPLICA_MAX = 16
 
 _RECEIPT_FIELDS = {
     "schema_version",
@@ -60,6 +78,7 @@ _RECEIPT_FIELDS = {
     "configuration",
     "application_images",
     "database",
+    "candidate_resources",
     "runtime_versions",
     "official_api_requests",
 }
@@ -92,6 +111,21 @@ _DATABASE_FIELDS = {
 }
 _RUNTIME_FIELDS = {"receipt_python", "podman", "postgresql"}
 _API_PROOF_FIELDS = {"count", "proof"}
+_CANDIDATE_RESOURCES_FIELDS = {
+    "postgres_container",
+    "network",
+    "volume",
+    "application_containers",
+}
+_CANDIDATE_RESOURCE_FIELDS = {"name", "scope_label"}
+_CANDIDATE_APPLICATION_FIELDS = {"name", "present"}
+_CANDIDATE_APPLICATIONS_FIELDS = {
+    "collector",
+    "python",
+    "worker",
+    "worker_replicas",
+    "website",
+}
 
 
 class ReceiptError(RuntimeError):
@@ -121,13 +155,22 @@ def _run(command: Sequence[str]) -> str:
     try:
         result = subprocess.run(
             command,
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
             timeout=30,
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise ReceiptError("required receipt input is unavailable") from error
+    if len(command) >= 3 and tuple(command[1:3]) == ("container", "exists"):
+        # `container exists` uses status 1 for a normal, absent container. Do
+        # not turn other Podman failures into a claim of absence.
+        if result.returncode == 0:
+            return "true"
+        if result.returncode == 1:
+            return "false"
+    if result.returncode != 0:
+        raise ReceiptError("required receipt input is unavailable")
     return result.stdout.strip()
 
 
@@ -142,6 +185,8 @@ def _canonical_digest(receipt: dict[str, Any]) -> str:
 
 
 def _bounded(value: str, pattern: re.Pattern[str], label: str) -> str:
+    if not isinstance(value, str):
+        raise ReceiptError(f"invalid {label}")
     value = value.strip()
     if pattern.fullmatch(value) is None:
         raise ReceiptError(f"invalid {label}")
@@ -294,6 +339,169 @@ def _container_identity(
     return identity
 
 
+def _candidate_name(value: Any, resource: str, *, strict: bool = False) -> str:
+    name = (
+        _require_text(value, _IDENTITY, f"candidate {resource} name")
+        if strict
+        else _bounded(value, _IDENTITY, f"candidate {resource} name")
+    )
+    default_name = _DEFAULT_RESOURCE_NAMES.get(resource)
+    if default_name is not None and name.casefold() == default_name.casefold():
+        raise ReceiptError("candidate resource identity is not dedicated")
+    return name
+
+
+def _worker_replica_names(worker_name: str) -> list[str]:
+    return [
+        _bounded(
+            f"{worker_name}-{replica}",
+            _IDENTITY,
+            "candidate worker replica name",
+        )
+        for replica in range(1, _WORKER_REPLICA_MAX + 1)
+    ]
+
+
+def _candidate_resource_names(arguments: argparse.Namespace) -> dict[str, str]:
+    fields = {
+        "network": ("podman_network", "candidate_network", "network"),
+        "volume": ("podman_volume", "candidate_volume", "volume"),
+        "postgres_container": ("postgres_container",),
+        "collector": ("collector_container",),
+        "python": ("python_container",),
+        "worker": ("worker_container", "python_worker_container"),
+        "website": ("website_container",),
+    }
+    names: dict[str, str] = {}
+    for resource, candidates in fields.items():
+        value = next(
+            (
+                getattr(arguments, field)
+                for field in candidates
+                if hasattr(arguments, field)
+            ),
+            None,
+        )
+        name = _candidate_name(value, resource)
+        names[resource] = name
+
+    seen: set[str] = set()
+    for name in (*names.values(), *_worker_replica_names(names["worker"])):
+        normalized = name.casefold()
+        if normalized in seen:
+            raise ReceiptError("candidate resource scope is ambiguous")
+        seen.add(normalized)
+    return names
+
+
+def _inspect_name(
+    podman_bin: str,
+    resource_type: str,
+    name: str,
+    run: Runner,
+) -> None:
+    inspected = run(
+        [podman_bin, resource_type, "inspect", "--format", "{{.Name}}", name]
+    ).strip()
+    inspected = inspected.removeprefix("/")
+    inspected = _bounded(inspected, _IDENTITY, f"{resource_type} name")
+    if inspected != name:
+        raise ReceiptError("candidate resource name does not match configuration")
+
+
+def _inspect_scope_label(
+    podman_bin: str,
+    resource_type: str,
+    name: str,
+    run: Runner,
+) -> None:
+    labels = ".Config.Labels" if resource_type == "container" else ".Labels"
+    value = _bounded(
+        run(
+            [
+                podman_bin,
+                resource_type,
+                "inspect",
+                "--format",
+                f'{{{{index {labels} "{CANDIDATE_SCOPE_LABEL_KEY}"}}}}',
+                name,
+            ]
+        ),
+        _IDENTITY,
+        "candidate scope label",
+    )
+    if value != CANDIDATE_SCOPE_LABEL_VALUE:
+        raise ReceiptError("candidate resource scope label is invalid")
+
+
+def _container_exists(podman_bin: str, name: str, run: Runner) -> bool:
+    state = run([podman_bin, "container", "exists", name]).strip().lower()
+    if state in {"false", "absent", "0"}:
+        return False
+    if state in {"true", "present", "1"}:
+        return True
+    raise ReceiptError("candidate application container presence is unavailable")
+
+
+def _verify_candidate_scope(
+    arguments: argparse.Namespace,
+    run: Runner,
+) -> dict[str, Any]:
+    names = _candidate_resource_names(arguments)
+    for resource_type, resource in (
+        ("network", "network"),
+        ("volume", "volume"),
+        ("container", "postgres_container"),
+    ):
+        name = names[resource]
+        _inspect_name(arguments.podman_bin, resource_type, name, run)
+        _inspect_scope_label(arguments.podman_bin, resource_type, name, run)
+
+    worker_replicas = _worker_replica_names(names["worker"])
+    application_containers = {
+        "collector": names["collector"],
+        "python": names["python"],
+        "worker": names["worker"],
+        "website": names["website"],
+        "worker_replicas": worker_replicas,
+    }
+    for name in (
+        application_containers["collector"],
+        application_containers["python"],
+        application_containers["worker"],
+        application_containers["website"],
+        *worker_replicas,
+    ):
+        if _container_exists(arguments.podman_bin, name, run):
+            raise ReceiptError("candidate application container is present")
+
+    return {
+        "postgres_container": {
+            "name": names["postgres_container"],
+            "scope_label": CANDIDATE_SCOPE_LABEL,
+        },
+        "network": {
+            "name": names["network"],
+            "scope_label": CANDIDATE_SCOPE_LABEL,
+        },
+        "volume": {
+            "name": names["volume"],
+            "scope_label": CANDIDATE_SCOPE_LABEL,
+        },
+        "application_containers": {
+            key: (
+                [
+                    {"name": replica, "present": False}
+                    for replica in value
+                ]
+                if key == "worker_replicas"
+                else {"name": value, "present": False}
+            )
+            for key, value in application_containers.items()
+        },
+    }
+
+
 def _database_identity(
     podman_bin: str,
     container_name: str,
@@ -378,12 +586,80 @@ def _configuration(values: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def _validate_candidate_resources(
+    value: Any,
+    database_container_name: str,
+) -> None:
+    resources = _require_mapping(
+        value,
+        _CANDIDATE_RESOURCES_FIELDS,
+        "candidate resource proof",
+    )
+    resource_names: list[str] = []
+    for resource in ("postgres_container", "network", "volume"):
+        details = _require_mapping(
+            resources[resource],
+            _CANDIDATE_RESOURCE_FIELDS,
+            f"candidate {resource} proof",
+        )
+        name = _candidate_name(details["name"], resource, strict=True)
+        if details["scope_label"] != CANDIDATE_SCOPE_LABEL:
+            raise ReceiptError("candidate resource scope label is invalid")
+        resource_names.append(name)
+    if resource_names[0] != database_container_name:
+        raise ReceiptError("candidate database resource does not match configuration")
+
+    applications = _require_mapping(
+        resources["application_containers"],
+        _CANDIDATE_APPLICATIONS_FIELDS,
+        "candidate application proof",
+    )
+    application_names: list[str] = []
+    for application in ("collector", "python", "worker", "website"):
+        details = _require_mapping(
+            applications[application],
+            _CANDIDATE_APPLICATION_FIELDS,
+            f"candidate {application} proof",
+        )
+        name = _candidate_name(details["name"], application, strict=True)
+        if details["present"] is not False:
+            raise ReceiptError("candidate application absence proof is invalid")
+        application_names.append(name)
+
+    replicas = applications["worker_replicas"]
+    if not isinstance(replicas, list) or len(replicas) != _WORKER_REPLICA_MAX:
+        raise ReceiptError("candidate worker replica proof is invalid")
+    expected_replicas = _worker_replica_names(application_names[2])
+    for index, details in enumerate(replicas):
+        details = _require_mapping(
+            details,
+            _CANDIDATE_APPLICATION_FIELDS,
+            "candidate worker replica proof",
+        )
+        name = _candidate_name(details["name"], "worker replica", strict=True)
+        if (
+            name != expected_replicas[index]
+            or details["present"] is not False
+        ):
+            raise ReceiptError("candidate worker replica proof is invalid")
+        application_names.append(name)
+
+    all_names = resource_names + application_names
+    if len({name.casefold() for name in all_names}) != len(all_names):
+        raise ReceiptError("candidate resource scope is ambiguous")
+
+
 def collect_receipt(arguments: argparse.Namespace, run: Runner = _run) -> dict[str, Any]:
     root = Path(arguments.root).resolve(strict=True)
     if arguments.scope not in SCOPES:
         raise ReceiptError("invalid receipt scope")
     environment = _bounded(arguments.environment, _IDENTITY, "environment identity")
     source = _git_source(root, arguments.git_bin, run)
+    candidate_resources = (
+        _verify_candidate_scope(arguments, run)
+        if arguments.scope == "candidate-preparation"
+        else None
+    )
     database = _database_identity(
         arguments.podman_bin,
         arguments.postgres_container,
@@ -424,6 +700,7 @@ def collect_receipt(arguments: argparse.Namespace, run: Runner = _run) -> dict[s
         "configuration": _configuration(arguments.safe_config),
         "application_images": images,
         "database": database,
+        "candidate_resources": candidate_resources,
         "runtime_versions": {
             "receipt_python": platform.python_version(),
             "podman": _bounded(
@@ -436,7 +713,7 @@ def collect_receipt(arguments: argparse.Namespace, run: Runner = _run) -> dict[s
         "official_api_requests": (
             {
                 "count": 0,
-                "proof": "receipt-command-inspects-images-and-database-only",
+                "proof": CANDIDATE_RECEIPT_OFFICIAL_API_PROOF,
             }
             if arguments.scope == "candidate-preparation"
             else None
@@ -571,6 +848,12 @@ def validate_receipt(receipt: dict[str, Any], *, require_digest: bool = False) -
     if database["identity_scope"] != expected_database_scope:
         raise ReceiptError("receipt database scope is invalid")
 
+    candidate_resources = receipt["candidate_resources"]
+    if scope == "candidate-preparation":
+        _validate_candidate_resources(candidate_resources, database["container_name"])
+    elif candidate_resources is not None:
+        raise ReceiptError("deployed receipt candidate resource proof is invalid")
+
     runtime = _require_mapping(receipt["runtime_versions"], _RUNTIME_FIELDS, "receipt runtime")
     _require_text(runtime["receipt_python"], _PYTHON_VERSION, "receipt Python version")
     _require_text(runtime["podman"], _PODMAN_VERSION, "receipt Podman version")
@@ -584,7 +867,7 @@ def validate_receipt(receipt: dict[str, Any], *, require_digest: bool = False) -
             isinstance(count, bool)
             or not isinstance(count, int)
             or count != 0
-            or proof["proof"] != "receipt-command-inspects-images-and-database-only"
+            or proof["proof"] != CANDIDATE_RECEIPT_OFFICIAL_API_PROOF
         ):
             raise ReceiptError("candidate receipt official API proof is invalid")
     elif official_api_requests is not None:
@@ -659,6 +942,20 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--podman-bin", default=os.environ.get("PODMAN_BIN", "podman"))
     parser.add_argument("--git-bin", default=os.environ.get("GIT_BIN", "git"))
     parser.add_argument("--postgres-container", required=True)
+    parser.add_argument(
+        "--podman-network",
+        "--candidate-network",
+        "--network",
+        dest="podman_network",
+        required=True,
+    )
+    parser.add_argument(
+        "--podman-volume",
+        "--candidate-volume",
+        "--volume",
+        dest="podman_volume",
+        required=True,
+    )
     parser.add_argument("--postgres-user", required=True)
     parser.add_argument("--postgres-database", required=True)
     parser.add_argument("--collector-image", required=True)
@@ -666,6 +963,9 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--website-image", required=True)
     parser.add_argument("--collector-container", required=True)
     parser.add_argument("--python-container", required=True)
+    parser.add_argument(
+        "--worker-container", "--python-worker-container", dest="worker_container", required=True
+    )
     parser.add_argument("--website-container", required=True)
     parser.add_argument("--safe-config", action="append", default=[])
     parser.add_argument("--created-at", help=argparse.SUPPRESS)

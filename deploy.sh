@@ -417,6 +417,20 @@ validate_common_settings() {
   validate_resource_budgets
 }
 
+# Candidate resources are deliberately identified by fixed deployment-owned
+# metadata. Do not allow an app.env setting to turn this path into the private
+# deployment scope or to replace the label used by its isolation proof.
+reject_candidate_scope_overrides() {
+  local setting
+  for setting in "${!ENV_PRESENT[@]}"; do
+    case "$setting" in
+      *SCOPE*|*LABEL*)
+        die "candidate resource scope metadata is deployment-owned"
+        ;;
+    esac
+  done
+}
+
 # A single key file setting names an in-container /run/secrets path; the host
 # file is the basename inside CLASHLENS_API_KEY_HOST_DIR.
 validate_single_key_file() {
@@ -492,6 +506,19 @@ replace_secret_value() {
   printf '%s' "$value" | "$PODMAN_BIN" secret create --replace "$name" - >/dev/null
 }
 
+postgres_password_secret_name() {
+  local scope=${1:-private}
+  if [[ "$scope" == "candidate" ]]; then
+    # Derive the disposable secret from its configured database container, so
+    # candidate preparation can never replace the deployed secret.
+    printf '%s-password' "$POSTGRES_CONTAINER"
+  else
+    # Preserve the existing deployed secret name, including deployments that
+    # use a custom PostgreSQL container name.
+    printf 'clashlens-postgres-password'
+  fi
+}
+
 create_secret_from_file() {
   local name=$1
   local source=$2
@@ -503,16 +530,18 @@ secret_rm() {
 }
 
 ensure_network() {
+  local scope=${1:-private}
   if ! "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1; then
     # The named network is private to this rootless Podman project. It must
     # retain outbound access for the official API and external archive.
-    "$PODMAN_BIN" network create --label org.clashlens.scope=private "$NETWORK_NAME" >/dev/null
+    "$PODMAN_BIN" network create --label "org.clashlens.scope=$scope" "$NETWORK_NAME" >/dev/null
   fi
 }
 
 ensure_volume() {
+  local scope=${1:-private}
   if ! "$PODMAN_BIN" volume exists "$POSTGRES_VOLUME" >/dev/null 2>&1; then
-    "$PODMAN_BIN" volume create --label org.clashlens.scope=private "$POSTGRES_VOLUME" >/dev/null
+    "$PODMAN_BIN" volume create --label "org.clashlens.scope=$scope" "$POSTGRES_VOLUME" >/dev/null
   fi
 }
 
@@ -527,8 +556,18 @@ ensure_spool_root() {
 }
 
 ensure_postgres() {
-  replace_secret_value clashlens-postgres-password "$POSTGRES_PASSWORD"
-  if container_exists "$POSTGRES_CONTAINER"; then
+  local scope=${1:-private}
+  local postgres_password_secret
+  local -a scope_label=()
+  if [[ "$scope" == "candidate" ]] && container_exists "$POSTGRES_CONTAINER"; then
+    die "candidate-prepare refuses an existing PostgreSQL container"
+  fi
+  postgres_password_secret=$(postgres_password_secret_name "$scope")
+  replace_secret_value "$postgres_password_secret" "$POSTGRES_PASSWORD"
+  if [[ "$scope" == "candidate" ]]; then
+    scope_label=(--label 'org.clashlens.scope=candidate')
+  fi
+  if [[ "$scope" != "candidate" ]] && container_exists "$POSTGRES_CONTAINER"; then
     local configured_shm_size configured_metrics_profile
     configured_shm_size=$("$PODMAN_BIN" container inspect \
       --format '{{index .Config.Labels "org.clashlens.postgres-shm-size"}}' \
@@ -555,7 +594,7 @@ ensure_postgres() {
     --env POSTGRES_DB \
     --env POSTGRES_USER \
     --env POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password \
-    --secret clashlens-postgres-password,type=mount,target=/run/secrets/postgres-password,uid=70,gid=70,mode=0400 \
+    --secret "$postgres_password_secret,type=mount,target=/run/secrets/postgres-password,uid=70,gid=70,mode=0400" \
     --memory "$CLASHLENS_POSTGRES_MEMORY" \
     --shm-size "$CLASHLENS_POSTGRES_SHM_SIZE" \
     --pids-limit "$CLASHLENS_POSTGRES_PIDS" \
@@ -566,6 +605,7 @@ ensure_postgres() {
     --health-retries 6 \
     --restart unless-stopped \
     --label org.clashlens.component=postgres \
+    "${scope_label[@]}" \
     --label "org.clashlens.postgres-shm-size=$CLASHLENS_POSTGRES_SHM_SIZE" \
     --label org.clashlens.postgres-metrics-profile=step6-v1 \
     "$POSTGRES_IMAGE" \
@@ -574,6 +614,53 @@ ensure_postgres() {
     -c pg_stat_statements.track=all \
     -c track_io_timing=on \
     -c track_wal_io_timing=on >/dev/null
+}
+
+inspect_candidate_resource_name() {
+  local resource_type=$1 name=$2 inspected
+  inspected=$(
+    "$PODMAN_BIN" "$resource_type" inspect --format '{{.Name}}' "$name" \
+      2>/dev/null
+  ) || return 1
+  inspected=${inspected#/}
+  [[ "$inspected" == "$name" ]]
+}
+
+inspect_candidate_scope_label() {
+  local resource_type=$1 name=$2 template inspected
+  if [[ "$resource_type" == "container" ]]; then
+    template='{{index .Config.Labels "org.clashlens.scope"}}'
+  else
+    template='{{index .Labels "org.clashlens.scope"}}'
+  fi
+  inspected=$(
+    "$PODMAN_BIN" "$resource_type" inspect --format "$template" "$name" \
+      2>/dev/null
+  ) || return 1
+  [[ "$inspected" == "candidate" ]]
+}
+
+verify_candidate_resource() {
+  local resource_type=$1 name=$2
+  inspect_candidate_resource_name "$resource_type" "$name" || \
+    die "candidate resource identity could not be verified"
+  inspect_candidate_scope_label "$resource_type" "$name" || \
+    die "candidate resource scope label could not be verified"
+}
+
+ensure_candidate_applications_absent() {
+  local name i
+  for name in "$COLLECTOR_CONTAINER" "$PYTHON_API_CONTAINER" \
+    "$PYTHON_WORKER_CONTAINER" "$WEBSITE_CONTAINER"; do
+    container_exists "$name" && \
+      die "candidate-prepare refuses an existing application container: $name"
+  done
+  for ((i = 1; i <= WORKER_REPLICA_MAX; i++)); do
+    name="${PYTHON_WORKER_CONTAINER}-${i}"
+    container_exists "$name" && \
+      die "candidate-prepare refuses an existing application container: $name"
+  done
+  return 0
 }
 
 wait_for_postgres() {
@@ -743,6 +830,8 @@ write_deployment_receipt() {
     --podman-bin "$PODMAN_BIN" \
     --git-bin "$GIT_BIN" \
     --postgres-container "$POSTGRES_CONTAINER" \
+    --podman-network "$NETWORK_NAME" \
+    --podman-volume "$POSTGRES_VOLUME" \
     --postgres-user "$POSTGRES_USER" \
     --postgres-database "$POSTGRES_DB" \
     --collector-image "$COLLECTOR_IMAGE" \
@@ -750,6 +839,7 @@ write_deployment_receipt() {
     --website-image "$WEBSITE_IMAGE" \
     --collector-container "$COLLECTOR_CONTAINER" \
     --python-container "$PYTHON_API_CONTAINER" \
+    --worker-container "$PYTHON_WORKER_CONTAINER" \
     --website-container "$WEBSITE_CONTAINER" \
     --safe-config "collector_database_pool_size=$CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE" \
     --safe-config "spool_free_inode_floor=$CLASHLENS_SPOOL_FREE_INODE_FLOOR" \
@@ -766,32 +856,45 @@ write_deployment_receipt() {
 
 prepare_candidate_database() {
   local i name version
+  reject_candidate_scope_overrides
   required_setting CLASHLENS_ARCHIVE_INSTANCE_ID
-  [[ "$NETWORK_NAME" != "clashlens-private" && \
-     "$POSTGRES_VOLUME" != "clashlens-postgres-data" && \
-     "$POSTGRES_CONTAINER" != "clashlens-postgres" && \
-     "$COLLECTOR_CONTAINER" != "clashlens-collector" && \
-     "$PYTHON_API_CONTAINER" != "clashlens-python-api" && \
-     "$PYTHON_WORKER_CONTAINER" != "clashlens-python-worker" && \
-     "$WEBSITE_CONTAINER" != "clashlens-website" ]] || \
+  [[ "${NETWORK_NAME,,}" != "clashlens-private" && \
+     "${POSTGRES_VOLUME,,}" != "clashlens-postgres-data" && \
+     "${POSTGRES_CONTAINER,,}" != "clashlens-postgres" && \
+     "${COLLECTOR_CONTAINER,,}" != "clashlens-collector" && \
+     "${PYTHON_API_CONTAINER,,}" != "clashlens-python-api" && \
+     "${PYTHON_WORKER_CONTAINER,,}" != "clashlens-python-worker" && \
+     "${WEBSITE_CONTAINER,,}" != "clashlens-website" ]] || \
     die "candidate-prepare requires dedicated non-default Podman resource names"
+  local candidate_name
+  local -A candidate_names=()
+  for candidate_name in "$NETWORK_NAME" "$POSTGRES_VOLUME" "$POSTGRES_CONTAINER" \
+    "$COLLECTOR_CONTAINER" "$PYTHON_API_CONTAINER" "$PYTHON_WORKER_CONTAINER" \
+    "$WEBSITE_CONTAINER"; do
+    [[ "$candidate_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || \
+      die "candidate-prepare requires bounded Podman resource names"
+    [[ -z "${candidate_names[${candidate_name,,}]+present}" ]] || \
+      die "candidate-prepare refuses ambiguous duplicate Podman resource names"
+    candidate_names["${candidate_name,,}"]=1
+  done
+  for ((i = 1; i <= WORKER_REPLICA_MAX; i++)); do
+    name="${PYTHON_WORKER_CONTAINER}-${i}"
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || \
+      die "candidate-prepare requires bounded Podman resource names"
+    [[ -z "${candidate_names[${name,,}]+present}" ]] || \
+      die "candidate-prepare refuses ambiguous duplicate Podman resource names"
+    candidate_names["${name,,}"]=1
+  done
+  [[ "$(postgres_password_secret_name candidate)" != "clashlens-postgres-password" ]] || \
+    die "candidate-prepare refuses the deployed PostgreSQL secret name"
   container_exists "$POSTGRES_CONTAINER" && \
     die "candidate-prepare refuses an existing PostgreSQL container"
   "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1 && \
     die "candidate-prepare refuses an existing Podman network"
   "$PODMAN_BIN" volume exists "$POSTGRES_VOLUME" >/dev/null 2>&1 && \
     die "candidate-prepare refuses an existing PostgreSQL volume"
-  for name in "$COLLECTOR_CONTAINER" "$PYTHON_API_CONTAINER" \
-    "$PYTHON_WORKER_CONTAINER" "$WEBSITE_CONTAINER"; do
-    container_exists "$name" && \
-      die "candidate-prepare refuses an existing application container: $name"
-  done
-  for ((i = 1; i <= WORKER_REPLICA_MAX; i++)); do
-    name="${PYTHON_WORKER_CONTAINER}-${i}"
-    container_exists "$name" && \
-      die "candidate-prepare refuses an existing application container: $name"
-  done
-  initialize_runtime
+  ensure_candidate_applications_absent
+  initialize_runtime candidate
   version=$(contract_version)
   case "$version" in
     absent)
@@ -978,11 +1081,21 @@ wait_for_collector() {
 }
 
 initialize_runtime() {
+  local scope=${1:-private}
   require_podman
   require_rootless_podman
-  ensure_network
-  ensure_volume
-  ensure_postgres
+  ensure_network "$scope"
+  if [[ "$scope" == "candidate" ]]; then
+    verify_candidate_resource network "$NETWORK_NAME"
+  fi
+  ensure_volume "$scope"
+  if [[ "$scope" == "candidate" ]]; then
+    verify_candidate_resource volume "$POSTGRES_VOLUME"
+  fi
+  ensure_postgres "$scope"
+  if [[ "$scope" == "candidate" ]]; then
+    verify_candidate_resource container "$POSTGRES_CONTAINER"
+  fi
   wait_for_postgres
 }
 

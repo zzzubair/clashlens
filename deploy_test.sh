@@ -56,7 +56,28 @@ case "$verb" in
     name=${!#}
     case "$sub" in
       exists) [[ -d "$FAKE_STATE/networks/$name" ]] ;;
-      create) mkdir -p "$FAKE_STATE/networks/$name" ;;
+      create)
+        scope=""
+        while (( $# > 0 )); do
+          if [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.scope=* ]]; then
+            scope=${2#*=}
+            shift 2
+          else
+            shift
+          fi
+        done
+        scope=${FAKE_SCOPE_OVERRIDE:-$scope}
+        mkdir -p "$FAKE_STATE/networks/$name"
+        printf '%s' "$scope" >"$FAKE_STATE/networks/$name.scope"
+        ;;
+      inspect)
+        template=${3:-}
+        if [[ "$template" == "{{.Name}}" ]]; then
+          printf '%s\n' "$name"
+        elif [[ "$template" == *"org.clashlens.scope"* ]]; then
+          cat "$FAKE_STATE/networks/$name.scope" 2>/dev/null || true
+        fi
+        ;;
     esac
     ;;
   volume)
@@ -64,7 +85,28 @@ case "$verb" in
     name=${!#}
     case "$sub" in
       exists) [[ -d "$FAKE_STATE/volumes/$name" ]] ;;
-      create) mkdir -p "$FAKE_STATE/volumes/$name" ;;
+      create)
+        scope=""
+        while (( $# > 0 )); do
+          if [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.scope=* ]]; then
+            scope=${2#*=}
+            shift 2
+          else
+            shift
+          fi
+        done
+        scope=${FAKE_SCOPE_OVERRIDE:-$scope}
+        mkdir -p "$FAKE_STATE/volumes/$name"
+        printf '%s' "$scope" >"$FAKE_STATE/volumes/$name.scope"
+        ;;
+      inspect)
+        template=${3:-}
+        if [[ "$template" == "{{.Name}}" ]]; then
+          printf '%s\n' "$name"
+        elif [[ "$template" == *"org.clashlens.scope"* ]]; then
+          cat "$FAKE_STATE/volumes/$name.scope" 2>/dev/null || true
+        fi
+        ;;
     esac
     ;;
   image)
@@ -91,11 +133,24 @@ case "$verb" in
     case "$sub" in
       exists)
         name=${!#}
+        if [[ "${FAKE_CONTAINER_APPEARS_AFTER:-}" == "$name" ]]; then
+          marker="$FAKE_STATE/race-container-$name"
+          if [[ ! -e "$marker" ]]; then
+            : >"$marker"
+            exit 1
+          fi
+          mkdir -p "$FAKE_STATE/containers/$name"
+        fi
         [[ -d "$FAKE_STATE/containers/$name" ]]
         ;;
       inspect)
         name=${!#}
-        if [[ "$*" == *"org.clashlens.postgres-shm-size"* ]]; then
+        template=${2:-}
+        if [[ "$template" == "{{.Name}}" ]]; then
+          printf '%s\n' "$name"
+        elif [[ "$*" == *"org.clashlens.scope"* ]]; then
+          cat "$FAKE_STATE/containers/$name.scope" 2>/dev/null || true
+        elif [[ "$*" == *"org.clashlens.postgres-shm-size"* ]]; then
           cat "$FAKE_STATE/containers/$name.postgres-shm-size" 2>/dev/null || true
         elif [[ "$*" == *"org.clashlens.postgres-metrics-profile"* ]]; then
           cat "$FAKE_STATE/containers/$name.postgres-metrics-profile" 2>/dev/null || true
@@ -133,6 +188,7 @@ case "$verb" in
     name=""
     postgres_shm_size=""
     postgres_metrics_profile=""
+    scope=""
     while (( $# > 0 )); do
       if [[ "$1" == "--name" && $# -ge 2 ]]; then
         name=$2
@@ -143,10 +199,14 @@ case "$verb" in
       elif [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.postgres-metrics-profile=* ]]; then
         postgres_metrics_profile=${2#*=}
         shift 2
+      elif [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.scope=* ]]; then
+        scope=${2#*=}
+        shift 2
       else
         shift
       fi
     done
+    scope=${FAKE_SCOPE_OVERRIDE:-$scope}
     mkdir -p "$FAKE_STATE/containers/$name"
     : >"$FAKE_STATE/containers/$name.running"
     if [[ -n "$postgres_shm_size" ]]; then
@@ -154,6 +214,9 @@ case "$verb" in
     fi
     if [[ -n "$postgres_metrics_profile" ]]; then
       printf '%s' "$postgres_metrics_profile" >"$FAKE_STATE/containers/$name.postgres-metrics-profile"
+    fi
+    if [[ -n "$scope" ]]; then
+      printf '%s' "$scope" >"$FAKE_STATE/containers/$name.scope"
     fi
     ;;
   exec)
@@ -669,6 +732,95 @@ log_lacks "$CANDIDATE_NORM" '^build ' 'candidate-prepare built an application im
 [[ "$(sort -n -u "$CANDIDATE_DIR/state/schema_migrations" | tr '\n' ' ')" == \
    '1 2 3 4 5 6 7 8 9 10 11 12 13 ' ]] || \
   fail 'candidate-prepare did not apply the exact migration set through 0013'
+[[ "$(cat "$CANDIDATE_DIR/state/networks/clashlens-candidate-private.scope")" == candidate ]] || \
+  fail 'candidate network was not stamped with the candidate scope label'
+[[ "$(cat "$CANDIDATE_DIR/state/volumes/clashlens-candidate-postgres-data.scope")" == candidate ]] || \
+  fail 'candidate volume was not stamped with the candidate scope label'
+[[ "$(cat "$CANDIDATE_DIR/state/containers/clashlens-candidate-postgres.scope")" == candidate ]] || \
+  fail 'candidate PostgreSQL container was not stamped with the candidate scope label'
+[[ -f "$CANDIDATE_DIR/state/secrets/clashlens-candidate-postgres-password" ]] || \
+  fail 'candidate PostgreSQL secret was not derived from the candidate container name'
+[[ ! -f "$CANDIDATE_DIR/state/secrets/clashlens-postgres-password" ]] || \
+  fail 'candidate preparation replaced the deployed PostgreSQL secret'
+log_has "$CANDIDATE_NORM" \
+  'secret create --replace clashlens-candidate-postgres-password' \
+  'candidate PostgreSQL secret replacement was not scoped'
+log_lacks "$CANDIDATE_NORM" \
+  'secret create --replace clashlens-postgres-password' \
+  'candidate PostgreSQL secret name leaked into the deployed scope'
+
+CANDIDATE_SCOPE_OVERRIDE_DIR=$(new_scenario)
+CANDIDATE_SCOPE_OVERRIDE_ENV="$CANDIDATE_SCOPE_OVERRIDE_DIR/app.env"
+write_scenario_env "$CANDIDATE_SCOPE_OVERRIDE_ENV" "$CANDIDATE_SCOPE_OVERRIDE_DIR/keys"
+cat >>"$CANDIDATE_SCOPE_OVERRIDE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-scope-override
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-scope-override-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-scope-override-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-scope-override-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-scope-override-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-scope-override-python
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-scope-override-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-scope-override-website
+CANDIDATE_RESOURCE_SCOPE=private
+EOF
+deploy_fails "$CANDIDATE_SCOPE_OVERRIDE_DIR" "$CANDIDATE_SCOPE_OVERRIDE_ENV" \
+  'candidate resource scope metadata is deployment-owned' -- candidate-prepare
+CANDIDATE_SCOPE_OVERRIDE_NORM="$CANDIDATE_SCOPE_OVERRIDE_DIR/podman.norm.log"
+norm_log "$CANDIDATE_SCOPE_OVERRIDE_DIR/podman.log" >"$CANDIDATE_SCOPE_OVERRIDE_NORM"
+log_lacks "$CANDIDATE_SCOPE_OVERRIDE_NORM" '^network create |^volume create |^run |^secret create ' \
+  'candidate scope override was accepted before resource mutation'
+
+CANDIDATE_REPLICA_COLLISION_DIR=$(new_scenario)
+CANDIDATE_REPLICA_COLLISION_ENV="$CANDIDATE_REPLICA_COLLISION_DIR/app.env"
+write_scenario_env "$CANDIDATE_REPLICA_COLLISION_ENV" "$CANDIDATE_REPLICA_COLLISION_DIR/keys"
+cat >>"$CANDIDATE_REPLICA_COLLISION_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-replica-collision
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-replica-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-replica-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-replica-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-replica-worker-1
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-replica-python
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-replica-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-replica-website
+EOF
+deploy_fails "$CANDIDATE_REPLICA_COLLISION_DIR" "$CANDIDATE_REPLICA_COLLISION_ENV" \
+  'ambiguous duplicate Podman resource names' -- candidate-prepare
+CANDIDATE_REPLICA_COLLISION_NORM="$CANDIDATE_REPLICA_COLLISION_DIR/podman.norm.log"
+norm_log "$CANDIDATE_REPLICA_COLLISION_DIR/podman.log" >"$CANDIDATE_REPLICA_COLLISION_NORM"
+log_lacks "$CANDIDATE_REPLICA_COLLISION_NORM" '^network create |^volume create |^run |^secret create ' \
+  'worker replica collision was detected after resource mutation'
+
+CANDIDATE_WRONG_LABEL_DIR=$(new_scenario)
+CANDIDATE_WRONG_LABEL_ENV="$CANDIDATE_WRONG_LABEL_DIR/app.env"
+write_scenario_env "$CANDIDATE_WRONG_LABEL_ENV" "$CANDIDATE_WRONG_LABEL_DIR/keys"
+cat >>"$CANDIDATE_WRONG_LABEL_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-wrong-label
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-wrong-label-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-wrong-label-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-wrong-label-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-wrong-label-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-wrong-label-python
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-wrong-label-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-wrong-label-website
+EOF
+deploy_fails "$CANDIDATE_WRONG_LABEL_DIR" "$CANDIDATE_WRONG_LABEL_ENV" \
+  'candidate resource scope label could not be verified' \
+  FAKE_SCOPE_OVERRIDE=private -- candidate-prepare
+[[ ! -e "$CANDIDATE_WRONG_LABEL_DIR/state/contract_version" ]] || \
+  fail 'candidate preparation migrated a resource with the wrong scope label'
+printf '%s\n' 'ok: candidate scope metadata is immutable, replica collisions are preflighted, and labels are verified after ensure/create'
 
 UNSAFE_CANDIDATE_DIR=$(new_scenario)
 UNSAFE_CANDIDATE_ENV="$UNSAFE_CANDIDATE_DIR/app.env"
@@ -686,6 +838,63 @@ UNSAFE_CANDIDATE_NORM="$UNSAFE_CANDIDATE_DIR/podman.norm.log"
 norm_log "$UNSAFE_CANDIDATE_DIR/podman.log" >"$UNSAFE_CANDIDATE_NORM"
 log_lacks "$UNSAFE_CANDIDATE_NORM" '^network create |^volume create |^run ' \
   'candidate-prepare mutated Podman before rejecting default resource names'
+
+EXISTING_CANDIDATE_DIR=$(new_scenario)
+EXISTING_CANDIDATE_ENV="$EXISTING_CANDIDATE_DIR/app.env"
+write_scenario_env "$EXISTING_CANDIDATE_ENV" "$EXISTING_CANDIDATE_DIR/keys"
+cat >>"$EXISTING_CANDIDATE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-existing-candidate
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-existing-candidate-private
+CLASHLENS_PODMAN_VOLUME=clashlens-existing-candidate-postgres-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-existing-candidate-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-existing-candidate-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-existing-candidate-python-api
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-existing-candidate-python-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-existing-candidate-website
+EOF
+mkdir "$EXISTING_CANDIDATE_DIR/state/containers/clashlens-existing-candidate-postgres"
+deploy_fails "$EXISTING_CANDIDATE_DIR" "$EXISTING_CANDIDATE_ENV" \
+  'refuses an existing PostgreSQL container' -- candidate-prepare
+EXISTING_CANDIDATE_NORM="$EXISTING_CANDIDATE_DIR/podman.norm.log"
+norm_log "$EXISTING_CANDIDATE_DIR/podman.log" >"$EXISTING_CANDIDATE_NORM"
+log_lacks "$EXISTING_CANDIDATE_NORM" '^network create |^volume create |^run |^start |^secret create ' \
+  'candidate-prepare adopted an existing PostgreSQL container'
+
+RACING_CANDIDATE_DIR=$(new_scenario)
+RACING_CANDIDATE_ENV="$RACING_CANDIDATE_DIR/app.env"
+write_scenario_env "$RACING_CANDIDATE_ENV" "$RACING_CANDIDATE_DIR/keys"
+cat >>"$RACING_CANDIDATE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-racing-candidate
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-racing-candidate-private
+CLASHLENS_PODMAN_VOLUME=clashlens-racing-candidate-postgres-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-racing-candidate-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-racing-candidate-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-racing-candidate-python-api
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-racing-candidate-python-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-racing-candidate-website
+EOF
+deploy_fails "$RACING_CANDIDATE_DIR" "$RACING_CANDIDATE_ENV" \
+  'refuses an existing PostgreSQL container' \
+  FAKE_CONTAINER_APPEARS_AFTER=clashlens-racing-candidate-postgres -- candidate-prepare
+RACING_CANDIDATE_NORM="$RACING_CANDIDATE_DIR/podman.norm.log"
+norm_log "$RACING_CANDIDATE_DIR/podman.log" >"$RACING_CANDIDATE_NORM"
+log_has "$RACING_CANDIDATE_NORM" '^network create ' \
+  'candidate-prepare race proof did not create its dedicated network'
+log_has "$RACING_CANDIDATE_NORM" '^volume create ' \
+  'candidate-prepare race proof did not create its dedicated volume'
+log_lacks "$RACING_CANDIDATE_NORM" '^run |^start |^secret create ' \
+  'candidate-prepare adopted a PostgreSQL container appearing after preflight'
+[[ ! -e "$RACING_CANDIDATE_DIR/state/contract_version" ]] || \
+  fail 'candidate-prepare migrated a PostgreSQL container appearing after preflight'
+printf '%s\n' 'ok: candidate PostgreSQL is create-only and rejects existing or racing containers before adoption'
 
 MISSING_ARCHIVE_DIR=$(new_scenario)
 MISSING_ARCHIVE_ENV="$MISSING_ARCHIVE_DIR/app.env"
@@ -729,6 +938,17 @@ deploy_fails "$BLOCKED_CANDIDATE_DIR" "$BLOCKED_CANDIDATE_ENV" \
 ! grep -q '^run ' "$BLOCKED_CANDIDATE_DIR/podman.log" || \
   fail 'candidate-prepare started PostgreSQL beside an application container'
 printf 'ok: candidate preparation starts only disposable PostgreSQL and applies every migration\n'
+
+NORMAL_CUSTOM_DIR=$(new_scenario)
+NORMAL_CUSTOM_ENV="$NORMAL_CUSTOM_DIR/app.env"
+write_scenario_env "$NORMAL_CUSTOM_ENV" "$NORMAL_CUSTOM_DIR/keys"
+printf '%s\n' 'CLASHLENS_POSTGRES_CONTAINER=clashlens-custom-postgres' >>"$NORMAL_CUSTOM_ENV"
+deploy "$NORMAL_CUSTOM_DIR" "$NORMAL_CUSTOM_ENV" -- init >/dev/null
+[[ -f "$NORMAL_CUSTOM_DIR/state/secrets/clashlens-postgres-password" ]] || \
+  fail 'normal deployment changed the shared PostgreSQL secret name'
+[[ ! -f "$NORMAL_CUSTOM_DIR/state/secrets/clashlens-custom-postgres-password" ]] || \
+  fail 'normal deployment unexpectedly derived a custom PostgreSQL secret name'
+printf 'ok: normal deployment keeps the shared PostgreSQL secret name\n'
 
 # ---------------------------------------------------------------------------
 # Scenario A0: v5 stop-migrate-restart wiring owns the shared rw,z spool.

@@ -181,11 +181,16 @@ install -d -m 0700 "$RESULTS_DIR"
 `candidate-prepare` refuses default or existing candidate resources and any
 configured application-container name that already exists, starts only the
 configured PostgreSQL container, and verifies every migration from 0001 through
-0013. Never aim it at a deployed volume or reuse deployed container names. The
-`candidate-preparation` receipt verifies the
-three built images and disposable database and records
-`production_deployment_status: not_asserted` and an official-request count of
-zero. It is candidate evidence, not proof that production was deployed.
+0013. Candidate resources carry the fixed
+`org.clashlens.scope=candidate` label; the preparation path verifies those
+labels and exact names after creation before applying migrations. Scope/label
+overrides in `app.env` are rejected before resource mutation. Never aim it at
+a deployed volume or reuse deployed container names. The
+`candidate-preparation` receipt retains the exact PostgreSQL/network/volume
+names and labels plus the configured application and worker-replica absence
+proof. It records `production_deployment_status: not_asserted` and an
+official-request count of zero. It is candidate evidence, not proof that
+production was deployed.
 
 After #31 deploys the real stack, its separate evidence path may inspect the
 running application containers and database:

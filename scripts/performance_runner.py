@@ -44,6 +44,7 @@ DUPLICATE_ENDPOINT_MIX = {
 }
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
 ARTIFACT_SCHEMA_VERSION = 8
+CANDIDATE_RECEIPT_SCHEMA_VERSION = 2
 REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 14))
 CANONICAL_REPOSITORY_URL = "https://github.com/zzzubair/clashlens"
 CONFIGURATION_KEYS = {
@@ -696,6 +697,7 @@ def _duplicate_hard_failure_codes(
         summary = summary["total"]
     if isinstance(summary, dict):
         outcomes = summary.get("outcomes")
+        statuses = summary.get("statuses")
         count = summary.get("count")
         if (
             isinstance(outcomes, dict)
@@ -704,6 +706,19 @@ def _duplicate_hard_failure_codes(
             and (
                 outcomes.get("processed") != count
                 or summary.get("count_matches_expected") is False
+                or (
+                    isinstance(statuses, dict)
+                    and any(
+                        statuses.get(status, 0) > 0
+                        for status in (
+                            "pending",
+                            "leased",
+                            "waiting_retry",
+                            "waiting_dependency",
+                            "failed",
+                        )
+                    )
+                )
             )
         ):
             failures.append("fixed_acceptance_failure")
@@ -1407,6 +1422,984 @@ _COORDINATOR_WORKLOAD_KEYS = frozenset(
     }
 )
 
+_POSTGRES_SETTING_NAMES = frozenset(
+    {
+        "server_version",
+        "server_version_num",
+        "shared_buffers",
+        "work_mem",
+        "maintenance_work_mem",
+        "max_connections",
+        "track_io_timing",
+    }
+)
+_ARMY_PLAN_KEYS = frozenset(
+    {
+        "correlation",
+        "sql",
+        "parameters",
+        "rows_scanned",
+        "rows_returned",
+        "explain_analyze_buffers",
+    }
+)
+_ARMY_PARAMETER_KEYS = frozenset({"arity", "types"})
+_ARMY_RELATION_SUBSETS = {
+    "duplicate-heavy": frozenset(
+        {
+            "collector_observations",
+            "parsed_source_payloads",
+            "archive_catalogue",
+            "python_processing_jobs",
+        }
+    ),
+    "reset-boundary": frozenset(
+        {
+            "ranked_day_versions",
+            "leaderboard_snapshots",
+            "leaderboard_snapshot_entries",
+            "analytics_summaries",
+            "army_analytics_battle_facts",
+        }
+    ),
+    "correction": frozenset(
+        {
+            "ranked_day_versions",
+            "leaderboard_snapshots",
+            "leaderboard_snapshot_entries",
+            "analytics_summaries",
+            "army_analytics_battle_facts",
+        }
+    ),
+    "mixed-backfill": frozenset(
+        {"collector_observations", "python_processing_jobs"}
+    ),
+    "army-analytics": frozenset(
+        {"army_analytics_battle_facts", "leaderboard_snapshot_entries"}
+    ),
+}
+_ARMY_QUERY_SHAPES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("top-1000", "army_analytics.completed_day_logs"): ("str", "int", "int"),
+    ("top-1000", "army_analytics.completed_days"): ("str", "int", "int"),
+    ("top-1000", "army_analytics.published_snapshots"): ("array",),
+    ("top-1000", "army_analytics.rank_members"): ("int", "int", "int"),
+    ("top-1000", "army_analytics.cohort_quality"): ("int", "int", "int"),
+    ("top-1000", "army_analytics.troop_state_aggregates"): (
+        "str",
+        "int",
+        "int",
+        "str",
+        "array",
+    ),
+    ("top-1000", "army_analytics.troop_component_aggregates"): (
+        "str",
+        "int",
+        "int",
+        "str",
+        "array",
+    ),
+    ("top-1000", "army_analytics.selected_source_hash"): (
+        "str",
+        "int",
+        "int",
+        "str",
+        "array",
+    ),
+    ("trophies-5000-9999", "army_analytics.completed_day_logs"): (
+        "str",
+        "int",
+        "int",
+    ),
+    ("trophies-5000-9999", "army_analytics.completed_days"): (
+        "str",
+        "int",
+        "int",
+    ),
+    ("trophies-5000-9999", "army_analytics.missing_trophies"): (
+        "str",
+        "int",
+        "int",
+        "str",
+    ),
+    ("trophies-5000-9999", "army_analytics.troop_state_aggregates"): (
+        "str",
+        "int",
+        "int",
+        "str",
+        "int",
+        "int",
+    ),
+    ("trophies-5000-9999", "army_analytics.troop_component_aggregates"): (
+        "str",
+        "int",
+        "int",
+        "str",
+        "int",
+        "int",
+    ),
+    ("trophies-5000-9999", "army_analytics.selected_source_hash"): (
+        "str",
+        "int",
+        "int",
+        "str",
+        "int",
+        "int",
+    ),
+    ("streak-top-1000", "army_analytics.completed_day_logs"): (
+        "str",
+        "int",
+        "int",
+    ),
+    ("streak-top-1000", "army_analytics.completed_days"): (
+        "str",
+        "int",
+        "int",
+    ),
+    ("streak-top-1000", "army_analytics.published_snapshots"): ("array",),
+    ("streak-top-1000", "army_analytics.streak_members"): (
+        "array",
+        "int",
+        "int",
+    ),
+    ("streak-top-1000", "army_analytics.streak_candidates"): ("array", "int"),
+    ("streak-top-1000", "army_analytics.streak_shield_state"): (
+        "array",
+        "array",
+    ),
+    ("streak-top-1000", "army_analytics.cohort_quality"): (
+        "array",
+        "int",
+        "int",
+    ),
+    ("streak-top-1000", "army_analytics.troop_state_aggregates"): (
+        "str",
+        "int",
+        "int",
+        "str",
+        "array",
+    ),
+    ("streak-top-1000", "army_analytics.troop_component_aggregates"): (
+        "str",
+        "int",
+        "int",
+        "str",
+        "array",
+    ),
+    ("streak-top-1000", "army_analytics.selected_source_hash"): (
+        "str",
+        "int",
+        "int",
+        "str",
+        "array",
+    ),
+}
+_ARMY_QUERY_ORDER = {
+    population: tuple(
+        identity
+        for (selection, identity), _shape in _ARMY_QUERY_SHAPES.items()
+        if selection == population
+    )
+    for population in ("top-1000", "trophies-5000-9999", "streak-top-1000")
+}
+_DUPLICATE_LATENCY_STAGES = {
+    "python_read": "python_archive_get_verify",
+    "local_verify": "python_archive_local_verify",
+    "transaction": "python_domain_profile",
+    "repair": "python_archive_repair",
+}
+_DUPLICATE_LATENCY_KEYS = frozenset(
+    set(_DUPLICATE_LATENCY_STAGES)
+    | {
+        "collector_hashing_us",
+        "collector_operation_total_us",
+        "collector_remote_put_us",
+        "collector_get_verify_us",
+        "collector_local_verify_us",
+    }
+)
+_ARMY_MEMORY_KEYS = frozenset(
+    {
+        "host_swap_used_bytes",
+        "process_cgroup_available",
+        "process_swap_used_bytes",
+        "process_oom",
+        "process_oom_kill",
+        "database_cgroup_available",
+        "database_swap_used_bytes",
+        "database_oom",
+        "database_oom_kill",
+    }
+)
+_ARMY_MEMORY_DELTA_KEYS = frozenset(_ARMY_MEMORY_KEYS - {"host_swap_used_bytes", "process_cgroup_available", "database_cgroup_available"})
+
+
+def _bounded_int(value: Any, label: str, *, positive: bool = False) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{label} is invalid")
+    if positive and value == 0:
+        raise ValueError(f"{label} is invalid")
+    return value
+
+
+def _bounded_number(value: Any, label: str, *, allow_none: bool = False) -> float | None:
+    if value is None and allow_none:
+        return None
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(float(value))
+        or float(value) < 0
+    ):
+        raise ValueError(f"{label} is invalid")
+    return float(value)
+
+
+def _bounded_text(value: Any, label: str, *, limit: int = 4096) -> str:
+    if not isinstance(value, str) or not value or len(value) > limit:
+        raise ValueError(f"{label} is invalid")
+    return value
+
+
+def _validate_postgres_identity(value: Any, label: str) -> None:
+    if not isinstance(value, dict) or set(value) != {
+        "version",
+        "settings",
+        "applied_migration_versions",
+    }:
+        raise ValueError(f"{label} schema is invalid")
+    if not _bounded_text(value["version"], f"{label}.version").startswith("PostgreSQL "):
+        raise ValueError(f"{label}.version is invalid")
+    settings = value["settings"]
+    if not isinstance(settings, dict) or set(settings) != _POSTGRES_SETTING_NAMES:
+        raise ValueError(f"{label}.settings are invalid")
+    for name, setting in settings.items():
+        _bounded_text(name, f"{label}.setting name")
+        _bounded_text(setting, f"{label}.{name}")
+    if value["applied_migration_versions"] != list(REQUIRED_MIGRATION_VERSIONS):
+        raise ValueError(f"{label}.applied_migration_versions is invalid")
+
+
+def _army_parameter_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("army query parameter is non-finite")
+        return "float"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, datetime):
+        return "timestamp"
+    if isinstance(value, (list, tuple)):
+        return "array"
+    raise ValueError("army query parameter has an unsupported type")
+
+
+def _army_parameter_shape(parameters: Any) -> tuple[str, ...]:
+    if parameters is None:
+        values: list[Any] = []
+    elif isinstance(parameters, (list, tuple)):
+        values = list(parameters)
+    else:
+        values = [parameters]
+    if len(values) > 16:
+        raise ValueError("army query has too many parameters")
+    return tuple(_army_parameter_type(value) for value in values)
+
+
+def _army_query_identity(sql: Any) -> str:
+    if not isinstance(sql, str):
+        raise TypeError("army query is not text")
+    normalized = re.sub(r"\s+", " ", sql.strip()).upper()
+    if "FROM API_PLAYER_DAILY_LOGS" in normalized:
+        return "army_analytics.completed_day_logs"
+    if "FROM ARMY_ANALYTICS_COMPLETED_DAYS" in normalized:
+        return "army_analytics.completed_days"
+    if "FROM LEADERBOARD_SNAPSHOTS" in normalized and "DISTINCT ON" in normalized:
+        return "army_analytics.published_snapshots"
+    if "GROUP BY PLAYER_ID HAVING COUNT(DISTINCT SNAPSHOT_ID)" in normalized:
+        return "army_analytics.streak_members"
+    if "SELECT DISTINCT PLAYER_ID" in normalized and "FROM LEADERBOARD_SNAPSHOT_ENTRIES" in normalized:
+        return "army_analytics.streak_candidates"
+    if "FROM UNNEST" in normalized and "RANKED_DAY_VERSIONS" in normalized:
+        return "army_analytics.streak_shield_state"
+    if "FROM LEADERBOARD_SNAPSHOT_ENTRIES" in normalized and "NOT (FRESHNESS" in normalized:
+        return "army_analytics.cohort_quality"
+    if "FROM LEADERBOARD_SNAPSHOT_ENTRIES" in normalized and "POSITION BETWEEN" in normalized:
+        return "army_analytics.rank_members"
+    if "BATTLE_TIME_TROPHIES IS NULL" in normalized:
+        return "army_analytics.missing_trophies"
+    if "STRING_AGG(" in normalized and "INPUT_HASH" in normalized:
+        return "army_analytics.selected_source_hash"
+    if "GROUP BY ARMY_STATE" in normalized:
+        return "army_analytics.troop_state_aggregates"
+    if "CROSS JOIN LATERAL" in normalized:
+        return "army_analytics.troop_component_aggregates"
+    raise ValueError("army query is outside the fixed production protocol")
+
+
+def _public_explain_payload(payload: Any) -> list[dict[str, Any]]:
+    if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
+        raise ValueError("army EXPLAIN payload is invalid")
+    envelope = payload[0]
+    if not set(envelope).issubset(
+        {"Plan", "Planning Time", "Triggers", "Execution Time"}
+    ) or not {"Plan", "Planning Time", "Execution Time"}.issubset(envelope):
+        raise ValueError("army EXPLAIN payload retains non-public fields")
+    if "Triggers" in envelope and envelope["Triggers"] not in ([], None):
+        raise ValueError("army EXPLAIN triggers are not public facts")
+
+    def discard_fact(value: Any, label: str, depth: int = 0) -> None:
+        """Bound raw EXPLAIN details while keeping them out of the artifact."""
+        if depth > 8:
+            raise ValueError("army EXPLAIN detail is too deep")
+        if value is None or isinstance(value, bool):
+            return
+        if isinstance(value, (int, float)):
+            _bounded_number(value, label)
+            return
+        if isinstance(value, str):
+            _bounded_text(value, label)
+            return
+        if isinstance(value, list):
+            if len(value) > MAX_RETAINED_SEQUENCE:
+                raise ValueError("army EXPLAIN detail is unbounded")
+            for index, child in enumerate(value):
+                discard_fact(child, f"{label}[{index}]", depth + 1)
+            return
+        if isinstance(value, dict):
+            if len(value) > 64:
+                raise ValueError("army EXPLAIN detail is unbounded")
+            for key, child in value.items():
+                _bounded_text(key, f"{label} key", limit=256)
+                discard_fact(child, f"{label}.{key}", depth + 1)
+            return
+        raise ValueError("army EXPLAIN detail is invalid")
+
+    def plan_node(value: Any, depth: int = 0) -> dict[str, Any]:
+        if not isinstance(value, dict) or depth > 32:
+            raise ValueError("army EXPLAIN plan is invalid")
+        allowed = {"Node Type", "Actual Rows", "Actual Loops", "Rows Removed by Filter", "Plans"}
+        if not {"Node Type", "Actual Rows", "Actual Loops"}.issubset(value):
+            raise ValueError("army EXPLAIN plan retains non-public fields")
+        for key, child in value.items():
+            if key not in allowed:
+                discard_fact(child, f"army EXPLAIN {key}")
+        node = {
+            "Node Type": _bounded_text(value["Node Type"], "army EXPLAIN node", limit=256),
+            "Actual Rows": _bounded_number(value["Actual Rows"], "army EXPLAIN rows"),
+            "Actual Loops": _bounded_number(value["Actual Loops"], "army EXPLAIN loops"),
+        }
+        if "Rows Removed by Filter" in value:
+            node["Rows Removed by Filter"] = _bounded_number(
+                value["Rows Removed by Filter"], "army EXPLAIN filtered rows"
+            )
+        if "Plans" in value:
+            children = value["Plans"]
+            if not isinstance(children, list) or len(children) > MAX_RETAINED_SEQUENCE:
+                raise ValueError("army EXPLAIN plan is unbounded")
+            node["Plans"] = [plan_node(child, depth + 1) for child in children]
+        return node
+
+    return [
+        {
+            "Plan": plan_node(envelope["Plan"]),
+            "Planning Time": _bounded_number(envelope["Planning Time"], "army planning time"),
+            "Execution Time": _bounded_number(envelope["Execution Time"], "army execution time"),
+        }
+    ]
+
+
+def _validate_relation_subset(database: Any, mode: str, label: str) -> None:
+    required = _ARMY_RELATION_SUBSETS[mode]
+    if not isinstance(database, dict):
+        raise TypeError(f"{label} database is invalid")
+    maps = [database.get(name) for name in ("relations", "relation_sizes", "relation_stats")]
+    affected = database.get("affected_relations")
+    if any(not isinstance(value, dict) or not required.issubset(value) for value in maps) or not isinstance(affected, list) or not required.issubset(affected):
+        raise ValueError(f"{label} relation evidence is incomplete")
+
+
+def _validate_published_latency(workload: Any, evidence: Any, label: str) -> None:
+    stages = workload.get("stage_metrics") if isinstance(workload, dict) else None
+    latency = evidence.get("latency_ms") if isinstance(evidence, dict) else None
+    if not isinstance(stages, dict) or not isinstance(latency, dict):
+        raise TypeError(f"{label} latency evidence is invalid")
+    if not set(latency).issubset(_DUPLICATE_LATENCY_KEYS):
+        raise ValueError(f"{label} latency evidence has an unknown stage")
+    for name, stage_name in _DUPLICATE_LATENCY_STAGES.items():
+        metric = stages.get(stage_name)
+        published = latency.get(name)
+        if metric is None:
+            if published is not None:
+                raise ValueError(f"{label}.{name} has no source stage")
+            continue
+        if not isinstance(metric, dict) or "average_ms" not in metric:
+            raise ValueError(f"{label}.{stage_name} is invalid")
+        average = _bounded_number(metric["average_ms"], f"{label}.{stage_name}.average_ms")
+        if published is None or not math.isclose(float(published), average or 0.0, rel_tol=1e-12):
+            raise ValueError(f"{label}.{name} contradicts {stage_name}")
+    for name, value in latency.items():
+        _bounded_number(value, f"{label}.latency_ms.{name}", allow_none=True)
+
+
+def _validate_duplicate_protocol(
+    workload: Any,
+    config: dict[str, Any],
+    label: str,
+    *,
+    overlap_cycle: bool = False,
+) -> None:
+    if not isinstance(workload, dict):
+        raise TypeError(f"{label} workload is invalid")
+    observations = _bounded_int(config["duplicate_observations"], f"{label}.observations", positive=True)
+    cycles = _bounded_int(config["duplicate_cycles"], f"{label}.cycles", positive=True)
+    if observations < 2 or observations > DUPLICATE_EXECUTION_CAP or cycles > 4:
+        raise ValueError(f"{label} duplicate protocol is invalid")
+    expected_total = observations * cycles
+    if workload.get("observations") != observations:
+        raise ValueError(f"{label}.observations contradict configuration")
+    if workload.get("official_responses") != expected_total or workload.get("executed_observations") != expected_total:
+        raise ValueError(f"{label} response counts contradict configuration")
+    if overlap_cycle:
+        _bounded_number(workload.get("cycle_elapsed_seconds"), f"{label}.cycle_elapsed_seconds")
+    else:
+        elapsed = workload.get("cycle_elapsed_seconds")
+        if not isinstance(elapsed, list) or len(elapsed) != cycles:
+            raise ValueError(f"{label}.cycle_elapsed_seconds is invalid")
+        for value in elapsed:
+            _bounded_number(value, f"{label}.cycle_elapsed_seconds")
+    for key in ("median_cycle_seconds", "daily_288_cycle_projection_seconds", "aggregation_factor"):
+        _bounded_number(workload.get(key), f"{label}.{key}")
+    expected_mix = _duplicate_response_mix(observations, _duplicate_endpoint_mix(observations))
+    expected_responses = {key: value * cycles for key, value in expected_mix.items()}
+    expected_occurrences = {
+        key: value * cycles for key, value in _duplicate_endpoint_mix(observations).items()
+    }
+    if workload.get("endpoint_mix") != expected_responses or workload.get("response_counts_by_endpoint") != expected_responses:
+        raise ValueError(f"{label} response endpoint counts are invalid")
+    if workload.get("occurrence_counts_by_endpoint") != expected_occurrences:
+        raise ValueError(f"{label} occurrence endpoint counts are invalid")
+    contract = workload.get("contract")
+    if not isinstance(contract, dict) or set(contract) != {
+        "expected_occurrences",
+        "executed_occurrences",
+        "matches_expected",
+        "endpoint_mix",
+    }:
+        raise ValueError(f"{label} contract is invalid")
+    if contract != {
+        "expected_occurrences": DUPLICATE_EXECUTION_CAP,
+        "executed_occurrences": observations,
+        "matches_expected": observations == DUPLICATE_EXECUTION_CAP,
+        "endpoint_mix": dict(DUPLICATE_ENDPOINT_MIX),
+    }:
+        raise ValueError(f"{label} contract is invalid")
+    fixture_bytes = workload.get("fixture_bytes_by_endpoint")
+    if not isinstance(fixture_bytes, dict) or set(fixture_bytes) != set(DUPLICATE_ENDPOINT_MIX):
+        raise ValueError(f"{label} fixture bytes are invalid")
+    exact_bytes = sum(
+        expected_occurrences[key] * _bounded_int(fixture_bytes[key], f"{label}.{key}", positive=True)
+        for key in DUPLICATE_ENDPOINT_MIX
+    )
+    if workload.get("exact_bytes") != exact_bytes:
+        raise ValueError(f"{label}.exact_bytes contradicts endpoint occurrences")
+    traffic = workload.get("official_api_traffic")
+    if traffic != {"requests": 0, "source": "committed fixtures"}:
+        raise ValueError(f"{label} official API traffic is invalid")
+    canonical = workload.get("canonical_content")
+    if not isinstance(canonical, dict) or set(canonical) != {
+        "parsed_payloads_by_endpoint",
+        "profile_semantic_versions",
+        "profile_occurrence_effects",
+        "battle_canonical_rows",
+        "battle_occurrence_rows",
+        "ranking_canonical_rows",
+        "ranking_occurrence_links",
+    }:
+        raise ValueError(f"{label} canonical content is invalid")
+    parsed = canonical["parsed_payloads_by_endpoint"]
+    if not isinstance(parsed, dict) or any(
+        key not in DUPLICATE_ENDPOINT_MIX or _bounded_int(value, f"{label}.parsed.{key}") < 0
+        for key, value in parsed.items()
+    ):
+        raise ValueError(f"{label} parsed payload counts are invalid")
+    for key in (
+        "profile_semantic_versions",
+        "profile_occurrence_effects",
+        "battle_canonical_rows",
+        "battle_occurrence_rows",
+        "ranking_canonical_rows",
+        "ranking_occurrence_links",
+    ):
+        _bounded_int(canonical[key], f"{label}.canonical.{key}")
+    if canonical["profile_semantic_versions"] != parsed.get("profile", 0) or canonical["profile_occurrence_effects"] != expected_occurrences["profile"]:
+        raise ValueError(f"{label} profile canonical counts are invalid")
+    if canonical["battle_canonical_rows"] > canonical["battle_occurrence_rows"] or canonical["ranking_canonical_rows"] > canonical["ranking_occurrence_links"]:
+        raise ValueError(f"{label} canonical counts are invalid")
+    summary = workload.get("processing_summary")
+    if not isinstance(summary, dict) or summary.get("count") != expected_total or summary.get("expected_count") != expected_total:
+        raise ValueError(f"{label} processing count is invalid")
+
+
+def _validate_duplicate_sample_semantics(
+    sample: dict[str, Any], config: dict[str, Any], artifact_failures: list[str], label: str
+) -> None:
+    workload = sample.get("workload")
+    database = sample.get("database")
+    _validate_duplicate_protocol(workload, config, label)
+    _validate_relation_subset(database, "duplicate-heavy", label)
+    evidence = sample.get("evidence")
+    spool = sample.get("spool")
+    archive = sample.get("archive_operations")
+    if not isinstance(evidence, dict) or not isinstance(spool, dict) or not isinstance(archive, dict):
+        raise TypeError(f"{label} evidence is invalid")
+    _validate_published_latency(workload, evidence, label)
+    if evidence.get("response_count") != workload["official_responses"] or evidence.get("executed_responses") != workload["executed_observations"] or evidence.get("exact_bytes") != workload["exact_bytes"] or evidence.get("execution_method") != workload["aggregation_method"]:
+        raise ValueError(f"{label} workload and evidence counters disagree")
+    counters = workload.get("evidence_counters")
+    if not isinstance(counters, dict) or any(
+        counters.get(key) != evidence.get(key)
+        for key in ("local_hits", "local_misses", "repairs", "provider_errors")
+    ):
+        raise ValueError(f"{label} evidence counters disagree")
+    if evidence.get("projected_responses") != evidence["response_count"] - evidence["executed_responses"]:
+        raise ValueError(f"{label} projected response count is invalid")
+    for key in ("response_counts_by_endpoint", "occurrence_counts_by_endpoint"):
+        if database.get(key) != workload[key]:
+            raise ValueError(f"{label}.{key} disagrees with workload")
+    local_misses = _bounded_int(evidence.get("local_misses"), f"{label}.local_misses")
+    distinct_hashes = _bounded_int(evidence.get("distinct_hashes"), f"{label}.distinct_hashes")
+    final_objects = _bounded_int(spool.get("final_object_count"), f"{label}.final_object_count")
+    archive_get = _bounded_int(archive.get("get"), f"{label}.archive.get")
+    if not (local_misses == archive_get == evidence.get("repairs") == distinct_hashes == final_objects):
+        raise ValueError(f"{label} local/archive/hash counters disagree")
+    archived_bytes = _bounded_int(evidence.get("archived_bytes"), f"{label}.archived_bytes")
+    archive_get_bytes = _bounded_int(archive.get("get_bytes"), f"{label}.archive.get_bytes")
+    final_bytes = _bounded_int(spool.get("final_bytes"), f"{label}.final_bytes")
+    if not (archived_bytes == archive_get_bytes == final_bytes):
+        raise ValueError(f"{label} archived bytes disagree")
+    if not _bounded_int(evidence.get("retries"), f"{label}.retries") == workload["processing_summary"]["retry_count"]:
+        raise ValueError(f"{label}.retries disagrees with processing")
+    derived = _duplicate_hard_failure_codes(workload, database)
+    if not set(derived).issubset(artifact_failures):
+        raise ValueError(f"{label} duplicate hard failures are incomplete")
+    if not derived:
+        full_spool = workload.get("spool", {})
+        residue_keys = (
+            "temporary_bytes",
+            "temporary_objects",
+            "abandoned_temp_bytes",
+            "abandoned_temp_objects",
+            "reserved_bytes",
+            "reserved_objects",
+        )
+        if (
+            not isinstance(full_spool, dict)
+            or any(key not in full_spool or full_spool[key] != 0 for key in residue_keys)
+            or evidence.get("provider_errors") != 0
+            or sample["database"].get("queue_residue")
+        ):
+            raise ValueError(f"{label} passing residue is non-zero")
+
+
+def _validate_resources(value: dict[str, Any], label: str) -> None:
+    _bounded_number(value.get("elapsed_seconds"), f"{label}.elapsed_seconds")
+    _bounded_number(value.get("cpu_seconds"), f"{label}.cpu_seconds")
+    _bounded_int(value.get("peak_rss_kib"), f"{label}.peak_rss_kib", positive=True)
+
+
+def _validate_reset_semantics(
+    samples: list[dict[str, Any]], config: dict[str, Any], mode: str, artifact_failures: list[str]
+) -> None:
+    generations = 2 if mode == "correction" else 1
+    for index, sample in enumerate(samples):
+        label = f"sample {index} reset"
+        workload = sample["workload"]
+        population = config["populations"][index]
+        if workload["population"] != population:
+            raise ValueError(f"{label} population disagrees with configuration")
+        _validate_resources(sample, label)
+        expected = {
+            "ranked_day_versions": generations * population,
+            "snapshot_headers": 2 * generations,
+            "snapshot_entries": 2 * generations * population,
+        }
+        actual = {key: workload["fact_counts"][key] for key in expected}
+        summary = workload["processing_summary"]["total"]
+        derived: list[str] = []
+        if workload["fanout_evidence"]["expected"] != expected or actual != expected:
+            derived.append("reset_fanout_mismatch")
+        if summary["outcomes"]["processed"] != summary["count"]:
+            derived.append("reset_non_processed_result")
+        if workload["queue_residue"] or sample["database"].get("queue_residue"):
+            derived.append("reset_queue_residue")
+        if workload["fanout_evidence"]["generation_states"] and len(workload["fanout_evidence"]["generation_states"]) != generations:
+            derived.append("reset_generation_count_mismatch")
+        derived = _failure_codes(derived)
+        if set(workload["hard_failures"]) != set(derived) or not set(derived).issubset(artifact_failures):
+            raise ValueError(f"{label} hard failures are incomplete")
+        if workload["official_responses"] != workload["processing_summary"]["official"]["count"]:
+            raise ValueError(f"{label} response count is invalid")
+
+
+def _validate_memory_facts(before: Any, after: Any, delta: Any, label: str) -> None:
+    for value, name in ((before, "before"), (after, "after")):
+        if not isinstance(value, dict) or set(value) != _ARMY_MEMORY_KEYS:
+            raise ValueError(f"{label}.{name} memory facts are invalid")
+        for key in _ARMY_MEMORY_KEYS:
+            _bounded_int(value[key], f"{label}.{name}.{key}")
+        if value["process_cgroup_available"] not in {0, 1} or value["database_cgroup_available"] not in {0, 1}:
+            raise ValueError(f"{label}.{name} cgroup facts are invalid")
+    if not isinstance(delta, dict) or set(delta) != _ARMY_MEMORY_DELTA_KEYS:
+        raise ValueError(f"{label}.delta memory facts are invalid")
+    for key in _ARMY_MEMORY_DELTA_KEYS:
+        _bounded_int(delta[key], f"{label}.delta.{key}")
+        if delta[key] != max(0, after[key] - before[key]):
+            raise ValueError(f"{label}.delta contradicts memory facts")
+
+
+def _validate_mixed_semantics(
+    sample: dict[str, Any], config: dict[str, Any], artifact_failures: list[str]
+) -> None:
+    workload = sample["workload"]
+    if (
+        workload["live_jobs"] != config["live_jobs"]
+        or workload["backfill_jobs"] != config["backfill_jobs"]
+        or workload["configured_lanes"] != config["lanes"]
+        or workload["effective_lanes"] != config["effective_lanes"]
+        or workload["official_responses"] != config["live_jobs"] + config["backfill_jobs"]
+    ):
+        raise ValueError("mixed workload disagrees with configuration")
+    _validate_resources(workload, "mixed workload")
+    counts = workload["completion_counts"]
+    if counts != {"live": config["live_jobs"], "backfill": config["backfill_jobs"]}:
+        raise ValueError("mixed completion counts disagree with jobs")
+    order = workload["completion_order"]
+    if order is not None and order.count("live") != config["live_jobs"]:
+        raise ValueError("mixed completion order disagrees with jobs")
+    live = workload["live_queue_latency_seconds"]
+    contract = workload["live_latency_contract"]
+    if any(contract[key] != live[source] for key, source in {
+        "p95_seconds": "p95",
+        "maximum_seconds": "maximum",
+        "collection_maximum_seconds": "collection_maximum",
+    }.items()):
+        raise ValueError("mixed latency contract is not sourced from measurements")
+    five = workload["five_minute_contract"]
+    if five["elapsed_seconds"] != workload["elapsed_seconds"] or five["passed"] is not (workload["elapsed_seconds"] <= five["target_seconds"]):
+        raise ValueError("mixed five-minute contract is invalid")
+    ages = sample["database"].get("queue_age_seconds", {})
+    oldest = max((age for age in ages.values() if age is not None), default=None)
+    if workload["oldest_active_queue_age_seconds"] != oldest:
+        raise ValueError("mixed oldest queue age is invalid")
+    _validate_memory_facts(
+        workload["memory_pressure_before"],
+        workload["memory_pressure_after"],
+        workload["memory_pressure_delta"],
+        "mixed workload",
+    )
+    derived: list[str] = []
+    expected_count = config["live_jobs"] + config["backfill_jobs"]
+    summary = workload["processing_summary"]
+    if summary["count"] != expected_count or sum(counts.values()) != expected_count:
+        derived.append("mixed_result_count_mismatch")
+    if summary["outcomes"]["processed"] != summary["count"] or summary["statuses"]["complete"] != summary["count"]:
+        derived.append("mixed_non_processed_result")
+    if not contract["passed"]:
+        derived.append("mixed_live_latency_exceeded")
+    if not five["passed"]:
+        derived.append("mixed_collection_latency_exceeded")
+    if sample["database"].get("queue_residue"):
+        derived.append("mixed_queue_residue")
+    if any(
+        workload["memory_pressure_before"][key] == 0 or workload["memory_pressure_after"][key] == 0
+        for key in ("process_cgroup_available", "database_cgroup_available")
+    ):
+        derived.append("memory_pressure_unavailable")
+    if any(workload["memory_pressure_delta"].values()):
+        derived.append("memory_pressure_increased")
+    if workload["official_api_traffic"] != {"requests": 0, "source": "committed fixtures"}:
+        raise ValueError("mixed official API traffic is invalid")
+    if workload["hard_failures"] != _failure_codes(derived) or not set(derived).issubset(artifact_failures):
+        raise ValueError("mixed hard failures are incomplete")
+
+
+def _validate_army_plan(value: Any, selection: str, statement_id: int, label: str) -> None:
+    if not isinstance(value, dict) or set(value) != _ARMY_PLAN_KEYS:
+        raise ValueError(f"{label} plan schema is invalid")
+    correlation = value["correlation"]
+    if correlation != {
+        "selection": selection,
+        "lens": correlation.get("lens") if isinstance(correlation, dict) else None,
+        "statement_id": statement_id,
+    } or correlation["lens"] not in {"offense", "defense"}:
+        raise ValueError(f"{label} plan correlation is invalid")
+    identity = value["sql"]
+    if not isinstance(identity, str) or (selection, identity) not in _ARMY_QUERY_SHAPES:
+        raise ValueError(f"{label} plan identity is invalid")
+    parameters = value["parameters"]
+    if not isinstance(parameters, dict) or set(parameters) != _ARMY_PARAMETER_KEYS:
+        raise ValueError(f"{label} parameter shape is invalid")
+    shape = tuple(parameters["types"]) if isinstance(parameters["types"], list) else ()
+    if parameters["arity"] != len(shape) or shape != _ARMY_QUERY_SHAPES[(selection, identity)]:
+        raise ValueError(f"{label} parameter shape is invalid")
+    for kind in shape:
+        if kind not in {"array", "bool", "float", "int", "null", "str", "timestamp"}:
+            raise ValueError(f"{label} parameter shape is invalid")
+    scanned = _bounded_int(value["rows_scanned"], f"{label}.rows_scanned")
+    returned = _bounded_int(value["rows_returned"], f"{label}.rows_returned")
+    if scanned < returned:
+        raise ValueError(f"{label} plan counts are invalid")
+    public = _public_explain_payload(value["explain_analyze_buffers"])
+    if public != value["explain_analyze_buffers"]:
+        raise ValueError(f"{label} plan retains non-public facts")
+    planned_scanned, planned_returned = _plan_counts(public[0]["Plan"])
+    if (scanned, returned) != (planned_scanned, planned_returned):
+        raise ValueError(f"{label} plan counts disagree with EXPLAIN")
+
+
+def _validate_army_selection(value: Any, spec: dict[str, Any], label: str) -> None:
+    if not isinstance(value, dict) or value.get("selection") != spec["selection"] or value.get("lens") not in {"offense", "defense"}:
+        raise ValueError(f"{label} selection identity is invalid")
+    if value.get("warmups") != STEP5_WARMUPS or value.get("requests") != STEP5_REQUESTS:
+        raise ValueError(f"{label} warmup/request protocol is invalid")
+    _bounded_number(value.get("forced_miss_seconds"), f"{label}.forced_miss_seconds")
+    _bounded_number(value.get("forced_miss_target_seconds"), f"{label}.forced_miss_target_seconds")
+    _validate_memory_facts(value.get("forced_miss_memory_before"), value.get("forced_miss_memory_after"), value.get("forced_miss_memory_delta"), label)
+    forced_passed = (
+        value["forced_miss_seconds"] < STEP5_FORCED_MISS_TARGET_SECONDS
+        and value["forced_miss_memory_before"]["process_cgroup_available"] == 1
+        and value["forced_miss_memory_after"]["process_cgroup_available"] == 1
+        and value["forced_miss_memory_before"]["database_cgroup_available"] == 1
+        and value["forced_miss_memory_after"]["database_cgroup_available"] == 1
+        and not any(value["forced_miss_memory_delta"].values())
+    )
+    if value.get("forced_miss_passed") is not forced_passed:
+        raise ValueError(f"{label}.forced_miss_passed is invalid")
+    latencies = value.get("latencies_ms")
+    if not isinstance(latencies, list) or len(latencies) != STEP5_REQUESTS:
+        raise ValueError(f"{label}.latencies_ms is invalid")
+    values = [_bounded_number(item, f"{label}.latency") for item in latencies]
+    numeric = [float(item) for item in values if item is not None]
+    p95 = _p95(numeric)
+    if not math.isclose(value["p95_ms"], p95, rel_tol=1e-12) or value["min_ms"] != min(numeric) or value["max_ms"] != max(numeric):
+        raise ValueError(f"{label} latency summaries are invalid")
+    if value.get("target_ms") != STEP5_P95_TARGET_MS or value.get("target_passed") is not (p95 < STEP5_P95_TARGET_MS):
+        raise ValueError(f"{label} latency target is invalid")
+    if value.get("selected_fact_count") != spec["expected_facts"] or value.get("expected_fact_count") != spec["expected_facts"]:
+        raise ValueError(f"{label} selected fact counts are invalid")
+    if value.get("troop_keys") != list(STEP5_TROOP_KEYS):
+        raise ValueError(f"{label} troop keys are invalid")
+    _bounded_int(value.get("peak_rss_kib"), f"{label}.peak_rss_kib", positive=True)
+    plans = value.get("endpoint_sql")
+    expected = _ARMY_QUERY_ORDER[spec["selection"]]
+    if not isinstance(plans, list) or len(plans) != len(expected):
+        raise ValueError(f"{label}.endpoint_sql is invalid")
+    for statement_id, (plan, identity) in enumerate(zip(plans, expected, strict=True), 1):
+        _validate_army_plan(plan, spec["selection"], statement_id, f"{label}.endpoint_sql[{statement_id}]")
+        if plan["sql"] != identity or plan["correlation"]["lens"] != spec["lens"]:
+            raise ValueError(f"{label}.endpoint_sql identity is invalid")
+
+
+def _validate_nested_army_read_sample(value: Any, label: str) -> None:
+    if not isinstance(value, dict) or value.get("status") != "passed":
+        raise ValueError(f"{label} status is invalid")
+    selections = value.get("selections")
+    expected_selections = ("top-1000", "trophies-5000-9999", "streak-top-1000")
+    if not isinstance(selections, list) or len(selections) != len(expected_selections):
+        raise ValueError(f"{label}.selections are invalid")
+    read_keys = {
+        "selection",
+        "synthetic_fact_limit",
+        "rows_scanned",
+        "rows_returned",
+        "latency_ms",
+        "endpoint",
+        "explain_analyze_buffers",
+    }
+    for read, expected_selection in zip(selections, expected_selections, strict=True):
+        if not isinstance(read, dict) or set(read) != read_keys or read["selection"] != expected_selection:
+            raise ValueError(f"{label}.selection evidence is invalid")
+        _bounded_int(read["synthetic_fact_limit"], f"{label}.synthetic_fact_limit", positive=True)
+        scanned = _bounded_int(read["rows_scanned"], f"{label}.rows_scanned")
+        returned = _bounded_int(read["rows_returned"], f"{label}.rows_returned")
+        if scanned < returned:
+            raise ValueError(f"{label}.plan counts are invalid")
+        _bounded_number(read["latency_ms"], f"{label}.latency_ms")
+        endpoint = read["endpoint"]
+        if not isinstance(endpoint, dict) or set(endpoint) != {
+            "status",
+            "returned_fact_count",
+            "latency_ms",
+        } or endpoint["status"] not in {"returned", "not-found", "ArmyAnalyticsUnavailable", "CurrentSeasonEmpty"}:
+            raise ValueError(f"{label}.endpoint evidence is invalid")
+        _bounded_int(endpoint["returned_fact_count"], f"{label}.returned_fact_count")
+        _bounded_number(endpoint["latency_ms"], f"{label}.endpoint.latency_ms")
+        payload = read["explain_analyze_buffers"]
+        if not isinstance(payload, dict):
+            raise TypeError(f"{label}.plan evidence is invalid")
+        public = _public_explain_payload([payload])[0]
+        if public != payload:
+            raise ValueError(f"{label}.plan retains raw EXPLAIN facts")
+        planned_scanned, planned_returned = _plan_counts(public["Plan"])
+        if (scanned, returned) != (planned_scanned, planned_returned):
+            raise ValueError(f"{label}.plan counts disagree with EXPLAIN")
+
+
+def _validate_army_mixed(value: Any, specs: tuple[dict[str, Any], ...], label: str) -> None:
+    if not isinstance(value, dict) or not isinstance(value.get("analytics_lanes"), list) or len(value["analytics_lanes"]) != len(specs):
+        raise ValueError(f"{label} analytics lanes are invalid")
+    spec_by_pair = {(spec["selection"], spec["lens"]): spec for spec in specs}
+    seen: set[tuple[str, str]] = set()
+    for lane in value["analytics_lanes"]:
+        pair = (lane.get("selection"), lane.get("lens"))
+        if pair in seen or pair not in spec_by_pair or lane.get("warmups") != STEP5_WARMUPS or lane.get("requests") != STEP5_REQUESTS:
+            raise ValueError(f"{label} analytics lane identity is invalid")
+        seen.add(pair)
+        spec = spec_by_pair[pair]
+        if lane.get("selected_fact_count") != spec["expected_facts"] or lane.get("troop_keys") != list(STEP5_TROOP_KEYS) or lane.get("target_ms") != STEP5_P95_TARGET_MS or lane.get("target_passed") is not (lane.get("p95_ms") < STEP5_P95_TARGET_MS):
+            raise ValueError(f"{label} analytics lane facts are invalid")
+        _bounded_number(lane.get("p95_ms"), f"{label}.lane.p95_ms")
+        _bounded_int(lane.get("overlap_measurements"), f"{label}.lane.overlap_measurements")
+    if seen != set(spec_by_pair):
+        raise ValueError(f"{label} analytics lanes are incomplete")
+    account = value.get("account")
+    if not isinstance(account, dict) or account.get("warmups") != STEP5_WARMUPS or account.get("requests") != STEP5_REQUESTS:
+        raise ValueError(f"{label} account protocol is invalid")
+    _bounded_int(account.get("overlap_measurements"), f"{label}.account_overlap_measurements")
+    latencies = account.get("latencies_ms")
+    if not isinstance(latencies, list) or len(latencies) != STEP5_REQUESTS:
+        raise ValueError(f"{label}.account.latencies_ms is invalid")
+    values = [_bounded_number(item, f"{label}.account.latency") for item in latencies]
+    numeric = [float(item) for item in values if item is not None]
+    account_p95 = _p95(numeric)
+    if (
+        not math.isclose(account.get("p95_ms"), account_p95, rel_tol=1e-12)
+        or account.get("min_ms") != min(numeric)
+        or account.get("max_ms") != max(numeric)
+    ):
+        raise ValueError(f"{label} account latency summaries are invalid")
+    if account.get("target_ms") != STEP5_P95_TARGET_MS or account.get("target_passed") is not (account_p95 < STEP5_P95_TARGET_MS):
+        raise ValueError(f"{label} account latency target is invalid")
+    overlaps = value.get("overlap_counts")
+    expected_overlaps = {f"{selection}/{lens}": next(lane["overlap_measurements"] for lane in value["analytics_lanes"] if lane["selection"] == selection and lane["lens"] == lens) for selection, lens in spec_by_pair}
+    if overlaps != expected_overlaps or value.get("account_overlap_measurements") != account["overlap_measurements"]:
+        raise ValueError(f"{label} overlap counts are invalid")
+    nested = _failure_codes(value.get("hard_failures"))
+    if value.get("hard_failures") != nested:
+        raise ValueError(f"{label} hard failures are invalid")
+    cycle = value.get("collection_cycle")
+    _validate_duplicate_protocol(cycle, {"duplicate_observations": DUPLICATE_EXECUTION_CAP, "duplicate_cycles": 1}, f"{label}.collection_cycle", overlap_cycle=True)
+    summary = cycle.get("processing_summary")
+    expected: list[str] = []
+    if any(count < STEP5_REQUESTS for count in overlaps.values()):
+        expected.append("step5_overlap_incomplete")
+    if summary.get("count") != DUPLICATE_EXECUTION_CAP:
+        expected.append("step5_collection_result_count_mismatch")
+    if summary.get("outcomes", {}).get("processed") != summary.get("count"):
+        expected.append("step5_non_processed_result")
+    if any(not lane["target_passed"] for lane in value["analytics_lanes"]):
+        expected.append("step5_p95_exceeded")
+    if account["overlap_measurements"] < STEP5_REQUESTS:
+        expected.append("step5_account_overlap_incomplete")
+    if not account["target_passed"]:
+        expected.append("step5_account_p95_exceeded")
+    if cycle["cycle_elapsed_seconds"] >= STEP5_COLLECTION_LIMIT_SECONDS:
+        expected.append("step5_collection_cycle_too_slow")
+    if nested != _failure_codes(expected):
+        raise ValueError(f"{label} hard failures are incomplete")
+
+
+def _validate_army_semantics(
+    value: dict[str, Any], provenance: dict[str, Any], artifact_failures: list[str], label: str
+) -> None:
+    configuration = provenance.get("configuration", {})
+    if (
+        configuration.get("army_warmups") != STEP5_WARMUPS
+        or configuration.get("army_requests") != STEP5_REQUESTS
+        or configuration.get("analytics_lanes") != STEP5_ANALYTICS_LANES
+    ):
+        raise ValueError(f"{label} configuration is not the fixed army protocol")
+    protocol = {
+        "population": STEP5_POPULATION,
+        "query_work_mem": "256MB",
+        "days": STEP5_DAYS,
+        "facts_per_member_day_per_lens": STEP5_FACTS_PER_MEMBER_DAY,
+        "selected_members": STEP5_SELECTED_MEMBERS,
+        "missing_trophy_rate": f"1/{STEP5_MISSING_TROPHY_RATE}",
+        "troop_keys": len(STEP5_TROOP_KEYS),
+        "warmups": STEP5_WARMUPS,
+        "requests": STEP5_REQUESTS,
+        "p95_target_ms": STEP5_P95_TARGET_MS,
+        "forced_miss_target_seconds": STEP5_FORCED_MISS_TARGET_SECONDS,
+        "analytics_lanes": STEP5_ANALYTICS_LANES,
+        "duplicate_cycle_observations": DUPLICATE_EXECUTION_CAP,
+    }
+    if value.get("protocol") != protocol:
+        raise ValueError(f"{label}.protocol is invalid")
+    seed = {
+        "population": STEP5_POPULATION,
+        "days": STEP5_DAYS,
+        "facts_per_lens": STEP5_POPULATION * STEP5_DAYS * STEP5_FACTS_PER_MEMBER_DAY,
+        "missing_trophies_per_lens": STEP5_POPULATION * STEP5_DAYS * STEP5_FACTS_PER_MEMBER_DAY // STEP5_MISSING_TROPHY_RATE,
+        "snapshots": STEP5_DAYS,
+        "snapshot_entries": STEP5_DAYS * STEP5_SELECTED_MEMBERS,
+        "completed_days": STEP5_DAYS,
+        "selected_facts_per_lens": STEP5_SELECTED_MEMBERS * STEP5_DAYS * STEP5_FACTS_PER_MEMBER_DAY,
+        "troop_keys": len(STEP5_TROOP_KEYS),
+    }
+    if value.get("seed") != seed:
+        raise ValueError(f"{label}.seed is invalid")
+    specs = _army_selection_specs()
+    selections = value.get("selections")
+    if not isinstance(selections, list) or len(selections) != len(specs):
+        raise ValueError(f"{label}.selections are invalid")
+    for selection, spec in zip(selections, specs, strict=True):
+        _validate_army_selection(selection, spec, f"{label}.{selection.get('selection')}/{selection.get('lens')}")
+    _validate_army_mixed(value["mixed_load"], specs, f"{label}.mixed_load")
+    cycle_counts = value["mixed_load"]["collection_cycle"]["occurrence_counts_by_endpoint"]
+    expected_counts = dict(cycle_counts)
+    expected_counts["profile"] += 1
+    if value["database"]["response_counts_by_endpoint"] != expected_counts or value["database"]["occurrence_counts_by_endpoint"] != expected_counts:
+        raise ValueError(f"{label}.database counts are invalid")
+    if value["queue_drained"] is not (not value["database"].get("queue_residue")):
+        raise ValueError(f"{label}.queue_drained is invalid")
+    _validate_postgres_identity(value["postgres"], f"{label}.postgres")
+    if value["postgres"] != provenance.get("postgres") or provenance.get("execution", {}).get("postgres") != {
+        "version": value["postgres"]["version"],
+        "settings": value["postgres"]["settings"],
+    }:
+        raise ValueError(f"{label}.postgres provenance is invalid")
+    _validate_resources(value, label)
+    _validate_memory_facts(value["memory_pressure_before"], value["memory_pressure_after"], value["memory_pressure_delta"], label)
+    expected_failures: list[str] = []
+    for selection in selections:
+        if not selection["forced_miss_passed"]:
+            expected_failures.append("step5_forced_miss_exceeded")
+        if selection["forced_miss_memory_before"]["process_cgroup_available"] != 1 or selection["forced_miss_memory_after"]["process_cgroup_available"] != 1 or selection["forced_miss_memory_before"]["database_cgroup_available"] != 1 or selection["forced_miss_memory_after"]["database_cgroup_available"] != 1:
+            expected_failures.append("step5_cgroup_unavailable")
+        if any(selection["forced_miss_memory_delta"].values()):
+            expected_failures.append("step5_memory_pressure_increased")
+        if not selection["target_passed"]:
+            expected_failures.append("step5_p95_exceeded")
+    expected_failures.extend(value["mixed_load"]["hard_failures"])
+    if value["database"].get("queue_residue"):
+        expected_failures.append("queue_residue")
+    if any(value["memory_pressure_before"][key] != 1 or value["memory_pressure_after"][key] != 1 for key in ("process_cgroup_available", "database_cgroup_available")):
+        expected_failures.append("memory_pressure_unavailable")
+    if any(value["memory_pressure_delta"].values()):
+        expected_failures.append("memory_pressure_increased")
+    expected_failures = _failure_codes(expected_failures)
+    if value.get("hard_failures") != expected_failures or value.get("hard_failures") != artifact_failures:
+        raise ValueError(f"{label} hard failures are incomplete")
+    if value.get("status") != ("passed" if not expected_failures else "failed"):
+        raise ValueError(f"{label}.status contradicts hard failures")
+
 
 def _reject_retained_job_details(value: Any) -> None:
     """Reject unbounded per-job detail anywhere in a retained artifact."""
@@ -1678,7 +2671,6 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
     if (
         not isinstance(runner_sha, str)
         or re.fullmatch(r"[0-9a-f]{64}", runner_sha) is None
-        or runner_sha != _sha(Path(__file__).read_bytes())
     ):
         raise ValueError("provenance runner hash is stale or invalid")
     migrations = provenance["migrations"]
@@ -1699,6 +2691,7 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
         )
     ):
         raise ValueError("provenance PostgreSQL identity is invalid")
+    _validate_postgres_identity(postgres, "provenance.postgres")
     if postgres["applied_migration_versions"] != applied:
         raise ValueError("provenance PostgreSQL migration state contradicts the artifact")
     configuration = provenance["configuration"]
@@ -1797,7 +2790,7 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
         not isinstance(candidate_receipt, dict)
         or set(candidate_receipt)
         != {"schema_version", "receipt_scope", "receipt_digest", "source_sha"}
-        or candidate_receipt["schema_version"] != 1
+        or candidate_receipt["schema_version"] != CANDIDATE_RECEIPT_SCHEMA_VERSION
         or candidate_receipt["receipt_scope"] != "candidate-preparation"
         or candidate_receipt["source_sha"] != source_sha
         or not isinstance(candidate_receipt["receipt_digest"], str)
@@ -1888,10 +2881,6 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
                     "ranking_occurrence_links",
                 ),
                 f"{label} canonical content",
-            )
-            require_processing_summary(
-                sample["workload"].get("processing_summary"),
-                f"{label} workload",
             )
             require_exact(
                 sample["workload"],
@@ -2082,6 +3071,7 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
                 ("database", "selections", "elapsed_seconds", "cpu_seconds", "peak_rss_kib"),
                 "army_read_sample",
             )
+            _validate_nested_army_read_sample(army_sample, "army_read_sample")
         elif army_sample["status"] == "failed":
             require(army_sample, ("reason",), "army_read_sample")
             if army_sample["reason"] != "army_read_sample_unavailable":
@@ -2170,6 +3160,38 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             or sum(workload["completion_counts"].values()) <= MAX_COMPLETION_ORDER
         ):
             raise ValueError("mixed-backfill omitted a bounded completion order")
+
+    configuration = provenance["configuration"]
+    if mode == "duplicate-heavy":
+        for index, sample in enumerate(samples):
+            _validate_duplicate_sample_semantics(
+                sample,
+                configuration,
+                artifact["hard_failures"],
+                f"sample {index}",
+            )
+    elif mode in {"reset-boundary", "correction"}:
+        for index, sample in enumerate(samples):
+            _validate_relation_subset(
+                sample["database"], mode, f"sample {index}"
+            )
+        _validate_reset_semantics(
+            samples, configuration, mode, artifact["hard_failures"]
+        )
+    elif mode == "mixed-backfill":
+        _validate_relation_subset(samples[0]["database"], mode, "mixed sample")
+        _validate_mixed_semantics(
+            samples[0], configuration, artifact["hard_failures"]
+        )
+    elif mode == STEP5_MODE:
+        army_sample = artifact["army_read_sample"]
+        _validate_relation_subset(army_sample["database"], mode, "army sample")
+        _validate_army_semantics(
+            army_sample,
+            provenance,
+            artifact["hard_failures"],
+            "army sample",
+        )
 
 
 def _query_army_endpoint(
@@ -2644,7 +3666,6 @@ def _explain_endpoint_statements(
     lens: str,
 ) -> list[dict[str, Any]]:
     import psycopg
-
     from clashlens.api_db import ARMY_ANALYTICS_QUERY_WORK_MEM
 
     plans: list[dict[str, Any]] = []
@@ -2664,8 +3685,11 @@ def _explain_endpoint_statements(
                 raise RuntimeError(
                     f"endpoint statement {selection}/{lens}/{statement_id} could not be explained"
                 ) from error
-            plan = payload[0]["Plan"] if isinstance(payload, list) else payload["Plan"]
+            public_payload = _public_explain_payload(payload)
+            plan = public_payload[0]["Plan"]
             scanned, returned = _plan_counts(plan)
+            identity = _army_query_identity(sql)
+            shape = _army_parameter_shape(call["params"])
             plans.append(
                 {
                     "correlation": {
@@ -2673,11 +3697,11 @@ def _explain_endpoint_statements(
                         "lens": lens,
                         "statement_id": statement_id,
                     },
-                    "sql": sql,
-                    "parameters": _json_value(call["params"]),
+                    "sql": identity,
+                    "parameters": {"arity": len(shape), "types": list(shape)},
                     "rows_scanned": scanned,
                     "rows_returned": returned,
-                    "explain_analyze_buffers": payload,
+                    "explain_analyze_buffers": public_payload,
                 }
             )
     return plans
@@ -2777,6 +3801,8 @@ def _run_account_read_gate(
     overlap_counts: list[int] | None = None,
     overlap_lock: Lock | None = None,
 ) -> dict[str, Any]:
+    from clashlens.api import create_app
+    from clashlens.api_db import ApiDatabase
     from fastapi.testclient import TestClient
     from test_private_api import (
         DISCORD_CURRENT,
@@ -2787,9 +3813,6 @@ def _run_account_read_gate(
         json_body,
         signed_headers,
     )
-
-    from clashlens.api import create_app
-    from clashlens.api_db import ApiDatabase
 
     database = ApiDatabase(connection_info, max_size=1)
     keys = {
@@ -3135,7 +4158,7 @@ def _seed_worst_case_army_reads(
     results = []
     for population in selections:
         with psycopg.connect(connection_info) as connection:
-            plan_row = connection.execute(
+            raw_payload = connection.execute(
                 """EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)
                    SELECT id,battle_id,population_player_id,battle_time_trophies,stars,
                           destruction_percentage,army_state,failure_reason,home_troops,
@@ -3144,8 +4167,9 @@ def _seed_worst_case_army_reads(
                    FROM army_analytics_battle_facts
                    WHERE official_season_id='1783918800'
                      AND season_day_number BETWEEN 1 AND 28 AND lens='offense' AND is_current
-                   ORDER BY battle_id"""
-            ).fetchone()[0][0]
+                     ORDER BY battle_id"""
+            ).fetchone()[0]
+        plan_row = _public_explain_payload(raw_payload)[0]
         scanned, returned = _plan_counts(plan_row["Plan"])
         endpoint = _query_army_endpoint(
             connection_info, population=population, start_day=1, end_day=28
@@ -3792,7 +4816,11 @@ def _run_duplicate(
         cycle_elapsed: list[float] = []
         profile_bodies: dict[tuple[str, int], bytes] = {}
         fixture_bodies: dict[str, bytes] = {}
-        source_bytes: dict[str, int] = {}
+        source_bytes: dict[str, int] = {
+            "profile": len(_profile_body(_tag(1))),
+            "battle_log": len(selected_battle_fixture),
+            "global_player_rankings": len(RANKING_FIXTURE),
+        }
         exact_bytes = 0
         executed_endpoint_mix: dict[str, int] = dict.fromkeys(endpoint_mix, 0)
         for cycle in range(max(1, cycles)):
@@ -3940,10 +4968,9 @@ def _run_mixed(
     connection_info: str, archive: Any, live: int, backfill: int
 ) -> dict[str, Any]:
     import psycopg
+    from clashlens.worker import process_concurrently
     from domain_test_support import store_observation
     from psycopg.types.json import Jsonb
-
-    from clashlens.worker import process_concurrently
 
     started = time.perf_counter()
     cpu_start = time.process_time()
@@ -5257,10 +6284,14 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
             parser.error(str(error))
     if (
         arguments.duplicate_observations < 2
+        or arguments.duplicate_observations > DUPLICATE_EXECUTION_CAP
         or arguments.live_jobs < 1
         or arguments.backfill_jobs < 1
     ):
-        parser.error("workload counts must be positive; duplicates must be at least 2")
+        parser.error(
+            "workload counts must be positive; duplicates must be between 2 and "
+            f"{DUPLICATE_EXECUTION_CAP}"
+        )
     if not 1 <= arguments.army_facts <= 100_000:
         parser.error("--army-facts must be between 1 and 100000")
     if not 1 <= arguments.lanes <= 64:

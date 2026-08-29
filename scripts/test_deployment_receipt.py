@@ -24,11 +24,17 @@ class FakeRunner:
         revision_label: str = SOURCE_SHA,
         applied: list[int] | None = None,
         image_id: str = IMAGE_ID,
+        scope_label: str = receipt.CANDIDATE_SCOPE_LABEL_VALUE,
+        present_containers: set[str] | None = None,
+        inspected_names: dict[str, str] | None = None,
     ) -> None:
         self.dirty = dirty
         self.revision_label = revision_label
         self.applied = applied or list(range(1, 14))
         self.image_id = image_id
+        self.scope_label = scope_label
+        self.present_containers = present_containers or set()
+        self.inspected_names = inspected_names or {}
         self.commands: list[list[str]] = []
 
     def __call__(self, command: list[str]) -> str:
@@ -39,6 +45,8 @@ class FakeRunner:
             return SOURCE_SHA
         if command[:2] == ["podman", "--version"]:
             return "podman version 5.8.4"
+        if command[:3] == ["podman", "container", "exists"]:
+            return "true" if command[3] in self.present_containers else "false"
         if command[:3] == ["podman", "image", "inspect"]:
             template = command[4]
             if template == "{{.Id}}":
@@ -51,12 +59,23 @@ class FakeRunner:
                 return self.revision_label
         if command[:3] == ["podman", "container", "inspect"]:
             template = command[4]
+            name = command[5]
+            if template == "{{.Name}}":
+                return self.inspected_names.get(name, name)
+            if "org.clashlens.scope" in template:
+                return self.scope_label
             if template == "{{.State.Running}}":
                 return "true"
             if template == "{{.ImageName}}":
                 return "localhost/clashlens:deployment"
             if template == "{{.Image}}":
                 return self.image_id
+        if command[:3] in (["podman", "network", "inspect"], ["podman", "volume", "inspect"]):
+            name = command[5]
+            if command[4] == "{{.Name}}":
+                return self.inspected_names.get(name, name)
+            if "org.clashlens.scope" in command[4]:
+                return self.scope_label
         if command[:2] == ["podman", "exec"]:
             return json.dumps(
                 {
@@ -71,7 +90,7 @@ class FakeRunner:
 
 
 def arguments(scope: str = "candidate-preparation") -> Namespace:
-    return Namespace(
+    value = Namespace(
         root=ROOT,
         scope=scope,
         environment="fedora-validation",
@@ -79,19 +98,28 @@ def arguments(scope: str = "candidate-preparation") -> Namespace:
         podman_bin="podman",
         git_bin="git",
         postgres_container="step8-postgres",
+        podman_network="step8-private",
+        podman_volume="step8-postgres-data",
         postgres_user="clashlens",
         postgres_database="clashlens",
         collector_image="localhost/clashlens-collector:deployment",
         python_image="localhost/clashlens-python:deployment",
         website_image="localhost/clashlens-website:deployment",
-        collector_container="clashlens-collector",
-        python_container="clashlens-python-api",
-        website_container="clashlens-website",
+        collector_container="step8-collector",
+        python_container="step8-python-api",
+        worker_container="step8-python-worker",
+        website_container="step8-website",
         safe_config=[
             f"{name}=1" for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
         ],
         created_at="2026-08-28T20:00:00+00:00",
     )
+    if scope == "deployed-stack":
+        value.collector_container = "clashlens-collector"
+        value.python_container = "clashlens-python-api"
+        value.worker_container = "clashlens-python-worker"
+        value.website_container = "clashlens-website"
+    return value
 
 
 class DeploymentReceiptTest(unittest.TestCase):
@@ -106,9 +134,32 @@ class DeploymentReceiptTest(unittest.TestCase):
         result = receipt.collect_receipt(arguments(), runner)
 
         self.assertEqual(result["receipt_scope"], "candidate-preparation")
+        self.assertEqual(result["schema_version"], receipt.SCHEMA_VERSION)
         self.assertEqual(result["production_deployment_status"], "not_asserted")
         self.assertEqual(result["official_api_requests"]["count"], 0)
+        self.assertEqual(
+            result["official_api_requests"]["proof"],
+            receipt.CANDIDATE_RECEIPT_OFFICIAL_API_PROOF,
+        )
         self.assertEqual(result["database"]["identity_scope"], "disposable_validation_database")
+        resources = result["candidate_resources"]
+        self.assertEqual(resources["postgres_container"]["name"], "step8-postgres")
+        self.assertEqual(resources["network"]["name"], "step8-private")
+        self.assertEqual(resources["volume"]["name"], "step8-postgres-data")
+        for resource in ("postgres_container", "network", "volume"):
+            self.assertEqual(
+                resources[resource]["scope_label"], receipt.CANDIDATE_SCOPE_LABEL
+            )
+        self.assertTrue(
+            all(
+                not item["present"]
+                for key, item in resources["application_containers"].items()
+                if key != "worker_replicas"
+            )
+        )
+        self.assertTrue(
+            all(not item["present"] for item in resources["application_containers"]["worker_replicas"])
+        )
         self.assertEqual(len(result["migrations"]), 13)
         self.assertTrue(all(item["applied"] for item in result["migrations"]))
         self.assertRegex(result["receipt_digest"], r"^sha256:[0-9a-f]{64}$")
@@ -123,6 +174,7 @@ class DeploymentReceiptTest(unittest.TestCase):
         result = receipt.collect_receipt(arguments("deployed-stack"), FakeRunner())
 
         self.assertIsNone(result["official_api_requests"])
+        self.assertIsNone(result["candidate_resources"])
         self.assertEqual(result["database"]["identity_scope"], "deployed_stack_database")
         self.assertEqual(
             result["application_images"]["python"]["container_name"],
@@ -149,6 +201,78 @@ class DeploymentReceiptTest(unittest.TestCase):
             receipt.collect_receipt(
                 arguments(), FakeRunner(applied=list(range(1, 13)))
             )
+
+    def test_candidate_scope_requires_matching_resource_labels_and_names(self) -> None:
+        with self.assertRaisesRegex(receipt.ReceiptError, "scope label"):
+            receipt.collect_receipt(arguments(), FakeRunner(scope_label="private"))
+
+        wrong_name = arguments()
+        wrong_name.podman_volume = "clashlens-candidate-postgres-data"
+        with self.assertRaisesRegex(receipt.ReceiptError, "name does not match"):
+            receipt.collect_receipt(
+                wrong_name,
+                FakeRunner(
+                    inspected_names={
+                        "clashlens-candidate-postgres-data": "other-volume"
+                    }
+                ),
+            )
+
+    def test_candidate_scope_rejects_default_or_ambiguous_names(self) -> None:
+        for field, value in (("podman_network", "clashlens-private"),):
+            candidate = arguments()
+            setattr(candidate, field, value)
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(receipt.ReceiptError, "dedicated"),
+            ):
+                receipt.collect_receipt(candidate, FakeRunner())
+
+        production_named = arguments()
+        production_named.postgres_container = "clashlens-production-postgres"
+        result = receipt.collect_receipt(production_named, FakeRunner())
+        self.assertEqual(
+            result["candidate_resources"]["postgres_container"]["name"],
+            "clashlens-production-postgres",
+        )
+
+        candidate = arguments()
+        candidate.website_container = candidate.collector_container
+        with self.assertRaisesRegex(receipt.ReceiptError, "ambiguous"):
+            receipt.collect_receipt(candidate, FakeRunner())
+
+    def test_candidate_scope_rejects_present_application_containers(self) -> None:
+        with self.assertRaisesRegex(receipt.ReceiptError, "application container"):
+            receipt.collect_receipt(
+                arguments(), FakeRunner(present_containers={"step8-python-worker-1"})
+            )
+
+    def test_candidate_scope_rejects_worker_replica_name_collisions(self) -> None:
+        candidate = arguments()
+        candidate.collector_container = "step8-python-worker-1"
+        with self.assertRaisesRegex(receipt.ReceiptError, "ambiguous"):
+            receipt.collect_receipt(candidate, FakeRunner())
+
+    def test_candidate_resource_proof_is_required_and_bounded(self) -> None:
+        candidate = self._unsigned_candidate()
+        candidate["candidate_resources"]["network"]["scope_label"] = "candidate"
+        with self.assertRaisesRegex(receipt.ReceiptError, "scope label"):
+            receipt.validate_receipt(candidate)
+
+        candidate = self._unsigned_candidate()
+        candidate["candidate_resources"]["volume"]["name"] = "step8-private"
+        with self.assertRaisesRegex(receipt.ReceiptError, "ambiguous"):
+            receipt.validate_receipt(candidate)
+
+        candidate = self._unsigned_candidate()
+        candidate["candidate_resources"]["application_containers"]["worker"]["present"] = True
+        with self.assertRaisesRegex(receipt.ReceiptError, "absence"):
+            receipt.validate_receipt(candidate)
+
+        candidate = self._unsigned_candidate()
+        candidate["candidate_resources"]["application_containers"]["worker_replicas"][0]["name"] = "step8-python-worker-2"
+        with self.assertRaisesRegex(receipt.ReceiptError, "replica"):
+            receipt.validate_receipt(candidate)
 
     def test_only_complete_numeric_safe_configuration_is_accepted(self) -> None:
         incomplete = arguments()

@@ -87,9 +87,10 @@ uv run --locked --python 3.12 ../scripts/performance_runner.py army-analytics \
 ```
 
 The same `--candidate-receipt` option may be used with each workload. The
-receipt must be a schema-1 `candidate-preparation` receipt whose clean source
+receipt must be a schema-2 `candidate-preparation` receipt whose clean source
 SHA, migration filenames/hashes through 0013, application source/revision
-labels, and canonical receipt digest validate against this checkout. The
+labels, bounded candidate resource proof, and canonical receipt digest validate
+against this checkout. The
 runner records those identities under `prepared_candidate_images`; they are
 never placed in `executor_images` for a host-run workload. The old ambiguous
 `--image` option is rejected.
