@@ -921,10 +921,12 @@ class PerformanceRunnerTest(unittest.TestCase):
                 "I/O Write Time": 0.0,
             }
         )
+        raw[0]["Planning"] = {"Shared Hit Blocks": 1}
         sanitized = runner._public_explain_payload(raw)
         self.assertNotIn("Shared Hit Blocks", json.dumps(sanitized))
         self.assertNotIn("Relation Name", json.dumps(sanitized))
         self.assertNotIn("secret high-cardinality detail", json.dumps(sanitized))
+        self.assertNotIn("Planning", sanitized[0])
         plan["explain_analyze_buffers"] = sanitized
         artifact["artifact_digest"] = runner._artifact_digest(artifact)
         runner.validate_artifact(artifact)

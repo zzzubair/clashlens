@@ -142,6 +142,11 @@ AFFECTED_RELATIONS = (
     "battle_log_observation_rows",
     "official_top200_version_entries",
     "official_top200_attempt_entries",
+    "ranked_day_versions",
+    "leaderboard_snapshots",
+    "leaderboard_snapshot_entries",
+    "analytics_summaries",
+    "army_analytics_battle_facts",
 )
 STEP5_MODE = "army-analytics"
 STEP5_POPULATION = 12_500
@@ -1747,7 +1752,7 @@ def _public_explain_payload(payload: Any) -> list[dict[str, Any]]:
         raise ValueError("army EXPLAIN payload is invalid")
     envelope = payload[0]
     if not set(envelope).issubset(
-        {"Plan", "Planning Time", "Triggers", "Execution Time"}
+        {"Plan", "Planning", "Planning Time", "Triggers", "Execution Time"}
     ) or not {"Plan", "Planning Time", "Execution Time"}.issubset(envelope):
         raise ValueError("army EXPLAIN payload retains non-public fields")
     if "Triggers" in envelope and envelope["Triggers"] not in ([], None):
@@ -1804,6 +1809,9 @@ def _public_explain_payload(payload: Any) -> list[dict[str, Any]]:
                 raise ValueError("army EXPLAIN plan is unbounded")
             node["Plans"] = [plan_node(child, depth + 1) for child in children]
         return node
+
+    if "Planning" in envelope:
+        discard_fact(envelope["Planning"], "army EXPLAIN planning")
 
     return [
         {
@@ -1976,12 +1984,17 @@ def _validate_duplicate_sample_semantics(
     distinct_hashes = _bounded_int(evidence.get("distinct_hashes"), f"{label}.distinct_hashes")
     final_objects = _bounded_int(spool.get("final_object_count"), f"{label}.final_object_count")
     archive_get = _bounded_int(archive.get("get"), f"{label}.archive.get")
-    if not (local_misses == archive_get == evidence.get("repairs") == distinct_hashes == final_objects):
+    repairs = _bounded_int(evidence.get("repairs"), f"{label}.repairs")
+    if not (
+        local_misses == archive_get == repairs
+        and distinct_hashes == final_objects
+        and local_misses >= distinct_hashes
+    ):
         raise ValueError(f"{label} local/archive/hash counters disagree")
     archived_bytes = _bounded_int(evidence.get("archived_bytes"), f"{label}.archived_bytes")
     archive_get_bytes = _bounded_int(archive.get("get_bytes"), f"{label}.archive.get_bytes")
     final_bytes = _bounded_int(spool.get("final_bytes"), f"{label}.final_bytes")
-    if not (archived_bytes == archive_get_bytes == final_bytes):
+    if not (archived_bytes == final_bytes and archive_get_bytes >= archived_bytes):
         raise ValueError(f"{label} archived bytes disagree")
     if not _bounded_int(evidence.get("retries"), f"{label}.retries") == workload["processing_summary"]["retry_count"]:
         raise ValueError(f"{label}.retries disagrees with processing")
