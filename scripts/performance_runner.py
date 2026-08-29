@@ -686,6 +686,32 @@ def _result_summary(results: list[dict[str, Any]], *, expected: int | None = Non
     }
 
 
+def _duplicate_hard_failure_codes(
+    workload: Any, database: Any
+) -> list[str]:
+    """Map duplicate acceptance facts to the bounded artifact failure codes."""
+    failures: list[str] = []
+    summary = workload.get("processing_summary") if isinstance(workload, dict) else None
+    if isinstance(summary, dict) and "total" in summary:
+        summary = summary["total"]
+    if isinstance(summary, dict):
+        outcomes = summary.get("outcomes")
+        count = summary.get("count")
+        if (
+            isinstance(outcomes, dict)
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+            and (
+                outcomes.get("processed") != count
+                or summary.get("count_matches_expected") is False
+            )
+        ):
+            failures.append("fixed_acceptance_failure")
+    if isinstance(database, dict) and database.get("queue_residue"):
+        failures.append("queue_residue")
+    return _failure_codes(failures)
+
+
 def _drain(processor: Any, limit: int) -> list[dict[str, Any]]:
     results = []
     for index in range(limit):
@@ -1872,6 +1898,13 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
                 _DUPLICATE_WORKLOAD_KEYS,
                 f"{label} duplicate workload",
             )
+            required_failures = _duplicate_hard_failure_codes(
+                sample["workload"], sample["database"]
+            )
+            if not set(required_failures).issubset(artifact["hard_failures"]):
+                raise ValueError(
+                    f"{label} duplicate hard failures are incomplete"
+                )
         if mode == "coordinator-12500":
             require_exact(sample, _COORDINATOR_SAMPLE_KEYS, label)
             require_exact(
@@ -5021,6 +5054,10 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             )
             filesystem_after = _filesystem_usage(ROOT)
             measurements["application_sql_calls"] = sql_calls[0]
+            if arguments.mode == "duplicate-heavy":
+                hard_failures.extend(
+                    _duplicate_hard_failure_codes(workload, measurements)
+                )
             if "official_responses" not in workload:
                 raise RuntimeError(
                     "workload did not report its exact official response count"

@@ -134,6 +134,83 @@ def _candidate_receipt() -> dict:
     return result
 
 
+def _valid_duplicate_artifact() -> dict:
+    database = dict.fromkeys(
+        [
+            "wal_bytes",
+            "wal_retained_bytes",
+            "wal_retained_growth_bytes",
+            "sql_statement_calls",
+            "application_sql_calls",
+            "pending_remote_verification",
+            "response_counts_by_endpoint",
+            "occurrence_counts_by_endpoint",
+            "relations",
+            "relation_sizes",
+            "relation_stats",
+            "affected_relations",
+            "queues",
+            "queue_age_seconds",
+            "queue_residue",
+        ]
+    )
+    database["queue_residue"] = []
+    workload = dict.fromkeys(runner._DUPLICATE_WORKLOAD_KEYS)
+    workload.update(
+        {
+            "processing_summary": runner._result_summary(
+                [{"outcome": "processed"}], expected=1
+            ),
+            "contract": {
+                "expected_occurrences": runner.DUPLICATE_EXECUTION_CAP,
+                "executed_occurrences": 1,
+                "endpoint_mix": {},
+            },
+            "canonical_content": dict.fromkeys(
+                [
+                    "parsed_payloads_by_endpoint",
+                    "profile_semantic_versions",
+                    "profile_occurrence_effects",
+                    "battle_canonical_rows",
+                    "battle_occurrence_rows",
+                    "ranking_canonical_rows",
+                    "ranking_occurrence_links",
+                ]
+            ),
+        }
+    )
+    artifact = _valid_artifact()
+    artifact["samples"] = [
+        {
+            "workload": workload,
+            "database": database,
+            "archive_operations": dict.fromkeys(
+                [
+                    "get",
+                    "get_bytes",
+                    "head",
+                    "conditional_put",
+                    "put",
+                    "put_bytes",
+                    "conflicts",
+                ]
+            ),
+            "storage_runway": {
+                "measured_local_growth_bytes": 0,
+                "days_to_80_percent": None,
+                "checks": {},
+            },
+            "evidence": {},
+            "spool": {},
+            "elapsed_seconds": 0,
+            "cpu_seconds": 0,
+            "peak_rss_kib": 0,
+        }
+    ]
+    artifact["artifact_digest"] = runner._artifact_digest(artifact)
+    return artifact
+
+
 class PerformanceRunnerTest(unittest.TestCase):
     def test_known_bad_target_is_rejected_even_as_one_population(self) -> None:
         with self.assertRaisesRegex(ValueError, "post-fix"):
@@ -205,6 +282,58 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(summary["outcomes"]["processed"], 1)
         self.assertEqual(summary["outcomes"]["retrying"], 1)
         self.assertEqual(summary["work_types"]["redecode_army"], 1)
+
+    def test_duplicate_acceptance_facts_map_to_bounded_failures(self) -> None:
+        clean = {
+            "processing_summary": runner._result_summary(
+                [{"outcome": "processed"}], expected=1
+            )
+        }
+        self.assertEqual(
+            runner._duplicate_hard_failure_codes(clean, {"queue_residue": []}),
+            [],
+        )
+
+        retrying = {
+            "processing_summary": runner._result_summary(
+                [{"outcome": "retrying"}], expected=1
+            )
+        }
+        failures = runner._duplicate_hard_failure_codes(
+            retrying,
+            {"queue_residue": [{"queue": "python_processing_jobs"}]},
+        )
+        self.assertEqual(
+            failures,
+            ["fixed_acceptance_failure", "queue_residue"],
+        )
+        self.assertTrue(set(failures).issubset(runner.ALLOWED_HARD_FAILURE_CODES))
+
+    def test_duplicate_artifact_requires_derived_hard_failures(self) -> None:
+        artifact = _valid_duplicate_artifact()
+        runner.validate_artifact(artifact)
+
+        artifact["samples"][0]["workload"]["processing_summary"] = runner._result_summary(
+            [{"outcome": "lease_lost"}], expected=1
+        )
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "hard failures are incomplete"):
+            runner.validate_artifact(artifact)
+
+        artifact["hard_failures"] = ["fixed_acceptance_failure"]
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        runner.validate_artifact(artifact)
+
+        artifact["samples"][0]["database"]["queue_residue"] = [
+            {"queue": "python_processing_jobs"}
+        ]
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "hard failures are incomplete"):
+            runner.validate_artifact(artifact)
+
+        artifact["hard_failures"].append("queue_residue")
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        runner.validate_artifact(artifact)
 
     def test_boundary_admission_evidence_is_exact_and_bounded(self) -> None:
         admitted = {
