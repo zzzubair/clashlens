@@ -532,6 +532,7 @@ def _duplicate_fixture_body(
     endpoint_count: int,
     profile_bodies: dict[tuple[str, int], bytes],
     fixture_bodies: dict[str, bytes],
+    battle_fixture: bytes | None = None,
 ) -> tuple[str | None, bytes]:
     if endpoint == "profile":
         window = max(1, endpoint_count // 200)
@@ -542,14 +543,27 @@ def _duplicate_fixture_body(
             profile_bodies[cache_key] = _profile_body(tag, variant)
         return tag, profile_bodies[cache_key]
     if endpoint not in fixture_bodies:
-        fixture_bodies[endpoint] = (
-            PYTHON / "testdata" / (
-                "legend_i_battle_log_v1.json"
-                if endpoint == "battle_log"
-                else "global_top_200_v1.json"
-            )
-        ).read_bytes()
+        if endpoint == "battle_log" and battle_fixture is not None:
+            fixture_bodies[endpoint] = battle_fixture
+        else:
+            fixture_bodies[endpoint] = (
+                PYTHON / "testdata" / (
+                    "legend_i_battle_log_v1.json"
+                    if endpoint == "battle_log"
+                    else "global_top_200_v1.json"
+                )
+            ).read_bytes()
     return (None if endpoint == "global_player_rankings" else _tag(index + 1)), fixture_bodies[endpoint]
+
+
+def _battle_fixture_for_day(day_start: datetime) -> bytes:
+    """Move the committed battle fixture while preserving its payload size."""
+    source_day = DAY_START.strftime("%Y-%m-%d").encode()
+    target_day = day_start.astimezone(UTC).strftime("%Y-%m-%d").encode()
+    shifted = BATTLE_FIXTURE.replace(source_day, target_day)
+    if shifted == BATTLE_FIXTURE or len(shifted) != len(BATTLE_FIXTURE):
+        raise RuntimeError("battle fixture day could not be shifted exactly")
+    return shifted
 
 
 def _process_jobs(
@@ -2839,11 +2853,18 @@ def _run_step5_overlap(
     def duplicate_cycle() -> dict[str, Any]:
         started = time.perf_counter()
         try:
+            overlap_day = BOUNDARY + timedelta(days=STEP5_DAYS + 1)
             result = _run_duplicate(
                 connection_info,
                 archive,
                 DUPLICATE_EXECUTION_CAP,
                 cycles=1,
+                # The Step 5 seed owns the fixed season-day rows around
+                # DAY_START. Keep overlap fixtures in a later, unseeded
+                # ranked day so their decoded battle observations cannot
+                # enqueue an unrelated legacy population-wide army job.
+                observation_start=overlap_day,
+                battle_fixture=_battle_fixture_for_day(overlap_day),
                 processing_started=processing_started,
             )
             result.pop("_spool_root", None)
@@ -3717,6 +3738,8 @@ def _run_duplicate(
     count: int,
     *,
     cycles: int = 1,
+    observation_start: datetime = DAY_START,
+    battle_fixture: bytes | None = None,
     processing_started: Event | None = None,
 ) -> dict[str, Any]:
     import psycopg
@@ -3724,8 +3747,11 @@ def _run_duplicate(
 
     database, processor, metrics, _spool = _processor(connection_info, archive)
     try:
+        selected_battle_fixture = (
+            BATTLE_FIXTURE if battle_fixture is None else battle_fixture
+        )
         fixture_discoveries = _seed_fixture_discoveries(
-            connection_info, BATTLE_FIXTURE, RANKING_FIXTURE
+            connection_info, selected_battle_fixture, RANKING_FIXTURE
         )
         executed_count = min(count, DUPLICATE_EXECUTION_CAP)
         endpoint_mix = _duplicate_endpoint_mix(count)
@@ -3752,6 +3778,7 @@ def _run_duplicate(
                             planned_count,
                             profile_bodies,
                             fixture_bodies,
+                            battle_fixture,
                         )
                         source_bytes[endpoint] = len(body)
                         exact_bytes += len(body)
@@ -3762,7 +3789,7 @@ def _run_duplicate(
                                 occurrence_key=f"duplicate-c{cycle}-{position}",
                                 endpoint=endpoint,
                                 body=body,
-                                observed_at=DAY_START
+                                observed_at=observation_start
                                 + timedelta(hours=1, minutes=position),
                                 normalized_tag=tag,
                                 existing_connection=seed_connection,

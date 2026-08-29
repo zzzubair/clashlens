@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -404,6 +405,18 @@ class PerformanceRunnerTest(unittest.TestCase):
             [224_000, 224_000, 2_772_000, 2_772_000, 224_000, 224_000],
         )
 
+    def test_step5_overlap_uses_an_unseeded_fixture_day(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            "battle_fixture=_battle_fixture_for_day(overlap_day)",
+            source,
+        )
+        overlap_day = runner.BOUNDARY + timedelta(days=runner.STEP5_DAYS + 1)
+        shifted = runner._battle_fixture_for_day(overlap_day)
+        self.assertEqual(len(shifted), len(runner.BATTLE_FIXTURE))
+        self.assertNotIn(runner.DAY_START.strftime("%Y-%m-%d").encode(), shifted)
+        self.assertIn(overlap_day.strftime("%Y-%m-%d").encode(), shifted)
+
     def test_army_source_guard_rejects_old_broad_materialization(self) -> None:
         source = (ROOT / "python/src/clashlens/api_db.py").read_text()
         self.assertTrue(runner._bounded_army_source_ready(source))
@@ -798,6 +811,70 @@ class PerformanceRunnerTest(unittest.TestCase):
     "set CLASHLENS_TEST_DATABASE_URL for real PostgreSQL workload tests",
 )
 class PerformanceRunnerPostgresTest(unittest.TestCase):
+    def test_overlap_fixture_does_not_enqueue_legacy_army_publication(self) -> None:
+        import psycopg
+        from domain_test_support import domain_database
+
+        with (
+            domain_database(
+                os.environ["CLASHLENS_TEST_DATABASE_URL"], include_coordinator=True
+            ) as connection_info,
+            runner.archive_server() as archive,
+        ):
+            with psycopg.connect(connection_info) as connection:
+                player_id = connection.execute(
+                    """
+                    INSERT INTO players (normalized_tag, active, eligibility_state)
+                    VALUES ('#SEED', true, 'eligible')
+                    RETURNING id
+                    """
+                ).fetchone()[0]
+                connection.execute(
+                    """
+                    INSERT INTO ranked_day_versions (
+                        player_id, ranked_day_start, ranked_day_end,
+                        official_season_id, season_day_number,
+                        season_anchor_rule_version, reconciliation_rule_version,
+                        result_hash, version, state, confidence,
+                        evidence_complete, reconciled, coverage_complete
+                    ) VALUES (
+                        %s, %s, %s, '1783918800', 1,
+                        'runner-anchor-v1', 'runner-reconciliation-v1',
+                        repeat('a', 64), 1, 'Complete', 'exact',
+                        true, true, true
+                    )
+                    """,
+                    (
+                        player_id,
+                        runner.DAY_START,
+                        runner.BOUNDARY,
+                    ),
+                )
+                connection.commit()
+
+            overlap_day = runner.BOUNDARY + timedelta(days=runner.STEP5_DAYS + 1)
+            workload = runner._run_duplicate(
+                connection_info,
+                archive,
+                6,
+                observation_start=overlap_day,
+                battle_fixture=runner._battle_fixture_for_day(overlap_day),
+            )
+
+            with psycopg.connect(connection_info) as connection:
+                legacy_army_jobs = connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM python_processing_jobs
+                    WHERE work_type = 'build_army_analytics'
+                    """
+                ).fetchone()[0]
+
+            self.assertEqual(legacy_army_jobs, 0)
+            self.assertEqual(
+                workload["processing_summary"]["outcomes"]["processed"], 6
+            )
+
     def test_duplicate_canonical_metrics_follow_schema_seam(self) -> None:
         from domain_test_support import domain_database
 
