@@ -95,12 +95,18 @@ runner records those identities under `prepared_candidate_images`; they are
 never placed in `executor_images` for a host-run workload. The old ambiguous
 `--image` option is rejected.
 
-## Step 8 exact-head Fedora evidence
+## Step 8 attributable Fedora evidence
 
 After the three application images and candidate receipt have been produced
-from one clean head, run the four accepted protocols from that same unchanged
-checkout. Use a fresh retained-results directory and a disposable UTF-8
-PostgreSQL database; the output filenames below must not already exist.
+from the clean final head, run every protocol affected by the final change and
+validate each retained unaffected artifact with the runner from its recorded
+source. Issue #80's evidence-closure matrix requires final-head operating and
+army evidence; it permits the retained `cf5e177` reset and `d65dbc0`
+duplicate/mixed results only for their named, independently reviewed gates.
+Never relabel retained evidence as final-head proof. The commands below remain
+the canonical rerun path whenever an artifact is missing, invalid, affected, or
+uncertain. Use a fresh retained-results directory and a disposable UTF-8
+PostgreSQL database; an executed output filename must not already exist.
 
 ```bash
 export CLASHLENS_TEST_DATABASE_URL=postgresql://.../clashlens
@@ -123,7 +129,7 @@ CLASHLENS_FEDORA_PROBE_OUTPUT="$RESULTS_DIR/mixed-backfill.json" \
   --live-jobs 20 --backfill-jobs 100 --skip-collector-probe
 ```
 
-The reset uses the landed bounded-writer guard before admitting the full
+The reset command uses the landed bounded-writer guard before admitting the full
 12,500-player population. Its opt-in Go probe uses the production contract-v5
 admission and scheduler seams in the workload's disposable schema: a transitive
 prior regular lineage blocks the reset, production creates the exact sweep,
@@ -132,9 +138,10 @@ and safe handoff reopens scheduling. The duplicate run repeats the accepted 25,0
 endpoint mix twice for its 24-hour-equivalent comparison. The mixed run keeps
 the accepted Step 7 20-live/100-backfill protocol; its collector probe is
 skipped because that production-path probe is already exercised by the other
-three exact-head modes. Record each file SHA-256 and internal
+three workload modes in the complete retained-or-rerun evidence set. Record each file SHA-256 and internal
 `artifact_digest`, validate each artifact, and compare it with the retained
-Step 1–7 result for that protocol. These are Step 8 measurements, not #31
+Step 1–7 result for that protocol. Record the truthful source and the reviewed
+impact-matrix decision for every reused result. These are Step 8 measurements, not #31
 launch approval or exact-candidate production evidence.
 
 Reset and correction use paired committed reset fixtures and production
@@ -147,8 +154,14 @@ troop keys. It executes one timed forced miss (required to stay below five secon
 five untimed warmups plus 100 timed cache-hit calls for each of `top-1000`,
 `trophies-5000-9999`, and `streak-top-1000` in both lenses through
 `ApiDatabase.get_army_analytics`. The forced miss is excluded from the warmed
-p95. Cache misses use the measured 256 MiB query-local PostgreSQL work-memory
-ceiling. Their SQL is captured and replayed under the same setting outside timing
+p95. Forced misses use a two-connection API pool; mixed-load lanes retain their
+one-connection fallback. The forced-miss pair imports one exported repeatable-read
+snapshot; mixed lanes use one repeatable-read transaction. Troop requests use a
+single five-second request deadline, with 0.1-second admission and primary-pool
+ceilings and a 0.3-second paired-checkout ceiling. PostgreSQL transaction timeouts
+enforce the same remaining deadline; exhaustion returns service unavailable instead
+of waiting and repeating the source hash sequentially. Cache misses use the
+measured 256 MiB query-local PostgreSQL work-memory ceiling. Their SQL is captured and replayed under the same setting outside timing
 with `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`. The retained result includes
 selected/scanned/returned rows, p95 and RSS, PostgreSQL settings, host memory,
 forced-miss and whole-run swap/OOM deltas, and the four-lane 25,024-observation mixed-load gate plus signed account

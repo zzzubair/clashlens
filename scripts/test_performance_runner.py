@@ -521,6 +521,10 @@ def _valid_army_artifact() -> dict:
             "requests": runner.STEP5_REQUESTS,
             "p95_target_ms": runner.STEP5_P95_TARGET_MS,
             "forced_miss_target_seconds": runner.STEP5_FORCED_MISS_TARGET_SECONDS,
+            "forced_miss_pool_max_size": 2,
+            "forced_miss_read_snapshot": "repeatable_read_exported",
+            "mixed_lane_pool_max_size": 1,
+            "mixed_lane_read_snapshot": "repeatable_read",
             "analytics_lanes": runner.STEP5_ANALYTICS_LANES,
             "duplicate_cycle_observations": runner.DUPLICATE_EXECUTION_CAP,
         },
@@ -569,6 +573,47 @@ def _valid_army_artifact() -> dict:
 
 
 class PerformanceRunnerTest(unittest.TestCase):
+    def setUp(self) -> None:
+        if self._testMethodName == (
+            "test_dirty_source_is_rejected_before_provenance_is_emitted"
+        ):
+            return
+        source_patch = mock.patch.object(
+            runner, "_clean_source", return_value=SOURCE_SHA
+        )
+        source_patch.start()
+        self.addCleanup(source_patch.stop)
+
+    def test_army_validation_allows_only_the_overlapped_pair_to_swap(self) -> None:
+        artifact = _valid_army_artifact()
+        sample = deepcopy(artifact["army_read_sample"]["selections"][0])
+        plans = sample["endpoint_sql"]
+        plans[-2], plans[-1] = plans[-1], plans[-2]
+        for statement_id, plan in enumerate(plans, 1):
+            plan["correlation"]["statement_id"] = statement_id
+        runner._validate_army_selection(
+            sample, runner._army_selection_specs()[0], "army-read"
+        )
+
+        duplicate = deepcopy(sample)
+        duplicate["endpoint_sql"][-1] = duplicate["endpoint_sql"][-2]
+        with self.assertRaises(ValueError):
+            runner._validate_army_selection(
+                duplicate, runner._army_selection_specs()[0], "army-read"
+            )
+
+        reordered = deepcopy(sample)
+        reordered["endpoint_sql"][-3], reordered["endpoint_sql"][-2] = (
+            reordered["endpoint_sql"][-2],
+            reordered["endpoint_sql"][-3],
+        )
+        for statement_id, plan in enumerate(reordered["endpoint_sql"], 1):
+            plan["correlation"]["statement_id"] = statement_id
+        with self.assertRaises(ValueError):
+            runner._validate_army_selection(
+                reordered, runner._army_selection_specs()[0], "army-read"
+            )
+
     def test_step5_troop_keys_use_retained_lexical_order(self) -> None:
         self.assertEqual(
             list(runner.STEP5_TROOP_KEYS),
@@ -1497,6 +1542,18 @@ class PerformanceRunnerTest(unittest.TestCase):
 
         artifact = _valid_artifact()
         artifact["provenance"]["runner_sha256"] = "not-a-hash"
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "runner hash"):
+            runner.validate_artifact(artifact)
+
+        artifact = _valid_artifact()
+        artifact["provenance"]["source_sha"] = "0" * 40
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "clean exact revision"):
+            runner.validate_artifact(artifact)
+
+        artifact = _valid_artifact()
+        artifact["provenance"]["runner_sha256"] = "1" * 64
         artifact["artifact_digest"] = runner._artifact_digest(artifact)
         with self.assertRaisesRegex(ValueError, "runner hash"):
             runner.validate_artifact(artifact)

@@ -1614,6 +1614,12 @@ _ARMY_QUERY_ORDER = {
     )
     for population in ("top-1000", "trophies-5000-9999", "streak-top-1000")
 }
+_ARMY_OVERLAPPED_QUERY_IDENTITIES = frozenset(
+    {
+        "army_analytics.troop_component_aggregates",
+        "army_analytics.selected_source_hash",
+    }
+)
 _DUPLICATE_LATENCY_STAGES = {
     "python_read": "python_archive_get_verify",
     "local_verify": "python_archive_local_verify",
@@ -2271,10 +2277,18 @@ def _validate_army_selection(value: Any, spec: dict[str, Any], label: str) -> No
     expected = _ARMY_QUERY_ORDER[spec["selection"]]
     if not isinstance(plans, list) or len(plans) != len(expected):
         raise ValueError(f"{label}.endpoint_sql is invalid")
-    for statement_id, (plan, identity) in enumerate(zip(plans, expected, strict=True), 1):
-        _validate_army_plan(plan, spec["selection"], statement_id, f"{label}.endpoint_sql[{statement_id}]")
-        if plan["sql"] != identity or plan["correlation"]["lens"] != spec["lens"]:
+    for statement_id, plan in enumerate(plans, 1):
+        _validate_army_plan(
+            plan, spec["selection"], statement_id, f"{label}.endpoint_sql[{statement_id}]"
+        )
+        if plan["correlation"]["lens"] != spec["lens"]:
             raise ValueError(f"{label}.endpoint_sql identity is invalid")
+    identities = [plan["sql"] for plan in plans]
+    if (
+        identities[:-2] != list(expected[:-2])
+        or frozenset(identities[-2:]) != _ARMY_OVERLAPPED_QUERY_IDENTITIES
+    ):
+        raise ValueError(f"{label}.endpoint_sql identity is invalid")
 
 
 def _validate_nested_army_read_sample(value: Any, label: str) -> None:
@@ -2408,6 +2422,10 @@ def _validate_army_semantics(
         "requests": STEP5_REQUESTS,
         "p95_target_ms": STEP5_P95_TARGET_MS,
         "forced_miss_target_seconds": STEP5_FORCED_MISS_TARGET_SECONDS,
+        "forced_miss_pool_max_size": 2,
+        "forced_miss_read_snapshot": "repeatable_read_exported",
+        "mixed_lane_pool_max_size": 1,
+        "mixed_lane_read_snapshot": "repeatable_read",
         "analytics_lanes": STEP5_ANALYTICS_LANES,
         "duplicate_cycle_observations": DUPLICATE_EXECUTION_CAP,
     }
@@ -2734,16 +2752,20 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
     )
     require_exact(provenance, _PROVENANCE_KEYS, "provenance")
     source_sha = provenance["source_sha"]
+    expected_source_sha = _clean_source()
     if (
         not isinstance(source_sha, str)
         or re.fullmatch(r"[0-9a-f]{40}", source_sha) is None
+        or source_sha != expected_source_sha
         or provenance["source_dirty"] is not False
     ):
         raise ValueError("provenance source is not a clean exact revision")
     runner_sha = provenance["runner_sha256"]
+    expected_runner_sha = _sha(Path(__file__).read_bytes())
     if (
         not isinstance(runner_sha, str)
         or re.fullmatch(r"[0-9a-f]{64}", runner_sha) is None
+        or runner_sha != expected_runner_sha
     ):
         raise ValueError("provenance runner hash is stale or invalid")
     migrations = provenance["migrations"]
@@ -3793,7 +3815,7 @@ def _measure_army_pair(
     if warmups != STEP5_WARMUPS or requests != STEP5_REQUESTS:
         raise ValueError("issue #73 army measurements require five warmups and 100 requests")
     selection = _step5_selection(spec)
-    database = ApiDatabase(connection_info, max_size=1)
+    database = ApiDatabase(connection_info, max_size=2)
     try:
         # The forced miss is also the production query capture used by the
         # untimed EXPLAIN diagnostic pass; it is excluded from warmups/p95.
@@ -5561,6 +5583,10 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
                 "requests": STEP5_REQUESTS,
                 "p95_target_ms": STEP5_P95_TARGET_MS,
                 "forced_miss_target_seconds": STEP5_FORCED_MISS_TARGET_SECONDS,
+                "forced_miss_pool_max_size": 2,
+                "forced_miss_read_snapshot": "repeatable_read_exported",
+                "mixed_lane_pool_max_size": 1,
+                "mixed_lane_read_snapshot": "repeatable_read",
                 "analytics_lanes": STEP5_ANALYTICS_LANES,
                 "duplicate_cycle_observations": DUPLICATE_EXECUTION_CAP,
             },
