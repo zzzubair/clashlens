@@ -92,9 +92,9 @@ PostgreSQL containers use the `step6-v1` metrics profile, preload
 
 The collector contract version is separate from the schema migration number.
 The production contract is version 5. The current forward-migration set is
-0001 through 0013. Migrations 0009 through 0013 add the raw-evidence,
-boundary-publication, parsed-content deduplication, and bounded backfill
-contracts. `up` applies
+0001 through 0014. Migrations 0009 through 0014 add the raw-evidence,
+boundary-publication, parsed-content deduplication, bounded backfill, and
+ranked-day lookup contracts. `up` applies
 only missing forward migrations recorded in `clash_lens_schema_migrations`; it
 never replays an applied migration. An unknown contract version is rejected
 without side effects.
@@ -109,9 +109,9 @@ curl --fail http://127.0.0.1:8081/readyz
 - `init` starts PostgreSQL and applies migration 0001 only to an absent
   database. It refuses an initialized database.
 - `up` builds the collector image, advances the database through all missing
-  migrations (0001–0013 on a fresh database), configures runtime role
+  migrations (0001–0014 on a fresh database), configures runtime role
   passwords, and stages the required collector with Global Top-200 disabled.
-  A contract-v1 upgrade uses the bridge collector while migrations 0002–0013
+  A contract-v1 upgrade uses the bridge collector while migrations 0002–0014
   are applied, then replaces it with the disabled required collector.
 - `build-collector`, `build-python`, and `build-website` build images only.
 - `restart` is the start-only recovery path for a contract-v5 stack. It does
@@ -181,7 +181,7 @@ install -d -m 0700 "$RESULTS_DIR"
 `candidate-prepare` refuses default or existing candidate resources and any
 configured application-container name that already exists, starts only the
 configured PostgreSQL container, and verifies every migration from 0001 through
-0013. Candidate resources carry the fixed
+0014. Candidate resources carry the fixed
 `org.clashlens.scope=candidate` label; the preparation path verifies those
 labels and exact names after creation before applying migrations. Scope/label
 overrides in `app.env` are rejected before resource mutation. Never aim it at

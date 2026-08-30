@@ -990,7 +990,7 @@ def _validate_database(value: Any) -> None:
     migrations = database["migrations"]
     if not isinstance(migrations, list) or any(
         not isinstance(item, dict) for item in migrations
-    ) or [item.get("version") for item in migrations] != list(range(1, 14)):
+    ) or [item.get("version") for item in migrations] != list(range(1, 15)):
         raise OperatingFactsError("required_fact_invalid")
     for item in migrations:
         _exact_keys(item, ("version", "applied_at"))

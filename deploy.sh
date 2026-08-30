@@ -19,6 +19,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0011_boundary_publication_contract.sql"
   "$ROOT_DIR/deploy/migrations/0012_parsed_content_dedup.sql"
   "$ROOT_DIR/deploy/migrations/0013_army_backfill_priority.sql"
+  "$ROOT_DIR/deploy/migrations/0014_ranked_day_lookup.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -93,7 +94,7 @@ Commands:
   build-python                 Build the immutable Python image only.
   build-website                Build the immutable website image only.
   candidate-prepare            Prepare only the configured disposable
-                               PostgreSQL database through migration 0013.
+                               PostgreSQL database through migration 0014.
   deployment-receipt <scope> <environment> <results-dir>
                                Write a candidate-preparation or deployed-stack
                                evidence receipt outside the checkout.
@@ -722,6 +723,10 @@ apply_pending_forward_migrations() {
       elif (( version == 13 )); then
         # The army backfill class changes claim ordering; drain old workers
         # before installing the new priority fence.
+        stop_all_worker_containers
+      elif (( version == 14 )); then
+        # The ranked-day lookup index changes the decode enqueue access path;
+        # drain old workers before taking the migration lock.
         stop_all_worker_containers
       fi
       apply_migration_file "$migration_file"
@@ -1696,9 +1701,10 @@ case "$command" in
       stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
       secret_rm clashlens-bridge-database-url
     elif [[ ("$version" == "2" || "$version" == "3" || "$version" == "4" || "$version" == "5") && "$fresh_bootstrap" != true ]]; then
-      # Migrations 0007, 0009, 0010, 0011, 0012, and 0013 change claim or
-      # publication contracts. Stop every old worker before applying any.
-      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9) || ! schema_migration_applied 10 || ! schema_migration_applied 11 || ! schema_migration_applied 12 || ! schema_migration_applied 13; then
+      # Migrations 0007, 0009, 0010, 0011, 0012, 0013, and 0014 change
+      # claim, publication, or worker access-path contracts. Stop every old
+      # worker before applying any.
+      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9) || ! schema_migration_applied 10 || ! schema_migration_applied 11 || ! schema_migration_applied 12 || ! schema_migration_applied 13 || ! schema_migration_applied 14; then
         stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
         stop_all_worker_containers
       fi
