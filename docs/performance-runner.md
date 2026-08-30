@@ -150,7 +150,12 @@ legacy army-read section bulk-loads bounded synthetic facts after that
 production seed. The dedicated `army-analytics` mode seeds exactly 12,500
 members across 28 days, eight current facts per member/day/lens, 28,000 missing
 trophies per lens, 28 identical fresh/confirmed Top-1,000 snapshots, and 27
-troop keys. It executes one timed forced miss (required to stay below five seconds), then
+troop keys. After the seed cardinalities commit, one identifier-safe `ANALYZE`
+statement prepares the six relations used by those reads. One 600-second
+readiness deadline bounds connection, analysis, and the fresh progress check.
+Timing starts only after the progress view reports no active analyze for those
+exact schema relations. It executes one timed forced miss
+(required to stay below five seconds), then
 five untimed warmups plus 100 timed cache-hit calls for each of `top-1000`,
 `trophies-5000-9999`, and `streak-top-1000` in both lenses through
 `ApiDatabase.get_army_analytics`. The forced miss is excluded from the warmed
@@ -166,9 +171,12 @@ with `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`. The retained result includes
 selected/scanned/returned rows, p95 and RSS, PostgreSQL settings, host memory,
 forced-miss and whole-run swap/OOM deltas, and the four-lane 25,024-observation mixed-load gate plus signed account
 reads. A p95, overlap, queue, or five-minute violation is retained in the JSON
-artifact and exits nonzero; no index or cache is added by the runner.
+artifact and exits nonzero; no index or cache is added by the runner. A
+statistics-readiness, request-budget, or other workload failure after a verified
+seed retains only fixed failure codes, the completed selection prefix, and
+readable aggregate database/resource facts. It never retries a timed request.
 
-Results use artifact schema 8 and include an `artifact_digest` SHA-256 over
+Results use artifact schema 9 and include an `artifact_digest` SHA-256 over
 canonical JSON excluding that field. Artifacts are validated before they are
 printed or written; missing/invalid digests, required metrics, or older artifact
 versions fail the run. They require a clean exact source SHA, the runner hash,
@@ -239,8 +247,11 @@ CLASHLENS_TEST_DATABASE_URL=postgresql://... \\
 ```
 
 Without `CLASHLENS_TEST_DATABASE_URL`, PostgreSQL checks are skipped. A skip is
-not performance acceptance. Database and collector-probe failures return a
-short nonzero diagnostic and do not emit a partial JSON result. The runner
+not performance acceptance. Bootstrap, unreadable aggregate/provenance state,
+and collector-probe failures return a short nonzero diagnostic and do not emit
+a partial JSON result. After a verified army seed, statistics-readiness,
+request-budget, and other workload failures retain a bounded schema-9 artifact
+whenever the aggregate/provenance snapshots remain readable. The runner
 publishes a complete artifact atomically and exclusively before returning a
 hard workload failure; an occupied output path is rejected. Retain real Fedora
 target-host outputs for review. The dedicated `army-analytics` mode

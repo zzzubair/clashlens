@@ -498,17 +498,23 @@ def _valid_army_artifact() -> dict:
     }
     collection_counts = collection["occurrence_counts_by_endpoint"]
     database = deepcopy(duplicate["samples"][0]["database"])
-    for relation in ("army_analytics_battle_facts", "leaderboard_snapshot_entries"):
+    for relation in runner.STEP5_STATISTICS_RELATIONS:
         database["relations"][relation] = 100
         database["relation_sizes"][relation] = {"total_bytes": 100}
-        database["relation_stats"][relation] = {"total_bytes": 100}
-        database["affected_relations"].append(relation)
+        database["relation_stats"][relation] = {
+            "total_bytes": 100,
+            "last_analyze": "2026-08-28T20:00:00+00:00",
+        }
+        if relation in runner.AFFECTED_RELATIONS:
+            database["affected_relations"].append(relation)
     database["response_counts_by_endpoint"] = dict(collection_counts)
     database["occurrence_counts_by_endpoint"] = dict(collection_counts)
     database["response_counts_by_endpoint"]["profile"] += 1
     database["occurrence_counts_by_endpoint"]["profile"] += 1
     army = {
         "status": "passed",
+        "failed_phase": None,
+        "failure": None,
         "protocol": {
             "population": runner.STEP5_POPULATION,
             "query_work_mem": "256MB",
@@ -539,6 +545,13 @@ def _valid_army_artifact() -> dict:
             "selected_facts_per_lens": runner.STEP5_SELECTED_MEMBERS * runner.STEP5_DAYS * runner.STEP5_FACTS_PER_MEMBER_DAY,
             "troop_keys": len(runner.STEP5_TROOP_KEYS),
         },
+        "statistics_readiness": {
+            "relations": list(runner.STEP5_STATISTICS_RELATIONS),
+            "readiness_timeout_seconds": runner.STEP5_STATISTICS_TIMEOUT_SECONDS,
+            "analyze_completed": True,
+            "active_analyzes": 0,
+            "ready": True,
+        },
         "selections": selections,
         "mixed_load": mixed,
         "database": database,
@@ -568,6 +581,20 @@ def _valid_army_artifact() -> dict:
         "army_read_sample": army,
         "hard_failures": [],
     }
+    artifact["artifact_digest"] = runner._artifact_digest(artifact)
+    return artifact
+
+
+def _valid_partial_army_artifact() -> dict:
+    artifact = _valid_army_artifact()
+    sample = artifact["army_read_sample"]
+    sample["status"] = "failed"
+    sample["failed_phase"] = "selection_reads"
+    sample["failure"] = "request_timeout"
+    sample["selections"] = sample["selections"][:2]
+    sample["mixed_load"] = None
+    sample["hard_failures"] = ["army_read_sample_unavailable"]
+    artifact["hard_failures"] = ["army_read_sample_unavailable"]
     artifact["artifact_digest"] = runner._artifact_digest(artifact)
     return artifact
 
@@ -619,6 +646,224 @@ class PerformanceRunnerTest(unittest.TestCase):
             list(runner.STEP5_TROOP_KEYS),
             sorted(runner.STEP5_TROOP_KEYS),
         )
+
+    def test_step5_partial_timeout_artifact_is_bounded_and_valid(self) -> None:
+        artifact = _valid_partial_army_artifact()
+        runner.validate_artifact(artifact)
+
+        for mutate in (
+            lambda sample: sample.__setitem__("failure", "SECRET-player-#TAG"),
+            lambda sample: sample["selections"].reverse(),
+            lambda sample: sample.__setitem__(
+                "mixed_load", _valid_army_artifact()["army_read_sample"]["mixed_load"]
+            ),
+            lambda sample: sample.__setitem__("status", "passed"),
+        ):
+            changed = _valid_partial_army_artifact()
+            mutate(changed["army_read_sample"])
+            changed["artifact_digest"] = runner._artifact_digest(changed)
+            with self.assertRaises(ValueError):
+                runner.validate_artifact(changed)
+
+        changed = _valid_partial_army_artifact()
+        completed = changed["army_read_sample"]["selections"][0]
+        completed.update(
+            {
+                "latencies_ms": [250.0] * runner.STEP5_REQUESTS,
+                "p95_ms": 250.0,
+                "min_ms": 250.0,
+                "max_ms": 250.0,
+                "target_passed": False,
+            }
+        )
+        changed["artifact_digest"] = runner._artifact_digest(changed)
+        with self.assertRaises(ValueError):
+            runner.validate_artifact(changed)
+        expected_failures = [
+            "step5_p95_exceeded",
+            "army_read_sample_unavailable",
+        ]
+        changed["army_read_sample"]["hard_failures"] = expected_failures
+        changed["hard_failures"] = expected_failures
+        changed["artifact_digest"] = runner._artifact_digest(changed)
+        runner.validate_artifact(changed)
+
+        for field, value in (
+            ("readiness_timeout_seconds", 601),
+            ("relations", ["army_analytics_battle_facts"]),
+            ("active_analyzes", 1),
+        ):
+            changed = _valid_army_artifact()
+            changed["army_read_sample"]["statistics_readiness"][field] = value
+            changed["artifact_digest"] = runner._artifact_digest(changed)
+            with self.assertRaises(ValueError):
+                runner.validate_artifact(changed)
+
+        for relation_map in ("relations", "relation_sizes", "relation_stats"):
+            changed = _valid_army_artifact()
+            del changed["army_read_sample"]["database"][relation_map][
+                runner.STEP5_STATISTICS_RELATIONS[0]
+            ]
+            changed["artifact_digest"] = runner._artifact_digest(changed)
+            with self.assertRaises(ValueError):
+                runner.validate_artifact(changed)
+
+        changed = _valid_army_artifact()
+        changed["army_read_sample"]["database"]["relation_stats"][
+            runner.STEP5_STATISTICS_RELATIONS[0]
+        ]["last_analyze"] = None
+        changed["artifact_digest"] = runner._artifact_digest(changed)
+        with self.assertRaises(ValueError):
+            runner.validate_artifact(changed)
+
+        for failure, completed, active in (
+            ("statistics_timeout", False, 0),
+            ("statistics_timeout", True, None),
+            ("statistics_not_ready", True, 1),
+            ("statistics_unavailable", None, None),
+            ("statistics_unavailable", True, None),
+        ):
+            changed = _valid_partial_army_artifact()
+            sample = changed["army_read_sample"]
+            sample["failed_phase"] = "statistics_readiness"
+            sample["failure"] = failure
+            sample["selections"] = []
+            sample["statistics_readiness"].update(
+                {
+                    "analyze_completed": completed,
+                    "active_analyzes": active,
+                    "ready": False,
+                }
+            )
+            changed["artifact_digest"] = runner._artifact_digest(changed)
+            runner.validate_artifact(changed)
+
+    def test_step5_statistics_deadline_and_unavailable_facts_are_explicit(self) -> None:
+        with (
+            mock.patch.object(
+                runner.time, "monotonic", side_effect=[100.0, 700.0]
+            ),
+            mock.patch("psycopg.connect") as connect,
+        ):
+            readiness, failure = runner._prepare_step5_statistics("unused")
+        connect.assert_not_called()
+        self.assertEqual(failure, "statistics_timeout")
+        self.assertEqual(readiness["analyze_completed"], False)
+        self.assertIsNone(readiness["active_analyzes"])
+        self.assertFalse(readiness["ready"])
+
+        with (
+            mock.patch.object(
+                runner.time, "monotonic", side_effect=[100.0, 100.0, 100.0]
+            ),
+            mock.patch(
+                "psycopg.connect", side_effect=RuntimeError("SECRET-player-#TAG")
+            ),
+        ):
+            readiness, failure = runner._prepare_step5_statistics("unused")
+        self.assertEqual(failure, "statistics_unavailable")
+        self.assertIsNone(readiness["analyze_completed"])
+        self.assertIsNone(readiness["active_analyzes"])
+        self.assertNotIn("SECRET", json.dumps(readiness))
+        self.assertNotIn("#TAG", json.dumps(readiness))
+
+    def test_step5_failures_snapshot_before_schema_cleanup(self) -> None:
+        import psycopg
+        from psycopg_pool import PoolTimeout
+
+        complete = _valid_army_artifact()["army_read_sample"]
+        for error, expected_failure in (
+            (
+                psycopg.errors.TransactionTimeout("SECRET-player-#TAG"),
+                "request_timeout",
+            ),
+            (PoolTimeout("SECRET-player-#TAG"), "request_timeout"),
+            (RuntimeError("SECRET-player-#TAG"), "workload_error"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                alive = {"value": False}
+                domain = mock.MagicMock()
+                domain.__enter__.side_effect = lambda alive=alive: (
+                    alive.__setitem__("value", True) or "postgresql://isolated"
+                )
+                domain.__exit__.side_effect = lambda *_, alive=alive: alive.__setitem__(
+                    "value", False
+                )
+                archive = mock.MagicMock()
+                archive.__enter__.return_value = object()
+                readiness = deepcopy(complete["statistics_readiness"])
+                database = deepcopy(complete["database"])
+
+                def snapshot(
+                    *_args: object,
+                    alive: dict[str, bool] = alive,
+                    database: dict = database,
+                ) -> dict:
+                    self.assertTrue(alive["value"])
+                    return deepcopy(database)
+
+                with (
+                    mock.patch(
+                        "domain_test_support.domain_database", return_value=domain
+                    ),
+                    mock.patch.object(runner, "archive_server", return_value=archive),
+                    mock.patch.object(
+                        runner,
+                        "_memory_pressure",
+                        side_effect=[
+                            deepcopy(complete["memory_pressure_before"]),
+                            deepcopy(complete["memory_pressure_after"]),
+                        ],
+                    ),
+                    mock.patch.object(
+                        runner, "_start_metrics", return_value=("0/0", None, 0)
+                    ),
+                    mock.patch.object(runner, "_relation_snapshot", return_value={}),
+                    mock.patch.object(
+                        runner,
+                        "_seed_step5_army_database",
+                        return_value=deepcopy(complete["seed"]),
+                    ),
+                    mock.patch.object(
+                        runner,
+                        "_prepare_step5_statistics",
+                        return_value=(readiness, None),
+                    ),
+                    mock.patch.object(
+                        runner,
+                        "_measure_army_pair",
+                        side_effect=[
+                            deepcopy(complete["selections"][0]),
+                            deepcopy(complete["selections"][1]),
+                            error,
+                        ],
+                    ),
+                    mock.patch.object(runner, "_run_step5_overlap") as overlap,
+                    mock.patch.object(runner, "_db_snapshot", side_effect=snapshot),
+                    mock.patch.object(
+                        runner,
+                        "_postgres_provenance",
+                        return_value=deepcopy(complete["postgres"]),
+                    ),
+                ):
+                    result = runner._run_step5_army("postgresql://disposable")
+
+                overlap.assert_not_called()
+                self.assertFalse(alive["value"])
+                self.assertEqual(result["failed_phase"], "selection_reads")
+                self.assertEqual(result["failure"], expected_failure)
+                self.assertEqual(len(result["selections"]), 2)
+                self.assertIsNone(result["mixed_load"])
+                self.assertEqual(
+                    result["hard_failures"], ["army_read_sample_unavailable"]
+                )
+                self.assertNotIn("SECRET", json.dumps(result))
+                self.assertNotIn("#TAG", json.dumps(result))
+                artifact = _valid_army_artifact()
+                artifact["army_read_sample"] = result
+                artifact["hard_failures"] = result["hard_failures"]
+                artifact["artifact_digest"] = runner._artifact_digest(artifact)
+                runner.validate_artifact(artifact)
 
     def test_known_bad_target_is_rejected_even_as_one_population(self) -> None:
         with self.assertRaisesRegex(ValueError, "post-fix"):
@@ -1614,14 +1859,14 @@ class PerformanceRunnerTest(unittest.TestCase):
                 runner._write_artifact(path, '{"replacement":true}\n')
 
     def test_main_retains_coherent_hard_failure_before_nonzero(self) -> None:
-        artifact = _valid_artifact()
-        artifact["hard_failures"] = ["fixed_acceptance_failure"]
+        artifact = _valid_partial_army_artifact()
+        runner.validate_artifact(artifact)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "hard-failure.json"
             with mock.patch.object(runner, "run", return_value=artifact):
                 result = runner.main(
                     [
-                        "duplicate-heavy",
+                        "army-analytics",
                         "--database-url",
                         "postgresql://fixture.invalid/clashlens",
                         "--output",
@@ -1630,10 +1875,9 @@ class PerformanceRunnerTest(unittest.TestCase):
                 )
 
             self.assertEqual(result, 2)
-            self.assertEqual(
-                json.loads(path.read_text(encoding="utf-8"))["hard_failures"],
-                ["fixed_acceptance_failure"],
-            )
+            retained = json.loads(path.read_text(encoding="utf-8"))
+            runner.validate_artifact(retained)
+            self.assertEqual(retained["hard_failures"], ["army_read_sample_unavailable"])
 
     def test_post_reset_army_failure_is_bounded_and_retained(self) -> None:
         with mock.patch.object(
@@ -1934,6 +2178,42 @@ class PerformanceRunnerTest(unittest.TestCase):
     "set CLASHLENS_TEST_DATABASE_URL for real PostgreSQL workload tests",
 )
 class PerformanceRunnerPostgresTest(unittest.TestCase):
+    def test_step5_statistics_readiness_analyzes_exact_relations(self) -> None:
+        import psycopg
+        from domain_test_support import domain_database
+
+        with domain_database(
+            os.environ["CLASHLENS_TEST_DATABASE_URL"], include_coordinator=True
+        ) as connection_info:
+            readiness, failure = runner._prepare_step5_statistics(connection_info)
+            with psycopg.connect(connection_info) as connection:
+                analyzed = {
+                    row[0]
+                    for row in connection.execute(
+                        """
+                        SELECT relname
+                        FROM pg_stat_all_tables
+                        WHERE schemaname = current_schema()
+                          AND relname = ANY(%s::text[])
+                          AND last_analyze IS NOT NULL
+                        """,
+                        (list(runner.STEP5_STATISTICS_RELATIONS),),
+                    ).fetchall()
+                }
+
+        self.assertIsNone(failure)
+        self.assertEqual(
+            readiness,
+            {
+                "relations": list(runner.STEP5_STATISTICS_RELATIONS),
+                "readiness_timeout_seconds": runner.STEP5_STATISTICS_TIMEOUT_SECONDS,
+                "analyze_completed": True,
+                "active_analyzes": 0,
+                "ready": True,
+            },
+        )
+        self.assertEqual(analyzed, set(runner.STEP5_STATISTICS_RELATIONS))
+
     def test_overlap_fixture_does_not_enqueue_legacy_army_publication(self) -> None:
         import psycopg
         from domain_test_support import domain_database

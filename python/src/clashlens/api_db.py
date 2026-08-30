@@ -2498,13 +2498,12 @@ class ApiDatabase:
                     missing_trophies = int(
                         connection.execute(
                             """
-                            SELECT count(*) FILTER (
-                                       WHERE battle_time_trophies IS NULL
-                                   )
+                            SELECT count(*)
                             FROM army_analytics_battle_facts
                             WHERE official_season_id=%s
                               AND season_day_number BETWEEN %s AND %s
                               AND lens=%s AND is_current
+                              AND battle_time_trophies IS NULL
                             """,
                             (
                                 resolved.season,

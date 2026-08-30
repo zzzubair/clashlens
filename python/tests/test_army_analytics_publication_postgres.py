@@ -402,6 +402,21 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 selection = _selection()
                 first = api.get_army_analytics(selection)
                 assert first is not None
+                missing_trophy_queries = [
+                    query
+                    for query in fact_queries
+                    if "battle_time_trophies IS NULL" in query
+                ]
+                assert len(missing_trophy_queries) == 1
+                missing_trophy_query = " ".join(missing_trophy_queries[0].split())
+                assert (
+                    "SELECT count(*) FROM army_analytics_battle_facts WHERE "
+                    in missing_trophy_query
+                )
+                assert "AND is_current AND battle_time_trophies IS NULL" in (
+                    missing_trophy_query
+                )
+                assert "FILTER" not in missing_trophy_query
                 assert first["total_attacks"] == 2
                 assert first["usable_army_sample"] == 2
                 assert first["army_states"]["fully_decoded"] == 1
@@ -539,7 +554,11 @@ def test_publication_writer_serves_reproducible_perspective_results(
                             assert other_column not in aggregate_query
                         continue
                     assert len(
-                        [query for query in fact_queries if "count(*) FILTER" in query]
+                        [
+                            query
+                            for query in fact_queries
+                            if "battle_time_trophies IS NULL" in query
+                        ]
                     ) == 1
                     payload_queries = [
                         query

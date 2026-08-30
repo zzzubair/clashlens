@@ -43,7 +43,7 @@ DUPLICATE_ENDPOINT_MIX = {
     "global_player_rankings": 24,
 }
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
-ARTIFACT_SCHEMA_VERSION = 8
+ARTIFACT_SCHEMA_VERSION = 9
 CANDIDATE_RECEIPT_SCHEMA_VERSION = 2
 REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 16))
 CANONICAL_REPOSITORY_URL = "https://github.com/zzzubair/clashlens"
@@ -168,6 +168,15 @@ STEP5_ANALYTICS_LANES = 4
 STEP5_P95_TARGET_MS = 200.0
 STEP5_FORCED_MISS_TARGET_SECONDS = 5.0
 STEP5_COLLECTION_LIMIT_SECONDS = 300.0
+STEP5_STATISTICS_TIMEOUT_SECONDS = 600
+STEP5_STATISTICS_RELATIONS = (
+    "api_player_daily_logs",
+    "army_analytics_completed_days",
+    "leaderboard_snapshots",
+    "leaderboard_snapshot_entries",
+    "ranked_day_versions",
+    "army_analytics_battle_facts",
+)
 STEP5_TROOP_KEYS = tuple(sorted(f"troop:{index}" for index in range(27)))
 BATTLE_FIXTURE = (PYTHON / "testdata" / "legend_i_battle_log_v1.json").read_bytes()
 RANKING_FIXTURE = (PYTHON / "testdata" / "global_top_200_v1.json").read_bytes()
@@ -1684,6 +1693,22 @@ def _army_forced_miss_passed(
     return not _army_forced_miss_failures(seconds, before, after, delta)
 
 
+def _army_completed_read_failures(selections: list[dict[str, Any]]) -> list[str]:
+    failures: list[str] = []
+    for selection in selections:
+        failures.extend(
+            _army_forced_miss_failures(
+                selection["forced_miss_seconds"],
+                selection["forced_miss_memory_before"],
+                selection["forced_miss_memory_after"],
+                selection["forced_miss_memory_delta"],
+            )
+        )
+        if not selection["target_passed"]:
+            failures.append("step5_p95_exceeded")
+    return failures
+
+
 def _bounded_int(value: Any, label: str, *, positive: bool = False) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ValueError(f"{label} is invalid")
@@ -2402,6 +2427,57 @@ def _validate_army_mixed(value: Any, specs: tuple[dict[str, Any], ...], label: s
         raise ValueError(f"{label} hard failures are incomplete")
 
 
+def _validate_step5_statistics(
+    value: Any, database: Any, label: str
+) -> None:
+    if not isinstance(value, dict) or set(value) != {
+        "relations",
+        "readiness_timeout_seconds",
+        "analyze_completed",
+        "active_analyzes",
+        "ready",
+    }:
+        raise ValueError(f"{label} schema is invalid")
+    completed = value["analyze_completed"]
+    active = value["active_analyzes"]
+    if (completed is not None and not isinstance(completed, bool)) or (
+        active is not None
+        and _bounded_int(active, f"{label}.active_analyzes") > 64
+    ):
+        raise ValueError(f"{label} facts are invalid")
+    if (
+        value["relations"] != list(STEP5_STATISTICS_RELATIONS)
+        or value["readiness_timeout_seconds"] != STEP5_STATISTICS_TIMEOUT_SECONDS
+        or not isinstance(value["ready"], bool)
+        or value["ready"] is not (completed is True and active == 0)
+    ):
+        raise ValueError(f"{label} facts are invalid")
+    if not isinstance(database, dict):
+        raise TypeError(f"{label} database facts are invalid")
+    required = set(STEP5_STATISTICS_RELATIONS)
+    for name in ("relations", "relation_sizes", "relation_stats"):
+        relation_map = database.get(name)
+        if not isinstance(relation_map, dict) or not required.issubset(relation_map):
+            raise ValueError(f"{label} database facts are incomplete")
+    if completed is True:
+        for relation in STEP5_STATISTICS_RELATIONS:
+            stats = database["relation_stats"][relation]
+            if not isinstance(stats, dict):
+                raise TypeError(f"{label} analyze timestamp is invalid")
+            try:
+                analyzed_at = datetime.fromisoformat(
+                    _bounded_text(
+                        stats.get("last_analyze"),
+                        f"{label}.{relation}.last_analyze",
+                        limit=64,
+                    )
+                )
+            except ValueError as error:
+                raise ValueError(f"{label} analyze timestamp is invalid") from error
+            if analyzed_at.tzinfo is None:
+                raise ValueError(f"{label} analyze timestamp is invalid")
+
+
 def _validate_army_semantics(
     value: dict[str, Any], provenance: dict[str, Any], artifact_failures: list[str], label: str
 ) -> None:
@@ -2446,18 +2522,17 @@ def _validate_army_semantics(
     }
     if value.get("seed") != seed:
         raise ValueError(f"{label}.seed is invalid")
+    _validate_step5_statistics(
+        value.get("statistics_readiness"),
+        value.get("database"),
+        f"{label}.statistics_readiness",
+    )
     specs = _army_selection_specs()
     selections = value.get("selections")
-    if not isinstance(selections, list) or len(selections) != len(specs):
+    if not isinstance(selections, list) or len(selections) > len(specs):
         raise ValueError(f"{label}.selections are invalid")
-    for selection, spec in zip(selections, specs, strict=True):
+    for selection, spec in zip(selections, specs):
         _validate_army_selection(selection, spec, f"{label}.{selection.get('selection')}/{selection.get('lens')}")
-    _validate_army_mixed(value["mixed_load"], specs, f"{label}.mixed_load")
-    cycle_counts = value["mixed_load"]["collection_cycle"]["occurrence_counts_by_endpoint"]
-    expected_counts = dict(cycle_counts)
-    expected_counts["profile"] += 1
-    if value["database"]["response_counts_by_endpoint"] != expected_counts or value["database"]["occurrence_counts_by_endpoint"] != expected_counts:
-        raise ValueError(f"{label}.database counts are invalid")
     if value["queue_drained"] is not (not value["database"].get("queue_residue")):
         raise ValueError(f"{label}.queue_drained is invalid")
     _validate_postgres_identity(value["postgres"], f"{label}.postgres")
@@ -2468,25 +2543,85 @@ def _validate_army_semantics(
         raise ValueError(f"{label}.postgres provenance is invalid")
     _validate_resources(value, label)
     _validate_memory_facts(value["memory_pressure_before"], value["memory_pressure_after"], value["memory_pressure_delta"], label)
-    expected_failures: list[str] = []
-    for selection in selections:
-        expected_failures.extend(
-            _army_forced_miss_failures(
-                selection["forced_miss_seconds"],
-                selection["forced_miss_memory_before"],
-                selection["forced_miss_memory_after"],
-                selection["forced_miss_memory_delta"],
-            )
-        )
-        if not selection["target_passed"]:
-            expected_failures.append("step5_p95_exceeded")
-    expected_failures.extend(value["mixed_load"]["hard_failures"])
+    expected_failures = _army_completed_read_failures(selections)
+    resource_failures: list[str] = []
     if value["database"].get("queue_residue"):
-        expected_failures.append("queue_residue")
+        resource_failures.append("queue_residue")
     if any(value["memory_pressure_before"][key] != 1 or value["memory_pressure_after"][key] != 1 for key in ("process_cgroup_available", "database_cgroup_available")):
-        expected_failures.append("memory_pressure_unavailable")
+        resource_failures.append("memory_pressure_unavailable")
     if any(value["memory_pressure_delta"].values()):
-        expected_failures.append("memory_pressure_increased")
+        resource_failures.append("memory_pressure_increased")
+    failed_phase = value.get("failed_phase")
+    failure = value.get("failure")
+    if failure is not None:
+        expected_failures.extend(resource_failures)
+        expected_failures.append("army_read_sample_unavailable")
+        expected_failures = _failure_codes(expected_failures)
+        if (
+            value.get("status") != "failed"
+            or value.get("mixed_load") is not None
+            or value.get("hard_failures") != expected_failures
+            or artifact_failures != expected_failures
+            or failed_phase
+            not in {"statistics_readiness", "selection_reads", "mixed_load"}
+            or failure
+            not in {
+                "statistics_timeout",
+                "statistics_not_ready",
+                "statistics_unavailable",
+                "request_timeout",
+                "workload_error",
+            }
+        ):
+            raise ValueError(f"{label} bounded failure is invalid")
+        readiness = value["statistics_readiness"]
+        if failed_phase == "statistics_readiness":
+            if selections or failure not in {
+                "statistics_timeout",
+                "statistics_not_ready",
+                "statistics_unavailable",
+            }:
+                raise ValueError(f"{label} readiness failure is invalid")
+            if failure == "statistics_timeout" and (
+                readiness["analyze_completed"] is None
+                or (
+                    readiness["analyze_completed"] is True
+                    and readiness["active_analyzes"] is not None
+                )
+            ):
+                raise ValueError(f"{label} readiness timeout is invalid")
+            if failure == "statistics_not_ready" and (
+                readiness["analyze_completed"] is not True
+                or not isinstance(readiness["active_analyzes"], int)
+                or readiness["active_analyzes"] == 0
+            ):
+                raise ValueError(f"{label} readiness state is invalid")
+            if failure == "statistics_unavailable" and (
+                readiness["ready"]
+                or readiness["active_analyzes"] is not None
+            ):
+                raise ValueError(f"{label} readiness availability is invalid")
+        elif (
+            failure not in {"request_timeout", "workload_error"}
+            or not readiness["ready"]
+            or (failed_phase == "selection_reads" and len(selections) == len(specs))
+            or (failed_phase == "mixed_load" and len(selections) != len(specs))
+        ):
+            raise ValueError(f"{label} timed read failure is invalid")
+        return
+
+    if failed_phase is not None or not value["statistics_readiness"]["ready"]:
+        raise ValueError(f"{label} complete execution state is invalid")
+    if len(selections) != len(specs):
+        raise ValueError(f"{label}.selections are incomplete")
+    _validate_army_mixed(value["mixed_load"], specs, f"{label}.mixed_load")
+    cycle_counts = value["mixed_load"]["collection_cycle"]["occurrence_counts_by_endpoint"]
+    expected_counts = dict(cycle_counts)
+    expected_counts["profile"] += 1
+    if value["database"]["response_counts_by_endpoint"] != expected_counts or value["database"]["occurrence_counts_by_endpoint"] != expected_counts:
+        raise ValueError(f"{label}.database counts are invalid")
+    expected_failures.extend(value["mixed_load"]["hard_failures"])
+    expected_failures.extend(resource_failures)
     expected_failures = _failure_codes(expected_failures)
     if value.get("hard_failures") != expected_failures or value.get("hard_failures") != artifact_failures:
         raise ValueError(f"{label} hard failures are incomplete")
@@ -3012,8 +3147,11 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             frozenset(
                 {
                     "status",
+                    "failed_phase",
+                    "failure",
                     "protocol",
                     "seed",
+                    "statistics_readiness",
                     "selections",
                     "mixed_load",
                     "database",
@@ -3727,6 +3865,109 @@ def _seed_step5_army_database(
                 "selected_facts_per_lens": int(selected),
                 "troop_keys": int(troop_keys),
             }
+
+
+def _step5_active_analyzes(
+    connection_info: str, deadline: float
+) -> int | None:
+    import psycopg
+
+    remaining = deadline - time.monotonic()
+    if remaining < 1:
+        return None
+    with psycopg.connect(
+        connection_info, connect_timeout=max(1, int(remaining))
+    ) as connection:
+        remaining_ms = int((deadline - time.monotonic()) * 1000)
+        if remaining_ms <= 0:
+            return None
+        with connection.transaction():
+            connection.execute(
+                f"SET LOCAL statement_timeout = '{remaining_ms}ms'"
+            )
+            row = connection.execute(
+                """
+                SELECT least(count(*), 64)::integer
+                FROM pg_stat_progress_analyze AS progress
+                WHERE progress.datid = (
+                    SELECT oid FROM pg_database WHERE datname = current_database()
+                )
+                  AND progress.relid IN (
+                      SELECT oid
+                      FROM pg_class
+                      WHERE relnamespace = current_schema()::regnamespace
+                        AND relname = ANY(%s::text[])
+                  )
+                """,
+                (list(STEP5_STATISTICS_RELATIONS),),
+            ).fetchone()
+    if row is None:
+        raise RuntimeError("step5 statistics readiness could not be read")
+    return int(row[0])
+
+
+def _prepare_step5_statistics(
+    connection_info: str,
+) -> tuple[dict[str, Any], str | None]:
+    """Analyze the six read-path relations once before any timed request."""
+    import psycopg
+    from psycopg import sql
+
+    deadline = time.monotonic() + STEP5_STATISTICS_TIMEOUT_SECONDS
+
+    def result(completed: bool | None, active: int | None) -> dict[str, Any]:
+        return {
+            "relations": list(STEP5_STATISTICS_RELATIONS),
+            "readiness_timeout_seconds": STEP5_STATISTICS_TIMEOUT_SECONDS,
+            "analyze_completed": completed,
+            "active_analyzes": active,
+            "ready": completed is True and active == 0,
+        }
+
+    completed = False
+    try:
+        remaining = deadline - time.monotonic()
+        if remaining < 1:
+            return result(completed, None), "statistics_timeout"
+        with psycopg.connect(
+            connection_info, connect_timeout=max(1, int(remaining))
+        ) as connection:
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                return result(completed, None), "statistics_timeout"
+            with connection.transaction():
+                connection.execute(
+                    f"SET LOCAL statement_timeout = '{remaining_ms}ms'"
+                )
+                connection.execute(
+                    sql.SQL("ANALYZE {}").format(
+                        sql.SQL(", ").join(
+                            sql.Identifier(name)
+                            for name in STEP5_STATISTICS_RELATIONS
+                        )
+                    )
+                )
+        completed = True
+    except (psycopg.errors.QueryCanceled, psycopg.errors.TransactionTimeout):
+        completed = False
+    except Exception:  # noqa: BLE001 - retain only explicit unavailable facts.
+        if time.monotonic() >= deadline:
+            return result(completed, None), "statistics_timeout"
+        return result(None, None), "statistics_unavailable"
+
+    try:
+        active = _step5_active_analyzes(connection_info, deadline)
+    except (psycopg.errors.QueryCanceled, psycopg.errors.TransactionTimeout):
+        return result(completed, None), "statistics_timeout"
+    except Exception:  # noqa: BLE001 - retain only explicit unavailable facts.
+        if time.monotonic() >= deadline:
+            return result(completed, None), "statistics_timeout"
+        return result(completed, None), "statistics_unavailable"
+    if active is None or not completed:
+        return result(completed, active), "statistics_timeout"
+    if active:
+        return result(completed, active), "statistics_not_ready"
+    return result(completed, active), None
 
 
 def _step5_selection(spec: dict[str, Any]) -> Any:
@@ -5521,7 +5762,9 @@ def _retained_army_read_sample(
 
 def _run_step5_army(database_url: str) -> dict[str, Any]:
     """Run the fixed PR 2 army protocol in one isolated production schema."""
+    import psycopg
     from domain_test_support import domain_database
+    from psycopg_pool import PoolTimeout
 
     pressure_before = _memory_pressure(database_url)
     started = time.perf_counter()
@@ -5534,8 +5777,26 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
         wal_start, statement_start, wal_retained_start = _start_metrics(connection_info)
         relation_start = _relation_snapshot(connection_info)
         seed = _seed_step5_army_database(connection_info, archive)
-        reads = [_measure_army_pair(connection_info, spec) for spec in specs]
-        overlap = _run_step5_overlap(connection_info, archive, specs)
+        readiness, readiness_failure = _prepare_step5_statistics(connection_info)
+        reads: list[dict[str, Any]] = []
+        overlap: dict[str, Any] | None = None
+        failed_phase: str | None = None
+        failure = readiness_failure
+        if failure is not None:
+            failed_phase = "statistics_readiness"
+        else:
+            phase = "selection_reads"
+            try:
+                for spec in specs:
+                    reads.append(_measure_army_pair(connection_info, spec))
+                phase = "mixed_load"
+                overlap = _run_step5_overlap(connection_info, archive, specs)
+            except (psycopg.errors.TransactionTimeout, PoolTimeout):
+                failed_phase = phase
+                failure = "request_timeout"
+            except Exception:  # noqa: BLE001 - retain only the finite failure code.
+                failed_phase = phase
+                failure = "workload_error"
         database = _db_snapshot(
             connection_info,
             wal_start,
@@ -5555,22 +5816,10 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
             if row["status"]
             in {"pending", "leased", "waiting_retry", "waiting_dependency"}
         ]
-        hard_failures: list[str] = []
-        for item in reads:
-            hard_failures.extend(
-                _army_forced_miss_failures(
-                    item["forced_miss_seconds"],
-                    item["forced_miss_memory_before"],
-                    item["forced_miss_memory_after"],
-                    item["forced_miss_memory_delta"],
-                )
-            )
-        hard_failures.extend(
-            "step5_p95_exceeded"
-            for item in reads
-            if not item["target_passed"]
-        )
-        hard_failures.extend(overlap["hard_failures"])
+        hard_failures = _army_completed_read_failures(reads)
+        if failure is None:
+            assert overlap is not None
+            hard_failures.extend(overlap["hard_failures"])
         if active_queue_rows:
             hard_failures.append("queue_residue")
         if (
@@ -5582,8 +5831,12 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
             hard_failures.append("memory_pressure_unavailable")
         if any(pressure_delta.values()):
             hard_failures.append("memory_pressure_increased")
+        if failure is not None:
+            hard_failures.append("army_read_sample_unavailable")
         return {
             "status": "passed" if not hard_failures else "failed",
+            "failed_phase": failed_phase,
+            "failure": failure,
             "protocol": {
                 "population": STEP5_POPULATION,
                 "query_work_mem": "256MB",
@@ -5604,6 +5857,7 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
                 "duplicate_cycle_observations": DUPLICATE_EXECUTION_CAP,
             },
             "seed": seed,
+            "statistics_readiness": readiness,
             "selections": reads,
             "mixed_load": overlap,
             "database": database,
