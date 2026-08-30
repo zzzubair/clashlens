@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -10,6 +11,7 @@ from clashlens.operating import (
     COLLECTOR_STAGES,
     LATENCY_BUCKETS_SECONDS,
     RELATION_NAMES,
+    WORKER_SNAPSHOT_MAX_AGE_SECONDS,
     ApiMetrics,
     WorkerMetrics,
     api_route,
@@ -87,7 +89,7 @@ def _database(*, captured_at: str = CAPTURED_AT) -> dict[str, object]:
         "contract_version": 5,
         "migrations": [
             {"version": version, "applied_at": "2026-08-28T19:00:00+00:00"}
-            for version in range(1, 15)
+            for version in range(1, 16)
         ],
         "queues": {"collector": _queue(), "python": _queue()},
         "processed": {
@@ -202,8 +204,8 @@ def _api() -> dict[str, object]:
     ).snapshot(_pool())
 
 
-def _worker() -> dict[str, object]:
-    return WorkerMetrics(
+def _worker(*, captured_at: str = CAPTURED_AT) -> dict[str, object]:
+    snapshot = WorkerMetrics(
         process_id="00000000-0000-4000-8000-000000000083",
         started_at=datetime(2026, 8, 28, 19, 32, tzinfo=UTC),
     ).snapshot(
@@ -220,6 +222,8 @@ def _worker() -> dict[str, object]:
         },
         spool={"ready": True, "component": "spool", "reason": "ready"},
     )
+    snapshot["captured_at"] = captured_at
+    return snapshot
 
 
 def _config() -> dict[str, int]:
@@ -239,11 +243,12 @@ def _snapshot(
     spool_config: dict[str, int] | None = None,
     previous: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    database_value = database or _database()
     return build_operating_snapshot(
-        database=database or _database(),
+        database=database_value,
         collector=collector or _collector(),
         python_api=_api(),
-        python_workers=[_worker()],
+        python_workers=[_worker(captured_at=str(database_value["captured_at"]))],
         spool_config=spool_config or _config(),
         previous=previous,
     )
@@ -342,6 +347,95 @@ def test_empty_healthy_snapshot_is_bounded_and_optional_stats_can_be_unavailable
     assert result["comparison"]["deltas"] is None
     assert len(result["snapshot_id"]) == 64
     assert "#" not in json.dumps(result)
+
+
+def test_worker_snapshot_freshness_is_required_and_bounded() -> None:
+    database = _database()
+    database_time = datetime.fromisoformat(CAPTURED_AT)
+    worker = _worker()
+    worker["captured_at"] = (
+        database_time - timedelta(seconds=WORKER_SNAPSHOT_MAX_AGE_SECONDS)
+    ).isoformat()
+
+    accepted = build_operating_snapshot(
+        database=database,
+        collector=_collector(),
+        python_api=_api(),
+        python_workers=[worker],
+        spool_config=_config(),
+    )
+    assert accepted["check"]["exit_code"] == 0
+
+    missing = _worker()
+    del missing["captured_at"]
+    missing_result = build_operating_snapshot(
+        database=database,
+        collector=_collector(),
+        python_api=_api(),
+        python_workers=[missing],
+        spool_config=_config(),
+    )
+    assert missing_result["check"]["exit_code"] == 2
+    assert missing_result["check"]["reasons"] == ["required_fact_missing"]
+
+    invalid_workers = []
+    stale = _worker()
+    stale["captured_at"] = (
+        database_time
+        - timedelta(seconds=WORKER_SNAPSHOT_MAX_AGE_SECONDS, microseconds=1)
+    ).isoformat()
+    invalid_workers.append(stale)
+    future = _worker()
+    future["captured_at"] = (database_time + timedelta(microseconds=1)).isoformat()
+    invalid_workers.append(future)
+
+    for invalid in invalid_workers:
+        result = build_operating_snapshot(
+            database=database,
+            collector=_collector(),
+            python_api=_api(),
+            python_workers=[invalid],
+            spool_config=_config(),
+        )
+        assert result["check"] == {
+            "status": "indeterminate",
+            "exit_code": 2,
+            "reasons": ["required_fact_invalid"],
+        }
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("outcome_count", "latency_count", "response_count", "latency_sum", "response_sum"),
+)
+def test_contradictory_api_measurements_are_indeterminate(mutation: str) -> None:
+    api = _api()
+    request = api["requests"]["account"]
+    if mutation == "outcome_count":
+        request["outcomes"]["success"] = 1
+    elif mutation == "latency_count":
+        request["latency"]["count"] = 1
+        request["latency"]["buckets"][-1] = 1
+    elif mutation == "response_count":
+        request["response_bytes"]["count"] = 1
+    elif mutation == "latency_sum":
+        request["latency"]["sum_seconds"] = 1
+    else:
+        request["response_bytes"]["sum"] = 1
+
+    result = build_operating_snapshot(
+        database=_database(),
+        collector=_collector(),
+        python_api=api,
+        python_workers=[_worker()],
+        spool_config=_config(),
+    )
+
+    assert result["check"] == {
+        "status": "indeterminate",
+        "exit_code": 2,
+        "reasons": ["required_fact_invalid"],
+    }
 
 
 def test_retained_historical_failure_and_old_queue_age_do_not_fail() -> None:
@@ -578,5 +672,26 @@ def test_tampered_explicit_previous_snapshot_is_indeterminate() -> None:
     result = _snapshot(previous=previous)
 
     assert result["check"]["status"] == "indeterminate"
+    assert result["check"]["exit_code"] == 2
+    assert "invalid_previous_snapshot" in result["check"]["reasons"]
+
+
+@pytest.mark.parametrize("offset_seconds", [-121, 1])
+def test_previous_snapshot_rejects_stale_or_future_worker(
+    offset_seconds: int,
+) -> None:
+    previous = _snapshot(database=_database(captured_at="2026-08-28T19:00:00+00:00"))
+    worker = previous["processes"]["python_workers"][0]
+    database_time = datetime.fromisoformat(previous["database"]["captured_at"])
+    worker["captured_at"] = (
+        database_time + timedelta(seconds=offset_seconds)
+    ).isoformat()
+    unsigned = {key: value for key, value in previous.items() if key != "snapshot_id"}
+    previous["snapshot_id"] = hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    result = _snapshot(previous=previous)
+
     assert result["check"]["exit_code"] == 2
     assert "invalid_previous_snapshot" in result["check"]["reasons"]

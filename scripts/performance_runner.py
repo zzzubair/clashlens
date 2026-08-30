@@ -45,7 +45,7 @@ DUPLICATE_ENDPOINT_MIX = {
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
 ARTIFACT_SCHEMA_VERSION = 8
 CANDIDATE_RECEIPT_SCHEMA_VERSION = 2
-REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 15))
+REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 16))
 CANONICAL_REPOSITORY_URL = "https://github.com/zzzubair/clashlens"
 CONFIGURATION_KEYS = {
     "mode",
@@ -812,6 +812,7 @@ def _boundary_admission_probe(
             "-run",
             "^TestStep8BoundaryAdmissionProbe$",
             "-count=1",
+            "-timeout=600s",
             "-v",
         ],
         cwd=ROOT,
@@ -819,6 +820,7 @@ def _boundary_admission_probe(
         text=True,
         capture_output=True,
         check=False,
+        timeout=660,
     )
     if completed.returncode != 0:
         raise RuntimeError("production boundary admission probe failed")
@@ -3761,7 +3763,6 @@ def _explain_endpoint_statements(
     lens: str,
 ) -> list[dict[str, Any]]:
     import psycopg
-
     from clashlens.api_db import ARMY_ANALYTICS_QUERY_WORK_MEM
 
     plans: list[dict[str, Any]] = []
@@ -3895,6 +3896,8 @@ def _run_account_read_gate(
     overlap_counts: list[int] | None = None,
     overlap_lock: Lock | None = None,
 ) -> dict[str, Any]:
+    from clashlens.api import create_app
+    from clashlens.api_db import ApiDatabase
     from fastapi.testclient import TestClient
     from test_private_api import (
         DISCORD_CURRENT,
@@ -3905,9 +3908,6 @@ def _run_account_read_gate(
         json_body,
         signed_headers,
     )
-
-    from clashlens.api import create_app
-    from clashlens.api_db import ApiDatabase
 
     database = ApiDatabase(connection_info, max_size=1)
     keys = {
@@ -3997,13 +3997,17 @@ def _run_step5_overlap(
     processing_started = Event()
     cycle_finished = Event()
     cycle_failed = Event()
+    analytics_warmups_finished = Event()
     overlap_lock = Lock()
+    warmed_lanes = [0]
     overlap_counts: dict[str, int] = {f"{s['selection']}/{s['lens']}": 0 for s in specs}
     account_overlap = [0]
 
     def duplicate_cycle() -> dict[str, Any]:
-        started = time.perf_counter()
         try:
+            if not analytics_warmups_finished.wait(120):
+                raise RuntimeError("analytics warmups did not finish")
+            started = time.perf_counter()
             overlap_day = BOUNDARY + timedelta(days=STEP5_DAYS + 1)
             result = _run_duplicate(
                 connection_info,
@@ -4029,21 +4033,28 @@ def _run_step5_overlap(
             cycle_finished.set()
 
     def analytics_lane(lane_specs: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
-        processing_started.wait()
-        if cycle_failed.is_set():
-            raise RuntimeError("collection cycle failed before processing started")
         from clashlens.api_db import ApiDatabase
 
         database = ApiDatabase(connection_info, max_size=1)
         results: list[dict[str, Any]] = []
         try:
             selections = [(spec, _step5_selection(spec)) for spec in lane_specs]
-            for spec, selection in selections:
-                for _ in range(STEP5_WARMUPS):
-                    result = database.get_army_analytics(
-                        selection, now=BOUNDARY + timedelta(days=STEP5_DAYS + 1)
-                    )
-                    _step5_result(result, spec, "mixed warmup")
+            try:
+                for spec, selection in selections:
+                    for _ in range(STEP5_WARMUPS):
+                        result = database.get_army_analytics(
+                            selection,
+                            now=BOUNDARY + timedelta(days=STEP5_DAYS + 1),
+                        )
+                        _step5_result(result, spec, "mixed warmup")
+            finally:
+                with overlap_lock:
+                    warmed_lanes[0] += 1
+                    if warmed_lanes[0] == STEP5_ANALYTICS_LANES:
+                        analytics_warmups_finished.set()
+            processing_started.wait()
+            if cycle_failed.is_set():
+                raise RuntimeError("collection cycle failed before processing started")
             latencies: dict[str, list[float]] = {
                 f"{spec['selection']}/{spec['lens']}": []
                 for spec, _selection in selections
@@ -5063,10 +5074,9 @@ def _run_mixed(
     connection_info: str, archive: Any, live: int, backfill: int
 ) -> dict[str, Any]:
     import psycopg
+    from clashlens.worker import process_concurrently
     from domain_test_support import store_observation
     from psycopg.types.json import Jsonb
-
-    from clashlens.worker import process_concurrently
 
     started = time.perf_counter()
     cpu_start = time.process_time()

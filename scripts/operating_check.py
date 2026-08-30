@@ -779,27 +779,6 @@ def _previous(path: Path | None) -> dict[str, Any] | None:
 
 
 def collect_snapshot(arguments: argparse.Namespace) -> dict[str, Any]:
-    database = _json_source(
-        _run(
-            [
-                arguments.podman_bin,
-                "exec",
-                "--interactive",
-                arguments.postgres_container,
-                "psql",
-                "--quiet",
-                "--tuples-only",
-                "--no-align",
-                "--set",
-                "ON_ERROR_STOP=1",
-                "--username",
-                arguments.postgres_user,
-                "--dbname",
-                arguments.postgres_database,
-            ],
-            input_text=DATABASE_SQL,
-        )
-    )
     collector = parse_collector_metrics(
         _run(
             [
@@ -849,6 +828,28 @@ def collect_snapshot(arguments: argparse.Namespace) -> dict[str, Any]:
         )
         for replica in range(1, arguments.worker_replicas + 1)
     ]
+    # Capture PostgreSQL last so its clock bounds every cached worker snapshot.
+    database = _json_source(
+        _run(
+            [
+                arguments.podman_bin,
+                "exec",
+                "--interactive",
+                arguments.postgres_container,
+                "psql",
+                "--quiet",
+                "--tuples-only",
+                "--no-align",
+                "--set",
+                "ON_ERROR_STOP=1",
+                "--username",
+                arguments.postgres_user,
+                "--dbname",
+                arguments.postgres_database,
+            ],
+            input_text=DATABASE_SQL,
+        )
+    )
     return build_operating_snapshot(
         database=database,
         collector=collector,

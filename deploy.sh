@@ -20,6 +20,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0012_parsed_content_dedup.sql"
   "$ROOT_DIR/deploy/migrations/0013_army_backfill_priority.sql"
   "$ROOT_DIR/deploy/migrations/0014_ranked_day_lookup.sql"
+  "$ROOT_DIR/deploy/migrations/0015_python_job_source_contract_security.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -94,7 +95,7 @@ Commands:
   build-python                 Build the immutable Python image only.
   build-website                Build the immutable website image only.
   candidate-prepare            Prepare only the configured disposable
-                               PostgreSQL database through migration 0014.
+                               PostgreSQL database through migration 0015.
   deployment-receipt <scope> <environment> <results-dir>
                                Write a candidate-preparation or deployed-stack
                                evidence receipt outside the checkout.
@@ -507,6 +508,12 @@ replace_secret_value() {
   printf '%s' "$value" | "$PODMAN_BIN" secret create --replace "$name" - >/dev/null
 }
 
+create_secret_value() {
+  local name=$1
+  local value=$2
+  printf '%s' "$value" | "$PODMAN_BIN" secret create "$name" - >/dev/null
+}
+
 postgres_password_secret_name() {
   local scope=${1:-private}
   if [[ "$scope" == "candidate" ]]; then
@@ -563,9 +570,11 @@ ensure_postgres() {
     die "candidate-prepare refuses an existing PostgreSQL container"
   fi
   postgres_password_secret=$(postgres_password_secret_name "$scope")
-  replace_secret_value "$postgres_password_secret" "$POSTGRES_PASSWORD"
   if [[ "$scope" == "candidate" ]]; then
+    create_secret_value "$postgres_password_secret" "$POSTGRES_PASSWORD"
     scope_label=(--label 'org.clashlens.scope=candidate')
+  else
+    replace_secret_value "$postgres_password_secret" "$POSTGRES_PASSWORD"
   fi
   if [[ "$scope" != "candidate" ]] && container_exists "$POSTGRES_CONTAINER"; then
     local configured_shm_size configured_metrics_profile
@@ -728,6 +737,10 @@ apply_pending_forward_migrations() {
         # The ranked-day lookup index changes the decode enqueue access path;
         # drain old workers before taking the migration lock.
         stop_all_worker_containers
+      elif (( version == 15 )); then
+        # The source-contract trigger changes execution identity; drain old
+        # workers before taking the migration lock.
+        stop_all_worker_containers
       fi
       apply_migration_file "$migration_file"
     fi
@@ -784,10 +797,6 @@ configure_runtime_roles() {
   sql+=" ALTER ROLE $API_ROLE WITH LOGIN PASSWORD '$CLASHLENS_API_DB_PASSWORD';"
   sql+=" REVOKE ALL PRIVILEGES ON TABLE python_processing_jobs FROM $WORKER_ROLE;"
   sql+=" GRANT SELECT (id, lease_generation) ON TABLE python_processing_jobs TO $WORKER_ROLE;"
-  if schema_migration_applied 9; then
-    sql+=" ALTER FUNCTION clashlens_set_python_job_source_contract() SECURITY DEFINER SET search_path = pg_catalog, public;"
-    sql+=" REVOKE ALL ON FUNCTION clashlens_set_python_job_source_contract() FROM PUBLIC;"
-  fi
   printf '%s\n' "$sql" | "$PODMAN_BIN" exec --interactive "$POSTGRES_CONTAINER" \
     psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"
 }
@@ -863,7 +872,7 @@ write_deployment_receipt() {
 }
 
 prepare_candidate_database() {
-  local i name version
+  local i name postgres_password_secret secret_status version
   reject_candidate_scope_overrides
   required_setting CLASHLENS_ARCHIVE_INSTANCE_ID
   [[ "${NETWORK_NAME,,}" != "clashlens-private" && \
@@ -893,8 +902,16 @@ prepare_candidate_database() {
       die "candidate-prepare refuses ambiguous duplicate Podman resource names"
     candidate_names["${name,,}"]=1
   done
-  [[ "$(postgres_password_secret_name candidate)" != "clashlens-postgres-password" ]] || \
+  postgres_password_secret=$(postgres_password_secret_name candidate)
+  [[ "$postgres_password_secret" != "clashlens-postgres-password" ]] || \
     die "candidate-prepare refuses the deployed PostgreSQL secret name"
+  if "$PODMAN_BIN" secret exists "$postgres_password_secret" >/dev/null 2>&1; then
+    die "candidate-prepare refuses an existing PostgreSQL password secret"
+  else
+    secret_status=$?
+  fi
+  (( secret_status == 1 )) || \
+    die "candidate-prepare could not verify PostgreSQL password secret absence"
   container_exists "$POSTGRES_CONTAINER" && \
     die "candidate-prepare refuses an existing PostgreSQL container"
   "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1 && \
@@ -1701,10 +1718,10 @@ case "$command" in
       stop_and_remove "$COLLECTOR_BRIDGE_CONTAINER" "$COLLECTOR_STOP_GRACE"
       secret_rm clashlens-bridge-database-url
     elif [[ ("$version" == "2" || "$version" == "3" || "$version" == "4" || "$version" == "5") && "$fresh_bootstrap" != true ]]; then
-      # Migrations 0007, 0009, 0010, 0011, 0012, 0013, and 0014 change
+      # Migrations 0007, 0009, 0010, 0011, 0012, 0013, 0014, and 0015 change
       # claim, publication, or worker access-path contracts. Stop every old
       # worker before applying any.
-      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9) || ! schema_migration_applied 10 || ! schema_migration_applied 11 || ! schema_migration_applied 12 || ! schema_migration_applied 13 || ! schema_migration_applied 14; then
+      if ! schema_migration_applied 7 || ([[ -n "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]] && ! schema_migration_applied 9) || ! schema_migration_applied 10 || ! schema_migration_applied 11 || ! schema_migration_applied 12 || ! schema_migration_applied 13 || ! schema_migration_applied 14 || ! schema_migration_applied 15; then
         stop_and_remove "$COLLECTOR_CONTAINER" "$COLLECTOR_STOP_GRACE"
         stop_all_worker_containers
       fi

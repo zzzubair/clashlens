@@ -66,6 +66,9 @@ _DEFAULT_RESOURCE_NAMES = {
     "website": "clashlens-website",
 }
 _WORKER_REPLICA_MAX = 16
+_CONTAINER_IDENTITY_FORMAT = (
+    '{{printf "%v\\n%s\\n%s" .State.Running .ImageName .Image}}'
+)
 
 _RECEIPT_FIELDS = {
     "schema_version",
@@ -288,7 +291,7 @@ def _image_identity(
             [
                 *prefix,
                 "{{if .RepoDigests}}{{index .RepoDigests 0}}{{else}}<none>{{end}}",
-                reference,
+                image_id,
             ]
         )
     )
@@ -296,18 +299,20 @@ def _image_identity(
         [
             *prefix,
             '{{index .Labels "org.opencontainers.image.source"}}',
-            reference,
+            image_id,
         ]
     ).strip()
     revision_label = run(
         [
             *prefix,
             '{{index .Labels "org.opencontainers.image.revision"}}',
-            reference,
+            image_id,
         ]
     ).strip()
     if source_label != CANONICAL_REPOSITORY_URL or revision_label != source_revision:
         raise ReceiptError("application image labels do not match the source")
+    if _image_id(run([*prefix, "{{.Id}}", reference])) != image_id:
+        raise ReceiptError("application image reference changed during inspection")
     return {
         "requested_reference": reference,
         "identity_type": "image_id",
@@ -326,13 +331,14 @@ def _container_identity(
 ) -> dict[str, Any]:
     name = _bounded(container_name, _IDENTITY, "container name")
     prefix = [podman_bin, "container", "inspect", "--format"]
-    running = run([*prefix, "{{.State.Running}}", name]).strip()
+    details = run([*prefix, _CONTAINER_IDENTITY_FORMAT, name]).splitlines()
+    if len(details) != 3:
+        raise ReceiptError("required deployed container identity is unavailable")
+    running, raw_reference, raw_image_id = details
     if running != "true":
         raise ReceiptError("required deployed container is not running")
-    reference = _bounded(
-        run([*prefix, "{{.ImageName}}", name]), _NAME, "container image reference"
-    )
-    image_id = _image_id(run([*prefix, "{{.Image}}", name]))
+    reference = _bounded(raw_reference, _NAME, "container image reference")
+    image_id = _image_id(raw_image_id)
     identity = _image_identity(podman_bin, image_id, source_revision, run)
     identity["requested_reference"] = reference
     identity["container_name"] = name
@@ -669,6 +675,7 @@ def collect_receipt(arguments: argparse.Namespace, run: Runner = _run) -> dict[s
         run,
     )
     migrations = _migration_state(root, database)
+    configuration = _configuration(arguments.safe_config)
     image_specs = (
         ("collector", arguments.collector_image, arguments.collector_container),
         ("python", arguments.python_image, arguments.python_container),
@@ -684,6 +691,22 @@ def collect_receipt(arguments: argparse.Namespace, run: Runner = _run) -> dict[s
             images[application] = _container_identity(
                 arguments.podman_bin, container, source["revision"], run
             )
+    if arguments.scope == "deployed-stack":
+        replica_count = int(configuration["fields"]["worker_replicas"])
+        if not 1 <= replica_count <= _WORKER_REPLICA_MAX:
+            raise ReceiptError("deployed worker replica count is invalid")
+        worker_base = _bounded(
+            arguments.worker_container, _IDENTITY, "worker container name"
+        )
+        for replica in range(1, replica_count + 1):
+            worker = _container_identity(
+                arguments.podman_bin,
+                f"{worker_base}-{replica}",
+                source["revision"],
+                run,
+            )
+            if worker["image_id"] != images["python"]["image_id"]:
+                raise ReceiptError("deployed Python worker image does not match the API")
     created_at = arguments.created_at or datetime.now(tz=UTC).isoformat()
     try:
         normalized_created_at = datetime.fromisoformat(created_at).astimezone(UTC)
@@ -697,7 +720,7 @@ def collect_receipt(arguments: argparse.Namespace, run: Runner = _run) -> dict[s
         "created_at": normalized_created_at.isoformat(),
         "source": source,
         "migrations": migrations,
-        "configuration": _configuration(arguments.safe_config),
+        "configuration": configuration,
         "application_images": images,
         "database": database,
         "candidate_resources": candidate_resources,

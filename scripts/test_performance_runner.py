@@ -42,7 +42,7 @@ def _test_postgres() -> dict[str, object]:
             "max_connections": "100",
             "track_io_timing": "off",
         },
-        "applied_migration_versions": list(range(1, 15)),
+        "applied_migration_versions": list(range(1, 16)),
     }
 
 
@@ -120,7 +120,7 @@ def _candidate_receipt() -> dict:
         "application_images": images,
         "database": {
             "contract_version": 5,
-            "applied_migration_versions": list(range(1, 15)),
+            "applied_migration_versions": list(range(1, 16)),
             "server_version": "18.6",
             "server_version_num": "180006",
             "system_identifier": "1234567890",
@@ -1245,6 +1245,37 @@ class PerformanceRunnerTest(unittest.TestCase):
                 handoff,
             )
 
+    def test_boundary_admission_timeout_is_bounded_and_returns_nonzero(self) -> None:
+        def run_with_boundary_probe(_arguments: object) -> dict[str, object]:
+            runner._boundary_admission_probe(
+                "postgresql://fixture.invalid/clashlens", "admit", 1
+            )
+            raise AssertionError("timed-out boundary probe unexpectedly returned")
+
+        psycopg = mock.Mock(Error=RuntimeError)
+        with (
+            mock.patch.dict(sys.modules, {"psycopg": psycopg}),
+            mock.patch.object(
+                runner.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(["go", "test"], 660),
+            ) as run_process,
+            mock.patch.object(runner, "run", side_effect=run_with_boundary_probe),
+            mock.patch("sys.stderr"),
+        ):
+            result = runner.main(
+                [
+                    "duplicate-heavy",
+                    "--database-url",
+                    "postgresql://fixture.invalid/clashlens",
+                ]
+            )
+
+        self.assertEqual(result, 2)
+        command = run_process.call_args.args[0]
+        self.assertIn("-timeout=600s", command)
+        self.assertEqual(run_process.call_args.kwargs["timeout"], 660)
+
     def test_artifact_rejects_arbitrary_hard_failure_code(self) -> None:
         artifact = _valid_artifact()
         artifact["hard_failures"] = ["job 101 failed: SECRET"]
@@ -1399,6 +1430,20 @@ class PerformanceRunnerTest(unittest.TestCase):
         self.assertEqual(len(shifted), len(runner.BATTLE_FIXTURE))
         self.assertNotIn(runner.DAY_START.strftime("%Y-%m-%d").encode(), shifted)
         self.assertIn(overlap_day.strftime("%Y-%m-%d").encode(), shifted)
+
+    def test_step5_overlap_warms_reads_before_collection_processing(self) -> None:
+        source = SCRIPT.read_text(encoding="utf-8")
+        wait = source.index("analytics_warmups_finished.wait(120)")
+        timer = source.index("started = time.perf_counter()", wait)
+        collection = source.index("result = _run_duplicate(", timer)
+        warmup = source.index('"mixed warmup"', collection)
+        ready = source.index("analytics_warmups_finished.set()", warmup)
+        measured_overlap = source.index("processing_started.wait()", ready)
+
+        self.assertLess(wait, timer)
+        self.assertLess(timer, collection)
+        self.assertLess(warmup, ready)
+        self.assertLess(ready, measured_overlap)
 
     def test_army_source_guard_rejects_old_broad_materialization(self) -> None:
         source = (ROOT / "python/src/clashlens/api_db.py").read_text()

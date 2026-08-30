@@ -279,6 +279,9 @@ case "$verb" in
       if grep -q 'VALUES (14)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '%s\n' 14 >>"$FAKE_STATE/schema_migrations"
       fi
+      if grep -q 'VALUES (15)' "$FAKE_STATE/stdin/exec-$n"; then
+        printf '%s\n' 15 >>"$FAKE_STATE/schema_migrations"
+      fi
     fi
     if [[ "$*" == *"SELECT version FROM clash_lens_contract"* ]]; then
       if [[ -f "$FAKE_STATE/contract_version" ]]; then
@@ -320,10 +323,15 @@ case "$verb" in
     sub=${1:-}
     shift || true
     case "$sub" in
+      exists)
+        [[ -f "$FAKE_STATE/secrets/${1:-}" ]]
+        ;;
       create)
         name=""
         source="-"
+        replace=false
         if [[ "${1:-}" == "--replace" ]]; then
+          replace=true
           name=${2:-}
           source=${3:--}
         else
@@ -331,6 +339,9 @@ case "$verb" in
           source=${2:--}
         fi
         mkdir -p "$FAKE_STATE/secrets"
+        if [[ "$replace" == false && -e "$FAKE_STATE/secrets/$name" ]]; then
+          exit 1
+        fi
         if [[ "$source" == "-" ]]; then
           cat >"$FAKE_STATE/secrets/$name"
         else
@@ -733,8 +744,8 @@ log_lacks "$CANDIDATE_NORM" '^build ' 'candidate-prepare built an application im
 [[ "$(cat "$CANDIDATE_DIR/state/contract_version")" == 5 ]] || \
   fail 'candidate-prepare did not reach contract version 5'
 [[ "$(sort -n -u "$CANDIDATE_DIR/state/schema_migrations" | tr '\n' ' ')" == \
-   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 ' ]] || \
-  fail 'candidate-prepare did not apply the exact migration set through 0014'
+   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 ' ]] || \
+  fail 'candidate-prepare did not apply the exact migration set through 0015'
 [[ "$(cat "$CANDIDATE_DIR/state/networks/clashlens-candidate-private.scope")" == candidate ]] || \
   fail 'candidate network was not stamped with the candidate scope label'
 [[ "$(cat "$CANDIDATE_DIR/state/volumes/clashlens-candidate-postgres-data.scope")" == candidate ]] || \
@@ -746,11 +757,59 @@ log_lacks "$CANDIDATE_NORM" '^build ' 'candidate-prepare built an application im
 [[ ! -f "$CANDIDATE_DIR/state/secrets/clashlens-postgres-password" ]] || \
   fail 'candidate preparation replaced the deployed PostgreSQL secret'
 log_has "$CANDIDATE_NORM" \
-  'secret create --replace clashlens-candidate-postgres-password' \
-  'candidate PostgreSQL secret replacement was not scoped'
+  'secret create clashlens-candidate-postgres-password' \
+  'candidate PostgreSQL secret creation was not scoped'
 log_lacks "$CANDIDATE_NORM" \
   'secret create --replace clashlens-postgres-password' \
   'candidate PostgreSQL secret name leaked into the deployed scope'
+
+CANDIDATE_SECRET_COLLISION_DIR=$(new_scenario)
+CANDIDATE_SECRET_COLLISION_ENV="$CANDIDATE_SECRET_COLLISION_DIR/app.env"
+write_scenario_env "$CANDIDATE_SECRET_COLLISION_ENV" \
+  "$CANDIDATE_SECRET_COLLISION_DIR/keys"
+cat >>"$CANDIDATE_SECRET_COLLISION_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-secret-collision
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-secret-collision-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-secret-collision-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-secret-collision-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-secret-collision-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-secret-collision-python
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-secret-collision-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-secret-collision-website
+EOF
+CANDIDATE_SECRET_COLLISION_NAME=clashlens-candidate-secret-collision-postgres-password
+CANDIDATE_SECRET_SENTINEL=unrelated-existing-secret-sentinel
+printf '%s' "$CANDIDATE_SECRET_SENTINEL" > \
+  "$(secret_file "$CANDIDATE_SECRET_COLLISION_DIR" "$CANDIDATE_SECRET_COLLISION_NAME")"
+deploy_fails "$CANDIDATE_SECRET_COLLISION_DIR" "$CANDIDATE_SECRET_COLLISION_ENV" \
+  'refuses an existing PostgreSQL password secret' -- candidate-prepare
+[[ "$(cat "$(secret_file "$CANDIDATE_SECRET_COLLISION_DIR" "$CANDIDATE_SECRET_COLLISION_NAME")")" == \
+   "$CANDIDATE_SECRET_SENTINEL" ]] || \
+  fail 'candidate-prepare changed the colliding PostgreSQL password secret'
+CANDIDATE_SECRET_COLLISION_NORM="$CANDIDATE_SECRET_COLLISION_DIR/podman.norm.log"
+norm_log "$CANDIDATE_SECRET_COLLISION_DIR/podman.log" > \
+  "$CANDIDATE_SECRET_COLLISION_NORM"
+log_has "$CANDIDATE_SECRET_COLLISION_NORM" \
+  "^secret exists $CANDIDATE_SECRET_COLLISION_NAME" \
+  'candidate-prepare did not check the exact PostgreSQL password secret name'
+log_lacks "$CANDIDATE_SECRET_COLLISION_NORM" \
+  '^network create |^volume create |^run |^secret create ' \
+  'candidate-prepare mutated resources before rejecting a secret collision'
+for resource in \
+  "networks/clashlens-candidate-secret-collision-private" \
+  "volumes/clashlens-candidate-secret-collision-data" \
+  "containers/clashlens-candidate-secret-collision-postgres" \
+  "containers/clashlens-candidate-secret-collision-collector" \
+  "containers/clashlens-candidate-secret-collision-python" \
+  "containers/clashlens-candidate-secret-collision-worker" \
+  "containers/clashlens-candidate-secret-collision-website"; do
+  [[ ! -e "$CANDIDATE_SECRET_COLLISION_DIR/state/$resource" ]] || \
+    fail "candidate-prepare created $resource before rejecting a secret collision"
+done
 
 CANDIDATE_SCOPE_OVERRIDE_DIR=$(new_scenario)
 CANDIDATE_SCOPE_OVERRIDE_ENV="$CANDIDATE_SCOPE_OVERRIDE_DIR/app.env"
@@ -977,10 +1036,17 @@ grep -q 'archive_instances' "$V3_DIR/state/stdin"/exec-* || fail 'migration 0009
 grep -q 'boundary_publication_generations' "$V3_DIR/state/stdin"/exec-* || fail 'migration 0010 was not applied in v3 flow'
 grep -q 'INSERT INTO archive_instances' "$V3_DIR/state/stdin"/exec-* || fail 'archive instance contract was not provisioned'
 v3_role_stdin=$(grep -l 'ALTER ROLE clashlens_collector WITH LOGIN PASSWORD' "$V3_DIR/state/stdin"/exec-* 2>/dev/null | head -n 1)
-grep -Fq 'ALTER FUNCTION clashlens_set_python_job_source_contract() SECURITY DEFINER SET search_path = pg_catalog, public' "$v3_role_stdin" || \
-  fail 'runtime-role setup did not protect the migrated source-contract trigger'
-grep -Fq 'REVOKE ALL ON FUNCTION clashlens_set_python_job_source_contract() FROM PUBLIC' "$v3_role_stdin" || \
-  fail 'runtime-role setup left the migrated source-contract trigger executable by PUBLIC'
+v3_migration_0009_stdin=$(grep -l 'CREATE OR REPLACE FUNCTION clashlens_set_python_job_source_contract()' "$V3_DIR/state/stdin"/exec-* 2>/dev/null | head -n 1)
+v3_migration_0015_stdin=$(grep -l 'VALUES (15)' "$V3_DIR/state/stdin"/exec-* 2>/dev/null | head -n 1)
+grep -Fq '$$ LANGUAGE plpgsql SECURITY DEFINER;' "$v3_migration_0009_stdin" || \
+  fail 'migration 0009 did not create the source-contract trigger as SECURITY DEFINER'
+grep -Fq "'REVOKE ALL ON FUNCTION %I.clashlens_set_python_job_source_contract() FROM PUBLIC'" "$v3_migration_0009_stdin" || \
+  fail 'migration 0009 left the source-contract trigger executable by PUBLIC'
+grep -Fq "'ALTER FUNCTION %I.clashlens_set_python_job_source_contract() SECURITY DEFINER'" "$v3_migration_0015_stdin" || \
+  fail 'migration 0015 did not harden an existing source-contract trigger'
+if grep -Fq 'clashlens_set_python_job_source_contract' "$v3_role_stdin"; then
+  fail 'runtime-role setup retained migration-owned source-contract function DDL'
+fi
 log_lacks "$V3_NORM" 'clashlens-python-api.*:/spool' 'private API received the raw spool mount'
 log_lacks "$V3_NORM" 'clashlens-website.*:/spool' 'website received the raw spool mount'
 printf 'ok: v5 migration, ownership, rw,z mount, and runtime isolation are wired\n'
@@ -1220,6 +1286,8 @@ grep -lq 'VALUES (13)' "$V2_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'missing migration 0013 was not applied on a v2 database'
 grep -lq 'VALUES (14)' "$V2_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'missing migration 0014 was not applied on a v2 database'
+grep -lq 'VALUES (15)' "$V2_DIR/state/stdin"/exec-* 2>/dev/null || \
+  fail 'missing migration 0015 was not applied on a v2 database'
 [[ "$(grep -l 'VALUES (4)' "$V2_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
   fail 'missing migration 0004 was not applied exactly once on a v2 database'
 [[ "$(grep -l 'VALUES (5)' "$V2_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
@@ -1256,9 +1324,32 @@ FAKE_STATE="$V2_DIR/state" FAKE_PODMAN_LOG="$V2_DIR/podman.log" \
   fail 'idempotent v2 up removed a current Python worker'
 if rg -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
   second_up_stdin_count=$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f | wc -l)
-  [[ "$second_up_stdin_count" == "13" ]] || fail 'a recorded forward migration was replayed on second up'
+  [[ "$second_up_stdin_count" == "14" ]] || fail 'a recorded forward migration was replayed on second up'
 fi
 printf 'ok: up on v2 applies only missing forward migrations and starts the required collector\n'
+
+# ---------------------------------------------------------------------------
+# Scenario C2: a contract-v5 migration-0014 stack drains old workers before
+# applying the source-contract function security migration.
+# ---------------------------------------------------------------------------
+V14_DIR=$(new_scenario)
+V14_ENV="$V14_DIR/app.env"
+write_scenario_env "$V14_ENV" "$V14_DIR/keys"
+printf '5' >"$V14_DIR/state/contract_version"
+seq 1 14 >"$V14_DIR/state/schema_migrations"
+FAKE_STATE="$V14_DIR/state" FAKE_PODMAN_LOG="$V14_DIR/podman.log" \
+  "$FAKE_BIN/podman" run --detach --name clashlens-python-worker-1 \
+  localhost/clashlens-python:previous >/dev/null
+deploy "$V14_DIR" "$V14_ENV" -- up >/dev/null
+[[ "$(grep -l 'VALUES (15)' "$V14_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
+  fail 'migration 0015 was not applied exactly once on a migration-0014 stack'
+v14_worker_stop_line=$(first_line "$V14_DIR/podman.log" '^stop --time 70 clashlens-python-worker-1 ' || true)
+v14_migration_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$V14_DIR/podman.log" | sed -n '1p' | cut -d: -f1)
+[[ -n "$v14_worker_stop_line" && -n "$v14_migration_line" ]] || \
+  fail 'could not locate the migration-0015 worker drain and migration'
+(( v14_worker_stop_line < v14_migration_line )) || \
+  fail 'migration 0015 ran before the old Python worker was drained'
+printf 'ok: migration 0015 drains old workers before changing trigger execution identity\n'
 
 # ---------------------------------------------------------------------------
 # Scenario D: init applies 0001 only on an absent database.
@@ -1294,7 +1385,7 @@ RESTART_DIR=$(new_scenario)
 RESTART_ENV="$RESTART_DIR/app.env"
 write_scenario_env "$RESTART_ENV" "$RESTART_DIR/keys"
 printf '5' >"$RESTART_DIR/state/contract_version"
-printf '14\n' >"$RESTART_DIR/state/schema_migrations"
+printf '15\n' >"$RESTART_DIR/state/schema_migrations"
 mkdir -p "$RESTART_DIR/state/images/localhost"
 : >"$RESTART_DIR/state/images/localhost/clashlens-collector:deployment"
 deploy "$RESTART_DIR" "$RESTART_ENV" -- restart >/dev/null
@@ -1320,9 +1411,9 @@ mkdir -p "$RESTART_UNMIGRATED_DIR/state/images/localhost"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-collector:deployment"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-python:deployment"
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 14 is required' -- restart
+  'forward migration 15 is required' -- restart
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 14 is required' -- python-start
+  'forward migration 15 is required' -- python-start
 
 UNKNOWN_DIR=$(new_scenario)
 UNKNOWN_ENV="$UNKNOWN_DIR/app.env"
@@ -1447,7 +1538,7 @@ ROLLBACK_DIR=$(new_scenario)
 ROLLBACK_ENV="$ROLLBACK_DIR/app.env"
 write_scenario_env "$ROLLBACK_ENV" "$ROLLBACK_DIR/keys"
 printf '5' >"$ROLLBACK_DIR/state/contract_version"
-printf '14\n' >"$ROLLBACK_DIR/state/schema_migrations"
+printf '15\n' >"$ROLLBACK_DIR/state/schema_migrations"
 mkdir -p "$ROLLBACK_DIR/state/networks" "$ROLLBACK_DIR/state/containers" "$ROLLBACK_DIR/state/images/localhost"
 mkdir -p "$ROLLBACK_DIR/state/networks/clashlens-private"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres"
@@ -1807,7 +1898,7 @@ REPLICA_MAX_ENV="$REPLICA_MAX_DIR/app.env"
 write_scenario_env "$REPLICA_MAX_ENV" "$REPLICA_MAX_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=16' >>"$REPLICA_MAX_ENV"
 printf '5' >"$REPLICA_MAX_DIR/state/contract_version"
-printf '14\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
+printf '15\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_MAX_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1851,7 +1942,7 @@ grep -v -E 'CLASHLENS_WORKER_(CONCURRENCY|DATABASE_POOL_SIZE|ARCHIVE_POOL_SIZE)=
   "$DEFAULTS_RAW" >"$DEFAULTS_ENV"
 chmod 0600 "$DEFAULTS_ENV"
 printf '5' >"$DEFAULTS_DIR/state/contract_version"
-printf '14\n' >"$DEFAULTS_DIR/state/schema_migrations"
+printf '15\n' >"$DEFAULTS_DIR/state/schema_migrations"
 mkdir -p "$DEFAULTS_DIR/state/networks/clashlens-private"
 mkdir -p "$DEFAULTS_DIR/state/containers/clashlens-postgres"
 : >"$DEFAULTS_DIR/state/containers/clashlens-postgres.running"
@@ -1872,7 +1963,7 @@ printf '%s\n' 'CLASHLENS_WORKER_CONCURRENCY=32' \
   'CLASHLENS_WORKER_DATABASE_POOL_SIZE=64' \
   'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=64' >>"$CONCURRENCY_MAX_ENV"
 printf '5' >"$CONCURRENCY_MAX_DIR/state/contract_version"
-printf '14\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
+printf '15\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres"
 : >"$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1937,7 +2028,7 @@ REPLICA_ENV="$REPLICA_DIR/app.env"
 write_scenario_env "$REPLICA_ENV" "$REPLICA_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=3' >>"$REPLICA_ENV"
 printf '5' >"$REPLICA_DIR/state/contract_version"
-printf '14\n' >"$REPLICA_DIR/state/schema_migrations"
+printf '15\n' >"$REPLICA_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_DIR/state/containers/clashlens-postgres.running"

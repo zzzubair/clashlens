@@ -88,7 +88,7 @@ uv run --locked --python 3.12 ../scripts/performance_runner.py army-analytics \
 
 The same `--candidate-receipt` option may be used with each workload. The
 receipt must be a schema-2 `candidate-preparation` receipt whose clean source
-SHA, migration filenames/hashes through 0014, application source/revision
+SHA, migration filenames/hashes through 0015, application source/revision
 labels, bounded candidate resource proof, and canonical receipt digest validate
 against this checkout. The
 runner records those identities under `prepared_candidate_images`; they are
@@ -173,7 +173,7 @@ canonical JSON excluding that field. Artifacts are validated before they are
 printed or written; missing/invalid digests, required metrics, or older artifact
 versions fail the run. They require a clean exact source SHA, the runner hash,
 source migration filenames/hashes and the applied database migration versions
-through 0014, a sanitized configuration fingerprint, host/runtime/PostgreSQL
+through 0015, a sanitized configuration fingerprint, host/runtime/PostgreSQL
 execution identity and settings, and fixed workload facts. They include
 generated and retained PostgreSQL WAL and relation sizes,
 per-relation DML and

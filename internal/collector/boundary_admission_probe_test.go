@@ -31,7 +31,8 @@ func TestStep8BoundaryAdmissionProbe(t *testing.T) {
 		t.Fatal("invalid Step 8 admission population")
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
+	defer cancel()
 	store, err := openStore(ctx, databaseURL, 5)
 	if err != nil {
 		t.Fatal("open Step 8 admission store")

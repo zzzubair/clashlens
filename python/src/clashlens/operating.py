@@ -80,6 +80,8 @@ WORKER_STAGES = (
     "python_parse_rankings",
     "python_queue_maintenance",
 )
+WORKER_SNAPSHOT_INTERVAL_SECONDS = 60.0
+WORKER_SNAPSHOT_MAX_AGE_SECONDS = WORKER_SNAPSHOT_INTERVAL_SECONDS * 2
 COLLECTOR_STAGES = (
     "ambiguous_commit_proof",
     "archive_get_verify",
@@ -536,6 +538,7 @@ class WorkerMetrics:
         }
         return {
             "schema_version": 1,
+            "captured_at": datetime.now(tz=UTC).isoformat(),
             "process": dict(self._identity),
             "stages": bounded_stages,
             "outcomes": outcomes,
@@ -668,7 +671,9 @@ def _validate_database_identity(value: Any) -> None:
 def _validate_histogram(value: Any) -> None:
     histogram = _exact_keys(value, ("count", "sum_seconds", "buckets"))
     count = _nonnegative_int(histogram["count"])
-    _nonnegative_number(histogram["sum_seconds"])
+    total = _nonnegative_number(histogram["sum_seconds"])
+    if count == 0 and total != 0:
+        raise OperatingFactsError("required_fact_invalid")
     buckets = histogram["buckets"]
     if not isinstance(buckets, list) or len(buckets) != len(
         LATENCY_BUCKETS_SECONDS
@@ -716,7 +721,13 @@ def _validate_api(value: Any) -> None:
         sizes = _exact_keys(request["response_bytes"], ("count", "sum", "max"))
         for size in sizes.values():
             _nonnegative_int(size)
-        if sizes["max"] > sizes["sum"]:
+        request_count = sum(outcomes.values())
+        if (
+            request_count != request["latency"]["count"]
+            or request_count != sizes["count"]
+            or (sizes["count"] == 0 and (sizes["sum"] != 0 or sizes["max"] != 0))
+            or sizes["max"] > sizes["sum"]
+        ):
             raise OperatingFactsError("required_fact_invalid")
 
 
@@ -725,6 +736,7 @@ def _validate_worker(value: Any) -> None:
         value,
         (
             "schema_version",
+            "captured_at",
             "process",
             "stages",
             "outcomes",
@@ -735,6 +747,7 @@ def _validate_worker(value: Any) -> None:
     )
     if worker["schema_version"] != 1:
         raise OperatingFactsError("required_fact_invalid")
+    _timestamp(worker["captured_at"])
     _validate_process_identity(worker["process"])
     _validate_pool(worker["database_pool"])
     stages = _exact_keys(worker["stages"], WORKER_STAGES)
@@ -796,6 +809,17 @@ def _validate_worker(value: Any) -> None:
         }
     ):
         raise OperatingFactsError("required_fact_invalid")
+
+
+def _validate_workers(value: Any, database_captured_at: Any) -> None:
+    if not isinstance(value, list) or not 1 <= len(value) <= 16:
+        raise OperatingFactsError("required_fact_invalid")
+    database_time = _timestamp(database_captured_at)
+    for worker in value:
+        _validate_worker(worker)
+        age = (database_time - _timestamp(worker["captured_at"])).total_seconds()
+        if not 0 <= age <= WORKER_SNAPSHOT_MAX_AGE_SECONDS:
+            raise OperatingFactsError("required_fact_invalid")
 
 
 def _validate_collector(value: Any) -> None:
@@ -990,7 +1014,7 @@ def _validate_database(value: Any) -> None:
     migrations = database["migrations"]
     if not isinstance(migrations, list) or any(
         not isinstance(item, dict) for item in migrations
-    ) or [item.get("version") for item in migrations] != list(range(1, 15)):
+    ) or [item.get("version") for item in migrations] != list(range(1, 16)):
         raise OperatingFactsError("required_fact_invalid")
     for item in migrations:
         _exact_keys(item, ("version", "applied_at"))
@@ -1105,12 +1129,10 @@ def _comparison(
         )
         _validate_collector(previous_processes["collector"])
         _validate_api(previous_processes["python_api"])
-        if not isinstance(previous_processes["python_workers"], list) or not (
-            1 <= len(previous_processes["python_workers"]) <= 16
-        ):
-            return {**empty, "reason": "invalid_previous_snapshot"}, True
-        for worker in previous_processes["python_workers"]:
-            _validate_worker(worker)
+        _validate_workers(
+            previous_processes["python_workers"],
+            previous["database"]["captured_at"],
+        )
         previous_check = _exact_keys(
             previous["check"], ("status", "exit_code", "reasons")
         )
@@ -1221,10 +1243,7 @@ def build_operating_snapshot(
         _validate_database(database)
         _validate_collector(collector)
         _validate_api(python_api)
-        if not isinstance(python_workers, list) or not 1 <= len(python_workers) <= 16:
-            raise OperatingFactsError("required_fact_invalid")
-        for worker in python_workers:
-            _validate_worker(worker)
+        _validate_workers(python_workers, database["captured_at"])
         identities = [
             collector["process"]["id"],
             python_api["process"]["id"],

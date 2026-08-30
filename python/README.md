@@ -15,7 +15,7 @@ operations are in [`docs/deployment.md`](../docs/deployment.md).
 - `testdata/` — synthetic fixtures only; no credentials or live player bodies.
 
 The production schema is owned by `deploy/migrations/0001_collector.sql`
-through `0014_ranked_day_lookup.sql`. Application startup does not create or
+through `0015_python_job_source_contract_security.sql`. Application startup does not create or
 alter tables; tests apply these migrations directly.
 
 ## Local checks

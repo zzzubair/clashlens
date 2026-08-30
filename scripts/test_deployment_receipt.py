@@ -27,14 +27,21 @@ class FakeRunner:
         scope_label: str = receipt.CANDIDATE_SCOPE_LABEL_VALUE,
         present_containers: set[str] | None = None,
         inspected_names: dict[str, str] | None = None,
+        retagged_image_id: str | None = None,
+        container_image_ids: dict[str, str] | None = None,
+        stopped_containers: set[str] | None = None,
     ) -> None:
         self.dirty = dirty
         self.revision_label = revision_label
-        self.applied = applied or list(range(1, 15))
+        self.applied = applied or list(range(1, 16))
         self.image_id = image_id
         self.scope_label = scope_label
         self.present_containers = present_containers or set()
         self.inspected_names = inspected_names or {}
+        self.retagged_image_id = retagged_image_id
+        self.container_image_ids = container_image_ids or {}
+        self.stopped_containers = stopped_containers or set()
+        self.image_resolutions: dict[str, int] = {}
         self.commands: list[list[str]] = []
 
     def __call__(self, command: list[str]) -> str:
@@ -49,7 +56,18 @@ class FakeRunner:
             return "true" if command[3] in self.present_containers else "false"
         if command[:3] == ["podman", "image", "inspect"]:
             template = command[4]
+            target = command[5]
             if template == "{{.Id}}":
+                if target.startswith("sha256:"):
+                    return target
+                resolutions = self.image_resolutions.get(target, 0) + 1
+                self.image_resolutions[target] = resolutions
+                if (
+                    not target.startswith("sha256:")
+                    and resolutions > 1
+                    and self.retagged_image_id is not None
+                ):
+                    return self.retagged_image_id
                 return self.image_id
             if template.startswith("{{if .RepoDigests}}"):
                 return "<none>"
@@ -60,6 +78,10 @@ class FakeRunner:
         if command[:3] == ["podman", "container", "inspect"]:
             template = command[4]
             name = command[5]
+            if template == receipt._CONTAINER_IDENTITY_FORMAT:
+                running = "false" if name in self.stopped_containers else "true"
+                image_id = self.container_image_ids.get(name, self.image_id)
+                return f"{running}\nlocalhost/clashlens:deployment\n{image_id}"
             if template == "{{.Name}}":
                 return self.inspected_names.get(name, name)
             if "org.clashlens.scope" in template:
@@ -160,7 +182,7 @@ class DeploymentReceiptTest(unittest.TestCase):
         self.assertTrue(
             all(not item["present"] for item in resources["application_containers"]["worker_replicas"])
         )
-        self.assertEqual(len(result["migrations"]), 14)
+        self.assertEqual(len(result["migrations"]), 15)
         self.assertTrue(all(item["applied"] for item in result["migrations"]))
         self.assertRegex(result["receipt_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertFalse(
@@ -171,7 +193,8 @@ class DeploymentReceiptTest(unittest.TestCase):
         )
 
     def test_deployed_receipt_uses_actual_running_containers(self) -> None:
-        result = receipt.collect_receipt(arguments("deployed-stack"), FakeRunner())
+        runner = FakeRunner()
+        result = receipt.collect_receipt(arguments("deployed-stack"), runner)
 
         self.assertIsNone(result["official_api_requests"])
         self.assertIsNone(result["candidate_resources"])
@@ -180,6 +203,105 @@ class DeploymentReceiptTest(unittest.TestCase):
             result["application_images"]["python"]["container_name"],
             "clashlens-python-api",
         )
+        container_inspects = [
+            command
+            for command in runner.commands
+            if command[:3] == ["podman", "container", "inspect"]
+        ]
+        self.assertEqual(len(container_inspects), 4)
+        self.assertTrue(
+            all(
+                command[4] == receipt._CONTAINER_IDENTITY_FORMAT
+                for command in container_inspects
+            )
+        )
+        self.assertTrue(
+            all(
+                command[5] == IMAGE_ID
+                for command in runner.commands
+                if command[:3] == ["podman", "image", "inspect"]
+            )
+        )
+
+    def test_deployed_receipt_inspects_every_configured_worker(self) -> None:
+        deployed = arguments("deployed-stack")
+        deployed.safe_config = [
+            f"{name}={'3' if name == 'worker_replicas' else '1'}"
+            for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
+        ]
+        runner = FakeRunner()
+
+        receipt.collect_receipt(deployed, runner)
+
+        inspected = [
+            command[5]
+            for command in runner.commands
+            if command[:3] == ["podman", "container", "inspect"]
+            and command[4] == receipt._CONTAINER_IDENTITY_FORMAT
+        ]
+        self.assertEqual(
+            inspected,
+            [
+                "clashlens-collector",
+                "clashlens-python-api",
+                "clashlens-website",
+                "clashlens-python-worker-1",
+                "clashlens-python-worker-2",
+                "clashlens-python-worker-3",
+            ],
+        )
+
+    def test_deployed_receipt_rejects_stopped_or_mismatched_worker(self) -> None:
+        worker_name = "clashlens-python-worker-1"
+        with (
+            self.subTest("stopped"),
+            self.assertRaisesRegex(receipt.ReceiptError, "not running"),
+        ):
+            receipt.collect_receipt(
+                arguments("deployed-stack"),
+                FakeRunner(stopped_containers={worker_name}),
+            )
+        with (
+            self.subTest("wrong image"),
+            self.assertRaisesRegex(receipt.ReceiptError, "does not match"),
+        ):
+            receipt.collect_receipt(
+                arguments("deployed-stack"),
+                FakeRunner(
+                    container_image_ids={worker_name: "sha256:" + "04" * 32}
+                ),
+            )
+    def test_candidate_image_metadata_is_pinned_and_tag_is_rechecked(self) -> None:
+        runner = FakeRunner()
+
+        receipt.collect_receipt(arguments(), runner)
+
+        image_inspects = [
+            command
+            for command in runner.commands
+            if command[:3] == ["podman", "image", "inspect"]
+        ]
+        for offset, reference in enumerate(
+            (
+                "localhost/clashlens-collector:deployment",
+                "localhost/clashlens-python:deployment",
+                "localhost/clashlens-website:deployment",
+            )
+        ):
+            commands = image_inspects[offset * 5 : offset * 5 + 5]
+            self.assertEqual([command[5] for command in commands], [
+                reference,
+                IMAGE_ID,
+                IMAGE_ID,
+                IMAGE_ID,
+                reference,
+            ])
+
+    def test_candidate_receipt_rejects_tag_change_during_inspection(self) -> None:
+        runner = FakeRunner(retagged_image_id="sha256:" + "04" * 32)
+
+        with self.assertRaisesRegex(receipt.ReceiptError, "changed"):
+            receipt.collect_receipt(arguments(), runner)
 
     def test_bare_podman_image_id_is_normalized_without_changing_identity(self) -> None:
         bare = "02" * 32

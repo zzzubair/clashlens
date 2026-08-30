@@ -92,9 +92,9 @@ PostgreSQL containers use the `step6-v1` metrics profile, preload
 
 The collector contract version is separate from the schema migration number.
 The production contract is version 5. The current forward-migration set is
-0001 through 0014. Migrations 0009 through 0014 add the raw-evidence,
-boundary-publication, parsed-content deduplication, bounded backfill, and
-ranked-day lookup contracts. `up` applies
+0001 through 0015. Migrations 0009 through 0015 add the raw-evidence,
+boundary-publication, parsed-content deduplication, bounded backfill,
+ranked-day lookup, and source-contract trigger security contracts. `up` applies
 only missing forward migrations recorded in `clash_lens_schema_migrations`; it
 never replays an applied migration. An unknown contract version is rejected
 without side effects.
@@ -109,9 +109,9 @@ curl --fail http://127.0.0.1:8081/readyz
 - `init` starts PostgreSQL and applies migration 0001 only to an absent
   database. It refuses an initialized database.
 - `up` builds the collector image, advances the database through all missing
-  migrations (0001–0014 on a fresh database), configures runtime role
+  migrations (0001–0015 on a fresh database), configures runtime role
   passwords, and stages the required collector with Global Top-200 disabled.
-  A contract-v1 upgrade uses the bridge collector while migrations 0002–0014
+  A contract-v1 upgrade uses the bridge collector while migrations 0002–0015
   are applied, then replaces it with the disabled required collector.
 - `build-collector`, `build-python`, and `build-website` build images only.
 - `restart` is the start-only recovery path for a contract-v5 stack. It does
@@ -181,7 +181,7 @@ install -d -m 0700 "$RESULTS_DIR"
 `candidate-prepare` refuses default or existing candidate resources and any
 configured application-container name that already exists, starts only the
 configured PostgreSQL container, and verifies every migration from 0001 through
-0014. Candidate resources carry the fixed
+0015. Candidate resources carry the fixed
 `org.clashlens.scope=candidate` label; the preparation path verifies those
 labels and exact names after creation before applying migrations. Scope/label
 overrides in `app.env` are rejected before resource mutation. Never aim it at
@@ -204,6 +204,8 @@ Both scopes record schema version, UTC creation time, exact clean source,
 migration file hashes and applied state, an explicit safe-configuration
 allowlist and fingerprint, truthful image identities, PostgreSQL identity,
 bounded runtime versions, and a canonical SHA-256 receipt digest. The command
+also verifies that every configured deployed worker replica is running the
+same exact Python image as the API. The command
 selects individual Podman fields and never serializes raw inspection output,
 `app.env`, credentials, database URLs, request or account identifiers, player
 tags, user selections, raw bodies, archive references, or arbitrary errors.
@@ -232,6 +234,9 @@ The command reads collector Prometheus facts through its loopback listener,
 the API process snapshot with an authenticated caller proof, worker process
 snapshots inside their private containers, and all
 related PostgreSQL facts in one read-only `REPEATABLE READ` transaction. The
+worker snapshots refresh on an independent 60-second heartbeat. A missing,
+future, or more than 120-second-old worker snapshot makes the check
+indeterminate instead of allowing stale process facts to report healthy. The
 contract reports process identity/start time, fixed worker and API latency and
 outcome categories, response bytes, pool pressure, processed observation/fact/
 result counts, queue/retry/dependency/lease state, active-boundary progress and
