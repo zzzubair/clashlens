@@ -258,7 +258,8 @@ active_artifacts AS MATERIALIZED (
     ) AS members
     CROSS JOIN LATERAL (
         SELECT
-            count(*) FILTER (WHERE legal.status = 'pending')::bigint AS pending,
+            count(*) FILTER (WHERE legal.status = 'pending'
+                AND legal.due_at <= clock.captured_at)::bigint AS pending,
             count(*) FILTER (WHERE legal.status = 'leased'
                 AND legal.lease_expires_at > clock.captured_at)::bigint AS valid_leases,
             count(*) FILTER (WHERE legal.status = 'waiting_retry'
@@ -354,7 +355,8 @@ active_artifacts AS MATERIALIZED (
     ) AS python_jobs
     CROSS JOIN LATERAL (
         SELECT
-            count(*) FILTER (WHERE job.status = 'pending')::bigint AS pending,
+            count(*) FILTER (WHERE job.status = 'pending'
+                AND job.due_at <= clock.captured_at)::bigint AS pending,
             count(*) FILTER (WHERE job.status = 'leased'
                 AND job.lease_expires_at > clock.captured_at)::bigint AS valid_leases,
             count(*) FILTER (WHERE job.status = 'waiting_retry'

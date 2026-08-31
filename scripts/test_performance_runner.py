@@ -647,6 +647,24 @@ class PerformanceRunnerTest(unittest.TestCase):
             sorted(runner.STEP5_TROOP_KEYS),
         )
 
+    def test_step5_partial_collection_cycle_artifact_is_valid(self) -> None:
+        artifact = _valid_army_artifact()
+        sample = artifact["army_read_sample"]
+        cycle = sample["mixed_load"]["collection_cycle"]
+        cycle["processing_summary"] = runner._result_summary(
+            [{"outcome": "processed"}] * (runner.DUPLICATE_EXECUTION_CAP - 1),
+            expected=runner.DUPLICATE_EXECUTION_CAP,
+        )
+        cycle["canonical_content"]["profile_occurrence_effects"] -= 1
+        failures = ["step5_collection_result_count_mismatch"]
+        sample["mixed_load"]["hard_failures"] = failures
+        sample["hard_failures"] = failures
+        sample["status"] = "failed"
+        artifact["hard_failures"] = failures
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+
+        runner.validate_artifact(artifact)
+
     def test_step5_partial_timeout_artifact_is_bounded_and_valid(self) -> None:
         artifact = _valid_partial_army_artifact()
         runner.validate_artifact(artifact)
@@ -977,6 +995,60 @@ class PerformanceRunnerTest(unittest.TestCase):
         artifact["artifact_digest"] = runner._artifact_digest(artifact)
         runner.validate_artifact(artifact)
 
+        artifact = _valid_duplicate_artifact()
+        artifact["samples"][0]["workload"]["processing_summary"] = (
+            runner._result_summary([{"outcome": "processed"}] * 5, expected=6)
+        )
+        artifact["samples"][0]["workload"]["canonical_content"][
+            "profile_occurrence_effects"
+        ] -= 1
+        artifact["hard_failures"] = ["fixed_acceptance_failure"]
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        runner.validate_artifact(artifact)
+
+        artifact = _valid_duplicate_artifact()
+        artifact["samples"][0]["workload"]["canonical_content"][
+            "profile_occurrence_effects"
+        ] -= 1
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaises(ValueError):
+            runner.validate_artifact(artifact)
+
+        artifact = _valid_duplicate_artifact()
+        sample = artifact["samples"][0]
+        workload = sample["workload"]
+        workload["processing_summary"] = runner._result_summary(
+            [{"outcome": "processed"}] * 5 + [{"outcome": "failed"}],
+            expected=6,
+        )
+        workload["canonical_content"]["profile_occurrence_effects"] -= 1
+        failed_bytes = workload["fixture_bytes_by_endpoint"]["profile"]
+        workload["evidence_counters"]["repairs"] -= 1
+        workload["spool"]["final_objects"] -= 1
+        workload["spool"]["final_bytes"] -= failed_bytes
+        sample["evidence"]["repairs"] -= 1
+        sample["spool"]["final_object_count"] -= 1
+        sample["spool"]["final_bytes"] -= failed_bytes
+        sample["database"]["queue_residue"] = [
+            {"queue": "python_processing_jobs"}
+        ]
+        artifact["hard_failures"] = [
+            "fixed_acceptance_failure",
+            "queue_residue",
+        ]
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        runner.validate_artifact(artifact)
+
+        repairs = sample["evidence"]["local_misses"] + 1
+        workload["evidence_counters"]["repairs"] = repairs
+        sample["evidence"]["repairs"] = repairs
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(
+            ValueError, "local/archive/hash counters disagree"
+        ):
+            runner.validate_artifact(artifact)
+
+        artifact = _valid_duplicate_artifact()
         artifact["samples"][0]["database"]["queue_residue"] = [
             {"queue": "python_processing_jobs"}
         ]
@@ -1089,6 +1161,35 @@ class PerformanceRunnerTest(unittest.TestCase):
         }
         config = {"populations": [1]}
         runner._validate_reset_semantics([sample], config, "reset-boundary", [])
+
+        incomplete = deepcopy(sample)
+        incomplete["workload"]["fanout_evidence"]["generation_states"] = []
+        incomplete["workload"]["hard_failures"] = [
+            "reset_generation_count_mismatch"
+        ]
+        runner._validate_reset_semantics(
+            [incomplete],
+            config,
+            "reset-boundary",
+            ["reset_generation_count_mismatch"],
+        )
+
+        extra = deepcopy(sample)
+        extra["workload"]["fanout_evidence"]["generation_states"].append(
+            {
+                "generation": 2,
+                "snapshot_state": "published",
+                "army_state": "published",
+            }
+        )
+        extra["workload"]["hard_failures"] = ["reset_generation_count_mismatch"]
+        runner._validate_reset_semantics(
+            [extra],
+            config,
+            "reset-boundary",
+            ["reset_generation_count_mismatch"],
+        )
+
         workload["fact_counts"]["snapshot_entries"] = 1
         with self.assertRaises(ValueError):
             runner._validate_reset_semantics([sample], config, "reset-boundary", [])
@@ -1096,8 +1197,12 @@ class PerformanceRunnerTest(unittest.TestCase):
     def test_mixed_semantics_reconcile_jobs_latency_resources_memory_and_residue(self) -> None:
         summary = runner._result_summary(
             [
-                {"outcome": "processed", "status": "complete"},
-                {"outcome": "processed", "status": "complete"},
+                {"outcome": "processed", "status": "complete", "kind": "live"},
+                {
+                    "outcome": "processed",
+                    "status": "complete",
+                    "kind": "backfill",
+                },
             ],
             expected=2,
         )
@@ -1156,6 +1261,54 @@ class PerformanceRunnerTest(unittest.TestCase):
             {"live_jobs": 1, "backfill_jobs": 1, "lanes": 8, "effective_lanes": 8},
             [],
         )
+
+        incomplete = deepcopy(sample)
+        incomplete["workload"]["completion_counts"] = {"live": 1, "backfill": 0}
+        incomplete["workload"]["completion_order"] = None
+        incomplete["workload"]["processing_summary"] = runner._result_summary(
+            [{"outcome": "processed", "status": "complete", "kind": "live"}],
+            expected=2,
+        )
+        incomplete["workload"]["hard_failures"] = [
+            "mixed_result_count_mismatch"
+        ]
+        runner._validate_mixed_semantics(
+            incomplete,
+            {"live_jobs": 1, "backfill_jobs": 1, "lanes": 8, "effective_lanes": 8},
+            ["mixed_result_count_mismatch"],
+        )
+        incomplete["workload"]["completion_counts"]["backfill"] = 1
+        with self.assertRaises(ValueError):
+            runner._validate_mixed_semantics(
+                incomplete,
+                {"live_jobs": 1, "backfill_jobs": 1, "lanes": 8, "effective_lanes": 8},
+                ["mixed_result_count_mismatch"],
+            )
+
+        unavailable = deepcopy(sample)
+        unavailable["workload"]["memory_pressure_before"][
+            "process_cgroup_available"
+        ] = 0
+        unavailable["workload"]["memory_pressure_after"][
+            "process_cgroup_available"
+        ] = 0
+        unavailable["workload"]["hard_failures"] = ["memory_pressure_unavailable"]
+        runner._validate_mixed_semantics(
+            unavailable,
+            {"live_jobs": 1, "backfill_jobs": 1, "lanes": 8, "effective_lanes": 8},
+            ["memory_pressure_unavailable"],
+        )
+
+        increased = deepcopy(sample)
+        increased["workload"]["memory_pressure_after"]["process_swap_used_bytes"] = 1
+        increased["workload"]["memory_pressure_delta"]["process_swap_used_bytes"] = 1
+        increased["workload"]["hard_failures"] = ["memory_pressure_increased"]
+        runner._validate_mixed_semantics(
+            increased,
+            {"live_jobs": 1, "backfill_jobs": 1, "lanes": 8, "effective_lanes": 8},
+            ["memory_pressure_increased"],
+        )
+
         workload["five_minute_contract"]["elapsed_seconds"] = 2.0
         with self.assertRaises(ValueError):
             runner._validate_mixed_semantics(
@@ -1971,6 +2124,16 @@ class PerformanceRunnerTest(unittest.TestCase):
             },
         )
 
+        before = _army_memory()
+        before["process_cgroup_available"] = 0
+        after = deepcopy(before)
+        after["process_swap_used_bytes"] = 1
+        delta = runner._memory_pressure_delta(before, after)
+        self.assertEqual(
+            runner._memory_pressure_failure_codes(before, after, delta),
+            ["memory_pressure_unavailable", "memory_pressure_increased"],
+        )
+
     def test_forced_miss_failure_codes_match_each_gate(self) -> None:
         memory = _army_memory()
         cases = (
@@ -2398,6 +2561,27 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
         self.assertNotEqual(captured_lengths[0], captured_lengths[1])
         self.assertEqual(workload["exact_bytes"], sum(captured_lengths))
 
+    def test_mixed_workload_emits_memory_pressure_failures(self) -> None:
+        from domain_test_support import domain_database
+
+        before = _army_memory()
+        before["process_cgroup_available"] = 0
+        after = deepcopy(before)
+        after["process_swap_used_bytes"] = 1
+        with (
+            domain_database(
+                os.environ["CLASHLENS_TEST_DATABASE_URL"], include_coordinator=True
+            ) as connection_info,
+            runner.archive_server() as archive,
+            mock.patch.object(runner, "_memory_pressure", side_effect=[before, after]),
+        ):
+            workload = runner._run_mixed(connection_info, archive, 1, 1)
+
+        self.assertEqual(
+            workload["hard_failures"],
+            ["memory_pressure_unavailable", "memory_pressure_increased"],
+        )
+
     def test_connection_execute_is_counted_once_by_cursor_hook(self) -> None:
         import psycopg
 
@@ -2523,6 +2707,30 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 self.assertEqual(workload["processing_summary"]["work_types"]["redecode_army"], 1)
                 self.assertEqual(workload["processing_summary"]["outcomes"]["processed"], 2)
                 self.assertEqual(workload["database"]["queue_residue"], [])
+
+                failed = deepcopy(result)
+                failed_workload = failed["samples"][0]["workload"]
+                failed_workload["completion_counts"] = {"live": 1, "backfill": 0}
+                failed_workload["completion_order"] = None
+                failed_workload["completion_order_complete"] = False
+                failed_workload["live_first_completion_index"] = None
+                failed_workload["processing_summary"] = runner._result_summary(
+                    [
+                        {
+                            "outcome": "processed",
+                            "status": "complete",
+                            "kind": "live",
+                            "work_type": "process_observation",
+                        }
+                    ],
+                    expected=2,
+                )
+                failed_workload["hard_failures"] = [
+                    "mixed_result_count_mismatch"
+                ]
+                failed["hard_failures"] = ["mixed_result_count_mismatch"]
+                failed["artifact_digest"] = runner._artifact_digest(failed)
+                runner.validate_artifact(failed)
             if mode == "duplicate-heavy":
                 operations = sample["workload"]["collector_archive_operations"]
                 self.assertTrue(operations["executed"])
@@ -2578,6 +2786,45 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 self.assertLess(
                     sample["workload"]["fact_counts"]["snapshot_entries"], 1000
                 )
+
+                failed = deepcopy(result)
+                failed_workload = failed["samples"][0]["workload"]
+                failed_workload["status"] = "failed"
+                failed_workload["fanout_evidence"]["generation_states"] = []
+                failed_workload["fanout_evidence"][
+                    "snapshot_entries_per_population"
+                ] = 0
+                failed_workload["fanout_evidence"]["matches_expected"] = False
+                failed_workload["hard_failures"] = [
+                    "reset_generation_count_mismatch"
+                ]
+                failed["hard_failures"] = ["reset_generation_count_mismatch"]
+                failed["artifact_digest"] = runner._artifact_digest(failed)
+                runner.validate_artifact(failed)
+
+                extra = deepcopy(result)
+                extra_workload = extra["samples"][0]["workload"]
+                generation_states = extra_workload["fanout_evidence"][
+                    "generation_states"
+                ]
+                generation_states.append(
+                    {
+                        "generation": len(generation_states) + 1,
+                        "snapshot_state": "published",
+                        "army_state": "published",
+                    }
+                )
+                extra_workload["status"] = "failed"
+                extra_workload["fanout_evidence"][
+                    "snapshot_entries_per_population"
+                ] = 2 * len(generation_states)
+                extra_workload["fanout_evidence"]["matches_expected"] = False
+                extra_workload["hard_failures"] = [
+                    "reset_generation_count_mismatch"
+                ]
+                extra["hard_failures"] = ["reset_generation_count_mismatch"]
+                extra["artifact_digest"] = runner._artifact_digest(extra)
+                runner.validate_artifact(extra)
 
 
 if __name__ == "__main__":

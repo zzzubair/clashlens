@@ -114,6 +114,8 @@ def test_database_contract_is_one_repeatable_read_only_transaction() -> None:
     assert "boundary_publication_manifests" in sql
     assert "terminal_history_rank <= 8" in sql
     assert "pg_ls_waldir" in sql
+    assert "legal.status = 'pending'\n                AND legal.due_at <= clock.captured_at" in sql
+    assert "job.status = 'pending'\n                AND job.due_at <= clock.captured_at" in sql
 
 
 def test_relation_contract_covers_every_current_migration_table() -> None:

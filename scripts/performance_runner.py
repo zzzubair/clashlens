@@ -1955,6 +1955,7 @@ def _validate_duplicate_protocol(
     label: str,
     *,
     overlap_cycle: bool = False,
+    fixed_acceptance_failure: bool = False,
 ) -> None:
     if not isinstance(workload, dict):
         raise TypeError(f"{label} workload is invalid")
@@ -2039,12 +2040,27 @@ def _validate_duplicate_protocol(
         "ranking_occurrence_links",
     ):
         _bounded_int(canonical[key], f"{label}.canonical.{key}")
-    if canonical["profile_semantic_versions"] != parsed.get("profile", 0) or canonical["profile_occurrence_effects"] != expected_occurrences["profile"]:
+    if (
+        canonical["profile_semantic_versions"] != parsed.get("profile", 0)
+        or canonical["profile_occurrence_effects"] > expected_occurrences["profile"]
+        or (
+            not fixed_acceptance_failure
+            and canonical["profile_occurrence_effects"]
+            != expected_occurrences["profile"]
+        )
+    ):
         raise ValueError(f"{label} profile canonical counts are invalid")
     if canonical["battle_canonical_rows"] > canonical["battle_occurrence_rows"] or canonical["ranking_canonical_rows"] > canonical["ranking_occurrence_links"]:
         raise ValueError(f"{label} canonical counts are invalid")
     summary = workload.get("processing_summary")
-    if not isinstance(summary, dict) or summary.get("count") != expected_total or summary.get("expected_count") != expected_total:
+    if (
+        not isinstance(summary, dict)
+        or summary.get("expected_count") != expected_total
+        or not isinstance(summary.get("count"), int)
+        or isinstance(summary.get("count"), bool)
+        or not 0 <= summary["count"] <= expected_total
+        or (not fixed_acceptance_failure and summary["count"] != expected_total)
+    ):
         raise ValueError(f"{label} processing count is invalid")
 
 
@@ -2053,7 +2069,14 @@ def _validate_duplicate_sample_semantics(
 ) -> None:
     workload = sample.get("workload")
     database = sample.get("database")
-    _validate_duplicate_protocol(workload, config, label)
+    derived = _duplicate_hard_failure_codes(workload, database)
+    fixed_acceptance_failure = "fixed_acceptance_failure" in derived
+    _validate_duplicate_protocol(
+        workload,
+        config,
+        label,
+        fixed_acceptance_failure=fixed_acceptance_failure,
+    )
     _validate_relation_subset(database, "duplicate-heavy", label)
     evidence = sample.get("evidence")
     spool = sample.get("spool")
@@ -2079,20 +2102,29 @@ def _validate_duplicate_sample_semantics(
     final_objects = _bounded_int(spool.get("final_object_count"), f"{label}.final_object_count")
     archive_get = _bounded_int(archive.get("get"), f"{label}.archive.get")
     repairs = _bounded_int(evidence.get("repairs"), f"{label}.repairs")
-    if not (
+    exact_counters = (
         local_misses == archive_get == repairs
         and distinct_hashes == final_objects
         and local_misses >= distinct_hashes
-    ):
+    )
+    failed_counters = (
+        repairs <= local_misses
+        and repairs <= archive_get
+        and final_objects <= distinct_hashes
+        and final_objects <= local_misses
+        and final_objects <= archive_get
+    )
+    if not (failed_counters if fixed_acceptance_failure else exact_counters):
         raise ValueError(f"{label} local/archive/hash counters disagree")
     archived_bytes = _bounded_int(evidence.get("archived_bytes"), f"{label}.archived_bytes")
     archive_get_bytes = _bounded_int(archive.get("get_bytes"), f"{label}.archive.get_bytes")
     final_bytes = _bounded_int(spool.get("final_bytes"), f"{label}.final_bytes")
-    if not (archived_bytes == final_bytes and archive_get_bytes >= archived_bytes):
+    exact_bytes = archived_bytes == final_bytes and archive_get_bytes >= archived_bytes
+    failed_bytes = final_bytes <= archived_bytes and final_bytes <= archive_get_bytes
+    if not (failed_bytes if fixed_acceptance_failure else exact_bytes):
         raise ValueError(f"{label} archived bytes disagree")
     if not _bounded_int(evidence.get("retries"), f"{label}.retries") == workload["processing_summary"]["retry_count"]:
         raise ValueError(f"{label}.retries disagrees with processing")
-    derived = _duplicate_hard_failure_codes(workload, database)
     if not set(derived).issubset(artifact_failures):
         raise ValueError(f"{label} duplicate hard failures are incomplete")
     if not derived:
@@ -2145,7 +2177,7 @@ def _validate_reset_semantics(
             derived.append("reset_non_processed_result")
         if workload["queue_residue"] or sample["database"].get("queue_residue"):
             derived.append("reset_queue_residue")
-        if workload["fanout_evidence"]["generation_states"] and len(workload["fanout_evidence"]["generation_states"]) != generations:
+        if len(workload["fanout_evidence"]["generation_states"]) != generations:
             derived.append("reset_generation_count_mismatch")
         derived = _failure_codes(derived)
         if set(workload["hard_failures"]) != set(derived) or not set(derived).issubset(artifact_failures):
@@ -2184,10 +2216,17 @@ def _validate_mixed_semantics(
         raise ValueError("mixed workload disagrees with configuration")
     _validate_resources(workload, "mixed workload")
     counts = workload["completion_counts"]
-    if counts != {"live": config["live_jobs"], "backfill": config["backfill_jobs"]}:
+    expected_counts = {
+        "live": config["live_jobs"],
+        "backfill": config["backfill_jobs"],
+    }
+    if any(counts[kind] > expected_counts[kind] for kind in expected_counts):
         raise ValueError("mixed completion counts disagree with jobs")
     order = workload["completion_order"]
-    if order is not None and order.count("live") != config["live_jobs"]:
+    if order is not None and counts != {
+        "live": order.count("live"),
+        "backfill": order.count("backfill"),
+    }:
         raise ValueError("mixed completion order disagrees with jobs")
     live = workload["live_queue_latency_seconds"]
     contract = workload["live_latency_contract"]
@@ -2213,7 +2252,14 @@ def _validate_mixed_semantics(
     derived: list[str] = []
     expected_count = config["live_jobs"] + config["backfill_jobs"]
     summary = workload["processing_summary"]
-    if summary["count"] != expected_count or sum(counts.values()) != expected_count:
+    if summary["expected_count"] != expected_count:
+        raise ValueError("mixed expected processing count disagrees with jobs")
+    if counts != {
+        "live": summary["kinds"]["live"],
+        "backfill": summary["kinds"]["backfill"],
+    } or sum(counts.values()) != summary["count"]:
+        raise ValueError("mixed completion counts disagree with processing")
+    if summary["count"] != expected_count:
         derived.append("mixed_result_count_mismatch")
     if summary["outcomes"]["processed"] != summary["count"] or summary["statuses"]["complete"] != summary["count"]:
         derived.append("mixed_non_processed_result")
@@ -2223,13 +2269,13 @@ def _validate_mixed_semantics(
         derived.append("mixed_collection_latency_exceeded")
     if sample["database"].get("queue_residue"):
         derived.append("mixed_queue_residue")
-    if any(
-        workload["memory_pressure_before"][key] == 0 or workload["memory_pressure_after"][key] == 0
-        for key in ("process_cgroup_available", "database_cgroup_available")
-    ):
-        derived.append("memory_pressure_unavailable")
-    if any(workload["memory_pressure_delta"].values()):
-        derived.append("memory_pressure_increased")
+    derived.extend(
+        _memory_pressure_failure_codes(
+            workload["memory_pressure_before"],
+            workload["memory_pressure_after"],
+            workload["memory_pressure_delta"],
+        )
+    )
     if workload["official_api_traffic"] != {"requests": 0, "source": "committed fixtures"}:
         raise ValueError("mixed official API traffic is invalid")
     if workload["hard_failures"] != _failure_codes(derived) or not set(derived).issubset(artifact_failures):
@@ -2407,7 +2453,14 @@ def _validate_army_mixed(value: Any, specs: tuple[dict[str, Any], ...], label: s
     if value.get("hard_failures") != nested:
         raise ValueError(f"{label} hard failures are invalid")
     cycle = value.get("collection_cycle")
-    _validate_duplicate_protocol(cycle, {"duplicate_observations": DUPLICATE_EXECUTION_CAP, "duplicate_cycles": 1}, f"{label}.collection_cycle", overlap_cycle=True)
+    _validate_duplicate_protocol(
+        cycle,
+        {"duplicate_observations": DUPLICATE_EXECUTION_CAP, "duplicate_cycles": 1},
+        f"{label}.collection_cycle",
+        overlap_cycle=True,
+        fixed_acceptance_failure="fixed_acceptance_failure"
+        in _duplicate_hard_failure_codes(cycle, {}),
+    )
     summary = cycle.get("processing_summary")
     expected: list[str] = []
     if any(count < STEP5_REQUESTS for count in overlaps.values()):
@@ -3241,10 +3294,13 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             generation_states = workload["fanout_evidence"]["generation_states"]
             if (
                 workload["fanout_evidence"]["expected"] != expected_counts
-                or workload["fanout_evidence"]["matches_expected"]
-                != (actual_counts == expected_counts)
                 or not isinstance(generation_states, list)
-                or len(generation_states) != generations
+                or len(generation_states) > generations + 1
+                or workload["fanout_evidence"]["matches_expected"]
+                != (
+                    len(generation_states) == generations
+                    and actual_counts == expected_counts
+                )
                 or workload["fanout_evidence"]["snapshot_entries_per_population"]
                 != 2 * len(generation_states)
                 or any(
@@ -3371,14 +3427,22 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             for count in workload["completion_counts"].values()
         ):
             raise ValueError("mixed-backfill completion counts are invalid")
+        expected_completion_counts = {
+            "live": int(workload.get("live_jobs", -1)),
+            "backfill": int(workload.get("backfill_jobs", -1)),
+        }
+        if any(
+            workload["completion_counts"][kind] > expected_completion_counts[kind]
+            for kind in expected_completion_counts
+        ):
+            raise ValueError("mixed-backfill completion counts exceed jobs")
         if completion_order is not None and (
             not isinstance(completion_order, list)
             or len(completion_order) > MAX_COMPLETION_ORDER
             or len(completion_order)
             > int(workload.get("live_jobs", 0)) + int(workload.get("backfill_jobs", 0))
             or any(item not in {"live", "backfill"} for item in completion_order)
-            or completion_order.count("live") != int(workload.get("live_jobs", 0))
-            or completion_order.count("backfill") != int(workload.get("backfill_jobs", 0))
+            or workload["completion_counts"] != expected_completion_counts
             or workload["completion_counts"] != {
                 "live": completion_order.count("live"),
                 "backfill": completion_order.count("backfill"),
@@ -3388,12 +3452,8 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
         if workload["completion_order_complete"] != (completion_order is not None):
             raise ValueError("mixed-backfill completion order status contradicts evidence")
         if completion_order is None and (
-            workload["completion_counts"]
-            != {
-                "live": int(workload.get("live_jobs", -1)),
-                "backfill": int(workload.get("backfill_jobs", -1)),
-            }
-            or sum(workload["completion_counts"].values()) <= MAX_COMPLETION_ORDER
+            workload["completion_counts"] == expected_completion_counts
+            and sum(workload["completion_counts"].values()) <= MAX_COMPLETION_ORDER
         ):
             raise ValueError("mixed-backfill omitted a bounded completion order")
 
@@ -5082,9 +5142,9 @@ def _run_reset(
                         ).fetchone()[0]
                     ),
                 }
-        generation_count = int(counts[5])
-        generation_states = counts[6]
         generations = 2 if correction else 1
+        generation_count = int(counts[5])
+        generation_states = (counts[6] or [])[: generations + 1]
         expected_counts = {
             "ranked_day_versions": generations * population,
             "snapshot_headers": 2 * generations,
@@ -5128,7 +5188,7 @@ def _run_reset(
                     generation_count == generations
                     and actual_counts == expected_counts
                 ),
-                "snapshot_entries_per_population": 2 * generation_count,
+                "snapshot_entries_per_population": 2 * len(generation_states),
                 "generation_states": generation_states,
             },
             "boundary_admission": admission_evidence,
@@ -5503,6 +5563,11 @@ def _run_mixed(
             hard_failures.append("mixed_collection_latency_exceeded")
         if queue_residue:
             hard_failures.append("mixed_queue_residue")
+        hard_failures.extend(
+            _memory_pressure_failure_codes(
+                pressure_before, pressure_after, pressure_delta
+            )
+        )
         completion_order_valid = (
             len(order) <= MAX_COMPLETION_ORDER
             and len(order) <= live + backfill
@@ -6142,6 +6207,20 @@ def _memory_pressure_delta(
     return {
         key: max(0, after.get(key, 0) - before.get(key, 0)) for key in keys
     }
+
+
+def _memory_pressure_failure_codes(
+    before: dict[str, int], after: dict[str, int], delta: dict[str, int]
+) -> list[str]:
+    failures = []
+    if any(
+        before[key] == 0 or after[key] == 0
+        for key in ("process_cgroup_available", "database_cgroup_available")
+    ):
+        failures.append("memory_pressure_unavailable")
+    if any(delta.values()):
+        failures.append("memory_pressure_increased")
+    return failures
 
 
 def _postgres_provenance(connection_info: str) -> dict[str, Any]:

@@ -28,13 +28,20 @@ func TestLeaseHeartbeatPreventsReclaimWhileWorkerMakesProgress(t *testing.T) {
 		t.Fatalf("schedule regular work: %v", err)
 	}
 
-	leaseDuration := 60 * time.Millisecond
-	job, err := store.claimNext(ctx, "heartbeat-owner", normalPool, now, leaseDuration, "heartbeat-token")
+	leaseDuration := 3 * time.Second
+	claimAt := time.Now().UTC()
+	job, err := store.claimNext(ctx, "heartbeat-owner", normalPool, claimAt, leaseDuration, "heartbeat-token")
 	if err != nil {
 		t.Fatalf("claim initial job: %v", err)
 	}
 	if job == nil {
 		t.Fatal("initial claim returned no job")
+	}
+	var initialExpiry time.Time
+	if err := store.pool.QueryRow(ctx, `
+		SELECT lease_expires_at FROM collector_jobs WHERE id = $1
+	`, job.id).Scan(&initialExpiry); err != nil {
+		t.Fatalf("read initial lease expiry: %v", err)
 	}
 	worker := &worker{store: store, config: workerConfig{leaseDuration: leaseDuration}}
 	heartbeatContext, stopHeartbeat := worker.startLeaseHeartbeat(ctx, job)
@@ -43,12 +50,27 @@ func TestLeaseHeartbeatPreventsReclaimWhileWorkerMakesProgress(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = stopHeartbeat() })
 
-	time.Sleep(140 * time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var renewedExpiry time.Time
+		if err := store.pool.QueryRow(ctx, `
+			SELECT lease_expires_at FROM collector_jobs WHERE id = $1
+		`, job.id).Scan(&renewedExpiry); err != nil {
+			t.Fatalf("read renewed lease expiry: %v", err)
+		}
+		if renewedExpiry.After(initialExpiry) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("heartbeat did not extend the lease")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	reclaimed, err := store.claimNext(
 		ctx,
 		"second-owner",
 		normalPool,
-		time.Now().UTC(),
+		initialExpiry,
 		leaseDuration,
 		"second-token",
 	)
