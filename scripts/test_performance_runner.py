@@ -529,8 +529,8 @@ def _valid_army_artifact() -> dict:
             "forced_miss_target_seconds": runner.STEP5_FORCED_MISS_TARGET_SECONDS,
             "forced_miss_pool_max_size": 2,
             "forced_miss_read_snapshot": "repeatable_read_exported",
-            "mixed_lane_pool_max_size": 1,
-            "mixed_lane_read_snapshot": "repeatable_read",
+            "mixed_lane_pool_max_size": runner.STEP5_MIXED_LANE_POOL_MAX_SIZE,
+            "mixed_lane_read_snapshot": "repeatable_read_exported",
             "analytics_lanes": runner.STEP5_ANALYTICS_LANES,
             "duplicate_cycle_observations": runner.DUPLICATE_EXECUTION_CAP,
         },
@@ -1678,17 +1678,59 @@ class PerformanceRunnerTest(unittest.TestCase):
 
     def test_step5_overlap_warms_reads_before_collection_processing(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
-        wait = source.index("analytics_warmups_finished.wait(120)")
+        self.assertEqual(runner.STEP5_MIXED_LANE_POOL_MAX_SIZE, 2)
+        wait = source.index("analytics_warmups_resolved.wait(120)")
+        failed = source.index("analytics_warmups_failed.is_set()", wait)
         timer = source.index("started = time.perf_counter()", wait)
         collection = source.index("result = _run_duplicate(", timer)
+        serialized = source.index("with analytics_warmup_lock:", collection)
         warmup = source.index('"mixed warmup"', collection)
-        ready = source.index("analytics_warmups_finished.set()", warmup)
+        ready = source.index("analytics_warmups_resolved.set()", warmup)
         measured_overlap = source.index("processing_started.wait()", ready)
 
         self.assertLess(wait, timer)
+        self.assertLess(failed, timer)
         self.assertLess(timer, collection)
+        self.assertLess(serialized, warmup)
         self.assertLess(warmup, ready)
         self.assertLess(ready, measured_overlap)
+        self.assertIn(
+            "connection_info, max_size=STEP5_MIXED_LANE_POOL_MAX_SIZE",
+            source,
+        )
+        self.assertIn(
+            "analytics_warmups_failed.set()\n"
+            "                analytics_warmups_resolved.set()",
+            source,
+        )
+
+    def test_step5_overlap_does_not_start_collection_after_failed_warmup(self) -> None:
+        pool_sizes: list[int] = []
+        warmup_calls = [0]
+
+        class FailingDatabase:
+            def __init__(self, _connection_info: str, *, max_size: int) -> None:
+                pool_sizes.append(max_size)
+
+            def get_army_analytics(self, *_args: object, **_kwargs: object) -> None:
+                warmup_calls[0] += 1
+                raise RuntimeError("cold cache fill failed")
+
+            def close(self) -> None:
+                pass
+
+        with mock.patch(
+            "clashlens.api_db.ApiDatabase", FailingDatabase
+        ), mock.patch.object(runner, "_run_duplicate") as duplicate, mock.patch.object(
+            runner, "_run_account_read_gate", return_value={}
+        ), self.assertRaisesRegex(RuntimeError, "analytics warmup failed"):
+            runner._run_step5_overlap(
+                "unused", object(), runner._army_selection_specs()
+            )
+
+        duplicate.assert_not_called()
+        self.assertEqual(warmup_calls, [1])
+        self.assertEqual(pool_sizes, [runner.STEP5_MIXED_LANE_POOL_MAX_SIZE] * 4)
 
     def test_army_source_guard_rejects_old_broad_materialization(self) -> None:
         source = (ROOT / "python/src/clashlens/api_db.py").read_text()

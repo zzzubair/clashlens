@@ -159,9 +159,10 @@ exact schema relations. It executes one timed forced miss
 five untimed warmups plus 100 timed cache-hit calls for each of `top-1000`,
 `trophies-5000-9999`, and `streak-top-1000` in both lenses through
 `ApiDatabase.get_army_analytics`. The forced miss is excluded from the warmed
-p95. Forced misses use a two-connection API pool; mixed-load lanes retain their
-one-connection fallback. The forced-miss pair imports one exported repeatable-read
-snapshot; mixed lanes use one repeatable-read transaction. Troop requests use a
+p95. Forced misses and mixed-load lanes use two-connection API pools so each
+component/source pair imports one exported repeatable-read snapshot. The six
+mixed-load cache fills are untimed and serialized before the same four lanes
+begin continuous measured overlap. Troop requests use a
 single five-second request deadline, with 0.1-second admission and primary-pool
 ceilings and a 0.3-second paired-checkout ceiling. PostgreSQL transaction timeouts
 enforce the same remaining deadline; exhaustion returns service unavailable instead

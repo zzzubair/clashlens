@@ -165,6 +165,7 @@ STEP5_MISSING_TROPHY_RATE = 100
 STEP5_WARMUPS = 5
 STEP5_REQUESTS = 100
 STEP5_ANALYTICS_LANES = 4
+STEP5_MIXED_LANE_POOL_MAX_SIZE = 2
 STEP5_P95_TARGET_MS = 200.0
 STEP5_FORCED_MISS_TARGET_SECONDS = 5.0
 STEP5_COLLECTION_LIMIT_SECONDS = 300.0
@@ -2502,8 +2503,8 @@ def _validate_army_semantics(
         "forced_miss_target_seconds": STEP5_FORCED_MISS_TARGET_SECONDS,
         "forced_miss_pool_max_size": 2,
         "forced_miss_read_snapshot": "repeatable_read_exported",
-        "mixed_lane_pool_max_size": 1,
-        "mixed_lane_read_snapshot": "repeatable_read",
+        "mixed_lane_pool_max_size": STEP5_MIXED_LANE_POOL_MAX_SIZE,
+        "mixed_lane_read_snapshot": "repeatable_read_exported",
         "analytics_lanes": STEP5_ANALYTICS_LANES,
         "duplicate_cycle_observations": DUPLICATE_EXECUTION_CAP,
     }
@@ -4240,7 +4241,9 @@ def _run_step5_overlap(
     processing_started = Event()
     cycle_finished = Event()
     cycle_failed = Event()
-    analytics_warmups_finished = Event()
+    analytics_warmups_resolved = Event()
+    analytics_warmups_failed = Event()
+    analytics_warmup_lock = Lock()
     overlap_lock = Lock()
     warmed_lanes = [0]
     overlap_counts: dict[str, int] = {f"{s['selection']}/{s['lens']}": 0 for s in specs}
@@ -4248,8 +4251,10 @@ def _run_step5_overlap(
 
     def duplicate_cycle() -> dict[str, Any]:
         try:
-            if not analytics_warmups_finished.wait(120):
+            if not analytics_warmups_resolved.wait(120):
                 raise RuntimeError("analytics warmups did not finish")
+            if analytics_warmups_failed.is_set():
+                raise RuntimeError("analytics warmup failed")
             started = time.perf_counter()
             overlap_day = BOUNDARY + timedelta(days=STEP5_DAYS + 1)
             result = _run_duplicate(
@@ -4278,23 +4283,32 @@ def _run_step5_overlap(
     def analytics_lane(lane_specs: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
         from clashlens.api_db import ApiDatabase
 
-        database = ApiDatabase(connection_info, max_size=1)
+        database = ApiDatabase(
+            connection_info, max_size=STEP5_MIXED_LANE_POOL_MAX_SIZE
+        )
         results: list[dict[str, Any]] = []
         try:
             selections = [(spec, _step5_selection(spec)) for spec in lane_specs]
             try:
                 for spec, selection in selections:
-                    for _ in range(STEP5_WARMUPS):
-                        result = database.get_army_analytics(
-                            selection,
-                            now=BOUNDARY + timedelta(days=STEP5_DAYS + 1),
-                        )
-                        _step5_result(result, spec, "mixed warmup")
-            finally:
+                    with analytics_warmup_lock:
+                        if analytics_warmups_failed.is_set():
+                            raise RuntimeError("analytics warmup failed")
+                        for _ in range(STEP5_WARMUPS):
+                            result = database.get_army_analytics(
+                                selection,
+                                now=BOUNDARY + timedelta(days=STEP5_DAYS + 1),
+                            )
+                            _step5_result(result, spec, "mixed warmup")
+            except Exception:
+                analytics_warmups_failed.set()
+                analytics_warmups_resolved.set()
+                raise
+            else:
                 with overlap_lock:
                     warmed_lanes[0] += 1
                     if warmed_lanes[0] == STEP5_ANALYTICS_LANES:
-                        analytics_warmups_finished.set()
+                        analytics_warmups_resolved.set()
             processing_started.wait()
             if cycle_failed.is_set():
                 raise RuntimeError("collection cycle failed before processing started")
@@ -5851,8 +5865,8 @@ def _run_step5_army(database_url: str) -> dict[str, Any]:
                 "forced_miss_target_seconds": STEP5_FORCED_MISS_TARGET_SECONDS,
                 "forced_miss_pool_max_size": 2,
                 "forced_miss_read_snapshot": "repeatable_read_exported",
-                "mixed_lane_pool_max_size": 1,
-                "mixed_lane_read_snapshot": "repeatable_read",
+                "mixed_lane_pool_max_size": STEP5_MIXED_LANE_POOL_MAX_SIZE,
+                "mixed_lane_read_snapshot": "repeatable_read_exported",
                 "analytics_lanes": STEP5_ANALYTICS_LANES,
                 "duplicate_cycle_observations": DUPLICATE_EXECUTION_CAP,
             },
