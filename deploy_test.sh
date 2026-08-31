@@ -56,7 +56,28 @@ case "$verb" in
     name=${!#}
     case "$sub" in
       exists) [[ -d "$FAKE_STATE/networks/$name" ]] ;;
-      create) mkdir -p "$FAKE_STATE/networks/$name" ;;
+      create)
+        scope=""
+        while (( $# > 0 )); do
+          if [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.scope=* ]]; then
+            scope=${2#*=}
+            shift 2
+          else
+            shift
+          fi
+        done
+        scope=${FAKE_SCOPE_OVERRIDE:-$scope}
+        mkdir -p "$FAKE_STATE/networks/$name"
+        printf '%s' "$scope" >"$FAKE_STATE/networks/$name.scope"
+        ;;
+      inspect)
+        template=${3:-}
+        if [[ "$template" == "{{.Name}}" ]]; then
+          printf '%s\n' "$name"
+        elif [[ "$template" == *"org.clashlens.scope"* ]]; then
+          cat "$FAKE_STATE/networks/$name.scope" 2>/dev/null || true
+        fi
+        ;;
     esac
     ;;
   volume)
@@ -64,7 +85,28 @@ case "$verb" in
     name=${!#}
     case "$sub" in
       exists) [[ -d "$FAKE_STATE/volumes/$name" ]] ;;
-      create) mkdir -p "$FAKE_STATE/volumes/$name" ;;
+      create)
+        scope=""
+        while (( $# > 0 )); do
+          if [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.scope=* ]]; then
+            scope=${2#*=}
+            shift 2
+          else
+            shift
+          fi
+        done
+        scope=${FAKE_SCOPE_OVERRIDE:-$scope}
+        mkdir -p "$FAKE_STATE/volumes/$name"
+        printf '%s' "$scope" >"$FAKE_STATE/volumes/$name.scope"
+        ;;
+      inspect)
+        template=${3:-}
+        if [[ "$template" == "{{.Name}}" ]]; then
+          printf '%s\n' "$name"
+        elif [[ "$template" == *"org.clashlens.scope"* ]]; then
+          cat "$FAKE_STATE/volumes/$name.scope" 2>/dev/null || true
+        fi
+        ;;
     esac
     ;;
   image)
@@ -91,11 +133,24 @@ case "$verb" in
     case "$sub" in
       exists)
         name=${!#}
+        if [[ "${FAKE_CONTAINER_APPEARS_AFTER:-}" == "$name" ]]; then
+          marker="$FAKE_STATE/race-container-$name"
+          if [[ ! -e "$marker" ]]; then
+            : >"$marker"
+            exit 1
+          fi
+          mkdir -p "$FAKE_STATE/containers/$name"
+        fi
         [[ -d "$FAKE_STATE/containers/$name" ]]
         ;;
       inspect)
         name=${!#}
-        if [[ "$*" == *"org.clashlens.postgres-shm-size"* ]]; then
+        template=${2:-}
+        if [[ "$template" == "{{.Name}}" ]]; then
+          printf '%s\n' "$name"
+        elif [[ "$*" == *"org.clashlens.scope"* ]]; then
+          cat "$FAKE_STATE/containers/$name.scope" 2>/dev/null || true
+        elif [[ "$*" == *"org.clashlens.postgres-shm-size"* ]]; then
           cat "$FAKE_STATE/containers/$name.postgres-shm-size" 2>/dev/null || true
         elif [[ "$*" == *"org.clashlens.postgres-metrics-profile"* ]]; then
           cat "$FAKE_STATE/containers/$name.postgres-metrics-profile" 2>/dev/null || true
@@ -133,6 +188,7 @@ case "$verb" in
     name=""
     postgres_shm_size=""
     postgres_metrics_profile=""
+    scope=""
     while (( $# > 0 )); do
       if [[ "$1" == "--name" && $# -ge 2 ]]; then
         name=$2
@@ -143,10 +199,14 @@ case "$verb" in
       elif [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.postgres-metrics-profile=* ]]; then
         postgres_metrics_profile=${2#*=}
         shift 2
+      elif [[ "$1" == "--label" && $# -ge 2 && "$2" == org.clashlens.scope=* ]]; then
+        scope=${2#*=}
+        shift 2
       else
         shift
       fi
     done
+    scope=${FAKE_SCOPE_OVERRIDE:-$scope}
     mkdir -p "$FAKE_STATE/containers/$name"
     : >"$FAKE_STATE/containers/$name.running"
     if [[ -n "$postgres_shm_size" ]]; then
@@ -154,6 +214,9 @@ case "$verb" in
     fi
     if [[ -n "$postgres_metrics_profile" ]]; then
       printf '%s' "$postgres_metrics_profile" >"$FAKE_STATE/containers/$name.postgres-metrics-profile"
+    fi
+    if [[ -n "$scope" ]]; then
+      printf '%s' "$scope" >"$FAKE_STATE/containers/$name.scope"
     fi
     ;;
   exec)
@@ -195,7 +258,7 @@ case "$verb" in
       if grep -q 'VALUES (8)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '%s\n' 8 >>"$FAKE_STATE/schema_migrations"
       fi
-      if grep -q 'archive_instances' "$FAKE_STATE/stdin/exec-$n"; then
+      if grep -q 'VALUES (9)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '3' >"$FAKE_STATE/contract_version"
         printf '%s\n' 9 >>"$FAKE_STATE/schema_migrations"
       fi
@@ -212,6 +275,12 @@ case "$verb" in
       fi
       if grep -q 'VALUES (13)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '%s\n' 13 >>"$FAKE_STATE/schema_migrations"
+      fi
+      if grep -q 'VALUES (14)' "$FAKE_STATE/stdin/exec-$n"; then
+        printf '%s\n' 14 >>"$FAKE_STATE/schema_migrations"
+      fi
+      if grep -q 'VALUES (15)' "$FAKE_STATE/stdin/exec-$n"; then
+        printf '%s\n' 15 >>"$FAKE_STATE/schema_migrations"
       fi
     fi
     if [[ "$*" == *"SELECT version FROM clash_lens_contract"* ]]; then
@@ -254,10 +323,15 @@ case "$verb" in
     sub=${1:-}
     shift || true
     case "$sub" in
+      exists)
+        [[ -f "$FAKE_STATE/secrets/${1:-}" ]]
+        ;;
       create)
         name=""
         source="-"
+        replace=false
         if [[ "${1:-}" == "--replace" ]]; then
+          replace=true
           name=${2:-}
           source=${3:--}
         else
@@ -265,6 +339,9 @@ case "$verb" in
           source=${2:--}
         fi
         mkdir -p "$FAKE_STATE/secrets"
+        if [[ "$replace" == false && -e "$FAKE_STATE/secrets/$name" ]]; then
+          exit 1
+        fi
         if [[ "$source" == "-" ]]; then
           cat >"$FAKE_STATE/secrets/$name"
         else
@@ -287,6 +364,38 @@ cat >"$FAKE_BIN/curl" <<'EOF'
 printf '{"ready":true}\n'
 EOF
 chmod 0700 "$FAKE_BIN/curl"
+
+cat >"$FAKE_BIN/git" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${1:-}" == "-C" ]]; then
+  shift 2
+fi
+case "${1:-}" in
+  status)
+    printf '%s' "${FAKE_GIT_STATUS:-}"
+    ;;
+  rev-parse)
+    [[ -n "${FAKE_GIT_HEAD:-}" ]] || exit 1
+    printf '%s\n' "$FAKE_GIT_HEAD"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+EOF
+chmod 0700 "$FAKE_BIN/git"
+FAKE_GIT_HEAD=0123456789abcdef0123456789abcdef01234567
+FAKE_GIT_STATUS=
+
+cat >"$FAKE_BIN/python3" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+printf '%s\n' "$@" >"$FAKE_PYTHON_LOG"
+printf '/retained/clashlens-candidate-preparation.json\n'
+printf 'sha256:%064d\n' 0
+EOF
+chmod 0700 "$FAKE_BIN/python3"
 
 # ---------------------------------------------------------------------------
 # Scenario helpers
@@ -371,7 +480,9 @@ deploy() {
   done
   [[ "${1:-}" == "--" ]] && shift
   env FAKE_STATE="$dir/state" FAKE_PODMAN_LOG="$dir/podman.log" \
+    FAKE_PYTHON_LOG="$dir/python.log" PYTHON_BIN="$FAKE_BIN/python3" \
     DEPLOY_ENV_FILE="$envfile" PODMAN_BIN="$FAKE_BIN/podman" CURL_BIN="$FAKE_BIN/curl" \
+    GIT_BIN="$FAKE_BIN/git" FAKE_GIT_HEAD="$FAKE_GIT_HEAD" FAKE_GIT_STATUS="$FAKE_GIT_STATUS" \
     "${extra[@]}" "$ROOT_DIR/deploy.sh" "$@"
 }
 
@@ -532,6 +643,376 @@ deploy_fails "$BADBUDGET_DIR" "$BADBUDGET_ENV" 'CLASHLENS_API_CPUS' -- up
 printf 'ok: resource budgets are required, explicit, and validated before side effects\n'
 
 # ---------------------------------------------------------------------------
+# Guard 6: image builds carry the canonical source and exact clean HEAD.
+# ---------------------------------------------------------------------------
+BUILD_DIR=$(new_scenario)
+BUILD_ENV="$BUILD_DIR/app.env"
+write_scenario_env "$BUILD_ENV" "$BUILD_DIR/keys"
+deploy "$BUILD_DIR" "$BUILD_ENV" -- build-collector >/dev/null
+deploy "$BUILD_DIR" "$BUILD_ENV" -- build-python >/dev/null
+deploy "$BUILD_DIR" "$BUILD_ENV" -- build-website >/dev/null
+BUILD_NORM="$BUILD_DIR/podman.norm.log"
+norm_log "$BUILD_DIR/podman.log" >"$BUILD_NORM"
+for image in clashlens-collector:deployment clashlens-python:deployment clashlens-website:deployment; do
+  build_line=$(grep '^build ' "$BUILD_NORM" | grep -- "$image")
+  [[ "$build_line" == *'--label org.opencontainers.image.source=https://github.com/zzzubair/clashlens'* ]] || \
+    fail "$image build is missing the canonical source label"
+  [[ "$build_line" == *"--label org.opencontainers.image.revision=$FAKE_GIT_HEAD"* ]] || \
+    fail "$image build is missing the exact HEAD revision label"
+done
+printf 'ok: all image builds carry canonical source and exact HEAD labels\n'
+
+DIRTY_DIR=$(new_scenario)
+DIRTY_ENV="$DIRTY_DIR/app.env"
+write_scenario_env "$DIRTY_ENV" "$DIRTY_DIR/keys"
+deploy_fails "$DIRTY_DIR" "$DIRTY_ENV" 'dirty git checkout' FAKE_GIT_STATUS=' M deploy.sh' -- build-collector
+[[ ! -s "$DIRTY_DIR/podman.log" ]] || fail 'dirty checkout refusal had podman side effects'
+
+MISSING_HEAD_DIR=$(new_scenario)
+MISSING_HEAD_ENV="$MISSING_HEAD_DIR/app.env"
+write_scenario_env "$MISSING_HEAD_ENV" "$MISSING_HEAD_DIR/keys"
+deploy_fails "$MISSING_HEAD_DIR" "$MISSING_HEAD_ENV" 'HEAD is missing or unverifiable' FAKE_GIT_HEAD= -- build-python
+[[ ! -s "$MISSING_HEAD_DIR/podman.log" ]] || fail 'missing HEAD refusal had podman side effects'
+printf 'ok: image builds refuse dirty checkouts and missing HEAD before Podman side effects\n'
+
+RECEIPT_DIR=$(new_scenario)
+RECEIPT_ENV="$RECEIPT_DIR/app.env"
+write_scenario_env "$RECEIPT_ENV" "$RECEIPT_DIR/keys"
+mkdir "$RECEIPT_DIR/retained"
+deploy "$RECEIPT_DIR" "$RECEIPT_ENV" -- deployment-receipt \
+  candidate-preparation fedora-validation "$RECEIPT_DIR/retained" >/dev/null
+grep -Fxq "$ROOT_DIR/scripts/deployment_receipt.py" "$RECEIPT_DIR/python.log" || \
+  fail 'deployment-receipt did not use the bounded receipt helper'
+for argument in \
+  candidate-preparation fedora-validation "$RECEIPT_DIR/retained" \
+  localhost/clashlens-collector:deployment localhost/clashlens-python:deployment \
+  localhost/clashlens-website:deployment collector_database_pool_size=16 \
+  spool_max_body_bytes=4194304 worker_concurrency=20; do
+  grep -Fxq "$argument" "$RECEIPT_DIR/python.log" || \
+    fail "deployment-receipt omitted safe argument $argument"
+done
+for forbidden in test-admin-password collector-archive-secret worker-archive-secret; do
+  ! grep -Fq "$forbidden" "$RECEIPT_DIR/python.log" || \
+    fail "deployment-receipt exposed $forbidden"
+done
+printf 'ok: deployment receipt wiring forwards only scope identities and allowlisted configuration\n'
+
+PREVIOUS_SNAPSHOT="$RECEIPT_DIR/retained/previous-operating.json"
+printf '{}\n' >"$PREVIOUS_SNAPSHOT"
+deploy "$RECEIPT_DIR" "$RECEIPT_ENV" -- operating-check \
+  --previous-snapshot "$PREVIOUS_SNAPSHOT" >/dev/null
+for argument in \
+  "$ROOT_DIR/scripts/operating_check.py" \
+  http://127.0.0.1:18081/metrics clashlens-python-api \
+  typescript-website current /run/secrets/clashlens-hmac-current \
+  clashlens-python-worker 4194304 17179869184 1000000 1073741824 10000 \
+  "$PREVIOUS_SNAPSHOT"; do
+  grep -Fxq "$argument" "$RECEIPT_DIR/python.log" || \
+    fail "operating-check omitted bounded argument $argument"
+done
+for forbidden in test-admin-password collector-archive-secret worker-archive-secret; do
+  ! grep -Fq "$forbidden" "$RECEIPT_DIR/python.log" || \
+    fail "operating-check exposed $forbidden"
+done
+printf 'ok: objective operating check wires only private sources and hard bounds\n'
+
+CANDIDATE_DIR=$(new_scenario)
+CANDIDATE_ENV="$CANDIDATE_DIR/app.env"
+write_scenario_env "$CANDIDATE_ENV" "$CANDIDATE_DIR/keys"
+cat >>"$CANDIDATE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-candidate
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-postgres-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-python-api
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-python-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-website
+EOF
+deploy "$CANDIDATE_DIR" "$CANDIDATE_ENV" -- candidate-prepare >/dev/null
+CANDIDATE_NORM="$CANDIDATE_DIR/podman.norm.log"
+norm_log "$CANDIDATE_DIR/podman.log" >"$CANDIDATE_NORM"
+[[ "$(grep -c '^run ' "$CANDIDATE_NORM")" == 1 ]] || \
+  fail 'candidate-prepare started more than its disposable PostgreSQL container'
+grep -q 'postgres:17-alpine' "$CANDIDATE_NORM" || \
+  fail 'candidate-prepare did not start disposable PostgreSQL'
+log_lacks "$CANDIDATE_NORM" '^build ' 'candidate-prepare built an application image'
+[[ "$(cat "$CANDIDATE_DIR/state/contract_version")" == 5 ]] || \
+  fail 'candidate-prepare did not reach contract version 5'
+[[ "$(sort -n -u "$CANDIDATE_DIR/state/schema_migrations" | tr '\n' ' ')" == \
+   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 ' ]] || \
+  fail 'candidate-prepare did not apply the exact migration set through 0015'
+[[ "$(cat "$CANDIDATE_DIR/state/networks/clashlens-candidate-private.scope")" == candidate ]] || \
+  fail 'candidate network was not stamped with the candidate scope label'
+[[ "$(cat "$CANDIDATE_DIR/state/volumes/clashlens-candidate-postgres-data.scope")" == candidate ]] || \
+  fail 'candidate volume was not stamped with the candidate scope label'
+[[ "$(cat "$CANDIDATE_DIR/state/containers/clashlens-candidate-postgres.scope")" == candidate ]] || \
+  fail 'candidate PostgreSQL container was not stamped with the candidate scope label'
+[[ -f "$CANDIDATE_DIR/state/secrets/clashlens-candidate-postgres-password" ]] || \
+  fail 'candidate PostgreSQL secret was not derived from the candidate container name'
+[[ ! -f "$CANDIDATE_DIR/state/secrets/clashlens-postgres-password" ]] || \
+  fail 'candidate preparation replaced the deployed PostgreSQL secret'
+log_has "$CANDIDATE_NORM" \
+  'secret create clashlens-candidate-postgres-password' \
+  'candidate PostgreSQL secret creation was not scoped'
+log_lacks "$CANDIDATE_NORM" \
+  'secret create --replace clashlens-postgres-password' \
+  'candidate PostgreSQL secret name leaked into the deployed scope'
+
+CANDIDATE_SECRET_COLLISION_DIR=$(new_scenario)
+CANDIDATE_SECRET_COLLISION_ENV="$CANDIDATE_SECRET_COLLISION_DIR/app.env"
+write_scenario_env "$CANDIDATE_SECRET_COLLISION_ENV" \
+  "$CANDIDATE_SECRET_COLLISION_DIR/keys"
+cat >>"$CANDIDATE_SECRET_COLLISION_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-secret-collision
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-secret-collision-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-secret-collision-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-secret-collision-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-secret-collision-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-secret-collision-python
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-secret-collision-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-secret-collision-website
+EOF
+CANDIDATE_SECRET_COLLISION_NAME=clashlens-candidate-secret-collision-postgres-password
+CANDIDATE_SECRET_SENTINEL=unrelated-existing-secret-sentinel
+printf '%s' "$CANDIDATE_SECRET_SENTINEL" > \
+  "$(secret_file "$CANDIDATE_SECRET_COLLISION_DIR" "$CANDIDATE_SECRET_COLLISION_NAME")"
+deploy_fails "$CANDIDATE_SECRET_COLLISION_DIR" "$CANDIDATE_SECRET_COLLISION_ENV" \
+  'refuses an existing PostgreSQL password secret' -- candidate-prepare
+[[ "$(cat "$(secret_file "$CANDIDATE_SECRET_COLLISION_DIR" "$CANDIDATE_SECRET_COLLISION_NAME")")" == \
+   "$CANDIDATE_SECRET_SENTINEL" ]] || \
+  fail 'candidate-prepare changed the colliding PostgreSQL password secret'
+CANDIDATE_SECRET_COLLISION_NORM="$CANDIDATE_SECRET_COLLISION_DIR/podman.norm.log"
+norm_log "$CANDIDATE_SECRET_COLLISION_DIR/podman.log" > \
+  "$CANDIDATE_SECRET_COLLISION_NORM"
+log_has "$CANDIDATE_SECRET_COLLISION_NORM" \
+  "^secret exists $CANDIDATE_SECRET_COLLISION_NAME" \
+  'candidate-prepare did not check the exact PostgreSQL password secret name'
+log_lacks "$CANDIDATE_SECRET_COLLISION_NORM" \
+  '^network create |^volume create |^run |^secret create ' \
+  'candidate-prepare mutated resources before rejecting a secret collision'
+for resource in \
+  "networks/clashlens-candidate-secret-collision-private" \
+  "volumes/clashlens-candidate-secret-collision-data" \
+  "containers/clashlens-candidate-secret-collision-postgres" \
+  "containers/clashlens-candidate-secret-collision-collector" \
+  "containers/clashlens-candidate-secret-collision-python" \
+  "containers/clashlens-candidate-secret-collision-worker" \
+  "containers/clashlens-candidate-secret-collision-website"; do
+  [[ ! -e "$CANDIDATE_SECRET_COLLISION_DIR/state/$resource" ]] || \
+    fail "candidate-prepare created $resource before rejecting a secret collision"
+done
+
+CANDIDATE_SCOPE_OVERRIDE_DIR=$(new_scenario)
+CANDIDATE_SCOPE_OVERRIDE_ENV="$CANDIDATE_SCOPE_OVERRIDE_DIR/app.env"
+write_scenario_env "$CANDIDATE_SCOPE_OVERRIDE_ENV" "$CANDIDATE_SCOPE_OVERRIDE_DIR/keys"
+cat >>"$CANDIDATE_SCOPE_OVERRIDE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-scope-override
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-scope-override-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-scope-override-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-scope-override-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-scope-override-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-scope-override-python
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-scope-override-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-scope-override-website
+CANDIDATE_RESOURCE_SCOPE=private
+EOF
+deploy_fails "$CANDIDATE_SCOPE_OVERRIDE_DIR" "$CANDIDATE_SCOPE_OVERRIDE_ENV" \
+  'candidate resource scope metadata is deployment-owned' -- candidate-prepare
+CANDIDATE_SCOPE_OVERRIDE_NORM="$CANDIDATE_SCOPE_OVERRIDE_DIR/podman.norm.log"
+norm_log "$CANDIDATE_SCOPE_OVERRIDE_DIR/podman.log" >"$CANDIDATE_SCOPE_OVERRIDE_NORM"
+log_lacks "$CANDIDATE_SCOPE_OVERRIDE_NORM" '^network create |^volume create |^run |^secret create ' \
+  'candidate scope override was accepted before resource mutation'
+
+CANDIDATE_REPLICA_COLLISION_DIR=$(new_scenario)
+CANDIDATE_REPLICA_COLLISION_ENV="$CANDIDATE_REPLICA_COLLISION_DIR/app.env"
+write_scenario_env "$CANDIDATE_REPLICA_COLLISION_ENV" "$CANDIDATE_REPLICA_COLLISION_DIR/keys"
+cat >>"$CANDIDATE_REPLICA_COLLISION_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-replica-collision
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-replica-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-replica-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-replica-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-replica-worker-1
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-replica-python
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-replica-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-replica-website
+EOF
+deploy_fails "$CANDIDATE_REPLICA_COLLISION_DIR" "$CANDIDATE_REPLICA_COLLISION_ENV" \
+  'ambiguous duplicate Podman resource names' -- candidate-prepare
+CANDIDATE_REPLICA_COLLISION_NORM="$CANDIDATE_REPLICA_COLLISION_DIR/podman.norm.log"
+norm_log "$CANDIDATE_REPLICA_COLLISION_DIR/podman.log" >"$CANDIDATE_REPLICA_COLLISION_NORM"
+log_lacks "$CANDIDATE_REPLICA_COLLISION_NORM" '^network create |^volume create |^run |^secret create ' \
+  'worker replica collision was detected after resource mutation'
+
+CANDIDATE_WRONG_LABEL_DIR=$(new_scenario)
+CANDIDATE_WRONG_LABEL_ENV="$CANDIDATE_WRONG_LABEL_DIR/app.env"
+write_scenario_env "$CANDIDATE_WRONG_LABEL_ENV" "$CANDIDATE_WRONG_LABEL_DIR/keys"
+cat >>"$CANDIDATE_WRONG_LABEL_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-wrong-label
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-wrong-label-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-wrong-label-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-wrong-label-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-wrong-label-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-wrong-label-python
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-wrong-label-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-wrong-label-website
+EOF
+deploy_fails "$CANDIDATE_WRONG_LABEL_DIR" "$CANDIDATE_WRONG_LABEL_ENV" \
+  'candidate resource scope label could not be verified' \
+  FAKE_SCOPE_OVERRIDE=private -- candidate-prepare
+[[ ! -e "$CANDIDATE_WRONG_LABEL_DIR/state/contract_version" ]] || \
+  fail 'candidate preparation migrated a resource with the wrong scope label'
+printf '%s\n' 'ok: candidate scope metadata is immutable, replica collisions are preflighted, and labels are verified after ensure/create'
+
+UNSAFE_CANDIDATE_DIR=$(new_scenario)
+UNSAFE_CANDIDATE_ENV="$UNSAFE_CANDIDATE_DIR/app.env"
+write_scenario_env "$UNSAFE_CANDIDATE_ENV" "$UNSAFE_CANDIDATE_DIR/keys"
+cat >>"$UNSAFE_CANDIDATE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-unsafe-candidate
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+EOF
+deploy_fails "$UNSAFE_CANDIDATE_DIR" "$UNSAFE_CANDIDATE_ENV" \
+  'requires dedicated non-default Podman resource names' -- candidate-prepare
+UNSAFE_CANDIDATE_NORM="$UNSAFE_CANDIDATE_DIR/podman.norm.log"
+norm_log "$UNSAFE_CANDIDATE_DIR/podman.log" >"$UNSAFE_CANDIDATE_NORM"
+log_lacks "$UNSAFE_CANDIDATE_NORM" '^network create |^volume create |^run ' \
+  'candidate-prepare mutated Podman before rejecting default resource names'
+
+EXISTING_CANDIDATE_DIR=$(new_scenario)
+EXISTING_CANDIDATE_ENV="$EXISTING_CANDIDATE_DIR/app.env"
+write_scenario_env "$EXISTING_CANDIDATE_ENV" "$EXISTING_CANDIDATE_DIR/keys"
+cat >>"$EXISTING_CANDIDATE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-existing-candidate
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-existing-candidate-private
+CLASHLENS_PODMAN_VOLUME=clashlens-existing-candidate-postgres-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-existing-candidate-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-existing-candidate-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-existing-candidate-python-api
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-existing-candidate-python-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-existing-candidate-website
+EOF
+mkdir "$EXISTING_CANDIDATE_DIR/state/containers/clashlens-existing-candidate-postgres"
+deploy_fails "$EXISTING_CANDIDATE_DIR" "$EXISTING_CANDIDATE_ENV" \
+  'refuses an existing PostgreSQL container' -- candidate-prepare
+EXISTING_CANDIDATE_NORM="$EXISTING_CANDIDATE_DIR/podman.norm.log"
+norm_log "$EXISTING_CANDIDATE_DIR/podman.log" >"$EXISTING_CANDIDATE_NORM"
+log_lacks "$EXISTING_CANDIDATE_NORM" '^network create |^volume create |^run |^start |^secret create ' \
+  'candidate-prepare adopted an existing PostgreSQL container'
+
+RACING_CANDIDATE_DIR=$(new_scenario)
+RACING_CANDIDATE_ENV="$RACING_CANDIDATE_DIR/app.env"
+write_scenario_env "$RACING_CANDIDATE_ENV" "$RACING_CANDIDATE_DIR/keys"
+cat >>"$RACING_CANDIDATE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-racing-candidate
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-racing-candidate-private
+CLASHLENS_PODMAN_VOLUME=clashlens-racing-candidate-postgres-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-racing-candidate-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-racing-candidate-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-racing-candidate-python-api
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-racing-candidate-python-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-racing-candidate-website
+EOF
+deploy_fails "$RACING_CANDIDATE_DIR" "$RACING_CANDIDATE_ENV" \
+  'refuses an existing PostgreSQL container' \
+  FAKE_CONTAINER_APPEARS_AFTER=clashlens-racing-candidate-postgres -- candidate-prepare
+RACING_CANDIDATE_NORM="$RACING_CANDIDATE_DIR/podman.norm.log"
+norm_log "$RACING_CANDIDATE_DIR/podman.log" >"$RACING_CANDIDATE_NORM"
+log_has "$RACING_CANDIDATE_NORM" '^network create ' \
+  'candidate-prepare race proof did not create its dedicated network'
+log_has "$RACING_CANDIDATE_NORM" '^volume create ' \
+  'candidate-prepare race proof did not create its dedicated volume'
+log_lacks "$RACING_CANDIDATE_NORM" '^run |^start |^secret create ' \
+  'candidate-prepare adopted a PostgreSQL container appearing after preflight'
+[[ ! -e "$RACING_CANDIDATE_DIR/state/contract_version" ]] || \
+  fail 'candidate-prepare migrated a PostgreSQL container appearing after preflight'
+printf '%s\n' 'ok: candidate PostgreSQL is create-only and rejects existing or racing containers before adoption'
+
+MISSING_ARCHIVE_DIR=$(new_scenario)
+MISSING_ARCHIVE_ENV="$MISSING_ARCHIVE_DIR/app.env"
+write_scenario_env "$MISSING_ARCHIVE_ENV" "$MISSING_ARCHIVE_DIR/keys"
+cat >>"$MISSING_ARCHIVE_ENV" <<'EOF'
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-missing-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-missing-postgres-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-missing-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-missing-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-missing-python-api
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-missing-python-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-missing-website
+EOF
+deploy_fails "$MISSING_ARCHIVE_DIR" "$MISSING_ARCHIVE_ENV" \
+  'CLASHLENS_ARCHIVE_INSTANCE_ID is required' -- candidate-prepare
+MISSING_ARCHIVE_NORM="$MISSING_ARCHIVE_DIR/podman.norm.log"
+norm_log "$MISSING_ARCHIVE_DIR/podman.log" >"$MISSING_ARCHIVE_NORM"
+log_lacks "$MISSING_ARCHIVE_NORM" '^network create |^volume create |^run ' \
+  'candidate-prepare mutated Podman without the migration-0009 archive identity'
+
+BLOCKED_CANDIDATE_DIR=$(new_scenario)
+BLOCKED_CANDIDATE_ENV="$BLOCKED_CANDIDATE_DIR/app.env"
+write_scenario_env "$BLOCKED_CANDIDATE_ENV" "$BLOCKED_CANDIDATE_DIR/keys"
+cat >>"$BLOCKED_CANDIDATE_ENV" <<'EOF'
+CLASHLENS_ARCHIVE_REGION=fr-par
+CLASHLENS_ARCHIVE_INSTANCE_ID=step8-candidate-blocked
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_PODMAN_NETWORK=clashlens-candidate-blocked-private
+CLASHLENS_PODMAN_VOLUME=clashlens-candidate-blocked-postgres-data
+CLASHLENS_POSTGRES_CONTAINER=clashlens-candidate-blocked-postgres
+CLASHLENS_COLLECTOR_CONTAINER=clashlens-candidate-blocked-collector
+CLASHLENS_PYTHON_API_CONTAINER=clashlens-candidate-blocked-python-api
+CLASHLENS_PYTHON_WORKER_CONTAINER=clashlens-candidate-blocked-python-worker
+CLASHLENS_WEBSITE_CONTAINER=clashlens-candidate-blocked-website
+EOF
+mkdir "$BLOCKED_CANDIDATE_DIR/state/containers/clashlens-candidate-blocked-python-worker-1"
+deploy_fails "$BLOCKED_CANDIDATE_DIR" "$BLOCKED_CANDIDATE_ENV" \
+  'refuses an existing application container' -- candidate-prepare
+! grep -q '^run ' "$BLOCKED_CANDIDATE_DIR/podman.log" || \
+  fail 'candidate-prepare started PostgreSQL beside an application container'
+printf 'ok: candidate preparation starts only disposable PostgreSQL and applies every migration\n'
+
+NORMAL_CUSTOM_DIR=$(new_scenario)
+NORMAL_CUSTOM_ENV="$NORMAL_CUSTOM_DIR/app.env"
+write_scenario_env "$NORMAL_CUSTOM_ENV" "$NORMAL_CUSTOM_DIR/keys"
+printf '%s\n' 'CLASHLENS_POSTGRES_CONTAINER=clashlens-custom-postgres' >>"$NORMAL_CUSTOM_ENV"
+deploy "$NORMAL_CUSTOM_DIR" "$NORMAL_CUSTOM_ENV" -- init >/dev/null
+[[ -f "$NORMAL_CUSTOM_DIR/state/secrets/clashlens-postgres-password" ]] || \
+  fail 'normal deployment changed the shared PostgreSQL secret name'
+[[ ! -f "$NORMAL_CUSTOM_DIR/state/secrets/clashlens-custom-postgres-password" ]] || \
+  fail 'normal deployment unexpectedly derived a custom PostgreSQL secret name'
+printf 'ok: normal deployment keeps the shared PostgreSQL secret name\n'
+
+# ---------------------------------------------------------------------------
 # Scenario A0: v5 stop-migrate-restart wiring owns the shared rw,z spool.
 # ---------------------------------------------------------------------------
 V3_DIR=$(new_scenario)
@@ -550,10 +1031,22 @@ norm_log "$V3_DIR/podman.log" >"$V3_NORM"
 V3_RUN=$(grep '^run ' "$V3_NORM" | grep 'clashlens-collector:deployment' | tail -n 1)
 [[ "$V3_RUN" == *'CLASHLENS_SCHEMA_VERSION=5'* ]] || fail 'v5 collector contract was not wired'
 [[ "$V3_RUN" == *':/spool:rw,z'* ]] || fail 'collector spool mount is not shared rw,z'
+[[ "$V3_RUN" == *'--userns keep-id:uid=10001,gid=10001'* ]] || fail 'collector spool owner is not mapped through keep-id'
 grep -q 'archive_instances' "$V3_DIR/state/stdin"/exec-* || fail 'migration 0009 was not applied in v3 flow'
 grep -q 'boundary_publication_generations' "$V3_DIR/state/stdin"/exec-* || fail 'migration 0010 was not applied in v3 flow'
 grep -q 'INSERT INTO archive_instances' "$V3_DIR/state/stdin"/exec-* || fail 'archive instance contract was not provisioned'
-grep -q 'chown -R 10001:10001' "$ROOT_DIR/deploy.sh" || fail 'collector spool ownership was not wired'
+v3_role_stdin=$(grep -l 'ALTER ROLE clashlens_collector WITH LOGIN PASSWORD' "$V3_DIR/state/stdin"/exec-* 2>/dev/null | head -n 1)
+v3_migration_0009_stdin=$(grep -l 'CREATE OR REPLACE FUNCTION clashlens_set_python_job_source_contract()' "$V3_DIR/state/stdin"/exec-* 2>/dev/null | head -n 1)
+v3_migration_0015_stdin=$(grep -l 'VALUES (15)' "$V3_DIR/state/stdin"/exec-* 2>/dev/null | head -n 1)
+grep -Fq '$$ LANGUAGE plpgsql SECURITY DEFINER;' "$v3_migration_0009_stdin" || \
+  fail 'migration 0009 did not create the source-contract trigger as SECURITY DEFINER'
+grep -Fq "'REVOKE ALL ON FUNCTION %I.clashlens_set_python_job_source_contract() FROM PUBLIC'" "$v3_migration_0009_stdin" || \
+  fail 'migration 0009 left the source-contract trigger executable by PUBLIC'
+grep -Fq "'ALTER FUNCTION %I.clashlens_set_python_job_source_contract() SECURITY DEFINER'" "$v3_migration_0015_stdin" || \
+  fail 'migration 0015 did not harden an existing source-contract trigger'
+if grep -Fq 'clashlens_set_python_job_source_contract' "$v3_role_stdin"; then
+  fail 'runtime-role setup retained migration-owned source-contract function DDL'
+fi
 log_lacks "$V3_NORM" 'clashlens-python-api.*:/spool' 'private API received the raw spool mount'
 log_lacks "$V3_NORM" 'clashlens-website.*:/spool' 'website received the raw spool mount'
 printf 'ok: v5 migration, ownership, rw,z mount, and runtime isolation are wired\n'
@@ -592,6 +1085,9 @@ grep -lq 'ALTER ROLE clashlens_python_api' "$FRESH_DIR/state/stdin"/exec-* 2>/de
   fail 'api role password was not configured through psql stdin'
 role_stdin=$(grep -l 'ALTER ROLE clashlens_collector WITH LOGIN PASSWORD' "$FRESH_DIR/state/stdin"/exec-* 2>/dev/null | head -n 1)
 [[ -n "$role_stdin" ]] || fail 'could not locate the role configuration psql stdin'
+if grep -Fq 'clashlens_set_python_job_source_contract' "$role_stdin"; then
+  fail 'runtime-role setup altered the absent migration-0009 source-contract trigger'
+fi
 grep -q 'collector-role-password-0123456789' "$role_stdin" || \
   fail 'collector role password did not reach psql stdin'
 grep -q 'worker-role-password-0123456789abcd' "$role_stdin" || \
@@ -788,6 +1284,10 @@ fi
   fail 'missing migration 0003 was not applied exactly once on a v2 database'
 grep -lq 'VALUES (13)' "$V2_DIR/state/stdin"/exec-* 2>/dev/null || \
   fail 'missing migration 0013 was not applied on a v2 database'
+grep -lq 'VALUES (14)' "$V2_DIR/state/stdin"/exec-* 2>/dev/null || \
+  fail 'missing migration 0014 was not applied on a v2 database'
+grep -lq 'VALUES (15)' "$V2_DIR/state/stdin"/exec-* 2>/dev/null || \
+  fail 'missing migration 0015 was not applied on a v2 database'
 [[ "$(grep -l 'VALUES (4)' "$V2_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
   fail 'missing migration 0004 was not applied exactly once on a v2 database'
 [[ "$(grep -l 'VALUES (5)' "$V2_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
@@ -824,9 +1324,32 @@ FAKE_STATE="$V2_DIR/state" FAKE_PODMAN_LOG="$V2_DIR/podman.log" \
   fail 'idempotent v2 up removed a current Python worker'
 if rg -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
   second_up_stdin_count=$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f | wc -l)
-  [[ "$second_up_stdin_count" == "12" ]] || fail 'a recorded forward migration was replayed on second up'
+  [[ "$second_up_stdin_count" == "14" ]] || fail 'a recorded forward migration was replayed on second up'
 fi
 printf 'ok: up on v2 applies only missing forward migrations and starts the required collector\n'
+
+# ---------------------------------------------------------------------------
+# Scenario C2: a contract-v5 migration-0014 stack drains old workers before
+# applying the source-contract function security migration.
+# ---------------------------------------------------------------------------
+V14_DIR=$(new_scenario)
+V14_ENV="$V14_DIR/app.env"
+write_scenario_env "$V14_ENV" "$V14_DIR/keys"
+printf '5' >"$V14_DIR/state/contract_version"
+seq 1 14 >"$V14_DIR/state/schema_migrations"
+FAKE_STATE="$V14_DIR/state" FAKE_PODMAN_LOG="$V14_DIR/podman.log" \
+  "$FAKE_BIN/podman" run --detach --name clashlens-python-worker-1 \
+  localhost/clashlens-python:previous >/dev/null
+deploy "$V14_DIR" "$V14_ENV" -- up >/dev/null
+[[ "$(grep -l 'VALUES (15)' "$V14_DIR/state/stdin"/exec-* 2>/dev/null | wc -l)" == "1" ]] || \
+  fail 'migration 0015 was not applied exactly once on a migration-0014 stack'
+v14_worker_stop_line=$(first_line "$V14_DIR/podman.log" '^stop --time 70 clashlens-python-worker-1 ' || true)
+v14_migration_line=$(grep -n '^exec --interactive clashlens-postgres psql ' "$V14_DIR/podman.log" | sed -n '1p' | cut -d: -f1)
+[[ -n "$v14_worker_stop_line" && -n "$v14_migration_line" ]] || \
+  fail 'could not locate the migration-0015 worker drain and migration'
+(( v14_worker_stop_line < v14_migration_line )) || \
+  fail 'migration 0015 ran before the old Python worker was drained'
+printf 'ok: migration 0015 drains old workers before changing trigger execution identity\n'
 
 # ---------------------------------------------------------------------------
 # Scenario D: init applies 0001 only on an absent database.
@@ -862,7 +1385,7 @@ RESTART_DIR=$(new_scenario)
 RESTART_ENV="$RESTART_DIR/app.env"
 write_scenario_env "$RESTART_ENV" "$RESTART_DIR/keys"
 printf '5' >"$RESTART_DIR/state/contract_version"
-printf '13\n' >"$RESTART_DIR/state/schema_migrations"
+printf '15\n' >"$RESTART_DIR/state/schema_migrations"
 mkdir -p "$RESTART_DIR/state/images/localhost"
 : >"$RESTART_DIR/state/images/localhost/clashlens-collector:deployment"
 deploy "$RESTART_DIR" "$RESTART_ENV" -- restart >/dev/null
@@ -888,9 +1411,9 @@ mkdir -p "$RESTART_UNMIGRATED_DIR/state/images/localhost"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-collector:deployment"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-python:deployment"
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 13 is required' -- restart
+  'forward migration 15 is required' -- restart
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 13 is required' -- python-start
+  'forward migration 15 is required' -- python-start
 
 UNKNOWN_DIR=$(new_scenario)
 UNKNOWN_ENV="$UNKNOWN_DIR/app.env"
@@ -934,6 +1457,7 @@ worker_normalized=$(norm_log <<<"$worker_run")
 [[ "$worker_normalized" == *'--network clashlens-private'* ]] || fail 'worker did not use the private network'
 [[ "$worker_normalized" != *'--publish'* ]] || fail 'worker published a host port'
 [[ "$worker_normalized" == *':/spool:rw,z'* ]] || fail 'worker spool mount is not shared rw,z'
+[[ "$worker_normalized" == *'--userns keep-id:uid=10001,gid=10001'* ]] || fail 'worker spool owner is not mapped through keep-id'
 for setting in CLASHLENS_ARCHIVE_INSTANCE_ID CLASHLENS_ARCHIVE_MARKER_KEY CLASHLENS_ARCHIVE_MARKER_HASH CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION CLASHLENS_SPOOL_MAX_BYTES CLASHLENS_SPOOL_MAX_OBJECTS CLASHLENS_SPOOL_FREE_SPACE_FLOOR CLASHLENS_SPOOL_FREE_INODE_FLOOR; do
   [[ "$worker_normalized" == *"--env $setting"* ]] || fail "worker did not receive $setting"
 done
@@ -974,7 +1498,7 @@ done
   fail 'worker read-only archive secret secret was not mounted'
 [[ "$worker_normalized" == *'--env CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key'* ]] || \
   fail 'worker archive access key file setting is missing'
-[[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
   fail 'worker did not receive the configured lease, concurrency, and pool bounds'
 [[ "$worker_normalized" == *'ready --expected-contract-version 5'* ]] || \
   fail 'worker health does not use the ready seam'
@@ -1014,7 +1538,7 @@ ROLLBACK_DIR=$(new_scenario)
 ROLLBACK_ENV="$ROLLBACK_DIR/app.env"
 write_scenario_env "$ROLLBACK_ENV" "$ROLLBACK_DIR/keys"
 printf '5' >"$ROLLBACK_DIR/state/contract_version"
-printf '13\n' >"$ROLLBACK_DIR/state/schema_migrations"
+printf '15\n' >"$ROLLBACK_DIR/state/schema_migrations"
 mkdir -p "$ROLLBACK_DIR/state/networks" "$ROLLBACK_DIR/state/containers" "$ROLLBACK_DIR/state/images/localhost"
 mkdir -p "$ROLLBACK_DIR/state/networks/clashlens-private"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres"
@@ -1374,7 +1898,7 @@ REPLICA_MAX_ENV="$REPLICA_MAX_DIR/app.env"
 write_scenario_env "$REPLICA_MAX_ENV" "$REPLICA_MAX_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=16' >>"$REPLICA_MAX_ENV"
 printf '5' >"$REPLICA_MAX_DIR/state/contract_version"
-printf '13\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
+printf '15\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_MAX_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1418,7 +1942,7 @@ grep -v -E 'CLASHLENS_WORKER_(CONCURRENCY|DATABASE_POOL_SIZE|ARCHIVE_POOL_SIZE)=
   "$DEFAULTS_RAW" >"$DEFAULTS_ENV"
 chmod 0600 "$DEFAULTS_ENV"
 printf '5' >"$DEFAULTS_DIR/state/contract_version"
-printf '13\n' >"$DEFAULTS_DIR/state/schema_migrations"
+printf '15\n' >"$DEFAULTS_DIR/state/schema_migrations"
 mkdir -p "$DEFAULTS_DIR/state/networks/clashlens-private"
 mkdir -p "$DEFAULTS_DIR/state/containers/clashlens-postgres"
 : >"$DEFAULTS_DIR/state/containers/clashlens-postgres.running"
@@ -1439,7 +1963,7 @@ printf '%s\n' 'CLASHLENS_WORKER_CONCURRENCY=32' \
   'CLASHLENS_WORKER_DATABASE_POOL_SIZE=64' \
   'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=64' >>"$CONCURRENCY_MAX_ENV"
 printf '5' >"$CONCURRENCY_MAX_DIR/state/contract_version"
-printf '13\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
+printf '15\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres"
 : >"$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -1504,7 +2028,7 @@ REPLICA_ENV="$REPLICA_DIR/app.env"
 write_scenario_env "$REPLICA_ENV" "$REPLICA_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=3' >>"$REPLICA_ENV"
 printf '5' >"$REPLICA_DIR/state/contract_version"
-printf '13\n' >"$REPLICA_DIR/state/schema_migrations"
+printf '15\n' >"$REPLICA_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_DIR/state/containers/clashlens-postgres.running"
@@ -1550,11 +2074,11 @@ run_1=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worke
 run_2=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-2 ')
 run_3=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-3 ')
 [[ -n "$run_1" && -n "$run_2" && -n "$run_3" ]] || fail 'not every configured worker replica was started'
-[[ "$run_1" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$run_1" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
   fail 'replica 1 did not receive its unique owner'
-[[ "$run_2" == *'worker --owner production-python-2 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$run_2" == *'worker --owner production-python-2 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
   fail 'replica 2 did not receive its unique owner'
-[[ "$run_3" == *'worker --owner production-python-3 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --run-forever'* ]] || \
+[[ "$run_3" == *'worker --owner production-python-3 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
   fail 'replica 3 did not receive its unique owner'
 for run in "$run_1" "$run_2" "$run_3"; do
   [[ "$run" == *'ready --expected-contract-version 5'* ]] || fail 'a replica health check lost the ready seam'

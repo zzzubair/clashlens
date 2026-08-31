@@ -74,7 +74,10 @@ jobs:
         run: uv run python -m compileall -q src
       - name: Tests
         working-directory: python
-        run: uv run pytest -q
+        run: |
+          uv run pytest -q
+          uv run pytest -q ../scripts/test_operating_check.py
+          PYTHONPATH=.. uv run pytest -q ../scripts/test_deployment_receipt.py
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"

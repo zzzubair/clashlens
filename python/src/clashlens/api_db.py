@@ -4,16 +4,19 @@ import hashlib
 import json
 from collections import Counter, OrderedDict
 from collections.abc import Iterable, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from threading import Lock
+from threading import BoundedSemaphore, Lock
+from time import monotonic
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
 from psycopg.types.json import Jsonb
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolTimeout
 
 from .army_analytics import (
     ArmyAnalyticsSelection,
@@ -24,6 +27,7 @@ from .army_analytics import (
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION, catalog_name
 from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION
+from .operating import database_pool_health
 from .profile import normalize_player_tag
 from .verification import KeyAction, VerificationOutcome
 
@@ -32,6 +36,26 @@ VERIFICATION_RESERVATION_SECONDS = 45
 PLAYER_SCREEN_READY_VERSION = "api-player-daily-log-v3"
 ARMY_ANALYTICS_CACHE_CAPACITY = 128
 ARMY_ANALYTICS_QUERY_WORK_MEM = "256MB"
+ARMY_ANALYTICS_REQUEST_TIMEOUT_SECONDS = 5.0
+ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS = 0.1
+ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS = 0.1
+ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS = 0.3
+
+
+def _army_timeout(deadline: float | None, ceiling: float) -> float:
+    if deadline is None:
+        return ceiling
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise PoolTimeout("army analytics request budget is exhausted")
+    return min(ceiling, remaining)
+
+
+def _army_transaction_timeout_milliseconds(deadline: float) -> int:
+    remaining = int((deadline - monotonic()) * 1000)
+    if remaining < 1:
+        raise PoolTimeout("army analytics request budget is exhausted")
+    return remaining
 
 
 def _build_troops_result_from_sql(
@@ -172,6 +196,8 @@ def _query_troops_aggregates(
     requested: dict[str, str | int],
     snapshot_ids: list[int],
     selection: ArmyAnalyticsSelection,
+    pool: ConnectionPool | None = None,
+    deadline: float | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Aggregate the troops projection and source identity inside PostgreSQL."""
     fact_where = " AND ".join(fact_filters)
@@ -196,8 +222,7 @@ def _query_troops_aggregates(
         """,
         tuple(fact_params),
     ).fetchall()
-    aggregate_rows = connection.execute(
-        f"""
+    component_query = f"""
         SELECT component.key, count(*),
                count(*) FILTER (WHERE selected.stars = 0),
                count(*) FILTER (WHERE selected.stars = 1),
@@ -226,9 +251,61 @@ def _query_troops_aggregates(
           AND selected.army_state IN ('decoded', 'partial')
         GROUP BY component.key
         ORDER BY component.key
-        """,
-        tuple(fact_params),
-    ).fetchall()
+        """
+
+    if pool is not None and pool.max_size >= 2:
+        snapshot_row = connection.execute("VALUES (pg_export_snapshot())").fetchone()
+        assert snapshot_row is not None
+        shared_snapshot = _text(snapshot_row[0])
+        # Acquire the paired connection before either expensive query starts.
+        # Contention fails quickly instead of consuming the caller's five-second
+        # budget and then repeating the source hash sequentially.
+        with pool.connection(
+            timeout=_army_timeout(
+                deadline, ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS
+            )
+        ) as source_connection:
+            with source_connection.transaction():
+                source_connection.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                )
+                source_connection.execute(
+                    psycopg.sql.SQL("SET TRANSACTION SNAPSHOT {}").format(
+                        psycopg.sql.Literal(shared_snapshot)
+                    )
+                )
+                if deadline is not None:
+                    source_connection.execute(
+                        "SET LOCAL transaction_timeout = "
+                        f"'{_army_transaction_timeout_milliseconds(deadline)}ms'"
+                    )
+                source_connection.execute(
+                    f"SET LOCAL work_mem = '{ARMY_ANALYTICS_QUERY_WORK_MEM}'"
+                )
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    source_future = executor.submit(
+                        _selected_source_hash,
+                        source_connection,
+                        fact_filters=fact_filters,
+                        fact_params=fact_params,
+                        requested=requested,
+                        snapshot_ids=snapshot_ids,
+                    )
+                    aggregate_rows = connection.execute(
+                        component_query, tuple(fact_params)
+                    ).fetchall()
+                    source_hash_value = source_future.result()
+    else:
+        aggregate_rows = connection.execute(
+            component_query, tuple(fact_params)
+        ).fetchall()
+        source_hash_value = _selected_source_hash(
+            connection,
+            fact_filters=fact_filters,
+            fact_params=fact_params,
+            requested=requested,
+            snapshot_ids=snapshot_ids,
+        )
     state_counts = {_text(row[0]): int(row[1]) for row in state_rows}
     summary = (
         sum(state_counts.values()),
@@ -254,13 +331,7 @@ def _query_troops_aggregates(
     )
     return (
         _build_troops_result_from_sql(summary, selection),
-        _selected_source_hash(
-            connection,
-            fact_filters=fact_filters,
-            fact_params=fact_params,
-            requested=requested,
-            snapshot_ids=snapshot_ids,
-        ),
+        source_hash_value,
     )
 
 
@@ -336,8 +407,12 @@ class ApiDatabase:
         if not 0 < timeout_seconds <= 30:
             raise ValueError("API database pool timeout is invalid")
         self._army_cache_capacity = army_cache_capacity
+        self._army_request_timeout_seconds = min(
+            timeout_seconds, ARMY_ANALYTICS_REQUEST_TIMEOUT_SECONDS
+        )
         self._army_cache: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
         self._army_cache_lock = Lock()
+        self._army_troop_slots = BoundedSemaphore(max(1, max_size // 2))
         self.pool = ConnectionPool(
             conninfo=database_url,
             min_size=min_size,
@@ -389,6 +464,9 @@ class ApiDatabase:
 
     def close(self) -> None:
         self.pool.close()
+
+    def pool_health(self) -> dict[str, int]:
+        return database_pool_health(self.pool)
 
     def _army_cache_get(self, key: tuple[Any, ...]) -> dict[str, Any] | None:
         if not self._army_cache_capacity:
@@ -2080,11 +2158,45 @@ class ApiDatabase:
                 ],
             }
 
+    @contextmanager
+    def _army_troop_admission(
+        self, selection: ArmyAnalyticsSelection, deadline: float
+    ):
+        if selection.category != "troops":
+            yield
+            return
+        if not self._army_troop_slots.acquire(
+            timeout=_army_timeout(
+                deadline, ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS
+            )
+        ):
+            raise PoolTimeout("troop analytics capacity is busy")
+        try:
+            yield
+        finally:
+            self._army_troop_slots.release()
+
     def get_army_analytics(
         self, selection: ArmyAnalyticsSelection, *, now: datetime | None = None
     ) -> dict[str, Any] | None:
-        with self.pool.connection() as connection:
+        deadline = monotonic() + self._army_request_timeout_seconds
+        # A bounded pre-checkout gate leaves one paired pool slot per admitted
+        # troop request. Other categories never need the second connection.
+        with self._army_troop_admission(
+            selection, deadline
+        ), self.pool.connection(
+            timeout=_army_timeout(
+                deadline, ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS
+            )
+        ) as connection:
             with connection.transaction():
+                connection.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                )
+                connection.execute(
+                    "SET LOCAL transaction_timeout = "
+                    f"'{_army_transaction_timeout_milliseconds(deadline)}ms'"
+                )
                 resolved = selection
                 if selection.season == "current":
                     anchor = connection.execute(
@@ -2386,13 +2498,12 @@ class ApiDatabase:
                     missing_trophies = int(
                         connection.execute(
                             """
-                            SELECT count(*) FILTER (
-                                       WHERE battle_time_trophies IS NULL
-                                   )
+                            SELECT count(*)
                             FROM army_analytics_battle_facts
                             WHERE official_season_id=%s
                               AND season_day_number BETWEEN %s AND %s
                               AND lens=%s AND is_current
+                              AND battle_time_trophies IS NULL
                             """,
                             (
                                 resolved.season,
@@ -2430,6 +2541,8 @@ class ApiDatabase:
                         requested=requested,
                         snapshot_ids=snapshot_ids,
                         selection=resolved,
+                        pool=self.pool,
+                        deadline=deadline,
                     )
                 else:
                     facts_rows = connection.execute(

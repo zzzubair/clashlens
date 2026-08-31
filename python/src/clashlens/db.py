@@ -38,6 +38,7 @@ from .domain import (
     ranked_day_for,
     validate_season_anchor,
 )
+from .operating import database_pool_health
 from .profile import ParsedProfile, normalize_player_tag
 from .rankings import ParsedOfficialRankings
 from .reconciliation import (
@@ -766,22 +767,7 @@ class Database:
         }
 
     def pool_health(self) -> dict[str, int]:
-        stats = self.pool.get_stats()
-        return {
-            key: int(stats[key])
-            for key in (
-                "pool_min",
-                "pool_max",
-                "pool_size",
-                "pool_available",
-                "requests_waiting",
-                "requests_num",
-                "requests_queued",
-                "requests_wait_ms",
-                "usage_ms",
-            )
-            if key in stats
-        }
+        return database_pool_health(self.pool)
 
     def scalar(self, query: str, params: Iterable[Any] = ()) -> Any:
         with self.pool.connection() as connection:

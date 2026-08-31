@@ -54,8 +54,8 @@ func TestCollectorExecutableDoesNotClaimWhenArchiveReadinessFails(t *testing.T) 
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
-	if err := command.Run(); err == nil || !strings.Contains(stderr.String(), "archive") {
-		t.Fatalf("collector error = %v and stderr = %q, want archive readiness failure", err, stderr.String())
+	if err := command.Run(); err == nil || !strings.Contains(stderr.String(), "collector: command failed") {
+		t.Fatalf("collector error = %v and stderr = %q, want bounded command failure", err, stderr.String())
 	}
 	if requests := apiRequests.Load(); requests != 0 {
 		t.Fatalf("official API request count = %d, want 0", requests)

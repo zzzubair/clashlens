@@ -91,11 +91,10 @@ PostgreSQL containers use the `step6-v1` metrics profile, preload
 ## Lifecycle and migrations
 
 The collector contract version is separate from the schema migration number.
-The production contract is version 2. The current forward-migration set is
-0001 through 0008, with 0006 permitting both Phase 1 login providers, 0007
-adding player discovery and the durable Global Top-200 cycle guard, and 0008
-preserving partial army decodes per perspective and adding the public army
-analytics publications. `up` applies
+The production contract is version 5. The current forward-migration set is
+0001 through 0015. Migrations 0009 through 0015 add the raw-evidence,
+boundary-publication, parsed-content deduplication, bounded backfill,
+ranked-day lookup, and source-contract trigger security contracts. `up` applies
 only missing forward migrations recorded in `clash_lens_schema_migrations`; it
 never replays an applied migration. An unknown contract version is rejected
 without side effects.
@@ -110,12 +109,12 @@ curl --fail http://127.0.0.1:8081/readyz
 - `init` starts PostgreSQL and applies migration 0001 only to an absent
   database. It refuses an initialized database.
 - `up` builds the collector image, advances the database through all missing
-  migrations (0001–0008 on a fresh database), configures runtime role
+  migrations (0001–0015 on a fresh database), configures runtime role
   passwords, and stages the required collector with Global Top-200 disabled.
-  A contract-v1 upgrade uses the bridge collector while migrations 0002–0008
+  A contract-v1 upgrade uses the bridge collector while migrations 0002–0015
   are applied, then replaces it with the disabled required collector.
 - `build-collector`, `build-python`, and `build-website` build images only.
-- `restart` is the start-only recovery path for a contract-v2 stack. It does
+- `restart` is the start-only recovery path for a contract-v5 stack. It does
   not build or run SQL and always stages Global Top-200 disabled.
 - `status` shows the network, volume, containers, health, and worker queue
   status without loading unrelated secrets.
@@ -131,7 +130,7 @@ website:
 curl --fail http://127.0.0.1:3000/healthz
 ```
 
-`python-up` requires contract version 2, builds the Python image, and starts
+`python-up` requires contract version 5, builds the Python image, and starts
 the private API and `CLASHLENS_WORKER_REPLICAS` identical worker containers.
 After the compatible workers report healthy, it recreates the collector with
 Global Top-200 enabled. `python-start` follows the same order without building;
@@ -150,6 +149,130 @@ When the PostgreSQL shared-memory or metrics-profile label on an existing
 container does not match `app.env`, `up` stops before migration and instructs
 the operator to run `stack-down`, then `up`. The named database volume is
 preserved.
+
+## Source labels and deployment receipts
+
+Every collector, Python, and website image built by `deploy.sh` receives the
+canonical repository URL in `org.opencontainers.image.source` and the exact
+clean commit in `org.opencontainers.image.revision`. A build refuses a dirty
+checkout or an unverifiable `HEAD` before invoking Podman. A mutable
+`:deployment` tag is never sufficient evidence; receipts record the local
+image ID and record a registry digest only when Podman actually provides one.
+
+Prepare Step 8 candidate evidence with dedicated non-default network, volume,
+PostgreSQL, collector, API, worker, and website names in `app.env`. The network,
+volume, and PostgreSQL container must not already exist. Configure the immutable
+archive-instance fields required by migration 0009. The results directory must
+already exist, be writable, contain no symlink component, and be outside the
+checkout. This sequence starts PostgreSQL only; it does not start an application
+container or make an official API request:
+
+```bash
+RESULTS_DIR=/home/clashlens/results/step8-$(git rev-parse HEAD)
+install -d -m 0700 "$RESULTS_DIR"
+./deploy.sh build-collector
+./deploy.sh build-python
+./deploy.sh build-website
+./deploy.sh candidate-prepare
+./deploy.sh deployment-receipt candidate-preparation \
+  fedora-validation "$RESULTS_DIR"
+```
+
+`candidate-prepare` refuses default or existing candidate resources and any
+configured application-container name that already exists, starts only the
+configured PostgreSQL container, and verifies every migration from 0001 through
+0015. Candidate resources carry the fixed
+`org.clashlens.scope=candidate` label; the preparation path verifies those
+labels and exact names after creation before applying migrations. Scope/label
+overrides in `app.env` are rejected before resource mutation. Never aim it at
+a deployed volume or reuse deployed container names. The
+`candidate-preparation` receipt retains the exact PostgreSQL/network/volume
+names and labels plus the configured application and worker-replica absence
+proof. It records `production_deployment_status: not_asserted` and an
+official-request count of zero. It is candidate evidence, not proof that
+production was deployed.
+
+After #31 deploys the real stack, its separate evidence path may inspect the
+running application containers and database:
+
+```bash
+./deploy.sh deployment-receipt deployed-stack \
+  production-fedora /home/clashlens/results/release-candidate
+```
+
+Both scopes record schema version, UTC creation time, exact clean source,
+migration file hashes and applied state, an explicit safe-configuration
+allowlist and fingerprint, truthful image identities, PostgreSQL identity,
+bounded runtime versions, and a canonical SHA-256 receipt digest. The command
+also verifies that every configured deployed worker replica is running the
+same exact Python image as the API. The command
+selects individual Podman fields and never serializes raw inspection output,
+`app.env`, credentials, database URLs, request or account identifiers, player
+tags, user selections, raw bodies, archive references, or arbitrary errors.
+
+Receipt publication creates a unique timestamped mode-0600 file exclusively,
+flushes it before publication, refuses an occupied name, verifies the stored
+digest, and never overwrites a retained receipt. This is write-once command
+behavior, not a claim that the destination filesystem is immutable. Retain the
+printed path and digest with the release evidence outside the checkout.
+
+## Private operating snapshot and objective check
+
+With the collector, private API, worker replicas, and PostgreSQL running, one
+command reads their existing private seams and prints one versioned JSON
+snapshot:
+
+```bash
+RESULTS_DIR=/home/clashlens/results/step8-$(git rev-parse HEAD)
+./deploy.sh operating-check >"$RESULTS_DIR/operating-initial.json"
+./deploy.sh operating-check \
+  --previous-snapshot "$RESULTS_DIR/operating-initial.json" \
+  >"$RESULTS_DIR/operating-later.json"
+```
+
+The command reads collector Prometheus facts through its loopback listener,
+the API process snapshot with an authenticated caller proof, worker process
+snapshots inside their private containers, and all
+related PostgreSQL facts in one read-only `REPEATABLE READ` transaction. The
+worker snapshots refresh on an independent 60-second heartbeat. A missing,
+future, or more than 120-second-old worker snapshot makes the check
+indeterminate instead of allowing stale process facts to report healthy. The
+contract reports process identity/start time, fixed worker and API latency and
+outcome categories, response bytes, pool pressure, processed observation/fact/
+result counts, queue/retry/dependency/lease state, active-boundary progress and
+publication state (including bounded published/superseded history), historical
+failures separately from active blockers,
+migrations, current relation table/index/TOAST sizes, retained WAL, and current
+spool state against its configured hard bounds. It does not add a public
+metrics route or a service.
+
+Exit codes are objective and fixed:
+
+- `0` means healthy or legally progressing, including expected pending work,
+  a due retry/dependency, a valid or recoverable lease, or a legal coordinator
+  transition;
+- `1` means a configured hard spool bound is violated or a persisted active
+  population-wide artifact has a blocking failure and no legal progress path;
+- `2` means a required process, database, metric, prior snapshot, or consistency
+  fact is absent, malformed, forbidden, or unreadable.
+
+Queue age and a passed `target_at` are facts, not failure thresholds. Historical
+parse/data-quality failures remain visible but do not make the stack red unless
+they demonstrably block an active artifact. Optional PostgreSQL timing is
+`null` with a fixed reason when unavailable. Growth deltas and spool runway are
+also `null` without a validated earlier snapshot from the same PostgreSQL
+system/database identity, configuration, and relation set; an identity change
+has the fixed `database_identity_mismatch` reason. With a comparable snapshot,
+the command records its digest, the exact interval and signed deltas, and the
+estimate without applying an invented threshold.
+
+The snapshot uses only fixed categories and safe internal generation identity.
+It excludes credentials, database URLs, raw bodies/configuration, player tags,
+user selections, account/request identifiers, archive references, arbitrary
+URLs, and arbitrary exception text. Retain redirected output outside the
+checkout and record its file digest. This Step 8 check is release evidence; it
+does not replace #31 alert policy, deployment, restart/persistence, backup,
+provider, or public-smoke gates.
 
 ## User services
 
@@ -277,7 +400,7 @@ do not print API keys or raw response bodies.
 ## Rollback and rotation
 
 Migrations are forward-only. Application rollback is start-only: select a
-previous image compatible with contract version 2 and every applied migration
+previous image compatible with contract version 5 and every applied migration
 with `CLASHLENS_COLLECTOR_IMAGE` or `CLASHLENS_PYTHON_IMAGE`, then run
 `restart` or `python-start`. For an incompatible schema change, stop the
 containers and restore a tested PostgreSQL backup before starting the old
@@ -306,8 +429,9 @@ backup.
 
 `CLASHLENS_SPOOL_ROOT` is a private host directory mounted read-write only at
 `/spool` in the collector and Python worker containers. The root is owned by
-UID/GID `10001`, mode `0700`, and is mounted with Podman `:rw,z`; the private
-API and website receive no spool mount. The spool is bounded processing state,
+UID/GID `10001` inside both runtime containers through Podman `keep-id`, mode
+`0700`, and is mounted with Podman `:rw,z`; the host deployment user retains
+ownership. The private API and website receive no spool mount. The spool is bounded processing state,
 not a backup. Its `.locks/` directory contains 4,096 permanent hash stripes and
 `.control/` contains the fsync'd capacity ledger, operation records, and held
 reservations. Contract v3 applies migration `0009_raw_evidence.sql` only after

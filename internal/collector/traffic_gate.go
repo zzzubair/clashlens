@@ -63,7 +63,11 @@ func (s *store) validateTrafficGateMode(ctx context.Context, mode trafficGateMod
 	if err != nil {
 		return fmt.Errorf("read contract for shared traffic gate: %w", err)
 	}
-	if version != expectedVersion {
+	validVersion := version == expectedVersion
+	if mode == requiredTrafficGateMode {
+		validVersion = version >= expectedVersion
+	}
+	if !validVersion {
 		return fmt.Errorf("%s shared traffic gate needs contract version %d, found %d", mode, expectedVersion, version)
 	}
 	return nil

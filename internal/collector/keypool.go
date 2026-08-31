@@ -69,7 +69,7 @@ func newKeyPool(keys []APIKey, requestsPerSecond int, unsafeNormalFallback bool)
 			return nil, fmt.Errorf("unknown API key pool %q", key.Pool)
 		}
 		if _, ok := seen[key.Label]; ok {
-			return nil, fmt.Errorf("duplicate API key label %q", key.Label)
+			return nil, errors.New("duplicate API key label")
 		}
 		secretHash := sha256.Sum256([]byte(key.Secret))
 		if _, ok := seenSecrets[secretHash]; ok {
@@ -144,7 +144,7 @@ func (p *keyPool) quarantine(label string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("unknown API key label %q", label)
+	return errors.New("unknown API key label")
 }
 
 func (p *keyPool) statuses(now time.Time) []APIKeyStatus {

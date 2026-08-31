@@ -91,6 +91,12 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
 
     monkeypatch.setattr(cli, "_archive", fake_archive)
     monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
+    operating_snapshots: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        cli,
+        "write_private_snapshot",
+        lambda path, snapshot: operating_snapshots.append(snapshot),
+    )
     arguments = Namespace(
         database_url="postgresql://prototype@postgres/db",
         database_url_file="",
@@ -103,6 +109,7 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
         concurrency=1,
         database_pool_size=None,
         archive_pool_size=None,
+        operating_snapshot_file="/tmp/clashlens-worker-operating.json",
     )
 
     result = cli._run_worker(arguments)
@@ -113,10 +120,14 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
     assert output["processed_count"] == cli.MAX_REPORTED_RESULTS + 1
     assert len(output["results"]) == cli.MAX_REPORTED_RESULTS
     assert [line["event"] for line in output_lines[:-1]] == (
-        ["job_result"] * (cli.MAX_REPORTED_RESULTS + 1) + ["worker_health"]
+        ["worker_health"] + ["job_result"] * (cli.MAX_REPORTED_RESULTS + 1)
     )
     assert database.closed is True
     assert database.maintenance_calls == 1
+    assert operating_snapshots[-1]["outcomes"]["processed"] == (
+        cli.MAX_REPORTED_RESULTS + 1
+    )
+    assert operating_snapshots[-1]["process"]["id"]
 
 
 @pytest.mark.parametrize("concurrency", [1, 3])
@@ -254,9 +265,119 @@ def _worker_namespace(**overrides: object) -> Namespace:
         "concurrency": 1,
         "database_pool_size": None,
         "archive_pool_size": None,
+        "operating_snapshot_file": "",
     }
     values.update(overrides)
     return Namespace(**values)
+
+
+def test_operating_snapshot_refreshes_while_a_batch_is_blocked(
+    monkeypatch,
+) -> None:
+    class FakeDatabase:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            assert max_jobs == 100
+            return 0
+
+    database = FakeDatabase()
+
+    class FakeArchive:
+        @staticmethod
+        def check_ready() -> bool:
+            return True
+
+    refreshed = Event()
+    snapshots: list[dict[str, object]] = []
+
+    class BlockingProcessor:
+        def __init__(self, _database: object, _archive: object) -> None:
+            return
+
+        def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
+            assert refreshed.wait(1)
+            stop_requested = kwargs["stop_requested"]
+            assert isinstance(stop_requested, Event)
+            stop_requested.set()
+            return []
+
+    def capture_snapshot(_path: object, snapshot: dict[str, object]) -> None:
+        snapshots.append(snapshot)
+        if len(snapshots) >= 2:
+            refreshed.set()
+
+    monkeypatch.setattr(cli, "Database", lambda _url, **_kwargs: database)
+    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
+    monkeypatch.setattr(cli, "ObservationProcessor", BlockingProcessor)
+    monkeypatch.setattr(cli, "write_private_snapshot", capture_snapshot)
+    monkeypatch.setattr(cli, "WORKER_SNAPSHOT_INTERVAL_SECONDS", 0.01)
+
+    result = cli._run_worker(
+        _worker_namespace(
+            run_forever=True,
+            operating_snapshot_file="/tmp/clashlens-worker-operating.json",
+        )
+    )
+
+    assert result == 0
+    assert len(snapshots) >= 3
+    assert snapshots[0]["captured_at"] != snapshots[1]["captured_at"]
+    assert database.closed is True
+
+
+def test_initial_operating_snapshot_failure_does_not_stop_work(
+    monkeypatch, capsys
+) -> None:
+    class FakeDatabase:
+        def close(self) -> None:
+            return
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            assert max_jobs == 100
+            return 0
+
+    class FakeArchive:
+        @staticmethod
+        def check_ready() -> bool:
+            return True
+
+    class OneBatchProcessor:
+        def __init__(self, _database: object, _archive: object) -> None:
+            return
+
+        def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
+            stop_requested = kwargs["stop_requested"]
+            assert isinstance(stop_requested, Event)
+            stop_requested.set()
+            return [ProcessResult(1, "processed")]
+
+    original_snapshot = cli.WorkerMetrics.snapshot
+    calls = 0
+
+    def fail_once(self: object, **kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("unavailable")
+        return original_snapshot(self, **kwargs)
+
+    monkeypatch.setattr(cli, "Database", lambda _url, **_kwargs: FakeDatabase())
+    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: FakeArchive())
+    monkeypatch.setattr(cli, "ObservationProcessor", OneBatchProcessor)
+    monkeypatch.setattr(cli.WorkerMetrics, "snapshot", fail_once)
+
+    result = cli._run_worker(
+        _worker_namespace(run_forever=True, operating_snapshot_file="")
+    )
+
+    assert result == 0
+    output = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert output[0] == {"event": "worker_health", "status": "unavailable"}
+    assert output[-1]["processed_count"] == 1
 
 
 class PoolRecordingDatabase:

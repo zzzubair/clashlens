@@ -321,7 +321,7 @@ func (a *application) schedulerOnce(ctx context.Context, now time.Time) error {
 				cleanupErr = a.archive.spool.sweepStale(now)
 			}
 			if cleanupErr != nil && a.logger != nil {
-				a.logger.WarnContext(ctx, "raw-evidence cleanup degraded", "error", cleanupErr)
+				a.logger.WarnContext(ctx, "raw-evidence cleanup degraded", "category", archiveFailureCategory(cleanupErr))
 			}
 			a.lastSpoolCleanupAt.Store(now.UnixNano())
 			a.metrics.recordStageDuration("spool_cleanup", time.Since(cleanupStartedAt))
@@ -505,7 +505,7 @@ func (a *application) runWorkerLoop(
 		releaseContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := a.store.releaseOwnerLeases(releaseContext, worker.config.owner, time.Now().UTC()); err != nil {
-			a.logger.Error("release worker leases", "owner", worker.config.owner, "error", err)
+			a.logger.Error("release worker leases", "owner", worker.config.owner, "category", "lease_release_failed")
 		}
 	}()
 	for {
@@ -514,7 +514,7 @@ func (a *application) runWorkerLoop(
 			if ctx.Err() != nil {
 				return
 			}
-			a.logger.ErrorContext(ctx, "worker job failed", "pool", pool, "error", err)
+			a.logger.ErrorContext(ctx, "worker job failed", "pool", pool, "category", "job_processing_failed")
 			if !waitForInterval(ctx, a.config.workerIdleInterval) {
 				return
 			}

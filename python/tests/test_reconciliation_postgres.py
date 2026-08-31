@@ -57,6 +57,7 @@ def _seed_reset_collection_identity(
     profile_observation_id: int,
     battle_observation_id: int,
     normalized_tag: str = "#2PP",
+    production_admission: bool = False,
 ) -> None:
     with psycopg.connect(connection_info) as connection:
         player_id = connection.execute(
@@ -72,6 +73,8 @@ def _seed_reset_collection_identity(
             """,
             (player_id, boundary),
         ).fetchone()
+        if baseline is None and production_admission:
+            raise RuntimeError("production reset admission did not create a baseline")
         if baseline is None:
             reset_sweep_id = connection.execute(
                 """
@@ -94,47 +97,65 @@ def _seed_reset_collection_identity(
             ).fetchone()[0]
         else:
             baseline_sweep_id, reset_sweep_id = int(baseline[0]), int(baseline[1])
-        connection.execute(
-            """
-            INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
-            VALUES (%s, %s)
-            ON CONFLICT (sweep_id, player_id) DO NOTHING
-            """,
-            (reset_sweep_id, player_id),
-        )
-        connection.execute(
-            """
-            INSERT INTO collector_boundary_admission (
-                boundary_at, reset_sweep_id, regular_drain_complete,
-                reset_drain_complete, safe_handoff, state
-            ) VALUES (%s, %s, true, true, true, 'safe_handoff')
-            ON CONFLICT (boundary_at) DO UPDATE
-                SET reset_sweep_id = EXCLUDED.reset_sweep_id,
-                    safe_handoff = true, state = 'safe_handoff'
-            """,
-            (boundary, reset_sweep_id),
-        )
-        root_job_id = connection.execute(
-            """
-            INSERT INTO collector_jobs (
-                work_type, scope, player_id, normalized_tag, capacity_pool,
-                priority, due_at, coalescing_key, sweep_id,
-                reset_baseline_sweep_id, status
-            ) VALUES (
-                'reset_baseline', 'player', %s, %s, 'normal', 400, %s,
-                %s, %s, %s, 'complete'
+        if production_admission:
+            root = connection.execute(
+                """
+                SELECT id FROM collector_jobs
+                WHERE work_type = 'reset_baseline'
+                  AND sweep_id = %s
+                  AND reset_baseline_sweep_id = %s
+                  AND player_id = %s
+                  AND status = 'pending'
+                """,
+                (reset_sweep_id, baseline_sweep_id, player_id),
+            ).fetchall()
+            if len(root) != 1:
+                raise RuntimeError(
+                    "production reset admission did not create exactly one root"
+                )
+            root_job_id = root[0][0]
+        else:
+            connection.execute(
+                """
+                INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
+                VALUES (%s, %s)
+                ON CONFLICT (sweep_id, player_id) DO NOTHING
+                """,
+                (reset_sweep_id, player_id),
             )
-            RETURNING id
-            """,
-            (
-                player_id,
-                normalized_tag,
-                boundary,
-                f"reset-baseline-{key}",
-                reset_sweep_id,
-                baseline_sweep_id,
-            ),
-        ).fetchone()[0]
+            connection.execute(
+                """
+                INSERT INTO collector_boundary_admission (
+                    boundary_at, reset_sweep_id, regular_drain_complete,
+                    reset_drain_complete, safe_handoff, state
+                ) VALUES (%s, %s, true, true, true, 'safe_handoff')
+                ON CONFLICT (boundary_at) DO UPDATE
+                    SET reset_sweep_id = EXCLUDED.reset_sweep_id,
+                        safe_handoff = true, state = 'safe_handoff'
+                """,
+                (boundary, reset_sweep_id),
+            )
+            root_job_id = connection.execute(
+                """
+                INSERT INTO collector_jobs (
+                    work_type, scope, player_id, normalized_tag, capacity_pool,
+                    priority, due_at, coalescing_key, sweep_id,
+                    reset_baseline_sweep_id, status
+                ) VALUES (
+                    'reset_baseline', 'player', %s, %s, 'normal', 400, %s,
+                    %s, %s, %s, 'complete'
+                )
+                RETURNING id
+                """,
+                (
+                    player_id,
+                    normalized_tag,
+                    boundary,
+                    f"reset-baseline-{key}",
+                    reset_sweep_id,
+                    baseline_sweep_id,
+                ),
+            ).fetchone()[0]
         root_attempt_id = connection.execute(
             """
             INSERT INTO collector_attempts (
@@ -145,7 +166,10 @@ def _seed_reset_collection_identity(
             (root_job_id, boundary, boundary),
         ).fetchone()[0]
         connection.execute(
-            "UPDATE collector_jobs SET result_attempt_id = %s WHERE id = %s",
+            """UPDATE collector_jobs
+               SET status = 'complete', result_attempt_id = %s,
+                   updated_at = clock_timestamp()
+               WHERE id = %s""",
             (root_attempt_id, root_job_id),
         )
         connection.execute(
@@ -198,6 +222,7 @@ def _store_baseline_pair(
     empty_battle_log: bool,
     observed_at: datetime | None = None,
     normalized_tag: str = "#2PP",
+    production_admission: bool = False,
 ) -> tuple[int, int, int, int]:
     # A reset-baseline sweep requests its endpoints after the boundary, so the
     # stored observations may complete after ``boundary`` itself.
@@ -227,8 +252,34 @@ def _store_baseline_pair(
         profile_observation_id=profile_observation,
         battle_observation_id=battle_observation,
         normalized_tag=normalized_tag,
+        production_admission=production_admission,
     )
     return profile_observation, battle_observation, profile_job, battle_job
+
+
+def test_production_admission_fixture_requires_existing_collector_root(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        try:
+            _store_baseline_pair(
+                connection_info,
+                archive_server,
+                key="missing-production-root",
+                boundary=DAY_END,
+                trophies=6040,
+                empty_battle_log=False,
+                production_admission=True,
+            )
+        except RuntimeError as error:
+            assert str(error) == "production reset admission did not create a baseline"
+        else:
+            raise AssertionError("production fixture accepted an absent collector root")
+        with psycopg.connect(connection_info) as connection:
+            admission_count = connection.execute(
+                "SELECT count(*) FROM collector_boundary_admission"
+            ).fetchone()[0]
+        assert admission_count == 0
 
 
 def test_durable_reconciliation_versions_late_corrections_without_rewriting_history(

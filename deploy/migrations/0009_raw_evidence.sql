@@ -115,7 +115,23 @@ BEGIN
       AND COALESCE(NEW.observation_id, NEW.replay_observation_id) = observation.id;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DO $$
+DECLARE
+    runtime_schema_name text := current_schema();
+BEGIN
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_set_python_job_source_contract() SET search_path TO pg_catalog, %I',
+        runtime_schema_name,
+        runtime_schema_name
+    );
+    EXECUTE format(
+        'REVOKE ALL ON FUNCTION %I.clashlens_set_python_job_source_contract() FROM PUBLIC',
+        runtime_schema_name
+    );
+END
+$$;
 
 DROP TRIGGER IF EXISTS python_processing_jobs_set_source_contract_v3
     ON python_processing_jobs;

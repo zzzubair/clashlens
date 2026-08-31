@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+import psycopg
 from domain_test_support import domain_database, store_observation, text
 
 from clashlens.archive import S3ArchiveReader
@@ -40,6 +41,91 @@ def _live_row(attack: bool, tag: str, code: str | None, ts: datetime):
     if code is not None:
         row["armyShareCode"] = code
     return row
+
+
+def test_ranked_day_enqueue_lookup_uses_day_index(
+    database_url: str,
+) -> None:
+    target_day = datetime(2026, 9, 3, 5, tzinfo=UTC)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO players (normalized_tag, active, eligibility_state)
+                SELECT '#IDX' || g, false, 'unknown'
+                FROM generate_series(1, 12500) AS values(g)
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO ranked_day_versions (
+                    player_id, ranked_day_start, ranked_day_end,
+                    official_season_id, season_day_number,
+                    season_anchor_rule_version, reconciliation_rule_version,
+                    result_hash, version, state, confidence, coverage_complete
+                )
+                SELECT player.id,
+                       %s - (day - 1) * interval '1 day',
+                       %s - (day - 2) * interval '1 day',
+                       'test-season', day,
+                       'test-anchor', 'test-reconciliation',
+                       md5(player.id::text) || md5(day::text), 1,
+                       CASE WHEN day = 1 THEN 'Complete' ELSE 'Partial' END,
+                       'exact', day = 1
+                FROM players AS player
+                CROSS JOIN generate_series(1, 28) AS days(day)
+                """,
+                (target_day, target_day),
+            )
+            connection.execute("DROP INDEX ranked_day_versions_completed_day_v1")
+            before = connection.execute(
+                """
+                EXPLAIN (ANALYZE, FORMAT JSON)
+                SELECT id, official_season_id
+                FROM ranked_day_versions
+                WHERE ranked_day_start = %s
+                  AND state = 'Complete' AND coverage_complete
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (target_day,),
+            ).fetchone()[0][0]["Plan"]
+            before_scans = []
+            pending = [before]
+            while pending:
+                node = pending.pop()
+                if node.get("Node Type") in {"Seq Scan", "Bitmap Heap Scan"}:
+                    before_scans.append(node)
+                pending.extend(node.get("Plans", []))
+            assert before_scans and before_scans[0]["Actual Rows"] >= 12500
+            connection.execute(
+                """
+                CREATE INDEX ranked_day_versions_completed_day_v1
+                    ON ranked_day_versions (ranked_day_start, id DESC)
+                    WHERE state = 'Complete' AND coverage_complete
+                """
+            )
+            connection.execute("ANALYZE ranked_day_versions")
+            after = connection.execute(
+                """
+                EXPLAIN (ANALYZE, FORMAT JSON)
+                SELECT id, official_season_id
+                FROM ranked_day_versions
+                WHERE ranked_day_start = %s
+                  AND state = 'Complete' AND coverage_complete
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (target_day,),
+            ).fetchone()[0][0]["Plan"]
+            after_scans = []
+            pending = [after]
+            while pending:
+                node = pending.pop()
+                if node.get("Index Name") == "ranked_day_versions_completed_day_v1":
+                    after_scans.append(node)
+                pending.extend(node.get("Plans", []))
+            assert after_scans and after_scans[0]["Actual Rows"] == 1
 
 
 def test_missing_army_code_remains_canonical_no_army_facts(

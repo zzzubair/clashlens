@@ -14,7 +14,7 @@ from collections import deque
 from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from time import monotonic, time
 from typing import Any
 from urllib.parse import urlsplit
@@ -27,6 +27,11 @@ from .api_db import ApiDatabase
 from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
 from .db import CONTRACT_VERSION, MAX_POOL_SIZE, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
+from .operating import (
+    WORKER_SNAPSHOT_INTERVAL_SECONDS,
+    WorkerMetrics,
+    write_private_snapshot,
+)
 from .profile import normalize_player_tag
 from .verification import (
     OfficialVerificationClient,
@@ -103,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=("archive HTTP connection pool size (default: max(4, concurrency))"),
     )
+    worker.add_argument("--operating-snapshot-file", default="")
 
     ready = subparsers.add_parser(
         "ready", help="check the production worker database and archive dependencies"
@@ -281,6 +287,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
     _install_shutdown_handlers(stop_requested)
     try:
         stage_metrics = StageMetrics()
+        worker_metrics = WorkerMetrics()
         try:
             archive = _archive(
                 arguments, pool_size=archive_pool_size, database=database
@@ -353,42 +360,81 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             return 0
         recent_results: deque[ProcessResult] = deque(maxlen=MAX_REPORTED_RESULTS)
         processed_count = 0
-        last_health_report = float("-inf")
-        while not stop_requested.is_set():
-            results = process_batch()
-            processed_count += len(results)
-            recent_results.extend(results)
-            for result in results:
+
+        def operating_snapshot() -> dict[str, Any]:
+            snapshot = worker_metrics.snapshot(
+                stages=stage_metrics.snapshot(),
+                database_pool=getattr(database, "pool_health", dict)(),
+                queue=getattr(database, "queue_health", dict)(),
+                spool=getattr(archive, "readiness", lambda: {"ready": True})(),
+            )
+            snapshot_file = getattr(arguments, "operating_snapshot_file", "")
+            if snapshot_file:
+                try:
+                    write_private_snapshot(Path(snapshot_file), snapshot)
+                except OSError:
+                    snapshot["snapshot_file_status"] = "unavailable"
+            return snapshot
+
+        def report_worker_health() -> None:
+            process_snapshot = operating_snapshot()
+            print(
+                json.dumps(
+                    {
+                        "event": "worker_health",
+                        "process": process_snapshot["process"],
+                        "outcomes": process_snapshot["outcomes"],
+                        "queue": process_snapshot["queue"],
+                        "database_pool": process_snapshot["database_pool"],
+                        "stages": process_snapshot["stages"],
+                        "archive": {
+                            "spool": process_snapshot["spool"],
+                            "remote_health": getattr(
+                                archive,
+                                "check_marker_health",
+                                lambda: "unconfigured",
+                            )(),
+                        },
+                    }
+                ),
+                flush=True,
+            )
+
+        heartbeat_stop = Event()
+
+        def safe_report_worker_health() -> None:
+            try:
+                report_worker_health()
+            except Exception:  # noqa: BLE001 - evidence failure must not stop work
                 print(
-                    json.dumps({"event": "job_result", **asdict(result)}),
+                    json.dumps({"event": "worker_health", "status": "unavailable"}),
                     flush=True,
                 )
-            current_time = monotonic()
-            if current_time - last_health_report >= 60:
-                print(
-                    json.dumps(
-                        {
-                            "event": "worker_health",
-                            "queue": getattr(database, "queue_health", dict)(),
-                            "database_pool": getattr(database, "pool_health", dict)(),
-                            "stages": stage_metrics.snapshot(),
-                            "archive": {
-                                "spool": getattr(
-                                    archive, "readiness", lambda: {"ready": True}
-                                )(),
-                                "remote_health": getattr(
-                                    archive,
-                                    "check_marker_health",
-                                    lambda: "unconfigured",
-                                )(),
-                            },
-                        }
-                    ),
-                    flush=True,
-                )
-                last_health_report = current_time
-            if not results:
-                stop_requested.wait(arguments.poll_interval_seconds)
+
+        def heartbeat() -> None:
+            while not heartbeat_stop.wait(WORKER_SNAPSHOT_INTERVAL_SECONDS):
+                safe_report_worker_health()
+
+        safe_report_worker_health()
+        heartbeat_thread = Thread(target=heartbeat, daemon=True)
+        heartbeat_thread.start()
+
+        try:
+            while not stop_requested.is_set():
+                results = process_batch()
+                processed_count += len(results)
+                recent_results.extend(results)
+                for result in results:
+                    worker_metrics.record_outcome(result.outcome)
+                    print(
+                        json.dumps({"event": "job_result", **asdict(result)}),
+                        flush=True,
+                    )
+                if not results:
+                    stop_requested.wait(arguments.poll_interval_seconds)
+        finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=5)
         print(
             json.dumps(
                 {
@@ -408,6 +454,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 }
             )
         )
+        operating_snapshot()
         return 0
     finally:
         database.close()

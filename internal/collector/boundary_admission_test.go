@@ -492,3 +492,91 @@ func TestBoundaryAdmissionExcludesRegularWorkUntilSafeHandoff(t *testing.T) {
 		t.Fatal("older reset lineage was not blocking next-day admission")
 	}
 }
+
+func TestBoundaryAdmissionRetainsLegacyResetLineage(t *testing.T) {
+	databaseURL := startBoundaryAdmissionDatabase(t)
+	ctx := context.Background()
+	store, err := openStore(ctx, databaseURL, 5)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	defer store.close()
+
+	boundary := time.Date(2026, time.August, 6, 5, 0, 0, 0, time.UTC)
+	var playerID, sweepID, baselineID, legacyJobID int64
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO players (normalized_tag, active)
+		VALUES ('#LEGACY-GATE', false) RETURNING id
+	`).Scan(&playerID); err != nil {
+		t.Fatalf("insert legacy reset player: %v", err)
+	}
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO collector_reset_sweeps (boundary_at)
+		VALUES ($1) RETURNING id
+	`, boundary).Scan(&sweepID); err != nil {
+		t.Fatalf("insert legacy reset sweep: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
+		VALUES ($1, $2)
+	`, sweepID, playerID); err != nil {
+		t.Fatalf("insert legacy reset member: %v", err)
+	}
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO collector_reset_baseline_sweeps (
+			reset_sweep_id, player_id, boundary_at, evidence_kind
+		) VALUES ($1, $2, $3, 'legacy_profile_only_v1')
+		RETURNING id
+	`, sweepID, playerID, boundary).Scan(&baselineID); err != nil {
+		t.Fatalf("insert legacy reset baseline: %v", err)
+	}
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, scope, player_id, normalized_tag, capacity_pool, priority,
+			due_at, coalescing_key, sweep_id, reset_baseline_sweep_id, status
+		) VALUES (
+			'legacy_reset_profile', 'player', $1, '#LEGACY-GATE', 'normal', 400,
+			$2, 'legacy-reset-gate', $3, $4, 'pending'
+		) RETURNING id
+	`, playerID, boundary, sweepID, baselineID).Scan(&legacyJobID); err != nil {
+		t.Fatalf("insert legacy reset job: %v", err)
+	}
+	var parentAttemptID int64
+	if err := store.pool.QueryRow(ctx, `
+		INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
+		VALUES ($1, 'complete', clock_timestamp(), clock_timestamp())
+		RETURNING id
+	`, legacyJobID).Scan(&parentAttemptID); err != nil {
+		t.Fatalf("insert legacy reset attempt: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, scope, player_id, normalized_tag, capacity_pool, priority,
+			due_at, coalescing_key, parent_attempt_id, required_endpoint, status
+		) VALUES (
+			'endpoint_retry', 'player', $1, '#LEGACY-GATE', 'normal', 50,
+			$2, 'legacy-reset-descendant', $3, 'profile', 'pending'
+		)
+	`, playerID, boundary, parentAttemptID); err != nil {
+		t.Fatalf("insert legacy reset descendant: %v", err)
+	}
+
+	if drained, err := store.resetJobsDrained(ctx, boundary); err != nil {
+		t.Fatalf("count legacy reset lineage: %v", err)
+	} else if drained {
+		t.Fatal("pending legacy reset lineage was treated as drained")
+	}
+	if err := store.setBoundaryAdmission(ctx, boundary, &sweepID, true, false, false); err != nil {
+		t.Fatalf("record legacy reset admission: %v", err)
+	}
+	if _, _, err := store.prepareBoundaryAdmission(ctx, boundary.Add(time.Minute)); err != nil {
+		t.Fatalf("reevaluate boundary with legacy reset lineage: %v", err)
+	}
+	allowed, err := store.regularAdmissionAllowed(ctx, boundary.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("check admission with legacy reset lineage: %v", err)
+	}
+	if allowed {
+		t.Fatal("pending legacy reset root/descendant reopened regular admission")
+	}
+}

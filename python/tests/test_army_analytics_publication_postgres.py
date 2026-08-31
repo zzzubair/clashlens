@@ -3,14 +3,24 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
-from threading import Lock
+from threading import Event, Lock
+from time import monotonic
+from unittest.mock import Mock
 
 import pytest
 from domain_test_support import domain_database, store_observation, text
+from psycopg_pool import PoolTimeout
 
-from clashlens.api_db import ApiDatabase
+from clashlens import api_db
+from clashlens.api_db import (
+    ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS,
+    ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS,
+    ARMY_ANALYTICS_QUERY_WORK_MEM,
+    ApiDatabase,
+)
 from clashlens.archive import S3ArchiveReader
 from clashlens.army_analytics import (
     ArmyAnalyticsSelection,
@@ -218,6 +228,71 @@ def test_army_cache_is_bounded_thread_safe_and_returns_copies() -> None:
     assert api._army_cache_get(("selection-one",)) is None
 
 
+def test_troop_source_hash_pool_timeout_fails_before_expensive_queries(
+    monkeypatch,
+) -> None:
+    def fake_connection():
+        connection = Mock()
+        query_kinds: list[str] = []
+
+        def execute(query, params=()):
+            del params
+            sql = str(query)
+            cursor = Mock()
+            if "GROUP BY army_state" in sql:
+                query_kinds.append("state")
+                cursor.fetchall.return_value = [("decoded", 1, 0, 0, False)]
+            elif sql.startswith("VALUES (pg_export_snapshot())"):
+                query_kinds.append("snapshot")
+                cursor.fetchone.return_value = ("test-snapshot",)
+            elif "CROSS JOIN LATERAL" in sql:
+                query_kinds.append("component")
+                cursor.fetchall.return_value = [
+                    ("troop:1", 1, 0, 0, 0, 1, 3, 100)
+                ]
+            else:
+                raise AssertionError(f"unexpected query: {sql}")
+            return cursor
+
+        connection.execute.side_effect = execute
+        return connection, query_kinds
+
+    selection = _selection(start_day=1, end_day=1)
+    hash_connections = []
+
+    def source_hash(connection, **_kwargs):
+        hash_connections.append(connection)
+        return "a" * 64
+
+    monkeypatch.setattr(api_db, "_selected_source_hash", source_hash)
+    arguments = {
+        "fact_filters": ["true"],
+        "fact_params": [],
+        "requested": selection.as_dict(),
+        "snapshot_ids": [],
+        "selection": selection,
+    }
+    sequential_connection, _ = fake_connection()
+    expected = api_db._query_troops_aggregates(
+        sequential_connection, **arguments
+    )
+
+    timed_out_connection, timed_out_queries = fake_connection()
+    pool = Mock(max_size=2)
+    pool.connection.side_effect = PoolTimeout("second connection unavailable")
+    with pytest.raises(PoolTimeout):
+        api_db._query_troops_aggregates(
+            timed_out_connection, pool=pool, **arguments
+        )
+
+    assert expected[0]["rows"][0]["usage_count"] == 1
+    pool.connection.assert_called_once_with(
+        timeout=ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS
+    )
+    assert timed_out_queries == ["state", "snapshot"]
+    assert hash_connections == [sequential_connection]
+
+
 def test_publication_writer_serves_reproducible_perspective_results(
     database_url: str, archive_server
 ) -> None:
@@ -307,8 +382,8 @@ def test_publication_writer_serves_reproducible_perspective_results(
             original_connection = api.pool.connection
 
             @contextmanager
-            def traced_connection():
-                with original_connection() as connection:
+            def traced_connection(*args, **kwargs):
+                with original_connection(*args, **kwargs) as connection:
                     class TracedConnection:
                         def execute(self, query, *args, **kwargs):
                             sql = str(query)
@@ -327,6 +402,21 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 selection = _selection()
                 first = api.get_army_analytics(selection)
                 assert first is not None
+                missing_trophy_queries = [
+                    query
+                    for query in fact_queries
+                    if "battle_time_trophies IS NULL" in query
+                ]
+                assert len(missing_trophy_queries) == 1
+                missing_trophy_query = " ".join(missing_trophy_queries[0].split())
+                assert (
+                    "SELECT count(*) FROM army_analytics_battle_facts WHERE "
+                    in missing_trophy_query
+                )
+                assert "AND is_current AND battle_time_trophies IS NULL" in (
+                    missing_trophy_query
+                )
+                assert "FILTER" not in missing_trophy_query
                 assert first["total_attacks"] == 2
                 assert first["usable_army_sample"] == 2
                 assert first["army_states"]["fully_decoded"] == 1
@@ -464,7 +554,11 @@ def test_publication_writer_serves_reproducible_perspective_results(
                             assert other_column not in aggregate_query
                         continue
                     assert len(
-                        [query for query in fact_queries if "count(*) FILTER" in query]
+                        [
+                            query
+                            for query in fact_queries
+                            if "battle_time_trophies IS NULL" in query
+                        ]
                     ) == 1
                     payload_queries = [
                         query
@@ -1105,6 +1199,48 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
             assert first is not None
             cached = api.get_army_analytics(selection)
             assert cached == first
+            cold_api = ApiDatabase(ci, max_size=2)
+            try:
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    concurrent_results = list(
+                        executor.map(cold_api.get_army_analytics, [selection] * 2)
+                    )
+                assert concurrent_results == [first, first]
+            finally:
+                cold_api.close()
+
+            busy_api = ApiDatabase(ci, max_size=2, army_cache_capacity=0)
+            assert busy_api._army_troop_slots.acquire(blocking=False)
+            try:
+                busy_started = monotonic()
+                with pytest.raises(PoolTimeout, match="troop analytics"):
+                    busy_api.get_army_analytics(selection)
+                assert monotonic() - busy_started < (
+                    ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS + 0.5
+                )
+            finally:
+                busy_api._army_troop_slots.release()
+                busy_api.close()
+
+            pool_busy_api = ApiDatabase(ci, max_size=2, army_cache_capacity=0)
+            try:
+                # Materialize both pool connections so this measures paired
+                # checkout contention, not connection creation.
+                with pool_busy_api.pool.connection() as first_connection:
+                    with pool_busy_api.pool.connection() as second_connection:
+                        assert first_connection is not second_connection
+                with pool_busy_api.pool.connection():
+                    pair_started = monotonic()
+                    with pytest.raises(PoolTimeout):
+                        pool_busy_api.get_army_analytics(selection)
+                    pair_elapsed = monotonic() - pair_started
+                    assert pair_elapsed >= (
+                        ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS * 0.5
+                    )
+                    assert pair_elapsed < 1
+                assert pool_busy_api.get_army_analytics(selection) == first
+            finally:
+                pool_busy_api.close()
 
             # A corrected source with identical aggregates still changes the
             # identity because retained source evidence changed.
@@ -1125,6 +1261,119 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
                 ).fetchone()[0] is None
         finally:
             api.close()
+            database.close()
+
+
+def test_concurrent_correction_never_mixes_army_publication_revisions(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = DAY_START + timedelta(hours=1)
+        _, job = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="consistent-publication-a1",
+            endpoint="battle_log",
+            body=json.dumps(
+                {"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}
+            ).encode(),
+            observed_at=ts + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        database, processor = _processor(ci, archive_server)
+        stable_api = ApiDatabase(ci, army_cache_capacity=0)
+        racing_api = ApiDatabase(ci, max_size=2, army_cache_capacity=0)
+        try:
+            processor.process_job(job, owner="ingest")
+            with database.pool.connection() as connection:
+                battle_id = int(
+                    connection.execute("SELECT max(id) FROM legend_battles").fetchone()[
+                        0
+                    ]
+                )
+            initial_events = [_event(battle_id, "offense", ts, 3, 100, 35)]
+            corrected_events = [_event(battle_id, "offense", ts, 2, 75, 35)]
+            _publish_day(database, "#2PP", initial_events)
+            processor.process_job(_army_job(database), owner="analytics")
+            selection = _selection()
+            before = stable_api.get_army_analytics(selection)
+            assert before is not None
+
+            source_waiting = Event()
+            component_read = Event()
+            correction_finished = Event()
+            original_connection = racing_api.pool.connection
+
+            @contextmanager
+            def coordinated_connection(*args, **kwargs):
+                with original_connection(*args, **kwargs) as connection:
+
+                    class CoordinatedConnection:
+                        def execute(self, query, *args, **kwargs):
+                            sql = str(query)
+                            if (
+                                "string_agg(" in sql
+                                and "army_analytics_battle_facts" in sql
+                            ):
+                                assert connection.execute("SHOW work_mem").fetchone()[0] == (
+                                    ARMY_ANALYTICS_QUERY_WORK_MEM
+                                )
+                                assert (
+                                    connection.execute(
+                                        "SHOW transaction_timeout"
+                                    ).fetchone()[0]
+                                    != "0"
+                                )
+                                source_waiting.set()
+                                assert correction_finished.wait(timeout=30)
+                            cursor = connection.execute(query, *args, **kwargs)
+                            if "CROSS JOIN LATERAL" in sql:
+                                assert (
+                                    connection.execute(
+                                        "SHOW transaction_timeout"
+                                    ).fetchone()[0]
+                                    != "0"
+                                )
+                                component_read.set()
+                            return cursor
+
+                        def __getattr__(self, name):
+                            return getattr(connection, name)
+
+                    yield CoordinatedConnection()
+
+            racing_api.pool.connection = coordinated_connection
+
+            def correct_facts() -> None:
+                try:
+                    assert source_waiting.wait(timeout=10)
+                    assert component_read.wait(timeout=10)
+                    _publish_day_correction(database, "#2PP", corrected_events)
+                    correction = processor.process_job(
+                        _army_job(database), owner="concurrent-correction"
+                    )
+                    assert correction is not None
+                    assert correction.outcome == "processed"
+                finally:
+                    correction_finished.set()
+
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                correction_future = executor.submit(correct_facts)
+                concurrent = racing_api.get_army_analytics(selection)
+                correction_future.result()
+            assert concurrent is not None
+
+            after = stable_api.get_army_analytics(selection)
+            assert after is not None
+            assert after["rows"] != before["rows"]
+            assert (
+                after["reproducibility"]["source_evidence_hash"]
+                != before["reproducibility"]["source_evidence_hash"]
+            )
+            assert concurrent in (before, after)
+        finally:
+            racing_api.close()
+            stable_api.close()
             database.close()
 
 
