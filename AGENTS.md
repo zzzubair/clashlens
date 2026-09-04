@@ -15,11 +15,13 @@ We need to be on the same page with terminology. When communicating use this lan
 ## Working rules
 - Keep it simple, stupid.
 - Really channel the "measure twice, cut once" and "yagni" aggressively.
+- The goal is clean, mergeable code.
 - Use worker subagents to get the work done, baby sit the subagents throughout their task. 
 - Preserve maintainer changes and make the smallest complete change.
-- Add or update only the tests needed for changed behavior. Smallest proof that the change works.
+- Avoid creating excessive test files. Create a new test file only when required by repository conventions or when no existing file is a suitable home.
+- Avoid unrelated cleanup and unnecessary complexity. Reuse suitable existing utilities. Read relevant repository instructions and inspect nearby code, tests, documentation, and CI.
 - Fight scope creep, try to honor the maintainer's intent in the most simple and realistic way.
-- Use the authenticated `gh` CLI to navigate this private repository.
+- Use the authenticated `gh` CLI to navigate this repository.
 - Do not commit, push, rebase, or open a pull request unless the maintainer asks.
 - Report what changed, what was verified, what was not verified, and what remains open.
 - The rest of this file is to help you navigate the project, but these are not "hard rules", think of them as "good defaults". The maintainers should be able to override anything written here.  
