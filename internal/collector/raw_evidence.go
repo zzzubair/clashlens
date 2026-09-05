@@ -50,11 +50,6 @@ func (a *s3Archive) secureAndCommit(ctx context.Context, reservation *spoolReser
 	// path releases it; promoted final bytes are accounted separately by the
 	// spool write, and a leaked reservation would wedge future admission.
 	defer reservation.release()
-	verified, err := a.isCatalogueVerified(ctx, digest, int64(len(body)))
-	if err != nil {
-		_ = reservation.release()
-		return err
-	}
 	stripeIndex, err := a.spool.stripeIndex(digest)
 	if err != nil {
 		_ = reservation.release()
@@ -65,13 +60,32 @@ func (a *s3Archive) secureAndCommit(ctx context.Context, reservation *spoolReser
 		return err
 	}
 	defer a.spool.unlockStripe(stripeIndex)
-	// Second catalogue check under the exclusive stripe: another runtime may
-	// have remotely verified this hash between admission and the lock. This
-	// keeps same-hash followers on the zero-remote-request duplicate path.
-	if !verified {
+	// Resolve under the shared spool stripe, also held by archive retirement.
+	// A pre-lock cache hit could otherwise outlive deletion of its remote key.
+	verified := false
+	if a.catalogueLocation != nil {
+		location, lookupErr := a.catalogueLocation(ctx, digest, int64(len(body)))
+		if lookupErr != nil {
+			return lookupErr
+		}
+		verified = location.verified
+		if verified {
+			reference = location.reference
+		} else if len(response) > 0 && response[0].pendingArchiveReference != "" {
+			reference = response[0].pendingArchiveReference
+			if reference == location.reference {
+				return fmt.Errorf("%w: pending archive location was retired", errArchiveTerminal)
+			}
+		} else if location.reference != "" {
+			token, tokenErr := randomToken()
+			if tokenErr != nil {
+				return tokenErr
+			}
+			reference += "/generation/" + token
+		}
+	} else {
 		verified, err = a.isCatalogueVerified(ctx, digest, int64(len(body)))
 		if err != nil {
-			_ = reservation.release()
 			return err
 		}
 	}
@@ -98,7 +112,7 @@ func (a *s3Archive) secureAndCommit(ctx context.Context, reservation *spoolReser
 		_ = reservation.release()
 	}
 	if !verified {
-		if _, putErr := a.putVerified(ctx, digest, body); putErr != nil {
+		if _, putErr := a.putVerifiedAt(ctx, digest, body, reference); putErr != nil {
 			// reference stays the deterministic bucket path so the fenced
 			// pending state can resume this exact evidence after recovery.
 			if pending != nil && len(response) > 0 && isRetryableArchiveError(putErr) {

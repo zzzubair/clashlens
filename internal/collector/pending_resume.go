@@ -38,6 +38,7 @@ func (w *worker) resumePendingEndpoint(ctx context.Context, archive rawEvidenceS
 	// The spool is the sole holder of the exact body; attach its verified
 	// bytes so catalogue sizing derives the real length, not an empty one.
 	response.body = body
+	response.pendingArchiveReference = pending.ArchiveReference
 	outcome := "observed"
 	var nextRetryAt *time.Time
 	if retryableHTTPStatus(response.statusCode) {

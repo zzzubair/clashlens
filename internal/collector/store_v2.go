@@ -122,7 +122,7 @@ func (s *store) commitObservationV2(
 		}
 		var catalogueHash, catalogueReference, catalogueInstance string
 		var catalogueSize int64
-		if err := transaction.QueryRow(ctx, `SELECT response_hash, archive_reference, byte_size, archive_instance_id FROM archive_catalogue WHERE response_hash = $1`, hash).Scan(&catalogueHash, &catalogueReference, &catalogueSize, &catalogueInstance); err != nil {
+		if err := transaction.QueryRow(ctx, `SELECT response_hash, archive_reference, byte_size, archive_instance_id FROM archive_catalogue WHERE response_hash = $1 AND archive_reference = $2`, hash, archiveReference).Scan(&catalogueHash, &catalogueReference, &catalogueSize, &catalogueInstance); err != nil {
 			return fmt.Errorf("read verified archive catalogue row: %w", err)
 		}
 		if catalogueHash != hash || catalogueReference != archiveReference || catalogueSize != int64(len(response.body)) || catalogueInstance != s.archiveInstanceID {

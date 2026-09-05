@@ -122,6 +122,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _database_argument(queue_status)
 
+    prune_history = subparsers.add_parser(
+        "prune-history", help="preview or prune redundant completed history (operator database role)"
+    )
+    _database_argument(prune_history)
+    prune_history.add_argument("--retention-hours", type=_bounded_int("retention hours", 48, 672), default=48)
+    prune_history.add_argument("--max-jobs", type=_bounded_int("cleanup batch size", 1, 1000), default=1000)
+    prune_history.add_argument("--apply", action="store_true")
+
+    prune_archive = subparsers.add_parser(
+        "prune-archive", help="preview or retire six-month inactive raw objects (operator credentials)"
+    )
+    _database_argument(prune_archive)
+    _archive_arguments(prune_archive)
+    prune_archive.add_argument("--max-objects", type=_bounded_int("archive cleanup batch", 1, 1000), default=100)
+    prune_archive.add_argument("--apply", action="store_true")
+
     republish_current_season = subparsers.add_parser(
         "republish-current-season",
         help="queue a bounded batch of current-season ranked-day republications",
@@ -222,6 +238,41 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(json.dumps(database.queue_health(), sort_keys=True))
             finally:
                 database.close()
+            return 0
+        if arguments.command == "prune-archive":
+            import psycopg
+
+            from .archive_retention import retire_archive_objects
+
+            database = Database(_database_url(arguments))
+            archive = None
+            try:
+                archive = _archive(arguments, database=database)
+                if not isinstance(archive, SpoolFirstReader):
+                    raise TypeError("archive retirement requires the collector's exact shared spool")
+                with psycopg.connect(_database_url(arguments), autocommit=True) as connection:
+                    report = retire_archive_objects(
+                        connection, archive.spool, archive.archive.client,
+                        bucket=arguments.archive_bucket, instance_id=arguments.archive_instance_id,
+                        max_objects=arguments.max_objects, apply=arguments.apply,
+                    )
+                print(json.dumps(report, sort_keys=True))
+            finally:
+                if isinstance(archive, SpoolFirstReader):
+                    archive.spool.close()
+                database.close()
+            return 0
+        if arguments.command == "prune-history":
+            import psycopg
+
+            from .history import prune_completed_history
+
+            with psycopg.connect(_database_url(arguments)) as connection:
+                report = prune_completed_history(
+                    connection, retention_hours=arguments.retention_hours,
+                    max_jobs=arguments.max_jobs, apply=arguments.apply,
+                )
+            print(json.dumps(report, sort_keys=True))
             return 0
         if arguments.command == "republish-current-season":
             database = Database(_database_url(arguments))

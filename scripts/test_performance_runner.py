@@ -42,7 +42,7 @@ def _test_postgres() -> dict[str, object]:
             "max_connections": "100",
             "track_io_timing": "off",
         },
-        "applied_migration_versions": list(range(1, 16)),
+        "applied_migration_versions": list(range(1, 19)),
     }
 
 
@@ -120,7 +120,7 @@ def _candidate_receipt() -> dict:
         "application_images": images,
         "database": {
             "contract_version": 5,
-            "applied_migration_versions": list(range(1, 16)),
+            "applied_migration_versions": list(range(1, 19)),
             "server_version": "18.6",
             "server_version_num": "180006",
             "system_identifier": "1234567890",
