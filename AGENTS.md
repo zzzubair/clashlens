@@ -1,43 +1,38 @@
 # Clash Lens
-Clash Lens makes competitive Clash of Clans ranked data accessible for all. It brings official observations together into trustworthy tracking and analysis so players can make evidence-led decisions.
 
-## Glossary
-We need to be on the same page with terminology. When communicating use this language:
-- **you** means the agent reading this file and changing Clash Lens.
-- **me**, **I**, and **maintainers** mean Zubair and Surbhi building Clash Lens. These are who you are talking to now.
-- **user**, **clasher** means the person that plays clash of clans and will use Clash Lens to view data and analyse. Zubair himself is a top clasher.
-- **Legend day** means a complete Legend day that starts at 05:00 UTC and ends at 05:00 UTC the next day.
-- **season** means a full legend season that lasts exactly 28 days.
-- **tournament** means a ranked competition period. Tournaments are weekly in all Ranked Leagues except Legend I, where one tournament runs for 4 weeks and consists of 28 Legend days.
-- **reset** means the time when a Legend day ends, i.e. 05:00 UTC.
-- **EOD**, **end of day** means the trophy count at the end of the Legend day.
+Clash Lens makes competitive Clash of Clans ranked data accessible through trustworthy tracking and analysis so clashers can make evidence-led decisions.
 
-## Working rules
-- Keep it simple, stupid.
-- Really channel the "measure twice, cut once" and "yagni" aggressively.
-- The goal is clean, mergeable code.
-- Use worker subagents to get the work done, baby sit the subagents throughout their task. 
-- Preserve maintainer changes and make the smallest complete change.
-- Avoid creating excessive test files. Create a new test file only when required by repository conventions or when no existing file is a suitable home.
-- Avoid unrelated cleanup and unnecessary complexity. Reuse suitable existing utilities. Read relevant repository instructions and inspect nearby code, tests, documentation, and CI.
-- Fight scope creep, try to honor the maintainer's intent in the most simple and realistic way.
-- Use the authenticated `gh` CLI to navigate this repository.
-- Do not commit, push, rebase, or open a pull request unless the maintainer asks.
-- Report what changed, what was verified, what was not verified, and what remains open.
-- The rest of this file is to help you navigate the project, but these are not "hard rules", think of them as "good defaults". The maintainers should be able to override anything written here.  
+## Domain language
 
-## Target machine
-- Clash Lens must run comfortably on the available Fedora validation host. Treat this machine as the implementation resource ceiling.
-- OS and architecture: Fedora Linux, x86_64.
-- CPU: 8 cores and 16 threads.
-- Memory: 16 GiB RAM and 8 GiB swap.
-- Storage: 1 TiB NVMe SSD.
+- **Clasher** or **user** means the player using Clash Lens.
+- **Legend day** runs from 05:00 UTC to 05:00 UTC the next day.
+- **Reset** is the Legend day boundary at 05:00 UTC.
+- **EOD** means the trophy count at the end of a Legend day.
+- **Season** means a full Legend season of exactly 28 days.
+- **Tournament** means a ranked competition period: weekly in other Ranked Leagues, and 28 Legend days in Legend I.
 
-## Sources
-Use this authority order when sources disagree:
+## Working agreement
 
-1. Code, migrations, fixtures, and tests define implemented behavior.
-2. Live GitHub issues define current scope, status, and approved work.
-3. Retained documentation describes durable contracts and operating guidance.
+- Make the smallest complete change that meets the maintainer's goal. Reuse suitable existing code and avoid unrelated cleanup or speculative abstractions.
+- Preserve maintainer changes. Use subagents only when useful and consistent with the maintainer's instructions; delegation is not required.
+- Discussion and agreement on a proposal do not authorize implementation. Once implementation is authorized, finish the agreed work and relevant checks without asking for routine confirmation.
+- Ask before publication, deployment, destructive changes, or material scope changes unless explicitly authorized. Do not commit, push, rebase, or open a pull request unless asked.
+- Test behavior rather than incidental implementation details. Keep validation proportional to risk and reuse suitable existing test files. Replace or remove tests when their requirements are deliberately superseded, not merely because they fail.
+- Use the authenticated GitHub CLI for repository issues, pull requests, and checks.
+- Report concisely what changed, what was verified, what was not verified, and what remains open.
 
-Documentation can be stale. Report conflicts and follow the higher source; do not silently treat prose as more authoritative than the code or an issue. Read only the sources relevant to the task. If an important uncertainty remains, ask the maintainer.
+## Hosting constraints
+
+Clash Lens must run comfortably on the Fedora host. Treat its resources and hosting cost as design constraints:
+
+- Fedora Linux, x86_64; 8 CPU cores and 16 threads.
+- 16 GiB RAM and 8 GiB swap. Swap is not a normal operating budget.
+- Nominal 1 TiB NVMe SSD; measure actual usable space and leave operating headroom.
+
+Estimate storage growth and resource use before introducing permanently growing data. Question requirements that threaten affordability rather than preserving them blindly. Do not weaken data integrity or delete retained data without an agreed policy.
+
+## Intent and evidence
+
+Maintainers define desired behavior and authorize changes. Code, migrations, fixtures, and tests show implemented behavior; they do not make that behavior an obligation to preserve.
+
+Live GitHub issues record agreed scope and status. Documentation provides durable guidance but may be stale. Inspect sources relevant to the task, flag conflicts, and resolve consequential uncertainty with the maintainer rather than silently treating existing code or prose as the desired outcome.
