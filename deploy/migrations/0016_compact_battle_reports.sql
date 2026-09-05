@@ -16,9 +16,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS battle_source_rows_report_hash
 
 CREATE TABLE IF NOT EXISTS battle_payload_rows (
     parsed_payload_id bigint NOT NULL REFERENCES parsed_source_payloads(id),
+    reporting_player_id bigint NOT NULL REFERENCES players(id),
     source_row_index integer NOT NULL CHECK (source_row_index >= 0),
     source_row_id bigint NOT NULL REFERENCES battle_source_rows(id),
-    PRIMARY KEY (parsed_payload_id, source_row_index)
+    PRIMARY KEY (parsed_payload_id, reporting_player_id, source_row_index)
 );
 CREATE INDEX IF NOT EXISTS battle_payload_rows_source
     ON battle_payload_rows (source_row_id);
@@ -65,6 +66,7 @@ SELECT log.id, source.id, NULL::bigint, member.source_row_index,
        source.outcome, source.failure_category, source.source_json, evidence.id
 FROM battle_log_observations AS log
 JOIN battle_payload_rows AS member ON member.parsed_payload_id = log.parsed_payload_id
+    AND member.reporting_player_id = log.player_id
 JOIN battle_source_rows AS source ON source.id = member.source_row_id
 LEFT JOIN LATERAL (
     SELECT e.id FROM battle_evidence AS e

@@ -2050,7 +2050,11 @@ def _validate_duplicate_protocol(
         )
     ):
         raise ValueError(f"{label} profile canonical counts are invalid")
-    if canonical["battle_canonical_rows"] > canonical["battle_occurrence_rows"] or canonical["ranking_canonical_rows"] > canonical["ranking_occurrence_links"]:
+    if (
+        (canonical["battle_occurrence_rows"] > 0
+         and canonical["battle_canonical_rows"] > canonical["battle_occurrence_rows"])
+        or canonical["ranking_canonical_rows"] > canonical["ranking_occurrence_links"]
+    ):
         raise ValueError(f"{label} canonical counts are invalid")
     summary = workload.get("processing_summary")
     if (
@@ -5308,6 +5312,7 @@ def _run_duplicate(
             if getattr(database, "_supports_content_dedup", False):
                 battle_canonical_rows = connection.execute(
                     "SELECT count(*) FROM battle_source_rows WHERE parsed_payload_id IS NOT NULL"
+                    + (" OR report_hash IS NOT NULL" if getattr(database, "_supports_compact_battles", False) else "")
                 ).fetchone()[0]
                 battle_occurrence_rows = connection.execute(
                     "SELECT count(*) FROM battle_log_observation_rows"

@@ -920,5 +920,23 @@ def test_duplicate_battles_and_rankings_reuse_source_rows(
                 assert connection.execute(
                     "SELECT min(source_observed_at) FROM battle_perspectives"
                 ).fetchone()[0] == NOW + timedelta(minutes=1)
+            # Identical raw bytes can be returned for different requested players.
+            # Membership must preserve the reporter, not just the payload hash.
+            _, other_job = store_observation(
+                connection_info, archive_server,
+                occurrence_key="dedup-battle-other-reporter", endpoint="battle_log",
+                body=BATTLE_FIXTURE.read_bytes(), observed_at=NOW,
+                normalized_tag="#9PP",
+            )
+            assert processor.process_job(other_job, owner="other-reporter").outcome == "processed"
+            with psycopg.connect(connection_info) as connection:
+                assert connection.execute(
+                    """
+                    SELECT count(*) FROM battle_log_observation_source_rows AS source
+                    JOIN battle_log_observations AS log ON log.id = source.battle_log_observation_id
+                    JOIN battle_evidence AS evidence ON evidence.id = source.evidence_id
+                    WHERE evidence.reporting_player_id <> log.player_id
+                    """
+                ).fetchone()[0] == 0
         finally:
             database.close()

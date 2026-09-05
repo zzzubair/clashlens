@@ -2519,7 +2519,8 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
             metrics[1],
             {
                 **metrics[0],
-                "battle_canonical_rows": 2,
+                "battle_canonical_rows": 4,
+                "battle_occurrence_rows": 0,
                 "ranking_canonical_rows": 200,
             },
         )

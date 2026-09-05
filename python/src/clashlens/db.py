@@ -10281,16 +10281,16 @@ class Database:
                     )
                 ), members AS (
                     INSERT INTO battle_payload_rows (
-                        parsed_payload_id, source_row_index, source_row_id
+                        parsed_payload_id, reporting_player_id, source_row_index, source_row_id
                     )
-                    SELECT %s, input.source_row_index, source.id
+                    SELECT %s, %s, input.source_row_index, source.id
                     FROM input JOIN battle_source_rows AS source USING (report_hash)
-                    ON CONFLICT (parsed_payload_id, source_row_index) DO NOTHING
+                    ON CONFLICT (parsed_payload_id, reporting_player_id, source_row_index) DO NOTHING
                 )
                 UPDATE battle_log_observations SET parsed_payload_id = %s
                 WHERE id = %s
                 """,
-                (Jsonb(rows), payload_id, payload_id, log_id),
+                (Jsonb(rows), payload_id, reporter_id, payload_id, log_id),
             )
         else:
             connection.execute(
