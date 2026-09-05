@@ -85,7 +85,7 @@ def test_python_production_migration_supports_global_observations_without_fake_p
                 INSERT INTO archive_catalogue (
                     response_hash, archive_reference, byte_size, archive_instance_id
                 ) VALUES (repeat('a', 64), 's3://evidence/test', 0, 'fixture-instance')
-                ON CONFLICT (response_hash) DO NOTHING
+                ON CONFLICT (response_hash, archive_reference) DO NOTHING
                 """
             )
             observation_id = connection.execute(

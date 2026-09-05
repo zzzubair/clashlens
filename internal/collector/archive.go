@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ type s3Archive struct {
 	spool             *evidenceSpool
 	maximumBodyBytes  int64
 	catalogueVerified func(context.Context, string, int64) (bool, error)
+	catalogueLocation func(context.Context, string, int64) (archiveLocation, error)
 	verifiedHashes    sync.Map
 	markerMu          sync.Mutex
 	markerCheckedAt   time.Time
@@ -148,6 +150,13 @@ func (a *s3Archive) verifyWriteCapability(ctx context.Context, probeID string) e
 // evidence: a successful conditional PUT is followed by a bounded GET and
 // SHA-256 verification.
 func (a *s3Archive) putVerified(ctx context.Context, hash string, body []byte) (string, error) {
+	if len(hash) != sha256HexLength {
+		return "", errors.New("invalid archive hash")
+	}
+	return a.putVerifiedAt(ctx, hash, body, "s3://"+a.bucket+"/sha256/"+hash[:2]+"/"+hash)
+}
+
+func (a *s3Archive) putVerifiedAt(ctx context.Context, hash string, body []byte, reference string) (string, error) {
 	if int64(len(body)) > a.maximumBodyBytes {
 		return "", fmt.Errorf("%w: archive body exceeds single-part limit", errArchiveTerminal)
 	}
@@ -161,8 +170,10 @@ func (a *s3Archive) putVerified(ctx context.Context, hash string, body []byte) (
 	if hex.EncodeToString(digest[:]) != hash {
 		return "", fmt.Errorf("%w: supplied body does not match its hash", errArchiveChecksumMismatch)
 	}
-	objectKey := "sha256/" + hash[:2] + "/" + hash
-	reference := "s3://" + a.bucket + "/" + objectKey
+	objectKey, keyErr := a.evidenceObjectKey(reference, hash)
+	if keyErr != nil {
+		return "", keyErr
+	}
 	options := minio.PutObjectOptions{ContentType: "application/octet-stream", SendContentMd5: true, DisableContentSha256: true, DisableMultipart: true, UserMetadata: map[string]string{"sha256": hash}}
 	options.SetMatchETagExcept("*")
 	putStartedAt := time.Now()
@@ -270,7 +281,33 @@ func (a *s3Archive) verifyObjectBytes(
 }
 
 func (a *s3Archive) readVerifiedObject(ctx context.Context, hash, reference string, size int64) ([]byte, error) {
-	return a.readObjectBytes(ctx, "sha256/"+hash[:2]+"/"+hash, reference, hash, size)
+	key, err := a.evidenceObjectKey(reference, hash)
+	if err != nil {
+		return nil, err
+	}
+	return a.readObjectBytes(ctx, key, reference, hash, size)
+}
+
+func (a *s3Archive) evidenceObjectKey(reference, hash string) (string, error) {
+	if len(hash) != sha256HexLength {
+		return "", errors.New("invalid archive hash")
+	}
+	prefix := "s3://" + a.bucket + "/"
+	if !strings.HasPrefix(reference, prefix) {
+		return "", errors.New("archive location is outside the configured bucket")
+	}
+	key := strings.TrimPrefix(reference, prefix)
+	base := "sha256/" + hash[:2] + "/" + hash
+	if key != base {
+		token := strings.TrimPrefix(key, base+"/generation/")
+		if !strings.HasPrefix(reference, prefix) || token == key || len(token) != 32 {
+			return "", errors.New("invalid immutable archive location")
+		}
+		if _, err := hex.DecodeString(token); err != nil {
+			return "", errors.New("invalid archive generation")
+		}
+	}
+	return key, nil
 }
 
 func (a *s3Archive) readObjectBytes(ctx context.Context, objectKey, reference, expectedHash string, expectedSize int64) ([]byte, error) {

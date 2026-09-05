@@ -23,6 +23,7 @@ type store struct {
 	lastInactiveCleanupAt   atomic.Int64
 	metrics                 *collectorMetrics
 	archiveInstanceID       string
+	archiveRetention        bool
 }
 
 func openStore(ctx context.Context, databaseURL string, expectedContractVersion int) (*store, error) {
@@ -83,6 +84,13 @@ func openStoreWithPoolSize(ctx context.Context, databaseURL string, expectedCont
 		maxContractVersion:      expectedContractVersion,
 		recoveryRetrySupported:  recoveryRetrySupported,
 		inactiveCleanupInterval: inactivePlayerCleanupInterval,
+	}
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (
+        SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('archive_catalogue')
+          AND attname = 'availability' AND NOT attisdropped
+    )`).Scan(&opened.archiveRetention); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("detect archive retention contract: %w", err)
 	}
 	opened.lastInactiveCleanupAt.Store(time.Now().UnixNano())
 	return opened, nil

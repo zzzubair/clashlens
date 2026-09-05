@@ -73,6 +73,44 @@ func bodyAndHash(t *testing.T, body string) ([]byte, string) {
 	return []byte(body), hex.EncodeToString(digest[:])
 }
 
+func TestRawEvidenceRetiredLocationIsNeverReused(t *testing.T) {
+	scenario := newScenarioArchive(t, filepath.Join(t.TempDir(), "spool"))
+	ctx := context.Background()
+	body, hash := bodyAndHash(t, `{"items":[]}`)
+	oldReference := "s3://evidence/sha256/" + hash[:2] + "/" + hash
+	location := archiveLocation{reference: oldReference, verified: false}
+	scenario.catalogueLocation = func(context.Context, string, int64) (archiveLocation, error) {
+		return location, nil
+	}
+	for i := 0; i < 2; i++ {
+		reservation, err := scenario.reserve(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = scenario.secureAndCommit(ctx, reservation, body, func(_ context.Context, reference, _ string, _ int64) error {
+			if reference == oldReference || !strings.Contains(reference, "/generation/") {
+				t.Fatalf("retired location reused: %s", reference)
+			}
+			location = archiveLocation{reference: reference, verified: true}
+			return nil
+		}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	key := strings.TrimPrefix(location.reference, "s3://evidence/")
+	scenario.backend.mu.Lock()
+	requests := append([]string(nil), scenario.backend.requests[key]...)
+	oldRequests := len(scenario.backend.requests[strings.TrimPrefix(oldReference, "s3://evidence/")])
+	scenario.backend.mu.Unlock()
+	if fmt.Sprint(requests) != "[PUT GET]" || oldRequests != 0 {
+		t.Fatalf("generation requests %v; retired-key requests %d", requests, oldRequests)
+	}
+	if _, err := scenario.readVerifiedObject(ctx, hash, location.reference, int64(len(body))); err != nil {
+		t.Fatalf("generation fallback: %v", err)
+	}
+}
+
 func TestRawEvidenceVerifiedDuplicateUsesZeroBucketRequests(t *testing.T) {
 	scenario := newScenarioArchive(t, filepath.Join(t.TempDir(), "spool"))
 	ctx := context.Background()

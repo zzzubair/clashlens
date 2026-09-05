@@ -705,7 +705,131 @@ def test_duplicate_profiles_reuse_canonical_and_semantic_rows(
             assert timestamps[0] > first_updated_at
             assert timestamps[1] > NOW
             assert timestamps[2] is not None
-            assert timestamps[3] == json.loads(body)
+            assert timestamps[3] == {"representation": "player_profile_versions"}
+            with psycopg.connect(connection_info) as connection:
+                profiles = connection.execute(
+                    "SELECT name, trophies, profile_json FROM player_profile_versions ORDER BY id"
+                ).fetchall()
+            assert profiles == [
+                (changed["name"], changed["trophies"], {"clan": {"name": "Synthetic Clan"}}),
+                (changed["name"], changed["trophies"], {"clan": {"name": "Changed Clan"}}),
+            ]
+        finally:
+            database.close()
+
+
+def test_history_cleanup_keeps_reports_latest_profiles_and_unfinished_work(
+    database_url: str, archive_server
+) -> None:
+    from clashlens.history import prune_completed_history
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for endpoint, fixture in [("profile", PROFILE_FIXTURE), ("battle_log", BATTLE_FIXTURE)]:
+                for index in range(3):
+                    _, job = store_observation(
+                        connection_info, archive_server,
+                        occurrence_key=f"retention-{endpoint}-{index}", endpoint=endpoint,
+                        body=fixture.read_bytes(), normalized_tag="#2PP",
+                        observed_at=NOW + timedelta(minutes=index),
+                    )
+                    result = processor.process_job(job, owner="retention")
+                    assert result is not None and result.outcome == "processed"
+            pending_observation, pending_job = store_observation(
+                connection_info, archive_server,
+                occurrence_key="retention-pending", endpoint="profile",
+                body=PROFILE_FIXTURE.read_bytes(), normalized_tag="#2PP",
+                observed_at=NOW + timedelta(minutes=3),
+            )
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE collector_jobs SET updated_at = clock_timestamp() - interval '3 days'"
+                )
+                connection.execute(
+                    "UPDATE python_processing_jobs SET updated_at = clock_timestamp() - interval '3 days' WHERE status = 'complete'"
+                )
+                for invalid in (0, 47, 673):
+                    with pytest.raises(ValueError, match="retention_hours"):
+                        prune_completed_history(connection, retention_hours=invalid)
+                for invalid in (0, 1001):
+                    with pytest.raises(ValueError, match="max_jobs"):
+                        prune_completed_history(connection, max_jobs=invalid)
+                report = prune_completed_history(connection)
+                assert report["eligible_collection_jobs"] == 2
+                assert report["deleted_collection_jobs"] == 0
+                assert connection.execute("SELECT count(*) FROM collector_observations").fetchone()[0] == 7
+                applied = prune_completed_history(connection, apply=True)
+                assert applied["deleted_collection_jobs"] == 2
+                assert connection.execute("SELECT count(*) FROM collector_observations").fetchone()[0] == 5
+                assert connection.execute("SELECT count(*) FROM battle_evidence").fetchone()[0] == 1
+                assert connection.execute("SELECT count(*) FROM battle_log_observations").fetchone()[0] == 2
+                assert connection.execute(
+                    "SELECT observation_id FROM python_processing_jobs WHERE id = %s",
+                    (pending_job,),
+                ).fetchone()[0] == pending_observation
+                assert prune_completed_history(connection, apply=True)["deleted_collection_jobs"] == 0
+            assert database.get_player("#2PP") is not None
+        finally:
+            database.close()
+
+
+def test_compact_reports_survive_log_changes_and_perspective_corrections(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            first = json.loads(BATTLE_FIXTURE.read_bytes())["items"][0]
+            second = dict(first, opponentPlayerTag="#9PP", stars=0,
+                          destructionPercentage=49)
+            third = dict(first, opponentPlayerTag="#QPP")
+            defense = dict(first, attack=False, opponentPlayerTag="#2PP",
+                           opponentName="Synthetic Attacker")
+            correction = dict(first, stars=2, destructionPercentage=94)
+            polls = [
+                ("#2PP", [first]),
+                ("#2PP", [third, second, first]),  # two new events, positions shift
+                ("#2PP", [third, second, first]),  # no new evidence
+                ("#8PP", [defense]),             # same battle, other perspective
+                ("#2PP", [third, second, correction]),
+                ("#2PP", [third, second, first]),  # correction reverted, reuse report
+            ]
+            for index, (tag, items) in enumerate(polls):
+                _, job = store_observation(
+                    connection_info, archive_server,
+                    occurrence_key=f"compact-report-{index}", endpoint="battle_log",
+                    body=json.dumps({"items": items}).encode(),
+                    normalized_tag=tag, observed_at=NOW + timedelta(minutes=index),
+                )
+                result = processor.process_job(job, owner="compact-reports")
+                assert result is not None and result.outcome == "processed"
+                with psycopg.connect(connection_info) as connection:
+                    counts = connection.execute(
+                        """
+                        SELECT (SELECT count(*) FROM legend_battles),
+                               (SELECT count(*) FROM battle_evidence),
+                               (SELECT count(*) FROM battle_log_observation_rows)
+                        """
+                    ).fetchone()
+                    assert counts == [(1, 1, 0), (3, 3, 0), (3, 3, 0),
+                                      (3, 4, 0), (3, 5, 0), (3, 6, 0)][index]
+                    if index >= 3:
+                        state = text(connection.execute(
+                            """
+                            SELECT disagreement_state FROM legend_battles AS b
+                            JOIN players AS p ON p.id = b.defender_player_id
+                            WHERE p.normalized_tag = '#8PP'
+                            """
+                        ).fetchone()[0])
+                        assert state == ("disagreement" if index == 4 else "agreed")
+            with psycopg.connect(connection_info) as connection:
+                assert connection.execute(
+                    "SELECT attacker_gain, defender_loss FROM battle_evidence WHERE stars = 0"
+                ).fetchone() == (4, 0)
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_source_rows WHERE report_hash IS NOT NULL"
+                ).fetchone()[0] == 5
         finally:
             database.close()
 
@@ -752,7 +876,7 @@ def test_duplicate_battles_and_rankings_reuse_source_rows(
                         (SELECT count(*) FROM parsed_source_payloads
                          WHERE endpoint = 'battle_log'),
                         (SELECT count(*) FROM battle_source_rows
-                         WHERE parsed_payload_id IS NOT NULL),
+                         WHERE report_hash IS NOT NULL),
                         (SELECT count(*) FROM battle_log_observation_rows),
                         (SELECT count(*) FROM battle_evidence),
                         (SELECT count(*) FROM parsed_source_payloads
@@ -768,12 +892,51 @@ def test_duplicate_battles_and_rankings_reuse_source_rows(
             assert counts == (
                 1,
                 len(battle_items),
-                len(battle_items) * 2,
-                valid_battles * 2,
+                0,
+                valid_battles,
                 1,
                 200,
                 400,
                 400,
             )
+            # A late-arriving older log still needs its own as-of evidence:
+            # the current perspective's newer report cannot describe that log.
+            older_observation, older_job = store_observation(
+                connection_info, archive_server,
+                occurrence_key="dedup-battle-out-of-order", endpoint="battle_log",
+                body=BATTLE_FIXTURE.read_bytes(), observed_at=NOW - timedelta(minutes=1),
+                normalized_tag="#2PP",
+            )
+            assert processor.process_job(older_job, owner="older-log").outcome == "processed"
+            with psycopg.connect(connection_info) as connection:
+                covered = connection.execute(
+                    """
+                    SELECT count(*) FROM battle_log_observation_source_rows AS source
+                    JOIN battle_log_observations AS log ON log.id = source.battle_log_observation_id
+                    WHERE log.observation_id = %s AND source.evidence_id IS NOT NULL
+                    """, (older_observation,),
+                ).fetchone()[0]
+                assert covered == valid_battles
+                assert connection.execute(
+                    "SELECT min(source_observed_at) FROM battle_perspectives"
+                ).fetchone()[0] == NOW + timedelta(minutes=1)
+            # Identical raw bytes can be returned for different requested players.
+            # Membership must preserve the reporter, not just the payload hash.
+            _, other_job = store_observation(
+                connection_info, archive_server,
+                occurrence_key="dedup-battle-other-reporter", endpoint="battle_log",
+                body=BATTLE_FIXTURE.read_bytes(), observed_at=NOW,
+                normalized_tag="#9PP",
+            )
+            assert processor.process_job(other_job, owner="other-reporter").outcome == "processed"
+            with psycopg.connect(connection_info) as connection:
+                assert connection.execute(
+                    """
+                    SELECT count(*) FROM battle_log_observation_source_rows AS source
+                    JOIN battle_log_observations AS log ON log.id = source.battle_log_observation_id
+                    JOIN battle_evidence AS evidence ON evidence.id = source.evidence_id
+                    WHERE evidence.reporting_player_id <> log.player_id
+                    """
+                ).fetchone()[0] == 0
         finally:
             database.close()

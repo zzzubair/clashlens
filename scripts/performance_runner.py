@@ -45,7 +45,7 @@ DUPLICATE_ENDPOINT_MIX = {
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
 ARTIFACT_SCHEMA_VERSION = 9
 CANDIDATE_RECEIPT_SCHEMA_VERSION = 2
-REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 16))
+REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 19))
 CANONICAL_REPOSITORY_URL = "https://github.com/zzzubair/clashlens"
 CONFIGURATION_KEYS = {
     "mode",
@@ -2050,7 +2050,11 @@ def _validate_duplicate_protocol(
         )
     ):
         raise ValueError(f"{label} profile canonical counts are invalid")
-    if canonical["battle_canonical_rows"] > canonical["battle_occurrence_rows"] or canonical["ranking_canonical_rows"] > canonical["ranking_occurrence_links"]:
+    if (
+        (canonical["battle_occurrence_rows"] > 0
+         and canonical["battle_canonical_rows"] > canonical["battle_occurrence_rows"])
+        or canonical["ranking_canonical_rows"] > canonical["ranking_occurrence_links"]
+    ):
         raise ValueError(f"{label} canonical counts are invalid")
     summary = workload.get("processing_summary")
     if (
@@ -5308,6 +5312,7 @@ def _run_duplicate(
             if getattr(database, "_supports_content_dedup", False):
                 battle_canonical_rows = connection.execute(
                     "SELECT count(*) FROM battle_source_rows WHERE parsed_payload_id IS NOT NULL"
+                    + (" OR report_hash IS NOT NULL" if getattr(database, "_supports_compact_battles", False) else "")
                 ).fetchone()[0]
                 battle_occurrence_rows = connection.execute(
                     "SELECT count(*) FROM battle_log_observation_rows"
