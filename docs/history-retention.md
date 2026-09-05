@@ -91,6 +91,68 @@ pruning, exhaustive replay of every historical poll is intentionally unavailable
 new replay work against retired evidence is rejected. Durable semantic battle,
 player and publication history remains available.
 
+## Fedora fixture measurements
+
+Measured application source: `807be87` (September 5, 2026). PostgreSQL 18 ran
+in the owned disposable Fedora container with 2 CPUs / 2 GiB; the Python driver
+used four lanes. No official API requests were made. The host filesystem had
+1,017,969,311,744 usable bytes and about 80.6 GB used. Temporary spool files were
+on tmpfs, so their measurements are byte accounting, not NVMe performance proof.
+
+| Probe | Workload | Relation growth | WAL generated | Spool / distinct raw bytes |
+| --- | --- | ---: | ---: | ---: |
+| Duplicate | 100 balanced responses × 2 cycles | 11,239,424 B | 21,821,224 B | 55,630 B |
+| Mixed | 20 live profiles + 100 battle/backfill jobs | 2,023,424 B | 2,479,936 B | 5,915 B |
+
+Both probes reported no hard failures or active queue residue. Retained WAL
+was 1 GiB and did not grow during either short sample; this does not mean WAL
+or backup storage costs zero. Duplicate processing produced 33 shared battles,
+33 evidence rows and **zero per-battle occurrence rows**, despite 66 battle-log
+responses. It still wrote 200 observations and processing jobs. The balanced
+sample deliberately overrepresents Top-200 relative to production: its 66
+ranking responses produced 13,200 operational entry links. Do not scale its
+56,197 B/response average to the production endpoint mix.
+
+For the 100-battle mixed sample, the allocated totals for `legend_battles`,
+`battle_source_rows`, `battle_evidence`, `battle_perspectives` and
+`battle_payload_rows` sum to 581,632 B: **5,816 B/distinct battle** for these
+selected tables, including index/TOAST allocation, ignored source rows and
+small-table page overhead. At the planning estimate of 100,000 battles/day,
+180 days would use about **104.7 GB for these tables alone**. That is not total
+local use: the sample does not establish representative armies, correction or
+opposite-perspective frequency, profile changes per player/day, retained roots,
+publications, vacuum reuse, backups or orphan growth. A full player/day rate and
+six-month headroom remain unqualified.
+
+A separate four-cycle cleanup probe aged completed bookkeeping by three days.
+Preview changed no rows; apply reduced observations/collector jobs from 400 to
+135, processing jobs from 400 to zero, profile effects from 136 to 68, log samples
+from 132 to 66 and ranking versions from 132 to one. All 66 source reports,
+33 battle evidence rows, 34 profile versions and 200 canonical ranking rows
+remained. This tests row retention, not post-vacuum filesystem shrinkage.
+
+The duplicate archive probe verified one PUT plus one GET for a new object and
+zero bucket requests for its verified repeats. Real archive GB-month, PUT/GET,
+DELETE and egress cost still require representative raw novelty/body sizes and
+the selected Scaleway tariff. Neither fixture byte totals nor a creation-age
+lifecycle establish that cost.
+
+Reproduce the storage probes from `python/` with the disposable database URL:
+
+```sh
+python ../scripts/performance_runner.py duplicate-heavy \
+  --duplicate-observations 100 --duplicate-cycles 2 --lanes 4 --output /retained/duplicates.json
+python ../scripts/performance_runner.py mixed-backfill \
+  --live-jobs 20 --backfill-jobs 100 --lanes 4 --output /retained/mixed.json
+```
+
+Artifacts remain on Fedora under `/home/zubair/clashlens-issue82-tools/`:
+`duplicates-807be87.json` (artifact digest
+`753ce30eca14b36d5624a4ba8c873c0ae26ae758d90de284bebc6e1d070062f4`) and
+`mixed-807be87.json` (artifact digest
+`f91611779b7d542086fcb3b41a46afc0a7712037729904b77cfb6643170e23da`).
+The reproducible cleanup probe is retained there as `prune-probe.py`.
+
 ## Capacity and rollout gates
 
 A six-month capacity guarantee requires measured novelty, relation/index/TOAST
