@@ -763,6 +763,24 @@ def test_two_connections_see_fence_and_serialize_finalize(
             database.close()
 
 
+def test_projection_marks_unmeasured_components_and_budget_unavailable() -> None:
+    projection = project_six_months(
+        player_season_bytes=100.0,
+        army_season_bytes=50.0,
+        live_detail_bytes_per_day=None,
+        daily_bookkeeping_bytes_per_day=None,
+        usable_bytes=1_000_000,
+    )
+    assert projection["projection_semantics"] == "lower_bound_with_unmeasured_components"
+    assert projection["live_detail_bytes"] is None
+    assert projection["bookkeeping_bytes"] is None
+    assert projection["fits_budget"] is None
+    assert set(projection["unmeasured_components"]) == {
+        "live_detail_bytes_per_day",
+        "daily_bookkeeping_bytes_per_day",
+    }
+
+
 def test_measurement_snapshot_and_projection_labels(database_url: str) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = ApiDatabase(connection_info)

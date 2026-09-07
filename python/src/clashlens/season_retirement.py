@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -60,11 +60,15 @@ def _table_exists(connection: Any, table: str) -> bool:
     return bool(row and row[0])
 
 
-def _lock_season(connection: Any, season_id: str) -> None:
+def acquire_season_lock(connection: Any, season_id: str) -> None:
+    """Use one transaction-scoped lock for every season detail writer."""
     connection.execute(
         "SELECT pg_advisory_xact_lock(hashtext(%s))",
         (f"season-retirement:{season_id}",),
     )
+
+
+_lock_season = acquire_season_lock
 
 
 def _check_season_id(season_id: str) -> str:
@@ -80,7 +84,10 @@ def _check_batch(value: int, label: str) -> int:
 
 
 def is_season_detail_retired(connection: Any, season_id: str) -> bool:
-    """True once a season is finalized (writers fenced) or retired."""
+    """True once a season is finalized (writers fenced) or retired.
+
+    Mutating callers acquire_season_lock first and hold it through their writes.
+    """
     if not _table_exists(connection, "season_detail_retirements"):
         return False
     row = connection.execute(
@@ -191,14 +198,7 @@ def finalize_season_detail(
             "already_finalized": False,
             "applied": False,
         }
-    bounds = connection.execute(
-        """
-        SELECT min(ranked_day_start), max(ranked_day_end)
-        FROM api_player_daily_logs WHERE official_season_id = %s
-        """,
-        (season_id,),
-    ).fetchone()
-    season_start, season_end = (bounds[0], bounds[1]) if bounds else (None, None)
+    season_start, season_end = _canonical_season_bounds(connection, season_id, now_utc)
     if season_start is None or season_end is None or not season_end <= now_utc:
         return {
             "season_id": season_id,
@@ -341,6 +341,42 @@ def finalize_season_detail(
         "already_finalized": False,
         "applied": True,
     }
+
+
+def _canonical_season_bounds(
+    connection: Any, season_id: str, now: datetime
+) -> tuple[Any, Any]:
+    """Return the exact 28-day window, never the observed log envelope."""
+    from .domain import SEASON_ANCHOR_RULE_VERSION, SEASON_DURATION
+
+    anchor = connection.execute(
+        """
+        SELECT current_league_season_id, previous_league_season_id,
+               current_start, previous_start
+        FROM legend_season_anchors
+        WHERE state = 'confirmed' AND anchor_rule_version = %s
+        ORDER BY current_start DESC LIMIT 1
+        """,
+        (SEASON_ANCHOR_RULE_VERSION,),
+    ).fetchone()
+    if anchor is not None:
+        for anchored_id, start in ((anchor[0], anchor[2]), (anchor[1], anchor[3])):
+            if _text(anchored_id) == season_id and start is not None:
+                return start, start + SEASON_DURATION
+    witness = connection.execute(
+        """
+        SELECT ranked_day_start FROM api_player_daily_logs
+        WHERE official_season_id = %s AND season_day_number = 28
+          AND state = 'Complete' AND ranked_day_end IS NOT NULL
+          AND ranked_day_end <= %s
+        ORDER BY ranked_day_start LIMIT 1
+        """,
+        (season_id, now),
+    ).fetchone()
+    if witness is None:
+        return None, None
+    start = witness[0] - timedelta(days=27)
+    return start, start + timedelta(days=28)
 
 
 def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -> dict[str, int]:
@@ -542,8 +578,13 @@ def _eligible_counts(
     counts["army_facts"] = connection.execute(
         """
         SELECT count(*) FROM (
-            SELECT id FROM army_analytics_battle_facts
-            WHERE official_season_id = %s ORDER BY id LIMIT %s
+            SELECT fact.id FROM army_analytics_battle_facts AS fact
+            WHERE fact.official_season_id = %s
+              AND NOT EXISTS (
+                  SELECT 1 FROM army_analytics_battle_facts AS newer
+                  WHERE newer.supersedes_id = fact.id
+              )
+            ORDER BY fact.id LIMIT %s
         ) AS candidates
         """,
         (season_id, limit),
@@ -610,9 +651,14 @@ def _delete_retirement_batch(
         connection.execute("SET LOCAL statement_timeout = '30s'")
         rows = connection.execute(
             """
-            SELECT id FROM army_analytics_battle_facts
-            WHERE official_season_id = %s ORDER BY id LIMIT %s
-            FOR UPDATE SKIP LOCKED
+            SELECT fact.id FROM army_analytics_battle_facts AS fact
+            WHERE fact.official_season_id = %s
+              AND NOT EXISTS (
+                  SELECT 1 FROM army_analytics_battle_facts AS newer
+                  WHERE newer.supersedes_id = fact.id
+              )
+            ORDER BY fact.id LIMIT %s
+            FOR UPDATE OF fact SKIP LOCKED
             """,
             (season_id, limit),
         ).fetchall()
@@ -647,10 +693,9 @@ def _delete_version_chain(connection: Any, table: str, ids: list[int]) -> int:
               AND NOT EXISTS (
                   SELECT 1 FROM {table} AS newer
                   WHERE newer.supersedes_id = {table}.id
-                    AND newer.id = ANY(%s::bigint[])
               )
             """,
-            (ids, ids),
+            (ids,),
         ).rowcount
         total += removed
         if not removed:
@@ -837,10 +882,10 @@ def measure_season_storage(
 
 def project_six_months(
     *,
-    player_season_bytes: float,
-    army_season_bytes: float,
-    live_detail_bytes_per_day: float,
-    daily_bookkeeping_bytes_per_day: float,
+    player_season_bytes: float | None,
+    army_season_bytes: float | None,
+    live_detail_bytes_per_day: float | None,
+    daily_bookkeeping_bytes_per_day: float | None,
     players: int = 12500,
     season_days: int = 28,
     months: int = 6,
@@ -860,11 +905,30 @@ def project_six_months(
         raise ValueError("projection headroom is outside the supported range")
     days = months * 365 // 12
     seasons = days / season_days
-    retained_summaries = players * float(player_season_bytes) * seasons
-    retained_army = float(army_season_bytes) * seasons
-    live_detail = float(live_detail_bytes_per_day) * season_days
-    bookkeeping = float(daily_bookkeeping_bytes_per_day) * days
-    total = retained_summaries + retained_army + live_detail + bookkeeping
+    retained_summaries = (
+        players * float(player_season_bytes) * seasons
+        if player_season_bytes is not None else 0
+    )
+    retained_army = (
+        float(army_season_bytes) * seasons if army_season_bytes is not None else 0
+    )
+    live_detail = (
+        float(live_detail_bytes_per_day) * season_days
+        if live_detail_bytes_per_day is not None else None
+    )
+    bookkeeping = (
+        float(daily_bookkeeping_bytes_per_day) * days
+        if daily_bookkeeping_bytes_per_day is not None else None
+    )
+    total = retained_summaries + retained_army + (live_detail or 0) + (bookkeeping or 0)
+    unmeasured = [
+        name for name, value in (
+            ("live_detail_bytes_per_day", live_detail_bytes_per_day),
+            ("daily_bookkeeping_bytes_per_day", daily_bookkeeping_bytes_per_day),
+            ("player_season_bytes", player_season_bytes),
+            ("army_season_bytes", army_season_bytes),
+        ) if value is None
+    ]
     usable = usable_bytes
     if usable is None:
         try:
@@ -879,13 +943,15 @@ def project_six_months(
         "players": players,
         "retained_player_summary_bytes": int(retained_summaries),
         "retained_army_summary_bytes": int(retained_army),
-        "live_detail_bytes": int(live_detail),
-        "bookkeeping_bytes": int(bookkeeping),
+        "live_detail_bytes": int(live_detail) if live_detail is not None else None,
+        "bookkeeping_bytes": int(bookkeeping) if bookkeeping is not None else None,
         "projected_total_bytes": int(total),
+        "projection_semantics": "lower_bound_with_unmeasured_components" if unmeasured else "measured_components",
+        "unmeasured_components": unmeasured,
         "usable_bytes": int(usable or 0),
         "headroom_fraction": headroom_fraction,
         "budget_bytes": int(budget),
-        "fits_budget": bool(budget and total <= budget),
+        "fits_budget": (None if unmeasured or not budget else bool(total <= budget)),
         "labels": [
             "synthetic extrapolation, not #60 Step 9 live validation",
             "vacuum-reusable space is not disk shrinkage",

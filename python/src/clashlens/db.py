@@ -1447,6 +1447,52 @@ class Database:
                     connection, claim, job, state="complete", outcome="processed"
                 )
 
+    @staticmethod
+    def _guard_battle_rows(connection: Any, rows: list[Any]) -> list[Any]:
+        """Lock every known season before filtering rolling battle input."""
+        from .season_retirement import (
+            acquire_season_lock,
+            filter_live_rows,
+            retired_day_ranges,
+        )
+
+        seasons: set[str] = set()
+        has_retirement_table = bool(
+            connection.execute(
+                "SELECT to_regclass(%s) IS NOT NULL",
+                ("season_detail_retirements",),
+            ).fetchone()[0]
+        )
+        for item in rows:
+            if item.battle is None:
+                continue
+            season_rows = connection.execute(
+                """
+                SELECT official_season_id FROM ranked_day_versions
+                WHERE ranked_day_start = %s
+                ORDER BY id DESC LIMIT 1
+                """,
+                (item.battle.ranked_day_start,),
+            ).fetchall()
+            seasons.update(_text_value(row[0]) for row in season_rows)
+            if has_retirement_table:
+                retired_rows = connection.execute(
+                    """
+                    SELECT official_season_id FROM season_detail_retirements
+                    WHERE status IN ('finalized', 'retired')
+                      AND season_start <= %s AND season_end > %s
+                    """,
+                    (item.battle.ranked_day_start, item.battle.ranked_day_start),
+                ).fetchall()
+                seasons.update(_text_value(row[0]) for row in retired_rows)
+        for season_id in sorted(seasons):
+            acquire_season_lock(connection, season_id)
+        return filter_live_rows(
+            rows,
+            lambda item: item.battle.ranked_day_start,
+            retired_day_ranges(connection),
+        )
+
     def _complete_battle_log_legacy(self, claim: Claim, battle_log: ParsedBattleLog) -> None:
         (
             observation_id,
@@ -1460,15 +1506,7 @@ class Database:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
                 valid_rows = [row for row in battle_log.rows if row.battle is not None]
-                # Rolling logs may carry retired battles: skip those rows but
-                # still process live-season content in the same observation.
-                from .season_retirement import filter_live_rows, retired_day_ranges
-
-                valid_rows = filter_live_rows(
-                    valid_rows,
-                    lambda row: row.battle.ranked_day_start,
-                    retired_day_ranges(connection),
-                )
+                valid_rows = self._guard_battle_rows(connection, valid_rows)
                 player_tags = {battle_log.normalized_tag}
                 for row in valid_rows:
                     assert row.battle is not None
@@ -2234,6 +2272,10 @@ class Database:
         with self._timed_connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
+                valid_rows = self._guard_battle_rows(
+                    connection,
+                    [row for row in battle_log.rows if row.battle is not None],
+                )
                 parsed_payload_id = self._record_parsed_payload(
                     connection,
                     endpoint=endpoint,
@@ -2245,16 +2287,6 @@ class Database:
                     ),
                     parsed_json={"items": [row.source_json for row in battle_log.rows]},
                     representation="battle_payload_rows" if compact else None,
-                )
-                valid_rows = [row for row in battle_log.rows if row.battle is not None]
-                # Rolling logs may carry retired battles: skip those rows but
-                # still process live-season content in the same observation.
-                from .season_retirement import filter_live_rows, retired_day_ranges
-
-                valid_rows = filter_live_rows(
-                    valid_rows,
-                    lambda row: row.battle.ranked_day_start,
-                    retired_day_ranges(connection),
                 )
                 player_tags = {battle_log.normalized_tag}
                 for row in valid_rows:
@@ -2923,10 +2955,42 @@ class Database:
                 now = now_row[0]
                 from .season_retirement import (
                     SEASON_DETAIL_RETIRED,
+                    acquire_season_lock,
                     is_detail_retired_for_day,
+                    is_season_detail_retired,
                 )
 
-                if is_detail_retired_for_day(connection, ranked_day.start):
+                season_row = connection.execute(
+                    """
+                    SELECT official_season_id FROM ranked_day_versions
+                    WHERE player_id = %s AND ranked_day_start = %s
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (player_id, ranked_day.start),
+                ).fetchone()
+                season_id = _text_value(season_row[0]) if season_row else None
+                if season_id is None:
+                    anchor_row = connection.execute(
+                        """
+                        SELECT current_league_season_id, previous_league_season_id,
+                               current_start, previous_start
+                        FROM legend_season_anchors
+                        WHERE state = 'confirmed' AND anchor_rule_version = %s
+                        ORDER BY current_start DESC LIMIT 1
+                        """,
+                        (SEASON_ANCHOR_RULE_VERSION,),
+                    ).fetchone()
+                    if anchor_row is not None:
+                        season_id = _text_value(
+                            anchor_row[0]
+                            if ranked_day.start >= anchor_row[2]
+                            else anchor_row[1]
+                        )
+                if season_id is not None and season_id != "unknown":
+                    acquire_season_lock(connection, season_id)
+                if is_detail_retired_for_day(connection, ranked_day.start) or (
+                    season_id is not None and is_season_detail_retired(connection, season_id)
+                ):
                     raise DomainRuleError(
                         SEASON_DETAIL_RETIRED,
                         f"ranked day {ranked_day.start.isoformat()} is retired",
@@ -6639,9 +6703,11 @@ class Database:
         if official_season_id != "unknown":
             from .season_retirement import (
                 SEASON_DETAIL_RETIRED,
+                acquire_season_lock,
                 is_season_detail_retired,
             )
 
+            acquire_season_lock(connection, official_season_id)
             if is_season_detail_retired(connection, official_season_id):
                 raise DomainRuleError(
                     SEASON_DETAIL_RETIRED,
@@ -8644,6 +8710,31 @@ class Database:
                 """,
                 (generation_id,),
             ).fetchall()
+            from .season_retirement import (
+                SEASON_DETAIL_RETIRED,
+                acquire_season_lock,
+                is_season_detail_retired,
+            )
+            seasons = [
+                _text_value(row[0])
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT ranked.official_season_id
+                    FROM boundary_publication_generation_members AS member
+                    JOIN ranked_day_versions AS ranked
+                      ON ranked.id = member.ranked_day_version_id
+                    WHERE member.generation_id = %s
+                    """,
+                    (generation_id,),
+                ).fetchall()
+            ]
+            for season_id in sorted(set(seasons)):
+                acquire_season_lock(connection, season_id)
+                if is_season_detail_retired(connection, season_id):
+                    raise DomainRuleError(
+                        SEASON_DETAIL_RETIRED,
+                        f"season {season_id} detail is retired",
+                    )
             for player_id, version_id, snapshot_status in members:
                 army_status = self._boundary_army_status(
                     connection,
@@ -8698,6 +8789,11 @@ class Database:
             return
         ranked_day_version_id = int(completed[0])
         season_id = _text_value(completed[1])
+        from .season_retirement import acquire_season_lock, is_season_detail_retired
+
+        acquire_season_lock(connection, season_id)
+        if is_season_detail_retired(connection, season_id):
+            return
         latest_decode = connection.execute(
             """
             SELECT COALESCE(max(decode.id), 0)
@@ -8816,14 +8912,6 @@ class Database:
                             "army publication target dependency is not ready"
                         )
                     manifest_digest_value = _text_value(manifest_digest[0])
-                    connection.execute(
-                        """
-                        UPDATE boundary_publication_generations
-                        SET army_state = 'building', updated_at = clock_timestamp()
-                        WHERE id = %s AND army_state = 'ready'
-                        """,
-                        (generation_row[0],),
-                    )
                     pending_members = connection.execute(
                         """
                         SELECT 1
@@ -8864,6 +8952,27 @@ class Database:
                 if ranked_day_str is None or season_id is None:
                     raise ValueError(
                         "army analytics requires ranked-day and season inputs"
+                    )
+                from .season_retirement import (
+                    SEASON_DETAIL_RETIRED,
+                    acquire_season_lock,
+                    is_season_detail_retired,
+                )
+
+                acquire_season_lock(connection, str(season_id))
+                if is_season_detail_retired(connection, str(season_id)):
+                    raise DomainRuleError(
+                        SEASON_DETAIL_RETIRED,
+                        f"season {season_id} detail is retired",
+                    )
+                if generation_row is not None:
+                    connection.execute(
+                        """
+                        UPDATE boundary_publication_generations
+                        SET army_state = 'building', updated_at = clock_timestamp()
+                        WHERE id = %s AND army_state = 'ready'
+                        """,
+                        (generation_row[0],),
                     )
                 manifest_members = None
                 manifest_versions = None
@@ -9453,9 +9562,9 @@ class Database:
 
         # Retired detail stays retired: a late day build must not replace
         # verified summaries from a reduced post-retirement sample.
+        acquire_army_season_lock(connection, season_id)
         if is_season_detail_retired(connection, season_id):
             return
-        acquire_army_season_lock(connection, season_id)
         summarized = connection.execute(
             """
             SELECT 1 FROM army_season_summaries
@@ -9570,6 +9679,19 @@ class Database:
                 raise ValueError("dependency_not_ready: ranked day is not complete")
         else:
             official_season_id = _text_value(completed[0])
+        from .season_retirement import (
+            SEASON_DETAIL_RETIRED,
+            acquire_season_lock,
+            is_season_detail_retired,
+        )
+
+        assert official_season_id is not None
+        acquire_season_lock(connection, str(official_season_id))
+        if is_season_detail_retired(connection, str(official_season_id)):
+            raise DomainRuleError(
+                SEASON_DETAIL_RETIRED,
+                f"season {official_season_id} detail is retired",
+            )
 
         rows = connection.execute(
             f"""
@@ -10364,6 +10486,34 @@ class Database:
                     raise ValueError("redecode requires battle_id or battle_ids")
                 if len(battle_ids) > 100:
                     raise ValueError("redecode batch limited to 100")
+                from .season_retirement import (
+                    SEASON_DETAIL_RETIRED,
+                    acquire_season_lock,
+                    is_season_detail_retired,
+                )
+
+                seasons = [
+                    _text_value(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT DISTINCT ranked.official_season_id
+                        FROM legend_battles AS battle
+                        JOIN ranked_day_versions AS ranked
+                          ON ranked.ranked_day_start = battle.ranked_day_start
+                        WHERE battle.id = ANY(%s::bigint[])
+                        """,
+                        (sorted(set(battle_ids)),),
+                    ).fetchall()
+                ]
+                if not seasons:
+                    raise ValueError("redecode season metadata is unavailable")
+                for season_id in sorted(set(seasons)):
+                    acquire_season_lock(connection, season_id)
+                    if is_season_detail_retired(connection, season_id):
+                        raise DomainRuleError(
+                            SEASON_DETAIL_RETIRED,
+                            f"season {season_id} detail is retired",
+                        )
                 self._upsert_army_decodes(connection, battle_ids)
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"

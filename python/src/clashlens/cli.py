@@ -433,17 +433,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 measurement = measure_season_storage(
                     connection, arguments.season_id or None
                 )
-            player_bytes = 0.0
             season_rows = measurement["summaries"].get("player_season", {})
-            if season_rows.get("rows"):
-                player_bytes = float(season_rows["total_bytes"]) / float(season_rows["rows"])
+            player_bytes = (
+                float(season_rows["total_bytes"]) / float(season_rows["rows"])
+                if season_rows.get("rows") else None
+            )
             army_rows = measurement["summaries"].get("army_season", {})
-            army_bytes = float(army_rows.get("total_bytes", 0) or 0)
+            army_bytes = (
+                float(army_rows["total_bytes"])
+                if army_rows.get("rows") else None
+            )
             projection = project_six_months(
                 player_season_bytes=player_bytes,
                 army_season_bytes=army_bytes,
-                live_detail_bytes_per_day=0.0,
-                daily_bookkeeping_bytes_per_day=0.0,
+                live_detail_bytes_per_day=None,
+                daily_bookkeeping_bytes_per_day=None,
                 players=arguments.players,
                 headroom_fraction=float(arguments.headroom_percent) / 100.0,
             )

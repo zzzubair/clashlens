@@ -51,9 +51,12 @@ counts, compact-summary size distribution, and the explicit unmeasured
 list: generated WAL, retained WAL and base backups (seven-day recovery
 window), spool occupancy, and remote raw bytes/request tariffs. The
 projection covers six calendar months (about 6.5 twenty-eight-day
-seasons) against measured usable capacity with headroom; it labels
-itself synthetic extrapolation, never #60 Step 9 live validation, and
-treats vacuum-reusable space as reusable, not as disk shrinkage.
+seasons) against measured usable capacity with headroom. Live detail and
+daily bookkeeping are not guessed as zero: until measured, the projection
+reports a lower bound, names the missing components, and leaves
+`fits_budget` unavailable. It labels itself synthetic extrapolation, never
+#60 Step 9 live validation, and treats vacuum-reusable space as reusable,
+not as disk shrinkage.
 
 Synthetic fixture illustration (2-player populated season, empty battle
 arrays, PostgreSQL 18): 56 daily logs at 114,688 B allocated and 3 army
@@ -62,10 +65,11 @@ army summary rows at 8,720 B total retained with byte-identical API
 reads; relation files did not shrink (vacuum-reusable). The labeled
 12,500-player projection from this fixture is about 114 MB of retained
 summaries over 6.5 seasons against measured Fedora capacity — a lower
-bound, not acceptance: the fixture carries no live detail or
+bound, not acceptance: the fixture carries no measured live detail or
 bookkeeping load, no TOAST pressure or at-scale indexes, no
 correction/opposite-perspective frequency, and no WAL, backup, spool,
-or remote-tariff costs.
+or remote-tariff costs. The storage CLI leaves those major components
+unmeasured rather than passing zero values.
 
 Migration 0020 adds shared whole-season army summaries: one
 `army_season_summaries` record per (season, lens, category) with

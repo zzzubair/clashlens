@@ -442,8 +442,13 @@ def materialize_player_season(
     """
     if not season_id or len(season_id) > 128:
         raise ValueError("official season id is outside the supported range")
-    from .season_retirement import SEASON_DETAIL_RETIRED, is_season_detail_retired
+    from .season_retirement import (
+        SEASON_DETAIL_RETIRED,
+        acquire_season_lock,
+        is_season_detail_retired,
+    )
 
+    acquire_season_lock(connection, season_id)
     if is_season_detail_retired(connection, season_id):
         existing_digest = connection.execute(
             """
@@ -462,10 +467,6 @@ def materialize_player_season(
             if existing_digest is not None
             else None,
         }
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtext(%s))",
-        (f"player-season:{int(player_id)}:{season_id}",),
-    )
     projected = _project(int(player_id), season_id, connection)
     if projected is None:
         return {"status": "missing", "content_digest": None}
@@ -611,8 +612,13 @@ def materialize_completed_seasons(
         or after_player_id < 0
     ):
         raise ValueError("backfill cursor is outside the supported range")
-    from .season_retirement import SEASON_DETAIL_RETIRED, is_season_detail_retired
+    from .season_retirement import (
+        SEASON_DETAIL_RETIRED,
+        acquire_season_lock,
+        is_season_detail_retired,
+    )
 
+    acquire_season_lock(connection, season_id)
     if is_season_detail_retired(connection, season_id):
         return {
             "season_id": season_id,
