@@ -452,8 +452,9 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                     """,
                     (DAY_END,),
                 ).fetchone()
-                assert correction[0] == 1
-                assert correction[2] == ["army"]
+                # An unchanged battle report must not trigger an army correction.
+                # The changed baseline is published after player reconciliation.
+                assert correction[0] == 0
                 second_job_row = connection.execute(
                     """
                     SELECT id

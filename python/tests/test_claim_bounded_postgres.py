@@ -97,7 +97,7 @@ def _seed_production_depth(connection: psycopg.Connection) -> None:
             SELECT lpad(to_hex(job.id), 64, '0'),
                    's3://evidence/seed-' || job.id, 0, 'fixture-instance'
             FROM collector_jobs AS job
-            ON CONFLICT (response_hash) DO NOTHING
+            ON CONFLICT (response_hash, archive_reference) DO NOTHING
             """
         )
     catalogue_columns = ", archive_catalogue_hash"

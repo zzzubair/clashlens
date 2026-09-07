@@ -23,6 +23,112 @@ from clashlens.archive import (
 FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 
 
+def test_last_seen_archive_retirement_fences_replay_and_unknown_delete(
+    database_url: str, archive_server, tmp_path: Path
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import UTC, datetime
+    from time import monotonic, sleep
+
+    import psycopg
+    from domain_test_support import domain_database, store_observation
+    from test_domain_processing_postgres import _processor
+    from test_parsed_content_dedup_postgres import _replay_job
+
+    from clashlens.archive_retention import retire_archive_objects
+    from clashlens.spool import Spool
+
+    class DeleteClient:
+        def __init__(self):
+            self.keys = set()
+            self.fail = True
+
+        def remove_object(self, bucket, key):
+            assert bucket == "evidence"
+            if self.fail:
+                self.fail = False
+                raise TimeoutError("unknown delete result")
+            self.keys.discard(key)
+
+    with domain_database(database_url, include_coordinator=True) as dsn:
+        database, processor = _processor(dsn, archive_server)
+        spool = Spool(tmp_path / "retention-spool", max_body_bytes=1 << 20)
+        client = DeleteClient()
+        try:
+            observation, job = store_observation(
+                dsn, archive_server, occurrence_key="expiry-first", endpoint="profile",
+                body=FIXTURE.read_bytes(), normalized_tag="#2PP", observed_at=datetime.now(UTC),
+            )
+            assert processor.process_job(job, owner="expiry").outcome == "processed"
+            with psycopg.connect(dsn, autocommit=True) as connection:
+                digest, reference = connection.execute(
+                    "SELECT response_hash, archive_reference FROM collector_observations WHERE id = %s",
+                    (observation,),
+                ).fetchone()
+                digest = digest.decode() if isinstance(digest, bytes) else digest
+                reference = reference.decode() if isinstance(reference, bytes) else reference
+                client.keys.add(reference.removeprefix("s3://evidence/"))
+
+                def racing_replay():
+                    with psycopg.connect(dsn, autocommit=True, application_name="expiry-racing-replay") as replay:
+                        replay.execute("SET statement_timeout = '5s'")
+                        _replay_job(replay, observation, "supercell-source-parser-v2")
+
+                # Make a replay wait behind retirement. Its availability check
+                # must run after the observation lock, not before the FK waits.
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    with connection.transaction():
+                        connection.execute(
+                            "SELECT id FROM collector_observations WHERE id = %s FOR UPDATE",
+                            (observation,),
+                        )
+                        future = executor.submit(racing_replay)
+                        deadline = monotonic() + 3
+                        while not connection.execute(
+                            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = 'expiry-racing-replay' AND wait_event_type = 'Lock')"
+                        ).fetchone()[0]:
+                            assert monotonic() < deadline, "replay did not reach the observation fence"
+                            connection.execute("SELECT pg_stat_clear_snapshot()")
+                            sleep(0.01)
+                        connection.execute("UPDATE archive_catalogue SET availability = 'retiring'")
+                    with pytest.raises(psycopg.errors.RaiseException, match="expired"):
+                        future.result(timeout=5)
+                connection.execute("UPDATE archive_catalogue SET availability = 'verified'")
+                connection.execute("UPDATE archive_catalogue SET last_seen_before = clock_timestamp() - interval '7 months'")
+                # A duplicate sighting extends retention without another raw object.
+                _, pending = store_observation(
+                    dsn, archive_server, occurrence_key="expiry-duplicate", endpoint="profile",
+                    body=FIXTURE.read_bytes(), normalized_tag="#2PP", observed_at=datetime.now(UTC),
+                )
+                options = {"bucket": "evidence", "instance_id": "fixture-instance"}
+                assert retire_archive_objects(connection, spool, client, **options)["eligible_objects"] == 0
+                connection.execute("UPDATE archive_catalogue SET last_seen_before = clock_timestamp() - interval '7 months'")
+                assert retire_archive_objects(connection, spool, client, apply=True, **options)["protected_objects"] == 1
+                assert processor.process_job(pending, owner="expiry-duplicate").outcome == "processed"
+                assert retire_archive_objects(connection, spool, client, **options)["eligible_objects"] == 1
+                with pytest.raises(TimeoutError):
+                    retire_archive_objects(connection, spool, client, apply=True, **options)
+                with pytest.raises(psycopg.errors.RaiseException, match="expired"):
+                    _replay_job(connection, observation, "supercell-source-parser-v2")
+                # Recollection gets a separate location. Retrying an unknown old
+                # DELETE can only affect the old key, never this new generation.
+                renewed = reference + "/generation/" + "a" * 32
+                client.keys.add(renewed.removeprefix("s3://evidence/"))
+                connection.execute(
+                    """
+                    INSERT INTO archive_catalogue(response_hash, archive_reference, byte_size, archive_instance_id)
+                    SELECT response_hash, %s, byte_size, archive_instance_id
+                    FROM archive_catalogue WHERE archive_reference = %s
+                    """, (renewed, reference),
+                )
+                assert retire_archive_objects(connection, spool, client, apply=True, **options)["retired_objects"] == 1
+                assert client.keys == {renewed.removeprefix("s3://evidence/")}
+                assert connection.execute("SELECT count(*) FROM player_profile_versions").fetchone()[0] == 1
+        finally:
+            spool.close()
+            database.close()
+
+
 class _S3Handler(BaseHTTPRequestHandler):
     objects: ClassVar[dict[str, bytes]] = {}
     get_count = 0

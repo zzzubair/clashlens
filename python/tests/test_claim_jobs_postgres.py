@@ -140,7 +140,7 @@ def _insert_observation(connection: psycopg.Connection, *, occurrence_key: str) 
             INSERT INTO archive_catalogue (
                 response_hash, archive_reference, byte_size, archive_instance_id
             ) VALUES (%s, %s, %s, 'fixture-instance')
-            ON CONFLICT (response_hash) DO NOTHING
+            ON CONFLICT (response_hash, archive_reference) DO NOTHING
             """,
             (digest, archive_reference, 0),
         )

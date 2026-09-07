@@ -10,7 +10,31 @@ import (
 
 var errArchiveCatalogueContradiction = errors.New("archive catalogue contradiction")
 
+type archiveLocation struct {
+	reference string
+	verified  bool
+}
+
+func (s *store) catalogueLocation(ctx context.Context, hash string, size int64) (archiveLocation, error) {
+	var location archiveLocation
+	err := s.pool.QueryRow(ctx, `
+        SELECT archive_reference, availability = 'verified'
+        FROM archive_catalogue
+        WHERE response_hash = $1 AND byte_size = $2 AND archive_instance_id = $3
+        ORDER BY (availability = 'verified') DESC, first_verified_at DESC, archive_reference DESC
+        LIMIT 1
+    `, hash, size, s.archiveInstanceID).Scan(&location.reference, &location.verified)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return archiveLocation{}, nil
+	}
+	return location, err
+}
+
 func (s *store) verifiedCatalogue(ctx context.Context, hash string, size int64) (bool, error) {
+	if s.archiveRetention {
+		location, err := s.catalogueLocation(ctx, hash, size)
+		return location.verified, err
+	}
 	if s.archiveInstanceID == "" {
 		return false, nil
 	}
@@ -32,7 +56,7 @@ func (s *store) insertCatalogue(ctx context.Context, tx pgx.Tx, hash, reference 
 	}
 	_, err := tx.Exec(ctx, `
         INSERT INTO archive_catalogue(response_hash, archive_reference, byte_size, archive_instance_id)
-        VALUES ($1,$2,$3,$4) ON CONFLICT (response_hash) DO NOTHING
+        VALUES ($1,$2,$3,$4) ON CONFLICT (response_hash, archive_reference) DO NOTHING
     `, hash, reference, size, s.archiveInstanceID)
 	return err
 }

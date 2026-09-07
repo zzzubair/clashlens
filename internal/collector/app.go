@@ -73,6 +73,9 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 	}
 	archive.maximumBodyBytes = config.maximumResponseBytes
 	archive.catalogueVerified = store.verifiedCatalogue
+	if store.archiveRetention {
+		archive.catalogueLocation = store.catalogueLocation
+	}
 	if config.schemaVersion >= 3 && config.spoolRoot != "" {
 		if config.spoolMaxBytes <= 0 {
 			config.spoolMaxBytes = 16 << 30

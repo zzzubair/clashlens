@@ -46,13 +46,14 @@ type officialAPIClient struct {
 }
 
 type officialResponse struct {
-	requestStartedAt    time.Time
-	responseCompletedAt time.Time
-	statusCode          int
-	body                []byte
-	headers             map[string]string
-	request             requestProvenance
-	pagingEnvelopeState string
+	requestStartedAt        time.Time
+	responseCompletedAt     time.Time
+	statusCode              int
+	body                    []byte
+	headers                 map[string]string
+	request                 requestProvenance
+	pagingEnvelopeState     string
+	pendingArchiveReference string // fenced retry state, never an API field
 }
 
 func newOfficialAPIClient(config officialAPIConfig) (*officialAPIClient, error) {

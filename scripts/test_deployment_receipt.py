@@ -33,7 +33,7 @@ class FakeRunner:
     ) -> None:
         self.dirty = dirty
         self.revision_label = revision_label
-        self.applied = applied or list(range(1, 16))
+        self.applied = applied or list(range(1, 19))
         self.image_id = image_id
         self.scope_label = scope_label
         self.present_containers = present_containers or set()
@@ -182,7 +182,7 @@ class DeploymentReceiptTest(unittest.TestCase):
         self.assertTrue(
             all(not item["present"] for item in resources["application_containers"]["worker_replicas"])
         )
-        self.assertEqual(len(result["migrations"]), 15)
+        self.assertEqual(len(result["migrations"]), 18)
         self.assertTrue(all(item["applied"] for item in result["migrations"]))
         self.assertRegex(result["receipt_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertFalse(

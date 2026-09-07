@@ -35,7 +35,7 @@ def test_operating_database_snapshot_executes_against_current_migrations(
     assert row is not None
     snapshot = json.loads(row[0]) if isinstance(row[0], str) else row[0]
     assert snapshot["contract_version"] == 5
-    assert [item["version"] for item in snapshot["migrations"]] == list(range(1, 16))
+    assert [item["version"] for item in snapshot["migrations"]] == list(range(1, 19))
     assert snapshot["identity"]["system_identifier"].isdigit()
     assert snapshot["identity"]["database_oid"] > 0
     assert snapshot["queues"]["collector"]["by_status"] == {
