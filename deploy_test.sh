@@ -282,7 +282,7 @@ case "$verb" in
       if grep -q 'VALUES (15)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '%s\n' 15 >>"$FAKE_STATE/schema_migrations"
       fi
-      for version in 16 17 18 19 20; do
+      for version in 16 17 18 19 20 21; do
         if grep -q "VALUES ($version)" "$FAKE_STATE/stdin/exec-$n"; then
           printf '%s\n' "$version" >>"$FAKE_STATE/schema_migrations"
         fi
@@ -749,8 +749,8 @@ log_lacks "$CANDIDATE_NORM" '^build ' 'candidate-prepare built an application im
 [[ "$(cat "$CANDIDATE_DIR/state/contract_version")" == 5 ]] || \
   fail 'candidate-prepare did not reach contract version 5'
 [[ "$(sort -n -u "$CANDIDATE_DIR/state/schema_migrations" | tr '\n' ' ')" == \
-   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 ' ]] || \
-  fail 'candidate-prepare did not apply the exact migration set through 0020'
+   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 ' ]] || \
+  fail 'candidate-prepare did not apply the exact migration set through 0021'
 [[ "$(cat "$CANDIDATE_DIR/state/networks/clashlens-candidate-private.scope")" == candidate ]] || \
   fail 'candidate network was not stamped with the candidate scope label'
 [[ "$(cat "$CANDIDATE_DIR/state/volumes/clashlens-candidate-postgres-data.scope")" == candidate ]] || \

@@ -192,6 +192,18 @@ def materialize_army_season(
     other.
     """
     _check_season_lens(season_id, lens)
+    from .season_retirement import SEASON_DETAIL_RETIRED, is_season_detail_retired
+
+    if is_season_detail_retired(connection, season_id):
+        return {
+            "season_id": season_id,
+            "lens": lens,
+            "status": SEASON_DETAIL_RETIRED,
+            "materialized": 0,
+            "unchanged": 0,
+            "failures": [],
+            "content_digests": {},
+        }
     acquire_army_season_lock(connection, season_id)
     projected = _project_lens(connection, season_id, lens)
     report: dict[str, Any] = {
@@ -284,6 +296,15 @@ def materialize_completed_army_season(
     """
     if not season_id or len(season_id) > 80:
         raise ValueError("official season id is outside the supported range")
+    from .season_retirement import SEASON_DETAIL_RETIRED, is_season_detail_retired
+
+    if is_season_detail_retired(connection, season_id):
+        return {
+            "season_id": season_id,
+            "season_completed": False,
+            "reason": SEASON_DETAIL_RETIRED,
+            "lenses": {},
+        }
     completed, reason = _season_completed(connection, season_id, now)
     if not completed:
         return {

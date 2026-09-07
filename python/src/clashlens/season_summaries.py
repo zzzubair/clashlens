@@ -442,6 +442,26 @@ def materialize_player_season(
     """
     if not season_id or len(season_id) > 128:
         raise ValueError("official season id is outside the supported range")
+    from .season_retirement import SEASON_DETAIL_RETIRED, is_season_detail_retired
+
+    if is_season_detail_retired(connection, season_id):
+        existing_digest = connection.execute(
+            """
+            SELECT content_digest FROM player_season_summaries
+            WHERE player_id = %s AND official_season_id = %s
+            """,
+            (int(player_id), season_id),
+        ).fetchone()
+        return {
+            "status": SEASON_DETAIL_RETIRED,
+            "content_digest": (
+                existing_digest[0].decode("utf-8")
+                if isinstance(existing_digest[0], bytes)
+                else str(existing_digest[0])
+            )
+            if existing_digest is not None
+            else None,
+        }
     connection.execute(
         "SELECT pg_advisory_xact_lock(hashtext(%s))",
         (f"player-season:{int(player_id)}:{season_id}",),
@@ -591,6 +611,19 @@ def materialize_completed_seasons(
         or after_player_id < 0
     ):
         raise ValueError("backfill cursor is outside the supported range")
+    from .season_retirement import SEASON_DETAIL_RETIRED, is_season_detail_retired
+
+    if is_season_detail_retired(connection, season_id):
+        return {
+            "season_id": season_id,
+            "season_completed": False,
+            "reason": SEASON_DETAIL_RETIRED,
+            "candidates": 0,
+            "materialized": 0,
+            "unchanged": 0,
+            "failures": [],
+            "next_after_player_id": None,
+        }
     completed, reason = _season_completed(connection, season_id, now)
     if not completed:
         return {

@@ -177,6 +177,34 @@ def build_parser() -> argparse.ArgumentParser:
     materialize_armies.add_argument("--season-id", required=True)
     materialize_armies.add_argument("--apply", action="store_true")
 
+    finalize_season = subparsers.add_parser(
+        "finalize-season-detail",
+        help="verify a completed season and fence writers before detail retirement (operator database role)",
+    )
+    _database_argument(finalize_season)
+    finalize_season.add_argument("--season-id", required=True)
+    finalize_season.add_argument("--apply", action="store_true")
+
+    retire_season = subparsers.add_parser(
+        "retire-season-detail",
+        help="preview or delete finalized-season daily logs, army facts, and exclusively-retired battle detail (operator database role)",
+    )
+    _database_argument(retire_season)
+    retire_season.add_argument("--season-id", required=True)
+    retire_season.add_argument(
+        "--max-rows", type=_bounded_int("retirement batch size", 1, 1000), default=500,
+    )
+    retire_season.add_argument("--apply", action="store_true")
+
+    measure_storage = subparsers.add_parser(
+        "measure-season-storage",
+        help="report reproducible season storage sizes, counts, and a labeled six-month projection",
+    )
+    _database_argument(measure_storage)
+    measure_storage.add_argument("--season-id", default="")
+    measure_storage.add_argument("--players", type=_bounded_int("projection players", 1, 1000000), default=12500)
+    measure_storage.add_argument("--headroom-percent", type=_bounded_int("headroom percent", 0, 90), default=20)
+
     serve = subparsers.add_parser(
         "serve", help="run the signed saved-data FastAPI route"
     )
@@ -357,6 +385,72 @@ def main(argv: Sequence[str] | None = None) -> int:
                     connection.rollback()
                     report = {**report, "applied": False}
             print(json.dumps(report, sort_keys=True, default=str))
+            return 0
+        if arguments.command == "finalize-season-detail":
+            import psycopg
+
+            from .season_retirement import finalize_season_detail
+
+            with psycopg.connect(_database_url(arguments)) as connection:
+                report = finalize_season_detail(
+                    connection,
+                    arguments.season_id,
+                    datetime.now(UTC),
+                    apply=arguments.apply,
+                )
+                if arguments.apply and report.get("applied"):
+                    connection.commit()
+                else:
+                    connection.rollback()
+                    report = {**report, "applied": False}
+            print(json.dumps(report, sort_keys=True, default=str))
+            return 0
+        if arguments.command == "retire-season-detail":
+            import psycopg
+
+            from .season_retirement import retire_season_detail
+
+            with psycopg.connect(_database_url(arguments)) as connection:
+                report = retire_season_detail(
+                    connection,
+                    arguments.season_id,
+                    max_rows=arguments.max_rows,
+                    apply=arguments.apply,
+                )
+                # Bounded deletes commit per table inside the helper; the
+                # progress update commits there as well. Roll back only the
+                # preview so it stays nonmutating.
+                if not arguments.apply:
+                    connection.rollback()
+            print(json.dumps(report, sort_keys=True, default=str))
+            return 0
+        if arguments.command == "measure-season-storage":
+            import psycopg
+
+            from .season_retirement import measure_season_storage, project_six_months
+
+            with psycopg.connect(_database_url(arguments)) as connection:
+                measurement = measure_season_storage(
+                    connection, arguments.season_id or None
+                )
+            player_bytes = 0.0
+            season_rows = measurement["summaries"].get("player_season", {})
+            if season_rows.get("rows"):
+                player_bytes = float(season_rows["total_bytes"]) / float(season_rows["rows"])
+            army_rows = measurement["summaries"].get("army_season", {})
+            army_bytes = float(army_rows.get("total_bytes", 0) or 0)
+            projection = project_six_months(
+                player_season_bytes=player_bytes,
+                army_season_bytes=army_bytes,
+                live_detail_bytes_per_day=0.0,
+                daily_bookkeeping_bytes_per_day=0.0,
+                players=arguments.players,
+                headroom_fraction=float(arguments.headroom_percent) / 100.0,
+            )
+            print(json.dumps(
+                {"measurement": measurement, "projection": projection},
+                sort_keys=True, default=str,
+            ))
             return 0
         if arguments.command == "serve":
             app, _database = _serve_app(arguments)

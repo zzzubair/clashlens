@@ -1460,6 +1460,15 @@ class Database:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
                 valid_rows = [row for row in battle_log.rows if row.battle is not None]
+                # Rolling logs may carry retired battles: skip those rows but
+                # still process live-season content in the same observation.
+                from .season_retirement import filter_live_rows, retired_day_ranges
+
+                valid_rows = filter_live_rows(
+                    valid_rows,
+                    lambda row: row.battle.ranked_day_start,
+                    retired_day_ranges(connection),
+                )
                 player_tags = {battle_log.normalized_tag}
                 for row in valid_rows:
                     assert row.battle is not None
@@ -2238,6 +2247,15 @@ class Database:
                     representation="battle_payload_rows" if compact else None,
                 )
                 valid_rows = [row for row in battle_log.rows if row.battle is not None]
+                # Rolling logs may carry retired battles: skip those rows but
+                # still process live-season content in the same observation.
+                from .season_retirement import filter_live_rows, retired_day_ranges
+
+                valid_rows = filter_live_rows(
+                    valid_rows,
+                    lambda row: row.battle.ranked_day_start,
+                    retired_day_ranges(connection),
+                )
                 player_tags = {battle_log.normalized_tag}
                 for row in valid_rows:
                     assert row.battle is not None
@@ -2903,6 +2921,16 @@ class Database:
                 now_row = connection.execute("SELECT clock_timestamp()").fetchone()
                 assert now_row is not None
                 now = now_row[0]
+                from .season_retirement import (
+                    SEASON_DETAIL_RETIRED,
+                    is_detail_retired_for_day,
+                )
+
+                if is_detail_retired_for_day(connection, ranked_day.start):
+                    raise DomainRuleError(
+                        SEASON_DETAIL_RETIRED,
+                        f"ranked day {ranked_day.start.isoformat()} is retired",
+                    )
                 player = connection.execute(
                     "SELECT id, normalized_tag FROM players WHERE id = %s",
                     (player_id,),
@@ -6606,6 +6634,19 @@ class Database:
         result: ReconciliationResult,
         contribution_evidence: list[dict[str, Any]],
     ) -> None:
+        # Targeted corrections for a retired season are rejected before any
+        # domain mutation; detailed reconstruction ends at finalization.
+        if official_season_id != "unknown":
+            from .season_retirement import (
+                SEASON_DETAIL_RETIRED,
+                is_season_detail_retired,
+            )
+
+            if is_season_detail_retired(connection, official_season_id):
+                raise DomainRuleError(
+                    SEASON_DETAIL_RETIRED,
+                    f"season {official_season_id} detail is retired",
+                )
         adjustment_rows = connection.execute(
             """
             SELECT adjustment_type, amount, evidence_state, rule_version,
@@ -9407,6 +9448,12 @@ class Database:
         yet cost one lock plus one existence lookup.
         """
         if not getattr(self, "_supports_army_season_summaries", False):
+            return
+        from .season_retirement import is_season_detail_retired
+
+        # Retired detail stays retired: a late day build must not replace
+        # verified summaries from a reduced post-retirement sample.
+        if is_season_detail_retired(connection, season_id):
             return
         acquire_army_season_lock(connection, season_id)
         summarized = connection.execute(

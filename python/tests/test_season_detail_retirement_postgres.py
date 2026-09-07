@@ -1,0 +1,809 @@
+"""Completed-season detail retirement (issue #82, final slice).
+
+Finalized seasons keep independently readable player/army summaries while
+their daily logs, army facts, and exclusively-retired battle detail are
+removed in bounded, restartable batches. Writers are fenced at
+finalization; rolling logs still process live-season content.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from datetime import UTC, datetime, timedelta
+
+import psycopg
+import pytest
+from domain_test_support import domain_database
+
+from clashlens.api_db import ApiDatabase
+from clashlens.army_season_summaries import materialize_completed_army_season
+from clashlens.db import Database
+from clashlens.domain import DomainRuleError
+from clashlens.season_retirement import (
+    SEASON_DETAIL_RETIRED,
+    finalize_season_detail,
+    is_detail_retired_for_day,
+    is_season_detail_retired,
+    measure_season_storage,
+    project_six_months,
+    retire_season_detail,
+)
+from clashlens.season_summaries import materialize_completed_seasons
+
+SEASON = "1785714000"
+LIVE_SEASON = "1785714001"
+DAY0 = datetime(2026, 5, 1, 5, 0, tzinfo=UTC)
+SEASON_END = DAY0 + timedelta(days=28)
+AFTER_SEASON = SEASON_END + timedelta(hours=1)
+LIVE_DAY0 = SEASON_END
+
+
+def _player(connection, tag="#2PP"):
+    return connection.execute(
+        """
+        INSERT INTO players (normalized_tag, active, eligibility_state)
+        VALUES (%s, true, 'eligible')
+        RETURNING id
+        """,
+        (tag,),
+    ).fetchone()[0]
+
+
+def _ranked(connection, player_id, day_number, start, end, *, season=SEASON):
+    return connection.execute(
+        """
+        INSERT INTO ranked_day_versions (
+            player_id, ranked_day_start, ranked_day_end, official_season_id,
+            season_day_number, season_anchor_rule_version,
+            reconciliation_rule_version, result_hash, version,
+            state, confidence, start_trophies, final_trophies_before_reset,
+            next_start_trophies, attack_count, defense_count,
+            attack_gain, observed_defense_loss
+        ) VALUES (
+            %s, %s, %s, %s, %s, 'season-anchor-v1',
+            'reconciliation-v1', %s, 1,
+            'Complete', 'exact', %s, %s, %s, 2, 1, 30, 20
+        )
+        RETURNING id
+        """,
+        (
+            player_id,
+            start,
+            end,
+            season,
+            day_number,
+            f"{day_number:064x}",
+            6000 + (day_number - 1) * 10,
+            6000 + day_number * 10,
+            6000 + day_number * 10,
+        ),
+    ).fetchone()[0]
+
+
+def _log(connection, player_id, day_number, ranked_version_id, start, *, season=SEASON):
+    connection.execute(
+        """
+        INSERT INTO api_player_daily_logs (
+            player_id, ranked_day_start, ranked_day_version_id, version,
+            state, coverage, ranked_day_end, official_season_id,
+            season_day_number, confidence, attack_count,
+            attack_three_star_count, attack_gain, defense_count,
+            defense_three_star_count, defense_loss, net_trophy_change,
+            adjustments, battles, partial_reasons
+        ) VALUES (
+            %s, %s, %s, 1, 'Complete', 'complete', %s, %s, %s, 'exact',
+            2, 1, 30, 1, 0, 20, 10, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb
+        )
+        """,
+        (
+            player_id,
+            start,
+            ranked_version_id,
+            start + timedelta(days=1),
+            season,
+            day_number,
+        ),
+    )
+
+
+def _full_season(connection, player_id, *, season=SEASON, day0=DAY0):
+    for day in range(1, 29):
+        start = day0 + timedelta(days=day - 1)
+        version_id = _ranked(connection, player_id, day, start, start + timedelta(days=1), season=season)
+        _log(connection, player_id, day, version_id, start, season=season)
+
+
+def _seed_army(connection, season=SEASON, day0=DAY0, *, tag="#2PP", base=7000):
+    """Minimal facts + completed days so army summaries materialize."""
+    connection.execute("SET LOCAL session_replication_role = replica")
+    player_id = connection.execute(
+        "SELECT id FROM players WHERE normalized_tag = %s", (tag,)
+    ).fetchone()
+    player_id = int(player_id[0]) if player_id else _player(connection, tag)
+    for lens, battle_id, evidence_id in (
+        ("offense", base + 1, base + 1001),
+        ("defense", base + 2, base + 1002),
+    ):
+        connection.execute(
+            """
+            INSERT INTO army_analytics_battle_facts (
+                battle_id, evidence_id, source_ranked_day_version_id,
+                ranked_day_start, official_season_id, season_day_number,
+                lens, population_player_id, stars, destruction_percentage,
+                army_state, perspective_disagreement,
+                battle_time_trophies, input_hash, version
+            ) VALUES (
+                %s, %s, 4242, %s, %s, 1, %s, %s, 3, 100, 'decoded',
+                false, 6000, %s, 1
+            )
+            """,
+            (
+                battle_id,
+                evidence_id,
+                day0,
+                season,
+                lens,
+                player_id,
+                hashlib.sha256(f"{season}:{lens}".encode()).hexdigest(),
+            ),
+        )
+    for day in range(1, 29):
+        connection.execute(
+            """
+            INSERT INTO army_analytics_completed_days (
+                ranked_day_start, official_season_id, season_day_number,
+                fact_input_hash
+            ) VALUES (%s, %s, %s, %s)
+            ON CONFLICT (ranked_day_start) DO NOTHING
+            """,
+            (
+                day0 + timedelta(days=day - 1),
+                season,
+                day,
+                hashlib.sha256(f"{season}:day:{day}".encode()).hexdigest(),
+            ),
+        )
+    return player_id
+
+
+def _materialize_all(connection, season=SEASON):
+    player_report = materialize_completed_seasons(
+        connection, season_id=season, max_players=1000, now=AFTER_SEASON
+    )
+    army_report = materialize_completed_army_season(
+        connection, season_id=season, now=AFTER_SEASON
+    )
+    return player_report, army_report
+
+
+_CHAIN_SEQ = [990000]
+
+
+def _battle_chain(connection, day_start, attacker_id, defender_id, *, battle_day=None):
+    """Real battle + evidence + decode + fact chain for deletion tests."""
+    _CHAIN_SEQ[0] += 1
+    fake_log = _CHAIN_SEQ[0]
+    fake_obs = _CHAIN_SEQ[0] + 500000
+    battle_day = battle_day or day_start
+    battle_id = connection.execute(
+        """
+        INSERT INTO legend_battles (ranked_day_start, attacker_player_id, defender_player_id)
+        VALUES (%s, %s, %s) RETURNING id
+        """,
+        (battle_day, attacker_id, defender_id),
+    ).fetchone()[0]
+    connection.execute("SET LOCAL session_replication_role = replica")
+    source_id = connection.execute(
+        """
+        INSERT INTO battle_source_rows (
+            battle_log_observation_id, source_row_index, outcome, source_json
+        ) VALUES (%s, 0, 'valid_legend', '{}'::jsonb) RETURNING id
+        """,
+        (fake_log,),
+    ).fetchone()[0]
+    evidence_id = connection.execute(
+        """
+        INSERT INTO battle_evidence (
+            battle_id, source_row_id, observation_id, reporting_player_id,
+            perspective, battle_timestamp, stars, destruction_percentage,
+            army_share_code, attacker_gain, defender_loss,
+            trophy_rule_version, source_observed_at, parser_version
+        ) VALUES (
+            %s, %s, %s, %s, 'attacker', %s, 3, 100, 'code',
+            20, 20, 'v1', %s, 'supercell-source-parser-v1'
+        ) RETURNING id
+        """,
+        (battle_id, source_id, fake_obs, attacker_id, day_start, day_start),
+    ).fetchone()[0]
+    connection.execute("SET LOCAL session_replication_role = DEFAULT")
+    connection.execute(
+        """
+        INSERT INTO battle_perspectives (battle_id, perspective, evidence_id, source_observed_at)
+        VALUES (%s, 'attacker', %s, %s)
+        """,
+        (battle_id, evidence_id, day_start),
+    )
+    connection.execute(
+        """
+        INSERT INTO battle_army_decodes (
+            battle_id, evidence_id, perspective, decoder_version,
+            catalog_version, catalog_hash, status, failure_category
+        ) VALUES (%s, %s, 'attacker', 'd1', 'c1', %s, 'failed', 'undecodable')
+        """,
+        (battle_id, evidence_id, "a" * 64),
+    )
+    ranked_version = connection.execute(
+        "SELECT id FROM ranked_day_versions LIMIT 1"
+    ).fetchone()
+    assert ranked_version is not None
+    connection.execute("SET LOCAL session_replication_role = replica")
+    connection.execute(
+        """
+        INSERT INTO army_analytics_battle_facts (
+            battle_id, evidence_id, source_ranked_day_version_id,
+            ranked_day_start, official_season_id, season_day_number,
+            lens, population_player_id, stars, destruction_percentage,
+            army_state, perspective_disagreement, input_hash, version
+        ) VALUES (
+            %s, %s, %s, %s, %s, 1, 'offense', %s, 3, 100, 'decoded',
+            false, %s, 1
+        )
+        """,
+        (
+            battle_id,
+            evidence_id,
+            int(ranked_version[0]),
+            battle_day,
+            SEASON,
+            attacker_id,
+            hashlib.sha256(f"chain:{battle_id}".encode()).hexdigest(),
+        ),
+    )
+    connection.execute("SET LOCAL session_replication_role = DEFAULT")
+    return int(battle_id)
+
+
+def _finalize_and_commit(connection, season=SEASON):
+    report = finalize_season_detail(connection, season, AFTER_SEASON, apply=True)
+    assert report["status"] == "finalized", report
+    connection.commit()
+    return report
+
+
+def test_finalize_preview_then_full_retirement_cycle(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                _full_season(connection, player_id)
+                _seed_army(connection)
+                connection.commit()
+                player_report, army_report = _materialize_all(connection)
+                connection.commit()
+            assert player_report["materialized"] == 1
+            assert army_report["season_completed"] is True
+            with database.pool.connection() as connection:
+                before_player = database.get_player_season_summary("#2PP", SEASON)
+                before_army = database.get_army_season_summary(
+                    SEASON, "offense", "troops", "usage-rate"
+                )
+                assert before_player is not None and len(before_player["daily_entries"]) == 28
+                assert before_army is not None
+                preview = finalize_season_detail(connection, SEASON, AFTER_SEASON)
+                assert preview["status"] == "ready"
+                assert preview["player_summary_count"] == 1
+                assert connection.execute(
+                    "SELECT count(*) FROM season_detail_retirements"
+                ).fetchone()[0] == 0
+                connection.rollback()
+                finalized = _finalize_and_commit(connection)
+                assert finalized["applied"] is True
+                assert is_season_detail_retired(connection, SEASON)
+                retire_preview = retire_season_detail(connection, SEASON)
+                assert retire_preview["eligible_daily_logs"] == 28
+                assert retire_preview["eligible_army_facts"] > 0
+                # Preview changed nothing.
+                assert connection.execute(
+                    "SELECT count(*) FROM api_player_daily_logs WHERE official_season_id = %s",
+                    (SEASON,),
+                ).fetchone()[0] == 28
+                connection.rollback()
+                # Bounded restartable apply: page one row at a time.
+                total_logs = 0
+                for _ in range(60):
+                    batch = retire_season_detail(connection, SEASON, max_rows=1, apply=True)
+                    assert batch["applied"] is True
+                    total_logs += batch.get("deleted_daily_logs", 0)
+                    connection.commit()
+                    if batch["status"] == "retired":
+                        break
+                assert total_logs == 28
+                assert connection.execute(
+                    "SELECT count(*) FROM api_player_daily_logs WHERE official_season_id = %s",
+                    (SEASON,),
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_battle_facts WHERE official_season_id = %s",
+                    (SEASON,),
+                ).fetchone()[0] == 0
+                status = connection.execute(
+                    "SELECT status FROM season_detail_retirements WHERE official_season_id = %s",
+                    (SEASON,),
+                ).fetchone()[0]
+                assert status == "retired"
+                # Idempotent rerun.
+                rerun = retire_season_detail(connection, SEASON, apply=True)
+                assert rerun["status"] == "retired"
+                connection.rollback()
+            # Historical API reads are unchanged after actual deletion.
+            after_player = database.get_player_season_summary("#2PP", SEASON)
+            after_army = database.get_army_season_summary(
+                SEASON, "offense", "troops", "usage-rate"
+            )
+            assert after_player == before_player
+            assert after_army == before_army
+            assert [s["official_season_id"] for s in database.list_player_seasons("#2PP")] == [SEASON]
+        finally:
+            database.close()
+
+
+def test_partial_coverage_season_retires(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                for day in (27, 28):
+                    start = DAY0 + timedelta(days=day - 1)
+                    version_id = _ranked(connection, player_id, day, start, start + timedelta(days=1))
+                    _log(connection, player_id, day, version_id, start)
+                _seed_army(connection)
+                connection.commit()
+                player_report, _ = _materialize_all(connection)
+                connection.commit()
+            assert player_report["materialized"] == 1
+            with database.pool.connection() as connection:
+                before = database.get_player_season_summary("#2PP", SEASON)
+                assert before is not None and before["coverage_state"] == "partial"
+                _finalize_and_commit(connection)
+                result = retire_season_detail(connection, SEASON, apply=True)
+                connection.commit()
+                assert result["status"] == "retired"
+            assert database.get_player_season_summary("#2PP", SEASON) == before
+        finally:
+            database.close()
+
+
+def test_finalize_blocks_unfinished_and_stale_work(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            # Live season cannot finalize.
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                live_start = AFTER_SEASON - timedelta(hours=12)
+                live_version = _ranked(
+                    connection, player_id, 1, live_start, live_start + timedelta(days=1),
+                    season=LIVE_SEASON,
+                )
+                _log(connection, player_id, 1, live_version, live_start, season=LIVE_SEASON)
+                _seed_army(connection, season=LIVE_SEASON, day0=live_start)
+                connection.commit()
+                live = finalize_season_detail(connection, LIVE_SEASON, AFTER_SEASON, apply=True)
+                assert live["status"] in ("not_completed", "blocked")
+                connection.rollback()
+            # Unknown season fails closed.
+            with database.pool.connection() as connection:
+                unknown = finalize_season_detail(connection, "no-such-season", AFTER_SEASON, apply=True)
+                assert unknown["status"] in ("not_completed", "blocked")
+                connection.rollback()
+            # Missing summaries block.
+            with database.pool.connection() as connection:
+                player_id = _player(connection, "#8PY")
+                _full_season(connection, player_id)
+                connection.commit()
+                missing = finalize_season_detail(connection, SEASON, AFTER_SEASON, apply=True)
+                assert missing["status"] == "blocked"
+                assert missing["reason"] == "verification_failed"
+                assert missing["missing_player_count"] >= 1
+                connection.rollback()
+        finally:
+            database.close()
+
+
+def test_finalize_blocks_stale_summaries_and_pending_work(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                _full_season(connection, player_id)
+                _seed_army(connection)
+                connection.commit()
+                _materialize_all(connection)
+                connection.commit()
+                # Stale summary blocks finalization.
+                connection.execute(
+                    "UPDATE player_season_summaries SET content_digest = repeat('1', 64)"
+                    " WHERE official_season_id = %s",
+                    (SEASON,),
+                )
+                stale = finalize_season_detail(connection, SEASON, AFTER_SEASON, apply=True)
+                assert stale["status"] == "blocked"
+                assert stale["stale_player_count"] == 1
+                connection.rollback()
+                # Non-terminal processing work scoped to the season blocks.
+                from domain_test_support import store_observation
+
+                body = (
+                    __import__("pathlib").Path(__file__).parents[1]
+                    / "testdata"
+                    / "legend_i_battle_log_v1.json"
+                ).read_bytes()
+                store_observation(
+                    connection_info,
+                    archive_server,
+                    occurrence_key="block-probe",
+                    endpoint="battle_log",
+                    body=body,
+                    observed_at=DAY0 + timedelta(days=2),
+                    normalized_tag="#2PP",
+                )
+                blocked = finalize_season_detail(connection, SEASON, AFTER_SEASON, apply=True)
+                assert blocked["status"] == "blocked"
+                assert blocked["blocking_work"].get("processing_jobs") == 1
+                connection.rollback()
+        finally:
+            database.close()
+
+
+def test_live_shared_and_protected_records_survive(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                _full_season(connection, player_id)
+                _seed_army(connection)
+                live_id = _player(connection, "#LIVE")
+                _full_season(connection, live_id, season=LIVE_SEASON, day0=LIVE_DAY0)
+                _seed_army(
+                    connection, season=LIVE_SEASON, day0=LIVE_DAY0, tag="#LIVE", base=9000
+                )
+                # Retired-season battle plus a live-season battle.
+                old_battle = _battle_chain(connection, DAY0, player_id, live_id)
+                live_battle = _battle_chain(
+                    connection, LIVE_DAY0, live_id, player_id, battle_day=LIVE_DAY0
+                )
+                connection.execute(
+                    "UPDATE army_analytics_battle_facts SET official_season_id = %s,"
+                    " ranked_day_start = %s WHERE battle_id = %s AND official_season_id = %s",
+                    (LIVE_SEASON, LIVE_DAY0, live_battle, SEASON),
+                )
+                connection.commit()
+                _materialize_all(connection)
+                connection.execute(
+                    """
+                    INSERT INTO api_frozen_leaderboards (
+                        public_id, boundary_at, version, ordering_rule_version, coverage
+                    ) VALUES (gen_random_uuid(), %s, 1, 'v1', '{}'::jsonb)
+                    """,
+                    (SEASON_END,),
+                )
+                connection.commit()
+                _finalize_and_commit(connection)
+                result = retire_season_detail(connection, SEASON, apply=True)
+                connection.commit()
+                assert result["status"] == "retired"
+                # Live detail is untouched.
+                assert connection.execute(
+                    "SELECT count(*) FROM api_player_daily_logs WHERE official_season_id = %s",
+                    (LIVE_SEASON,),
+                ).fetchone()[0] == 28
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_battle_facts WHERE official_season_id = %s",
+                    (LIVE_SEASON,),
+                ).fetchone()[0] > 0
+                assert connection.execute(
+                    "SELECT count(*) FROM legend_battles WHERE id = %s", (live_battle,)
+                ).fetchone()[0] == 1
+                # Retired battle detail is gone.
+                assert connection.execute(
+                    "SELECT count(*) FROM legend_battles WHERE id = %s", (old_battle,)
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_evidence WHERE battle_id = %s", (old_battle,)
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_perspectives WHERE battle_id = %s", (old_battle,)
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_army_decodes WHERE battle_id = %s", (old_battle,)
+                ).fetchone()[0] == 0
+                # Protected records survive: players, ranked versions, frozen
+                # boards, live summaries, and the retirement fence itself.
+                assert connection.execute("SELECT count(*) FROM players").fetchone()[0] >= 2
+                assert connection.execute(
+                    "SELECT count(*) FROM ranked_day_versions WHERE official_season_id = %s",
+                    (SEASON,),
+                ).fetchone()[0] == 28
+                assert connection.execute(
+                    "SELECT count(*) FROM api_frozen_leaderboards"
+                ).fetchone()[0] == 1
+                assert connection.execute(
+                    "SELECT count(*) FROM player_season_summaries WHERE official_season_id = %s",
+                    (SEASON,),
+                ).fetchone()[0] == 1
+                assert connection.execute(
+                    "SELECT count(*) FROM army_season_summaries WHERE official_season_id = %s",
+                    (SEASON,),
+                ).fetchone()[0] > 0
+                connection.rollback()
+        finally:
+            database.close()
+
+
+def test_post_finalization_writes_are_fenced(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        api = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                _full_season(connection, player_id)
+                _seed_army(connection)
+                connection.commit()
+                _materialize_all(connection)
+                connection.commit()
+                before = api.get_player_season_summary("#2PP", SEASON)
+                before_army = api.get_army_season_summary(SEASON, "offense", "troops", "usage-rate")
+                _finalize_and_commit(connection)
+                # Rematerialization returns the explicit retired marker.
+                from clashlens.season_summaries import materialize_player_season
+
+                outcome = materialize_player_season(connection, player_id, SEASON)
+                assert outcome["status"] == SEASON_DETAIL_RETIRED
+                backfill = materialize_completed_seasons(
+                    connection, season_id=SEASON, max_players=10, now=AFTER_SEASON
+                )
+                assert backfill["reason"] == SEASON_DETAIL_RETIRED
+                from clashlens.army_season_summaries import materialize_army_season
+
+                army_outcome = materialize_army_season(connection, SEASON, "offense")
+                assert army_outcome["status"] == SEASON_DETAIL_RETIRED
+                # Targeted correction raises before domain mutation.
+                day5 = DAY0 + timedelta(days=4)
+                version_id = connection.execute(
+                    "SELECT id FROM ranked_day_versions WHERE player_id = %s"
+                    " AND ranked_day_start = %s",
+                    (player_id, day5),
+                ).fetchone()[0]
+                from clashlens.reconciliation import ReconciliationResult
+
+                with pytest.raises(DomainRuleError, match=SEASON_DETAIL_RETIRED):
+                    database._publish_player_daily_log(
+                        connection,
+                        player_id=player_id,
+                        ranked_day_start=day5,
+                        ranked_day_end=day5 + timedelta(days=1),
+                        official_season_id=SEASON,
+                        season_day_number=5,
+                        version_number=99,
+                        ranked_day_version_id=int(version_id),
+                        result=ReconciliationResult(
+                            state="Complete", confidence="exact", attack_count=0,
+                            defense_count=0, attack_trophy_gain=0,
+                            observed_defense_loss=0, automatic_defense_loss=None,
+                            automatic_defense_evidence_state="unknown",
+                            boundary_adjustment=0, boundary_adjustment_type=None,
+                            final_trophies_before_reset=6050,
+                            shield_state="not_inferred", shield_duration_days=None,
+                            coverage_complete=True, failure_reasons=(),
+                            net_trophy_change=0,
+                        ),
+                        contribution_evidence=[],
+                    )
+                # Reconciliation for the retired day raises on any connection.
+                with psycopg.connect(connection_info) as other:
+                    assert is_detail_retired_for_day(other, day5) is True
+                    assert is_detail_retired_for_day(other, LIVE_DAY0) is False
+                connection.rollback()
+                # Summaries are unchanged by fenced writes.
+                assert api.get_player_season_summary("#2PP", SEASON) == before
+                assert (
+                    api.get_army_season_summary(SEASON, "offense", "troops", "usage-rate")
+                    == before_army
+                )
+        finally:
+            database.close()
+            api.close()
+
+
+def test_rolling_log_processes_live_content_after_finalization(
+    database_url: str, archive_server
+) -> None:
+    from domain_test_support import store_observation
+    from test_domain_processing_postgres import _processor
+
+
+    battle_body = (
+        __import__("pathlib").Path(__file__).parents[1]
+        / "testdata"
+        / "legend_i_battle_log_v1.json"
+    ).read_bytes()
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _observation_id, job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="retire-live-log",
+                endpoint="battle_log",
+                body=battle_body,
+                observed_at=LIVE_DAY0 + timedelta(hours=1),
+                normalized_tag="#2PP",
+            )
+            result = processor.process_job(job_id, owner="retire-live")
+            assert result is not None and result.outcome == "processed"
+        finally:
+            database.close()
+        with psycopg.connect(connection_info) as connection:
+            live_battles_before = connection.execute(
+                "SELECT count(*) FROM legend_battles"
+            ).fetchone()[0]
+            assert live_battles_before > 0
+            connection.commit()
+        # Finalize an unrelated historical season built from direct fixtures,
+        # then prove the live battle path still ingests new observations.
+        api = ApiDatabase(connection_info)
+        try:
+            with api.pool.connection() as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                _full_season(connection, int(player_id))
+                _seed_army(connection)
+                connection.commit()
+                _materialize_all(connection)
+                connection.commit()
+                _finalize_and_commit(connection)
+        finally:
+            api.close()
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _observation_id, job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="retire-live-log-2",
+                endpoint="battle_log",
+                body=battle_body,
+                observed_at=LIVE_DAY0 + timedelta(hours=2),
+                normalized_tag="#2PP",
+            )
+            result = processor.process_job(job_id, owner="retire-live-2")
+            assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM legend_battles"
+                ).fetchone()[0] >= live_battles_before
+        finally:
+            database.close()
+
+
+def test_failure_injection_preserves_summaries_and_fence(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                _full_season(connection, player_id)
+                _seed_army(connection)
+                connection.commit()
+                _materialize_all(connection)
+                connection.commit()
+                _finalize_and_commit(connection)
+                before = database.get_player_season_summary("#2PP", SEASON)
+                # Deleting the only valid summary blocks retirement.
+                connection.execute(
+                    "DELETE FROM player_season_summaries WHERE official_season_id = %s",
+                    (SEASON,),
+                )
+                blocked = retire_season_detail(connection, SEASON, apply=True)
+                assert blocked["status"] == "blocked"
+                assert blocked["reason"] == "player_summaries_missing"
+                connection.rollback()
+                # Caller-owned transaction rollback restores detail.
+                connection.execute(
+                    "DELETE FROM api_player_daily_logs WHERE official_season_id = %s",
+                    (SEASON,),
+                )
+                connection.rollback()
+                assert connection.execute(
+                    "SELECT count(*) FROM api_player_daily_logs WHERE official_season_id = %s",
+                    (SEASON,),
+                ).fetchone()[0] == 28
+                assert database.get_player_season_summary("#2PP", SEASON) == before
+                assert is_season_detail_retired(connection, SEASON) is True
+                connection.rollback()
+        finally:
+            database.close()
+
+
+def test_two_connections_see_fence_and_serialize_finalize(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                _full_season(connection, player_id)
+                _seed_army(connection)
+                connection.commit()
+                _materialize_all(connection)
+                connection.commit()
+                _finalize_and_commit(connection)
+            # A second connection sees the fence after commit.
+            with psycopg.connect(connection_info) as other:
+                assert is_season_detail_retired(other, SEASON) is True
+                repeat = finalize_season_detail(other, SEASON, AFTER_SEASON, apply=True)
+                assert repeat["already_finalized"] is True
+                other.rollback()
+            # Concurrent first materialization loses to the fence.
+            with database.pool.connection() as connection:
+                from clashlens.season_summaries import materialize_player_season
+
+                outcome = materialize_player_season(connection, player_id, SEASON)
+                assert outcome["status"] == SEASON_DETAIL_RETIRED
+                connection.rollback()
+        finally:
+            database.close()
+
+
+def test_measurement_snapshot_and_projection_labels(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                _full_season(connection, player_id)
+                _seed_army(connection)
+                connection.commit()
+                _materialize_all(connection)
+                connection.commit()
+                snapshot = measure_season_storage(connection, SEASON)
+                assert snapshot["tables"]["player_season_summaries"]["rows"] == 1
+                assert snapshot["tables"]["api_player_daily_logs"]["rows"] == 28
+                assert snapshot["season_counts"]["api_player_daily_logs"] == 28
+                assert snapshot["summaries"]["player_season"]["rows"] == 1
+                assert snapshot["summaries"]["player_season"]["total_bytes"] > 0
+                assert any("WAL" in gap for gap in snapshot["unmeasured"])
+                per_player = (
+                    snapshot["summaries"]["player_season"]["total_bytes"]
+                    / snapshot["summaries"]["player_season"]["rows"]
+                )
+                projection = project_six_months(
+                    player_season_bytes=per_player,
+                    army_season_bytes=float(
+                        snapshot["summaries"]["army_season"]["total_bytes"]
+                    ),
+                    live_detail_bytes_per_day=1_000_000.0,
+                    daily_bookkeeping_bytes_per_day=500_000.0,
+                    players=12500,
+                    usable_bytes=1_017_969_311_744,
+                )
+                assert projection["players"] == 12500
+                assert projection["projected_total_bytes"] > 0
+                assert any("Step 9" in label for label in projection["labels"])
+                assert isinstance(projection["fits_budget"], bool)
+                with pytest.raises(ValueError, match="projection population"):
+                    project_six_months(
+                        player_season_bytes=1.0, army_season_bytes=1.0,
+                        live_detail_bytes_per_day=1.0,
+                        daily_bookkeeping_bytes_per_day=1.0, players=0,
+                    )
+        finally:
+            database.close()
