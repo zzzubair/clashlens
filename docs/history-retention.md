@@ -98,6 +98,21 @@ statement timeout aborts the transaction; investigate rather than disabling
 constraints. Retries/child collection trees and failed work can still accumulate
 and require operator investigation; this is not a universal TTL on all tables.
 
+The same command also prunes redundant discovery provenance attached to retained
+roots: `known_player_discoveries` rows and observation-backed
+`player_discovery_events` (source `official_global_ranking`), bounded per table by
+`--max-discoveries` (1-1000, default 1000). A discovery row is eligible only when
+its owning root collection is old, its observation is successfully processed and
+completed before the confirmed current-season start, under a completed root
+collection of an allowed
+work type with no child tree, transport failure, reset-baseline reference,
+unfinished or recent processing, or pending replay request. An unknown season
+boundary fails closed and live-season discovery history is retained. Source-less
+events (submitted tags, player references, account links) are preserved, as are
+parent roots and all semantic detail. After guarded cleanup, exhaustive
+discovery-event history becomes unavailable; discovery scheduling, replay,
+corrections, and semantic history are unchanged.
+
 Normal PostgreSQL vacuum makes deleted space reusable; deletion does not shrink
 relation files or imply that retained WAL/backups have expired. Do not run
 `VACUUM FULL` on production as part of routine cleanup.

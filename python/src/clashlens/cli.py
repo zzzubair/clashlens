@@ -129,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     _database_argument(prune_history)
     prune_history.add_argument("--retention-hours", type=_bounded_int("retention hours", 48, 672), default=48)
     prune_history.add_argument("--max-jobs", type=_bounded_int("cleanup batch size", 1, 1000), default=1000)
+    prune_history.add_argument("--max-discoveries", type=_bounded_int("discovery batch size", 1, 1000), default=1000)
     prune_history.add_argument("--apply", action="store_true")
 
     prune_archive = subparsers.add_parser(
@@ -297,7 +298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             with psycopg.connect(_database_url(arguments)) as connection:
                 report = prune_completed_history(
                     connection, retention_hours=arguments.retention_hours,
-                    max_jobs=arguments.max_jobs, apply=arguments.apply,
+                    max_jobs=arguments.max_jobs, max_discoveries=arguments.max_discoveries,
+                    apply=arguments.apply,
                 )
             print(json.dumps(report, sort_keys=True))
             return 0

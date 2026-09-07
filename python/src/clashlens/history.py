@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .domain import SEASON_ANCHOR_RULE_VERSION
+
 # Keep source transitions and both ends of unchanged log runs. Removing an
 # interior repeat cannot change the overlap/quality result of the log chain.
 _ELIGIBLE = """
@@ -99,23 +101,169 @@ FOR UPDATE OF job SKIP LOCKED
 """
 
 
+_DISCOVERY_CANDIDATE = """
+SELECT target.id FROM {table} AS target
+JOIN collector_observations AS o ON o.id = target.{obs_column}
+JOIN collector_jobs AS job ON job.id = o.collection_job_id
+WHERE job.status = 'complete'
+  AND job.work_type IN ('regular_poll', 'initial_collection', 'global_player_rankings')
+  AND job.parent_attempt_id IS NULL
+  AND job.updated_at < clock_timestamp() - make_interval(hours => %s)
+  AND o.response_completed_at < (
+      SELECT current_start FROM legend_season_anchors
+      WHERE state = 'confirmed' AND anchor_rule_version = %s
+  )
+  AND ({extra})
+  AND EXISTS (
+      SELECT 1 FROM observation_processing_outcomes AS outcome
+      WHERE outcome.observation_id = o.id AND outcome.outcome = 'processed'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM python_processing_jobs AS p
+      WHERE (p.observation_id = o.id OR p.replay_observation_id = o.id)
+        AND (p.status <> 'complete' OR
+             p.updated_at >= clock_timestamp() - make_interval(hours => %s))
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM python_replay_requests AS request
+      WHERE request.observation_id = o.id
+        AND request.status IN ('requested', 'enqueued')
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM reset_baseline_evidence AS baseline
+      WHERE baseline.profile_observation_id = o.id
+         OR baseline.battle_log_observation_id = o.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM collector_attempts AS attempt
+      JOIN collector_jobs AS child ON child.parent_attempt_id = attempt.id
+      WHERE attempt.job_id = job.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM collector_transport_failures WHERE collection_job_id = job.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM reset_baseline_evidence WHERE collection_job_id = job.id
+  )
+  AND (%s::bigint[] IS NULL OR target.id = ANY(%s::bigint[]))
+ORDER BY target.id
+LIMIT %s
+FOR UPDATE OF target SKIP LOCKED
+"""
+
+_DISCOVERY_TABLES = (
+    # Discovery rows are write-once provenance: scheduling consumes the
+    # in-transaction discovery list, so old rows are redundant once their
+    # observation is processed and pre-season. Source-less events (submitted
+    # tags, account links) have no owning observation and are preserved.
+    ("known_player_discoveries", "observation_id", "TRUE"),
+    (
+        "player_discovery_events",
+        "source_observation_id",
+        "target.source_observation_id IS NOT NULL",
+    ),
+)
+
+
+def _require_read_committed(connection: Any) -> None:
+    isolation = connection.execute("SHOW transaction_isolation").fetchone()[0]
+    if isinstance(isolation, bytes):
+        isolation = isolation.decode()
+    if isolation != "read committed":
+        raise ValueError("history cleanup requires READ COMMITTED isolation")
+
+
+def _prune_discovery_children(
+    connection: Any, hours: int, limit: int, apply: bool
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for table, obs_column, extra in _DISCOVERY_TABLES:
+        query = _DISCOVERY_CANDIDATE.format(
+            table=table, obs_column=obs_column, extra=extra
+        )
+        with connection.transaction():
+            _require_read_committed(connection)
+            connection.execute("SET LOCAL lock_timeout = '1s'")
+            connection.execute("SET LOCAL statement_timeout = '30s'")
+            candidates = [
+                row[0]
+                for row in connection.execute(
+                    query,
+                    (
+                        hours,
+                        SEASON_ANCHOR_RULE_VERSION,
+                        hours,
+                        None,
+                        None,
+                        limit,
+                    ),
+                ).fetchall()
+            ]
+            if candidates:
+                # Fence the owning observations and their processing jobs,
+                # then recheck: concurrent replay/processing either protects
+                # its inputs or safely re-creates a deleted provenance row.
+                observations = [
+                    row[0]
+                    for row in connection.execute(
+                        f"""SELECT o.id FROM {table} AS target
+                        JOIN collector_observations AS o ON o.id = target.{obs_column}
+                        WHERE target.id = ANY(%s::bigint[])
+                        ORDER BY o.id FOR UPDATE OF o""",
+                        (candidates,),
+                    ).fetchall()
+                ]
+                if observations:
+                    connection.execute(
+                        """SELECT p.id FROM python_processing_jobs AS p
+                        WHERE p.observation_id = ANY(%s::bigint[])
+                           OR p.replay_observation_id = ANY(%s::bigint[])
+                        ORDER BY p.id FOR UPDATE OF p""",
+                        (observations, observations),
+                    ).fetchall()
+                candidates = [
+                    row[0]
+                    for row in connection.execute(
+                        query,
+                        (
+                            hours,
+                            SEASON_ANCHOR_RULE_VERSION,
+                            hours,
+                            candidates,
+                            candidates,
+                            limit,
+                        ),
+                    ).fetchall()
+                ]
+            deleted = 0
+            if apply and candidates:
+                deleted = connection.execute(
+                    f"DELETE FROM {table} WHERE id = ANY(%s::bigint[])",
+                    (candidates,),
+                ).rowcount
+            counts[f"eligible_{table}"] = len(candidates)
+            counts[f"deleted_{table}"] = deleted
+    return counts
+
+
 def prune_completed_history(
     connection: Any,
     *,
     retention_hours: int = 48,
     max_jobs: int = 1000,
     apply: bool = False,
+    max_discoveries: int = 1000,
 ) -> dict[str, int | bool]:
     if not 48 <= retention_hours <= 24 * 28:
         raise ValueError("retention_hours must be between 48 and 672")
     if not 1 <= max_jobs <= 1000:
         raise ValueError("max_jobs must be between 1 and 1000")
+    if not 1 <= max_discoveries <= 1000:
+        raise ValueError("max_discoveries must be between 1 and 1000")
+    discoveries = _prune_discovery_children(
+        connection, retention_hours, max_discoveries, apply
+    )
     with connection.transaction():
-        isolation = connection.execute("SHOW transaction_isolation").fetchone()[0]
-        if isinstance(isolation, bytes):
-            isolation = isolation.decode()
-        if isolation != "read committed":
-            raise ValueError("history cleanup requires READ COMMITTED isolation")
         connection.execute("SET LOCAL lock_timeout = '1s'")
         connection.execute("SET LOCAL statement_timeout = '30s'")
         candidates = [
@@ -161,8 +309,10 @@ def prune_completed_history(
     garbage = _prune_unused_content(connection, retention_hours, max_jobs, apply)
     return {
         **garbage,
+        **discoveries,
         "apply": apply,
         "retention_hours": retention_hours,
+        "max_discoveries": max_discoveries,
         "eligible_collection_jobs": len(candidates),
         "deleted_collection_jobs": deleted,
     }
