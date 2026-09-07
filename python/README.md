@@ -15,7 +15,7 @@ operations are in [`docs/deployment.md`](../docs/deployment.md).
 - `testdata/` — synthetic fixtures only; no credentials or live player bodies.
 
 The production schema is owned by `deploy/migrations/0001_collector.sql`
-through `0019_player_season_summaries.sql`.
+through `0020_army_season_summaries.sql`.
 See [history retention](../docs/history-retention.md) for compact storage,
 operator-only cleanup, and the limits on replay after expiry. Application startup does not create or
 alter tables; tests apply these migrations directly.

@@ -1004,6 +1004,55 @@ describe("server-only Python client response boundary", () => {
     });
   });
 
+  it("maps a whole-season army summary without day ranges or population filters", async () => {
+    const payload = {
+      ...armyAnalyticsPayload(),
+      publication_identity: "army-season-abc123-def45678",
+      collection_coverage: { state: "partial", completed_days: 20 },
+      reproducibility: {
+        official_season_id: "1785714000",
+        legend_days: [1, 28],
+        snapshot_versions: [],
+      },
+      selection: {
+        lens: "defense",
+        season: "1785714000",
+        start_day: 1,
+        end_day: 28,
+        population: "all",
+        category: "troops",
+        sort: "usage-rate",
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+    const query = new URLSearchParams({
+      lens: "defense",
+      category: "troops",
+      sort: "usage-rate",
+    });
+    const mapped = await createPythonClient().getArmySeasonSummary("1785714000", query);
+    const url = fetchMock.mock.calls[0][0] as URL;
+    expect(url.pathname).toBe("/v1/analytics/armies/seasons/1785714000");
+    expect(url.searchParams.has("start_day")).toBe(false);
+    expect(url.searchParams.has("population")).toBe(false);
+    expect(mapped.selection).toMatchObject({
+      startDay: 1,
+      endDay: 28,
+      population: "all",
+    });
+    expect(mapped.collectionCoverage).toEqual({ state: "partial", completedDays: 20 });
+    expect(mapped.rows[0]).toMatchObject({ key: "troop:58", usageCount: 2 });
+  });
+
   it("rejects an army analytics payload with malformed evidence coverage", async () => {
     const payload = armyAnalyticsPayload();
     delete (payload as Record<string, unknown>).cohort_evidence;

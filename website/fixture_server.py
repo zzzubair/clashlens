@@ -859,6 +859,12 @@ class FixtureHandler(BaseHTTPRequestHandler):
                 return
             self.send_json(200, leaderboard(limit, view, offset, season, day))
             return
+        if path.startswith("/v1/analytics/armies/seasons/"):
+            # Compact summaries are not materialized in the fixture: report
+            # the transitional missing-summary signal so historical reads
+            # exercise the detailed fallback.
+            self.send_json(404, {"error": "army_analytics_unavailable"})
+            return
         if path == "/v1/analytics/armies":
             season = query.get("season", ["current"])[0]
             if season == "fixture-422":

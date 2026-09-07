@@ -204,6 +204,7 @@ RELATION_NAMES = (
     "army_analytics_completed_days",
     "army_analytics_day_summaries",
     "army_analytics_season_summaries",
+    "army_season_summaries",
     "battle_army_decodes",
     "battle_evidence",
     "battle_log_observation_rows",
@@ -1016,7 +1017,7 @@ def _validate_database(value: Any) -> None:
     migrations = database["migrations"]
     if not isinstance(migrations, list) or any(
         not isinstance(item, dict) for item in migrations
-    ) or [item.get("version") for item in migrations] != list(range(1, 20)):
+    ) or [item.get("version") for item in migrations] != list(range(1, 21)):
         raise OperatingFactsError("required_fact_invalid")
     for item in migrations:
         _exact_keys(item, ("version", "applied_at"))

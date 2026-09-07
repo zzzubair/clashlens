@@ -89,7 +89,7 @@ def _database(*, captured_at: str = CAPTURED_AT) -> dict[str, object]:
         "contract_version": 5,
         "migrations": [
             {"version": version, "applied_at": "2026-08-28T19:00:00+00:00"}
-            for version in range(1, 20)
+            for version in range(1, 21)
         ],
         "queues": {"collector": _queue(), "python": _queue()},
         "processed": {

@@ -462,6 +462,33 @@ def create_app(
             raise ApiError(404, "army_analytics_unavailable")
         return JSONResponse(status_code=200, content=_json_safe(result))
 
+    @app.get("/v1/analytics/armies/seasons/{season_id}")
+    def army_season_summary(
+        season_id: str,
+        request: Request,
+        lens: str = Query(default="offense", max_length=16),
+        category: str = Query(default="troops", max_length=40),
+        sort: str = Query(default="usage-rate", max_length=40),
+    ) -> JSONResponse:
+        _authorize(request, "analytics.read", production_database)
+        # Historical army reads cover the whole season only: no day range
+        # or population filter is accepted. The population vehicle below
+        # only satisfies selection validation; it never reaches the stored
+        # whole-season sample.
+        try:
+            selection = ArmyAnalyticsSelection.parse(
+                lens=lens, season=season_id, start_day=1, end_day=28,
+                population="top-100", category=category, sort=sort,
+            )
+        except ValueError as error:
+            raise ApiError(422, "invalid_army_analytics_selection") from error
+        result = production_database.get_army_season_summary(
+            selection.season, selection.lens, selection.category, selection.sort
+        )
+        if result is None:
+            raise ApiError(404, "army_analytics_unavailable")
+        return JSONResponse(status_code=200, content=_json_safe(result))
+
     @app.get("/v1/battles/{battle_id}/army")
     def battle_army(
         battle_id: int,
