@@ -282,3 +282,53 @@ export interface RefreshStatus extends RefreshWork {
 
 export type RefreshError = WebsiteErrorResponse;
 export type RefreshStatusResponse = RefreshStatus | RefreshError;
+
+export interface HistoricalSeasonDayEntry {
+  dayNumber: number | null;
+  period: string;
+  startTrophies: number | null;
+  endTrophies: number | null;
+  attackGain: number | null;
+  defenseLoss: number | null;
+  netChange: number | null;
+  attacks: number | null;
+  defenses: number | null;
+  state: string;
+  coverage: string;
+  hasAdjustment: boolean;
+  adjustmentTotal: number | null;
+  flags: string[];
+}
+
+export interface HistoricalSeasonSummary {
+  kind: "player-season-summary";
+  tag: string;
+  seasonId: string;
+  seasonStart: string | null;
+  seasonEnd: string | null;
+  startTrophies: number | null;
+  endTrophies: number | null;
+  finalRank: number | null;
+  attackCount: number | null;
+  attackGain: number | null;
+  defenseCount: number | null;
+  defenseLoss: number | null;
+  netTrophyChange: number | null;
+  attackStars: Record<string, number>;
+  defenseStars: Record<string, number>;
+  attackStarsUnknown: number;
+  defenseStarsUnknown: number;
+  daysObserved: number;
+  daysMissing: number[];
+  coverageState: "complete" | "partial";
+  unresolvedFlags: string[];
+  dailyEntries: HistoricalSeasonDayEntry[];
+  publishedAt: string | null;
+}
+
+export interface SummarizedSeasonRef {
+  seasonId: string;
+  coverageState: "complete" | "partial";
+  daysObserved: number;
+  daysMissing: number;
+}

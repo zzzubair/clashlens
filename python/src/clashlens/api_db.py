@@ -1603,6 +1603,68 @@ class ApiDatabase:
                 },
             }
 
+    def list_player_seasons(self, normalized_tag: str) -> list[dict[str, Any]]:
+        """List summarized historical seasons for one player.
+
+        Reads the compact summary table only; it never touches current
+        profile evidence, battle decodes, daily publications, or
+        ranked-day detail.
+        """
+        with self.pool.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT summary.official_season_id, summary.coverage_state,
+                       summary.days_observed, summary.days_missing,
+                       summary.start_trophies, summary.end_trophies,
+                       summary.published_at
+                FROM player_season_summaries AS summary
+                JOIN players AS player ON player.id = summary.player_id
+                WHERE player.normalized_tag = %s
+                ORDER BY summary.season_start NULLS LAST,
+                         summary.official_season_id
+                """,
+                (normalized_tag,),
+            ).fetchall()
+            return [
+                {
+                    "official_season_id": _text(row[0]),
+                    "coverage_state": _text(row[1]),
+                    "days_observed": int(row[2]),
+                    "days_missing": int(row[3]),
+                    "start_trophies": None if row[4] is None else int(row[4]),
+                    "end_trophies": None if row[5] is None else int(row[5]),
+                    "published_at": row[6].astimezone(UTC).isoformat(),
+                }
+                for row in rows
+            ]
+
+    def get_player_season_summary(
+        self, normalized_tag: str, official_season_id: str
+    ) -> dict[str, Any] | None:
+        """Read one historical season directly from its compact summary.
+
+        Uses shared player identity only. A missing summary returns None
+        (the caller reports unavailable/not found); it never falls back to
+        live detail.
+        """
+        with self.pool.connection() as connection:
+            cursor = connection.execute(
+                """
+                SELECT player.normalized_tag, summary.*
+                FROM player_season_summaries AS summary
+                JOIN players AS player ON player.id = summary.player_id
+                WHERE player.normalized_tag = %s
+                  AND summary.official_season_id = %s
+                """,
+                (normalized_tag, official_season_id),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            columns = [d.name for d in cursor.description]
+            record = dict(zip(columns, row))
+            return _historical_season_summary(record)
+
     def search_known_players(
         self,
         query: str,
@@ -3602,3 +3664,58 @@ def _daily_log(day: Any) -> dict[str, Any]:
 
 def _json_array(value: Any) -> list[Any]:
     return list(value) if isinstance(value, list) else []
+
+
+def _historical_season_summary(record: dict[str, Any]) -> dict[str, Any]:
+    """Project a stored compact season summary to the public shape.
+
+    The stored row is already the complete historical record; this only
+    normalizes timestamps and preserves numeric values (never rendered
+    text) so future comparisons can reuse them.
+    """
+
+    def _optional_int(value: Any) -> int | None:
+        return None if value is None else int(value)
+
+    def _iso(value: Any) -> str | None:
+        return None if value is None else value.astimezone(UTC).isoformat()
+
+    return {
+        "kind": "player-season-summary",
+        "tag": _text(record["normalized_tag"]),
+        "official_season_id": _text(record["official_season_id"]),
+        "season_start": _iso(record["season_start"]),
+        "season_end": _iso(record["season_end"]),
+        "start_trophies": _optional_int(record["start_trophies"]),
+        "end_trophies": _optional_int(record["end_trophies"]),
+        "final_rank": _optional_int(record["final_rank"]),
+        "attack_count": _optional_int(record["attack_count"]),
+        "attack_gain": _optional_int(record["attack_gain"]),
+        "attack_three_star_count": _optional_int(
+            record["attack_three_star_count"]
+        ),
+        "defense_count": _optional_int(record["defense_count"]),
+        "defense_loss": _optional_int(record["defense_loss"]),
+        "defense_three_star_count": _optional_int(
+            record["defense_three_star_count"]
+        ),
+        "net_trophy_change": _optional_int(record["net_trophy_change"]),
+        "attack_stars": {
+            str(star): int(record[f"attack_star_{star}"]) for star in range(4)
+        },
+        "attack_stars_unknown": int(record["attack_star_unknown"]),
+        "defense_stars": {
+            str(star): int(record[f"defense_star_{star}"]) for star in range(4)
+        },
+        "defense_stars_unknown": int(record["defense_star_unknown"]),
+        "days_observed": int(record["days_observed"]),
+        "days_missing": int(record["days_missing"]),
+        "missing_days": [int(day) for day in (record["missing_days"] or [])],
+        "coverage_state": _text(record["coverage_state"]),
+        "unresolved_flags": [
+            _text(flag) for flag in (record["unresolved_flags"] or [])
+        ],
+        "daily_entries": _json_array(record["daily_entries"]),
+        "projection_version": _text(record["projection_version"]),
+        "published_at": _iso(record["published_at"]),
+    }

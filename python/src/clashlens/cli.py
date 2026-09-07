@@ -13,6 +13,7 @@ import urllib.request
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
 from time import monotonic, time
@@ -148,6 +149,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=_bounded_int("republication batch size", 1, 1000),
         default=100,
     )
+
+    materialize_seasons = subparsers.add_parser(
+        "materialize-season-summaries",
+        help="project compact historical player-season summaries for one completed season",
+    )
+    _database_argument(materialize_seasons)
+    materialize_seasons.add_argument("--season-id", required=True)
+    materialize_seasons.add_argument(
+        "--max-players",
+        type=_bounded_int("materialization batch size", 1, 1000),
+        default=100,
+    )
+    materialize_seasons.add_argument(
+        "--after-player-id",
+        type=_bounded_int("materialization cursor", 0, 9223372036854775807),
+        default=0,
+    )
+    materialize_seasons.add_argument("--apply", action="store_true")
 
     serve = subparsers.add_parser(
         "serve", help="run the signed saved-data FastAPI route"
@@ -288,6 +307,27 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             finally:
                 database.close()
+            return 0
+        if arguments.command == "materialize-season-summaries":
+            import psycopg
+
+            from .season_summaries import materialize_completed_seasons
+
+            with psycopg.connect(_database_url(arguments)) as connection:
+                report = materialize_completed_seasons(
+                    connection,
+                    season_id=arguments.season_id,
+                    max_players=arguments.max_players,
+                    now=datetime.now(UTC),
+                    after_player_id=arguments.after_player_id,
+                )
+                if arguments.apply:
+                    connection.commit()
+                    report = {**report, "applied": True}
+                else:
+                    connection.rollback()
+                    report = {**report, "applied": False}
+            print(json.dumps(report, sort_keys=True, default=str))
             return 0
         if arguments.command == "serve":
             app, _database = _serve_app(arguments)

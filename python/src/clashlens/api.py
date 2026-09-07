@@ -336,6 +336,35 @@ def create_app(
             raise ApiError(404, "player_not_found")
         return JSONResponse(status_code=200, content=_json_safe(result))
 
+    @app.get("/v1/players/{tag}/seasons")
+    def player_seasons(tag: str, request: Request) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        normalized_tag = _safe_tag(tag)
+        return JSONResponse(
+            status_code=200,
+            content=_json_safe(
+                {
+                    "tag": normalized_tag,
+                    "seasons": production_database.list_player_seasons(
+                        normalized_tag
+                    ),
+                }
+            ),
+        )
+
+    @app.get("/v1/players/{tag}/seasons/{season_id}")
+    def player_season(tag: str, season_id: str, request: Request) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        normalized_tag = _safe_tag(tag)
+        if not 1 <= len(season_id) <= 128:
+            raise ApiError(422, "invalid_request")
+        result = production_database.get_player_season_summary(
+            normalized_tag, season_id
+        )
+        if result is None:
+            raise ApiError(404, "season_not_found")
+        return JSONResponse(status_code=200, content=_json_safe(result))
+
     @app.post("/v1/players/{tag}/refresh")
     async def refresh(tag: str, request: Request) -> JSONResponse:
         context = _authorize(request, "refresh.submit", production_database)

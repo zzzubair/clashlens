@@ -1,11 +1,13 @@
 import type {
   ArmyAnalytics,
   BattleArmy,
+  HistoricalSeasonSummary,
   PlayerPage,
   RankedBattleEvent,
   RefreshStatus,
   RefreshWork,
   SearchResponse,
+  SummarizedSeasonRef,
   TrackedLeaderboard,
 } from "../lib/contracts";
 import type {
@@ -81,6 +83,8 @@ export interface PythonClient {
   ): Promise<TrackedLeaderboard>;
   searchPlayers(query: string, limit?: number): Promise<SearchResponse>;
   getPlayer(tag: string): Promise<PlayerPage>;
+  getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]>;
+  getPlayerSeason(tag: string, seasonId: string): Promise<HistoricalSeasonSummary>;
   getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics>;
   requestRefresh(tag: string, idempotencyKey: string): Promise<RefreshWork>;
   getRefreshStatus(workId: string, tag: string): Promise<RefreshStatus>;
@@ -166,6 +170,8 @@ export function createPythonClient(
     getTrackedLeaderboard,
     searchPlayers,
     getPlayer: getPlayerPage,
+    getPlayerSeasons,
+    getPlayerSeason,
     getArmyAnalytics,
     requestRefresh: requestPlayerRefresh,
     getRefreshStatus,
@@ -266,6 +272,164 @@ async function getPlayerPage(tag: string): Promise<PlayerPage> {
     undefined,
   );
   return mapPlayerPage(payload);
+}
+
+async function getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]> {
+  const payload = await requestJson<unknown>(
+    `/v1/players/${encodeURIComponent(tag)}/seasons`,
+    "GET",
+    undefined,
+    undefined,
+  );
+  if (!isRecord(payload) || !Array.isArray(payload.seasons))
+    throw new PythonApiError(502, { error: "malformed" });
+  return payload.seasons.map((value) => {
+    if (
+      !isRecord(value) ||
+      !isString(value.official_season_id) ||
+      value.official_season_id.length === 0 ||
+      !isOneOf(value.coverage_state, ["complete", "partial"] as const) ||
+      !isInteger(value.days_observed) ||
+      !isInteger(value.days_missing)
+    )
+      throw new PythonApiError(502, { error: "malformed" });
+    return {
+      seasonId: value.official_season_id,
+      coverageState: value.coverage_state,
+      daysObserved: value.days_observed,
+      daysMissing: value.days_missing,
+    };
+  });
+}
+
+async function getPlayerSeason(
+  tag: string,
+  seasonId: string,
+): Promise<HistoricalSeasonSummary> {
+  const payload = await requestJson<unknown>(
+    `/v1/players/${encodeURIComponent(tag)}/seasons/${encodeURIComponent(seasonId)}`,
+    "GET",
+    undefined,
+    undefined,
+  );
+  return mapHistoricalSeason(payload);
+}
+
+function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
+  if (
+    !isRecord(payload) ||
+    payload.kind !== "player-season-summary" ||
+    !isCanonicalPlayerTag(payload.tag) ||
+    !isString(payload.official_season_id) ||
+    payload.official_season_id.length === 0 ||
+    !(payload.season_start === null || isString(payload.season_start)) ||
+    !(payload.season_end === null || isString(payload.season_end)) ||
+    !isOneOf(payload.coverage_state, ["complete", "partial"] as const) ||
+    !Array.isArray(payload.daily_entries) ||
+    payload.daily_entries.length > 28 ||
+    !Array.isArray(payload.unresolved_flags) ||
+    !payload.unresolved_flags.every(isString) ||
+    !Array.isArray(payload.missing_days) ||
+    !payload.missing_days.every(isInteger) ||
+    !isInteger(payload.days_observed) ||
+    !isRecord(payload.attack_stars) ||
+    !isRecord(payload.defense_stars) ||
+    !isInteger(payload.attack_stars_unknown) ||
+    !isInteger(payload.defense_stars_unknown)
+  )
+    throw new PythonApiError(502, { error: "malformed" });
+  const counts = [
+    payload.attack_count,
+    payload.attack_gain,
+    payload.defense_count,
+    payload.defense_loss,
+    payload.net_trophy_change,
+    payload.start_trophies,
+    payload.end_trophies,
+  ];
+  if (!counts.every((item) => item === null || isInteger(item)))
+    throw new PythonApiError(502, { error: "malformed" });
+  if (
+    !(payload.final_rank === null || isInteger(payload.final_rank)) ||
+    !(payload.published_at === null || isString(payload.published_at))
+  )
+    throw new PythonApiError(502, { error: "malformed" });
+  for (const stars of [payload.attack_stars, payload.defense_stars]) {
+    if (!["0", "1", "2", "3"].every((key) => isInteger(stars[key])))
+      throw new PythonApiError(502, { error: "malformed" });
+  }
+  const dailyEntries = payload.daily_entries.map((value) => {
+    if (
+      !isRecord(value) ||
+      !(value.season_day_number === null || isInteger(value.season_day_number)) ||
+      !isString(value.ranked_day_start) ||
+      !(value.ranked_day_end === null || isString(value.ranked_day_end)) ||
+      !isString(value.state) ||
+      !isString(value.coverage) ||
+      typeof value.has_adjustment !== "boolean" ||
+      !Array.isArray(value.flags) ||
+      !value.flags.every(isString)
+    )
+      throw new PythonApiError(502, { error: "malformed" });
+    const metrics = [
+      value.start_trophies,
+      value.end_trophies,
+      value.attack_gain,
+      value.defense_loss,
+      value.net_change,
+      value.attack_count,
+      value.defense_count,
+      value.adjustment_total,
+    ];
+    if (!metrics.every((item) => item === null || isInteger(item)))
+      throw new PythonApiError(502, { error: "malformed" });
+    // Compact entries carry no battle drilldown.
+    if ("battle_id" in value || "battles" in value || "opponent" in value)
+      throw new PythonApiError(502, { error: "malformed" });
+    return {
+      dayNumber: value.season_day_number as number | null,
+      period: isString(value.ranked_day_end)
+        ? `${value.ranked_day_start} – ${value.ranked_day_end}`
+        : (value.ranked_day_start as string),
+      startTrophies: value.start_trophies as number | null,
+      endTrophies: value.end_trophies as number | null,
+      attackGain: value.attack_gain as number | null,
+      defenseLoss: value.defense_loss as number | null,
+      netChange: value.net_change as number | null,
+      attacks: value.attack_count as number | null,
+      defenses: value.defense_count as number | null,
+      state: value.state as string,
+      coverage: value.coverage as string,
+      hasAdjustment: value.has_adjustment as boolean,
+      adjustmentTotal: value.adjustment_total as number | null,
+      flags: value.flags as string[],
+    };
+  });
+  return {
+    kind: "player-season-summary",
+    tag: payload.tag,
+    seasonId: payload.official_season_id,
+    seasonStart: payload.season_start as string | null,
+    seasonEnd: payload.season_end as string | null,
+    startTrophies: payload.start_trophies as number | null,
+    endTrophies: payload.end_trophies as number | null,
+    finalRank: payload.final_rank as number | null,
+    attackCount: payload.attack_count as number | null,
+    attackGain: payload.attack_gain as number | null,
+    defenseCount: payload.defense_count as number | null,
+    defenseLoss: payload.defense_loss as number | null,
+    netTrophyChange: payload.net_trophy_change as number | null,
+    attackStars: payload.attack_stars as Record<string, number>,
+    defenseStars: payload.defense_stars as Record<string, number>,
+    attackStarsUnknown: payload.attack_stars_unknown,
+    defenseStarsUnknown: payload.defense_stars_unknown,
+    daysObserved: payload.days_observed,
+    daysMissing: payload.missing_days as number[],
+    coverageState: payload.coverage_state,
+    unresolvedFlags: payload.unresolved_flags as string[],
+    dailyEntries,
+    publishedAt: payload.published_at as string | null,
+  };
 }
 
 async function requestPlayerRefresh(
