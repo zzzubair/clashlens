@@ -1,11 +1,4 @@
-import {
-  data,
-  Form,
-  Link,
-  useLoaderData,
-  useSearchParams,
-  type LoaderFunctionArgs,
-} from "react-router";
+import { data, Form, Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { WebsiteErrorResponse } from "../lib/contracts";
@@ -34,6 +27,20 @@ const allowed = {
   ],
 } as const;
 
+// Transitional missing-summary signal: the compact summary endpoint reports
+// 404 army_analytics_unavailable while summaries are not yet materialized.
+// Only this shape falls back to detail; 422 and other errors propagate.
+function isMissingArmySummary(cause: unknown): boolean {
+  if (typeof cause !== "object" || cause === null) return false;
+  const { status, payload } = cause as { status?: unknown; payload?: unknown };
+  return (
+    status === 404 &&
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { error?: unknown }).error === "army_analytics_unavailable"
+  );
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   const source = new URL(request.url).searchParams;
   const season = source.get("season") ?? "current";
@@ -43,17 +50,40 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const python = await import("../services/python.server");
   try {
     if (season !== "current") {
-      // Historical seasons read the shared whole-season summary only:
-      // Legend days 1-28 with the whole-season sample. Day ranges and
-      // population filters are not accepted for historical reads.
+      // Historical seasons prefer the shared whole-season summary:
+      // Legend days 1-28 with the whole-season sample, served without
+      // touching battle detail. Summaries are materialized after deploy,
+      // so a missing summary (404 army_analytics_unavailable only) falls
+      // back to the existing detailed read with the requested range and
+      // population until materialization lands. No fallback on 422 or
+      // other errors.
+      const client = python.createPythonClient();
       const summaryQuery = new URLSearchParams({ lens, category, sort });
-      return {
-        analytics: await python
-          .createPythonClient()
-          .getArmySeasonSummary(season, summaryQuery),
-        error: null,
-        seasonEmpty: null,
-      };
+      try {
+        return {
+          analytics: await client.getArmySeasonSummary(season, summaryQuery),
+          error: null,
+          seasonEmpty: null,
+          historicalSummary: true,
+        };
+      } catch (summaryCause) {
+        if (!isMissingArmySummary(summaryCause)) throw summaryCause;
+        const query = new URLSearchParams({
+          season,
+          lens,
+          start_day: source.get("start_day") ?? "1",
+          end_day: source.get("end_day") ?? "28",
+          population: source.get("population") ?? "top-100",
+          category,
+          sort,
+        });
+        return {
+          analytics: await client.getArmyAnalytics(query),
+          error: null,
+          seasonEmpty: null,
+          historicalSummary: false,
+        };
+      }
     }
     const query = new URLSearchParams({
       season,
@@ -68,6 +98,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       analytics: await python.createPythonClient().getArmyAnalytics(query),
       error: null,
       seasonEmpty: null,
+      historicalSummary: false,
     };
   } catch (cause) {
     if (cause instanceof python.NoCompletedLegendDaysError) {
@@ -78,6 +109,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           analytics: null,
           error: null,
           seasonEmpty: { previousSeasonId: cause.previousSeasonId },
+          historicalSummary: false,
         },
         { status: 404 },
       );
@@ -121,11 +153,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
         error.error.affectedDays = (payload as { affected_days: number[] }).affected_days;
       }
       return data(
-        { analytics: null, error, seasonEmpty: null },
+        { analytics: null, error, seasonEmpty: null, historicalSummary: false },
         { status: pythonError.status },
       );
     }
-    return { analytics: null, error: safeWebsiteError(cause), seasonEmpty: null };
+    return {
+      analytics: null,
+      error: safeWebsiteError(cause),
+      seasonEmpty: null,
+      historicalSummary: false,
+    };
   }
 }
 
@@ -134,14 +171,14 @@ export function headers() {
 }
 
 export default function ArmyAnalyticsRoute() {
-  const { analytics, error, seasonEmpty } = useLoaderData<typeof loader>();
+  const { analytics, error, seasonEmpty, historicalSummary } =
+    useLoaderData<typeof loader>();
   const selected = analytics?.selection;
-  const [searchParams] = useSearchParams();
-  // Historical seasons serve the shared whole-season summary only
-  // (Legend days 1-28, all players): day-range and population controls
-  // are disabled so the form cannot submit selections the loader ignores.
-  const isHistorical =
-    (searchParams.get("season") ?? selected?.season ?? "current") !== "current";
+  // Day-range and population controls are disabled only while a compact
+  // whole-season summary (Legend days 1-28, all players) is served. While
+  // the transitional detail fallback is served, the requested controls
+  // stay enabled and keep their requested values.
+  const isHistorical = historicalSummary === true;
   return (
     <main className="page-shell">
       <section className="hero" aria-labelledby="army-analytics-title">
