@@ -718,6 +718,58 @@ def test_duplicate_profiles_reuse_canonical_and_semantic_rows(
             database.close()
 
 
+def test_populated_compact_upgrade_replays_existing_battle_log(
+    database_url: str, archive_server
+) -> None:
+    migrations = sorted((Path(__file__).parents[2] / "deploy/migrations").glob("*.sql"))
+    with _pre_dedup_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            for migration in migrations:
+                if "0012_" <= migration.name < "0016_":
+                    connection.execute(migration.read_text())
+        observation_id, job_id = store_observation(
+            connection_info, archive_server, occurrence_key="compact-upgrade",
+            endpoint="battle_log", body=BATTLE_FIXTURE.read_bytes(),
+            observed_at=NOW, normalized_tag="#2PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_job(job_id, owner="before-upgrade").outcome == "processed"
+        finally:
+            database.close()
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            original_evidence = connection.execute(
+                "SELECT id, source_row_id, observation_row_id FROM battle_evidence ORDER BY id"
+            ).fetchall()
+            parser_version = text(connection.execute(
+                "SELECT parser_version FROM battle_log_observations WHERE observation_id = %s",
+                (observation_id,),
+            ).fetchone()[0])
+            for migration in migrations:
+                if migration.name >= "0016_":
+                    connection.execute(migration.read_text())
+            replay_job_id = _replay_job(connection, observation_id, parser_version)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_job(replay_job_id, owner="after-upgrade").outcome == "processed"
+            with psycopg.connect(connection_info) as connection:
+                assert connection.execute(
+                    "SELECT id, source_row_id, observation_row_id FROM battle_evidence "
+                    "WHERE observation_row_id IS NOT NULL ORDER BY id"
+                ).fetchall() == original_evidence
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_log_observation_source_rows "
+                    "WHERE evidence_id IS NOT NULL"
+                ).fetchone()[0] == len(original_evidence)
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_perspectives AS p "
+                    "JOIN battle_evidence AS e ON e.id = p.evidence_id "
+                    "WHERE e.observation_row_id IS NULL"
+                ).fetchone()[0] == len(original_evidence)
+        finally:
+            database.close()
+
+
 def test_history_cleanup_keeps_reports_latest_profiles_and_unfinished_work(
     database_url: str, archive_server
 ) -> None:

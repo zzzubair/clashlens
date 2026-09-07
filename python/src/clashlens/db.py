@@ -2380,7 +2380,7 @@ class Database:
                                     )
                                 ],
                                 "source_row_id": source_row_ids[row.source_row_index],
-                                "observation_row_id": observation_row_ids.get(row.source_row_index),
+                                "observation_row_id": None if compact else observation_row_ids[row.source_row_index],
                                 "perspective": battle.perspective,
                                 "battle_timestamp": battle.battle_timestamp.isoformat(),
                                 "stars": battle.stars,
