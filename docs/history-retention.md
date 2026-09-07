@@ -1,5 +1,28 @@
 # Compact history and retention
 
+Migration 0020 adds shared whole-season army summaries: one
+`army_season_summaries` record per (season, lens, category) with
+whole-season usage counts and rates, 0/1/2/3-star attack counts, the
+three-star rate derived from the stored attack sample, and the underlying
+denominators plus excluded/undecodable counts and honest coverage.
+Summaries are projected from the current versioned battle facts and read
+back without battle detail; offense and defense stay separate. Existing
+detail is retained; no cleanup is authorized by this migration.
+
+```sh
+python -m clashlens.cli materialize-army-season-summaries --season-id 1785714000
+# Inspect the JSON report, then explicitly opt in:
+python -m clashlens.cli materialize-army-season-summaries --season-id 1785714000 --apply
+```
+
+The default is preview only. A season is completed under the same gate as
+the player summaries (confirmed anchor timing or a completed day-28
+publication); anything else, including a live season, is left untouched.
+Historical army reads cover Legend days 1–28 with the whole-season sample
+only: no day ranges, no population filters, no per-battle drilldown. Late
+corrections refresh already-summarized seasons atomically with the day's
+facts; unchanged categories are a no-op.
+
 Migration 0019 adds compact historical player-season summaries: one
 `player_season_summaries` record per player per season with typed season
 totals and up to 28 compact daily trophy entries. Summaries are projected

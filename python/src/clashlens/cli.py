@@ -168,6 +168,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     materialize_seasons.add_argument("--apply", action="store_true")
 
+    materialize_armies = subparsers.add_parser(
+        "materialize-army-season-summaries",
+        help="project shared whole-season army summaries for one completed season",
+    )
+    _database_argument(materialize_armies)
+    materialize_armies.add_argument("--season-id", required=True)
+    materialize_armies.add_argument("--apply", action="store_true")
+
     serve = subparsers.add_parser(
         "serve", help="run the signed saved-data FastAPI route"
     )
@@ -320,6 +328,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_players=arguments.max_players,
                     now=datetime.now(UTC),
                     after_player_id=arguments.after_player_id,
+                )
+                if arguments.apply:
+                    connection.commit()
+                    report = {**report, "applied": True}
+                else:
+                    connection.rollback()
+                    report = {**report, "applied": False}
+            print(json.dumps(report, sort_keys=True, default=str))
+            return 0
+        if arguments.command == "materialize-army-season-summaries":
+            import psycopg
+
+            from .army_season_summaries import materialize_completed_army_season
+
+            with psycopg.connect(_database_url(arguments)) as connection:
+                report = materialize_completed_army_season(
+                    connection,
+                    season_id=arguments.season_id,
+                    now=datetime.now(UTC),
                 )
                 if arguments.apply:
                     connection.commit()

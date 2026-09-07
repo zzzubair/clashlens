@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import warnings
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from .army_decoder import (
     DecodeFailure,
     decode_army_share_code,
 )
+from .army_season_summaries import materialize_army_season
 from .battle import (
     SOURCE_PARSER_VERSION,
     ParsedBattleLog,
@@ -634,6 +636,9 @@ class Database:
             self._supports_season_summaries = connection.execute(
                 "SELECT to_regclass('player_season_summaries') IS NOT NULL"
             ).fetchone()[0]
+            self._supports_army_season_summaries = connection.execute(
+                "SELECT to_regclass('army_season_summaries') IS NOT NULL"
+            ).fetchone()[0]
         self._supports_coordinator_contract = self._contract_version >= 4
         self._dependency_support_probed = True
 
@@ -690,6 +695,9 @@ class Database:
             ).fetchone()[0]
             self._supports_season_summaries = connection.execute(
                 "SELECT to_regclass('player_season_summaries') IS NOT NULL"
+            ).fetchone()[0]
+            self._supports_army_season_summaries = connection.execute(
+                "SELECT to_regclass('army_season_summaries') IS NOT NULL"
             ).fetchone()[0]
         self._dependency_support_probed = True
 
@@ -9368,6 +9376,55 @@ class Database:
                     marker_hash,
                 ),
             )
+            # A late correction refreshes an already-summarized season.
+            # Seasons without summaries (live seasons stay on explicit
+            # preview-first backfill) cost one existence lookup; summarized
+            # seasons pay one projection per lens per day build (fact scan
+            # plus per-category upserts, writes skipped when digests match).
+            # Each lens refreshes in a savepoint so a projection failure
+            # warns without rolling back the day facts/marker above.
+            self._refresh_army_season_summaries(
+                connection, _text_value(marker_day[0])
+            )
+
+    def _refresh_army_season_summaries(
+        self, connection: Any, season_id: str
+    ) -> None:
+        """Refresh whole-season army summaries without risking the caller.
+
+        The caller is the enclosing day build: its facts and completion
+        marker are already written in the same transaction. Each lens
+        refreshes in a savepoint, so a projection failure rolls back only
+        that lens refresh, warns observably, and leaves the day build
+        green; the other lens still refreshes. Seasons with no summaries
+        yet cost one existence lookup.
+        """
+        if not getattr(self, "_supports_army_season_summaries", False):
+            return
+        summarized = connection.execute(
+            """
+            SELECT 1 FROM army_season_summaries
+            WHERE official_season_id = %s LIMIT 1
+            """,
+            (season_id,),
+        ).fetchone()
+        if summarized is None:
+            return
+        for summary_lens in ("offense", "defense"):
+            try:
+                with connection.transaction():
+                    materialize_army_season(
+                        connection,
+                        season_id,
+                        summary_lens,
+                    )
+            except Exception:  # noqa: BLE001 - day facts/marker stay durable; warn, keep the day build green
+                warnings.warn(
+                    "army_season_summary_refresh_failed:"
+                    f"{season_id}:{summary_lens}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
     def _season_metadata_for_ranked_day(
         self, connection: Any, ranked_day_start: datetime

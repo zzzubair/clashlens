@@ -1,4 +1,11 @@
-import { data, Form, Link, useLoaderData, type LoaderFunctionArgs } from "react-router";
+import {
+  data,
+  Form,
+  Link,
+  useLoaderData,
+  useSearchParams,
+  type LoaderFunctionArgs,
+} from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { WebsiteErrorResponse } from "../lib/contracts";
@@ -29,17 +36,34 @@ const allowed = {
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const source = new URL(request.url).searchParams;
-  const query = new URLSearchParams({
-    season: source.get("season") ?? "current",
-    lens: source.get("lens") ?? "offense",
-    start_day: source.get("start_day") ?? "1",
-    end_day: source.get("end_day") ?? "28",
-    population: source.get("population") ?? "top-100",
-    category: source.get("category") ?? "troops",
-    sort: source.get("sort") ?? "usage-rate",
-  });
+  const season = source.get("season") ?? "current";
+  const lens = source.get("lens") ?? "offense";
+  const category = source.get("category") ?? "troops";
+  const sort = source.get("sort") ?? "usage-rate";
   const python = await import("../services/python.server");
   try {
+    if (season !== "current") {
+      // Historical seasons read the shared whole-season summary only:
+      // Legend days 1-28 with the whole-season sample. Day ranges and
+      // population filters are not accepted for historical reads.
+      const summaryQuery = new URLSearchParams({ lens, category, sort });
+      return {
+        analytics: await python
+          .createPythonClient()
+          .getArmySeasonSummary(season, summaryQuery),
+        error: null,
+        seasonEmpty: null,
+      };
+    }
+    const query = new URLSearchParams({
+      season,
+      lens,
+      start_day: source.get("start_day") ?? "1",
+      end_day: source.get("end_day") ?? "28",
+      population: source.get("population") ?? "top-100",
+      category,
+      sort,
+    });
     return {
       analytics: await python.createPythonClient().getArmyAnalytics(query),
       error: null,
@@ -112,6 +136,12 @@ export function headers() {
 export default function ArmyAnalyticsRoute() {
   const { analytics, error, seasonEmpty } = useLoaderData<typeof loader>();
   const selected = analytics?.selection;
+  const [searchParams] = useSearchParams();
+  // Historical seasons serve the shared whole-season summary only
+  // (Legend days 1-28, all players): day-range and population controls
+  // are disabled so the form cannot submit selections the loader ignores.
+  const isHistorical =
+    (searchParams.get("season") ?? selected?.season ?? "current") !== "current";
   return (
     <main className="page-shell">
       <section className="hero" aria-labelledby="army-analytics-title">
@@ -122,6 +152,12 @@ export default function ArmyAnalyticsRoute() {
         </p>
       </section>
       <Form method="get" className="search-panel" aria-label="Army analytics filters">
+        {isHistorical ? (
+          <p>
+            Historical seasons show the whole season (Legend days 1–28, all players). Day
+            ranges and population filters apply to the current season only.
+          </p>
+        ) : null}
         <label>
           Lens
           <select name="lens" defaultValue={selected?.lens ?? "offense"}>
@@ -142,6 +178,7 @@ export default function ArmyAnalyticsRoute() {
             min="1"
             max="28"
             defaultValue={selected?.startDay ?? 1}
+            disabled={isHistorical}
           />
         </label>
         <label>
@@ -152,11 +189,16 @@ export default function ArmyAnalyticsRoute() {
             min="1"
             max="28"
             defaultValue={selected?.endDay ?? 28}
+            disabled={isHistorical}
           />
         </label>
         <label>
           Population
-          <input name="population" defaultValue={selected?.population ?? "top-100"} />
+          <input
+            name="population"
+            defaultValue={selected?.population ?? (isHistorical ? "all" : "top-100")}
+            disabled={isHistorical}
+          />
         </label>
         <label>
           Category
@@ -184,7 +226,7 @@ export default function ArmyAnalyticsRoute() {
             <Link
               to={`/analytics/armies?season=${encodeURIComponent(
                 seasonEmpty.previousSeasonId,
-              )}&lens=offense&start_day=1&end_day=28&population=top-100&category=troops&sort=usage-rate`}
+              )}&lens=offense&category=troops&sort=usage-rate`}
             >
               View the previous season
             </Link>

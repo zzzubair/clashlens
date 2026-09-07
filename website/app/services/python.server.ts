@@ -86,6 +86,7 @@ export interface PythonClient {
   getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]>;
   getPlayerSeason(tag: string, seasonId: string): Promise<HistoricalSeasonSummary>;
   getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics>;
+  getArmySeasonSummary(season: string, query: URLSearchParams): Promise<ArmyAnalytics>;
   requestRefresh(tag: string, idempotencyKey: string): Promise<RefreshWork>;
   getRefreshStatus(workId: string, tag: string): Promise<RefreshStatus>;
   createAccount(
@@ -173,6 +174,7 @@ export function createPythonClient(
     getPlayerSeasons,
     getPlayerSeason,
     getArmyAnalytics,
+    getArmySeasonSummary,
     requestRefresh: requestPlayerRefresh,
     getRefreshStatus,
     ...accountOperations,
@@ -251,6 +253,21 @@ async function getArmyAnalytics(query: URLSearchParams): Promise<ArmyAnalytics> 
     }
     throw cause;
   }
+  return mapArmyAnalytics(payload);
+}
+
+async function getArmySeasonSummary(
+  season: string,
+  query: URLSearchParams,
+): Promise<ArmyAnalytics> {
+  // Historical army reads cover the whole season only: the query carries
+  // lens/category/sort, never a day range or population filter.
+  const payload = await requestJson<unknown>(
+    `/v1/analytics/armies/seasons/${encodeURIComponent(season)}?${query.toString()}`,
+    "GET",
+    undefined,
+    undefined,
+  );
   return mapArmyAnalytics(payload);
 }
 

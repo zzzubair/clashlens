@@ -749,8 +749,8 @@ log_lacks "$CANDIDATE_NORM" '^build ' 'candidate-prepare built an application im
 [[ "$(cat "$CANDIDATE_DIR/state/contract_version")" == 5 ]] || \
   fail 'candidate-prepare did not reach contract version 5'
 [[ "$(sort -n -u "$CANDIDATE_DIR/state/schema_migrations" | tr '\n' ' ')" == \
-   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 ' ]] || \
-  fail 'candidate-prepare did not apply the exact migration set through 0019'
+   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 ' ]] || \
+  fail 'candidate-prepare did not apply the exact migration set through 0020'
 [[ "$(cat "$CANDIDATE_DIR/state/networks/clashlens-candidate-private.scope")" == candidate ]] || \
   fail 'candidate network was not stamped with the candidate scope label'
 [[ "$(cat "$CANDIDATE_DIR/state/volumes/clashlens-candidate-postgres-data.scope")" == candidate ]] || \

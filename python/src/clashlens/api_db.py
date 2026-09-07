@@ -19,6 +19,8 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolTimeout
 
 from .army_analytics import (
+    ARMY_ANALYTICS_RULE_VERSION,
+    SORTS,
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
     CurrentSeasonEmpty,
@@ -1664,6 +1666,123 @@ class ApiDatabase:
             columns = [d.name for d in cursor.description]
             record = dict(zip(columns, row))
             return _historical_season_summary(record)
+
+    def get_army_season_summary(
+        self,
+        official_season_id: str,
+        lens: str,
+        category: str,
+        sort: str,
+    ) -> dict[str, Any] | None:
+        """Read one historical whole-season army aggregate from its summary.
+
+        The stored row is already the complete historical record for the
+        whole season (Legend days 1-28, whole-season sample): this never
+        touches battle facts, snapshot cohorts, or individual battles, and
+        never accepts a day range or population filter. A missing summary
+        returns None (the caller reports unavailable); it never falls back
+        to live detail.
+        """
+        if sort not in SORTS:
+            raise ValueError("unsupported army analytics sort")
+        with self.pool.connection() as connection:
+            row = connection.execute(
+                """
+                SELECT days_observed, days_missing, missing_days,
+                       coverage_state, total_attacks, usable_army_sample,
+                       army_states, unknown_affected_attacks,
+                       unknown_component_occurrences,
+                       perspective_disagreement_count,
+                       missing_trophy_membership_evidence, result_rows,
+                       projection_version, content_digest
+                FROM army_season_summaries
+                WHERE official_season_id = %s AND lens = %s AND category = %s
+                """,
+                (official_season_id, lens, category),
+            ).fetchone()
+            if row is None:
+                return None
+            stored_rows = _json_array(row[11])
+            sort_field = {
+                "usage-rate": "usage_rate",
+                "usage-count": "usage_count",
+                "three-star-rate": "three_star_rate",
+                "average-stars": "average_stars",
+                "average-destruction": "average_destruction",
+            }[sort]
+            rows = [
+                {
+                    "key": _text(item["key"]),
+                    "label": _text(item["label"]),
+                    "usage_count": int(item["usage_count"]),
+                    "usage_denominator": int(item["usage_denominator"]),
+                    "usage_rate": float(item["usage_rate"]),
+                    "star_counts": [int(value) for value in item["star_counts"]],
+                    "star_rates": [float(value) for value in item["star_rates"]],
+                    "three_star_rate": float(item["three_star_rate"]),
+                    "average_stars": float(item["average_stars"]),
+                    "average_destruction": float(item["average_destruction"]),
+                    "unknown_excluded_attacks": int(
+                        item["unknown_excluded_attacks"]
+                    ),
+                }
+                for item in stored_rows
+            ]
+            rows.sort(key=lambda item: (-float(item[sort_field]), item["key"]))
+            army_states = {
+                _text(state): int(count)
+                for state, count in dict(row[6] or {}).items()
+            }
+            total_attacks = int(row[4])
+            requested = {
+                "lens": lens,
+                "season": official_season_id,
+                "start_day": 1,
+                "end_day": 28,
+                "population": "all",
+                "category": category,
+                "sort": sort,
+            }
+            publication_key = hashlib.sha256(
+                json.dumps(requested, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            return {
+                "kind": "army-analytics",
+                "selection": requested,
+                "total_attacks": total_attacks,
+                "usable_army_sample": int(row[5]),
+                "army_states": army_states,
+                "army_states_sum_confirmed": sum(army_states.values())
+                == total_attacks,
+                "unknown_affected_attacks": int(row[7]),
+                "unknown_component_occurrences": int(row[8]),
+                "perspective_disagreement_count": int(row[9]),
+                "missing_trophy_membership_evidence": int(row[10]),
+                "cohort_evidence": {
+                    "stale_or_uncertain_cohort_members": 0,
+                    "streak_excluded_players": 0,
+                    "shielded_player_days": 0,
+                },
+                "collection_coverage": {
+                    "state": _text(row[3]),
+                    "completed_days": int(row[0]),
+                },
+                "freshness": {"state": "frozen"},
+                "reproducibility": {
+                    "official_season_id": official_season_id,
+                    "legend_days": [1, 28],
+                    "snapshot_versions": [],
+                },
+                "versions": {
+                    "decoder": DECODER_VERSION,
+                    "catalog": CATALOG_VERSION,
+                    "analytics": ARMY_ANALYTICS_RULE_VERSION,
+                },
+                "publication_identity": (
+                    f"army-season-{publication_key[:24]}-{_text(row[13])[:16]}"
+                ),
+                "rows": rows,
+            }
 
     def search_known_players(
         self,
