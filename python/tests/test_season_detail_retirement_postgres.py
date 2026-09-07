@@ -358,10 +358,10 @@ def test_deep_decode_chain_progresses_without_fk_rollback(database_url: str) -> 
                 defender_id = _player(connection, "#8PP")
                 _full_season(connection, player_id)
                 _seed_army(connection)
+                battle_id = _battle_chain(connection, DAY0, player_id, defender_id)
                 connection.commit()
                 _materialize_all(connection)
                 connection.commit()
-                battle_id = _battle_chain(connection, DAY0, player_id, defender_id)
                 existing = connection.execute(
                     "SELECT id, evidence_id FROM battle_army_decodes WHERE battle_id = %s",
                     (battle_id,),
@@ -376,19 +376,21 @@ def test_deep_decode_chain_progresses_without_fk_rollback(database_url: str) -> 
                     previous_id = connection.execute(
                         """
                         INSERT INTO battle_army_decodes (
-                            battle_id, evidence_id, decoder_version, catalog_version,
-                            catalog_hash, status, failure_category, is_active,
-                            supersedes_id
-                        ) VALUES (%s, %s, %s, %s, repeat('a', 64), 'failed',
-                                  'undecodable', %s, %s)
+                            battle_id, evidence_id, perspective, decoder_version,
+                            catalog_version, catalog_hash, status, failure_category,
+                            is_active, supersedes_id
+                        )
+                        SELECT battle_id, evidence_id, perspective, %s, %s,
+                               catalog_hash, status, failure_category, %s, %s
+                        FROM battle_army_decodes
+                        WHERE id = %s
                         RETURNING id
                         """,
                         (
-                            battle_id,
-                            existing[1],
                             f"deep-{index}",
                             f"catalog-{index}",
                             index == 10,
+                            previous_id,
                             previous_id,
                         ),
                     ).fetchone()[0]
@@ -424,60 +426,83 @@ def test_observationless_army_work_uses_half_open_season_scope(
                 defender_id = _player(connection, "#8PP")
                 _full_season(connection, player_id)
                 _seed_army(connection)
+                battle_id = _battle_chain(connection, DAY0, player_id, defender_id)
+                next_battle_id = _battle_chain(
+                    connection, SEASON_END, player_id, defender_id
+                )
+                connection.execute(
+                    "UPDATE army_analytics_battle_facts SET official_season_id = %s,"
+                    " ranked_day_start = %s WHERE battle_id = %s AND official_season_id = %s",
+                    (LIVE_SEASON, SEASON_END, next_battle_id, SEASON),
+                )
                 connection.commit()
                 _materialize_all(connection)
                 connection.commit()
-                battle_id = _battle_chain(connection, DAY0, player_id, defender_id)
                 day_text = DAY0.strftime("%Y-%m-%dT%H:%M:%SZ")
                 next_day_text = SEASON_END.strftime("%Y-%m-%dT%H:%M:%SZ")
-                connection.execute(
-                    """
-                    INSERT INTO python_processing_jobs (
-                        work_type, deduplication_key, input_json,
-                        processing_version, domain_rule_version, analytics_rule_version
-                    ) VALUES ('build_army_analytics', 'retirement-army-season',
-                              %s::jsonb, 'clashlens-domain-processing-v1',
-                              'clashlens-domain-rules-v1', 'army-analytics-v2')
-                    """,
-                    (json.dumps({"ranked_day_start": day_text, "official_season_id": SEASON}),),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO python_processing_jobs (
-                        work_type, deduplication_key, input_json,
-                        processing_version, domain_rule_version, analytics_rule_version
-                    ) VALUES ('redecode_army', 'retirement-redecode-season',
-                              %s::jsonb, 'clashlens-domain-processing-v1',
-                              'clashlens-domain-rules-v1', 'army-analytics-v2')
-                    """,
-                    (json.dumps({"battle_ids": [battle_id]}),),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO python_processing_jobs (
-                        work_type, deduplication_key, input_json,
-                        processing_version, domain_rule_version, analytics_rule_version
-                    ) VALUES ('build_army_analytics', 'retirement-army-next-season',
-                              %s::jsonb, 'clashlens-domain-processing-v1',
-                              'clashlens-domain-rules-v1', 'army-analytics-v2')
-                    """,
+                job_rows = [
                     (
+                        "build_army_analytics",
+                        "retirement-army-season",
                         json.dumps(
                             {
-                                "ranked_day_start": next_day_text,
-                                "official_season_id": LIVE_SEASON,
+                                "boundary_at": day_text,
+                                "generation": 1,
+                                "manifest_id": 1,
+                                "manifest_digest": "a" * 64,
                             }
                         ),
                     ),
-                )
+                    (
+                        "redecode_army",
+                        "retirement-redecode-season",
+                        json.dumps({"battle_ids": [battle_id]}),
+                    ),
+                    (
+                        "build_army_analytics",
+                        "retirement-army-next-season",
+                        json.dumps(
+                            {
+                                "boundary_at": next_day_text,
+                                "generation": 1,
+                                "manifest_id": 1,
+                                "manifest_digest": "a" * 64,
+                            }
+                        ),
+                    ),
+                    (
+                        "redecode_army",
+                        "retirement-redecode-next-season",
+                        json.dumps({"battle_ids": [next_battle_id]}),
+                    ),
+                ]
+                for job_row in job_rows:
+                    connection.execute(
+                        """
+                        INSERT INTO python_processing_jobs_worker (
+                            work_type, deduplication_key, input_json,
+                            processing_version, domain_rule_version,
+                            analytics_rule_version
+                        ) VALUES (
+                            %s, %s, %s::jsonb, 'clashlens-domain-processing-v1',
+                            'clashlens-domain-rules-v1', 'army-analytics-v2'
+                        )
+                        """,
+                        job_row,
+                    )
                 blocked = finalize_season_detail(connection, SEASON, AFTER_SEASON)
                 assert blocked["status"] == "blocked"
                 assert blocked["blocking_work"]["observationless_army_jobs"] == 2
                 connection.execute(
                     "UPDATE python_processing_jobs SET status = 'complete',"
                     " outcome = 'processed', completed_at = clock_timestamp()"
-                    " WHERE deduplication_key IN (%s, %s)",
-                    ("retirement-army-season", "retirement-redecode-season"),
+                    " WHERE deduplication_key IN (%s, %s, %s, %s)",
+                    (
+                        "retirement-army-season",
+                        "retirement-redecode-season",
+                        "retirement-army-next-season",
+                        "retirement-redecode-next-season",
+                    ),
                 )
                 ready = finalize_season_detail(connection, SEASON, AFTER_SEASON)
                 assert ready["status"] == "ready"
