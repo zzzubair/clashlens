@@ -380,7 +380,7 @@ def _canonical_season_bounds(
 
 
 def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -> dict[str, int]:
-    """Count non-terminal work scoped to the season time bounds."""
+    """Count non-terminal work scoped to the half-open season interval."""
     blocking: dict[str, int] = {}
     if _table_exists(connection, "python_processing_jobs") and _table_exists(
         connection, "collector_observations"
@@ -392,12 +392,58 @@ def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -
               ON observation.id = COALESCE(job.observation_id, job.replay_observation_id)
             WHERE job.status <> ALL(%s::text[])
               AND observation.response_completed_at >= %s
-              AND observation.response_completed_at < %s + interval '1 day'
+              AND observation.response_completed_at < %s
             """,
             (list(TERMINAL_JOB_STATUSES), season_start, season_end),
         ).fetchone()
         if row and int(row[0]):
             blocking["processing_jobs"] = int(row[0])
+    if _table_exists(connection, "python_processing_jobs_worker") and _table_exists(
+        connection, "legend_battles"
+    ):
+        row = connection.execute(
+            """
+            SELECT count(*) FROM python_processing_jobs_worker AS job
+            WHERE job.state <> ALL(%s::text[])
+              AND job.observation_id IS NULL
+              AND job.replay_observation_id IS NULL
+              AND (
+                  (job.work_type = 'build_army_analytics' AND (
+                      (job.input_json ->> 'ranked_day_start')::timestamptz >= %s
+                      AND (job.input_json ->> 'ranked_day_start')::timestamptz < %s
+                      OR (job.input_json ->> 'boundary_at')::timestamptz >= %s
+                      AND (job.input_json ->> 'boundary_at')::timestamptz < %s
+                  ))
+                  OR (job.work_type = 'redecode_army' AND EXISTS (
+                      SELECT 1
+                      FROM jsonb_array_elements_text(
+                          CASE
+                              WHEN jsonb_typeof(job.input_json -> 'battle_ids') = 'array'
+                                  THEN job.input_json -> 'battle_ids'
+                              WHEN jsonb_typeof(job.input_json -> 'battle_id') = 'number'
+                                  THEN jsonb_build_array(job.input_json -> 'battle_id')
+                              ELSE '[]'::jsonb
+                          END
+                      ) AS requested(battle_id)
+                      JOIN legend_battles AS battle
+                        ON battle.id = requested.battle_id::bigint
+                      WHERE battle.ranked_day_start >= %s
+                        AND battle.ranked_day_start < %s
+                  ))
+              )
+            """,
+            (
+                list(TERMINAL_JOB_STATUSES),
+                season_start,
+                season_end,
+                season_start,
+                season_end,
+                season_start,
+                season_end,
+            ),
+        ).fetchone()
+        if row and int(row[0]):
+            blocking["observationless_army_jobs"] = int(row[0])
     if _table_exists(connection, "python_replay_requests"):
         row = connection.execute(
             """
@@ -406,7 +452,7 @@ def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -
               ON observation.id = request.observation_id
             WHERE request.status <> ALL(%s::text[])
               AND observation.response_completed_at >= %s
-              AND observation.response_completed_at < %s + interval '1 day'
+              AND observation.response_completed_at < %s
             """,
             (list(TERMINAL_REPLAY_STATUSES), season_start, season_end),
         ).fetchone()
@@ -416,7 +462,7 @@ def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -
         row = connection.execute(
             """
             SELECT count(*) FROM boundary_publication_generations
-            WHERE boundary_at >= %s AND boundary_at < %s + interval '1 day'
+            WHERE boundary_at >= %s AND boundary_at < %s
               AND (snapshot_state = ANY(%s::text[])
                    OR army_state = ANY(%s::text[]))
             """,
@@ -428,7 +474,7 @@ def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -
         row = connection.execute(
             """
             SELECT count(*) FROM boundary_publication_corrections
-            WHERE boundary_at >= %s AND boundary_at < %s + interval '1 day'
+            WHERE boundary_at >= %s AND boundary_at < %s
               AND state <> ALL(%s::text[])
             """,
             (season_start, season_end, list(TERMINAL_CORRECTION_STATES)),
@@ -723,6 +769,17 @@ def _delete_battles(connection: Any, battle_ids: list[int]) -> int:
     _delete_version_chain(
         connection, "battle_army_decodes", [int(row[0]) for row in decode_rows]
     )
+    if connection.execute(
+        """
+        SELECT 1 FROM battle_army_decodes
+        WHERE battle_id = ANY(%s::bigint[])
+        LIMIT 1
+        """,
+        (battle_ids,),
+    ).fetchone():
+        # A deep supersedes chain needs another bounded run. Do not remove
+        # evidence while restrictive decode references still exist.
+        return 0
     connection.execute(
         "DELETE FROM battle_perspectives WHERE battle_id = ANY(%s::bigint[])",
         (battle_ids,),

@@ -9,6 +9,7 @@ finalization; rolling logs still process live-season content.
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -344,6 +345,143 @@ def test_finalize_preview_then_full_retirement_cycle(database_url: str) -> None:
             assert after_player == before_player
             assert after_army == before_army
             assert [s["official_season_id"] for s in database.list_player_seasons("#2PP")] == [SEASON]
+        finally:
+            database.close()
+
+
+def test_deep_decode_chain_progresses_without_fk_rollback(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                defender_id = _player(connection, "#8PP")
+                _full_season(connection, player_id)
+                _seed_army(connection)
+                connection.commit()
+                _materialize_all(connection)
+                connection.commit()
+                battle_id = _battle_chain(connection, DAY0, player_id, defender_id)
+                existing = connection.execute(
+                    "SELECT id, evidence_id FROM battle_army_decodes WHERE battle_id = %s",
+                    (battle_id,),
+                ).fetchone()
+                assert existing is not None
+                connection.execute(
+                    "UPDATE battle_army_decodes SET is_active = false WHERE id = %s",
+                    (existing[0],),
+                )
+                previous_id = int(existing[0])
+                for index in range(11):
+                    previous_id = connection.execute(
+                        """
+                        INSERT INTO battle_army_decodes (
+                            battle_id, evidence_id, decoder_version, catalog_version,
+                            catalog_hash, status, failure_category, is_active,
+                            supersedes_id
+                        ) VALUES (%s, %s, %s, %s, repeat('a', 64), 'failed',
+                                  'undecodable', %s, %s)
+                        RETURNING id
+                        """,
+                        (
+                            battle_id,
+                            existing[1],
+                            f"deep-{index}",
+                            f"catalog-{index}",
+                            index == 10,
+                            previous_id,
+                        ),
+                    ).fetchone()[0]
+                _finalize_and_commit(connection)
+                for _ in range(60):
+                    result = retire_season_detail(
+                        connection, SEASON, max_rows=1, apply=True
+                    )
+                    connection.commit()
+                    if result["status"] == "retired":
+                        break
+                else:
+                    pytest.fail("deep decode chain did not retire")
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_army_decodes WHERE battle_id = %s",
+                    (battle_id,),
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM legend_battles WHERE id = %s", (battle_id,)
+                ).fetchone()[0] == 0
+        finally:
+            database.close()
+
+
+def test_observationless_army_work_uses_half_open_season_scope(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                defender_id = _player(connection, "#8PP")
+                _full_season(connection, player_id)
+                _seed_army(connection)
+                connection.commit()
+                _materialize_all(connection)
+                connection.commit()
+                battle_id = _battle_chain(connection, DAY0, player_id, defender_id)
+                day_text = DAY0.strftime("%Y-%m-%dT%H:%M:%SZ")
+                next_day_text = SEASON_END.strftime("%Y-%m-%dT%H:%M:%SZ")
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json,
+                        processing_version, domain_rule_version, analytics_rule_version
+                    ) VALUES ('build_army_analytics', 'retirement-army-season',
+                              %s::jsonb, 'clashlens-domain-processing-v1',
+                              'clashlens-domain-rules-v1', 'army-analytics-v2')
+                    """,
+                    (json.dumps({"ranked_day_start": day_text, "official_season_id": SEASON}),),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json,
+                        processing_version, domain_rule_version, analytics_rule_version
+                    ) VALUES ('redecode_army', 'retirement-redecode-season',
+                              %s::jsonb, 'clashlens-domain-processing-v1',
+                              'clashlens-domain-rules-v1', 'army-analytics-v2')
+                    """,
+                    (json.dumps({"battle_ids": [battle_id]}),),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json,
+                        processing_version, domain_rule_version, analytics_rule_version
+                    ) VALUES ('build_army_analytics', 'retirement-army-next-season',
+                              %s::jsonb, 'clashlens-domain-processing-v1',
+                              'clashlens-domain-rules-v1', 'army-analytics-v2')
+                    """,
+                    (
+                        json.dumps(
+                            {
+                                "ranked_day_start": next_day_text,
+                                "official_season_id": LIVE_SEASON,
+                            }
+                        ),
+                    ),
+                )
+                blocked = finalize_season_detail(connection, SEASON, AFTER_SEASON)
+                assert blocked["status"] == "blocked"
+                assert blocked["blocking_work"]["observationless_army_jobs"] == 2
+                connection.execute(
+                    "UPDATE python_processing_jobs SET status = 'complete',"
+                    " outcome = 'processed', completed_at = clock_timestamp()"
+                    " WHERE deduplication_key IN (%s, %s)",
+                    ("retirement-army-season", "retirement-redecode-season"),
+                )
+                ready = finalize_season_detail(connection, SEASON, AFTER_SEASON)
+                assert ready["status"] == "ready"
+                connection.rollback()
         finally:
             database.close()
 
