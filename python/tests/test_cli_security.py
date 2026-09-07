@@ -407,3 +407,37 @@ def test_cli_ready_fails_on_terminal_marker_mismatch_only(
     payload = json.loads(capsys.readouterr().out)
     assert payload["remote_health"] == remote_health
     assert payload["status"] == ("ready" if expected_exit == 0 else "not_ready")
+
+
+def _materialize_arguments(*extra: str) -> argparse.Namespace:
+    return build_parser().parse_args(
+        [
+            "materialize-season-summaries",
+            "--database-url",
+            "postgresql://prototype@postgres/db",
+            "--season-id",
+            "1785714000",
+            *extra,
+        ]
+    )
+
+
+def test_materialize_cursor_defaults_to_zero() -> None:
+    arguments = _materialize_arguments()
+
+    assert arguments.after_player_id == 0
+    assert arguments.max_players == 100
+    assert arguments.apply is False
+
+
+def test_materialize_cursor_accepts_a_valid_id() -> None:
+    arguments = _materialize_arguments("--after-player-id", "12345")
+
+    assert arguments.after_player_id == 12345
+
+
+@pytest.mark.parametrize("value", ["-1", "abc", "1.5", ""])
+def test_materialize_cursor_rejects_invalid_bounds(value: str) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        _materialize_arguments("--after-player-id", value)
+    assert excinfo.value.code == 2

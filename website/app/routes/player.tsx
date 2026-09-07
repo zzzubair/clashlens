@@ -11,12 +11,15 @@ import { ErrorNotice } from "../components/ErrorNotice";
 import { formatTimestamp } from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
+  HistoricalSeasonDayEntry,
+  HistoricalSeasonSummary,
   PlayerPage,
   RankedBattleEvent,
   RankedDaySummary,
   RefreshError,
   RefreshStatus,
   RefreshWork,
+  SummarizedSeasonRef,
   WebsiteErrorResponse,
 } from "../lib/contracts";
 import { isRefreshStatusPayload, isWebsiteErrorResponse } from "../lib/validation";
@@ -27,6 +30,10 @@ export interface PlayerLoaderData {
   refreshStatus: RefreshStatus | null;
   refreshError: WebsiteErrorResponse | null;
   noJsIdempotencyKey: string;
+  seasons: SummarizedSeasonRef[];
+  selectedSeason: string | null;
+  historical: HistoricalSeasonSummary | null;
+  historicalError: WebsiteErrorResponse | null;
 }
 
 export async function loader({
@@ -48,6 +55,10 @@ export async function loader({
       refreshStatus: null,
       refreshError: null,
       noJsIdempotencyKey,
+      seasons: [],
+      selectedSeason: null,
+      historical: null,
+      historicalError: null,
     };
   }
   const canonicalPath = canonicalPlayerPath(normalizedTag);
@@ -61,11 +72,32 @@ export async function loader({
 
   let player: PlayerPage | null = null;
   let error: WebsiteErrorResponse | null = null;
+  let seasons: SummarizedSeasonRef[];
+  let historical: HistoricalSeasonSummary | null = null;
+  let historicalError: WebsiteErrorResponse | null = null;
+  const selectedSeason = readSeasonParam(url.searchParams.get("season"));
   try {
     const { createPythonClient } = await import("../services/python.server");
     player = await createPythonClient().getPlayer(normalizedTag);
   } catch (cause) {
     error = await safeError(cause);
+  }
+  try {
+    const { createPythonClient } = await import("../services/python.server");
+    seasons = await createPythonClient().getPlayerSeasons(normalizedTag);
+  } catch {
+    seasons = [];
+  }
+  if (selectedSeason !== null) {
+    try {
+      const { createPythonClient } = await import("../services/python.server");
+      historical = await createPythonClient().getPlayerSeason(
+        normalizedTag,
+        selectedSeason,
+      );
+    } catch (cause) {
+      historicalError = await safeError(cause);
+    }
   }
 
   let refreshStatus: RefreshStatus | null = null;
@@ -89,7 +121,22 @@ export async function loader({
       }
     }
   }
-  return { player, error, refreshStatus, refreshError, noJsIdempotencyKey };
+  return {
+    player,
+    error,
+    refreshStatus,
+    refreshError,
+    noJsIdempotencyKey,
+    seasons,
+    selectedSeason,
+    historical,
+    historicalError,
+  };
+}
+
+function readSeasonParam(value: string | null): string | null {
+  if (value === null || value.length === 0 || value.length > 128) return null;
+  return value;
 }
 
 export function headers() {
@@ -205,6 +252,31 @@ export default function PlayerRoute() {
   }, [player?.tag, refreshResourcePath, revalidator, terminalState, workId]);
 
   if (player === null) {
+    if (data.selectedSeason !== null && data.historical !== null) {
+      return (
+        <main className="page-shell player-page">
+          <header className="player-header">
+            <div>
+              <h1>{data.historical.tag}</h1>
+              <p className="player-identity">
+                <span className="player-tag prominent">{data.historical.tag}</span>
+              </p>
+            </div>
+          </header>
+          {data.error ? <ErrorNotice error={data.error} /> : null}
+          <p className="section-note">
+            Current profile data is unavailable; showing the compact historical summary
+            only. We did not invent a name or trophy count.
+          </p>
+          <SeasonNav
+            tag={data.historical.tag}
+            seasons={data.seasons}
+            selectedSeason={data.selectedSeason}
+          />
+          <HistoricalSeasonPanel summary={data.historical} />
+        </main>
+      );
+    }
     return (
       <main className="page-shell narrow-page">
         <h1>Player data unavailable</h1>
@@ -276,85 +348,263 @@ export default function PlayerRoute() {
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {visibleStatus ? <RefreshProgress status={visibleStatus} /> : null}
 
-      {player.currentDay === null ? (
-        <section className="data-section" aria-labelledby="current-day-title">
-          <div className="section-heading">
-            <h2 id="current-day-title">Current Legend day</h2>
-          </div>
-          <p className="section-note">Current Legend day data is not available.</p>
-        </section>
-      ) : (
-        <section className="data-section" aria-labelledby="current-day-title">
-          <div className="section-heading">
-            <h2 id="current-day-title">Current Legend day</h2>
-          </div>
-          <p className="section-note">
-            Ranked day {player.currentDay!.dayNumber ?? "Unknown"} ·{" "}
-            {player.currentDay!.period}
-          </p>
-          <div className="metric-grid">
-            <MetricCard title="Offense">
-              <Metric
-                label="Attacks observed"
-                value={formatCount(player.currentDay!.offense.attacks)}
-              />
-              <Metric
-                label="Three-stars"
-                value={formatFraction(
-                  player.currentDay!.offense.threeStars,
-                  player.currentDay!.offense.attacks,
-                )}
-              />
-              <Metric
-                label="Trophy gain"
-                value={formatSigned(player.currentDay!.offense.trophyGain)}
-              />
-            </MetricCard>
-            <MetricCard title="Defense">
-              <Metric
-                label="Defenses observed"
-                value={formatCount(player.currentDay!.defense.defenses)}
-              />
-              <Metric
-                label="Three-stars against"
-                value={formatCount(player.currentDay!.defense.threeStarsAgainst)}
-              />
-              <Metric
-                label="Trophy loss"
-                value={
-                  player.currentDay!.defense.trophyLoss === null
-                    ? "Unknown"
-                    : formatSigned(-player.currentDay!.defense.trophyLoss)
-                }
-              />
-            </MetricCard>
-            <MetricCard title="Trophy change">
-              <Metric
-                label="Net change"
-                value={formatSigned(player.currentDay!.trophyChange)}
-              />
-              <Metric
-                label="Season day"
-                value={
-                  player.season
-                    ? `${player.season.currentDayNumber} / ${player.season.dayCount}`
-                    : "Unknown"
-                }
-              />
-            </MetricCard>
-          </div>
-        </section>
-      )}
+      <SeasonNav
+        tag={player.tag}
+        seasons={data.seasons}
+        selectedSeason={data.selectedSeason}
+      />
 
-      <section className="data-section" aria-labelledby="season-days-title">
-        <h2 id="season-days-title">Legend season</h2>
-        <div className="legend-days">
-          {player.seasonDays.map((day) => (
-            <LegendDay key={`${day.period}-${day.dayNumber ?? "unknown"}`} day={day} />
-          ))}
-        </div>
-      </section>
+      {data.selectedSeason !== null ? (
+        data.historical !== null ? (
+          <HistoricalSeasonPanel summary={data.historical} />
+        ) : (
+          <section className="data-section" aria-labelledby="historical-title">
+            <div className="section-heading">
+              <h2 id="historical-title">Historical season</h2>
+            </div>
+            {data.historicalError ? <ErrorNotice error={data.historicalError} /> : null}
+            <p className="section-note">
+              Season {data.selectedSeason} is not available as a compact summary. We did
+              not substitute live detail.
+            </p>
+          </section>
+        )
+      ) : null}
+
+      {data.selectedSeason !== null && data.historical !== null ? null : (
+        <>
+          {player.currentDay === null ? (
+            <section className="data-section" aria-labelledby="current-day-title">
+              <div className="section-heading">
+                <h2 id="current-day-title">Current Legend day</h2>
+              </div>
+              <p className="section-note">Current Legend day data is not available.</p>
+            </section>
+          ) : (
+            <section className="data-section" aria-labelledby="current-day-title">
+              <div className="section-heading">
+                <h2 id="current-day-title">Current Legend day</h2>
+              </div>
+              <p className="section-note">
+                Ranked day {player.currentDay!.dayNumber ?? "Unknown"} ·{" "}
+                {player.currentDay!.period}
+              </p>
+              <div className="metric-grid">
+                <MetricCard title="Offense">
+                  <Metric
+                    label="Attacks observed"
+                    value={formatCount(player.currentDay!.offense.attacks)}
+                  />
+                  <Metric
+                    label="Three-stars"
+                    value={formatFraction(
+                      player.currentDay!.offense.threeStars,
+                      player.currentDay!.offense.attacks,
+                    )}
+                  />
+                  <Metric
+                    label="Trophy gain"
+                    value={formatSigned(player.currentDay!.offense.trophyGain)}
+                  />
+                </MetricCard>
+                <MetricCard title="Defense">
+                  <Metric
+                    label="Defenses observed"
+                    value={formatCount(player.currentDay!.defense.defenses)}
+                  />
+                  <Metric
+                    label="Three-stars against"
+                    value={formatCount(player.currentDay!.defense.threeStarsAgainst)}
+                  />
+                  <Metric
+                    label="Trophy loss"
+                    value={
+                      player.currentDay!.defense.trophyLoss === null
+                        ? "Unknown"
+                        : formatSigned(-player.currentDay!.defense.trophyLoss)
+                    }
+                  />
+                </MetricCard>
+                <MetricCard title="Trophy change">
+                  <Metric
+                    label="Net change"
+                    value={formatSigned(player.currentDay!.trophyChange)}
+                  />
+                  <Metric
+                    label="Season day"
+                    value={
+                      player.season
+                        ? `${player.season.currentDayNumber} / ${player.season.dayCount}`
+                        : "Unknown"
+                    }
+                  />
+                </MetricCard>
+              </div>
+            </section>
+          )}
+
+          <section className="data-section" aria-labelledby="season-days-title">
+            <h2 id="season-days-title">Legend season</h2>
+            <div className="legend-days">
+              {player.seasonDays.map((day) => (
+                <LegendDay
+                  key={`${day.period}-${day.dayNumber ?? "unknown"}`}
+                  day={day}
+                />
+              ))}
+            </div>
+          </section>
+        </>
+      )}
     </main>
+  );
+}
+
+function SeasonNav({
+  tag,
+  seasons,
+  selectedSeason,
+}: {
+  tag: string;
+  seasons: SummarizedSeasonRef[];
+  selectedSeason: string | null;
+}) {
+  if (seasons.length === 0) return null;
+  return (
+    <nav className="data-section" aria-label="Historical seasons">
+      <div className="section-heading">
+        <h2>Historical seasons</h2>
+      </div>
+      <ul className="season-list">
+        <li key="current">
+          {selectedSeason === null ? (
+            <strong aria-current="page">Current season</strong>
+          ) : (
+            <a href={canonicalPlayerPath(tag)}>Current season</a>
+          )}
+        </li>
+        {seasons.map((season) => (
+          <li key={season.seasonId}>
+            {selectedSeason === season.seasonId ? (
+              <strong aria-current="page">
+                Season {season.seasonId} · {season.coverageState}
+              </strong>
+            ) : (
+              <a
+                href={`${canonicalPlayerPath(tag)}?season=${encodeURIComponent(season.seasonId)}`}
+              >
+                Season {season.seasonId} · {season.coverageState}
+              </a>
+            )}
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+
+function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }) {
+  return (
+    <section className="data-section" aria-labelledby="historical-season-title">
+      <div className="section-heading">
+        <h2 id="historical-season-title">
+          Season {summary.seasonId} · {summary.coverageState}
+        </h2>
+      </div>
+      <p className="section-note">
+        Compact historical summary · {summary.daysObserved} of 28 days
+        {summary.daysMissing.length > 0
+          ? ` · missing days ${summary.daysMissing.join(", ")}`
+          : ""}
+      </p>
+      <div className="metric-grid">
+        <MetricCard title="Offense">
+          <Metric label="Attacks" value={formatCount(summary.attackCount)} />
+          <Metric label="Trophy gain" value={formatSigned(summary.attackGain)} />
+        </MetricCard>
+        <MetricCard title="Defense">
+          <Metric label="Defenses" value={formatCount(summary.defenseCount)} />
+          <Metric
+            label="Trophy loss"
+            value={
+              summary.defenseLoss === null
+                ? "Unknown"
+                : formatSigned(-summary.defenseLoss)
+            }
+          />
+        </MetricCard>
+        <MetricCard title="Season">
+          <Metric label="Net change" value={formatSigned(summary.netTrophyChange)} />
+          <Metric
+            label="Trophies"
+            value={
+              summary.startTrophies === null || summary.endTrophies === null
+                ? "Unknown"
+                : `${summary.startTrophies} → ${summary.endTrophies}`
+            }
+          />
+          <Metric
+            label="Final rank"
+            value={summary.finalRank === null ? "Unknown" : String(summary.finalRank)}
+          />
+        </MetricCard>
+        <MetricCard title="Attack stars">
+          <Metric label="Three-star" value={formatCount(summary.attackStars["3"])} />
+          <Metric label="Two-star" value={formatCount(summary.attackStars["2"])} />
+          <Metric label="One-star" value={formatCount(summary.attackStars["1"])} />
+          <Metric label="No-star" value={formatCount(summary.attackStars["0"])} />
+          <Metric label="Unknown" value={formatCount(summary.attackStarsUnknown)} />
+        </MetricCard>
+        <MetricCard title="Defense stars">
+          <Metric label="Three-star" value={formatCount(summary.defenseStars["3"])} />
+          <Metric label="Two-star" value={formatCount(summary.defenseStars["2"])} />
+          <Metric label="One-star" value={formatCount(summary.defenseStars["1"])} />
+          <Metric label="No-star" value={formatCount(summary.defenseStars["0"])} />
+          <Metric label="Unknown" value={formatCount(summary.defenseStarsUnknown)} />
+        </MetricCard>
+      </div>
+      {summary.unresolvedFlags.length > 0 ? (
+        <p className="section-note">Unresolved: {summary.unresolvedFlags.join("; ")}</p>
+      ) : null}
+      <table aria-label="Daily trophy totals">
+        <thead>
+          <tr>
+            <th scope="col">Day</th>
+            <th scope="col">Start</th>
+            <th scope="col">Attack</th>
+            <th scope="col">Defense</th>
+            <th scope="col">Net</th>
+            <th scope="col">End</th>
+            <th scope="col">Attacks</th>
+            <th scope="col">Defenses</th>
+            <th scope="col">State</th>
+            <th scope="col">Coverage</th>
+            <th scope="col">Flags</th>
+            <th scope="col">Adjustment</th>
+          </tr>
+        </thead>
+        <tbody>
+          {summary.dailyEntries.map((day) => (
+            <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
+              <td>{day.dayNumber ?? "Unknown"}</td>
+              <td>{formatCount(day.startTrophies)}</td>
+              <td>{formatSigned(day.attackGain)}</td>
+              <td>
+                {day.defenseLoss === null ? "Unknown" : formatSigned(-day.defenseLoss)}
+              </td>
+              <td>{formatSigned(day.netChange)}</td>
+              <td>{formatCount(day.endTrophies)}</td>
+              <td>{formatCount(day.attacks)}</td>
+              <td>{formatCount(day.defenses)}</td>
+              <td>{day.state}</td>
+              <td>{day.coverage}</td>
+              <td>{day.flags.length > 0 ? day.flags.join("; ") : "—"}</td>
+              <td>{formatAdjustment(day)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </section>
   );
 }
 
@@ -486,6 +736,12 @@ function formatSigned(value: number | null): string {
 
 function formatCount(value: number | null): string {
   return value === null ? "Unknown" : String(value);
+}
+
+function formatAdjustment(day: HistoricalSeasonDayEntry): string {
+  if (!day.hasAdjustment) return "No";
+  if (day.adjustmentTotal === null) return "Yes · unknown amount";
+  return `Yes · ${formatSigned(day.adjustmentTotal)}`;
 }
 
 function formatFraction(numerator: number | null, denominator: number | null): string {

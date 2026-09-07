@@ -1,5 +1,32 @@
 # Compact history and retention
 
+Migration 0019 adds compact historical player-season summaries: one
+`player_season_summaries` record per player per season with typed season
+totals and up to 28 compact daily trophy entries. Summaries are projected
+from the latest published daily log per day (joined only to that log's
+exact ranked-day version) and read back without battle detail. Existing
+detail is retained; no cleanup is authorized by this migration.
+
+```sh
+python -m clashlens.cli materialize-season-summaries --season-id 1785714000 --max-players 100
+# Inspect the JSON report, then explicitly opt in:
+python -m clashlens.cli materialize-season-summaries --season-id 1785714000 --max-players 100 --apply
+```
+
+The default is preview only, and the preview report already carries the
+next cursor. Page large populations by repeating the command with the
+reported `next_after_player_id` until it is null:
+
+```sh
+python -m clashlens.cli materialize-season-summaries --season-id 1785714000 --max-players 100 --after-player-id 12345 --apply
+```
+
+A season is completed when it matches the confirmed anchor's current
+season id with its exact 28 days elapsed, matches the previous season
+id, or — for noncanonical legacy ids — has a completed day-28
+publication establishing the boundary. Anything else, including a live
+season, is left untouched.
+
 Migrations 0016–0018 separate durable game history from repeated collection
 bookkeeping. They do not delete existing history or remote objects. Deploy with
 `./deploy.sh up` so old collectors and workers are drained before migration;

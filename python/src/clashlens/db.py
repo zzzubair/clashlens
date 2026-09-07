@@ -51,6 +51,7 @@ from .reconciliation import (
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
+from .season_summaries import materialize_player_season
 from .source_observation_contract import SOURCE_OBSERVATION_CONTRACTS
 
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
@@ -630,6 +631,9 @@ class Database:
             self._supports_compact_battles = connection.execute(
                 "SELECT to_regclass('battle_payload_rows') IS NOT NULL"
             ).fetchone()[0]
+            self._supports_season_summaries = connection.execute(
+                "SELECT to_regclass('player_season_summaries') IS NOT NULL"
+            ).fetchone()[0]
         self._supports_coordinator_contract = self._contract_version >= 4
         self._dependency_support_probed = True
 
@@ -683,6 +687,9 @@ class Database:
         with self.pool.connection() as connection:
             self._supports_compact_battles = connection.execute(
                 "SELECT to_regclass('battle_payload_rows') IS NOT NULL"
+            ).fetchone()[0]
+            self._supports_season_summaries = connection.execute(
+                "SELECT to_regclass('player_season_summaries') IS NOT NULL"
             ).fetchone()[0]
         self._dependency_support_probed = True
 
@@ -6727,6 +6734,32 @@ class Database:
                 """,
                 daily_log_values,
             )
+        # Refresh the compact historical summary in the same transaction:
+        # a late correction updates an already-summarized season, and a
+        # completed day-28 publication establishes one. Active seasons stay
+        # on explicit backfill, and unchanged input is a no-op, so routine
+        # live publication is unaffected.
+        if public_state != "Live" and getattr(
+            self, "_supports_season_summaries", False
+        ) and official_season_id != "unknown":
+            refresh = season_day_number == 28 and public_state == "Complete"
+            if not refresh:
+                refresh = (
+                    connection.execute(
+                        """
+                        SELECT 1 FROM player_season_summaries
+                        WHERE player_id = %s AND official_season_id = %s
+                        """,
+                        (player_id, official_season_id),
+                    ).fetchone()
+                    is not None
+                )
+            if refresh:
+                materialize_player_season(
+                    connection,
+                    player_id=player_id,
+                    season_id=official_season_id,
+                )
 
     @staticmethod
     def _boundary_population_hash(player_ids: list[int]) -> str:
