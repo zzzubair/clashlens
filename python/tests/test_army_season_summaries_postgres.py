@@ -637,3 +637,136 @@ def test_refresh_failure_warns_and_keeps_day_durable(
             assert rows["troop:58"]["star_counts"] == [2, 1, 1, 0]
         finally:
             database.close()
+
+
+def test_first_materialization_serializes_with_correction(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A correction racing first materialization cannot leave stale counts.
+
+    The backfill projects v1 while holding the shared season lock; the
+    correction writes its fact, then its refresh waits on that lock and
+    republishes the summary, so the final aggregate includes the
+    correction instead of the backfill's older projection.
+    """
+    import threading
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = Database(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                _seed(
+                    connection,
+                    offense=[
+                        {"stars": 3, "home_troops": [["troop:58", 2]]},
+                    ],
+                )
+                connection.commit()
+            database._supports_army_season_summaries = True
+            projected = threading.Event()
+            release_backfill = threading.Event()
+            correction_entered = threading.Event()
+            correction_done = threading.Event()
+            errors: list[BaseException] = []
+            real_project = army_summaries_module._project_lens
+
+            def _paused_project(connection, season_id, lens):
+                result = real_project(connection, season_id, lens)
+                if lens == "offense" and not release_backfill.is_set():
+                    projected.set()
+                    assert release_backfill.wait(timeout=30), (
+                        "backfill was never released"
+                    )
+                return result
+
+            monkeypatch.setattr(
+                army_summaries_module, "_project_lens", _paused_project
+            )
+
+            def _backfill() -> None:
+                try:
+                    with psycopg.connect(connection_info) as connection:
+                        materialize_army_season(connection, SEASON, "offense")
+                        connection.commit()
+                except BaseException as exc:  # noqa: BLE001 - re-raised below
+                    errors.append(exc)
+
+            def _correct() -> None:
+                try:
+                    assert projected.wait(timeout=30), "backfill never projected"
+                    with psycopg.connect(connection_info) as connection:
+                        connection.execute(
+                            "SET LOCAL session_replication_role = replica"
+                        )
+                        player_id = connection.execute(
+                            "SELECT id FROM players LIMIT 1"
+                        ).fetchone()[0]
+                        connection.execute(
+                            """
+                            INSERT INTO army_analytics_battle_facts (
+                                battle_id, evidence_id,
+                                source_ranked_day_version_id,
+                                ranked_day_start, official_season_id,
+                                season_day_number, lens, population_player_id,
+                                stars, destruction_percentage, army_state,
+                                home_troops, spells, siege, cc_troops, heroes,
+                                unresolved_components,
+                                perspective_disagreement,
+                                battle_time_trophies, input_hash, version
+                            ) VALUES (
+                                7999, 8999, 4242, %s, %s, 1, 'offense', %s,
+                                3, 100, 'decoded', %s::jsonb, '[]', '[]',
+                                '[]', '[]', '[]', false, 6000, %s, 1
+                            )
+                            """,
+                            (
+                                DAY0,
+                                SEASON,
+                                player_id,
+                                json.dumps([["troop:58", 2]]),
+                                _fact_hash("offense", 999),
+                            ),
+                        )
+                        correction_entered.set()
+                        database._refresh_army_season_summaries(
+                            connection, SEASON
+                        )
+                        connection.commit()
+                except BaseException as exc:  # noqa: BLE001 - re-raised below
+                    errors.append(exc)
+                finally:
+                    correction_done.set()
+
+            backfill_thread = threading.Thread(
+                target=_backfill, daemon=True
+            )
+            correction_thread = threading.Thread(
+                target=_correct, daemon=True
+            )
+            backfill_thread.start()
+            assert projected.wait(timeout=30), "backfill never projected"
+            correction_thread.start()
+            assert correction_entered.wait(timeout=30), (
+                "correction never reached refresh"
+            )
+            # The correction must wait on the shared season lock while the
+            # backfill holds it; without the lock it would skip the refresh
+            # (no committed summary yet) and the backfill would publish
+            # stale v1 counts.
+            assert not correction_done.wait(timeout=5), (
+                "correction refresh did not wait for the backfill lock"
+            )
+            release_backfill.set()
+            backfill_thread.join(timeout=30)
+            correction_thread.join(timeout=30)
+            assert not backfill_thread.is_alive()
+            assert not correction_thread.is_alive()
+            assert errors == []
+            with database.pool.connection() as connection:
+                summary = _row(connection)
+            assert summary["total_attacks"] == 2
+            assert summary["usable_army_sample"] == 2
+            rows = {row["key"]: row for row in summary["result_rows"]}
+            assert rows["troop:58"]["usage_count"] == 2
+        finally:
+            database.close()

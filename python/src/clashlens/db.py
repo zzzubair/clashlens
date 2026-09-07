@@ -28,7 +28,10 @@ from .army_decoder import (
     DecodeFailure,
     decode_army_share_code,
 )
-from .army_season_summaries import materialize_army_season
+from .army_season_summaries import (
+    acquire_army_season_lock,
+    materialize_army_season,
+)
 from .battle import (
     SOURCE_PARSER_VERSION,
     ParsedBattleLog,
@@ -9378,8 +9381,8 @@ class Database:
             )
             # A late correction refreshes an already-summarized season.
             # Seasons without summaries (live seasons stay on explicit
-            # preview-first backfill) cost one existence lookup; summarized
-            # seasons pay one projection per lens per day build (fact scan
+            # preview-first backfill) cost one season lock plus one existence
+            # lookup; summarized seasons pay one projection per lens per day build (fact scan
             # plus per-category upserts, writes skipped when digests match).
             # Each lens refreshes in a savepoint so a projection failure
             # warns without rolling back the day facts/marker above.
@@ -9393,14 +9396,19 @@ class Database:
         """Refresh whole-season army summaries without risking the caller.
 
         The caller is the enclosing day build: its facts and completion
-        marker are already written in the same transaction. Each lens
+        marker are already written in the same transaction. The shared
+        season lock is acquired before the existence check so a first
+        backfill and a concurrent correction serialize: either the
+        backfill projects the committed correction, or the correction
+        waits and then refreshes the newly published summary. Each lens
         refreshes in a savepoint, so a projection failure rolls back only
         that lens refresh, warns observably, and leaves the day build
         green; the other lens still refreshes. Seasons with no summaries
-        yet cost one existence lookup.
+        yet cost one lock plus one existence lookup.
         """
         if not getattr(self, "_supports_army_season_summaries", False):
             return
+        acquire_army_season_lock(connection, season_id)
         summarized = connection.execute(
             """
             SELECT 1 FROM army_season_summaries

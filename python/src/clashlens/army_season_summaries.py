@@ -74,6 +74,20 @@ def _check_season_lens(season_id: str, lens: str) -> None:
         raise ValueError("unsupported army summary lens")
 
 
+def acquire_army_season_lock(connection: Any, season_id: str) -> None:
+    """Serialize first materialization against correction refreshes.
+
+    One shared transaction-scoped lock per season (not per lens) is held
+    before projecting/publishing and before the refresh existence check,
+    so a correction either commits first and the backfill projects its
+    facts, or it waits and then refreshes the newly published summary.
+    """
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+        (f"army-season:{season_id}",),
+    )
+
+
 def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
     """Aggregate one season-lens across all categories from current facts.
 
@@ -167,8 +181,8 @@ def materialize_army_season(
 ) -> dict[str, Any]:
     """Project and atomically store one season-lens across all categories.
 
-    Competing projections for the same season-lens serialize on a
-    transaction-scoped advisory lock. All categories publish together:
+    Competing writers for the same season serialize on the shared
+    season advisory lock (see acquire_army_season_lock). All categories publish together:
     any failure raises and aborts the whole lens, so the prior complete
     lens stays readable and a lens is never published partially.
     Unchanged categories are a no-op that leaves the existing rows
@@ -178,10 +192,7 @@ def materialize_army_season(
     other.
     """
     _check_season_lens(season_id, lens)
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtext(%s))",
-        (f"army-season:{season_id}:{lens}",),
-    )
+    acquire_army_season_lock(connection, season_id)
     projected = _project_lens(connection, season_id, lens)
     report: dict[str, Any] = {
         "season_id": season_id,
