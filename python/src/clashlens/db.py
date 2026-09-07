@@ -1507,6 +1507,11 @@ class Database:
                 job = self._lock_live_claim(connection, claim)
                 valid_rows = [row for row in battle_log.rows if row.battle is not None]
                 valid_rows = self._guard_battle_rows(connection, valid_rows)
+                if any(row.battle is not None for row in battle_log.rows) and not valid_rows:
+                    raise DomainRuleError(
+                        "season_detail_retired",
+                        "battle log contains only retired-season detail",
+                    )
                 player_tags = {battle_log.normalized_tag}
                 for row in valid_rows:
                     assert row.battle is not None
@@ -2272,10 +2277,13 @@ class Database:
         with self._timed_connection() as connection:
             with connection.transaction():
                 job = self._lock_live_claim(connection, claim)
-                valid_rows = self._guard_battle_rows(
-                    connection,
-                    [row for row in battle_log.rows if row.battle is not None],
-                )
+                all_battle_rows = [row for row in battle_log.rows if row.battle is not None]
+                valid_rows = self._guard_battle_rows(connection, all_battle_rows)
+                if all_battle_rows and not valid_rows:
+                    raise DomainRuleError(
+                        "season_detail_retired",
+                        "battle log contains only retired-season detail",
+                    )
                 parsed_payload_id = self._record_parsed_payload(
                     connection,
                     endpoint=endpoint,
@@ -5194,6 +5202,15 @@ class Database:
                     )
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
+                )
+
+    def complete_terminal(self, claim: Claim, *, outcome: str) -> None:
+        """Finish a claimed job after a domain fence made its work obsolete."""
+        with self.pool.connection() as connection:
+            with connection.transaction():
+                job = self._lock_live_claim(connection, claim)
+                self._finish_claim(
+                    connection, claim, job, state="complete", outcome=outcome
                 )
 
     def complete_classified(self, claim: Claim, *, outcome: str) -> None:

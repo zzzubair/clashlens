@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -328,6 +329,10 @@ def test_finalize_preview_then_full_retirement_cycle(database_url: str) -> None:
                     "SELECT count(*) FROM army_analytics_battle_facts WHERE official_season_id = %s",
                     (SEASON,),
                 ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM army_analytics_completed_days WHERE official_season_id = %s",
+                    (SEASON,),
+                ).fetchone()[0] == 0
                 status = connection.execute(
                     "SELECT status FROM season_detail_retirements WHERE official_season_id = %s",
                     (SEASON,),
@@ -615,9 +620,32 @@ def test_finalize_blocks_stale_summaries_and_pending_work(
                     observed_at=DAY0 + timedelta(days=2),
                     normalized_tag="#2PP",
                 )
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs_worker (
+                        work_type, deduplication_key, input_json,
+                        processing_version, domain_rule_version, analytics_rule_version
+                    ) VALUES (
+                        'reconcile_ranked_day', 'retirement-reconcile-probe', %s::jsonb,
+                        'clashlens-domain-processing-v1', 'clashlens-domain-rules-v1',
+                        'legend-analytics-v1'
+                    )
+                    """,
+                    (
+                        json.dumps(
+                            {
+                                "player_id": player_id,
+                                "ranked_day_start": (DAY0 + timedelta(days=2)).strftime(
+                                    "%Y-%m-%dT05:00:00Z"
+                                ),
+                            }
+                        ),
+                    ),
+                )
                 blocked = finalize_season_detail(connection, SEASON, AFTER_SEASON, apply=True)
                 assert blocked["status"] == "blocked"
                 assert blocked["blocking_work"].get("processing_jobs") == 1
+                assert blocked["blocking_work"].get("observationless_army_jobs") == 1
                 connection.rollback()
         finally:
             database.close()
@@ -852,6 +880,64 @@ def test_rolling_log_processes_live_content_after_finalization(
                 assert connection.execute(
                     "SELECT count(*) FROM legend_battles"
                 ).fetchone()[0] >= live_battles_before
+        finally:
+            database.close()
+
+
+def test_retired_only_replay_is_terminal_and_does_not_recreate_detail(
+    database_url: str, archive_server
+) -> None:
+    from domain_test_support import store_observation
+    from test_domain_processing_postgres import _processor
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            with database.pool.connection() as connection:
+                player_id = _player(connection)
+                _full_season(connection, player_id)
+                _seed_army(connection)
+                connection.commit()
+                _materialize_all(connection)
+                connection.commit()
+                _finalize_and_commit(connection)
+                result = retire_season_detail(connection, SEASON, apply=True)
+                assert result["status"] == "retired"
+                connection.commit()
+            body = json.loads(
+                (Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json").read_bytes()
+            )
+            body["items"][0]["battleTimestamp"] = "2026-05-01T12:00:00Z"
+            _observation_id, job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="retired-only-replay",
+                endpoint="battle_log",
+                body=json.dumps(body).encode(),
+                observed_at=LIVE_DAY0,
+                normalized_tag="#2PP",
+            )
+            worker_database, processor = _processor(connection_info, archive_server)
+            try:
+                processed = processor.process_job(job_id, owner="retired-only-replay")
+                assert processed is not None
+                assert processed.outcome == SEASON_DETAIL_RETIRED
+            finally:
+                worker_database.close()
+            with psycopg.connect(connection_info) as connection:
+                assert connection.execute(
+                    "SELECT count(*) FROM legend_battles"
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT status, outcome FROM python_processing_jobs WHERE id = %s",
+                    (job_id,),
+                ).fetchone() == ("complete", SEASON_DETAIL_RETIRED)
+                assert connection.execute(
+                    "SELECT count(*) FROM battle_log_observations"
+                ).fetchone()[0] == 0
+                assert connection.execute(
+                    "SELECT count(*) FROM parsed_source_payloads"
+                ).fetchone()[0] == 0
         finally:
             database.close()
 

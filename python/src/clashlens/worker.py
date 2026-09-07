@@ -20,6 +20,7 @@ from .db import (
     Database,
     LeaseLost,
 )
+from .domain import DomainRuleError
 from .profile import ProfileParseError, parse_profile
 from .rankings import (
     RankingParseError,
@@ -273,6 +274,8 @@ class ObservationProcessor:
                 self.database.complete_reconciliation(claim)
             except LeaseLost:
                 return ProcessResult(claim.job_id, "lease_lost")
+            except DomainRuleError as error:
+                return self._complete_retired(claim, error)
             return ProcessResult(claim.job_id, "processed")
         if claim.work_type in {"build_snapshot", "build_analytics"}:
             if claim.processing_version != PROCESSING_VERSION:
@@ -295,6 +298,8 @@ class ObservationProcessor:
                     self.database.complete_analytics(claim)
             except LeaseLost:
                 return ProcessResult(claim.job_id, "lease_lost")
+            except DomainRuleError as error:
+                return self._complete_retired(claim, error)
             except (KeyError, TypeError, ValueError) as error:
                 return self._fail(
                     claim,
@@ -326,6 +331,8 @@ class ObservationProcessor:
                     self.database.complete_army_redecode(claim)
             except LeaseLost:
                 return ProcessResult(claim.job_id, "lease_lost")
+            except DomainRuleError as error:
+                return self._complete_retired(claim, error)
             except (KeyError, TypeError, ValueError) as error:
                 is_dependency = (
                     "dependency" in str(error).lower()
@@ -468,9 +475,24 @@ class ObservationProcessor:
                 outcome = "processed"
         except (ProfileParseError, BattleLogParseError, RankingParseError) as error:
             return self._fail(claim, error.category, detail=str(error), retryable=False)
+        except DomainRuleError as error:
+            return self._complete_retired(claim, error)
         except LeaseLost:
             return ProcessResult(claim.job_id, "lease_lost")
         return ProcessResult(claim.job_id, outcome)
+
+    def _complete_retired(
+        self, claim: Claim, error: DomainRuleError
+    ) -> ProcessResult:
+        if error.category != "season_detail_retired":
+            raise error
+        try:
+            self.database.complete_terminal(
+                claim, outcome="season_detail_retired"
+            )
+        except LeaseLost:
+            return ProcessResult(claim.job_id, "lease_lost")
+        return ProcessResult(claim.job_id, "season_detail_retired", error.category)
 
     def _fail(
         self,

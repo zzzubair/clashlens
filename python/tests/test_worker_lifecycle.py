@@ -7,6 +7,8 @@ from threading import Event
 import pytest
 
 from clashlens import cli
+from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
+from clashlens.domain import DomainRuleError
 from clashlens.worker import ObservationProcessor, ProcessResult, StageMetrics
 
 
@@ -30,6 +32,39 @@ def test_stage_metrics_report_bounded_histogram_percentiles() -> None:
     assert snapshot["p50_upper_ms"] == 1.0
     assert snapshot["p95_upper_ms"] == 250.0
     assert snapshot["p99_upper_ms"] == 250.0
+
+
+def test_worker_terminalizes_race_to_retired_season() -> None:
+    class RetiredDatabase:
+        def __init__(self) -> None:
+            self.finished: list[tuple[int, str]] = []
+
+        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+            del lease_seconds
+
+        def complete_reconciliation(self, _claim: object) -> None:
+            raise DomainRuleError("season_detail_retired", "season fence won the race")
+
+        def complete_terminal(self, claim: object, *, outcome: str) -> None:
+            self.finished.append((claim.job_id, outcome))  # type: ignore[attr-defined]
+
+    claim = type(
+        "Claim",
+        (),
+        {
+            "job_id": 17,
+            "work_type": "reconcile_ranked_day",
+            "processing_version": PROCESSING_VERSION,
+            "domain_rule_version": DOMAIN_RULE_VERSION,
+        },
+    )()
+    database = RetiredDatabase()
+    result = ObservationProcessor(database, archive=object())._process_claim(
+        claim, lease_seconds=30
+    )
+
+    assert result == ProcessResult(17, "season_detail_retired", "season_detail_retired")
+    assert database.finished == [(17, "season_detail_retired")]
 
 
 def test_worker_does_not_claim_after_shutdown_is_requested() -> None:

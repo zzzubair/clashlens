@@ -24,7 +24,8 @@ or unexplained failures block), and season-scoped processing, replay,
 publication-generation, and correction work is terminal. Unknown fails
 closed. The applied `finalized` record fences writers atomically before
 any deletion. Retirement then deletes all `api_player_daily_logs` for
-the season, its `army_analytics_battle_facts`, and battle detail
+the season, its `army_analytics_battle_facts` and redundant
+`army_analytics_completed_days` markers, and battle detail
 (decodes, perspectives, evidence, source reports, payload membership,
 battles) only where no retained, live, shared, or protected dependency
 still needs them; each table is limited to 1–1000 rows per invocation
@@ -46,9 +47,11 @@ Measure one season (or the whole database) plus a labeled projection:
 python -m clashlens.cli measure-season-storage --season-id 1785714000 --players 12500 --headroom-percent 20
 ```
 
-The report carries allocated bytes (heap plus indexes/TOAST), row
-counts, compact-summary size distribution, and the explicit unmeasured
-list: generated WAL, retained WAL and base backups (seven-day recovery
+The report carries allocated bytes for every application table,
+partition, and materialized view in the active schema (heap plus
+indexes/TOAST), row counts, compact-summary size distribution, and the
+explicitly labeled migration metadata exclusion. The unmeasured list is:
+generated WAL, retained WAL and base backups (seven-day recovery
 window), spool occupancy, and remote raw bytes/request tariffs. The
 projection covers six calendar months (about 6.5 twenty-eight-day
 seasons) against measured usable capacity with headroom. Live detail and

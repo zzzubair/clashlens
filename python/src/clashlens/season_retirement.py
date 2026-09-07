@@ -23,32 +23,7 @@ TERMINAL_REPLAY_STATUSES = ("complete", "failed", "cancelled")
 TERMINAL_CORRECTION_STATES = ("finalized", "terminal")
 ACTIVE_GENERATION_STATES = ("pending", "ready", "building")
 
-_MEASURE_TABLES = (
-    "player_season_summaries",
-    "army_season_summaries",
-    "api_player_daily_logs",
-    "ranked_day_versions",
-    "army_analytics_battle_facts",
-    "army_analytics_completed_days",
-    "legend_battles",
-    "battle_evidence",
-    "battle_perspectives",
-    "battle_army_decodes",
-    "battle_source_rows",
-    "battle_log_observation_rows",
-    "battle_payload_rows",
-    "battle_log_observations",
-    "collector_jobs",
-    "collector_observations",
-    "python_processing_jobs",
-    "python_replay_requests",
-    "known_player_discoveries",
-    "player_discovery_events",
-    "boundary_publication_generations",
-    "boundary_publication_corrections",
-    "api_frozen_leaderboards",
-    "api_frozen_leaderboard_entries",
-)
+_MIGRATION_RELATIONS = ("clash_lens_schema_migrations",)
 
 
 def _text(value: Any) -> str:
@@ -58,6 +33,22 @@ def _text(value: Any) -> str:
 def _table_exists(connection: Any, table: str) -> bool:
     row = connection.execute("SELECT to_regclass(%s) IS NOT NULL", (table,)).fetchone()
     return bool(row and row[0])
+
+
+def _application_relations(connection: Any) -> list[str]:
+    rows = connection.execute(
+        """
+        SELECT c.relname
+        FROM pg_class AS c
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relkind IN ('r', 'p', 'm')
+          AND c.relname <> ALL(%s::text[])
+        ORDER BY c.relname
+        """,
+        (list(_MIGRATION_RELATIONS),),
+    ).fetchall()
+    return [_text(row[0]) for row in rows]
 
 
 def acquire_season_lock(connection: Any, season_id: str) -> None:
@@ -430,10 +421,20 @@ def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -
                       WHERE battle.ranked_day_start >= %s
                         AND battle.ranked_day_start < %s
                   ))
+                  OR (job.work_type = 'reconcile_ranked_day' AND (
+                      ((job.input_json ->> 'ranked_day_start')::timestamptz >= %s
+                       AND (job.input_json ->> 'ranked_day_start')::timestamptz < %s)
+                      OR ((job.input_json ->> 'boundary_at')::timestamptz >= %s
+                       AND (job.input_json ->> 'boundary_at')::timestamptz < %s)
+                  ))
               )
             """,
             (
                 list(TERMINAL_JOB_STATUSES),
+                season_start,
+                season_end,
+                season_start,
+                season_end,
                 season_start,
                 season_end,
                 season_start,
@@ -635,6 +636,15 @@ def _eligible_counts(
         """,
         (season_id, limit),
     ).fetchone()[0]
+    counts["completed_days"] = connection.execute(
+        """
+        SELECT count(*) FROM (
+            SELECT ranked_day_start FROM army_analytics_completed_days
+            WHERE official_season_id = %s ORDER BY ranked_day_start LIMIT %s
+        ) AS candidates
+        """,
+        (season_id, limit),
+    ).fetchone()[0]
     counts["battles"] = len(
         _eligible_battle_ids(connection, season_start, season_end, limit)
     )
@@ -690,6 +700,25 @@ def _delete_retirement_batch(
                 (ids,),
             ).rowcount
             if ids
+            else 0
+        )
+    with connection.transaction():
+        connection.execute("SET LOCAL lock_timeout = '1s'")
+        connection.execute("SET LOCAL statement_timeout = '30s'")
+        rows = connection.execute(
+            """
+            SELECT ranked_day_start FROM army_analytics_completed_days
+            WHERE official_season_id = %s ORDER BY ranked_day_start LIMIT %s
+            FOR UPDATE SKIP LOCKED
+            """,
+            (season_id, limit),
+        ).fetchall()
+        deleted["completed_days"] = (
+            connection.execute(
+                "DELETE FROM army_analytics_completed_days WHERE ranked_day_start = ANY(%s::timestamptz[])",
+                ([row[0] for row in rows],),
+            ).rowcount
+            if rows
             else 0
         )
     with connection.transaction():
@@ -860,9 +889,7 @@ def measure_season_storage(
     zero cost.
     """
     tables: dict[str, Any] = {}
-    for table in _MEASURE_TABLES:
-        if not _table_exists(connection, table):
-            continue
+    for table in _application_relations(connection):
         size = connection.execute(
             "SELECT pg_total_relation_size(to_regclass(%s))", (table,)
         ).fetchone()[0]
@@ -928,6 +955,10 @@ def measure_season_storage(
         "tables": tables,
         "summaries": summaries,
         "season_counts": season_counts,
+        "measured_relation_scope": "public application tables, partitions, and materialized views",
+        "excluded_relations": {
+            "migration_metadata": list(_MIGRATION_RELATIONS),
+        },
         "unmeasured": [
             "generated WAL (use pg_current_wal_lsn delta around a bounded run)",
             "retained WAL and base backups (7-day recovery window, host procedure)",
