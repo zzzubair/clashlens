@@ -1133,6 +1133,14 @@ def derive_log_width(cal_column_bytes: float, cal_body_bytes: float,
     return min(cap, cal_column_bytes * target_body_bytes / cal_body_bytes)
 
 
+def _script_sha256() -> str:
+    """Content hash of this executed script file, when readable."""
+    try:
+        return hashlib.sha256(Path(__file__).resolve().read_bytes()).hexdigest()
+    except OSError:
+        return "unknown"
+
+
 def _source_sha() -> str:
     try:
         proc = subprocess.run(
@@ -1352,7 +1360,9 @@ def phase_report(results: Path) -> dict:
         "official_api_requests": 0,
         "provenance": {
             "source_sha": _source_sha(),
-            "script_sha256": rehearsal.get("script_sha256", "unknown"),
+            "script_sha256": _script_sha256(),
+            "pg_rehearsal_script_sha256": rehearsal.get(
+                "script_sha256", "unknown"),
             "pg_migrations": len(
                 (rehearsal.get("database") or {}).get("migration_hashes")
                 or {}),
