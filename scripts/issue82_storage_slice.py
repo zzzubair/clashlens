@@ -948,10 +948,16 @@ def phase_pg_rehearsal(database_url: str, results: Path) -> dict:
                             "report scales by measured body-sample sizes"),
             }
             final_snap = snap(conn, lsn0, "rehearsal_complete")
+            try:
+                script_sha256 = hashlib.sha256(
+                    Path(__file__).resolve().read_bytes()).hexdigest()
+            except OSError:
+                script_sha256 = "unknown"
             payload = {
                 "schema_version": 1,
                 "measured_at": utcnow_iso(),
                 "source": "disposable_postgresql_synthetic_rehearsal",
+                "script_sha256": script_sha256,
                 "official_api_requests": 0,
                 "synthetic_data": True,
                 "database": {"server_version": pg_version, "settings": pg_settings,
@@ -1344,6 +1350,7 @@ def phase_report(results: Path) -> dict:
         "official_api_requests": 0,
         "provenance": {
             "source_sha": _source_sha(),
+            "script_sha256": rehearsal.get("script_sha256", "unknown"),
             "pg_migrations": len(
                 (rehearsal.get("database") or {}).get("migration_hashes")
                 or {}),
