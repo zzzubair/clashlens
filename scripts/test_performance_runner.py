@@ -42,7 +42,7 @@ def _test_postgres() -> dict[str, object]:
             "max_connections": "100",
             "track_io_timing": "off",
         },
-        "applied_migration_versions": list(range(1, 21)),
+        "applied_migration_versions": list(range(1, 22)),
     }
 
 
@@ -120,7 +120,7 @@ def _candidate_receipt() -> dict:
         "application_images": images,
         "database": {
             "contract_version": 5,
-            "applied_migration_versions": list(range(1, 21)),
+            "applied_migration_versions": list(range(1, 22)),
             "server_version": "18.6",
             "server_version_num": "180006",
             "system_identifier": "1234567890",
@@ -2578,6 +2578,10 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
         ):
             workload = runner._run_mixed(connection_info, archive, 1, 1)
 
+        self.assertEqual(
+            workload["processing_summary"]["outcomes"]["processed"],
+            2,
+        )
         self.assertEqual(
             workload["hard_failures"],
             ["memory_pressure_unavailable", "memory_pressure_increased"],

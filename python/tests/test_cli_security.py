@@ -441,3 +441,62 @@ def test_materialize_cursor_rejects_invalid_bounds(value: str) -> None:
     with pytest.raises(SystemExit) as excinfo:
         _materialize_arguments("--after-player-id", value)
     assert excinfo.value.code == 2
+
+
+def _retire_arguments(*extra: str) -> argparse.Namespace:
+    return build_parser().parse_args(
+        [
+            "retire-season-detail",
+            "--database-url",
+            "postgresql://prototype@postgres/db",
+            "--season-id",
+            "1785714000",
+            *extra,
+        ]
+    )
+
+
+def test_retire_batch_defaults_and_requires_season() -> None:
+    arguments = _retire_arguments()
+
+    assert arguments.max_rows == 500
+    assert arguments.apply is False
+    with pytest.raises(SystemExit) as excinfo:
+        build_parser().parse_args(
+            [
+                "retire-season-detail",
+                "--database-url",
+                "postgresql://prototype@postgres/db",
+            ]
+        )
+    assert excinfo.value.code == 2
+
+
+@pytest.mark.parametrize("value", ["0", "1001", "abc"])
+def test_retire_batch_rejects_out_of_range(value: str) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        _retire_arguments("--max-rows", value)
+    assert excinfo.value.code == 2
+
+
+def test_finalize_and_measure_commands_parse() -> None:
+    parser = build_parser()
+    finalize = parser.parse_args(
+        [
+            "finalize-season-detail",
+            "--database-url",
+            "postgresql://prototype@postgres/db",
+            "--season-id",
+            "1785714000",
+        ]
+    )
+    assert finalize.apply is False
+    measure = parser.parse_args(
+        [
+            "measure-season-storage",
+            "--database-url",
+            "postgresql://prototype@postgres/db",
+        ]
+    )
+    assert measure.season_id == ""
+    assert measure.players == 12500

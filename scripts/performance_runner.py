@@ -45,7 +45,7 @@ DUPLICATE_ENDPOINT_MIX = {
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
 ARTIFACT_SCHEMA_VERSION = 9
 CANDIDATE_RECEIPT_SCHEMA_VERSION = 2
-REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 21))
+REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 22))
 CANONICAL_REPOSITORY_URL = "https://github.com/zzzubair/clashlens"
 CONFIGURATION_KEYS = {
     "mode",
@@ -5441,6 +5441,25 @@ def _run_mixed(
                         if battle_id is None:
                             raise RuntimeError("mixed battle seed produced no battle")
                         battle_id = int(battle_id[0])
+                        connection.execute(
+                            """
+                            INSERT INTO ranked_day_versions (
+                                player_id, ranked_day_start, ranked_day_end,
+                                official_season_id, season_day_number,
+                                season_anchor_rule_version,
+                                reconciliation_rule_version, result_hash, version,
+                                state, confidence, evidence_complete,
+                                coverage_complete
+                            )
+                            SELECT battle.attacker_player_id, %s, %s,
+                                   %s, 1, 'runner-anchor-v1', 'runner-rules-v1',
+                                   repeat('a', 64), 1, 'Partial', 'partial', false, false
+                            FROM legend_battles AS battle
+                            WHERE battle.id = %s
+                            ON CONFLICT DO NOTHING
+                            """,
+                            (DAY_START, BOUNDARY, str(int(DAY_START.timestamp())), battle_id),
+                        )
                         job = connection.execute(
                             """INSERT INTO python_processing_jobs (
                                    work_type, deduplication_key, input_json,

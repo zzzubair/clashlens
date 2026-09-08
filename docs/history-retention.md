@@ -1,5 +1,81 @@
 # Compact history and retention
 
+Migration 0021 adds the durable completed-season detail-retirement
+record: one `season_detail_retirements` row per season storing the
+established boundaries, player/army summary digests, and retirement
+progress. The record survives daily-log and battle-fact deletion and
+fences later writers. This migration creates the record only; no data
+is deleted.
+
+```sh
+python -m clashlens.cli finalize-season-detail --season-id 1785714000
+# Inspect the JSON report, then explicitly opt in:
+python -m clashlens.cli finalize-season-detail --season-id 1785714000 --apply
+python -m clashlens.cli retire-season-detail --season-id 1785714000 --max-rows 500
+# Inspect the JSON report, then explicitly opt in:
+python -m clashlens.cli retire-season-detail --season-id 1785714000 --max-rows 500 --apply
+```
+
+The default is preview only. Finalization verifies the season ended
+under the same completed-season gate, every required player summary and
+every army lens/category matches its current projection (complete or
+explicitly partial summaries are accepted; missing rows, stale digests,
+or unexplained failures block), and season-scoped processing, replay,
+publication-generation, and correction work is terminal. Unknown fails
+closed. The applied `finalized` record fences writers atomically before
+any deletion. Retirement then deletes all `api_player_daily_logs` for
+the season, its `army_analytics_battle_facts` and redundant
+`army_analytics_completed_days` markers, and battle detail
+(decodes, perspectives, evidence, source reports, payload membership,
+battles) only where no retained, live, shared, or protected dependency
+still needs them; each table is limited to 1–1000 rows per invocation
+so runs are bounded, restartable, and idempotent. Summaries, players
+and accounts, raw lifecycle, reset baselines, frozen publication
+identities/entries, boundary generations/manifests, correction chains,
+and ranked-day versions are retained, and restrictive foreign keys are
+unchanged. Once finalized, targeted corrections, replays, and
+rematerializations return an explicit `season_detail_retired` result
+before any domain mutation and never rebuild retired detail or replace
+summaries from a reduced sample; rolling logs containing old battles
+still process their live-season content. Detailed reconstruction ends at
+finalization; reopening or restore is out of scope. Repeat bounded
+retire runs until the report status is `retired`.
+
+Measure one season (or the whole database) plus a labeled projection:
+
+```sh
+python -m clashlens.cli measure-season-storage --season-id 1785714000 --players 12500 --headroom-percent 20
+```
+
+The report carries allocated bytes for every application table,
+partition parent/child, materialized view, and application sequence in the
+active schema (heap plus indexes/TOAST), row counts, compact-summary size
+distribution, relation-kind inclusions/exclusions, and the explicitly labeled
+migration metadata exclusion. Partition parents are cataloged with zero
+allocation so their children are not double-counted. The unmeasured list is:
+generated WAL, retained WAL and base backups (seven-day recovery
+window), spool occupancy, and remote raw bytes/request tariffs. The
+projection covers six calendar months (about 6.5 twenty-eight-day
+seasons) against measured usable capacity with headroom. Live detail and
+daily bookkeeping are not guessed as zero: until measured, the projection
+reports a lower bound, names the missing components, and leaves
+`fits_budget` unavailable. It labels itself synthetic extrapolation, never
+#60 Step 9 live validation, and treats vacuum-reusable space as reusable,
+not as disk shrinkage.
+
+Synthetic fixture illustration (2-player populated season, empty battle
+arrays, PostgreSQL 18): 56 daily logs at 114,688 B allocated and 3 army
+facts retired to zero rows; 2 player summaries at 1,400 B/row and 22
+army summary rows at 8,720 B total retained with byte-identical API
+reads; relation files did not shrink (vacuum-reusable). The labeled
+12,500-player projection from this fixture is about 114 MB of retained
+summaries over 6.5 seasons against measured Fedora capacity — a lower
+bound, not acceptance: the fixture carries no measured live detail or
+bookkeeping load, no TOAST pressure or at-scale indexes, no
+correction/opposite-perspective frequency, and no WAL, backup, spool,
+or remote-tariff costs. The storage CLI leaves those major components
+unmeasured rather than passing zero values.
+
 Migration 0020 adds shared whole-season army summaries: one
 `army_season_summaries` record per (season, lens, category) with
 whole-season usage counts and rates, 0/1/2/3-star attack counts, the

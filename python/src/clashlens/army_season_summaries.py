@@ -75,17 +75,10 @@ def _check_season_lens(season_id: str, lens: str) -> None:
 
 
 def acquire_army_season_lock(connection: Any, season_id: str) -> None:
-    """Serialize first materialization against correction refreshes.
+    """Compatibility name for the shared retirement season lock."""
+    from .season_retirement import acquire_season_lock
 
-    One shared transaction-scoped lock per season (not per lens) is held
-    before projecting/publishing and before the refresh existence check,
-    so a correction either commits first and the backfill projects its
-    facts, or it waits and then refreshes the newly published summary.
-    """
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtext(%s))",
-        (f"army-season:{season_id}",),
-    )
+    acquire_season_lock(connection, season_id)
 
 
 def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
@@ -192,6 +185,23 @@ def materialize_army_season(
     other.
     """
     _check_season_lens(season_id, lens)
+    from .season_retirement import (
+        SEASON_DETAIL_RETIRED,
+        acquire_season_lock,
+        is_season_detail_retired,
+    )
+
+    acquire_season_lock(connection, season_id)
+    if is_season_detail_retired(connection, season_id):
+        return {
+            "season_id": season_id,
+            "lens": lens,
+            "status": SEASON_DETAIL_RETIRED,
+            "materialized": 0,
+            "unchanged": 0,
+            "failures": [],
+            "content_digests": {},
+        }
     acquire_army_season_lock(connection, season_id)
     projected = _project_lens(connection, season_id, lens)
     report: dict[str, Any] = {
@@ -284,6 +294,20 @@ def materialize_completed_army_season(
     """
     if not season_id or len(season_id) > 80:
         raise ValueError("official season id is outside the supported range")
+    from .season_retirement import (
+        SEASON_DETAIL_RETIRED,
+        acquire_season_lock,
+        is_season_detail_retired,
+    )
+
+    acquire_season_lock(connection, season_id)
+    if is_season_detail_retired(connection, season_id):
+        return {
+            "season_id": season_id,
+            "season_completed": False,
+            "reason": SEASON_DETAIL_RETIRED,
+            "lenses": {},
+        }
     completed, reason = _season_completed(connection, season_id, now)
     if not completed:
         return {

@@ -26,6 +26,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0018_archive_last_seen_retention.sql"
   "$ROOT_DIR/deploy/migrations/0019_player_season_summaries.sql"
   "$ROOT_DIR/deploy/migrations/0020_army_season_summaries.sql"
+  "$ROOT_DIR/deploy/migrations/0021_season_detail_retirement.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -100,7 +101,7 @@ Commands:
   build-python                 Build the immutable Python image only.
   build-website                Build the immutable website image only.
   candidate-prepare            Prepare only the configured disposable
-                               PostgreSQL database through migration 0020.
+                               PostgreSQL database through migration 0021.
   deployment-receipt <scope> <environment> <results-dir>
                                Write a candidate-preparation or deployed-stack
                                evidence receipt outside the checkout.
