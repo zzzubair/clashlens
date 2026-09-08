@@ -2579,6 +2579,10 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
             workload = runner._run_mixed(connection_info, archive, 1, 1)
 
         self.assertEqual(
+            workload["processing_summary"]["outcomes"]["processed"],
+            2,
+        )
+        self.assertEqual(
             workload["hard_failures"],
             ["memory_pressure_unavailable", "memory_pressure_increased"],
         )
