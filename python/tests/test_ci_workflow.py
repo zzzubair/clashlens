@@ -71,6 +71,7 @@ def test_python_job_runs_the_complete_suite_against_postgresql() -> None:
     assert test_step["run"] == (
         "uv run pytest -q\n"
         "uv run pytest -q ../scripts/test_operating_check.py\n"
+        "uv run pytest -q ../scripts/test_issue82_storage_slice.py\n"
         "PYTHONPATH=.. uv run pytest -q ../scripts/test_deployment_receipt.py\n"
     )
 
