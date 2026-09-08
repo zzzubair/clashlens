@@ -294,6 +294,36 @@ Artifacts remain on Fedora under `/home/zubair/clashlens-issue82-tools/`:
 `f91611779b7d542086fcb3b41a46afc0a7712037729904b77cfb6643170e23da`).
 The reproducible cleanup probe is retained there as `prune-probe.py`.
 
+## All-component storage slice (issue #82 preflight, 2026-09-08)
+
+`scripts/issue82_storage_slice.py` (stdlib only; unit checks in
+`scripts/test_issue82_storage_slice.py`) ran the closing measurement slice:
+a 12,500-player x 28-day synthetic rehearsal in disposable PostgreSQL 18
+(production materialization, finalization, bounded retirement to `retired`,
+ordinary vacuum, byte-equivalent historical reads), an exact 256-prefix
+metadata census plus a 384-body shape sample of the read-only GCS corpus,
+and verified Scaleway/R2 tariff extraction. No official API traffic; no
+production data; aggregate-only archive handling (no tags, bodies, or
+archive references retained).
+
+Measured: 1,399 B/player-season summaries (1,725 B allocated), 896 B/ranked
+version, 312 B/empty daily log, 2,851 B/battle across six tables, 2,977
+B/bookkeeping observation; finalize `ready` then `finalized` (12,500),
+retire to `retired` in 350 bounded rounds with 61 MB vacuum-reclaimed;
+corpus 683,391 objects / 24.4 GB over 29 days with bursty arrival (peak day
+90.7%) and profile/battle-log mean bodies of 23/65 KB. Central and
+conservative six-month scenarios fit measured Fedora capacity with 20%
+headroom; the seven-day recovery window is modeled as base backup plus
+generated WAL on R2 (labeled assumption; #31 owns backup design), and raw
+retention on Scaleway Standard with request-billing and minimum-size
+ambiguities recorded for #63 live proof.
+
+Retained on Fedora under `/home/zubair/clashlens-issue82-results/`:
+`issue82-gcs-census.json`, `issue82-gcs-bodies.json`,
+`issue82-pg-rehearsal.json`, `issue82-pricing.json` (beside the raw tariff
+pages), and `issue82-storage-report.json` with the six-month report
+`issue82-storage-slice-report.md`, each with a `.sha256` sidecar.
+
 ## Capacity and rollout gates
 
 A six-month capacity guarantee requires measured novelty, relation/index/TOAST
