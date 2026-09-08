@@ -1449,7 +1449,13 @@ class Database:
 
     @staticmethod
     def _guard_battle_rows(connection: Any, rows: list[Any]) -> list[Any]:
-        """Lock every known season before filtering rolling battle input."""
+        """Lock resolved seasons before filtering rolling battle input.
+
+        A ranked-day version is not required to identify a canonical season:
+        finalization can race a partial season while its day row is absent.
+        Historical days that match neither canonical bounds nor a durable
+        retirement fence are rejected rather than written without a lock.
+        """
         from .season_retirement import (
             acquire_season_lock,
             filter_live_rows,
@@ -1457,22 +1463,59 @@ class Database:
         )
 
         seasons: set[str] = set()
+        unresolved_historical: set[int] = set()
         has_retirement_table = bool(
             connection.execute(
                 "SELECT to_regclass(%s) IS NOT NULL",
                 ("season_detail_retirements",),
             ).fetchone()[0]
         )
-        for item in rows:
+        anchors = connection.execute(
+            """
+            SELECT current_league_season_id, previous_league_season_id,
+                   current_start, previous_start
+            FROM legend_season_anchors
+            WHERE state = 'confirmed' AND anchor_rule_version = %s
+            """,
+            (SEASON_ANCHOR_RULE_VERSION,),
+        ).fetchall()
+        canonical_bounds: list[tuple[str, Any, Any]] = []
+        historical_before: list[Any] = []
+        for anchor in anchors:
+            current_start, previous_start = anchor[2], anchor[3]
+            historical_before.append(current_start)
+            canonical_bounds.append(
+                (
+                    _text_value(anchor[0]),
+                    current_start,
+                    current_start + timedelta(days=28),
+                )
+            )
+            canonical_bounds.append(
+                (
+                    _text_value(anchor[1]),
+                    previous_start,
+                    previous_start + timedelta(days=28),
+                )
+            )
+        historical_cutoff = max(historical_before, default=None)
+        for item_index, item in enumerate(rows):
             if item.battle is None:
                 continue
+            day = item.battle.ranked_day_start
+            canonical_ids = {
+                season_id
+                for season_id, start, end in canonical_bounds
+                if start <= day < end
+            }
+            seasons.update(canonical_ids)
             season_rows = connection.execute(
                 """
                 SELECT official_season_id FROM ranked_day_versions
                 WHERE ranked_day_start = %s
                 ORDER BY id DESC LIMIT 1
                 """,
-                (item.battle.ranked_day_start,),
+                (day,),
             ).fetchall()
             seasons.update(_text_value(row[0]) for row in season_rows)
             if has_retirement_table:
@@ -1482,16 +1525,41 @@ class Database:
                     WHERE status IN ('finalized', 'retired')
                       AND season_start <= %s AND season_end > %s
                     """,
-                    (item.battle.ranked_day_start, item.battle.ranked_day_start),
+                    (day, day),
                 ).fetchall()
                 seasons.update(_text_value(row[0]) for row in retired_rows)
+            if not canonical_ids and not season_rows and historical_cutoff is not None and day < historical_cutoff:
+                unresolved_historical.add(item_index)
         for season_id in sorted(seasons):
             acquire_season_lock(connection, season_id)
+        # The first read only discovers lock keys. Re-read after blocking on
+        # those locks so a just-committed finalization is never stale here.
+        retired_ranges = retired_day_ranges(connection)
+        candidates = [
+            item for index, item in enumerate(rows) if index not in unresolved_historical
+        ]
         return filter_live_rows(
-            rows,
+            candidates,
             lambda item: item.battle.ranked_day_start,
-            retired_day_ranges(connection),
+            retired_ranges,
         )
+
+    @staticmethod
+    def _recheck_battle_rows(connection: Any, rows: list[Any]) -> None:
+        """Recheck the retirement fence while the season locks are held."""
+        from .season_retirement import filter_live_rows, retired_day_ranges
+
+        if len(
+            filter_live_rows(
+                rows,
+                lambda item: item.battle.ranked_day_start,
+                retired_day_ranges(connection),
+            )
+        ) != len(rows):
+            raise DomainRuleError(
+                "season_detail_retired",
+                "battle log crossed a committed season detail fence",
+            )
 
     def _complete_battle_log_legacy(self, claim: Claim, battle_log: ParsedBattleLog) -> None:
         (
@@ -1558,6 +1626,7 @@ class Database:
                 ).fetchone()
                 assert log_row is not None
                 log_id = int(log_row[0])
+                self._recheck_battle_rows(connection, valid_rows)
                 source_rows = connection.execute(
                     """
                     WITH input AS (
@@ -2284,6 +2353,7 @@ class Database:
                         "season_detail_retired",
                         "battle log contains only retired-season detail",
                     )
+                self._recheck_battle_rows(connection, valid_rows)
                 parsed_payload_id = self._record_parsed_payload(
                     connection,
                     endpoint=endpoint,

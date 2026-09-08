@@ -35,20 +35,29 @@ def _table_exists(connection: Any, table: str) -> bool:
     return bool(row and row[0])
 
 
-def _application_relations(connection: Any) -> list[str]:
+_MEASURED_RELKINDS = ("r", "p", "m", "S")
+_RELKIND_LABELS = {
+    "r": "ordinary table",
+    "p": "partitioned table parent",
+    "m": "materialized view",
+    "S": "sequence",
+}
+
+
+def _application_relations(connection: Any) -> list[tuple[str, str]]:
     rows = connection.execute(
         """
-        SELECT c.relname
+        SELECT c.relname, c.relkind
         FROM pg_class AS c
         JOIN pg_namespace AS n ON n.oid = c.relnamespace
         WHERE n.nspname = current_schema()
-          AND c.relkind IN ('r', 'p', 'm')
+          AND c.relkind IN ('r', 'p', 'm', 'S')
           AND c.relname <> ALL(%s::text[])
         ORDER BY c.relname
         """,
         (list(_MIGRATION_RELATIONS),),
     ).fetchall()
-    return [_text(row[0]) for row in rows]
+    return [(_text(row[0]), _text(row[1])) for row in rows]
 
 
 def acquire_season_lock(connection: Any, season_id: str) -> None:
@@ -889,20 +898,59 @@ def measure_season_storage(
     zero cost.
     """
     tables: dict[str, Any] = {}
-    for table in _application_relations(connection):
-        size = connection.execute(
-            "SELECT pg_total_relation_size(to_regclass(%s))", (table,)
-        ).fetchone()[0]
-        heap = connection.execute(
-            "SELECT pg_relation_size(to_regclass(%s))", (table,)
-        ).fetchone()[0]
-        count = connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+    for table, relkind in _application_relations(connection):
+        # Partition parents have no relation file; counting their children
+        # again would overstate both rows and allocation. Sequences have
+        # allocation but are not queryable as ordinary tables.
+        if relkind == "p":
+            size = heap = count = 0
+        else:
+            size = connection.execute(
+                "SELECT pg_total_relation_size(to_regclass(%s))", (table,)
+            ).fetchone()[0]
+            heap = connection.execute(
+                "SELECT pg_relation_size(to_regclass(%s))", (table,)
+            ).fetchone()[0]
+            count = (
+                0
+                if relkind == "S"
+                else connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+            )
         tables[table] = {
+            "relation_kind": relkind,
             "allocated_bytes": int(size),
             "heap_bytes": int(heap),
             "index_toast_bytes": int(size) - int(heap),
             "rows": int(count),
+            "row_count_semantics": (
+                "not_applicable_for_sequence"
+                if relkind == "S"
+                else "not_counted_for_partition_parent"
+                if relkind == "p"
+                else "relation_rows"
+            ),
         }
+    relation_kinds = connection.execute(
+        """
+        SELECT c.relkind, count(*)
+        FROM pg_class AS c
+        JOIN pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relname <> ALL(%s::text[])
+        GROUP BY c.relkind ORDER BY c.relkind
+        """,
+        (list(_MIGRATION_RELATIONS),),
+    ).fetchall()
+    included_kinds = {
+        kind: _RELKIND_LABELS[kind]
+        for kind in _MEASURED_RELKINDS
+        if any(_text(row[0]) == kind for row in relation_kinds)
+    }
+    excluded_kinds = {
+        _text(row[0]): f"not measured ({_text(row[0])} relation kind)"
+        for row in relation_kinds
+        if _text(row[0]) not in _MEASURED_RELKINDS
+    }
     summaries: dict[str, Any] = {}
     if season_id is not None and _table_exists(connection, "player_season_summaries"):
         dist = connection.execute(
@@ -955,7 +1003,17 @@ def measure_season_storage(
         "tables": tables,
         "summaries": summaries,
         "season_counts": season_counts,
-        "measured_relation_scope": "public application tables, partitions, and materialized views",
+        "measured_relation_total_bytes": sum(
+            entry["allocated_bytes"] for entry in tables.values()
+        ),
+        "measured_relation_scope": (
+            "public application tables, partition parents, materialized views, "
+            "and sequences; partition parents are cataloged with zero allocation"
+        ),
+        "relation_kinds": {
+            "included": included_kinds,
+            "excluded": excluded_kinds,
+        },
         "excluded_relations": {
             "migration_metadata": list(_MIGRATION_RELATIONS),
         },

@@ -48,9 +48,11 @@ python -m clashlens.cli measure-season-storage --season-id 1785714000 --players 
 ```
 
 The report carries allocated bytes for every application table,
-partition, and materialized view in the active schema (heap plus
-indexes/TOAST), row counts, compact-summary size distribution, and the
-explicitly labeled migration metadata exclusion. The unmeasured list is:
+partition parent/child, materialized view, and application sequence in the
+active schema (heap plus indexes/TOAST), row counts, compact-summary size
+distribution, relation-kind inclusions/exclusions, and the explicitly labeled
+migration metadata exclusion. Partition parents are cataloged with zero
+allocation so their children are not double-counted. The unmeasured list is:
 generated WAL, retained WAL and base backups (seven-day recovery
 window), spool occupancy, and remote raw bytes/request tariffs. The
 projection covers six calendar months (about 6.5 twenty-eight-day

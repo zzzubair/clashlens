@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import psycopg
 import pytest
@@ -1030,6 +1033,93 @@ def test_projection_marks_unmeasured_components_and_budget_unavailable() -> None
     }
 
 
+def test_rolling_log_waits_for_finalization_when_ranked_day_is_missing(
+    database_url: str,
+) -> None:
+    """A canonical partial season still shares the finalization fence lock."""
+    from clashlens.season_retirement import acquire_season_lock
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            player_id = _player(connection, "#RACE")
+            _full_season(connection, player_id)
+            _seed_army(connection, tag="#RACE", base=7100)
+            connection.commit()
+            # The direct fixture anchor is valid canonical metadata; replica
+            # mode also lets this regression remove the ranked-day row while
+            # retaining the partial season's remaining history.
+            connection.execute("SET LOCAL session_replication_role = replica")
+            connection.execute(
+                "DELETE FROM ranked_day_versions WHERE ranked_day_start = %s",
+                (DAY0,),
+            )
+            connection.execute(
+                "DELETE FROM api_player_daily_logs WHERE ranked_day_start = %s",
+                (DAY0,),
+            )
+            connection.execute(
+                """
+                INSERT INTO legend_season_anchors (
+                    current_league_season_id, previous_league_season_id,
+                    current_start, previous_start, anchor_rule_version,
+                    source_profile_version_id, state
+                ) VALUES (%s, %s, %s, %s, 'legend-season-anchor-v1', 1, 'confirmed')
+                """,
+                (LIVE_SEASON, SEASON, LIVE_DAY0, DAY0),
+            )
+            connection.commit()
+            _materialize_all(connection)
+            connection.commit()
+
+        ready = threading.Event()
+        release = threading.Event()
+        finalized: list[dict[str, object]] = []
+
+        def finalize() -> None:
+            with psycopg.connect(connection_info) as finalizer:
+                acquire_season_lock(finalizer, SEASON)
+                ready.set()
+                assert release.wait(10)
+                finalized.append(
+                    finalize_season_detail(finalizer, SEASON, AFTER_SEASON, apply=True)
+                )
+                finalizer.commit()
+
+        thread = threading.Thread(target=finalize)
+        thread.start()
+        assert ready.wait(10)
+        result: list[object] = []
+        guard_errors: list[BaseException] = []
+
+        def guard() -> None:
+            item = SimpleNamespace(
+                battle=SimpleNamespace(ranked_day_start=DAY0),
+            )
+            try:
+                with psycopg.connect(connection_info) as writer:
+                    result.extend(Database._guard_battle_rows(writer, [item]))
+            except (psycopg.Error, ValueError) as error:  # pragma: no cover
+                guard_errors.append(error)
+
+        writer = threading.Thread(target=guard)
+        writer.start()
+        time.sleep(0.1)
+        assert writer.is_alive(), guard_errors
+        release.set()
+        writer.join(10)
+        thread.join(10)
+        assert not writer.is_alive() and not thread.is_alive()
+        assert finalized and finalized[0]["status"] == "finalized", repr(finalized)
+        assert result == []
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute(
+                "SELECT count(*) FROM legend_battles"
+            ).fetchone()[0] == 0
+            assert connection.execute(
+                "SELECT count(*) FROM battle_evidence"
+            ).fetchone()[0] == 0
+
+
 def test_measurement_snapshot_and_projection_labels(database_url: str) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = ApiDatabase(connection_info)
@@ -1040,9 +1130,33 @@ def test_measurement_snapshot_and_projection_labels(database_url: str) -> None:
                 _seed_army(connection)
                 connection.commit()
                 _materialize_all(connection)
+                connection.execute("CREATE SEQUENCE issue82_storage_probe_seq")
+                connection.execute(
+                    "CREATE TABLE issue82_storage_probe_partition "
+                    "(id bigint) PARTITION BY RANGE (id)"
+                )
+                connection.execute(
+                    "CREATE TABLE issue82_storage_probe_partition_1 "
+                    "PARTITION OF issue82_storage_probe_partition "
+                    "FOR VALUES FROM (0) TO (100)"
+                )
                 connection.commit()
                 snapshot = measure_season_storage(connection, SEASON)
                 assert snapshot["tables"]["player_season_summaries"]["rows"] == 1
+                sequence = snapshot["tables"]["issue82_storage_probe_seq"]
+                assert sequence["relation_kind"] == "S"
+                assert sequence["row_count_semantics"] == "not_applicable_for_sequence"
+                assert sequence["allocated_bytes"] > 0
+                parent = snapshot["tables"]["issue82_storage_probe_partition"]
+                assert parent["relation_kind"] == "p"
+                assert parent["row_count_semantics"] == "not_counted_for_partition_parent"
+                assert parent["allocated_bytes"] == 0
+                assert "p" in snapshot["relation_kinds"]["included"]
+                assert snapshot["measured_relation_total_bytes"] == sum(
+                    entry["allocated_bytes"]
+                    for entry in snapshot["tables"].values()
+                )
+                assert "i" in snapshot["relation_kinds"]["excluded"]
                 assert snapshot["tables"]["api_player_daily_logs"]["rows"] == 28
                 assert snapshot["season_counts"]["api_player_daily_logs"] == 28
                 assert snapshot["summaries"]["player_season"]["rows"] == 1
