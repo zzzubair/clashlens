@@ -300,11 +300,13 @@ The reproducible cleanup probe is retained there as `prune-probe.py`.
 `scripts/test_issue82_storage_slice.py`) ran the closing measurement slice:
 a 12,500-player x 28-day synthetic rehearsal in disposable PostgreSQL 18
 (production materialization, finalization, bounded retirement to `retired`,
-ordinary vacuum, byte-equivalent historical reads), an exact 256-prefix
-metadata census plus a 384-body shape sample of the read-only GCS corpus,
-and verified Scaleway/R2 tariff extraction. No official API traffic; no
-production data; aggregate-only archive handling (no tags, bodies, or
-archive references retained).
+ordinary vacuum, canonical-string-identical historical reads), an exact
+256-prefix metadata census plus a 384-body shape sample of the read-only
+GCS corpus, and verified Scaleway/R2 tariff extraction. No official API
+traffic; no production data; aggregate-only archive handling (no tags,
+bodies, or archive references retained). Daily-log width comes from one
+synthetic 50-entry column-size point scaled by measured body-sample sizes;
+raw cost is a six-month average monthly figure with an end-state run-rate.
 
 Measured: 1,399 B/player-season summaries (1,725 B allocated), 896 B/ranked
 version, 312 B/empty daily log, 2,851 B/battle across six tables, 2,977

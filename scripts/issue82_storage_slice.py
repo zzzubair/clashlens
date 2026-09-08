@@ -193,13 +193,11 @@ def phase_gcs_census(results: Path, prefixes: list[str]) -> dict:
             "per-day arrival counts object creation_time, not collection time",
         ],
     }
-    digest = atomic_write_json(results / "issue82-gcs-census.json", payload)
     # Reservoir is intentionally not persisted (names are archive references).
-    with open(results / "issue82-gcs-census.json.sha256", "a",
-              encoding="utf-8") as handle:
-        handle.write(f"elapsed_seconds={time.time() - started:.1f}\n")
+    payload["elapsed_seconds"] = round(time.time() - started, 1)
+    digest = atomic_write_json(results / "issue82-gcs-census.json", payload)
     return {"digest": digest, "reservoir": reservoir,
-            "elapsed_seconds": round(time.time() - started, 1)}
+            "elapsed_seconds": payload["elapsed_seconds"]}
 
 
 def _fetch_body(name: str, timeout: int = 120) -> bytes | None:
@@ -505,11 +503,12 @@ def phase_pg_rehearsal(database_url: str, results: Path) -> dict:
                        CASE WHEN g %% 2 = 0 THEN 'offense' ELSE 'defense' END,
                        1 + ((g - 1) %% %s), 3, 100, 'decoded', false, 6000,
                        md5(%s || ':' || g::text) || md5(g::text || %s), 1
-            
+
                 FROM generate_series(1, %s) AS g
                 """,
                 (day0, SEASON_DAYS, season, SEASON_DAYS, PLAYERS, season,
                  season, 5000))
+
             conn.commit()
             snap(conn, lsn0, "season_seeded")
             # --- battle-detail width sample: 500 battles, current schema ---
@@ -689,24 +688,30 @@ def phase_pg_rehearsal(database_url: str, results: Path) -> dict:
             # Sample keys are positional labels; synthetic tags never
             # leave the disposable database or enter retained artifacts.
             sample_tags = [_seed_tag(n) for n in (1, 2, 3, 50, 500, 5000, 12500)]
-            reads_before = {}
+            # Compare canonical serialized strings in memory; the artifact
+            # retains only aggregate lengths, never the strings themselves.
+            reads_before_text = {}
             for index, tag in enumerate(sample_tags):
                 try:
-                    reads_before[f"sample-{index}"] = len(json.dumps(
+                    reads_before_text[f"sample-{index}"] = json.dumps(
                         api.get_player_season_summary(tag, season),
-                        sort_keys=True, default=str))
+                        sort_keys=True, default=str)
                 except Exception as error:  # noqa: BLE001 - recorded only
-                    reads_before[f"sample-{index}"] = (
+                    reads_before_text[f"sample-{index}"] = (
                         f"error:{str(error)[:80]}")
-            army_before = {}
+            army_before_text = {}
             try:
                 for lens in ("offense", "defense"):
-                    army_before[lens] = len(json.dumps(
+                    army_before_text[lens] = json.dumps(
                         api.get_army_season_summary(season, lens, "troops",
                                                     "usage-rate"),
-                        sort_keys=True, default=str))
+                        sort_keys=True, default=str)
             except Exception as error:  # noqa: BLE001 - recorded only
-                army_before["error"] = str(error)[:120]
+                army_before_text["error"] = str(error)[:120]
+            reads_before = {key: len(value)
+                            for key, value in reads_before_text.items()}
+            army_before = {key: len(value)
+                           for key, value in army_before_text.items()}
             # --- finalize (preview then apply) + bounded retirement ---
             finalize_preview = finalize_season_detail(conn, season, after_season,
                                                       apply=False)
@@ -754,26 +759,30 @@ def phase_pg_rehearsal(database_url: str, results: Path) -> dict:
                 )
             snap(conn, lsn0, "vacuumed")
             # --- historical-read byte-equivalence after retirement ---
-            reads_after = {}
+            reads_after_text = {}
             for index, tag in enumerate(sample_tags):
                 try:
-                    reads_after[f"sample-{index}"] = len(json.dumps(
+                    reads_after_text[f"sample-{index}"] = json.dumps(
                         api.get_player_season_summary(tag, season),
-                        sort_keys=True, default=str))
+                        sort_keys=True, default=str)
                 except Exception as error:  # noqa: BLE001 - recorded only
-                    reads_after[f"sample-{index}"] = (
+                    reads_after_text[f"sample-{index}"] = (
                         f"error:{str(error)[:80]}")
-            army_after = {}
+            army_after_text = {}
             try:
                 for lens in ("offense", "defense"):
-                    army_after[lens] = len(json.dumps(
+                    army_after_text[lens] = json.dumps(
                         api.get_army_season_summary(season, lens, "troops",
                                                     "usage-rate"),
-                        sort_keys=True, default=str))
+                        sort_keys=True, default=str)
             except Exception as error:  # noqa: BLE001 - recorded only
-                army_after["error"] = str(error)[:120]
-            byte_equivalent = (reads_before == reads_after
-                               and army_before == army_after)
+                army_after_text["error"] = str(error)[:120]
+            byte_equivalent = (reads_before_text == reads_after_text
+                               and army_before_text == army_after_text)
+            reads_after = {key: len(value)
+                           for key, value in reads_after_text.items()}
+            army_after = {key: len(value)
+                          for key, value in army_after_text.items()}
             # --- live-season working set: 1 day x 12,500 players ---
             conn.execute(
                 """
@@ -919,23 +928,25 @@ def phase_pg_rehearsal(database_url: str, results: Path) -> dict:
             conn.commit()
             snap(conn, lsn0, "bookkeeping_sampled")
             # Width calibration for battle-embedded daily logs without storing
-            # gigabytes: pg_column_size of padded battles arrays at the measured
-            # archive body widths (p50/p90 novel battle-log bytes).
-            width_calibration = {}
-            for label, body_bytes in (("empty", 2), ("p50_battle_log", 23000),
-                                      ("p90_battle_log", 67000)):
-                entry = json.dumps({"stars": 3, "destructionPercentage": 100,
+            # gigabytes. Production daily logs embed battle JSON while the
+            # seeded rows carry empty arrays, so one synthetic full-length
+            # (50-entry) battles array is sized with pg_column_size. This is
+            # a synthetic sensitivity point, not a corpus percentile: the
+            # report scales it by the measured body-sample sizes.
+            cal_entry = json.dumps({"stars": 3, "destructionPercentage": 100,
                                     "pad": "x" * 400})
-                per_entry = len(entry)
-                entries = max(1, min(50, body_bytes // max(1, per_entry)))
-                battles_text = "[" + ",".join([entry] * entries) + "]"
-                if len(battles_text) > 250000:
-                    battles_text = battles_text[:250000]
-                row_bytes = conn.execute(
-                    "SELECT pg_column_size(%s::jsonb)", (battles_text,)).fetchone()[0]
-                width_calibration[label] = {"body_bytes": body_bytes,
-                                            "entries": entries,
-                                            "battles_column_bytes": int(row_bytes)}
+            cal_entries = 50
+            cal_text = "[" + ",".join([cal_entry] * cal_entries) + "]"
+            cal_body_bytes = len(cal_text)
+            cal_column_bytes = int(conn.execute(
+                "SELECT pg_column_size(%s::jsonb)", (cal_text,)).fetchone()[0])
+            width_calibration = {
+                "synthetic_body_bytes": cal_body_bytes,
+                "synthetic_entries": cal_entries,
+                "synthetic_column_bytes": cal_column_bytes,
+                "basis": ("single synthetic 50-entry battles array; "
+                            "report scales by measured body-sample sizes"),
+            }
             final_snap = snap(conn, lsn0, "rehearsal_complete")
             payload = {
                 "schema_version": 1,
@@ -986,8 +997,9 @@ def phase_pg_rehearsal(database_url: str, results: Path) -> dict:
                 "limitations": [
                     ("synthetic rehearsal: no production pipeline behavior, no "
                     "real correction/opposite-perspective rates"),
-                    ("empty-battles daily logs understate production rows; padded "
-                    "widths calibrate the gap without storing gigabytes"),
+                    ("empty-battles daily logs understate production rows; one "
+                    "synthetic 50-entry column-size point calibrates the gap "
+                    "without storing gigabytes"),
                     ("army facts use one fixed shape; troop-key diversity and "
                     "TOAST pressure at full battle volume are not established"),
                     ("bookkeeping widths are synthetic-shaped rows, not pipeline "
@@ -1088,6 +1100,33 @@ def _gb(value_bytes: float) -> float:
     return value_bytes / 1e9
 
 
+# 17.2 GB configured spool cap (collector spool bound; the duplicate-heavy
+# and mixed probes measured only kilobyte-scale distinct raw bytes on tmpfs,
+# so the cap is carried as the conservative allowance, not a measurement).
+SPOOL_ALLOWANCE_BYTES = 17.2e9
+# 24 ranking observations per 5-minute cycle (contract endpoint mix) x 288
+# cycles/day. Rankings carry the full Top-200 list each cycle.
+RANKING_OBS_PER_DAY = 24 * 288
+# Daily-log battles column ceiling: api_player_daily_logs.battles carries a
+# 262144-byte text CHECK; the jsonb column stays comfortably under it, so
+# modeled widths clamp here rather than growing without bound.
+MAX_LOG_COLUMN_BYTES = 200000
+
+
+def derive_log_width(cal_column_bytes: float, cal_body_bytes: float,
+                     target_body_bytes: float,
+                     cap: float = MAX_LOG_COLUMN_BYTES) -> float:
+    """Scale one measured column-size point to a target body size.
+
+    Returns the proportional width clamped to ``cap``; non-positive inputs
+    yield 0.0 instead of a division error. This feeds the live-working-set
+    projection and therefore the fits-budget decision.
+    """
+    if cal_column_bytes <= 0 or cal_body_bytes <= 0 or target_body_bytes <= 0:
+        return 0.0
+    return min(cap, cal_column_bytes * target_body_bytes / cal_body_bytes)
+
+
 def _source_sha() -> str:
     try:
         proc = subprocess.run(
@@ -1173,20 +1212,29 @@ def phase_report(results: Path) -> dict:
     vacuum_reclaimed = (timeline["season_retired"]["total_allocated_bytes"]
                         - timeline["vacuumed"]["total_allocated_bytes"])
     retained_wal_bytes = rehearsal["final_snapshot"]["retained_wal_bytes"]
-    # Real archive: measured arrival over the corpus window. Arrival is
-    # bursty (one bulk-load day dominates), so the window average is
-    # reported alongside the peak-day share, never as a steady rate.
+    # Real archive: measured arrival over the corpus window. The window
+    # average is reported alongside the peak-day share, never as a steady
+    # rate; burstiness is derived from the peak-day share below.
     arrival = census["arrival_per_day"]
     days = [datetime.fromisoformat(d).date() for d in arrival]
     window_days = max(1, (max(days) - min(days)).days + 1)
     novel_per_day = census["object_count"] / window_days
     novel_bytes_per_day = census["total_bytes"] / window_days
     peak_day = max(arrival.items(), key=lambda item: item[1]["objects"])
+    peak_day_share = (peak_day[1]["objects"]
+                        / max(1, census["object_count"]))
+    # Derived, not asserted: one day holding over half the corpus means the
+    # window average cannot be read as a steady collection rate.
+    arrival_is_bursty = bool(peak_day_share > 0.5)
     cats = bodies["categories"]
 
     def cat_mean(name: str, fallback: float) -> float:
         body = (cats.get(name) or {}).get("body_bytes") or {}
         return float(body.get("mean") or fallback)
+
+    def _percentile_of(name: str, pct: int, fallback: float) -> float:
+        body = (cats.get(name) or {}).get("body_bytes") or {}
+        return float(body.get(f"p{pct}") or fallback)
     profile_body = cat_mean("profile", 20000)
     battle_body = cat_mean("battle_log", 30000)
     rankings_body = cat_mean("global_player_rankings", 32000)
@@ -1200,10 +1248,20 @@ def phase_report(results: Path) -> dict:
     budget = usable * 0.8
     scaleway = pricing["tariffs"]["scaleway_object_storage"]
     std_gb_month = scaleway["standard_multi_az_eur_per_gb_month"]
-    p50_width = rehearsal["width_calibration"]["p50_battle_log"][
-        "battles_column_bytes"]
-    p90_body = 67000.0
-    p50_body = 23000.0
+    calibration = rehearsal["width_calibration"]
+    # Central/conservative daily-log widths derive from one synthetic
+    # column-size point scaled by the measured body-sample battle-log p50
+    # and p90 body sizes. Rationale: seeded daily logs embed empty arrays
+    # while production rows embed battle JSON; the factor translates real
+    # body sizes into column bytes without storing gigabytes of rows.
+    battle_p50 = cat_mean("battle_log", 30000)
+    battle_p90 = _percentile_of("battle_log", 90, 32000)
+    log_width_central = derive_log_width(
+        calibration["synthetic_column_bytes"],
+        calibration["synthetic_body_bytes"], battle_p50)
+    log_width_conservative = derive_log_width(
+        calibration["synthetic_column_bytes"],
+        calibration["synthetic_body_bytes"], battle_p90)
     scenarios = {}
     for name, knobs in (
             ("central", {"profile_novel_pp_day": 1.0, "battle_novel_pp_day": 2.0,
@@ -1219,11 +1277,8 @@ def phase_report(results: Path) -> dict:
         retained_versions = PLAYERS * SEASON_DAYS * version_bytes * SEASONS_6MO
         retained_army = (full_per_row("army_season_summaries") * 22
                          * SEASONS_6MO)
-        # Conservative daily-log width scales the measured p50 column by the
-        # p90/p50 body ratio (capped): p90 battle-embedded rows are wider
-        # than the 50-entry calibration sample.
-        log_width = (p50_width if name == "central"
-                     else min(200000, p50_width * p90_body / p50_body))
+        log_width = (log_width_central if name == "central"
+                     else log_width_conservative)
         live_logs = PLAYERS * SEASON_DAYS * log_width
         live_battles = knobs["battles_day"] * SEASON_DAYS * battle_bytes_per_battle
         live_facts = knobs["battles_day"] * SEASON_DAYS * fact_bytes
@@ -1239,7 +1294,7 @@ def phase_report(results: Path) -> dict:
         pg_growth = (retained_summaries + retained_versions + retained_army
                      + live_working + window_book + retained_anchors)
         pg_total = used_now + pg_growth
-        spool_allowance = 17.2e9
+        spool_allowance = SPOOL_ALLOWANCE_BYTES
         # WAL sizing uses the real pipeline fixture rates (mixed 20.7 KB
         # rounded to 25 central, duplicate-heavy 109 KB conservative), not
         # the synthetic floor: the pipeline writes ranking links, profile
@@ -1251,9 +1306,12 @@ def phase_report(results: Path) -> dict:
         r2_usd_month = recovery_bytes / 1e9 * 0.015
         novel_day = (PLAYERS * (knobs["profile_novel_pp_day"] * profile_body
                                 + knobs["battle_novel_pp_day"] * battle_body)
-                     + 6912 * rankings_body)
+                     + RANKING_OBS_PER_DAY * rankings_body)
         raw_6mo = novel_day * SIX_MONTH_DAYS
-        raw_eur_month = (raw_6mo / 1e9 * std_gb_month) / 6
+        # Six-month average monthly cost under a linear retention ramp;
+        # end-state run-rate is twice the average (full window retained).
+        raw_eur_month_avg = (raw_6mo / 1e9 * std_gb_month) / 6
+        raw_eur_month_end_state = raw_eur_month_avg * 2
         egress_day = novel_day  # one verification GET per novel PUT
         egress_eur_month = max(0, egress_day * 30.4 / 1e9 - 75) * 0.01
         scenarios[name] = {
@@ -1274,7 +1332,10 @@ def phase_report(results: Path) -> dict:
             "recovery_r2_usd_per_month": round(r2_usd_month, 2),
             "novel_raw_per_day_gb": round(_gb(novel_day), 2),
             "raw_6mo_gb": round(_gb(raw_6mo), 1),
-            "raw_scaleway_eur_per_month": round(raw_eur_month, 2),
+            "raw_scaleway_eur_per_month_avg_6mo": round(
+                raw_eur_month_avg, 2),
+            "raw_scaleway_eur_per_month_end_state": round(
+                raw_eur_month_end_state, 2),
             "egress_scaleway_eur_per_month": round(egress_eur_month, 2),
         }
     report = {
@@ -1308,6 +1369,19 @@ def phase_report(results: Path) -> dict:
                 table: round(width, 1)
                 for table, width in sorted(book_widths.items())},
             "live_day_bytes_12500_players": live_day_bytes,
+            "log_width_basis": {
+                "synthetic_column_bytes": calibration[
+                    "synthetic_column_bytes"],
+                "synthetic_body_bytes": calibration["synthetic_body_bytes"],
+                "battle_body_p50": round(battle_p50, 1),
+                "battle_body_p90": round(battle_p90, 1),
+                "log_width_central": round(log_width_central, 1),
+                "log_width_conservative": round(log_width_conservative, 1),
+                "rationale": ("one synthetic 50-entry column-size point "
+                                "scaled by measured body-sample battle-log "
+                                "p50/p90; seeded rows embed empty arrays "
+                                "while production rows embed battle JSON"),
+            },
             "wal_bytes_per_summary": round(wal_per_summary, 1),
             "wal_floor_bytes_per_row": round(wal_floor_per_row, 1),
             "vacuum_reclaimed_bytes": vacuum_reclaimed,
@@ -1325,9 +1399,8 @@ def phase_report(results: Path) -> dict:
             "novel_bytes_per_day": round(novel_bytes_per_day, 1),
             "peak_arrival_day": peak_day[0],
             "peak_day_objects": peak_day[1]["objects"],
-            "peak_day_share": round(peak_day[1]["objects"]
-                                    / max(1, census["object_count"]), 4),
-            "arrival_is_bursty": True,
+            "peak_day_share": round(peak_day_share, 4),
+            "arrival_is_bursty": arrival_is_bursty,
             "implied_novelty_vs_contract": round(implied_novelty, 5),
             "measured_body_bytes": {
                 "profile": round(profile_body, 1),
@@ -1397,13 +1470,20 @@ def phase_report(results: Path) -> dict:
             report["measured"]["summary_bytes_per_player_season"],
             report["measured"]["ranked_version_bytes_per_row"],
             report["measured"]["daily_log_bytes_per_row_empty"]),
+        "- Daily-log width: one synthetic 50-entry column-size point scaled "
+        "by measured battle-log body p50/p90 "
+        "({:.0f}/{:.0f} B/row central/conservative). Seeded rows embed "
+        "empty arrays; production rows embed battle JSON.".format(
+            report["measured"]["log_width_basis"]["log_width_central"],
+            report["measured"]["log_width_basis"]["log_width_conservative"]),
         "- Battle detail: {:.1f} B/battle across six tables; army facts "
         "{:.1f} B/row; bookkeeping {:.1f} B/observation.".format(
             report["measured"]["battle_detail_bytes_per_battle"],
             report["measured"]["army_fact_bytes_per_row"],
             report["measured"]["bookkeeping_bytes_per_observation"]),
 "- Finalize: {}; retire: {} in {} rounds; historical reads "
-        "byte-equivalent: {}; materialize 12,500 in {}s.".format(
+        "identical (canonical strings): {}; materialize 12,500 in "
+        "{}s.".format(
             rehearsal["finalize_status"], rehearsal["retire_status"],
             rehearsal["retire_rounds"],
             rehearsal["historical_reads_byte_equivalent"],
@@ -1413,7 +1493,8 @@ def phase_report(results: Path) -> dict:
             census["object_count"], census["total_bytes"] / 1e9,
             window_days),
         ("- Novel arrival {:.0f} objects/day, {:.2f} GB/day (window "
-         "average; peak day holds most objects, so this is not a steady "
+         "average; peak day holds most objects (bursty by derivation: "
+         "peak share > 50%), so this is not a steady "
          "rate); implied novelty vs the 7.2M/day contract denominator: "
          "{:.3f}% (labeled sensitivity, not observed).").format(
             report["measured"]["novel_objects_per_day"],
@@ -1422,17 +1503,21 @@ def phase_report(results: Path) -> dict:
         "",
         "## Six-month scenarios (20% headroom on measured host)",
         "- Central: host total {:.1f} GB (budget {:.1f} GB), fits={}; raw "
-        "{:.1f} GB at EUR {:.2f}/mo; recovery {:.1f} GB at USD {:.2f}/mo.".format(
+        "{:.1f} GB at EUR {:.2f}/mo avg (EUR {:.2f}/mo end-state); "
+        "recovery {:.1f} GB at USD {:.2f}/mo.".format(
             central["projected_host_total_gb"], central["budget_80pct_gb"],
             central["fits_budget"], central["raw_6mo_gb"],
-            central["raw_scaleway_eur_per_month"],
+            central["raw_scaleway_eur_per_month_avg_6mo"],
+            central["raw_scaleway_eur_per_month_end_state"],
             central["recovery_window_gb"],
             central["recovery_r2_usd_per_month"]),
-        "- Conservative: host total {:.1f} GB, fits={}; raw {:.1f} GB at EUR "
-        "{:.2f}/mo; recovery {:.1f} GB at USD {:.2f}/mo.".format(
+        "- Conservative: host total {:.1f} GB, fits={}; raw {:.1f} GB at "
+        "EUR {:.2f}/mo avg (EUR {:.2f}/mo end-state); recovery {:.1f} GB "
+        "at USD {:.2f}/mo.".format(
             conservative["projected_host_total_gb"],
             conservative["fits_budget"], conservative["raw_6mo_gb"],
-            conservative["raw_scaleway_eur_per_month"],
+            conservative["raw_scaleway_eur_per_month_avg_6mo"],
+            conservative["raw_scaleway_eur_per_month_end_state"],
             conservative["recovery_window_gb"],
             conservative["recovery_r2_usd_per_month"]),
         "",

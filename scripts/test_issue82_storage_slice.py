@@ -12,9 +12,11 @@ from pathlib import Path
 sys.path[:0] = [str(Path(__file__).resolve().parents[1])]
 
 from scripts.issue82_storage_slice import (
+    MAX_LOG_COLUMN_BYTES,
     _seed_tag,
     atomic_write_json,
     classify_body,
+    derive_log_width,
     percentiles,
 )
 
@@ -77,6 +79,31 @@ class PercentilesTest(unittest.TestCase):
         self.assertEqual(got["max"], 100)
         self.assertEqual(got["mean"], 50.5)
         self.assertTrue(got["p50"] <= got["p90"] <= got["p95"] <= got["p99"])
+
+
+class DeriveLogWidthTest(unittest.TestCase):
+    """Decision-bearing math: the live-working-set width per scenario."""
+
+    def test_proportional_scaling(self):
+        # 24,008 B column for a ~21.6 KB synthetic body, scaled to the
+        # measured battle-log p50 body size.
+        width = derive_log_width(24008.0, 21665.0, 66116.0)
+        self.assertAlmostEqual(width, 24008.0 * 66116.0 / 21665.0, places=1)
+
+    def test_p90_exceeds_p50(self):
+        p50 = derive_log_width(24008.0, 21665.0, 66116.0)
+        p90 = derive_log_width(24008.0, 21665.0, 67377.0)
+        self.assertGreater(p90, p50)
+
+    def test_cap_clamps(self):
+        self.assertEqual(
+            derive_log_width(24008.0, 21665.0, 10_000_000.0),
+            MAX_LOG_COLUMN_BYTES)
+
+    def test_non_positive_inputs_yield_zero(self):
+        self.assertEqual(derive_log_width(0.0, 21665.0, 66116.0), 0.0)
+        self.assertEqual(derive_log_width(24008.0, 0.0, 66116.0), 0.0)
+        self.assertEqual(derive_log_width(24008.0, 21665.0, -1.0), 0.0)
 
 
 class AtomicWriteTest(unittest.TestCase):
