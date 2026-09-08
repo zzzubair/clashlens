@@ -1453,8 +1453,8 @@ class Database:
 
         A ranked-day version is not required to identify a canonical season:
         finalization can race a partial season while its day row is absent.
-        Rows that match neither canonical bounds nor a durable retirement
-        fence are rejected rather than written without a lock.
+        Unknown days remain writable until canonical season metadata exists;
+        finalization itself requires canonical bounds and takes the global gate.
         """
         from .season_retirement import (
             acquire_season_lock,
@@ -1463,7 +1463,6 @@ class Database:
         )
 
         seasons: set[str] = set()
-        unresolved_rows: set[int] = set()
         has_retirement_table = bool(
             connection.execute(
                 "SELECT to_regclass(%s) IS NOT NULL",
@@ -1526,18 +1525,13 @@ class Database:
                     (day, day),
                 ).fetchall()
                 seasons.update(_text_value(row[0]) for row in retired_rows)
-            if not canonical_ids and not season_rows and not retired_rows:
-                unresolved_rows.add(item_index)
         for season_id in sorted(seasons):
             acquire_season_lock(connection, season_id)
         # The first read only discovers lock keys. Re-read after blocking on
         # those locks so a just-committed finalization is never stale here.
         retired_ranges = retired_day_ranges(connection)
-        candidates = [
-            item for index, item in enumerate(rows) if index not in unresolved_rows
-        ]
         return filter_live_rows(
-            candidates,
+            rows,
             lambda item: item.battle.ranked_day_start,
             retired_ranges,
         )
@@ -1570,6 +1564,8 @@ class Database:
         ) = self._observation_source(claim)
         with self._timed_connection() as connection:
             with connection.transaction():
+                from .season_retirement import acquire_retirement_reader
+                acquire_retirement_reader(connection)
                 job = self._lock_live_claim(connection, claim)
                 valid_rows = [row for row in battle_log.rows if row.battle is not None]
                 valid_rows = self._guard_battle_rows(connection, valid_rows)
@@ -2343,6 +2339,8 @@ class Database:
         ) = self._observation_source(claim)
         with self._timed_connection() as connection:
             with connection.transaction():
+                from .season_retirement import acquire_retirement_reader
+                acquire_retirement_reader(connection)
                 job = self._lock_live_claim(connection, claim)
                 all_battle_rows = [row for row in battle_log.rows if row.battle is not None]
                 valid_rows = self._guard_battle_rows(connection, all_battle_rows)

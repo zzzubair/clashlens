@@ -171,7 +171,29 @@ def _seed_army(connection, season=SEASON, day0=DAY0, *, tag="#2PP", base=7000):
     return player_id
 
 
+def _ensure_canonical_anchor(connection, season=SEASON, start=DAY0):
+    connection.execute("SET LOCAL session_replication_role = replica")
+    connection.execute(
+        """
+        INSERT INTO legend_season_anchors (
+            current_league_season_id, previous_league_season_id,
+            current_start, previous_start, anchor_rule_version,
+            source_profile_version_id, state
+        )
+        SELECT %s, %s, %s, %s, 'legend-season-anchor-v1', 1, 'confirmed'
+        WHERE NOT EXISTS (
+            SELECT 1 FROM legend_season_anchors
+            WHERE state = 'confirmed' AND anchor_rule_version = 'legend-season-anchor-v1'
+              AND (current_league_season_id = %s OR previous_league_season_id = %s)
+        )
+        """,
+        (season, f"previous-{season}", start, start - timedelta(days=28), season, season),
+    )
+    connection.execute("SET LOCAL session_replication_role = DEFAULT")
+
+
 def _materialize_all(connection, season=SEASON):
+    _ensure_canonical_anchor(connection, season)
     player_report = materialize_completed_seasons(
         connection, season_id=season, max_players=1000, now=AFTER_SEASON
     )
@@ -573,6 +595,16 @@ def test_finalize_blocks_unfinished_and_stale_work(database_url: str) -> None:
             with database.pool.connection() as connection:
                 player_id = _player(connection, "#8PY")
                 _full_season(connection, player_id)
+                connection.commit()
+                unknown_bounds = finalize_season_detail(
+                    connection, SEASON, AFTER_SEASON, apply=True
+                )
+                assert unknown_bounds["reason"] == "unknown_season_boundary"
+                assert connection.execute(
+                    "SELECT count(*) FROM season_detail_retirements"
+                ).fetchone()[0] == 0
+                connection.rollback()
+                _ensure_canonical_anchor(connection)
                 connection.commit()
                 missing = finalize_season_detail(connection, SEASON, AFTER_SEASON, apply=True)
                 assert missing["status"] == "blocked"
@@ -1056,8 +1088,8 @@ def test_projection_marks_unmeasured_components_and_budget_unavailable() -> None
 def test_rolling_log_waits_for_finalization_when_ranked_day_is_missing(
     database_url: str,
 ) -> None:
-    """A canonical partial season still shares the finalization fence lock."""
-    from clashlens.season_retirement import acquire_season_lock
+    """An unresolved writer cannot cross the committed finalization fence."""
+    from clashlens.season_retirement import acquire_retirement_reader
 
     with domain_database(database_url, include_coordinator=True) as connection_info:
         with psycopg.connect(connection_info) as connection:
@@ -1091,46 +1123,47 @@ def test_rolling_log_waits_for_finalization_when_ranked_day_is_missing(
             _materialize_all(connection)
             connection.commit()
 
-        ready = threading.Event()
+        writer_ready = threading.Event()
         release = threading.Event()
         finalized: list[dict[str, object]] = []
-
-        def finalize() -> None:
-            with psycopg.connect(connection_info) as finalizer:
-                acquire_season_lock(finalizer, SEASON)
-                ready.set()
-                assert release.wait(10)
-                finalized.append(
-                    finalize_season_detail(finalizer, SEASON, AFTER_SEASON, apply=True)
-                )
-                finalizer.commit()
-
-        thread = threading.Thread(target=finalize)
-        thread.start()
-        assert ready.wait(10)
         result: list[object] = []
-        guard_errors: list[BaseException] = []
+        writer_errors: list[BaseException] = []
 
-        def guard() -> None:
+        def unresolved_writer() -> None:
             item = SimpleNamespace(
                 battle=SimpleNamespace(ranked_day_start=DAY0),
             )
             try:
                 with psycopg.connect(connection_info) as writer:
-                    result.extend(Database._guard_battle_rows(writer, [item]))
+                    with writer.transaction():
+                        acquire_retirement_reader(writer)
+                        result.extend(Database._guard_battle_rows(writer, [item]))
+                        writer_ready.set()
+                        assert release.wait(10)
             except (psycopg.Error, ValueError) as error:  # pragma: no cover
-                guard_errors.append(error)
+                writer_errors.append(error)
 
-        writer = threading.Thread(target=guard)
+        def finalize() -> None:
+            with psycopg.connect(connection_info) as finalizer:
+                finalized.append(
+                    finalize_season_detail(finalizer, SEASON, AFTER_SEASON, apply=True)
+                )
+                finalizer.commit()
+
+        writer = threading.Thread(target=unresolved_writer)
         writer.start()
+        assert writer_ready.wait(10)
+        thread = threading.Thread(target=finalize)
+        thread.start()
         time.sleep(0.1)
-        assert writer.is_alive(), guard_errors
+        assert thread.is_alive()
         release.set()
         writer.join(10)
         thread.join(10)
         assert not writer.is_alive() and not thread.is_alive()
+        assert not writer_errors
         assert finalized and finalized[0]["status"] == "finalized", repr(finalized)
-        assert result == []
+        assert result
         with psycopg.connect(connection_info) as connection:
             assert connection.execute(
                 "SELECT count(*) FROM legend_battles"
@@ -1140,7 +1173,7 @@ def test_rolling_log_waits_for_finalization_when_ranked_day_is_missing(
             ).fetchone()[0] == 0
 
 
-def test_rolling_log_rejects_noncanonical_day_without_resolution_source(
+def test_rolling_log_keeps_noncanonical_day_until_anchor_resolution(
     database_url: str,
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -1148,9 +1181,50 @@ def test_rolling_log_rejects_noncanonical_day_without_resolution_source(
             battle=SimpleNamespace(ranked_day_start=DAY0 - timedelta(days=1)),
         )
         with psycopg.connect(connection_info) as connection:
-            before = connection.execute("SELECT count(*) FROM legend_battles").fetchone()[0]
-            assert Database._guard_battle_rows(connection, [item]) == []
-            assert connection.execute("SELECT count(*) FROM legend_battles").fetchone()[0] == before
+            assert Database._guard_battle_rows(connection, [item]) == [item]
+
+
+def test_pre_anchor_battle_ingestion_works_for_both_paths(
+    database_url: str, archive_server
+) -> None:
+    from domain_test_support import store_observation
+    from test_domain_processing_postgres import _processor
+
+    body = (
+        Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
+    ).read_bytes()
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _, compact_job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="pre-anchor-compact",
+                endpoint="battle_log",
+                body=body,
+                observed_at=DAY0,
+                normalized_tag="#2PP",
+            )
+            compact = processor.process_job(compact_job, owner="pre-anchor-compact")
+            assert compact is not None and compact.outcome == "processed"
+        finally:
+            database.close()
+        database, processor = _processor(connection_info, archive_server)
+        database._supports_compact_battles = False
+        try:
+            _, legacy_job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="pre-anchor-legacy",
+                endpoint="battle_log",
+                body=body + b"\n",
+                observed_at=DAY0 + timedelta(minutes=1),
+                normalized_tag="#2PP",
+            )
+            legacy = processor.process_job(legacy_job, owner="pre-anchor-legacy")
+            assert legacy is not None and legacy.outcome == "processed"
+        finally:
+            database.close()
 
 
 def test_measurement_snapshot_and_projection_labels(database_url: str) -> None:

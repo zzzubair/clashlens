@@ -1322,12 +1322,12 @@ FAKE_STATE="$V2_DIR/state" FAKE_PODMAN_LOG="$V2_DIR/podman.log" \
 v2_first_up_lines=$(wc -l <"$V2_DIR/podman.log")
 deploy "$V2_DIR" "$V2_ENV" -- up >/dev/null
 v2_second_up=$(tail -n +"$((v2_first_up_lines + 1))" "$V2_DIR/podman.log")
-rg -q '^stop .*clashlens-python-worker-1 ' <<<"$v2_second_up" && \
+grep -q '^stop .*clashlens-python-worker-1 ' <<<"$v2_second_up" && \
   fail 'idempotent v2 up drained a current Python worker'
 FAKE_STATE="$V2_DIR/state" FAKE_PODMAN_LOG="$V2_DIR/podman.log" \
   "$FAKE_BIN/podman" container exists clashlens-python-worker-1 || \
   fail 'idempotent v2 up removed a current Python worker'
-if rg -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
+if grep -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
   second_up_stdin_count=$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f | wc -l)
   [[ "$second_up_stdin_count" == "20" ]] || fail 'a recorded forward migration was replayed on second up'
 fi

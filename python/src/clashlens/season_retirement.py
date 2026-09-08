@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,21 @@ TERMINAL_CORRECTION_STATES = ("finalized", "terminal")
 ACTIVE_GENERATION_STATES = ("pending", "ready", "building")
 
 _MIGRATION_RELATIONS = ("clash_lens_schema_migrations",)
+_RETIREMENT_GATE = "clashlens:season-retirement-global"
+
+
+def acquire_retirement_reader(connection: Any) -> None:
+    connection.execute(
+        "SELECT pg_advisory_xact_lock_shared(hashtextextended(%s, 0))",
+        (_RETIREMENT_GATE,),
+    )
+
+
+def acquire_retirement_writer(connection: Any) -> None:
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (_RETIREMENT_GATE,),
+    )
 
 
 def _text(value: Any) -> str:
@@ -164,6 +179,7 @@ def finalize_season_detail(
 
     season_id = _check_season_id(season_id)
     now_utc = now.astimezone(UTC)
+    acquire_retirement_writer(connection)
     _lock_season(connection, season_id)
     if _table_exists(connection, "season_detail_retirements"):
         existing = connection.execute(
@@ -355,28 +371,17 @@ def _canonical_season_bounds(
                current_start, previous_start
         FROM legend_season_anchors
         WHERE state = 'confirmed' AND anchor_rule_version = %s
+          AND (current_league_season_id = %s OR previous_league_season_id = %s)
         ORDER BY current_start DESC LIMIT 1
         """,
-        (SEASON_ANCHOR_RULE_VERSION,),
+        (SEASON_ANCHOR_RULE_VERSION, season_id, season_id),
     ).fetchone()
-    if anchor is not None:
-        for anchored_id, start in ((anchor[0], anchor[2]), (anchor[1], anchor[3])):
-            if _text(anchored_id) == season_id and start is not None:
-                return start, start + SEASON_DURATION
-    witness = connection.execute(
-        """
-        SELECT ranked_day_start FROM api_player_daily_logs
-        WHERE official_season_id = %s AND season_day_number = 28
-          AND state = 'Complete' AND ranked_day_end IS NOT NULL
-          AND ranked_day_end <= %s
-        ORDER BY ranked_day_start LIMIT 1
-        """,
-        (season_id, now),
-    ).fetchone()
-    if witness is None:
+    if anchor is None:
         return None, None
-    start = witness[0] - timedelta(days=27)
-    return start, start + timedelta(days=28)
+    for anchored_id, start in ((anchor[0], anchor[2]), (anchor[1], anchor[3])):
+        if _text(anchored_id) == season_id and start is not None:
+            return start, start + SEASON_DURATION
+    return None, None
 
 
 def _blocking_season_work(connection: Any, season_start: Any, season_end: Any) -> dict[str, int]:
