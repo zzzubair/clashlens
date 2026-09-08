@@ -1241,8 +1241,10 @@ def phase_report(results: Path) -> dict:
     def _percentile_of(name: str, pct: int, fallback: float) -> float:
         body = (cats.get(name) or {}).get("body_bytes") or {}
         return float(body.get(f"p{pct}") or fallback)
-    profile_body = cat_mean("profile", 20000)
-    battle_body = cat_mean("battle_log", 30000)
+    # Central body sizes are true body-sample p50s (rankings has no samples,
+    # so its fixture fallback stands and stays flagged as unmeasured).
+    profile_body = _percentile_of("profile", 50, 20000)
+    battle_body = _percentile_of("battle_log", 50, 30000)
     rankings_body = cat_mean("global_player_rankings", 32000)
     # Production-contract denominator (labeled sensitivity, not observed).
     contract_obs_day = CONTRACT_OBS_PER_CYCLE * CONTRACT_CYCLES_PER_DAY
@@ -1260,7 +1262,7 @@ def phase_report(results: Path) -> dict:
     # and p90 body sizes. Rationale: seeded daily logs embed empty arrays
     # while production rows embed battle JSON; the factor translates real
     # body sizes into column bytes without storing gigabytes of rows.
-    battle_p50 = cat_mean("battle_log", 30000)
+    battle_p50 = battle_body
     battle_p90 = _percentile_of("battle_log", 90, 32000)
     log_width_central = derive_log_width(
         calibration["synthetic_column_bytes"],
@@ -1410,11 +1412,21 @@ def phase_report(results: Path) -> dict:
             "arrival_is_bursty": arrival_is_bursty,
             "implied_novelty_vs_contract": round(implied_novelty, 5),
             "measured_body_bytes": {
+                "statistic": "p50 (rankings: fixture fallback)",
                 "profile": round(profile_body, 1),
                 "battle_log": round(battle_body, 1),
                 "global_player_rankings": round(rankings_body, 1),
                 "global_player_rankings_measured": bool(
                     "global_player_rankings" in cats)},
+            "sampling_epochs": {
+                "gcs_census_measured_at": census.get("measured_at"),
+                "gcs_bodies_measured_at": bodies.get("measured_at"),
+                "note": ("body-shape sample reservoir was drawn from the "
+                           "earlier census listing epoch; census metadata "
+                           "was re-listed later with identical object/byte "
+                           "totals, so aggregate body-shape statistics are "
+                           "unaffected by the listing epoch"),
+            },
             "endpoint_categories": {
                 name: {"share": round(cat.get("share", 0), 4),
                        "mean_body_bytes": round(
@@ -1501,8 +1513,9 @@ def phase_report(results: Path) -> dict:
             window_days),
         ("- Novel arrival {:.0f} objects/day, {:.2f} GB/day (window "
          "average; peak day holds most objects (bursty by derivation: "
-         "peak share > 50%), so this is not a steady "
-         "rate); implied novelty vs the 7.2M/day contract denominator: "
+         "peak share > 50%), so this is not a steady rate; body sample "
+         "drawn from the earlier census listing epoch (see JSON); "
+         "implied novelty vs the 7.2M/day contract denominator: "
          "{:.3f}% (labeled sensitivity, not observed).").format(
             report["measured"]["novel_objects_per_day"],
             report["measured"]["novel_bytes_per_day"] / 1e9,
@@ -1544,6 +1557,10 @@ def phase_report(results: Path) -> dict:
     with open(md_tmp, "w", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
     os.replace(md_tmp, md_path)
+    # Standard checksum sidecar, hashed from the written bytes.
+    md_digest = hashlib.sha256(md_path.read_bytes()).hexdigest()
+    with open(str(md_path) + ".sha256", "w", encoding="utf-8") as handle:
+        handle.write(f"{md_digest}  {md_path.name}\n")
     return {"digest": digest, "readiness": readiness}
 
 

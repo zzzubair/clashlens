@@ -313,7 +313,7 @@ version, 312 B/empty daily log, 2,851 B/battle across six tables, 2,977
 B/bookkeeping observation; finalize `ready` then `finalized` (12,500),
 retire to `retired` in 350 bounded rounds with 61 MB vacuum-reclaimed;
 corpus 683,391 objects / 24.4 GB over 29 days with bursty arrival (peak day
-90.7%) and profile/battle-log mean bodies of 23/65 KB. Central and
+90.7%) and profile/battle-log p50 bodies of 23/66 KB. Central and
 conservative six-month scenarios fit measured Fedora capacity with 20%
 headroom; the seven-day recovery window is modeled as base backup plus
 generated WAL on R2 (labeled assumption; #31 owns backup design), and raw
