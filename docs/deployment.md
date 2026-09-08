@@ -183,7 +183,7 @@ install -d -m 0700 "$RESULTS_DIR"
 `candidate-prepare` refuses default or existing candidate resources and any
 configured application-container name that already exists, starts only the
 configured PostgreSQL container, and verifies every migration from 0001 through
-0020. Candidate resources carry the fixed
+0021. Candidate resources carry the fixed
 `org.clashlens.scope=candidate` label; the preparation path verifies those
 labels and exact names after creation before applying migrations. Scope/label
 overrides in `app.env` are rejected before resource mutation. Never aim it at
