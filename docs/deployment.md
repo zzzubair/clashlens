@@ -443,3 +443,50 @@ instance ID, and marker contract. A marker outage is degraded telemetry; a
 static contract mismatch is a startup failure. A catalogued response may be cleaned only after remote verification, terminal
 processing, and its safety age. An unverified orphan has the separate orphan
 safety age and must never be confused with pending or catalogued evidence.
+
+## Spool filesystem capacity (Btrfs dynamic inodes)
+
+The persistent spool and PostgreSQL stay on the existing Btrfs filesystem.
+Separate paths/subvolumes do not provide independent capacity or failure
+isolation. The 16 GiB logical spool cap, object cap, free-byte floor,
+reservations, atomic handling, cleanup, and backpressure are unchanged.
+
+- Btrfs reports inode capacity as `0/0`: it has no fixed pool. Clash Lens
+  classifies positively identified Btrfs as `dynamic` and skips only the
+  fixed free-inode floor. Byte/object limits, reservations, and allocation
+  error handling stay active.
+- Non-Btrfs with total inodes > 0 and `0 <= avail <= total` is `finite`;
+  the floor reserves room above it, so zero available inodes with a zero
+  floor is still exhausted.
+- Non-Btrfs `0/0`, sentinel, inconsistent (`avail > total`), or failed
+  probes are `unknown` and reject admission/readiness without fabricating
+  capacity. A failed capacity syscall never admits work.
+- Numeric gauges stay truthful (Btrfs `free_inodes` remains zero) with
+  `clashlens_spool_inode_model_info{filesystem_type,model} 1` carrying the
+  meaning. Filesystem capacity and logical spool occupancy are distinct.
+- `df` free bytes alone do not prove Btrfs metadata headroom. Host
+  qualification requires `btrfs filesystem usage` data/metadata evidence;
+  missing metadata blocks acceptance, not code merge.
+- Collector/worker/tooling must be rebuilt together: collector facts and
+  operating snapshots are now version 2, performance artifacts version 10.
+  Mixed-version evidence is rejected; capture a fresh operating baseline
+  after rebuilding. Raw-evidence spool contract v3, its ledger/migration
+  meaning, bucket retention, verification, schema, and recovery policy are
+  unchanged.
+
+Capture host evidence (stdlib only, no container dependency):
+
+```bash
+python3 scripts/spool_filesystem_check.py \
+  --spool-path /var/lib/clashlens/spool \
+  --postgres-path /var/lib/clashlens/postgres \
+  --output /retained/spool-filesystem.json \
+  --candidate-receipt /retained/clashlens-candidate-preparation.json
+```
+
+Post-merge `rogue` qualification remains separate: confirm persistent
+spool/`PGDATA` paths, mount sources, and the shared Btrfs pool; retain
+byte/data/metadata evidence; verify in-container classification, ownership,
+SELinux, `flock`, `fsync`, cleanup, and restart persistence; schedule an
+authorized reboot/remount check; and retain revision, digests, fingerprint,
+mount evidence, and a fresh snapshot together.

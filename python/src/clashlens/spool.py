@@ -11,6 +11,8 @@ from pathlib import Path
 from time import time
 from typing import Any
 
+from .filesystem import filesystem_capacity
+
 STRIPE_COUNT = 4096
 LEDGER_FIELDS = (
     "final_bytes",
@@ -415,10 +417,15 @@ class Spool:
                 > self.max_objects
             ):
                 raise SpoolError("degraded_capacity: spool reservation denied")
-            filesystem = os.statvfs(self.root)
-            if self.free_space_floor > 0 and filesystem.f_bavail * filesystem.f_frsize < self.free_space_floor + limit:
+            # One shared classifier: probe failure raises before any
+            # reservation; unknown capacity rejects; dynamic skips only the
+            # inode floor while byte/object limits stay active.
+            capacity = filesystem_capacity(self.root)
+            if capacity["inode_model"] == "unknown":
+                raise SpoolError("degraded_capacity: spool unknown filesystem capacity")
+            if self.free_space_floor > 0 and int(capacity["free_bytes"]) < self.free_space_floor + limit:
                 raise SpoolError("degraded_capacity: spool free-space floor reached")
-            if self.free_inode_floor > 0 and filesystem.f_favail < self.free_inode_floor + 1:
+            if capacity["inode_model"] == "finite" and int(capacity["free_inodes"]) < self.free_inode_floor + 1:
                 raise SpoolError("degraded_capacity: spool free-inode floor reached")
             reservations_fd = self._sub_dir_fd(".control", "reservations")
             try:
@@ -627,14 +634,17 @@ class Spool:
                     self._release(reservation_fd, reservation_name, actual_temp_bytes=0)
             raise
 
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> dict[str, Any]:
         with self._capacity_lock():
             ledger = self._scan_locked()
             self._write_ledger_locked(ledger)
-            filesystem = os.statvfs(self.root)
-            ledger["free_inodes"] = filesystem.f_favail
-            ledger["free_bytes"] = filesystem.f_bavail * filesystem.f_frsize
-            ledger["allocated_blocks"] = (ledger["final_bytes"] + ledger["temporary_bytes"] + filesystem.f_frsize - 1) // filesystem.f_frsize
+            capacity = filesystem_capacity(self.root)
+            ledger["filesystem_type"] = str(capacity["filesystem_type"])
+            ledger["inode_model"] = str(capacity["inode_model"])
+            ledger["free_inodes"] = int(capacity["free_inodes"])
+            ledger["free_bytes"] = int(capacity["free_bytes"])
+            block_size = max(1, int(capacity["block_size"]))
+            ledger["allocated_blocks"] = (ledger["final_bytes"] + ledger["temporary_bytes"] + block_size - 1) // block_size
             return ledger.copy()
 
     def readiness(self) -> tuple[bool, str]:
@@ -648,7 +658,9 @@ class Spool:
             return False, "degraded_capacity"
         if stats["free_bytes"] < self.free_space_floor + self.max_body_bytes:
             return False, "degraded_free_space"
-        if stats["free_inodes"] < self.free_inode_floor + 1:
+        if stats.get("inode_model") == "unknown":
+            return False, "degraded_capacity"
+        if stats.get("inode_model") != "dynamic" and stats["free_inodes"] < self.free_inode_floor + 1:
             return False, "degraded_free_inodes"
         return True, "ready"
 

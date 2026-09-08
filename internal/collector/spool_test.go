@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -501,4 +502,142 @@ func TestEvidenceSpoolReconcileDoesNotDoubleCountBoundTemporary(t *testing.T) {
 	if ledger.HighWaterBytes < expectedHighWater {
 		t.Fatalf("high water below components: %+v", ledger)
 	}
+}
+
+func stubSpoolStatfs(t *testing.T, fsType int64, files, ffree, bavail uint64) {
+	t.Helper()
+	original := spoolStatfs
+	spoolStatfs = func(_ string, stat *syscall.Statfs_t) error {
+		stat.Type = fsType
+		stat.Bsize = 4096
+		stat.Files = files
+		stat.Ffree = ffree
+		stat.Bavail = bavail
+		return nil
+	}
+	t.Cleanup(func() { spoolStatfs = original })
+}
+
+func TestSpoolCapacityClassificationAgreesWithPython(t *testing.T) {
+	cases := []struct {
+		fsType int64
+		files  uint64
+		ffree  uint64
+		fstype string
+		model  string
+	}{
+		{btrfsMagic, 0, 0, "btrfs", "dynamic"},
+		{btrfsMagic, 1000, 10, "btrfs", "dynamic"},
+		{ext4Magic, 1000, 999, "ext4", "finite"},
+		{ext4Magic, 1000, 0, "ext4", "finite"},
+		{xfsMagic, 100, 50, "xfs", "finite"},
+		{0x794C7630, 1000, 10, "other", "finite"},
+		{ext4Magic, 0, 0, "ext4", "unknown"},
+		{0, 1000, 10, "unknown", "finite"},
+		{ext4Magic, 1000, 1001, "ext4", "unknown"},
+		{ext4Magic, ^uint64(0), ^uint64(0), "ext4", "unknown"},
+	}
+	for _, tc := range cases {
+		fstype := spoolFilesystemType(tc.fsType)
+		if fstype != tc.fstype {
+			t.Errorf("type %#x = %q, want %q", tc.fsType, fstype, tc.fstype)
+		}
+		if model := classifySpoolInodeModel(fstype, tc.files, tc.ffree); model != tc.model {
+			t.Errorf("model %s %d/%d = %q, want %q", fstype, tc.files, tc.ffree, model, tc.model)
+		}
+	}
+	if got := spoolFilesystemType(0); got != "unknown" {
+		t.Errorf("zero type = %q, want unknown", got)
+	}
+}
+
+func TestSpoolReserveBtrfsSkipsOnlyInodeFloor(t *testing.T) {
+	spool, err := newEvidenceSpool(spoolConfig{root: filepath.Join(t.TempDir(), "spool"), maxBytes: 1 << 20, maxObjects: 10, freeSpaceFloor: 1000, freeInodeFloor: 10000, staleTempAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.close()
+	// Explicit Btrfs 0/0 passes the inode gate.
+	stubSpoolStatfs(t, btrfsMagic, 0, 0, 1<<20)
+	reservation, err := spool.reserve(512)
+	if err != nil {
+		t.Fatalf("btrfs reserve = %v, want success", err)
+	}
+	if err := reservation.release(); err != nil {
+		t.Fatal(err)
+	}
+	metrics, err := spool.metrics()
+	if err != nil || metrics.inodeModel != "dynamic" || metrics.filesystemType != "btrfs" || metrics.freeInodes != 0 {
+		t.Fatalf("btrfs metrics = %+v, %v", metrics, err)
+	}
+	// Low free bytes still blocks Btrfs.
+	stubSpoolStatfs(t, btrfsMagic, 0, 0, 0)
+	if _, err := spool.reserve(512); !errors.Is(err, errSpoolFreeSpaceFloor) {
+		t.Fatalf("btrfs low-bytes reserve = %v, want free-space floor", err)
+	}
+	if err := (&s3Archive{spool: spool, maximumBodyBytes: 512}).spoolReady(); !errors.Is(err, errSpoolFreeSpaceFloor) {
+		t.Fatalf("btrfs low-bytes ready = %v, want free-space floor", err)
+	}
+}
+
+func TestSpoolReserveRejectsUnknownAndProbeFailure(t *testing.T) {
+	spool, err := newEvidenceSpool(spoolConfig{root: filepath.Join(t.TempDir(), "spool"), maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.close()
+	// Unknown non-Btrfs 0/0 must not admit.
+	stubSpoolStatfs(t, ext4Magic, 0, 0, 1<<20)
+	if _, err := spool.reserve(512); !errors.Is(err, errSpoolUnknownCapacity) {
+		t.Fatalf("unknown reserve = %v, want unknown capacity", err)
+	}
+	if category := archiveFailureCategory(errSpoolUnknownCapacity); category != "degraded_capacity" {
+		t.Fatalf("unknown category = %q, want degraded_capacity", category)
+	}
+	if err := (&s3Archive{spool: spool, maximumBodyBytes: 512}).spoolReady(); !errors.Is(err, errSpoolUnknownCapacity) {
+		t.Fatalf("unknown ready = %v, want unknown capacity", err)
+	}
+	// Inconsistent and sentinel counts are unknown, not finite.
+	for _, tc := range [][2]uint64{{1000, 1001}, {^uint64(0), ^uint64(0)}} {
+		stubSpoolStatfs(t, ext4Magic, tc[0], tc[1], 1<<20)
+		if _, err := spool.reserve(512); !errors.Is(err, errSpoolUnknownCapacity) {
+			t.Fatalf("inconsistent %v reserve = %v, want unknown", tc, err)
+		}
+	}
+	// A failed probe must not create a reservation.
+	original := spoolStatfs
+	spoolStatfs = func(_ string, _ *syscall.Statfs_t) error { return fmt.Errorf("injected statfs failure") }
+	defer func() { spoolStatfs = original }()
+	before, _ := os.ReadDir(filepath.Join(spool.cfg.root, ".control", "reservations"))
+	if _, err := spool.reserve(512); !errors.Is(err, errSpoolCapacity) {
+		t.Fatalf("probe-failure reserve = %v, want capacity error", err)
+	}
+	after, _ := os.ReadDir(filepath.Join(spool.cfg.root, ".control", "reservations"))
+	if len(after) != len(before) {
+		t.Fatal("probe failure created a reservation")
+	}
+	if _, err := spool.metrics(); err == nil {
+		t.Fatal("probe-failure metrics succeeded, want error")
+	}
+}
+
+func TestSpoolReserveFiniteZeroFloorStillRequiresOneInode(t *testing.T) {
+	spool, err := newEvidenceSpool(spoolConfig{root: filepath.Join(t.TempDir(), "spool"), maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.close()
+	stubSpoolStatfs(t, ext4Magic, 1000, 0, 1<<20)
+	if _, err := spool.reserve(512); !errors.Is(err, errSpoolFreeInodeFloor) {
+		t.Fatalf("exhausted finite reserve = %v, want inode floor", err)
+	}
+	if err := (&s3Archive{spool: spool, maximumBodyBytes: 512}).spoolReady(); !errors.Is(err, errSpoolFreeInodeFloor) {
+		t.Fatalf("exhausted finite ready = %v, want inode floor", err)
+	}
+	stubSpoolStatfs(t, ext4Magic, 1000, 1, 1<<20)
+	reservation, err := spool.reserve(512)
+	if err != nil {
+		t.Fatalf("finite one-free reserve = %v, want success", err)
+	}
+	_ = reservation.release()
 }

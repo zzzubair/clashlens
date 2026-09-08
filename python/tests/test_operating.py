@@ -150,7 +150,7 @@ def _collector() -> dict[str, object]:
         "buckets": [0] * (len(LATENCY_BUCKETS_SECONDS) + 1),
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "process": {
             "id": "11" * 16,
             "started_at": "2026-08-28T19:30:00+00:00",
@@ -193,6 +193,8 @@ def _collector() -> dict[str, object]:
             "high_water_bytes": 10,
             "free_bytes": 10_000,
             "free_inodes": 1000,
+            "filesystem_type": "ext4",
+            "inode_model": "finite",
         },
     }
 
@@ -695,3 +697,54 @@ def test_previous_snapshot_rejects_stale_or_future_worker(
 
     assert result["check"]["exit_code"] == 2
     assert "invalid_previous_snapshot" in result["check"]["reasons"]
+
+
+def test_btrfs_dynamic_skips_inode_floor_but_keeps_byte_and_object_limits() -> None:
+    collector = _collector()
+    collector["spool"]["filesystem_type"] = "btrfs"
+    collector["spool"]["inode_model"] = "dynamic"
+    collector["spool"]["free_inodes"] = 0
+    assert _snapshot(collector=collector)["check"]["exit_code"] == 0
+
+    collector["spool"]["free_bytes"] = 10
+    result = _snapshot(collector=collector)
+    assert result["check"]["exit_code"] == 1
+    assert "spool_free_space_below_floor" in result["check"]["reasons"]
+
+
+def test_unknown_capacity_and_impossible_combinations_are_indeterminate() -> None:
+    for filesystem_type, inode_model in (
+        ("other", "unknown"),
+        ("unknown", "unknown"),
+        ("ext4", "dynamic"),
+        ("btrfs", "finite"),
+    ):
+        collector = _collector()
+        collector["spool"]["filesystem_type"] = filesystem_type
+        collector["spool"]["inode_model"] = inode_model
+        collector["spool"]["free_inodes"] = 0
+        result = _snapshot(collector=collector)
+        assert result["check"]["exit_code"] == 2
+        assert result["check"]["reasons"] == ["required_fact_invalid"]
+
+
+def test_old_v1_snapshot_is_rejected_as_incompatible_previous_evidence() -> None:
+    previous = _snapshot(database=_database(captured_at="2026-08-28T19:00:00+00:00"))
+    previous = deepcopy(previous)
+    previous["schema_version"] = 1
+    previous["processes"]["collector"]["schema_version"] = 1
+    del previous["processes"]["collector"]["spool"]["filesystem_type"]
+    del previous["processes"]["collector"]["spool"]["inode_model"]
+    unsigned = {key: value for key, value in previous.items() if key != "snapshot_id"}
+    previous["snapshot_id"] = hashlib.sha256(
+        json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    result = _snapshot(previous=previous)
+    assert result["check"]["exit_code"] == 2
+    assert "invalid_previous_snapshot" in result["check"]["reasons"]
+
+
+def test_snapshot_and_collector_contract_are_version_2() -> None:
+    result = _snapshot()
+    assert result["schema_version"] == 2
+    assert result["processes"]["collector"]["schema_version"] == 2

@@ -403,3 +403,32 @@ func TestSpoolStripeLockInteroperatesWithPython(t *testing.T) {
 		t.Fatalf("python bypassed the Go-held stripe lock: %s", probeOutput)
 	}
 }
+
+func TestSpoolBtrfsAllocationFailurePromotesNothing(t *testing.T) {
+	spool := newFaultTestSpool(t)
+	original := spoolStatfs
+	spoolStatfs = func(_ string, stat *syscall.Statfs_t) error {
+		stat.Type = btrfsMagic
+		stat.Bsize = 4096
+		stat.Files = 0
+		stat.Ffree = 0
+		stat.Bavail = 1 << 20
+		return nil
+	}
+	t.Cleanup(func() { spoolStatfs = original })
+	reservation, err := spool.reserve(1 << 20)
+	if err != nil {
+		t.Fatalf("btrfs reserve returned an error: %v", err)
+	}
+	spool.faults = &spoolFaults{writeFileErr: syscall.ENOSPC}
+	defer func() { spool.faults = nil }()
+	body := []byte("btrfs exact bytes")
+	_, err = spool.write(reservation, bytes.NewReader(body))
+	if !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("btrfs write error = %v, want injected ENOSPC", err)
+	}
+	if category := archiveFailureCategory(err); category != "degraded_capacity" {
+		t.Fatalf("btrfs ENOSPC category = %q, want degraded_capacity", category)
+	}
+	assertNoFinalAndReleased(t, spool, reservation)
+}

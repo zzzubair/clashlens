@@ -433,7 +433,7 @@ class SpoolFirstReader:
     def counters(self) -> dict[str, int]:
         return dict(self._counters)
 
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> dict[str, Any]:
         return self.spool.stats()
 
     @property

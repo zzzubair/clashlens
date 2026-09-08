@@ -165,7 +165,7 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	fmt.Fprintf(&output, "clashlens_collector_waiting_retries %d\n", statistics.waitingRetries)
 	fmt.Fprintf(&output, "clashlens_collector_waiting_dependencies %d\n", statistics.waitingDependencies)
 	fmt.Fprintf(&output, "clashlens_collector_pending_remote_verifications %d\n", statistics.pendingRemoteVerifications)
-	spool := spoolMetrics{}
+	spool := spoolMetrics{filesystemType: "unknown", inodeModel: "unknown"}
 	var orphanCount, orphanBytes int64
 	if len(spools) > 0 && spools[0] != nil {
 		var spoolErr error
@@ -190,6 +190,7 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	fmt.Fprintf(&output, "clashlens_spool_allocated_bytes %d\n", spool.allocatedBytes)
 	fmt.Fprintf(&output, "clashlens_spool_free_bytes %d\n", spool.freeBytes)
 	fmt.Fprintf(&output, "clashlens_spool_free_inodes %d\n", spool.freeInodes)
+	fmt.Fprintf(&output, "clashlens_spool_inode_model_info{filesystem_type=%q,model=%q} 1\n", spool.filesystemType, spool.inodeModel)
 	fmt.Fprintf(&output, "clashlens_spool_orphan_count %d\n", orphanCount)
 	fmt.Fprintf(&output, "clashlens_spool_orphan_bytes %d\n", orphanBytes)
 	fmt.Fprintf(&output, "clashlens_collector_incomplete_attempts %d\n", statistics.incompleteAttempts)

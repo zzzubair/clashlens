@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/minio/minio-go/v7"
@@ -69,23 +68,18 @@ func (a *s3Archive) spoolReady() error {
 	if metrics.finalBytes+metrics.temporaryBytes+metrics.reservedBytes+a.maximumBodyBytes > a.spool.cfg.maxBytes || metrics.finalObjects+metrics.temporaryObjects+metrics.reservedObjects+1 > a.spool.cfg.maxObjects {
 		return errSpoolCapacity
 	}
-	if metrics.freeInodes < a.spool.cfg.freeInodeFloor+1 {
+	// Same classifier as reservation: dynamic skips only the inode floor,
+	// unknown rejects readiness, finite reserves room above the floor.
+	if metrics.inodeModel == "unknown" {
+		return errSpoolUnknownCapacity
+	}
+	if metrics.inodeModel == "finite" && metrics.freeInodes < a.spool.cfg.freeInodeFloor+1 {
 		return errSpoolFreeInodeFloor
 	}
-	var stat struct {
-		available uint64
-	}
-	// metrics already reports inode pressure; Statfs is kept in the spool
-	// metrics seam for the byte floor so remote health remains independent.
-	if a.spool.cfg.freeSpaceFloor > 0 {
-		var fs syscall.Statfs_t
-		if statErr := syscall.Statfs(a.spool.cfg.root, &fs); statErr != nil {
-			return fmt.Errorf("spool free-space metrics: %w", statErr)
-		}
-		stat.available = fs.Bavail * uint64(fs.Bsize)
-		if stat.available < a.spool.cfg.freeSpaceFloor+uint64(a.maximumBodyBytes) {
-			return errSpoolFreeSpaceFloor
-		}
+	// metrics already reports byte pressure; reuse its freeBytes so remote
+	// health stays on the single capacity seam.
+	if a.spool.cfg.freeSpaceFloor > 0 && metrics.freeBytes < a.spool.cfg.freeSpaceFloor+uint64(a.maximumBodyBytes) {
+		return errSpoolFreeSpaceFloor
 	}
 	return nil
 }
