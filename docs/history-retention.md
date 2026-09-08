@@ -318,7 +318,7 @@ conservative six-month scenarios fit measured Fedora capacity with 20%
 headroom; the seven-day recovery window is modeled as base backup plus
 generated WAL on R2 (labeled assumption; #31 owns backup design), and raw
 retention on Scaleway Standard with request-billing and minimum-size
-ambiguities recorded for #63 live proof.
+ambiguities recorded for #31's final raw-provider workload/cost qualification (#63 is closed).
 
 Retained on Fedora under `/home/zubair/clashlens-issue82-results/`:
 `issue82-gcs-census.json`, `issue82-gcs-bodies.json`,

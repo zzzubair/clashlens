@@ -1068,8 +1068,9 @@ def phase_pricing(results: Path) -> dict:
             "request_fee_skus_in_catalog": [],
             "ambiguities": [
                 ("no PUT/GET/DELETE per-request SKU appears in the catalog "
-                "API payload; requests are modeled at zero cost with live "
-                "verification owned by #63"),
+                "API payload; requests are modeled at zero cost with final "
+                "live verification owned by #31 (#63 is closed; its "
+                "unfinished workload/cost proof moved to #31)"),
                 ("no storage free tier is stated on the pricing page (only "
                 "the 75 GB egress free tier); zero free storage is modeled"),
                 ("minimum billable object size and minimum retention for "
@@ -1461,8 +1462,9 @@ def phase_report(results: Path) -> dict:
             ("base-backup cadence/format and WAL retention beyond 7 days "
             "(owned by #31)"),
             ("Scaleway request billing, storage free tier, minimum billable "
-            "size/retention (modeled as zero/min-free/actual-bytes; #63 owns "
-            "live proof)"),
+            "size/retention (modeled as zero/min-free/actual-bytes; #31 owns "
+            "final raw-provider workload/cost qualification since #63 "
+            "closed)"),
             ("provider orphans, version retention, and correction-driven "
             "re-PUTs"),
         ],
