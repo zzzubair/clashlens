@@ -135,6 +135,23 @@ def _processor(
     return database, processor
 
 
+def _seed_battle_anchor(connection_info: str, current_start: datetime) -> None:
+    with psycopg.connect(connection_info) as connection:
+        connection.execute("SET LOCAL session_replication_role = replica")
+        connection.execute(
+            """
+            INSERT INTO legend_season_anchors (
+                current_league_season_id, previous_league_season_id,
+                current_start, previous_start, anchor_rule_version,
+                source_profile_version_id, state
+            ) VALUES ('test-current-season', 'test-previous-season', %s, %s,
+                      'legend-season-anchor-v1', 1, 'confirmed')
+            """,
+            (current_start, current_start - timedelta(days=28)),
+        )
+        connection.commit()
+
+
 def _prepare_reset_baseline_pair(
     connection_info: str,
     archive_server,
@@ -611,6 +628,7 @@ def test_concurrent_battle_batches_lock_shared_rows_in_one_order(
     reverse = json.dumps({"items": [second, first]}).encode()
 
     with domain_database(database_url) as connection_info:
+        _seed_battle_anchor(connection_info, datetime(2026, 8, 1, 5, tzinfo=UTC))
         _first_observation, first_job = store_observation(
             connection_info,
             archive_server,
@@ -675,6 +693,7 @@ def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
         with psycopg.connect(connection_info) as connection:
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         ranked_day = ranked_day_for(now)
+        _seed_battle_anchor(connection_info, ranked_day.start)
         event_at = ranked_day.start + timedelta(hours=1)
         observed_at = ranked_day.start + timedelta(hours=2)
 
@@ -879,6 +898,7 @@ def test_live_shaped_battle_rows_publish_one_player_battle_without_duplicate_con
         with psycopg.connect(connection_info) as connection:
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         ranked_day = ranked_day_for(now)
+        _seed_battle_anchor(connection_info, ranked_day.start)
         event_at = ranked_day.start + timedelta(hours=1)
         observed_at = ranked_day.start + timedelta(hours=2)
 
@@ -1418,6 +1438,7 @@ def test_canonical_battle_keeps_detail_disagreement_for_both_perspectives(
 ) -> None:
     observed_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
     with domain_database(database_url) as connection_info:
+        _seed_battle_anchor(connection_info, datetime(2026, 8, 1, 5, tzinfo=UTC))
         attacker_body = BATTLE_FIXTURE.read_bytes()
         _attacker_observation_id, attacker_job_id = store_observation(
             connection_info,

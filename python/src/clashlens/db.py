@@ -1453,8 +1453,8 @@ class Database:
 
         A ranked-day version is not required to identify a canonical season:
         finalization can race a partial season while its day row is absent.
-        Historical days that match neither canonical bounds nor a durable
-        retirement fence are rejected rather than written without a lock.
+        Rows that match neither canonical bounds nor a durable retirement
+        fence are rejected rather than written without a lock.
         """
         from .season_retirement import (
             acquire_season_lock,
@@ -1463,7 +1463,7 @@ class Database:
         )
 
         seasons: set[str] = set()
-        unresolved_historical: set[int] = set()
+        unresolved_rows: set[int] = set()
         has_retirement_table = bool(
             connection.execute(
                 "SELECT to_regclass(%s) IS NOT NULL",
@@ -1480,10 +1480,8 @@ class Database:
             (SEASON_ANCHOR_RULE_VERSION,),
         ).fetchall()
         canonical_bounds: list[tuple[str, Any, Any]] = []
-        historical_before: list[Any] = []
         for anchor in anchors:
             current_start, previous_start = anchor[2], anchor[3]
-            historical_before.append(current_start)
             canonical_bounds.append(
                 (
                     _text_value(anchor[0]),
@@ -1498,7 +1496,6 @@ class Database:
                     previous_start + timedelta(days=28),
                 )
             )
-        historical_cutoff = max(historical_before, default=None)
         for item_index, item in enumerate(rows):
             if item.battle is None:
                 continue
@@ -1518,6 +1515,7 @@ class Database:
                 (day,),
             ).fetchall()
             seasons.update(_text_value(row[0]) for row in season_rows)
+            retired_rows = []
             if has_retirement_table:
                 retired_rows = connection.execute(
                     """
@@ -1528,15 +1526,15 @@ class Database:
                     (day, day),
                 ).fetchall()
                 seasons.update(_text_value(row[0]) for row in retired_rows)
-            if not canonical_ids and not season_rows and historical_cutoff is not None and day < historical_cutoff:
-                unresolved_historical.add(item_index)
+            if not canonical_ids and not season_rows and not retired_rows:
+                unresolved_rows.add(item_index)
         for season_id in sorted(seasons):
             acquire_season_lock(connection, season_id)
         # The first read only discovers lock keys. Re-read after blocking on
         # those locks so a just-committed finalization is never stale here.
         retired_ranges = retired_day_ranges(connection)
         candidates = [
-            item for index, item in enumerate(rows) if index not in unresolved_historical
+            item for index, item in enumerate(rows) if index not in unresolved_rows
         ]
         return filter_live_rows(
             candidates,

@@ -829,6 +829,26 @@ def test_rolling_log_processes_live_content_after_finalization(
         / "legend_i_battle_log_v1.json"
     ).read_bytes()
     with domain_database(database_url, include_coordinator=True) as connection_info:
+        # The static battle fixture is in the August season; seed its canonical
+        # anchor so the fail-closed guard can distinguish it from an unknown day.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET LOCAL session_replication_role = replica")
+            connection.execute(
+                """
+                INSERT INTO legend_season_anchors (
+                    current_league_season_id, previous_league_season_id,
+                    current_start, previous_start, anchor_rule_version,
+                    source_profile_version_id, state
+                ) VALUES (%s, %s, %s, %s, 'legend-season-anchor-v1', 1, 'confirmed')
+                """,
+                (
+                    LIVE_SEASON,
+                    SEASON,
+                    datetime(2026, 8, 1, 5, tzinfo=UTC),
+                    DAY0,
+                ),
+            )
+            connection.commit()
         database, processor = _processor(connection_info, archive_server)
         try:
             _observation_id, job_id = store_observation(
@@ -1118,6 +1138,19 @@ def test_rolling_log_waits_for_finalization_when_ranked_day_is_missing(
             assert connection.execute(
                 "SELECT count(*) FROM battle_evidence"
             ).fetchone()[0] == 0
+
+
+def test_rolling_log_rejects_noncanonical_day_without_resolution_source(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        item = SimpleNamespace(
+            battle=SimpleNamespace(ranked_day_start=DAY0 - timedelta(days=1)),
+        )
+        with psycopg.connect(connection_info) as connection:
+            before = connection.execute("SELECT count(*) FROM legend_battles").fetchone()[0]
+            assert Database._guard_battle_rows(connection, [item]) == []
+            assert connection.execute("SELECT count(*) FROM legend_battles").fetchone()[0] == before
 
 
 def test_measurement_snapshot_and_projection_labels(database_url: str) -> None:
