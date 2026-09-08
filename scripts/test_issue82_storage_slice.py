@@ -18,6 +18,7 @@ from scripts.issue82_storage_slice import (
     classify_body,
     derive_log_width,
     percentiles,
+    raw_storage_cost_eur,
 )
 
 
@@ -104,6 +105,33 @@ class DeriveLogWidthTest(unittest.TestCase):
         self.assertEqual(derive_log_width(0.0, 21665.0, 66116.0), 0.0)
         self.assertEqual(derive_log_width(24008.0, 0.0, 66116.0), 0.0)
         self.assertEqual(derive_log_width(24008.0, 21665.0, -1.0), 0.0)
+
+
+class RawStorageCostTest(unittest.TestCase):
+    """Decision-bearing math: end-state retained GB times monthly tariff."""
+
+    def test_central_raw_cost(self):
+        avg, end_state = raw_storage_cost_eur(395.5, 0.01606)
+        self.assertAlmostEqual(end_state, 6.35, places=2)
+        self.assertAlmostEqual(avg, 3.18, places=2)
+        # The old divide-by-6 average understated ~3x; it must fail here.
+        self.assertGreater(avg, 2.5 * (395.5 * 0.01606 / 6))
+
+    def test_conservative_raw_cost(self):
+        avg, end_state = raw_storage_cost_eur(1461.5, 0.01606)
+        self.assertAlmostEqual(end_state, 23.47, places=2)
+        self.assertAlmostEqual(avg, 11.74, places=2)
+        self.assertGreater(avg, 2.5 * (1461.5 * 0.01606 / 6))
+
+    def test_average_is_half_end_state(self):
+        avg, end_state = raw_storage_cost_eur(100.0, 0.02)
+        self.assertAlmostEqual(end_state, 2.0, places=9)
+        self.assertAlmostEqual(avg, 1.0, places=9)
+
+    def test_non_positive_inputs_clamp_to_zero(self):
+        self.assertEqual(raw_storage_cost_eur(0.0, 0.01606), (0.0, 0.0))
+        self.assertEqual(raw_storage_cost_eur(-5.0, 0.01606), (0.0, 0.0))
+        self.assertEqual(raw_storage_cost_eur(100.0, -0.5), (0.0, 0.0))
 
 
 class AtomicWriteTest(unittest.TestCase):

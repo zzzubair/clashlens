@@ -1120,6 +1120,18 @@ RANKING_OBS_PER_DAY = 24 * 288
 MAX_LOG_COLUMN_BYTES = 200000
 
 
+def raw_storage_cost_eur(raw_6mo_gb: float,
+                         eur_per_gb_month: float) -> tuple[float, float]:
+    """Monthly raw-archive cost as (six-month average, end-state).
+
+    ``raw_6mo_gb`` is end-state retained GB and the tariff is EUR/GB/month,
+    so end-state cost is retained GB times tariff; the six-month average
+    monthly cost under a linear retention ramp is half of end-state.
+    """
+    end_state = max(0.0, raw_6mo_gb) * max(0.0, eur_per_gb_month)
+    return end_state / 2, end_state
+
+
 def derive_log_width(cal_column_bytes: float, cal_body_bytes: float,
                      target_body_bytes: float,
                      cap: float = MAX_LOG_COLUMN_BYTES) -> float:
@@ -1325,10 +1337,8 @@ def phase_report(results: Path) -> dict:
                                 + knobs["battle_novel_pp_day"] * battle_body)
                      + RANKING_OBS_PER_DAY * rankings_body)
         raw_6mo = novel_day * SIX_MONTH_DAYS
-        # Six-month average monthly cost under a linear retention ramp;
-        # end-state run-rate is twice the average (full window retained).
-        raw_eur_month_avg = (raw_6mo / 1e9 * std_gb_month) / 6
-        raw_eur_month_end_state = raw_eur_month_avg * 2
+        raw_eur_month_avg, raw_eur_month_end_state = raw_storage_cost_eur(
+            raw_6mo / 1e9, std_gb_month)
         egress_day = novel_day  # one verification GET per novel PUT
         egress_eur_month = max(0, egress_day * 30.4 / 1e9 - 75) * 0.01
         scenarios[name] = {
