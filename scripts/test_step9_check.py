@@ -959,6 +959,10 @@ def _rehearsal_hooks(database, fixed_ids, *, slots: int):
             "fetch_metrics": lambda url: {"process_id": "p1", "started_at": 1.0,
                                           "counters": {"jobs_total{}": mono[0]},
                                           "digest": str(mono[0])},
+            "container_probe": lambda run: {"running": True,
+                                              "image": "sha256:test",
+                                              "started_at": "t",
+                                              "stats": None},
             "watchdog_check": lambda run: True, "clock": clock,
             "now_utc": now_utc, "no_sleep": True, "max_slots": slots}
 
@@ -1009,7 +1013,12 @@ def _mirror_live_run(connection, run_id: str, player: int, tag: str,
 
 
 def test_no_official_traffic_rehearsal() -> None:
-    """Full 1440-slot loop on a disposable migrated DB; no official calls."""
+    """Preflight end-to-end on a disposable migrated DB; no official calls.
+
+    Full 75-slot loop (60 bootstrap + 15 drain) through the real Database:
+    start, sample, finalize, validate. Live-day 1440 counts stay covered by
+    sealed runs; per-statement live-day SQL stays covered by PG probe tests.
+    """
     import psycopg
     from domain_test_support import domain_database
 
@@ -1019,17 +1028,22 @@ def test_no_official_traffic_rehearsal() -> None:
         _write_cohort(cohort, TAGS)
         run_dir = cohort.parent / "run"
         arguments = _start_args(run_dir, cohort, database_url=info,
-                                run_id="rehearsal1",
-                                max_invocation_gap_seconds=3600)
+                                run_id="rehearsal1", mode="preflight",
+                                core_start="2026-10-04T05:00:00Z",
+                                core_end="2026-10-04T06:15:00Z")
         with psycopg.connect(info) as connection:
-            _mirror_0022(connection)
             player = _seed_player(connection, TAGS[0])
-            version = connection.execute(
-                "SELECT current_profile_version_id FROM players"
-                " WHERE id = %s", (player,)).fetchone()[0]
-            _seed_reset(connection, [player])
-            _mirror_live_run(connection, "rehearsal1", player, TAGS[0],
-                             version, datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
+            connection.execute(
+                "INSERT INTO collector_jobs (work_type, scope, player_id,"
+                " normalized_tag, capacity_pool, priority, due_at,"
+                " coalescing_key, status, required_endpoint, created_at)"
+                " VALUES ('discovery_profile', 'player', %s, %s, 'normal',"
+                " 100, now(), %s, 'complete', 'profile',"
+                " '2026-10-04T05:30:00+00:00')",
+                (player, TAGS[0], f"rehearsal-{player}"))
+            connection.execute(
+                "INSERT INTO global_rankings_intents (cycle_at)"
+                " VALUES ('2026-10-04T05:00:00+00:00')")
             connection.commit()
         with mock.patch.object(step9.deployment_receipt, "validate_receipt",
                                return_value=None):
@@ -1038,10 +1052,11 @@ def test_no_official_traffic_rehearsal() -> None:
             arguments.deployed_receipt = str(receipt_path)
             header = step9.cmd_start(arguments, database)
         assert header["initial"]["eligible_count"] == 1
+        assert header["mode"] == "preflight"
         sample_args = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
         assert step9.cmd_sample(sample_args,
                                 _rehearsal_hooks(database, [player],
-                                                 slots=step9.CORE_SLOTS)) == 0
+                                                 slots=75)) == 0
         assert step9.cmd_finalize(sample_args, {"db": database}) == 0
         assert step9.cmd_validate(sample_args) == 0
         # No tags, raw bodies, or official hosts leak into retained artifacts.
@@ -1104,7 +1119,11 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
         podman = FakePodman()
         watchdog_args = _watchdog_args(run_dir2,
                                        deadline="2026-10-03T05:00:00Z")
-        assert step9.cmd_watchdog(watchdog_args, {"podman_run": podman}) == 1
+        # injected clock: past the fixture deadline (real now predates it)
+        assert step9.cmd_watchdog(watchdog_args, {
+            "podman_run": podman, "single_pass": True, "no_sleep": True,
+            "now_utc": lambda: datetime(2026, 10, 4, 5, 0, tzinfo=UTC),
+        }) == 1
         assert ["podman", "stop", "--ignore", "--time", "30",
                 "test-collector"] in podman.commands
 
@@ -1339,107 +1358,12 @@ def test_preflight_roundtrip(tmp_path: Path) -> None:
     assert step9.cmd_finalize(arguments2, {"db": db2}) == 1
     assert step9.cmd_validate(arguments2) == 1
 
-# --- Frozen 0022 contract (test-local copy) ------------------------------
-# Exact content of the frozen admission-lane migration at
-# issue92-admission-evidence/deploy/migrations/
-# 0022_step9_regular_admission_evidence.sql (BEGIN/COMMIT stripped; the
-# test connection owns the transaction). Delete this mirror and rely on
-# domain_database once migration 0022 merges to main.
-_FROZEN_0022_SQL = """
--- Clash Lens deployment migration 0022.
--- Bounded regular-admission evidence for Step 9 validation. One run header
--- plus one row per scheduleDueRegular invocation inside the configured
--- capture interval. Disabled by default: the scheduler keeps its existing
--- single statement when no run is configured. No contract-version bump: this
--- is an optional backward-compatible table pair. No automatic deletion.
-
-CREATE TABLE IF NOT EXISTS collector_regular_admission_evidence_runs (
-    run_id text PRIMARY KEY CHECK (run_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'),
-    capture_start timestamptz NOT NULL,
-    capture_end timestamptz NOT NULL,
-    max_events integer NOT NULL CHECK (max_events BETWEEN 1 AND 108000),
-    max_selected_entries bigint NOT NULL CHECK (max_selected_entries BETWEEN 1 AND 5000000),
-    events_written integer NOT NULL DEFAULT 0,
-    selected_entries_written bigint NOT NULL DEFAULT 0,
-    state text NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'capacity_exceeded', 'capture_out_of_range')),
-    stopped_at timestamptz,
-    failure_code text,
-    CHECK (capture_end > capture_start AND capture_end <= capture_start + interval '30 hours'),
-    CHECK (events_written >= 0 AND events_written <= max_events),
-    CHECK (selected_entries_written >= 0 AND selected_entries_written <= max_selected_entries),
-    CHECK (
-        (state = 'active' AND stopped_at IS NULL AND failure_code IS NULL)
-        OR (state = 'capacity_exceeded' AND stopped_at IS NOT NULL AND failure_code = 'admission_evidence_capacity_exceeded')
-        OR (state = 'capture_out_of_range' AND stopped_at IS NOT NULL AND failure_code = 'admission_evidence_capture_out_of_range')
-    )
-);
-
-CREATE TABLE IF NOT EXISTS collector_regular_admission_evidence (
-    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    run_id text NOT NULL REFERENCES collector_regular_admission_evidence_runs (run_id) ON DELETE RESTRICT,
-    invocation_id text NOT NULL CHECK (invocation_id ~ '^[0-9a-f]{32,64}$'),
-    capture_start timestamptz NOT NULL,
-    capture_end timestamptz NOT NULL,
-    cycle_at timestamptz NOT NULL,
-    scheduler_at timestamptz NOT NULL,
-    database_at timestamptz NOT NULL,
-    gate_allowed boolean NOT NULL,
-    gate_handoff_at timestamptz,
-    batch_limit integer NOT NULL CHECK (batch_limit BETWEEN 1 AND 1000),
-    visible_due_count integer NOT NULL CHECK (visible_due_count >= 0),
-    visible_due_min_at timestamptz,
-    unselected_visible_due_count integer NOT NULL CHECK (unselected_visible_due_count >= 0),
-    unselected_visible_due_min_at timestamptz,
-    unselected_visible_past_deadline_count integer NOT NULL CHECK (unselected_visible_past_deadline_count >= 0),
-    unselected_visible_past_deadline_min_at timestamptz,
-    selected_past_deadline_count integer NOT NULL CHECK (selected_past_deadline_count >= 0),
-    selected_player_ids bigint[] NOT NULL,
-    selected_due_ats timestamptz[] NOT NULL,
-    selected_profile_version_ids bigint[] NOT NULL,
-    selected_eligibility_states text[] NOT NULL,
-    inserted_job_ids bigint[] NOT NULL,
-    advanced_count integer NOT NULL CHECK (advanced_count >= 0),
-    UNIQUE (run_id, invocation_id),
-    CHECK (capture_end > capture_start AND capture_end <= capture_start + interval '30 hours'),
-    CHECK (database_at >= capture_start AND database_at < capture_end),
-    CHECK (cycle_at = date_bin(interval '5 minutes', cycle_at, timestamptz '2000-01-01 00:00:00+00')),
-    CHECK (scheduler_at >= cycle_at AND scheduler_at < cycle_at + interval '5 minutes'),
-    CHECK ((visible_due_count = 0) = (visible_due_min_at IS NULL)),
-    CHECK ((unselected_visible_due_count = 0) = (unselected_visible_due_min_at IS NULL)),
-    CHECK ((unselected_visible_past_deadline_count = 0) = (unselected_visible_past_deadline_min_at IS NULL)),
-    CHECK (unselected_visible_due_count <= visible_due_count),
-    CHECK (unselected_visible_past_deadline_count <= unselected_visible_due_count),
-    CHECK (selected_past_deadline_count <= COALESCE(cardinality(selected_player_ids), 0)),
-    CHECK (COALESCE(cardinality(selected_player_ids), 0) <= batch_limit),
-    CHECK (COALESCE(cardinality(selected_due_ats), 0) = COALESCE(cardinality(selected_player_ids), 0)),
-    CHECK (COALESCE(cardinality(selected_profile_version_ids), 0) = COALESCE(cardinality(selected_player_ids), 0)),
-    CHECK (COALESCE(cardinality(selected_eligibility_states), 0) = COALESCE(cardinality(selected_player_ids), 0)),
-    CHECK (COALESCE(cardinality(inserted_job_ids), 0) <= COALESCE(cardinality(selected_player_ids), 0)),
-    CHECK (advanced_count = COALESCE(cardinality(selected_player_ids), 0)),
-    CHECK (array_position(selected_player_ids, NULL) IS NULL),
-    CHECK (array_position(selected_due_ats, NULL) IS NULL),
-    CHECK (gate_allowed OR COALESCE(cardinality(selected_player_ids), 0) = 0)
-);
-
-CREATE INDEX IF NOT EXISTS collector_regular_admission_evidence_run_cycle
-    ON collector_regular_admission_evidence (run_id, cycle_at, database_at, id);
-
-REVOKE ALL ON collector_regular_admission_evidence_runs, collector_regular_admission_evidence FROM PUBLIC;
-GRANT SELECT, INSERT ON collector_regular_admission_evidence_runs TO clashlens_collector;
-GRANT UPDATE (events_written, selected_entries_written, state, stopped_at, failure_code)
-    ON collector_regular_admission_evidence_runs TO clashlens_collector;
-GRANT INSERT ON collector_regular_admission_evidence TO clashlens_collector;
-GRANT USAGE, SELECT ON SEQUENCE collector_regular_admission_evidence_id_seq TO clashlens_collector;
-
--- The collector-owned contract stays at version five. Version six would be a
--- future breaking scheduler contract; this evidence pair is optional.
-INSERT INTO clash_lens_schema_migrations(version) VALUES (22)
-ON CONFLICT (version) DO NOTHING;
-"""
-
-
 def _mirror_0022(connection) -> None:
-    connection.execute(_FROZEN_0022_SQL)
+    """Require the real migration 0022 (merged); the frozen mirror is deleted."""
+    row = connection.execute(
+        "SELECT 1 FROM clash_lens_schema_migrations WHERE version = 22"
+    ).fetchone()
+    assert row is not None, "migration 0022 must be applied"
 
 
 def test_admission_tables_absent_without_mirror() -> None:
@@ -1604,11 +1528,11 @@ def test_preflight_probes_against_real_schema() -> None:
 
 
 def test_observer_role_least_privilege() -> None:
-    """Worker-role read set for the observer; gaps pin the lane grants.
+    """Worker-role read set for the observer (0022 grants merged).
 
     Least-privilege existing role: clashlens_python_worker (never the public
-    API role, never superuser). Failing asserts name the exact grants the
-    admission lane must add in migration 0022.
+    API role, never superuser). Migration 0022 carries the evidence-table
+    and rankings cycle_at SELECT grants; this test proves the full read set.
     """
     import psycopg
     from domain_test_support import domain_database
@@ -1645,32 +1569,7 @@ def test_observer_role_least_privilege() -> None:
                 ("pending_remote", step9.SQL_PREFLIGHT_PENDING_REMOTE, ()),
             ]
             for name, sql, params in readable:
-                if name in ("run", "events", "latest"):
-                    continue  # 0022 grants pending: asserted below
                 connection.execute(sql, params if params else None)
-            # Exact gaps the admission lane must close in migration 0022:
-            for name, sql, params in [
-                    ("run", step9.SQL_ADMISSION_RUN, ("role1",)),
-                    ("events", step9.SQL_ADMISSION_EVENTS,
-                     ("role1", "2026-10-04T05:00:00Z", "2026-10-05T05:00:00Z")),
-                    ("latest", step9.SQL_ADMISSION_LATEST, ("role1",)),
-                    ("intents", step9.SQL_PREFLIGHT_RANKING_INTENTS,
-                     ("2026-10-04T04:00:00Z", "2026-10-04T07:00:00Z"))]:
-                with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                    connection.execute(sql, params)
-            connection.execute("RESET ROLE")
-            # The exact grant the lane must add resolves the evidence reads.
-            connection.execute(
-                "GRANT SELECT ON collector_regular_admission_evidence_runs,"
-                " collector_regular_admission_evidence TO clashlens_python_worker")
-            connection.execute(
-                "GRANT SELECT (cycle_at) ON global_rankings_intents"
-                " TO clashlens_python_worker")
-            connection.execute("SET ROLE clashlens_python_worker")
-            connection.execute(step9.SQL_ADMISSION_RUN, ("role1",))
-            connection.execute(
-                step9.SQL_PREFLIGHT_RANKING_INTENTS,
-                ("2026-10-04T04:00:00Z", "2026-10-04T07:00:00Z"))
             connection.execute("RESET ROLE")
 
 
