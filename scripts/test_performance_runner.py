@@ -42,7 +42,7 @@ def _test_postgres() -> dict[str, object]:
             "max_connections": "100",
             "track_io_timing": "off",
         },
-        "applied_migration_versions": list(range(1, 22)),
+        "applied_migration_versions": [*range(1, 22), 23],
     }
 
 
@@ -81,7 +81,7 @@ def _candidate_receipt() -> dict:
 
     migrations = runner._source_migrations()
     fields = {
-        name: ("true" if name == "player_discovery_enabled" else "1")
+        name: ("true" if name in deployment_receipt._SAFE_BOOLEAN_FIELDS else "1")
         for name in sorted(deployment_receipt.SAFE_CONFIGURATION_FIELDS)
     }
     configuration = {
@@ -121,7 +121,7 @@ def _candidate_receipt() -> dict:
         "application_images": images,
         "database": {
             "contract_version": 5,
-            "applied_migration_versions": list(range(1, 22)),
+            "applied_migration_versions": [*range(1, 22), 23],
             "server_version": "18.6",
             "server_version_num": "180006",
             "system_identifier": "1234567890",

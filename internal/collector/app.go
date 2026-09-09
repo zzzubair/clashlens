@@ -51,6 +51,7 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 		return nil, err
 	}
 	store.archiveInstanceID = config.archiveInstanceID
+	store.setEndpointBudget(config.endpointBudget)
 	if err := store.validateArchiveInstance(ctx, config.archiveEndpoint, config.archiveRegion, config.archiveBucket, config.archiveMarkerKey, config.archiveMarkerHash, config.archiveMarkerPayloadVersion); err != nil {
 		store.close()
 		return nil, err
@@ -115,6 +116,7 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 		origin:                config.officialAPIOrigin,
 		proxyURL:              config.officialAPIProxyURL,
 		allowInsecureTestHTTP: config.allowInsecureTestHTTP,
+		disableRedirects:       config.disableOfficialRedirects,
 		connectionTimeout:     config.connectionTimeout,
 		responseHeaderTimeout: config.responseHeaderTimeout,
 		totalTimeout:          config.totalRequestTimeout,

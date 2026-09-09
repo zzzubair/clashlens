@@ -28,6 +28,10 @@ CANDIDATE_RECEIPT_OFFICIAL_API_PROOF = (
 )
 SAFE_CONFIGURATION_FIELDS = {
     "collector_database_pool_size",
+    "endpoint_budget_battle_log",
+    "endpoint_budget_enabled",
+    "endpoint_budget_global_rankings",
+    "endpoint_budget_profile",
     "player_discovery_enabled",
     "spool_free_inode_floor",
     "spool_free_space_floor",
@@ -40,7 +44,7 @@ SAFE_CONFIGURATION_FIELDS = {
     "worker_lease_seconds",
     "worker_replicas",
 }
-CONFIGURATION_ALLOWLIST_VERSION = "step9-v1"
+CONFIGURATION_ALLOWLIST_VERSION = "step10-v1"
 _IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}\Z")
 _HEX_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -48,6 +52,7 @@ _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _DIGEST = re.compile(r"(?:[A-Za-z0-9._:/@+-]{1,256}@)?sha256:[0-9a-f]{64}\Z")
 _SAFE_VALUE = re.compile(r"[0-9]{1,20}\Z")
 _SAFE_BOOLEAN = re.compile(r"(?:true|false)\Z")
+_SAFE_BOOLEAN_FIELDS = frozenset({"endpoint_budget_enabled", "player_discovery_enabled"})
 _MIGRATION = re.compile(r"([0-9]{4})_[a-z0-9_]{1,240}\.sql\Z")
 _VERSION_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._+:/()=-]{0,255}\Z")
 _PYTHON_VERSION = re.compile(
@@ -577,7 +582,7 @@ SELECT json_build_object(
 
 
 def _configuration_value(key: str, value: str) -> str:
-    if key == "player_discovery_enabled":
+    if key in _SAFE_BOOLEAN_FIELDS:
         return _bounded(value, _SAFE_BOOLEAN, "configuration value")
     return _bounded(value, _SAFE_VALUE, "configuration value")
 
@@ -822,7 +827,7 @@ def validate_receipt(receipt: dict[str, Any], *, require_digest: bool = False) -
     if not isinstance(fields, dict) or set(fields) != SAFE_CONFIGURATION_FIELDS:
         raise ReceiptError("receipt configuration is invalid")
     for key, value in fields.items():
-        if key == "player_discovery_enabled":
+        if key in _SAFE_BOOLEAN_FIELDS:
             _require_text(value, _SAFE_BOOLEAN, "configuration value")
         else:
             _require_text(value, _SAFE_VALUE, "configuration value")

@@ -1009,6 +1009,14 @@ func (s *store) beginEndpointRequest(
 	endpoint endpointName,
 	startedAt time.Time,
 ) (int, error) {
+	// The durable run-scoped budget reserves before any dispatch. When
+	// exhausted or misconfigured the request fails closed here and the
+	// official client is never reached.
+	if s.endpointBudget != nil {
+		if err := s.reserveEndpointBudget(ctx, endpoint); err != nil {
+			return 0, err
+		}
+	}
 	contractVersion, err := s.currentContractVersion(ctx)
 	if err != nil {
 		return 0, err

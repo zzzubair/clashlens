@@ -145,6 +145,17 @@ def build_parser() -> argparse.ArgumentParser:
     prune_archive.add_argument("--max-objects", type=_bounded_int("archive cleanup batch", 1, 1000), default=100)
     prune_archive.add_argument("--apply", action="store_true")
 
+    bootstrap_population = subparsers.add_parser(
+        "bootstrap-population",
+        help="admit a protected tag manifest as inactive players with profile-only discovery work (operator database role)",
+    )
+    _database_argument(bootstrap_population)
+    bootstrap_population.add_argument("--cohort-file", required=True)
+    bootstrap_population.add_argument("--expected-sha256", required=True)
+    bootstrap_population.add_argument("--expected-count", type=int, required=True)
+    bootstrap_population.add_argument("--run-id", required=True)
+    bootstrap_population.add_argument("--result-file", required=True)
+
     republish_current_season = subparsers.add_parser(
         "republish-current-season",
         help="queue a bounded batch of current-season ranked-day republications",
@@ -334,6 +345,25 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_jobs=arguments.max_jobs, max_discoveries=arguments.max_discoveries,
                     apply=arguments.apply,
                 )
+            print(json.dumps(report, sort_keys=True))
+            return 0
+        if arguments.command == "bootstrap-population":
+            from .bootstrap import (
+                BootstrapError,
+                bootstrap_population,
+                read_secret_file,
+            )
+
+            if not arguments.database_url_file:
+                raise BootstrapError("database_url_file_is_required")
+            report = bootstrap_population(
+                database_url=read_secret_file(arguments.database_url_file),
+                cohort_file=arguments.cohort_file,
+                expected_sha256=arguments.expected_sha256,
+                expected_count=arguments.expected_count,
+                run_id=arguments.run_id,
+                result_file=arguments.result_file,
+            )
             print(json.dumps(report, sort_keys=True))
             return 0
         if arguments.command == "republish-current-season":

@@ -75,7 +75,36 @@ resource budget.
 every worker replica then starts with `--disable-player-discovery`, so
 ranking and battle evidence is retained without enqueueing `discovery_profile`
 work for outside players. Global Top-200 collection stays enabled, and the
-choice is fingerprinted in the deployment receipt (`step9-v1`).
+choice is fingerprinted in the deployment receipt (`step10-v1`).
+
+`CLASHLENS_ENDPOINT_BUDGET_ENABLED` defaults to `false`. Enable it only for
+a fixed-population bootstrap run, with `CLASHLENS_ENDPOINT_BUDGET_RUN_ID`,
+per-endpoint caps (`CLASHLENS_ENDPOINT_BUDGET_PROFILE`,
+`CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS`,
+`CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG`), and an RFC 3339
+`CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT`. While enabled, every official
+dispatch reserves one durable budget unit before the request, reservations
+survive restarts and are never refunded, and official redirects are refused.
+The enabled flag and caps are fingerprinted in the deployment receipt.
+
+Admit a protected manifest with the Python worker role (validates the whole
+manifest before the first write; replays idempotently under one run-id):
+
+```bash
+python -m clashlens.cli bootstrap-population \
+  --database-url-file /run/secrets/database-url \
+  --cohort-file /path/to/legend-player-tags-2026-09-08.txt \
+  --expected-sha256 558979624d7e8475cd536871c62fc3e04298cec23dbfc35fc63e7148d1933e10 \
+  --expected-count 12857 \
+  --run-id ISSUE92_RUN_ID \
+  --result-file /path/to/result.json
+```
+
+Enqueue the single aligned Global Top-200 cycle with the collector role:
+
+```bash
+collector enqueue-global-rankings --cycle-at 2026-09-08T05:00:00Z
+```
 
 ### Fixed-egress proxy
 

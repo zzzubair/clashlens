@@ -48,8 +48,10 @@ type collectorConfig struct {
 	archiveSecretKey            string
 	officialAPIOrigin           string
 	officialAPIProxyURL         string
+	disableOfficialRedirects    bool
 	allowInsecureTestHTTP       bool
 	enableGlobalRankings        bool
+	endpointBudget              endpointBudgetConfig
 	keys                        []APIKey
 	requestsPerSecondPerKey     int
 	workersPerKey               int
@@ -166,6 +168,10 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	if config.allowInsecureTestHTTP, err = optionalBool(getenv, "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN", false); err != nil {
 		return collectorConfig{}, err
 	}
+	if config.endpointBudget, err = loadEndpointBudgetConfig(getenv); err != nil {
+		return collectorConfig{}, err
+	}
+	config.disableOfficialRedirects = config.endpointBudget.enabled
 	if config.enableGlobalRankings, err = optionalBool(getenv, "CLASHLENS_ENABLE_GLOBAL_RANKINGS", false); err != nil {
 		return collectorConfig{}, err
 	}
@@ -381,6 +387,7 @@ func logConfigState(ctx context.Context, logger *slog.Logger, config collectorCo
 		ctx,
 		"collector configuration loaded",
 		"global_rankings_enabled", config.enableGlobalRankings,
+		"endpoint_budget_enabled", config.endpointBudget.enabled,
 	)
 }
 
