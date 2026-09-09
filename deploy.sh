@@ -1037,6 +1037,7 @@ prepare_candidate_database() {
     version=$(migration_version "$migration_file")
     schema_migration_applied "$version" || die "candidate database is missing forward migration $version"
   done
+  configure_runtime_roles
   printf 'disposable candidate database is ready through migration %s\n' \
     "$(migration_version "${MIGRATION_FILES[-1]}")"
 }

@@ -496,6 +496,9 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
     except OSError as error:
         raise Step9Error("run_unwritable", "run directory cannot be created") from error
     os.chmod(run_dir, 0o700)
+    if db is None:
+        raise Step9Error("database_required",
+                         "start requires a database connection")
     podman_bin = getattr(arguments, "podman_bin", "podman")
     collector_image: str | None = None
     collector_image_error = "image_pin_unattempted"
@@ -520,14 +523,13 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
     except Exception as error:  # noqa: BLE001 - unpinnable image is unknown
         postgres_image_error = f"image_inspect_unavailable: {type(error).__name__}"
     initial = {"status": "unknown", "failure_code": "database_unavailable"}
-    if db is not None:
-        try:
-            initial = _capture_initial(db, tags)
-        except Step9Error:
-            raise
-        except Exception as error:
-            raise Step9Error("database_unavailable",
-                             f"initial snapshot failed: {error}") from error
+    try:
+        initial = _capture_initial(db, tags, mode_name)
+    except Step9Error:
+        raise
+    except Exception as error:
+        raise Step9Error("database_unavailable",
+                         f"initial snapshot failed: {error}") from error
     header = {
         "schema": mode["schema"], "mode": mode_name, "run_id": run_id,
         "core_start": core_start.isoformat(), "core_end": core_end.isoformat(),
@@ -561,8 +563,7 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "deadline": arguments.deadline,
         "max_sample_age_seconds": arguments.max_sample_age_seconds,
         "watchdog_unit": arguments.watchdog_unit,
-        "max_invocation_gap_seconds": getattr(
-            arguments, "max_invocation_gap_seconds", 5),
+        "max_invocation_gap_seconds": _require_gap_seconds(arguments),
         "podman_bin": getattr(arguments, "podman_bin", "podman"),
         "database_url_source": ("file" if getattr(
             arguments, "database_url_file", None) else (
@@ -571,6 +572,10 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "bootstrap_run_id": getattr(arguments, "bootstrap_run_id", None),
         "budget_receipt": budget_receipt,
         "archive_eur_per_gib": getattr(arguments, "archive_eur_per_gib", None),
+        "cost_basis": {
+            "note": "tariff estimate only, never actual billed cost",
+            "tariff": "preparation-tariff-20260909.json (reverify before traffic)",
+        },
         "archive_interfaces": list(getattr(arguments, "archive_interfaces",
                                             None) or []),
         "archive_route_host": getattr(arguments, "archive_route_host", None),
@@ -705,6 +710,15 @@ def _budget_receipt_block(receipt: dict, mode_name: str) -> dict | None:
             "deadline_at": fields["endpoint_budget_deadline_at"]}
 
 
+def _require_gap_seconds(arguments: argparse.Namespace) -> int:
+    """Scheduler-cadence evidence bound; fail closed when not explicit."""
+    value = getattr(arguments, "max_invocation_gap_seconds", None)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise Step9Error("invocation_gap_unpinned",
+                         "--max-invocation-gap-seconds is required")
+    return value
+
+
 def _admission_header(db: object | None, mode_name: str, run_id: str,
                       core_start: datetime, core_end: datetime) -> dict:
     """Pin admission expectations; fail closed when 0022 is absent."""
@@ -736,7 +750,7 @@ def _admission_header(db: object | None, mode_name: str, run_id: str,
             "max_selected_entries": row["max_selected_entries"]}
 
 
-def _capture_initial(db: object, tags: list[str]) -> dict:
+def _capture_initial(db: object, tags: list[str], mode_name: str = "live-day") -> dict:
     rows = db.snapshot_population(tags)
     eligible: list[int] = []
     matched: list[int] = []
@@ -761,6 +775,14 @@ def _capture_initial(db: object, tags: list[str]) -> dict:
             "foreign_lineage", "outside player-scoped collection lineage exists",
             gate=True)
     if not eligible:
+        if mode_name == "preflight":
+            return {
+                "status": "pending_bootstrap",
+                "eligible_count": 0,
+                "eligible_digest": _eligible_digest([]),
+                "counts": counts,
+                "database_identity": db.identity(),
+            }
         raise Step9Error("zero_eligible", "zero eligible supplied players", gate=True)
     return {
         "status": "captured", "eligible_count": len(eligible),
@@ -2006,7 +2028,10 @@ def _finalize_eligibility(run: dict, db: object | None) -> dict:
             "outside_active": outside, "outside_lineage": lineage,
             "effect_rows": len(effects),
         }
-        if outside or lineage:
+        if not eligible:
+            result["status"] = "failed"
+            result["failure_code"] = "zero_eligible"
+        elif outside or lineage:
             result["status"] = "failed"
             result["failure_code"] = "foreign_population_recheck"
         return result
@@ -2230,6 +2255,12 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
                 raise Step9Error("mount_identity_unknown",
                                  f"slot {sample.get('slot')} mount unproven",
                                  gate=True)
+            resources = sample.get("resources")
+            if isinstance(resources, dict) and (
+                    resources.get("failures") or resources.get("unknown")):
+                raise Step9Error("resource_evidence_failed",
+                                 f"slot {sample.get('slot')} resource "
+                                 "failures or unknowns", gate=True)
             operating = sample.get("operating")
             if operating is not None and operating.get("status") != "complete":
                 raise Step9Error("operating_failed",
@@ -2540,7 +2571,8 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--prior-transfer-provenance", default=None)
     start.add_argument("--bootstrap-run-id", default=None)
     start.add_argument("--mode", choices=sorted(MODES), default="live-day")
-    start.add_argument("--max-invocation-gap-seconds", type=int, default=5)
+    start.add_argument("--max-invocation-gap-seconds", type=int, default=None,
+                       help="required: scheduler invocation cadence evidence bound")
 
     sample = sub.add_parser("sample", help="run the minute sampling loop")
     _add_common(sample)
@@ -3323,7 +3355,7 @@ RES_FS_FREE_MIN = 200 * 1024**3
 RES_PHYS_GROWTH_MAX = 64 * 1024**3
 RES_BTRFS_METADATA_MAX = 80.0
 RES_BTRFS_UNALLOC_MIN = 100 * 1024**3
-RES_MEM_USED_MAX = 4 * 1024**3
+RES_MEM_AVAIL_MIN = 4 * 1024**3
 RES_ARCHIVE_LOGICAL_MAX = 16 * 1024**3
 RES_ARCHIVE_PHYSICAL_MAX = 64 * 1024**3
 RES_ARCHIVE_OBJECTS_MAX = 100_000
@@ -3449,12 +3481,12 @@ def evaluate_resource_gates(baseline: dict, current: dict,
             failures.append("swap_growth")
     else:
         unknown.append("swap_unknown")
-    if mem.get("used_bytes") is None:
+    if mem.get("available_bytes") is None:
         unknown.append("memory_unknown")
-    elif mem["used_bytes"] > RES_MEM_USED_MAX:
+    elif mem["available_bytes"] < RES_MEM_AVAIL_MIN:
         mem_over += 1
         if mem_over >= 2:
-            failures.append("memory_over")
+            failures.append("memory_low")
     else:
         mem_over = 0
     archive = current.get("archive") or {}
@@ -3556,6 +3588,7 @@ def collect_resource_facts(*, spool_path: str, postgres_path: str,
             "memory": {"used_bytes": (total_b - avail_b
                                           if total_b is not None
                                           and avail_b is not None else None),
+                         "available_bytes": avail_b,
                          "swap_used_bytes": (swap_total - swap_free
                                               if swap_total is not None
                                               and swap_free is not None

@@ -296,7 +296,9 @@ python3 scripts/step9_check.py start \
   --postgres-path /actual/postgres/path \
   --deadline 2026-MM-DDT05:TAIL:00Z \
   --watchdog-unit clashlens-step9-sampler-RUN \
-  [--database-url postgresql://...]
+  --max-invocation-gap-seconds 5 \
+  --archive-egress-interface ARCHIVE_IFACE \
+  [--database-url-file /protected/clashlens-issue92-db-url]
 
 systemd-run --user --unit clashlens-step9-watchdog-RUN \
   --property=Type=exec --property=Restart=on-failure \
@@ -418,7 +420,7 @@ against these fixed Phase 4 stop/fail thresholds and stops the sampler (exit
 1) on the first breach: filesystem use ≥80%, free space <200 GiB, shared-pool
 physical growth >64 GiB from baseline, Btrfs metadata ≥80% of allocated,
 Btrfs unallocated <100 GiB, any new Btrfs probe error or diagnostic stderr,
-any OOM-kill increase, any swap growth, host memory used >4 GiB for two
+any OOM-kill increase, any swap growth, host memory available <4 GiB for two
 consecutive samples, archive logical >16 GiB, archive physical >64 GiB,
 archive objects >100k, or estimated archive cost >EUR 4.50. Filesystems
 sharing one pool are evaluated once. Missing probe fields stay unknown

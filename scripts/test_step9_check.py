@@ -467,8 +467,7 @@ def _sample_hooks(db: FakeDB, **overrides):
                                         "counters": {"jobs_total{}": 5},
                                         "digest": "x"},
         "watchdog_check": lambda run: True, "clock": clock, "now_utc": now_utc,
-        "resource_facts": lambda run, db, metrics: {
-            "filesystems": {}, "memory": {}, "archive": {}},
+        "resource_facts": lambda run, db, metrics: _quiet_facts(),
         "pgdata_probe": lambda run: {
             "status": "captured", "failure_code": None,
             "captured_at": "2026-10-04T05:00:00+00:00",
@@ -581,6 +580,29 @@ class FakePodman:
                 self.running = False
             return ""
         raise AssertionError(f"unexpected podman command: {command}")
+
+
+def _pin_resources(run_dir: Path) -> None:
+    """Test-only: align the start baseline with quiet fake loop facts."""
+    path = run_dir / "run.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["resource_baseline"] = _quiet_facts()
+    path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n",
+                    encoding="utf-8")
+
+
+def _pin_wire(run_dir: Path, rx: int = 1000, tx: int = 500) -> None:
+    """Test-only: set a matching wire baseline (production pins at start)."""
+    path = run_dir / "run.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["wire_baseline"] = {
+        "status": "captured", "failure_code": None,
+        "boot_id": payload.get("boot_id"),
+        "interfaces": {"test-eth0": {
+            "present": True, "rx_bytes": rx, "tx_bytes": tx,
+            "mac": "aa:bb:cc:dd:ee:ff", "operstate": "up"}}}
+    path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n",
+                    encoding="utf-8")
 
 
 def _pin_image(run_dir: Path, image: str = "sha256:image") -> None:
@@ -1104,8 +1126,7 @@ def _rehearsal_hooks(database, fixed_ids, *, slots: int):
                                               "started_at": "t",
                                               "stats": None},
             "watchdog_check": lambda run: True,
-            "resource_facts": lambda run, db, metrics: {
-                "filesystems": {}, "memory": {}, "archive": {}},
+            "resource_facts": lambda run, db, metrics: _quiet_facts(),
             "wire_facts": lambda run: {
                 "status": "captured", "failure_code": None,
                 "boot_id": run.get("boot_id"),
@@ -1211,6 +1232,7 @@ def test_no_official_traffic_rehearsal() -> None:
             header = step9.cmd_start(arguments, database)
         assert header["initial"]["eligible_count"] == 1
         assert header["mode"] == "preflight"
+        _pin_resources(run_dir)
         sample_args = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
         assert step9.cmd_sample(sample_args,
                                 _rehearsal_hooks(database, [player],
@@ -1265,6 +1287,7 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
             step9.cmd_start(_start_args(run_dir, cohort, run_id="killed1",
                                         deployed_receipt=str(kill_receipt)),
                             database)
+        _pin_resources(run_dir)
         sample_args = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
         assert step9.cmd_sample(sample_args,
                                 _rehearsal_hooks(database, [player],
@@ -1824,8 +1847,7 @@ def test_shifted_sampler_fails_lateness_gate(tmp_path: Path) -> None:
              "fetch_metrics": lambda url: {"process_id": "p1", "started_at": 1.0,
                                            "counters": {}, "digest": "x"},
              "watchdog_check": lambda run: True,
-            "resource_facts": lambda run, db, metrics: {
-                "filesystems": {}, "memory": {}, "archive": {}},
+            "resource_facts": lambda run, db, metrics: _quiet_facts(),
             "wire_facts": lambda run: {
                 "status": "captured", "failure_code": None,
                 "boot_id": run.get("boot_id"),
@@ -2043,7 +2065,8 @@ def _quiet_facts():
                            "unallocated_bytes": 500 * 1024**3,
                            "error": None, "stderr": None},
                  "error": None}},
-        "memory": {"used_bytes": 1024**3, "swap_used_bytes": 0,
+        "memory": {"used_bytes": 1024**3, "available_bytes": 8 * 1024**3,
+                   "swap_used_bytes": 0,
                    "oom_kills": 0, "psi_avg10": 0.0, "error": None},
         "archive": {"logical_bytes": 100, "objects": 2,
                     "physical_bytes": 100, "cost_eur": 0.01, "error": None}}
@@ -2075,7 +2098,8 @@ def test_resource_gates_all_thresholds() -> None:
     pool["btrfs"] = {"metadata_pct": 90.0,
                      "unallocated_bytes": 10 * 1024**3,
                      "error": "probe_failed", "stderr": "x"}
-    breach["memory"] = {"used_bytes": 6 * 1024**3, "swap_used_bytes": 99,
+    breach["memory"] = {"used_bytes": 6 * 1024**3, "available_bytes": 1024**3,
+                        "swap_used_bytes": 99,
                         "oom_kills": 3, "psi_avg10": 1.0, "error": None}
     breach["archive"] = {"logical_bytes": 20 * 1024**3, "objects": 200_000,
                          "physical_bytes": 70 * 1024**3, "cost_eur": 9.0,
@@ -2085,16 +2109,16 @@ def test_resource_gates_all_thresholds() -> None:
                  "physical_growth_breach", "btrfs_metadata_breach",
                  "btrfs_unallocated_breach", "btrfs_diagnostic_stderr",
                  "btrfs_new_error", "oom_kill_observed", "swap_growth",
-                 "memory_over", "archive_logical_breach",
+                 "memory_low", "archive_logical_breach",
                  "archive_objects_breach", "archive_physical_breach",
                  "archive_cost_breach"):
         assert code in failures, code
     assert strikes == 2
     # memory needs two consecutive samples
     current = _quiet_facts()
-    current["memory"]["used_bytes"] = 6 * 1024**3
+    current["memory"]["available_bytes"] = 1024**3
     failures, _unknown, strikes = step9.evaluate_resource_gates(base, current, 0)
-    assert "memory_over" not in failures and strikes == 1
+    assert "memory_low" not in failures and strikes == 1
     # shared pool evaluated once: spool+postgres labels share one entry
     assert len(base["filesystems"]) == 1
     # null stays unknown, never zero
@@ -2177,6 +2201,47 @@ def test_no_credential_in_artifacts(tmp_path: Path) -> None:
 def test_cli_start_accepts_url_file(tmp_path: Path) -> None:
     db_url = _write_url_file(tmp_path / "db.url", b"postgresql://x\n")
     assert db_url.endswith("db.url")
+    cohort = _write_cohort(tmp_path / "cohort.txt", TAGS)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope()))
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        fake_db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+        with mock.patch.object(step9, "Database", lambda url: fake_db):
+            code = step9.main([
+                "start", "--run-dir", str(tmp_path / "run"),
+                "--cohort-file", str(cohort),
+                "--deployed-receipt", str(receipt_path),
+                "--core-start", "2026-10-04T05:00:00Z",
+                "--core-end", "2026-10-05T05:00:00Z",
+                "--collector-container", "test-collector",
+                "--postgres-container", "test-pg",
+                "--python-api-container", "test-api",
+                "--python-worker-container", "test-worker",
+                "--runtime-metrics-url", "http://127.0.0.1:9/x",
+                "--spool-path", "/tmp", "--postgres-path", "/tmp",
+                "--deadline", "2026-10-05T05:10:00Z",
+                "--watchdog-unit", "test-unit",
+                "--run-id", "testrun01",
+                "--max-invocation-gap-seconds", "5",
+                "--archive-egress-interface", "test-eth0",
+                "--database-url-file", db_url])
+    assert code == 0
+
+
+def test_start_requires_explicit_gap(tmp_path: Path) -> None:
+    cohort = _write_cohort(tmp_path / "c.txt", TAGS)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope()))
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    arguments = _start_args(tmp_path / "nogap", cohort,
+                            deployed_receipt=str(receipt_path),
+                            max_invocation_gap_seconds=None)
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(arguments, db)
+        assert error.value.code == "invocation_gap_unpinned"
 
 
 def test_sample_resource_gate_stops(tmp_path: Path) -> None:
@@ -2516,8 +2581,7 @@ def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
              "container_probe": container_probe,
              "watchdog_check": lambda run: True, "clock": clock,
              "now_utc": now_utc, "no_sleep": True, "max_slots": 75,
-             "resource_facts": lambda run, db, metrics: {
-                 "filesystems": {}, "memory": {}, "archive": {}},
+             "resource_facts": lambda run, db, metrics: _quiet_facts(),
              "wire_facts": lambda run: quiet_wire,
              "worker_probe": lambda run: benign_s3,
              "pgdata_probe": lambda run: benign_pgdata}
@@ -2571,8 +2635,7 @@ def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
               "watchdog_check": lambda run: True,
               "clock": clock2, "now_utc": now_utc2,
               "no_sleep": True, "max_slots": 75,
-              "resource_facts": lambda run, db, metrics: {
-                  "filesystems": {}, "memory": {}, "archive": {}},
+              "resource_facts": lambda run, db, metrics: _quiet_facts(),
               "wire_facts": lambda run: {
                   "status": "captured", "failure_code": None,
                   "boot_id": run.get("boot_id"),
@@ -2778,3 +2841,25 @@ def test_s3_accounting() -> None:
     totals, error = step9._worker_snapshots(
         {}, lambda run: [{"archive": {}}])
     assert totals == {} and error is not None
+
+
+def test_slot_zero_transfer_breach_records(tmp_path: Path) -> None:
+    """Slot-0 early gate branches must record, never raise NameError."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    _pin_wire(run_dir)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    hooks = _sample_hooks(db)
+    breached_wire = {
+        "status": "captured", "failure_code": None, "boot_id": "boot-1",
+        "interfaces": {"test-eth0": {
+            "present": True, "rx_bytes": 1000 + 70 * 1024**3, "tx_bytes": 500,
+            "mac": "aa:bb:cc:dd:ee:ff", "operstate": "up"}}}
+    hooks["wire_facts"] = lambda run: dict(
+        breached_wire, boot_id=run.get("boot_id"))
+    hooks["max_slots"] = 1
+    hooks["single_pass"] = False
+    assert step9.cmd_sample(arguments, hooks) == 1
+    sample = json.loads((run_dir / "samples" / "minute-0000.json").read_text())
+    assert sample["outcome"] == "transfer_gate"
+    assert list((run_dir / "failures").glob("transfer_breach-*.json"))

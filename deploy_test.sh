@@ -769,6 +769,10 @@ log_has "$CANDIDATE_NORM" \
 log_lacks "$CANDIDATE_NORM" \
   'secret create --replace clashlens-postgres-password' \
   'candidate PostgreSQL secret name leaked into the deployed scope'
+[[ "$(grep -rho 'ALTER ROLE [a-z_]* WITH LOGIN PASSWORD' "$CANDIDATE_DIR/state/stdin/" | sort -u | wc -l)" == "3" ]] || \
+  fail 'candidate-prepare did not configure runtime LOGIN roles'
+[[ "$(grep -rh 'REVOKE ALL PRIVILEGES' "$CANDIDATE_DIR/state/stdin/" | wc -l)" -ge "1" ]] || \
+  fail 'candidate-prepare omitted runtime role hardening'
 
 CANDIDATE_SECRET_COLLISION_DIR=$(new_scenario)
 CANDIDATE_SECRET_COLLISION_ENV="$CANDIDATE_SECRET_COLLISION_DIR/app.env"
