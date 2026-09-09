@@ -56,6 +56,7 @@ def _start_args(run_dir: Path, cohort: Path, **overrides):
         "max_sample_age_seconds": 125, "watchdog_unit": "test-unit",
         "run_id": "testrun01", "database_url": None, "mode": "live-day",
         "max_invocation_gap_seconds": 5, "bootstrap_run_id": None,
+        "archive_eur_per_gib": None,
     }
     defaults.update(overrides)
     return mock.Mock(**defaults)
@@ -446,6 +447,8 @@ def _sample_hooks(db: FakeDB, **overrides):
                                         "counters": {"jobs_total{}": 5},
                                         "digest": "x"},
         "watchdog_check": lambda run: True, "clock": clock, "now_utc": now_utc,
+        "resource_facts": lambda run, db, metrics: {
+            "filesystems": {}, "memory": {}, "archive": {}},
         "no_sleep": True, "single_pass": True, "max_slots": 1,
     }
     hooks.update(overrides)
@@ -505,7 +508,8 @@ def test_sql_is_read_only_and_bound() -> None:
                 or "pg_control_system" in statement
                 or "pg_current_wal_lsn" in statement
                 or "to_regclass" in statement
-                or "pending_remote_verification" in statement)
+                or "pending_remote_verification" in statement
+                or "archive_catalogue" in statement)
         assert "f\"" not in statement and "\" + " not in statement
         with pytest.raises(step9.Step9Error):
             step9.assert_read_only("SELECT 1; INSERT INTO players VALUES (1)")
@@ -1029,7 +1033,10 @@ def _rehearsal_hooks(database, fixed_ids, *, slots: int):
                                               "image": "sha256:test",
                                               "started_at": "t",
                                               "stats": None},
-            "watchdog_check": lambda run: True, "clock": clock,
+            "watchdog_check": lambda run: True,
+            "resource_facts": lambda run, db, metrics: {
+                "filesystems": {}, "memory": {}, "archive": {}},
+            "clock": clock,
             "now_utc": now_utc, "no_sleep": True, "max_slots": slots}
 
 
@@ -1701,7 +1708,10 @@ def test_shifted_sampler_fails_lateness_gate(tmp_path: Path) -> None:
     hooks = {"db": db, "fixed_ids": db.fixed_ids,
              "fetch_metrics": lambda url: {"process_id": "p1", "started_at": 1.0,
                                            "counters": {}, "digest": "x"},
-             "watchdog_check": lambda run: True, "clock": clock,
+             "watchdog_check": lambda run: True,
+            "resource_facts": lambda run, db, metrics: {
+                "filesystems": {}, "memory": {}, "archive": {}},
+            "clock": clock,
              "now_utc": now_utc, "no_sleep": True, "max_slots": 5,
              "single_pass": False}
     assert step9.cmd_sample(arguments, hooks) == 1
@@ -1866,3 +1876,188 @@ def test_finalize_budget_manifest_match() -> None:
                                        run_id="other"))
     result = step9._finalize_budget(tampered, BoundDB(), {})
     assert result["failure"] == "budget_binding_mismatch"
+
+
+def _quiet_facts():
+    return {"filesystems": {
+        "pool": {"key": "pool", "mount_point": "/", "source": "/dev/sda",
+                 "mnt_id": 1, "filesystem_type": "btrfs",
+                 "total_bytes": 1000 * 1024**3, "free_bytes": 900 * 1024**3,
+                 "used_bytes": 100 * 1024**3, "use_pct": 10.0,
+                 "labels": ["spool", "postgres"],
+                 "btrfs": {"metadata_pct": 10.0,
+                           "unallocated_bytes": 500 * 1024**3,
+                           "error": None, "stderr": None},
+                 "error": None}},
+        "memory": {"used_bytes": 1024**3, "swap_used_bytes": 0,
+                   "oom_kills": 0, "psi_avg10": 0.0, "error": None},
+        "archive": {"logical_bytes": 100, "objects": 2,
+                    "physical_bytes": 100, "cost_eur": 0.01, "error": None}}
+
+
+def test_parse_btrfs_usage_cases() -> None:
+    separate = ("Data,single: Size: 1000, Used: 100\n"
+                "Metadata,DUP: Size: 200, Used: 50\n"
+                "Unallocated: 5000\n")
+    parsed = step9._parse_btrfs_usage(separate)
+    assert parsed == {"metadata_pct": 25.0, "unallocated_bytes": 5000}
+    combined = "Data+Metadata,single: Size: 4, Used: 1\nUnallocated: 8\n"
+    parsed = step9._parse_btrfs_usage(combined)
+    assert parsed == {"metadata_pct": None, "unallocated_bytes": 8}
+    assert step9._parse_btrfs_usage("") == {
+        "metadata_pct": None, "unallocated_bytes": None}
+
+
+def test_resource_gates_all_thresholds() -> None:
+    base = _quiet_facts()
+    failures, unknown, strikes = step9.evaluate_resource_gates(base, base, 0)
+    assert failures == [] and strikes == 0
+    assert unknown == []  # fully known quiet facts prove no false positive
+    breach = _quiet_facts()
+    pool = breach["filesystems"]["pool"]
+    pool["use_pct"] = 85.0
+    pool["free_bytes"] = 100 * 1024**3
+    pool["used_bytes"] = 200 * 1024**3
+    pool["btrfs"] = {"metadata_pct": 90.0,
+                     "unallocated_bytes": 10 * 1024**3,
+                     "error": "probe_failed", "stderr": "x"}
+    breach["memory"] = {"used_bytes": 6 * 1024**3, "swap_used_bytes": 99,
+                        "oom_kills": 3, "psi_avg10": 1.0, "error": None}
+    breach["archive"] = {"logical_bytes": 20 * 1024**3, "objects": 200_000,
+                         "physical_bytes": 70 * 1024**3, "cost_eur": 9.0,
+                         "error": None}
+    failures, unknown, strikes = step9.evaluate_resource_gates(base, breach, 1)
+    for code in ("filesystem_use_breach", "filesystem_free_breach",
+                 "physical_growth_breach", "btrfs_metadata_breach",
+                 "btrfs_unallocated_breach", "btrfs_diagnostic_stderr",
+                 "btrfs_new_error", "oom_kill_observed", "swap_growth",
+                 "memory_over", "archive_logical_breach",
+                 "archive_objects_breach", "archive_physical_breach",
+                 "archive_cost_breach"):
+        assert code in failures, code
+    assert strikes == 2
+    # memory needs two consecutive samples
+    current = _quiet_facts()
+    current["memory"]["used_bytes"] = 6 * 1024**3
+    failures, _unknown, strikes = step9.evaluate_resource_gates(base, current, 0)
+    assert "memory_over" not in failures and strikes == 1
+    # shared pool evaluated once: spool+postgres labels share one entry
+    assert len(base["filesystems"]) == 1
+    # null stays unknown, never zero
+    empty = {"filesystems": {}, "memory": {}, "archive": {}}
+    failures, unknown, _strikes = step9.evaluate_resource_gates(empty, empty, 0)
+    assert failures == [] and set(unknown) >= {
+        "oom_unknown", "swap_unknown", "memory_unknown", "archive_unknown",
+        "archive_physical_unknown", "archive_cost_unknown"}
+
+
+def _write_url_file(path: Path, data: bytes, mode: int = 0o600) -> str:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    try:
+        os.write(descriptor, data)
+    finally:
+        os.close(descriptor)
+    os.chmod(path, mode)
+    return str(path)
+
+
+def test_database_url_file_contract(tmp_path: Path) -> None:
+    url = "postgresql://observer:S3cret-X@127.0.0.1:55440/clashlens"
+    good = _write_url_file(tmp_path / "db.url", (url + "\n").encode())
+    assert step9._resolve_database_url(
+        mock.Mock(database_url=None, database_url_file=good)) == url
+    assert step9._resolve_database_url(
+        mock.Mock(database_url=None, database_url_file=None)) is None
+    with pytest.raises(step9.Step9Error):
+        step9._resolve_database_url(
+            mock.Mock(database_url=url, database_url_file=good))
+    link = tmp_path / "link.url"
+    link.symlink_to(good)
+    with pytest.raises(step9.Step9Error):
+        step9._resolve_database_url(
+            mock.Mock(database_url=None, database_url_file=str(link)))
+    open_mode = _write_url_file(tmp_path / "open.url", b"x\n", mode=0o644)
+    with pytest.raises(step9.Step9Error):
+        step9._resolve_database_url(
+            mock.Mock(database_url=None, database_url_file=open_mode))
+    for name, data in (("empty.url", b""), ("multi.url", b"a\nb\n"),
+                       ("nul.url", b"a\0b\n")):
+        bad = _write_url_file(tmp_path / name, data)
+        with pytest.raises(step9.Step9Error):
+            step9._resolve_database_url(
+                mock.Mock(database_url=None, database_url_file=bad))
+    with pytest.raises(step9.Step9Error):
+        step9._resolve_database_url(
+            mock.Mock(database_url=None,
+                      database_url_file=str(tmp_path / "missing.url")))
+    with pytest.raises(step9.Step9Error):
+        step9._resolve_database_url(
+            mock.Mock(database_url=None, database_url_file="relative.url"))
+
+
+def test_no_credential_in_artifacts(tmp_path: Path) -> None:
+    password = "S3cret-X9q moon"
+    url = f"postgresql://observer:{password}@127.0.0.1:55440/clashlens"
+    url_file = _write_url_file(tmp_path / "db.url", (url + "\n").encode())
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    cohort = _write_cohort(tmp_path / "cohort.txt", TAGS)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope()))
+    run_dir = tmp_path / "run"
+    arguments = _start_args(run_dir, cohort, deployed_receipt=str(receipt_path),
+                            database_url=None, database_url_file=url_file)
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        step9.cmd_start(arguments, db)
+    sample_args = mock.Mock(run_dir=str(run_dir), podman_bin="podman",
+                            database_url=None, database_url_file=None)
+    assert step9.cmd_sample(sample_args, _sample_hooks(db)) == 0
+    retained = "".join(path.read_text(encoding="utf-8", errors="replace")
+                       for path in run_dir.rglob("*") if path.is_file())
+    assert password not in retained
+    assert "S3cret" not in retained
+    header = json.loads((run_dir / "run.json").read_text())
+    assert header["database_url_source"] == "file"
+
+
+def test_cli_start_accepts_url_file(tmp_path: Path) -> None:
+    db_url = _write_url_file(tmp_path / "db.url", b"postgresql://x\n")
+    assert db_url.endswith("db.url")
+
+
+def test_sample_resource_gate_stops(tmp_path: Path) -> None:
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    breached = _quiet_facts()
+    breached["filesystems"]["pool"]["use_pct"] = 95.0
+    hooks = _sample_hooks(db)
+    hooks["resource_facts"] = lambda run, db, metrics: breached
+    hooks["max_slots"] = 3
+    hooks["single_pass"] = False
+    assert step9.cmd_sample(arguments, hooks) == 1
+    sample = json.loads((run_dir / "samples" / "minute-0000.json").read_text())
+    assert sample["outcome"] == "resource_gate"
+    assert sample["resources"]["failures"] == ["filesystem_use_breach"]
+    assert list((run_dir / "failures").glob("filesystem_use_breach-*.json"))
+
+
+def test_archive_usage_real_sql() -> None:
+    import psycopg
+    from domain_test_support import domain_database
+
+    with domain_database(_pg_url(), include_coordinator=True) as info:
+        database = step9.Database(lambda: psycopg.connect(info))
+        with psycopg.connect(info, autocommit=True) as connection:
+            assert database.archive_usage() == (0, 0)
+            connection.execute(
+                "INSERT INTO archive_instances (instance_id, endpoint, region,"
+                " bucket, marker_key, marker_hash, marker_payload_version)"
+                " VALUES ('i1', 'e', 'r', 'b', 'm', %s, 'v1')", ("ab" * 32,))
+            for digest, size in (("cd" * 32, 100), ("ef" * 32, 200)):
+                connection.execute(
+                    "INSERT INTO archive_catalogue (response_hash,"
+                    " archive_reference, byte_size, archive_instance_id)"
+                    " VALUES (%s, %s, %s, 'i1')",
+                    (digest, f"ref-{digest[:8]}", size))
+        assert database.archive_usage() == (300, 2)

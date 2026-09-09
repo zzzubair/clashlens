@@ -545,8 +545,17 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "watchdog_unit": arguments.watchdog_unit,
         "max_invocation_gap_seconds": getattr(
             arguments, "max_invocation_gap_seconds", 5),
+        "database_url_source": ("file" if getattr(
+            arguments, "database_url_file", None) else (
+                "argv" if getattr(arguments, "database_url", None)
+                else "none")),
         "bootstrap_run_id": getattr(arguments, "bootstrap_run_id", None),
         "budget_receipt": budget_receipt,
+        "archive_eur_per_gib": getattr(arguments, "archive_eur_per_gib", None),
+        "resource_baseline": collect_resource_facts(
+            spool_path=arguments.spool_path,
+            postgres_path=arguments.postgres_path, db=db, metrics=None,
+            eur_per_gib=getattr(arguments, "archive_eur_per_gib", None)),
         "filesystem": filesystem_facts(arguments.spool_path,
                                         arguments.postgres_path),
         "admission": _admission_header(db, mode_name, run_id, core_start,
@@ -880,6 +889,12 @@ class Database:
                                       "deadline_at", "updated_at"), r))
                          for r in cursor.fetchall()]
             return {"run": run_row, "budgets": budgets}
+        return self._one_txn(work)
+
+    def archive_usage(self) -> tuple:
+        def work(cursor):
+            cursor.execute(SQL_ARCHIVE_USAGE)
+            return tuple(cursor.fetchone())
         return self._one_txn(work)
 
     def active_queues(self) -> dict:
@@ -1261,6 +1276,9 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
     unavailable_strikes = 0
     container_probe = hooks.get("container_probe")
     baseline_fs = (run.get("filesystem") or {})
+    resource_baseline = run.get("resource_baseline") or {}
+    eur_per_gib = run.get("archive_eur_per_gib")
+    mem_over = 0
     for index in range(max_slots):
         expected_utc = slot_expected_utc(core_start, index)
         captured_utc = hooks.get("now_utc", _utc_now)()
@@ -1313,6 +1331,22 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                 sample["container"] = None
             sample["mount_changed"] = _mount_changed(baseline_fs,
                                                       sample["filesystem"])
+            facts_hook = hooks.get("resource_facts")
+            if facts_hook is not None:
+                resources = facts_hook(run=run, db=db, metrics=metrics)
+            else:
+                resources = collect_resource_facts(
+                    spool_path=run["spool_path"],
+                    postgres_path=run["postgres_path"], db=db,
+                    metrics=metrics, eur_per_gib=eur_per_gib,
+                    btrfs_probe=hooks.get("btrfs_probe"))
+            res_failures, res_unknown, mem_over = evaluate_resource_gates(
+                resource_baseline, resources, mem_over)
+            sample["resources"] = {"failures": res_failures,
+                                     "unknown": res_unknown}
+            if res_failures:
+                sample["failure_code"] = res_failures[0]
+                sample["outcome"] = "resource_gate"
             if metrics is not None:
                 previous_metrics = metrics
             name = f"minute-{index:04d}.json"
@@ -1329,10 +1363,11 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
             outcome = sample["outcome"]
             if outcome in ("clock_jump", "boot_change", "non_monotonic",
                            "out_of_order", "late", "admission_mismatch",
-                           "process_restart"):
+                           "process_restart", "resource_gate"):
                 _record_failure(run_dir, sample["failure_code"], outcome)
                 outcome_strikes += 1
-                if outcome_strikes >= 2 or outcome == "process_restart":
+                if outcome_strikes >= 2 or outcome in ("process_restart",
+                                                      "resource_gate"):
                     return 1
             elif outcome == "on_time" and db_error is None \
                     and metrics_error is None:
@@ -2051,6 +2086,8 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--watchdog-unit", required=True)
     start.add_argument("--run-id", default=None)
     start.add_argument("--database-url", default=None)
+    start.add_argument("--database-url-file", default=None)
+    start.add_argument("--archive-eur-per-gib", type=float, default=None)
     start.add_argument("--bootstrap-run-id", default=None)
     start.add_argument("--mode", choices=sorted(MODES), default="live-day")
     start.add_argument("--max-invocation-gap-seconds", type=int, default=5)
@@ -2058,10 +2095,12 @@ def build_parser() -> argparse.ArgumentParser:
     sample = sub.add_parser("sample", help="run the minute sampling loop")
     _add_common(sample)
     sample.add_argument("--database-url", default=None)
+    sample.add_argument("--database-url-file", default=None)
 
     finalize = sub.add_parser("finalize", help="reconcile once and seal a manifest")
     _add_common(finalize)
     finalize.add_argument("--database-url", default=None)
+    finalize.add_argument("--database-url-file", default=None)
 
     validate = sub.add_parser("validate",
                               help="validate a sealed run without traffic or DB")
@@ -2076,9 +2115,45 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _cli_hooks(arguments: argparse.Namespace) -> dict:
-    """Build production hooks: real DB when --database-url is given."""
+def _read_database_url_file(path_str: str) -> str:
+    """Read a protected database URL file; never log or retain the value."""
+    from clashlens.bootstrap import read_secret_file
+
+    if not os.path.isabs(path_str):
+        raise Step9Error("db_url_file", "database URL file must be absolute")
+    try:
+        st = os.lstat(path_str)
+    except OSError as error:
+        raise Step9Error("db_url_file", "database URL file unreadable") from error
+    import stat as _stat
+
+    if not _stat.S_ISREG(st.st_mode):
+        raise Step9Error("db_url_file", "database URL file must be a file")
+    if st.st_mode & 0o077:
+        raise Step9Error("db_url_file", "database URL file must be private")
+    try:
+        value = read_secret_file(path_str)
+    except Exception as error:
+        raise Step9Error("db_url_file", "database URL file invalid") from error
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        raise Step9Error("db_url_file", "database URL file invalid")
+    return value
+
+
+def _resolve_database_url(arguments: argparse.Namespace) -> str | None:
     url = getattr(arguments, "database_url", None)
+    path = getattr(arguments, "database_url_file", None)
+    if url and path:
+        raise Step9Error("db_url_conflict",
+                         "use only one of --database-url/--database-url-file")
+    if path:
+        return _read_database_url_file(path)
+    return url
+
+
+def _cli_hooks(arguments: argparse.Namespace) -> dict:
+    """Build production hooks: real DB when a URL source is given."""
+    url = _resolve_database_url(arguments)
     if not url:
         return {}
     import psycopg
@@ -2092,10 +2167,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments.command == "start":
             db = None
-            if arguments.database_url:
+            url = _resolve_database_url(arguments)
+            if url:
                 import psycopg
 
-                url = arguments.database_url
                 db = Database(lambda: psycopg.connect(url))
             header = cmd_start(arguments, db)
             print(json.dumps({"run_id": header["run_id"],
@@ -2424,5 +2499,237 @@ def evaluate_preflight_envelope(*, workcounts: list[tuple],
                                 "max_cycle_at": str(intents[2])}}
 
 
+SQL_ARCHIVE_USAGE = """
+SELECT COALESCE(sum(byte_size), 0), count(*)
+FROM archive_catalogue
+"""
+
+for _statement in (SQL_ARCHIVE_USAGE,):
+    assert_read_only(_statement)
+
+ALL_RO_STATEMENTS += (SQL_ARCHIVE_USAGE,)
+
+RES_FS_USE_PCT_MAX = 80.0
+RES_FS_FREE_MIN = 200 * 1024**3
+RES_PHYS_GROWTH_MAX = 64 * 1024**3
+RES_BTRFS_METADATA_MAX = 80.0
+RES_BTRFS_UNALLOC_MIN = 100 * 1024**3
+RES_MEM_USED_MAX = 4 * 1024**3
+RES_ARCHIVE_LOGICAL_MAX = 16 * 1024**3
+RES_ARCHIVE_PHYSICAL_MAX = 64 * 1024**3
+RES_ARCHIVE_OBJECTS_MAX = 100_000
+RES_ARCHIVE_COST_MAX = 4.50
+
+
+def _parse_btrfs_usage(stdout: str) -> dict:
+    meta_size = meta_used = 0
+    unallocated = None
+    for line in (stdout or "").splitlines():
+        line = line.strip()
+        match = re.fullmatch(
+            r"(Metadata\w*),[^:]*: Size: (\d+), Used: (\d+).*", line)
+        if match:
+            meta_size += int(match.group(2))
+            meta_used += int(match.group(3))
+            continue
+        match = re.fullmatch(r"Unallocated:\s*(\d+).*", line)
+        if match:
+            unallocated = int(match.group(1))
+    metadata_pct = (100.0 * meta_used / meta_size) if meta_size else None
+    return {"metadata_pct": metadata_pct, "unallocated_bytes": unallocated}
+
+
+def _btrfs_probe_numbers(target: str) -> dict:
+    result: dict = {"metadata_pct": None, "unallocated_bytes": None,
+                    "error": None, "stderr": None}
+    try:
+        from scripts import spool_filesystem_check as spool_check
+
+        probe = spool_check._btrfs_probe(Path(target))
+    except Exception as error:  # noqa: BLE001 - probe miss is unknown
+        result["error"] = "probe_unavailable:" + type(error).__name__
+        return result
+    if probe.get("error"):
+        result["error"] = probe["error"]
+        return result
+    if probe.get("stderr"):
+        result["stderr"] = "diagnostic_stderr"
+    parsed = _parse_btrfs_usage(probe.get("stdout", ""))
+    result.update(parsed)
+    if parsed["metadata_pct"] is None and parsed["unallocated_bytes"] is None:
+        result["error"] = result["error"] or "allocation_evidence_missing"
+    return result
+
+
+def evaluate_resource_gates(baseline: dict, current: dict,
+                            mem_over: int) -> tuple[list[str], list[str], int]:
+    """Compare real probe fields against Phase 4 thresholds.
+
+    Returns (failures, unknowns, mem_over): null stays unknown/failure,
+    never zero. mem_over counts consecutive memory-over samples.
+    """
+    failures: list[str] = []
+    unknown: list[str] = []
+    base_fs = (baseline.get("filesystems") or {})
+    for key, facts in (current.get("filesystems") or {}).items():
+        use_pct = facts.get("use_pct")
+        free_b = facts.get("free_bytes")
+        if use_pct is None or free_b is None:
+            unknown.append("filesystem_unknown")
+        else:
+            if use_pct >= RES_FS_USE_PCT_MAX:
+                failures.append("filesystem_use_breach")
+            if free_b < RES_FS_FREE_MIN:
+                failures.append("filesystem_free_breach")
+        old = base_fs.get(key, {})
+        if facts.get("used_bytes") is not None \
+                and old.get("used_bytes") is not None:
+            if facts["used_bytes"] - old["used_bytes"] > RES_PHYS_GROWTH_MAX:
+                failures.append("physical_growth_breach")
+        else:
+            unknown.append("physical_growth_unknown")
+        btrfs = facts.get("btrfs") or {}
+        if btrfs.get("error"):
+            unknown.append("btrfs_evidence_" + str(btrfs["error"]))
+        if btrfs.get("stderr"):
+            failures.append("btrfs_diagnostic_stderr")
+        old_btrfs = old.get("btrfs") or {}
+        if old_btrfs.get("error") is None and btrfs.get("error"):
+            failures.append("btrfs_new_error")
+        meta_pct = btrfs.get("metadata_pct")
+        if meta_pct is None:
+            unknown.append("btrfs_metadata_unknown")
+        elif meta_pct >= RES_BTRFS_METADATA_MAX:
+            failures.append("btrfs_metadata_breach")
+        unalloc = btrfs.get("unallocated_bytes")
+        if unalloc is None:
+            unknown.append("btrfs_unallocated_unknown")
+        elif unalloc < RES_BTRFS_UNALLOC_MIN:
+            failures.append("btrfs_unallocated_breach")
+    mem = current.get("memory") or {}
+    old_mem = baseline.get("memory") or {}
+    if mem.get("oom_kills") is not None \
+            and old_mem.get("oom_kills") is not None:
+        if mem["oom_kills"] > old_mem["oom_kills"]:
+            failures.append("oom_kill_observed")
+    else:
+        unknown.append("oom_unknown")
+    if mem.get("swap_used_bytes") is not None \
+            and old_mem.get("swap_used_bytes") is not None:
+        if mem["swap_used_bytes"] > old_mem["swap_used_bytes"]:
+            failures.append("swap_growth")
+    else:
+        unknown.append("swap_unknown")
+    if mem.get("used_bytes") is None:
+        unknown.append("memory_unknown")
+    elif mem["used_bytes"] > RES_MEM_USED_MAX:
+        mem_over += 1
+        if mem_over >= 2:
+            failures.append("memory_over")
+    else:
+        mem_over = 0
+    archive = current.get("archive") or {}
+    if archive.get("logical_bytes") is None or archive.get("objects") is None:
+        unknown.append("archive_unknown")
+    else:
+        if archive["logical_bytes"] > RES_ARCHIVE_LOGICAL_MAX:
+            failures.append("archive_logical_breach")
+        if archive["objects"] > RES_ARCHIVE_OBJECTS_MAX:
+            failures.append("archive_objects_breach")
+    if archive.get("physical_bytes") is None:
+        unknown.append("archive_physical_unknown")
+    elif archive["physical_bytes"] > RES_ARCHIVE_PHYSICAL_MAX:
+        failures.append("archive_physical_breach")
+    if archive.get("cost_eur") is None:
+        unknown.append("archive_cost_unknown")
+    elif archive["cost_eur"] > RES_ARCHIVE_COST_MAX:
+        failures.append("archive_cost_breach")
+    return sorted(set(failures)), sorted(set(unknown)), mem_over
+
+
+def collect_resource_facts(*, spool_path: str, postgres_path: str,
+                           db: object | None, metrics: dict | None,
+                           eur_per_gib: float | None,
+                           btrfs_probe=None) -> dict:
+    probe = btrfs_probe or _btrfs_probe_numbers
+    filesystems: dict[str, dict] = {}
+    for label, target in (("spool", spool_path), ("postgres", postgres_path)):
+        try:
+            facts = filesystem_facts(target, target)[label]
+        except Exception:  # noqa: BLE001 - probe miss is unknown
+            facts = {"mount_point": None, "source": None,
+                     "filesystem_type": "unknown", "mnt_id": None,
+                     "free_bytes": None, "error": "filesystem_unavailable"}
+        try:
+            stat = os.statvfs(target)
+            total = stat.f_blocks * stat.f_frsize
+            free = stat.f_bavail * stat.f_frsize
+            used = total - free
+            use_pct = 100.0 * used / total if total else None
+        except OSError:
+            total, free, used, use_pct = None, facts.get("free_bytes"), None, None
+        key = str(facts.get("source") or facts.get("mount_point") or label)
+        entry = filesystems.setdefault(key, {
+            "key": key, "mount_point": facts.get("mount_point"),
+            "source": facts.get("source"), "mnt_id": facts.get("mnt_id"),
+            "filesystem_type": facts.get("filesystem_type"),
+            "total_bytes": total, "free_bytes": free, "used_bytes": used,
+            "use_pct": use_pct, "labels": [],
+            "btrfs": probe(target), "error": facts.get("error")})
+        entry["labels"].append(label)
+    pressure = host_pressure()
+    memory = pressure.get("memory") or {}
+    try:
+        text = Path("/proc/vmstat").read_text()
+        oom_kills = int(text.split("oom_kill ")[1].split()[0])
+    except (OSError, IndexError, ValueError):
+        oom_kills = None
+    try:
+        psi = Path("/proc/pressure/memory").read_text()
+        some = next(line for line in psi.splitlines()
+                    if line.startswith("some"))
+        psi_avg10 = float(some.split("avg10=")[1].split()[0])
+    except (OSError, IndexError, ValueError, StopIteration):
+        psi_avg10 = None
+    total_b = memory.get("total_bytes")
+    avail_b = memory.get("available_bytes")
+    swap_total = memory.get("swap_total_bytes")
+    swap_free = memory.get("swap_free_bytes")
+    archive: dict = {"logical_bytes": None, "objects": None,
+                     "physical_bytes": None, "cost_eur": None,
+                     "error": None}
+    if db is not None:
+        try:
+            logical, objects = db.archive_usage()
+            archive["logical_bytes"] = int(logical)
+            archive["objects"] = int(objects)
+        except Exception as error:  # noqa: BLE001 - probe miss is unknown
+            archive["error"] = "catalogue_unavailable:" + type(error).__name__
+    else:
+        archive["error"] = "database_unavailable"
+    spool_bytes = None
+    if metrics is not None:
+        for name, value in (metrics.get("counters") or {}).items():
+            if "spool_final_bytes" in name:
+                spool_bytes = value
+                break
+    if isinstance(spool_bytes, (int, float)):
+        archive["physical_bytes"] = int(spool_bytes)
+    if archive["logical_bytes"] is not None and eur_per_gib is not None:
+        archive["cost_eur"] = archive["logical_bytes"] / 1024**3 * eur_per_gib
+    return {"filesystems": filesystems,
+            "memory": {"used_bytes": (total_b - avail_b
+                                          if total_b is not None
+                                          and avail_b is not None else None),
+                         "swap_used_bytes": (swap_total - swap_free
+                                              if swap_total is not None
+                                              and swap_free is not None
+                                              else None),
+                         "oom_kills": oom_kills, "psi_avg10": psi_avg10,
+                         "error": pressure.get("error")},
+            "archive": archive}
+
+
 if __name__ == "__main__":
     sys.exit(main())
+

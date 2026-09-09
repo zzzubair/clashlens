@@ -391,3 +391,24 @@ requires a deployed-stack receipt whose configuration pins
 receipts fail closed. Runtime counters come from B1's query-free
 `GET /runtime-metrics` Prometheus exposition; process-identity change stops
 the run and pool gauges are exempt from counter-continuity.
+
+### Phase 4 resource gates and protected database URL
+
+Every command that touches the database accepts either `--database-url` or
+`--database-url-file`, never both. The file must be absolute, a regular
+private file (no group/other bits), at most 4 KiB, single-line UTF-8 with no
+control characters; symlinks, wrong permissions, and malformed content fail
+closed. The URL value is never written to artifacts, failure records, or
+usage output; run.json records only which source was used.
+
+`start` pins a resource baseline; each minute sample compares real probes
+against these fixed Phase 4 stop/fail thresholds and stops the sampler (exit
+1) on the first breach: filesystem use ≥80%, free space <200 GiB, shared-pool
+physical growth >64 GiB from baseline, Btrfs metadata ≥80% of allocated,
+Btrfs unallocated <100 GiB, any new Btrfs probe error or diagnostic stderr,
+any OOM-kill increase, any swap growth, host memory used >4 GiB for two
+consecutive samples, archive logical >16 GiB, archive physical >64 GiB,
+archive objects >100k, or estimated archive cost >EUR 4.50. Filesystems
+sharing one pool are evaluated once. Missing probe fields stay unknown
+(recorded, never zero). Pass `--archive-eur-per-gib RATE` to enable the cost
+gate; without a rate the cost stays unknown.
