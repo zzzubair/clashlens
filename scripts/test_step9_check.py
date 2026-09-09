@@ -2109,14 +2109,24 @@ def _quiet_facts():
 
 
 def test_parse_btrfs_usage_cases() -> None:
-    separate = ("Data,single: Size: 1000, Used: 100\n"
-                "Metadata,DUP: Size: 200, Used: 50\n"
-                "Unallocated: 5000\n")
-    parsed = step9._parse_btrfs_usage(separate)
-    assert parsed == {"metadata_pct": 25.0, "unallocated_bytes": 5000}
+    spaced = ("Data,single: Size: 1000, Used: 100\n"
+              "Metadata,DUP: Size: 200, Used: 50\n"
+              "Unallocated: 5000\n")
+    assert step9._parse_btrfs_usage(spaced) == {
+        "metadata_pct": 25.0, "unallocated_bytes": 5000}
+    actual = ("WARNING: cannot read detailed chunk info, per-device usage will not be shown, run as root\n"
+              "Overall:\n"
+              "    Device unallocated:              932285775872\n"
+              "Data,single: Size:80539025408, Used:78130692096 (97.01%)\n"
+              "Metadata,DUP: Size:4294967296, Used:2506653696 (58.36%)\n")
+    parsed = step9._parse_btrfs_usage(actual)
+    assert parsed["unallocated_bytes"] == 932285775872
+    assert round(parsed["metadata_pct"], 2) == 58.36
     combined = "Data+Metadata,single: Size: 4, Used: 1\nUnallocated: 8\n"
     parsed = step9._parse_btrfs_usage(combined)
     assert parsed == {"metadata_pct": None, "unallocated_bytes": 8}
+    assert step9._parse_btrfs_usage("Device unallocated: nope\n") == {
+        "metadata_pct": None, "unallocated_bytes": None}
     assert step9._parse_btrfs_usage("") == {
         "metadata_pct": None, "unallocated_bytes": None}
 
