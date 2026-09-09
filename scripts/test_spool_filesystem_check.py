@@ -116,6 +116,22 @@ def test_btrfs_probe_requires_complete_allocation_output(tmp_path: Path) -> None
         assert result["allocation_evidence"] == expected_evidence
         assert result["stdout"] == stdout
 
+    warning = (
+        "WARNING: cannot read detailed chunk info, per-device usage will not be shown, "
+        "run as root\n"
+    )
+    completed = subprocess.CompletedProcess(
+        args=["btrfs"],
+        returncode=0,
+        stdout="Data,single: Size: 1, Used: 1\nMetadata,DUP: Size: 1, Used: 1\n",
+        stderr=warning,
+    )
+    with mock.patch.object(check.subprocess, "run", return_value=completed):
+        result = check._btrfs_probe(target)
+    assert result["error"] == "diagnostic_stderr"
+    assert result["stderr"] == warning
+    assert result["allocation_evidence"] == "separate"
+
     long_output = (
         "Data,single: Size: 1, Used: 1\nMetadata,DUP: Size: 1, Used: 1\n"
         + "x" * check.PROBE_STDOUT_LIMIT

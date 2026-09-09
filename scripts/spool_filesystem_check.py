@@ -182,6 +182,8 @@ def _btrfs_result(
             error = "empty_output"
         elif stdout_truncated or stderr_truncated:
             error = "output_truncated"
+        elif stderr_text.strip():
+            error = "diagnostic_stderr"
         elif allocation_evidence is None:
             error = "allocation_evidence_missing"
     return {
