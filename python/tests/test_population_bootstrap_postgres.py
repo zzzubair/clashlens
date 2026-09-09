@@ -266,6 +266,49 @@ def test_concurrent_distinct_run_ids_serialize_fail_closed(
             )
 
 
+def test_partial_replay_reports_full_converged_aggregate(
+    database_url: str, tmp_path
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        tags = [_tag(61), _tag(62), _tag(63)]
+        settings = _setup(tmp_path, connection_info, tags)
+        set_digest = hashlib.sha256("\n".join(sorted(tags)).encode()).hexdigest()
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            # Simulate a crash after an earlier attempt committed one
+            # player's discovery job but died before the run-row update.
+            connection.execute(
+                """INSERT INTO population_bootstrap_runs (
+                       run_id, manifest_sha256, manifest_count,
+                       normalized_set_sha256, status, batch_size
+                   ) VALUES (%s, %s, %s, %s, 'started', 500)""",
+                (RUN_ID, settings["expected_sha256"], len(tags), set_digest),
+            )
+            connection.execute(
+                """INSERT INTO players (normalized_tag, active, eligibility_state)
+                   SELECT tag, false, 'unknown'
+                   FROM unnest(%s::text[]) AS tag""",
+                (tags,),
+            )
+            first_id = connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s", (tags[0],)
+            ).fetchone()[0]
+            created = connection.execute(
+                "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
+                ([first_id],),
+            ).fetchone()[0]
+            assert created == 1
+        report = _direct(settings)
+        assert report["players_registered"] == 3
+        assert report["discovery_jobs_created"] == 3
+        with psycopg.connect(connection_info) as connection:
+            run = connection.execute(
+                """SELECT status, players_registered, discovery_jobs_created
+                   FROM population_bootstrap_runs WHERE run_id = %s""",
+                (RUN_ID,),
+            ).fetchone()
+            assert run == ("complete", 3, 3)
+
+
 def test_partial_batch_resume_converges(
     database_url: str, tmp_path
 ) -> None:

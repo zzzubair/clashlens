@@ -287,8 +287,6 @@ def bootstrap_population(
                     ),
                 )
 
-        players_registered = 0
-        discovery_jobs_created = 0
         for offset in range(0, len(tags), BOOTSTRAP_BATCH_SIZE):
             chunk = tags[offset : offset + BOOTSTRAP_BATCH_SIZE]
             with connection.transaction():
@@ -300,11 +298,6 @@ def bootstrap_population(
                        ON CONFLICT (normalized_tag) DO NOTHING""",
                     (chunk,),
                 )
-                players_registered += connection.execute(
-                    """SELECT count(*) FROM players
-                       WHERE normalized_tag = ANY(%s::text[])""",
-                    (chunk,),
-                ).fetchone()[0]
                 player_ids = [
                     row[0]
                     for row in connection.execute(
@@ -313,11 +306,29 @@ def bootstrap_population(
                         (chunk,),
                     ).fetchall()
                 ]
-                created = connection.execute(
+                connection.execute(
                     "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
                     (player_ids,),
-                ).fetchone()[0]
-                discovery_jobs_created += created
+                )
+
+        # Recompute the durable aggregates from the cohort's actual roots
+        # after convergence. A replayed batch reuses existing jobs (which
+        # report zero created), so only a post-pass count is exact. These
+        # are counts over the cohort set; no tags or IDs leave the database.
+        players_registered = connection.execute(
+            """SELECT count(*) FROM players
+               WHERE normalized_tag = ANY(%s::text[])""",
+            (tags,),
+        ).fetchone()[0]
+        discovery_jobs_created = connection.execute(
+            """SELECT count(*) FROM collector_jobs
+               WHERE work_type = 'discovery_profile'
+                 AND player_id IN (
+                     SELECT id FROM players
+                     WHERE normalized_tag = ANY(%s::text[])
+                 )""",
+            (tags,),
+        ).fetchone()[0]
 
         connection.execute(
             """UPDATE population_bootstrap_runs

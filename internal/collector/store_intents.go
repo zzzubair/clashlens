@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -520,17 +519,52 @@ func (s *store) scheduleGlobalRankings(ctx context.Context, now time.Time, cycle
 		return false, nil
 	}
 	cycleStart := now.UTC().Truncate(cycle)
-	return s.insertGlobalRankingsCycle(ctx, cycleStart)
+	var created bool
+	err = s.withGlobalRankingsCycleLock(ctx, cycleStart, func(tx pgx.Tx) error {
+		var err error
+		created, err = insertGlobalRankingsCycleTx(ctx, tx, cycleStart)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return created, nil
 }
 
-// insertGlobalRankingsCycle records one immutable global Top-200 intent and
-// its collector root. A repeated cycle inserts nothing and reports false.
-func (s *store) insertGlobalRankingsCycle(ctx context.Context, cycleStart time.Time) (bool, error) {
+// globalRankingsLockKey scopes one advisory lock per cycle so the
+// scheduler and manual admission fully serialize for the same cycle: a
+// terminal transition cannot slip between lookup and insert.
+func globalRankingsLockKey(cycleStart time.Time) string {
+	return "global-rankings:" + cycleStart.Format(time.RFC3339)
+}
+
+func (s *store) withGlobalRankingsCycleLock(ctx context.Context, cycleStart time.Time, work func(pgx.Tx) error) error {
+	transaction, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin ranking admission transaction: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+	if _, err := transaction.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, globalRankingsLockKey(cycleStart)); err != nil {
+		return fmt.Errorf("lock ranking admission cycle: %w", err)
+	}
+	if err := work(transaction); err != nil {
+		return err
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("commit ranking admission: %w", err)
+	}
+	return nil
+}
+
+// insertGlobalRankingsCycleTx records one immutable global Top-200 intent
+// and its collector root. A repeated cycle inserts nothing and reports
+// false. Callers must hold the cycle lock.
+func insertGlobalRankingsCycleTx(ctx context.Context, transaction pgx.Tx, cycleStart time.Time) (bool, error) {
 	priority := 300
 	if cycleStart.Hour() == 5 && cycleStart.Minute() == 0 {
 		priority = 400
 	}
-	command, err := s.pool.Exec(ctx, `
+	command, err := transaction.Exec(ctx, `
 		WITH intent AS (
 			INSERT INTO global_rankings_intents (cycle_at) VALUES ($2)
 			ON CONFLICT DO NOTHING
@@ -572,59 +606,53 @@ func (s *store) enqueueGlobalRankingsCycle(ctx context.Context, cycleStart time.
 		return false, errors.New("global rankings intents need contract version 2")
 	}
 	// A root of any status already admits the cycle: replay is idempotent
-	// and never re-arms a terminal root.
-	found, identical, err := s.latestGlobalRankingsRoot(ctx, cycleStart)
-	if err != nil {
-		return false, err
-	}
-	if found {
-		if !identical {
-			return false, errGlobalRankingsCollision
-		}
-		return false, nil
-	}
-	created, err := s.insertGlobalRankingsCycle(ctx, cycleStart)
-	if err != nil {
-		// The scheduler insert path reports an active coalescing-key
-		// collision as a unique violation instead of a no-op. That
-		// means a concurrent admission won the race; whoever won
-		// defines the identity.
-		var conflict *pgconn.PgError
-		if !errors.As(err, &conflict) || conflict.Code != "23505" {
-			return false, err
-		}
-		found, identical, err := s.latestGlobalRankingsRoot(ctx, cycleStart)
+	// and never re-arms a terminal root. Lookup and admission share the
+	// cycle lock, so a concurrent terminal transition cannot interleave.
+	var created bool
+	err = s.withGlobalRankingsCycleLock(ctx, cycleStart, func(transaction pgx.Tx) error {
+		found, identical, err := latestGlobalRankingsRootTx(ctx, transaction, cycleStart)
 		if err != nil {
-			return false, err
+			return err
+		}
+		if found {
+			if !identical {
+				return errGlobalRankingsCollision
+			}
+			return nil
+		}
+		admitted, err := insertGlobalRankingsCycleTx(ctx, transaction, cycleStart)
+		if err != nil {
+			return err
+		}
+		if !admitted {
+			// The intent exists but no root does: repair the orphaned
+			// admission.
+			if err := repairGlobalRankingsRootTx(ctx, transaction, cycleStart); err != nil {
+				return err
+			}
+		}
+		found, identical, err = latestGlobalRankingsRootTx(ctx, transaction, cycleStart)
+		if err != nil {
+			return err
 		}
 		if !found || !identical {
-			return false, errGlobalRankingsCollision
+			return errGlobalRankingsCollision
 		}
-		return false, nil
-	}
-	if !created {
-		// The intent exists but no root does: repair the orphaned
-		// admission.
-		if err := s.repairGlobalRankingsRoot(ctx, cycleStart); err != nil {
-			return false, err
-		}
-		if err := s.verifyLatestGlobalRankingsRoot(ctx, cycleStart); err != nil {
-			return false, err
-		}
-		return true, nil
-	}
-	if err := s.verifyLatestGlobalRankingsRoot(ctx, cycleStart); err != nil {
+		created = true
+		return nil
+	})
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	return created, nil
 }
 
-func (s *store) repairGlobalRankingsRoot(ctx context.Context, cycleStart time.Time) error {
+func repairGlobalRankingsRootTx(ctx context.Context, transaction pgx.Tx, cycleStart time.Time) error {
 	priority := 300
 	if cycleStart.Hour() == 5 && cycleStart.Minute() == 0 {
 		priority = 400
 	}
-	if _, err := s.pool.Exec(ctx, `
+	if _, err := transaction.Exec(ctx, `
 		INSERT INTO collector_jobs (
 			work_type, scope, player_id, normalized_tag, capacity_pool,
 			priority, due_at, coalescing_key, required_endpoint, status
@@ -640,15 +668,16 @@ func (s *store) repairGlobalRankingsRoot(ctx context.Context, cycleStart time.Ti
 	return nil
 }
 
-// latestGlobalRankingsRoot reports whether any root carries the cycle key
-// and whether the newest one bears the immutable ranking identity. The
+// latestGlobalRankingsRootTx reports whether any root carries the cycle
+// key and whether the newest one bears the immutable ranking identity. The
 // newest row wins because a terminal root supersedes earlier attempts; a
-// terminal replay with identical identity is an idempotent no-op.
-func (s *store) latestGlobalRankingsRoot(ctx context.Context, cycleStart time.Time) (found, identical bool, err error) {
+// terminal replay with identical identity is an idempotent no-op. Callers
+// must hold the cycle lock.
+func latestGlobalRankingsRootTx(ctx context.Context, transaction pgx.Tx, cycleStart time.Time) (found, identical bool, err error) {
 	var workType, scope, pool, requiredEndpoint string
 	var playerID *int64
 	var normalizedTag *string
-	if err := s.pool.QueryRow(ctx, `
+	if err := transaction.QueryRow(ctx, `
 		SELECT work_type, scope, capacity_pool, required_endpoint,
 		       player_id, normalized_tag
 		FROM collector_jobs
@@ -668,20 +697,6 @@ func (s *store) latestGlobalRankingsRoot(ctx context.Context, cycleStart time.Ti
 		pool == "normal" && requiredEndpoint == "global_player_rankings" &&
 		playerID == nil && normalizedTag == nil
 	return true, identical, nil
-}
-
-func (s *store) verifyLatestGlobalRankingsRoot(ctx context.Context, cycleStart time.Time) error {
-	found, identical, err := s.latestGlobalRankingsRoot(ctx, cycleStart)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return errors.New("global player rankings root is missing")
-	}
-	if !identical {
-		return errGlobalRankingsCollision
-	}
-	return nil
 }
 
 func resetBoundaryAtOrBefore(now time.Time) time.Time {

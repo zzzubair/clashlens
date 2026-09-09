@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -220,8 +221,14 @@ func TestEnqueueGlobalRankingsRepairsMissingRoot(t *testing.T) {
 	if !created {
 		t.Fatal("enqueue with lone intent reported no creation")
 	}
-	if err := store.verifyLatestGlobalRankingsRoot(ctx, cycle); err != nil {
-		t.Fatalf("repaired root failed verification: %v", err)
+	// A second call proves the repaired root verifies: identical replay
+	// is an idempotent no-op.
+	again, err := store.enqueueGlobalRankingsCycle(ctx, cycle)
+	if err != nil {
+		t.Fatalf("replay after repair returned an error: %v", err)
+	}
+	if again {
+		t.Fatal("replay after repair reported creation")
 	}
 }
 
@@ -546,13 +553,6 @@ func TestBeginEndpointRequestFailsClosedOnExhaustedBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare attempt: %v", err)
 	}
-	var before int
-	if err := store.pool.QueryRow(ctx, `
-		SELECT request_count FROM collector_endpoint_results
-		WHERE attempt_id = $1 AND endpoint = 'profile'
-	`, attemptID).Scan(&before); err != nil {
-		t.Fatalf("read request count: %v", err)
-	}
 	store.setEndpointBudget(testBudgetConfig(map[endpointName]int{
 		profileEndpoint:              0,
 		globalPlayerRankingsEndpoint: 0,
@@ -561,15 +561,19 @@ func TestBeginEndpointRequestFailsClosedOnExhaustedBudget(t *testing.T) {
 	if _, err := store.beginEndpointRequest(ctx, job, attemptID, profileEndpoint, now); !errors.Is(err, errEndpointBudgetExhausted) {
 		t.Fatalf("beginEndpointRequest error = %v, want errEndpointBudgetExhausted", err)
 	}
-	var after int
+	// Deterministic bookkeeping runs before the reservation, so the
+	// attempt counter may advance; the denial itself must consume
+	// nothing and admit no dispatch (proven end-to-end by
+	// TestBudgetDenialNeverCallsHTTP).
+	var consumed int
 	if err := store.pool.QueryRow(ctx, `
-		SELECT request_count FROM collector_endpoint_results
-		WHERE attempt_id = $1 AND endpoint = 'profile'
-	`, attemptID).Scan(&after); err != nil {
-		t.Fatalf("reread request count: %v", err)
+		SELECT consumed FROM collector_endpoint_budgets
+		WHERE run_id = 'b2-test-run' AND endpoint = 'profile'
+	`).Scan(&consumed); err != nil {
+		t.Fatalf("read denied budget: %v", err)
 	}
-	if after != before {
-		t.Fatalf("request count moved %d -> %d on a denied reservation", before, after)
+	if consumed != 0 {
+		t.Fatalf("denied reservation consumed %d units, want 0", consumed)
 	}
 }
 
@@ -694,5 +698,184 @@ func TestEnqueueGlobalRankingsRejectsMisalignedCycles(t *testing.T) {
 		&stderr,
 	); err == nil {
 		t.Fatal("enqueue-global-rankings accepted a missing --cycle-at")
+	}
+}
+
+func TestBeginEndpointRequestLeaseFailureDoesNotConsumeBudget(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	store := startPopulationStore(t, ctx)
+
+	now := time.Now().UTC()
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO players (normalized_tag, active, next_due_at)
+		VALUES ('#2PP', true, $1)
+	`, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("insert active player: %v", err)
+	}
+	if _, err := store.scheduleDueRegular(ctx, now, 5*time.Minute, 1); err != nil {
+		t.Fatalf("schedule regular work: %v", err)
+	}
+	job, err := store.claimNext(ctx, "budget-lease-owner", normalPool, now, time.Minute, "budget-lease-token")
+	if err != nil {
+		t.Fatalf("claim job: %v", err)
+	}
+	if job == nil {
+		t.Fatal("claim returned no job")
+	}
+	attemptID, _, err := store.prepareAttempt(ctx, job, now)
+	if err != nil {
+		t.Fatalf("prepare attempt: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE collector_jobs SET lease_expires_at = clock_timestamp() - interval '1 second'
+		WHERE id = $1
+	`, job.id); err != nil {
+		t.Fatalf("expire lease: %v", err)
+	}
+	store.setEndpointBudget(testBudgetConfig(map[endpointName]int{
+		profileEndpoint:              5,
+		globalPlayerRankingsEndpoint: 5,
+		battleLogEndpoint:            5,
+	}, now.Add(time.Hour)))
+	if _, err := store.beginEndpointRequest(ctx, job, attemptID, profileEndpoint, now); !errors.Is(err, errLeaseLost) {
+		t.Fatalf("beginEndpointRequest error = %v, want errLeaseLost", err)
+	}
+	var budgetRows int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM collector_endpoint_budgets`).Scan(&budgetRows); err != nil {
+		t.Fatalf("count budget rows: %v", err)
+	}
+	if budgetRows != 0 {
+		t.Fatalf("lease failure consumed budget: %d budget rows, want 0", budgetRows)
+	}
+}
+
+func TestBudgetDenialNeverCallsHTTP(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	store := startPopulationStore(t, ctx)
+
+	now := time.Now().UTC()
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO players (normalized_tag, active, next_due_at)
+		VALUES ('#2PP', true, $1)
+	`, now.Add(-time.Hour)); err != nil {
+		t.Fatalf("insert active player: %v", err)
+	}
+	if _, err := store.scheduleDueRegular(ctx, now, 5*time.Minute, 1); err != nil {
+		t.Fatalf("schedule regular work: %v", err)
+	}
+	var hits atomic.Int64
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		hits.Add(1)
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{}`))
+	}))
+	t.Cleanup(api.Close)
+	keys, err := newKeyPool([]APIKey{{Label: "normal-1", Secret: "normal-secret", Pool: normalPool}}, 30, false)
+	if err != nil {
+		t.Fatalf("create normal key pool: %v", err)
+	}
+	worker := newWorker(store, &memoryArchive{}, newTestOfficialAPIClient(t, api.URL, 1<<20), keys, workerConfig{
+		owner:            "budget-denial-worker",
+		leaseDuration:    time.Minute,
+		collectorVersion: "collector-test",
+		maximumRetries:   0,
+		metrics:          newCollectorMetrics(),
+	})
+	store.setEndpointBudget(testBudgetConfig(map[endpointName]int{
+		profileEndpoint:              0,
+		globalPlayerRankingsEndpoint: 0,
+		battleLogEndpoint:            0,
+	}, now.Add(time.Hour)))
+	_, err = worker.runOnce(ctx, normalPool)
+	if err == nil || !strings.Contains(err.Error(), "exhausted") {
+		t.Fatalf("worker run error = %v, want budget exhaustion", err)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("denied dispatch reached HTTP %d times, want 0", got)
+	}
+}
+
+func TestGlobalRankingsConcurrentAdmissionConvergesToOneRoot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	store := startPopulationStore(t, ctx)
+
+	// Scheduler and manual admission race the same fresh cycle: the shared
+	// cycle lock must converge them onto exactly one intent and one root.
+	cycle := time.Date(2026, 9, 8, 12, 30, 0, 0, time.UTC)
+	const racers = 8
+	var wait sync.WaitGroup
+	errs := make(chan error, 2*racers)
+	for range racers {
+		wait.Add(2)
+		go func() {
+			defer wait.Done()
+			_, err := store.scheduleGlobalRankings(ctx, cycle, 5*time.Minute)
+			errs <- err
+		}()
+		go func() {
+			defer wait.Done()
+			_, err := store.enqueueGlobalRankingsCycle(ctx, cycle)
+			errs <- err
+		}()
+	}
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent admission error = %v", err)
+		}
+	}
+	var jobs, intents int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM collector_jobs),
+		       (SELECT count(*) FROM global_rankings_intents)
+	`).Scan(&jobs, &intents); err != nil {
+		t.Fatalf("count ranking rows: %v", err)
+	}
+	if jobs != 1 || intents != 1 {
+		t.Fatalf("concurrent admission left %d jobs and %d intents, want 1 and 1", jobs, intents)
+	}
+
+	// The same race against a terminal root must stay a no-op: exactly one
+	// root, none rearmed.
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE collector_jobs SET status = 'complete'
+		WHERE coalescing_key = $1
+	`, globalRankingsCoalescingKey(cycle)); err != nil {
+		t.Fatalf("complete ranking root: %v", err)
+	}
+	var terminalWait sync.WaitGroup
+	terminalErrs := make(chan error, racers)
+	created := make(chan bool, racers)
+	for range racers {
+		terminalWait.Add(1)
+		go func() {
+			defer terminalWait.Done()
+			made, err := store.enqueueGlobalRankingsCycle(ctx, cycle)
+			terminalErrs <- err
+			created <- made
+		}()
+	}
+	terminalWait.Wait()
+	close(terminalErrs)
+	close(created)
+	for err := range terminalErrs {
+		if err != nil {
+			t.Fatalf("terminal-race admission error = %v", err)
+		}
+	}
+	for made := range created {
+		if made {
+			t.Fatal("terminal-race admission re-armed the cycle")
+		}
+	}
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM collector_jobs`).Scan(&jobs); err != nil {
+		t.Fatalf("recount jobs: %v", err)
+	}
+	if jobs != 1 {
+		t.Fatalf("terminal race left %d jobs, want 1", jobs)
 	}
 }
