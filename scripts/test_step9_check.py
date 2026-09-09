@@ -2988,6 +2988,12 @@ def test_tariff_oracle_counterexamples(tmp_path: Path) -> None:
     with pytest.raises(step9.Step9Error) as error:
         block(storage_projection_eur=0.01)
     assert error.value.code == "tariff_mismatch"
+    with pytest.raises(step9.Step9Error) as error:
+        block(tariff_eur_per_decimal_gb_hour="0.000044",
+              storage_projection_eur=3.535488,
+              combined_projection_eur=4.225488,
+              with_uncertainty_eur=6.338232)
+    assert error.value.code == "tariff_envelope_exceeded"
 
 
 def test_s3_nonzero_initial_counters(tmp_path: Path) -> None:

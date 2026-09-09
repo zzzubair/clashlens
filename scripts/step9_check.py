@@ -3304,6 +3304,9 @@ def _verify_tariff_math(payload: dict, rate_hour: Decimal,
         if stated != value:
             raise Step9Error("tariff_mismatch",
                              f"tariff {key} disagrees with rates and caps")
+    if expected["with_uncertainty_eur"] > Decimal("4.5"):
+        raise Step9Error("tariff_envelope_exceeded",
+                         "tariff uncertainty-adjusted envelope exceeds EUR 4.50")
 
 
 def _s3_prior_block(arguments: argparse.Namespace) -> dict:
