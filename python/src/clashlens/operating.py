@@ -155,6 +155,8 @@ SPOOL_INT_FIELDS = (
 )
 FILESYSTEM_TYPES = ("btrfs", "ext4", "xfs", "other", "unknown")
 INODE_MODELS = ("finite", "dynamic", "unknown")
+ARCHIVE_REMOTE_HEALTH = ("ready", "degraded", "terminal", "unconfigured")
+ARCHIVE_REMOTE_OPERATIONS = ("get", "bucket", "marker")
 SPOOL_CONFIG_FIELDS = (
     "max_body_bytes",
     "max_bytes",
@@ -768,6 +770,7 @@ def _validate_worker(value: Any) -> None:
             "database_pool",
             "queue",
             "spool",
+            "archive",
         ),
     )
     if worker["schema_version"] != 1:
@@ -834,6 +837,12 @@ def _validate_worker(value: Any) -> None:
         }
     ):
         raise OperatingFactsError("required_fact_invalid")
+    archive = _exact_keys(worker["archive"], ("remote_health", "remote_attempts"))
+    if archive["remote_health"] not in ARCHIVE_REMOTE_HEALTH:
+        raise OperatingFactsError("required_fact_invalid")
+    attempts = _exact_keys(archive["remote_attempts"], ARCHIVE_REMOTE_OPERATIONS)
+    for count in attempts.values():
+        _nonnegative_int(count)
 
 
 def _validate_workers(value: Any, database_captured_at: Any) -> None:

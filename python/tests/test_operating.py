@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -225,6 +227,10 @@ def _worker(*, captured_at: str = CAPTURED_AT) -> dict[str, object]:
         spool={"ready": True, "component": "spool", "reason": "ready"},
     )
     snapshot["captured_at"] = captured_at
+    snapshot["archive"] = {
+        "remote_health": "ready",
+        "remote_attempts": {"get": 0, "bucket": 0, "marker": 0},
+    }
     return snapshot
 
 
@@ -339,6 +345,31 @@ def test_private_worker_snapshot_is_atomically_replaced(tmp_path) -> None:
 
     assert json.loads(path.read_text(encoding="utf-8"))["value"] == 2
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_written_worker_file_is_accepted_by_operating_check_and_builder(
+    tmp_path,
+) -> None:
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "operating_check_written_worker_test", root / "scripts" / "operating_check.py"
+    )
+    assert spec and spec.loader
+    operating_check = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(operating_check)
+    path = tmp_path / "worker-operating.json"
+    write_private_snapshot(path, _worker())
+    worker = operating_check._json_source(path.read_text(encoding="utf-8"))
+
+    result = build_operating_snapshot(
+        database=_database(),
+        collector=_collector(),
+        python_api=_api(),
+        python_workers=[worker],
+        spool_config=_config(),
+    )
+
+    assert result["check"] == {"status": "healthy", "exit_code": 0, "reasons": []}
 
 
 def test_empty_healthy_snapshot_is_bounded_and_optional_stats_can_be_unavailable() -> None:
