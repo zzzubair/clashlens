@@ -435,9 +435,23 @@ def test_parse_runtime_metrics_wire_format() -> None:
     with pytest.raises(step9.Step9Error):
         step9.parse_runtime_metrics("bogus line here\n")
     # gauges may fall without tripping counter-reset
-    assert step9._check_counters_decreased(
-        {"clashlens_collector_database_pool_idle_connections{}": 5},
-        {"clashlens_collector_database_pool_idle_connections{}": 2}) is None
+    spool_gauges = {
+        "clashlens_spool_abandoned_temporary_bytes",
+        "clashlens_spool_abandoned_temporary_objects",
+        "clashlens_spool_final_bytes",
+        "clashlens_spool_final_objects",
+        "clashlens_spool_free_bytes",
+        "clashlens_spool_free_inodes",
+        "clashlens_spool_high_water_bytes",
+        "clashlens_spool_live_reservations",
+        "clashlens_spool_reserved_bytes",
+        "clashlens_spool_temporary_bytes",
+        "clashlens_spool_temporary_objects",
+    }
+    assert spool_gauges < step9._RUNTIME_GAUGES
+    for gauge in spool_gauges:
+        assert step9._check_counters_decreased(
+            {f"{gauge}{{}}": 5}, {f"{gauge}{{}}": 2}) is None
     assert step9._check_counters_decreased({"a_total{}": 5},
                                             {"a_total{}": 4}) == "a_total{}"
 

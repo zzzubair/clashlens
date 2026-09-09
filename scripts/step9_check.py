@@ -1158,6 +1158,17 @@ _RUNTIME_METRIC_LINE = re.compile(
 _RUNTIME_GAUGES = {
     "clashlens_collector_database_pool_acquired_connections",
     "clashlens_collector_database_pool_idle_connections",
+    "clashlens_spool_abandoned_temporary_bytes",
+    "clashlens_spool_abandoned_temporary_objects",
+    "clashlens_spool_final_bytes",
+    "clashlens_spool_final_objects",
+    "clashlens_spool_free_bytes",
+    "clashlens_spool_free_inodes",
+    "clashlens_spool_high_water_bytes",
+    "clashlens_spool_live_reservations",
+    "clashlens_spool_reserved_bytes",
+    "clashlens_spool_temporary_bytes",
+    "clashlens_spool_temporary_objects",
 }
 
 
