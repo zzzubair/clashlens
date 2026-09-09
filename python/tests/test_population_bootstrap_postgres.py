@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import psycopg
 import pytest
@@ -228,6 +230,40 @@ def test_replay_same_run_id_is_idempotent(
         assert json.loads((tmp_path / "result-second.json").read_bytes()) == json.loads(
             (tmp_path / "result.json").read_bytes()
         )
+
+
+def test_concurrent_distinct_run_ids_serialize_fail_closed(
+    database_url: str, tmp_path
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        tags = [_tag(91), _tag(92)]
+        first = _setup(tmp_path / "race-a", connection_info, tags, run_id="race-a")
+        second = _setup(tmp_path / "race-b", connection_info, tags, run_id="race-b")
+        barrier = threading.Barrier(2)
+        outcomes: dict[str, str] = {}
+
+        def attempt(settings: dict) -> None:
+            barrier.wait(timeout=30)
+            try:
+                _direct(settings)
+            except BootstrapError:
+                outcomes[settings["run_id"]] = "rejected"
+            else:
+                outcomes[settings["run_id"]] = "admitted"
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(attempt, (first, second)))
+        assert sorted(outcomes.values()) == ["admitted", "rejected"]
+        with psycopg.connect(connection_info) as connection:
+            runs = connection.execute(
+                "SELECT run_id, status FROM population_bootstrap_runs"
+            ).fetchall()
+            assert len(runs) == 1
+            assert runs[0][1] == "complete"
+            assert (
+                connection.execute("SELECT count(*) FROM players").fetchone()[0]
+                == 2
+            )
 
 
 def test_partial_batch_resume_converges(

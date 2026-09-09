@@ -693,6 +693,7 @@ for argument in \
   localhost/clashlens-collector:deployment localhost/clashlens-python:deployment \
   localhost/clashlens-website:deployment collector_database_pool_size=16 \
   player_discovery_enabled=true spool_max_body_bytes=4194304 worker_concurrency=20 \
+  official_api_proxy_url=http://100.64.0.1:3128 \
   admission_evidence_run_id=disabled admission_evidence_start=disabled admission_evidence_end=disabled admission_evidence_max_events=0 admission_evidence_max_selected_entries=0; do
   grep -Fxq "$argument" "$RECEIPT_DIR/python.log" || \
     fail "deployment-receipt omitted safe argument $argument"

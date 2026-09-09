@@ -97,6 +97,8 @@ def _candidate_receipt() -> dict:
             return "issue92"
         if name == "endpoint_budget_deadline_at":
             return "2026-09-09T06:00:00Z"
+        if name == "official_api_proxy_url":
+            return "http://100.64.0.1:3128"
         if name == "admission_evidence_run_id":
             return "disabled"
         if name in ("admission_evidence_start", "admission_evidence_end"):

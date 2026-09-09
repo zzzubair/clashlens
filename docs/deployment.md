@@ -75,7 +75,7 @@ resource budget.
 every worker replica then starts with `--disable-player-discovery`, so
 ranking and battle evidence is retained without enqueueing `discovery_profile`
 work for outside players. Global Top-200 collection stays enabled, and the
-choice is fingerprinted in the deployment receipt (`step10-v1`).
+choice is fingerprinted in the deployment receipt (`step12-v1`).
 
 `CLASHLENS_ENDPOINT_BUDGET_ENABLED` defaults to `false`. Enable it only for
 a fixed-population bootstrap run, with `CLASHLENS_ENDPOINT_BUDGET_RUN_ID`,
@@ -87,7 +87,9 @@ dispatch reserves one durable budget unit before the request, reservations
 survive restarts and are never refunded, and official redirects are refused.
 The enabled flag, the three caps, and the exact run identity and deadline
 are fingerprinted in the deployment receipt, so provenance proves which
-durable budget row the executing collector consumes.
+durable budget row the executing collector consumes. The exact official
+proxy URL is fingerprinted alongside them, so provenance proves the
+collector's egress route.
 
 Admit a protected manifest with the Python worker role (validates the whole
 manifest before the first write; replays idempotently under one run-id):

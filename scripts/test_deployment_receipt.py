@@ -23,6 +23,8 @@ def _valid_safe_config(name: str) -> str:
         return f"{name}=issue92"
     if name == "endpoint_budget_deadline_at":
         return f"{name}=2026-09-09T06:00:00Z"
+    if name == "official_api_proxy_url":
+        return f"{name}=http://100.64.0.1:3128"
     if name == "admission_evidence_run_id":
         return f"{name}=disabled"
     if name in ("admission_evidence_start", "admission_evidence_end"):
@@ -448,11 +450,11 @@ class DeploymentReceiptTest(unittest.TestCase):
                     ]
                     result = receipt.collect_receipt(args, FakeRunner())
                     self.assertEqual(result["configuration"]["fields"][key], good)
-                    self.assertEqual(result["configuration"]["allowlist_version"], "step11-v1")
+                    self.assertEqual(result["configuration"]["allowlist_version"], "step12-v1")
 
         old = deepcopy(receipt.collect_receipt(arguments(), FakeRunner()))
         old.pop("receipt_digest")
-        old["configuration"]["allowlist_version"] = "step10-v1"
+        old["configuration"]["allowlist_version"] = "step11-v1"
         with self.assertRaisesRegex(receipt.ReceiptError, "configuration is invalid"):
             receipt.validate_receipt(old)
 
@@ -524,6 +526,50 @@ class DeploymentReceiptTest(unittest.TestCase):
             disengaged["configuration"]["fields"]["endpoint_budget_deadline_at"],
             "",
         )
+
+    def test_official_proxy_url_is_preserved_exactly_and_rejects_unsafe(self) -> None:
+        result = receipt.collect_receipt(arguments(), FakeRunner())
+        self.assertEqual(
+            result["configuration"]["fields"]["official_api_proxy_url"],
+            "http://100.64.0.1:3128",
+        )
+        args = arguments()
+        args.safe_config = [
+            "official_api_proxy_url=https://proxy.example:8080"
+            if item.startswith("official_api_proxy_url=")
+            else item
+            for item in args.safe_config
+        ]
+        preserved = receipt.collect_receipt(args, FakeRunner())
+        self.assertEqual(
+            preserved["configuration"]["fields"]["official_api_proxy_url"],
+            "https://proxy.example:8080",
+        )
+        for bad in (
+            "",
+            "http://user:secret@100.64.0.1:3128",
+            "http://user@100.64.0.1:3128",
+            "http://100.64.0.1:3128/path",
+            "http://100.64.0.1:3128?query=1",
+            "http://100.64.0.1:3128#fragment",
+            "socks5://100.64.0.1:3128",
+            "ftp://100.64.0.1:3128",
+            "HTTP://100.64.0.1:3128",
+            "http://",
+            "100.64.0.1:3128",
+        ):
+            with self.subTest(value=bad):
+                args = arguments()
+                args.safe_config = [
+                    f"official_api_proxy_url={bad}"
+                    if item.startswith("official_api_proxy_url=")
+                    else item
+                    for item in args.safe_config
+                ]
+                with self.assertRaisesRegex(
+                    receipt.ReceiptError, "configuration value"
+                ):
+                    receipt.collect_receipt(args, FakeRunner())
     def test_admission_evidence_configuration_is_all_or_none_and_bounded(self) -> None:
         def with_admission(items: list[str], **overrides: str) -> list[str]:
             result = list(items)
@@ -553,7 +599,7 @@ class DeploymentReceiptTest(unittest.TestCase):
             with self.assertRaisesRegex(receipt.ReceiptError, "all-or-none"):
                 receipt.collect_receipt(args, FakeRunner())
             break
-        # Fully enabled valid run passes and stays on step11-v1.
+        # Fully enabled valid run passes and stays on step12-v1.
         enabled = [item for item in base if not item.startswith("admission_evidence_")] + [
             "admission_evidence_run_id=step9-run-v1",
             "admission_evidence_start=2026-09-10T05:00:00Z",
@@ -564,7 +610,7 @@ class DeploymentReceiptTest(unittest.TestCase):
         args = arguments()
         args.safe_config = enabled
         result = receipt.collect_receipt(args, FakeRunner())
-        self.assertEqual(result["configuration"]["allowlist_version"], "step11-v1")
+        self.assertEqual(result["configuration"]["allowlist_version"], "step12-v1")
         self.assertEqual(result["configuration"]["fields"]["admission_evidence_run_id"], "step9-run-v1")
         # Over-quota and over-duration fail.
         for bad in [

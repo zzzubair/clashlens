@@ -953,6 +953,7 @@ write_deployment_receipt() {
     --safe-config "endpoint_budget_global_rankings=$CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS" \
     --safe-config "endpoint_budget_profile=$CLASHLENS_ENDPOINT_BUDGET_PROFILE" \
     --safe-config "endpoint_budget_run_id=$CLASHLENS_ENDPOINT_BUDGET_RUN_ID" \
+    --safe-config "official_api_proxy_url=$CLASHLENS_OFFICIAL_API_PROXY_URL" \
     --safe-config "player_discovery_enabled=$CLASHLENS_PLAYER_DISCOVERY_ENABLED" \
     --safe-config "spool_free_inode_floor=$CLASHLENS_SPOOL_FREE_INODE_FLOOR" \
     --safe-config "spool_free_space_floor=$CLASHLENS_SPOOL_FREE_SPACE_FLOOR" \

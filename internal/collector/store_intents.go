@@ -571,46 +571,52 @@ func (s *store) enqueueGlobalRankingsCycle(ctx context.Context, cycleStart time.
 	if contractVersion < 2 {
 		return false, errors.New("global rankings intents need contract version 2")
 	}
+	// A root of any status already admits the cycle: replay is idempotent
+	// and never re-arms a terminal root.
+	found, identical, err := s.latestGlobalRankingsRoot(ctx, cycleStart)
+	if err != nil {
+		return false, err
+	}
+	if found {
+		if !identical {
+			return false, errGlobalRankingsCollision
+		}
+		return false, nil
+	}
 	created, err := s.insertGlobalRankingsCycle(ctx, cycleStart)
 	if err != nil {
 		// The scheduler insert path reports an active coalescing-key
-		// collision as a unique violation instead of a no-op. The
-		// enqueue command treats that as a possible replay and falls
-		// through to the immutable identity check below.
+		// collision as a unique violation instead of a no-op. That
+		// means a concurrent admission won the race; whoever won
+		// defines the identity.
 		var conflict *pgconn.PgError
 		if !errors.As(err, &conflict) || conflict.Code != "23505" {
 			return false, err
 		}
-	}
-	if created {
-		if err := s.verifyGlobalRankingsRoot(ctx, cycleStart); err != nil {
+		found, identical, err := s.latestGlobalRankingsRoot(ctx, cycleStart)
+		if err != nil {
 			return false, err
 		}
-		return true, nil
+		if !found || !identical {
+			return false, errGlobalRankingsCollision
+		}
+		return false, nil
 	}
-	var activeRootExists bool
-	if err := s.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM collector_jobs
-			WHERE coalescing_key = $1
-				AND status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
-		)
-	`, globalRankingsCoalescingKey(cycleStart)).Scan(&activeRootExists); err != nil {
-		return false, fmt.Errorf("read global player rankings root: %w", err)
-	}
-	if !activeRootExists {
+	if !created {
+		// The intent exists but no root does: repair the orphaned
+		// admission.
 		if err := s.repairGlobalRankingsRoot(ctx, cycleStart); err != nil {
 			return false, err
 		}
-		if err := s.verifyGlobalRankingsRoot(ctx, cycleStart); err != nil {
+		if err := s.verifyLatestGlobalRankingsRoot(ctx, cycleStart); err != nil {
 			return false, err
 		}
 		return true, nil
 	}
-	if err := s.verifyGlobalRankingsRoot(ctx, cycleStart); err != nil {
+	if err := s.verifyLatestGlobalRankingsRoot(ctx, cycleStart); err != nil {
 		return false, err
 	}
-	return false, nil
+	return true, nil
 }
 
 func (s *store) repairGlobalRankingsRoot(ctx context.Context, cycleStart time.Time) error {
@@ -634,32 +640,45 @@ func (s *store) repairGlobalRankingsRoot(ctx context.Context, cycleStart time.Ti
 	return nil
 }
 
-func (s *store) verifyGlobalRankingsRoot(ctx context.Context, cycleStart time.Time) error {
-	// The oldest active root carries the cycle identity; terminal rows may
-	// share the key after retries, and due_at may move during recovery.
-	var workType, scope, pool, requiredEndpoint, coalescingKey string
+// latestGlobalRankingsRoot reports whether any root carries the cycle key
+// and whether the newest one bears the immutable ranking identity. The
+// newest row wins because a terminal root supersedes earlier attempts; a
+// terminal replay with identical identity is an idempotent no-op.
+func (s *store) latestGlobalRankingsRoot(ctx context.Context, cycleStart time.Time) (found, identical bool, err error) {
+	var workType, scope, pool, requiredEndpoint string
 	var playerID *int64
 	var normalizedTag *string
 	if err := s.pool.QueryRow(ctx, `
 		SELECT work_type, scope, capacity_pool, required_endpoint,
-		       coalescing_key, player_id, normalized_tag
+		       player_id, normalized_tag
 		FROM collector_jobs
 		WHERE coalescing_key = $1
-			AND status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
-		ORDER BY id
+		ORDER BY id DESC
 		LIMIT 1
 	`, globalRankingsCoalescingKey(cycleStart)).Scan(
 		&workType, &scope, &pool, &requiredEndpoint,
-		&coalescingKey, &playerID, &normalizedTag,
+		&playerID, &normalizedTag,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return errors.New("global player rankings root is missing")
+			return false, false, nil
 		}
-		return fmt.Errorf("read global player rankings root: %w", err)
+		return false, false, fmt.Errorf("read global player rankings root: %w", err)
 	}
-	if workType != "global_player_rankings" || scope != "global" ||
-		pool != "normal" || requiredEndpoint != "global_player_rankings" ||
-		playerID != nil || normalizedTag != nil {
+	identical = workType == "global_player_rankings" && scope == "global" &&
+		pool == "normal" && requiredEndpoint == "global_player_rankings" &&
+		playerID == nil && normalizedTag == nil
+	return true, identical, nil
+}
+
+func (s *store) verifyLatestGlobalRankingsRoot(ctx context.Context, cycleStart time.Time) error {
+	found, identical, err := s.latestGlobalRankingsRoot(ctx, cycleStart)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("global player rankings root is missing")
+	}
+	if !identical {
 		return errGlobalRankingsCollision
 	}
 	return nil

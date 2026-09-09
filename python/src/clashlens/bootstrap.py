@@ -216,67 +216,76 @@ def bootstrap_population(
         if version is None or version[0] != CONTRACT_VERSION:
             raise BootstrapError("database_contract_unsupported")
 
-        existing = _run_row(connection, run_id)
-        if existing is not None:
-            if (
-                existing["manifest_sha256"] != manifest.raw_sha256
-                or existing["manifest_count"] != len(tags)
-                or existing["normalized_set_sha256"]
-                != manifest.normalized_set_sha256
-                or existing["batch_size"] != BOOTSTRAP_BATCH_SIZE
-            ):
-                raise BootstrapError("bootstrap_run_collision")
-            if existing["status"] == "complete":
-                report = _report(
-                    run_id,
-                    manifest,
-                    batch_size=BOOTSTRAP_BATCH_SIZE,
-                    players_registered=existing["players_registered"],
-                    discovery_jobs_created=existing[
-                        "discovery_jobs_created"
-                    ],
-                )
-                _write_result_file(result_file, report)
-                return report
-            # Same run-id, still started: replay every batch below. Each
-            # batch is idempotent, so a partial run simply converges.
-        else:
-            other_runs = connection.execute(
-                "SELECT count(*) FROM population_bootstrap_runs"
-            ).fetchone()[0]
-            if other_runs:
-                raise BootstrapError("bootstrap_run_collision")
-            if (
-                connection.execute(
-                    "SELECT count(*) FROM players WHERE active"
-                ).fetchone()[0]
-            ):
-                raise BootstrapError("database_already_has_active_players")
-            if (
-                connection.execute(
-                    "SELECT count(*) FROM collector_jobs WHERE scope = 'player'"
-                ).fetchone()[0]
-            ):
-                raise BootstrapError("database_already_has_player_work")
-            if (
-                connection.execute(
-                    "SELECT count(*) FROM global_rankings_intents"
-                ).fetchone()[0]
-            ):
-                raise BootstrapError("database_already_has_ranking_intent")
+        # Serialize the fresh-run check/insert so two concurrent run IDs
+        # cannot both pass the no-earlier-run invariant. The transaction
+        # advisory lock mirrors the admission-evidence pattern; the loser
+        # blocks here, then re-reads committed state and fails closed.
+        with connection.transaction():
             connection.execute(
-                """INSERT INTO population_bootstrap_runs (
-                       run_id, manifest_sha256, manifest_count,
-                       normalized_set_sha256, status, batch_size
-                   ) VALUES (%s, %s, %s, %s, 'started', %s)""",
-                (
-                    run_id,
-                    manifest.raw_sha256,
-                    len(tags),
-                    manifest.normalized_set_sha256,
-                    BOOTSTRAP_BATCH_SIZE,
-                ),
+                "SELECT pg_advisory_xact_lock(hashtextextended("\
+                "'population_bootstrap', 0))"
             )
+            existing = _run_row(connection, run_id)
+            if existing is not None:
+                if (
+                    existing["manifest_sha256"] != manifest.raw_sha256
+                    or existing["manifest_count"] != len(tags)
+                    or existing["normalized_set_sha256"]
+                    != manifest.normalized_set_sha256
+                    or existing["batch_size"] != BOOTSTRAP_BATCH_SIZE
+                ):
+                    raise BootstrapError("bootstrap_run_collision")
+                if existing["status"] == "complete":
+                    report = _report(
+                        run_id,
+                        manifest,
+                        batch_size=BOOTSTRAP_BATCH_SIZE,
+                        players_registered=existing["players_registered"],
+                        discovery_jobs_created=existing[
+                            "discovery_jobs_created"
+                        ],
+                    )
+                    _write_result_file(result_file, report)
+                    return report
+                # Same run-id, still started: replay every batch below. Each
+                # batch is idempotent, so a partial run simply converges.
+            else:
+                other_runs = connection.execute(
+                    "SELECT count(*) FROM population_bootstrap_runs"
+                ).fetchone()[0]
+                if other_runs:
+                    raise BootstrapError("bootstrap_run_collision")
+                if (
+                    connection.execute(
+                        "SELECT count(*) FROM players WHERE active"
+                    ).fetchone()[0]
+                ):
+                    raise BootstrapError("database_already_has_active_players")
+                if (
+                    connection.execute(
+                        "SELECT count(*) FROM collector_jobs WHERE scope = 'player'"
+                    ).fetchone()[0]
+                ):
+                    raise BootstrapError("database_already_has_player_work")
+                if (
+                    connection.execute(
+                        "SELECT count(*) FROM global_rankings_intents"
+                    ).fetchone()[0]
+                ):
+                    raise BootstrapError("database_already_has_ranking_intent")
+                connection.execute(
+                    """INSERT INTO population_bootstrap_runs (
+                           run_id, manifest_sha256, manifest_count,
+                           normalized_set_sha256, status, batch_size
+                       ) VALUES (%s, %s, %s, %s, 'started', %s)""",
+                    (
+                        run_id,
+                        manifest.raw_sha256,
+                        len(tags),
+                        manifest.normalized_set_sha256,
+                        BOOTSTRAP_BATCH_SIZE,
+                    ),
+                )
 
         players_registered = 0
         discovery_jobs_created = 0

@@ -32,6 +32,7 @@ func startPopulationDatabase(t *testing.T, ctx context.Context) string {
 		"0001_collector.sql",
 		"0002_python_layer.sql",
 		"0007_player_discovery.sql",
+		"0022_step9_regular_admission_evidence.sql",
 		"0023_population_bootstrap.sql",
 	} {
 		applySQLFile(t, bootstrapContext, connection, filepath.Join("..", "..", "deploy", "migrations", migration))
@@ -219,8 +220,42 @@ func TestEnqueueGlobalRankingsRepairsMissingRoot(t *testing.T) {
 	if !created {
 		t.Fatal("enqueue with lone intent reported no creation")
 	}
-	if err := store.verifyGlobalRankingsRoot(ctx, cycle); err != nil {
+	if err := store.verifyLatestGlobalRankingsRoot(ctx, cycle); err != nil {
 		t.Fatalf("repaired root failed verification: %v", err)
+	}
+}
+
+func TestEnqueueGlobalRankingsTerminalReplayIsIdempotent(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	store := startPopulationStore(t, ctx)
+
+	cycle := time.Date(2026, 9, 8, 12, 25, 0, 0, time.UTC)
+	if _, err := store.enqueueGlobalRankingsCycle(ctx, cycle); err != nil {
+		t.Fatalf("first enqueue returned an error: %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE collector_jobs SET status = 'complete'
+		WHERE coalescing_key = $1
+	`, globalRankingsCoalescingKey(cycle)); err != nil {
+		t.Fatalf("complete ranking root: %v", err)
+	}
+	created, err := store.enqueueGlobalRankingsCycle(ctx, cycle)
+	if err != nil {
+		t.Fatalf("terminal replay returned an error: %v", err)
+	}
+	if created {
+		t.Fatal("terminal replay reported creation; it must not re-arm a terminal root")
+	}
+	var jobs, intents int
+	if err := store.pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM collector_jobs),
+		       (SELECT count(*) FROM global_rankings_intents)
+	`).Scan(&jobs, &intents); err != nil {
+		t.Fatalf("count ranking rows: %v", err)
+	}
+	if jobs != 1 || intents != 1 {
+		t.Fatalf("ranking rows = %d jobs and %d intents, want 1 and 1", jobs, intents)
 	}
 }
 

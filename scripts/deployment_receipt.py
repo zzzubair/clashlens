@@ -39,6 +39,7 @@ SAFE_CONFIGURATION_FIELDS = {
     "endpoint_budget_global_rankings",
     "endpoint_budget_profile",
     "endpoint_budget_run_id",
+    "official_api_proxy_url",
     "player_discovery_enabled",
     "spool_free_inode_floor",
     "spool_free_space_floor",
@@ -51,7 +52,7 @@ SAFE_CONFIGURATION_FIELDS = {
     "worker_lease_seconds",
     "worker_replicas",
 }
-CONFIGURATION_ALLOWLIST_VERSION = "step11-v1"
+CONFIGURATION_ALLOWLIST_VERSION = "step12-v1"
 _IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}\Z")
 _HEX_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -61,6 +62,7 @@ _SAFE_VALUE = re.compile(r"[0-9]{1,20}\Z")
 _SAFE_BOOLEAN = re.compile(r"(?:true|false)\Z")
 _SAFE_BOOLEAN_FIELDS = frozenset({"endpoint_budget_enabled", "player_discovery_enabled"})
 _SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_SAFE_PROXY_URL = re.compile(r"https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?\Z")
 _SAFE_RFC3339 = re.compile(
     r"[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])"
     r"T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
@@ -610,6 +612,8 @@ def _configuration_value(key: str, value: str) -> str:
         return _bounded(value, _IDENTITY, "configuration value")
     if key in ("admission_evidence_start", "admission_evidence_end"):
         return _bounded(value, _ADMISSION_TIMESTAMP, "configuration value")
+    if key == "official_api_proxy_url":
+        return _bounded(value, _SAFE_PROXY_URL, "configuration value")
     return _bounded(value, _SAFE_VALUE, "configuration value")
 
 
@@ -913,6 +917,8 @@ def validate_receipt(receipt: dict[str, Any], *, require_digest: bool = False) -
             _require_text(value, _IDENTITY, "configuration value")
         elif key in ("admission_evidence_start", "admission_evidence_end"):
             _require_text(value, _ADMISSION_TIMESTAMP, "configuration value")
+        elif key == "official_api_proxy_url":
+            _require_text(value, _SAFE_PROXY_URL, "configuration value")
         else:
             _require_text(value, _SAFE_VALUE, "configuration value")
     _configuration_identity_binding(fields)
