@@ -77,6 +77,7 @@ jobs:
         run: |
           uv run pytest -q
           uv run pytest -q ../scripts/test_operating_check.py
+          uv run pytest -q ../scripts/test_step9_check.py
           uv run pytest -q ../scripts/test_issue82_storage_slice.py
           uv run pytest -q ../scripts/test_spool_filesystem_check.py
           PYTHONPATH=.. uv run pytest -q ../scripts/test_deployment_receipt.py

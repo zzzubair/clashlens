@@ -266,3 +266,67 @@ target-host outputs for review. The dedicated `army-analytics` mode
 asserts the warmed 200 ms p95, forced-miss five-second bound, four-lane overlap,
 queue-drain, and five-minute gates;
 its output is retained before a hard-gate failure returns nonzero.
+
+## Step 9 live-day observer (issue #92)
+
+`scripts/step9_check.py` is the bounded read-only observer/validator/watchdog
+for the Step 9 full Legend-day test. It is not a scheduler, collector,
+service, or benchmark: it only records evidence and checks it. Exit `0`
+means a complete valid action, `1` an objective live gate failure, and `2`
+absent, malformed, mixed, or unavailable evidence. Each live command writes a
+fixed-code failure record before returning when the run directory is writable.
+
+```sh
+RUN=/home/clashlens/results/step9-YYYYMMDD-SHA
+install -d -m 0700 "$RUN"
+
+python3 scripts/step9_check.py start \
+  --run-dir "$RUN" \
+  --cohort-file /protected/legend-tags-2026-09-08.txt \
+  --deployed-receipt /retained/clashlens-deployed-stack.json \
+  --core-start 2026-MM-DDT05:00:00Z \
+  --core-end 2026-MM-DDT05:00:00Z \
+  --collector-container clashlens-issue92-COLLECTOR \
+  --postgres-container clashlens-issue92-POSTGRES \
+  --python-api-container clashlens-issue92-API \
+  --python-worker-container clashlens-issue92-WORKER \
+  --worker-replicas N \
+  --runtime-metrics-url http://127.0.0.1:PORT/runtime-metrics \
+  --spool-path /actual/spool/path \
+  --postgres-path /actual/postgres/path \
+  --deadline 2026-MM-DDT05:TAIL:00Z \
+  --watchdog-unit clashlens-step9-sampler-RUN \
+  [--database-url postgresql://...]
+
+systemd-run --user --unit clashlens-step9-watchdog-RUN \
+  --property=Type=exec --property=Restart=on-failure \
+  --property=RestartSec=5s --property=RuntimeMaxSec=RUN_SECONDS \
+  --property='ExecStopPost=/usr/bin/podman stop --ignore --time 30 clashlens-issue92-COLLECTOR' \
+  python3 scripts/step9_check.py watchdog \
+    --run-dir "$RUN" --deadline 2026-MM-DDT05:TAIL:00Z \
+    --max-sample-age-seconds 125 \
+    --collector-container clashlens-issue92-COLLECTOR \
+    --systemd-unit clashlens-step9-sampler-RUN
+
+systemd-run --user --unit clashlens-step9-sampler-RUN \
+  --property=Type=exec --property=Restart=no \
+  python3 scripts/step9_check.py sample --run-dir "$RUN"
+
+python3 scripts/step9_check.py finalize --run-dir "$RUN"
+python3 scripts/step9_check.py validate --run-dir "$RUN"
+sha256sum "$RUN/manifest.json"
+```
+
+This template documents invocation only; fill every placeholder in the Phase 4
+go/no-go record first. There is no verified live-day command today.
+
+Rules the tool enforces: one continuous 05:00 UTC to 05:00 UTC core day with
+exactly 288 five-minute windows and 1440 minute samples; cohort input capped
+at 1 MiB and 20,000 lines with duplicate-after-normalization rejection;
+fewer than 12,500 eligible supplied players is valid while zero eligible,
+any active outside player, or any outside player-scoped collection lineage
+fails the gate; missing or malformed evidence is unknown/failure, never zero;
+artifacts are written exclusively and never replaced; the run directory is
+capped at 256 MiB; semantic regular-window admission reconciliation stays
+pending the validated admission handoff and `validate` refuses any run that
+claims it complete before that integration.
