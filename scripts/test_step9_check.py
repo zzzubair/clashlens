@@ -2549,6 +2549,7 @@ def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
                 "digest": "x"}
 
     run_dir, run = _sealed_preflight(tmp_path, "drain", db)
+    _pin_resources(run_dir)
     # rewrite: drive the loop directly with a stopping collector
     import shutil
     shutil.rmtree(run_dir / "samples")
@@ -2599,6 +2600,7 @@ def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
     # authorized stop at minute 60: absent metrics pass through the drain
     db2 = FakeDB(rows=[_eligible_row(1, TAGS[0])])
     run_dir2, _run2 = _sealed_preflight(tmp_path, "drain2", db2)
+    _pin_resources(run_dir2)
     shutil.rmtree(run_dir2 / "samples")
     (run_dir2 / "samples").mkdir()
     stopped = {"at": 60}
