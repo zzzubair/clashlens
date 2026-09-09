@@ -480,4 +480,8 @@ query-free runtime metrics, plus Python worker `remote_attempts` summed
 across replicas. Decreases fail closed; the mandatory rehearsal prior
 defaults to the exact 21 retained qualification requests and is overridable
 with `--prior-s3-attempts N` (integer 0..100000) plus bounded provenance;
-crossing 100,000 cumulative stops the run.
+crossing 100,000 cumulative stops the run. Before production observer start,
+the host must include the scheduler-once S3 marker's actual retry-aware
+transport count in that prior, or a proven conservative bound: count every
+operation and each transport retry, with no outer-call estimate or double
+counting.

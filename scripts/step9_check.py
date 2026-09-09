@@ -2571,6 +2571,8 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--archive-route-host", default=None)
     start.add_argument("--prior-s3-attempts", type=int, default=None)
     start.add_argument("--prior-s3-provenance", default=None)
+    start.add_argument("--prior-transfer-bytes", type=int, default=None)
+    start.add_argument("--prior-transfer-provenance", default=None)
     start.add_argument("--bootstrap-run-id", default=None)
     start.add_argument("--mode", choices=sorted(MODES), default="live-day")
     start.add_argument("--max-invocation-gap-seconds", type=int, default=None,

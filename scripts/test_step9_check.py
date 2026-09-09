@@ -3060,3 +3060,39 @@ def test_s3_prior_input_contract(tmp_path: Path) -> None:
                              prior_s3_provenance=bad_provenance)
             assert error.value.code == "s3_prior_invalid"
 
+
+
+def test_all_prior_flags_coexist(tmp_path: Path) -> None:
+    """Parser keeps wire+S3 prior flags adjacent; all four feed run.json."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        _run_dir, header = _started_run(
+            tmp_path, db, run_dir_name="priors",
+            prior_transfer_bytes=1024,
+            prior_transfer_provenance="wire-partial-1k",
+            prior_s3_attempts=9,
+            prior_s3_provenance="rehearsal-partial-9")
+        assert header["transfer_prior_bytes"] == 1024
+        assert header["transfer_prior_provenance"] == "wire-partial-1k"
+        assert header["s3_prior"]["attempts"] == 9
+
+
+def test_cli_parses_all_prior_flags(tmp_path: Path) -> None:
+    args = [
+        "start", "--run-dir", str(tmp_path), "--mode", "preflight",
+        "--cohort-file", "cohort", "--deployed-receipt", "receipt",
+        "--core-start", "2026-10-04T05:00:00Z",
+        "--core-end", "2026-10-05T05:00:00Z",
+        "--collector-container", "collector", "--postgres-container", "pg",
+        "--python-api-container", "api", "--python-worker-container", "worker",
+        "--runtime-metrics-url", "http://metrics", "--spool-path", "/tmp",
+        "--postgres-path", "/tmp", "--deadline", "2026-10-05T05:10:00Z",
+        "--watchdog-unit", "unit",
+        "--prior-transfer-bytes", "10", "--prior-transfer-provenance", "p",
+        "--prior-s3-attempts", "11", "--prior-s3-provenance", "q"]
+    namespace = step9.build_parser().parse_args(args)
+    assert namespace.prior_transfer_bytes == 10
+    assert namespace.prior_transfer_provenance == "p"
+    assert namespace.prior_s3_attempts == 11
+    assert namespace.prior_s3_provenance == "q"
