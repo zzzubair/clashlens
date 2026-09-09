@@ -42,7 +42,7 @@ def _test_postgres() -> dict[str, object]:
             "max_connections": "100",
             "track_io_timing": "off",
         },
-        "applied_migration_versions": [*range(1, 22), 23],
+        "applied_migration_versions": list(range(1, 24)),
     }
 
 
@@ -90,8 +90,22 @@ def _candidate_receipt() -> dict:
     from scripts import deployment_receipt
 
     migrations = runner._source_migrations()
+    def _field(name: str) -> str:
+        if name in ("endpoint_budget_enabled", "player_discovery_enabled"):
+            return "true"
+        if name == "endpoint_budget_run_id":
+            return "issue92"
+        if name == "endpoint_budget_deadline_at":
+            return "2026-09-09T06:00:00Z"
+        if name == "admission_evidence_run_id":
+            return "disabled"
+        if name in ("admission_evidence_start", "admission_evidence_end"):
+            return "disabled"
+        if name in ("admission_evidence_max_events", "admission_evidence_max_selected_entries"):
+            return "0"
+        return "1"
     fields = {
-        name: _valid_safe_value(name)
+        name: _field(name)
         for name in sorted(deployment_receipt.SAFE_CONFIGURATION_FIELDS)
     }
     configuration = {
@@ -131,7 +145,7 @@ def _candidate_receipt() -> dict:
         "application_images": images,
         "database": {
             "contract_version": 5,
-            "applied_migration_versions": [*range(1, 22), 23],
+            "applied_migration_versions": list(range(1, 24)),
             "server_version": "18.6",
             "server_version_num": "180006",
             "system_identifier": "1234567890",

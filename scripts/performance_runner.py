@@ -45,9 +45,9 @@ DUPLICATE_ENDPOINT_MIX = {
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
 ARTIFACT_SCHEMA_VERSION = 10
 CANDIDATE_RECEIPT_SCHEMA_VERSION = 2
-# Migration 0022 is reserved for separate admission evidence, so the
-# required set skips it while requiring the population-bootstrap 0023.
-REQUIRED_MIGRATION_VERSIONS = (*range(1, 22), 23)
+# Migrations 0022 (admission evidence) and 0023 (population bootstrap) are
+# both required; the gap reservation is retired by this integration.
+REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 24))
 CANONICAL_REPOSITORY_URL = "https://github.com/zzzubair/clashlens"
 CONFIGURATION_KEYS = {
     "mode",

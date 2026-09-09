@@ -108,6 +108,19 @@ Enqueue the single aligned Global Top-200 cycle with the collector role:
 collector enqueue-global-rankings --cycle-at 2026-09-08T05:00:00Z
 ```
 
+`CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID/_START/_END/_MAX_EVENTS/_MAX_SELECTED_ENTRIES`
+are all-or-none. Leave all five unset for production (evidence disabled,
+scheduler SQL unchanged). When set, they pin one bounded run: UTC capture
+interval at most 30 hours, at most 108000 events and 5000000 selected
+entries, exact equality with the run header and receipt fingerprint.
+The scheduler writes one evidence row per invocation inside an explicit
+transaction (advisory lock, locked header, fresh snapshot), commits the
+durable stop before returning `admission_evidence_capacity_exceeded` or
+`admission_evidence_capture_out_of_range`, and records nullable observed
+profile state without changing active-only selection. Scheduler defaults
+stay one second, batch 1000, five-minute cycle. Disabled receipt fields use
+`disabled`/`0` sentinels under the same `step9-v1` allowlist.
+
 ### Fixed-egress proxy
 
 `deploy/egress-proxy/` deploys the narrow CONNECT proxy on the fixed-egress
@@ -135,7 +148,11 @@ volume, never as an upgrade of existing data.
 
 The collector contract version is separate from the schema migration number.
 The production contract is version 5. The current forward-migration set is
-0001 through 0021. Migrations 0016–0021 add [compact history and operator-only
+0001 through 0023. Migration 0022 adds the optional bounded regular-admission
+evidence pair (run header plus per-invocation rows, at most 108000 events and
+5000000 selected entries, no automatic deletion, contract stays 5). Migration
+0023 adds the population-bootstrap run record and the durable run-scoped
+endpoint budget ledger (contract stays 5). Migrations 0016–0021 add [compact history and operator-only
 retention](history-retention.md); they do not delete existing evidence.
 Migrations 0009 through 0015 add the raw-evidence,
 boundary-publication, parsed-content deduplication, bounded backfill,
@@ -154,9 +171,9 @@ curl --fail http://127.0.0.1:8081/readyz
 - `init` starts PostgreSQL and applies migration 0001 only to an absent
   database. It refuses an initialized database.
 - `up` builds the collector image, advances the database through all missing
-  migrations (0001–0021 on a fresh database), configures runtime role
+  migrations (0001–0022 on a fresh database), configures runtime role
   passwords, and stages the required collector with Global Top-200 disabled.
-  A contract-v1 upgrade uses the bridge collector while migrations 0002–0021
+  A contract-v1 upgrade uses the bridge collector while migrations 0002–0022
   are applied, then replaces it with the disabled required collector.
 - `build-collector`, `build-python`, and `build-website` build images only.
 - `restart` is the start-only recovery path for a contract-v5 stack. It does
@@ -226,7 +243,7 @@ install -d -m 0700 "$RESULTS_DIR"
 `candidate-prepare` refuses default or existing candidate resources and any
 configured application-container name that already exists, starts only the
 configured PostgreSQL container, and verifies every migration from 0001 through
-0021. Candidate resources carry the fixed
+0022. Candidate resources carry the fixed
 `org.clashlens.scope=candidate` label; the preparation path verifies those
 labels and exact names after creation before applying migrations. Scope/label
 overrides in `app.env` are rejected before resource mutation. Never aim it at

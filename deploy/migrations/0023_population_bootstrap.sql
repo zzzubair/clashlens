@@ -64,11 +64,6 @@ GRANT SELECT, INSERT, UPDATE ON TABLE collector_endpoint_budgets
 -- Python-worker role; it must never mint or consume budget units.
 GRANT SELECT ON TABLE collector_endpoint_budgets TO clashlens_python_worker;
 
--- The bootstrap precheck runs under the existing Python-worker role, so it
--- reads only the ranking cycle identity column, never ranking evidence.
-GRANT SELECT (cycle_at) ON TABLE global_rankings_intents
-    TO clashlens_python_worker;
-
 INSERT INTO clash_lens_schema_migrations (version) VALUES (23)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;

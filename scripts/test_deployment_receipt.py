@@ -16,14 +16,23 @@ SOURCE_SHA = "01" * 20
 IMAGE_ID = "sha256:" + "02" * 32
 
 
-def _valid_safe_value(name: str) -> str:
+def _valid_safe_config(name: str) -> str:
     if name in receipt._SAFE_BOOLEAN_FIELDS:
-        return "true"
+        return f"{name}=true"
     if name == "endpoint_budget_run_id":
-        return "issue92"
+        return f"{name}=issue92"
     if name == "endpoint_budget_deadline_at":
-        return "2026-09-09T06:00:00Z"
-    return "1"
+        return f"{name}=2026-09-09T06:00:00Z"
+    if name == "admission_evidence_run_id":
+        return f"{name}=disabled"
+    if name in ("admission_evidence_start", "admission_evidence_end"):
+        return f"{name}=disabled"
+    if name in (
+        "admission_evidence_max_events",
+        "admission_evidence_max_selected_entries",
+    ):
+        return f"{name}=0"
+    return f"{name}=1"
 
 
 class FakeRunner:
@@ -43,7 +52,7 @@ class FakeRunner:
     ) -> None:
         self.dirty = dirty
         self.revision_label = revision_label
-        self.applied = applied or [*range(1, 22), 23]
+        self.applied = applied or list(range(1, 24))
         self.image_id = image_id
         self.scope_label = scope_label
         self.present_containers = present_containers or set()
@@ -142,7 +151,7 @@ def arguments(scope: str = "candidate-preparation") -> Namespace:
         worker_container="step8-python-worker",
         website_container="step8-website",
         safe_config=[
-            f"{name}={_valid_safe_value(name)}"
+            _valid_safe_config(name)
             for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
         ],
         created_at="2026-08-28T20:00:00+00:00",
@@ -193,7 +202,7 @@ class DeploymentReceiptTest(unittest.TestCase):
         self.assertTrue(
             all(not item["present"] for item in resources["application_containers"]["worker_replicas"])
         )
-        self.assertEqual(len(result["migrations"]), 22)
+        self.assertEqual(len(result["migrations"]), 23)
         self.assertTrue(all(item["applied"] for item in result["migrations"]))
         self.assertRegex(result["receipt_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertFalse(
@@ -237,7 +246,7 @@ class DeploymentReceiptTest(unittest.TestCase):
     def test_deployed_receipt_inspects_every_configured_worker(self) -> None:
         deployed = arguments("deployed-stack")
         deployed.safe_config = [
-            f"{name}={'3' if name == 'worker_replicas' else _valid_safe_value(name)}"
+            f"{name}=3" if name == "worker_replicas" else _valid_safe_config(name)
             for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
         ]
         runner = FakeRunner()
@@ -439,11 +448,11 @@ class DeploymentReceiptTest(unittest.TestCase):
                     ]
                     result = receipt.collect_receipt(args, FakeRunner())
                     self.assertEqual(result["configuration"]["fields"][key], good)
-                    self.assertEqual(result["configuration"]["allowlist_version"], "step10-v1")
+                    self.assertEqual(result["configuration"]["allowlist_version"], "step11-v1")
 
         old = deepcopy(receipt.collect_receipt(arguments(), FakeRunner()))
         old.pop("receipt_digest")
-        old["configuration"]["allowlist_version"] = "step9-v1"
+        old["configuration"]["allowlist_version"] = "step10-v1"
         with self.assertRaisesRegex(receipt.ReceiptError, "configuration is invalid"):
             receipt.validate_receipt(old)
 
@@ -515,6 +524,58 @@ class DeploymentReceiptTest(unittest.TestCase):
             disengaged["configuration"]["fields"]["endpoint_budget_deadline_at"],
             "",
         )
+    def test_admission_evidence_configuration_is_all_or_none_and_bounded(self) -> None:
+        def with_admission(items: list[str], **overrides: str) -> list[str]:
+            result = list(items)
+            for key, value in overrides.items():
+                for index, item in enumerate(result):
+                    if item.startswith(key + "="):
+                        result[index] = f"{key}={value}"
+            return result
+
+        base = arguments().safe_config
+        # Disabled sentinels pass.
+        receipt.collect_receipt(arguments(), FakeRunner())
+        # Partial enablement fails.
+        for key in ("admission_evidence_run_id", "admission_evidence_start", "admission_evidence_end", "admission_evidence_max_events", "admission_evidence_max_selected_entries"):
+            args = arguments()
+            args.safe_config = with_admission(base, **{key: "1" if "max" in key else ("2026-09-10T05:00:00Z" if "start" in key or "end" in key else "run-v1")})
+            # Only one field enabled while the rest stay disabled must fail.
+            # Build a partially-enabled set explicitly.
+            partial = [
+                "admission_evidence_run_id=run-v1",
+                "admission_evidence_start=disabled",
+                "admission_evidence_end=disabled",
+                "admission_evidence_max_events=0",
+                "admission_evidence_max_selected_entries=0",
+            ]
+            args.safe_config = [item for item in base if not item.startswith("admission_evidence_")] + partial
+            with self.assertRaisesRegex(receipt.ReceiptError, "all-or-none"):
+                receipt.collect_receipt(args, FakeRunner())
+            break
+        # Fully enabled valid run passes and stays on step11-v1.
+        enabled = [item for item in base if not item.startswith("admission_evidence_")] + [
+            "admission_evidence_run_id=step9-run-v1",
+            "admission_evidence_start=2026-09-10T05:00:00Z",
+            "admission_evidence_end=2026-09-11T05:00:00Z",
+            "admission_evidence_max_events=90000",
+            "admission_evidence_max_selected_entries=4000000",
+        ]
+        args = arguments()
+        args.safe_config = enabled
+        result = receipt.collect_receipt(args, FakeRunner())
+        self.assertEqual(result["configuration"]["allowlist_version"], "step11-v1")
+        self.assertEqual(result["configuration"]["fields"]["admission_evidence_run_id"], "step9-run-v1")
+        # Over-quota and over-duration fail.
+        for bad in [
+            {"admission_evidence_max_events": "108001"},
+            {"admission_evidence_max_selected_entries": "5000001"},
+            {"admission_evidence_end": "2026-09-12T05:00:01Z"},
+        ]:
+            args = arguments()
+            args.safe_config = with_admission(enabled, **bad)
+            with self.assertRaisesRegex(receipt.ReceiptError, "configuration value|all-or-none"):
+                receipt.collect_receipt(args, FakeRunner())
 
     def test_write_is_digest_verified_exclusive_and_mode_0600(self) -> None:
         value = receipt.collect_receipt(arguments(), FakeRunner())
