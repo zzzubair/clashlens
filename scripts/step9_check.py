@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -28,6 +29,7 @@ import tempfile
 import time
 import urllib.request
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -3188,19 +3190,43 @@ def _read_tariff_file(path_str: str) -> dict:
     return payload
 
 
+def _tariff_decimal(value, label: str) -> Decimal:
+    """Strict finite decimal; rejects NaN/Infinity/missing values."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise Step9Error("tariff_malformed",
+                         f"tariff {label} is invalid") from error
+    if not math.isfinite(number):
+        raise Step9Error("tariff_malformed",
+                         f"tariff {label} is not finite")
+    return Decimal(str(value))
+
+
 def _tariff_block(payload: dict, core_start: datetime) -> dict:
     """Validate exact bounds/provenance; the envelope is reported, not billed."""
     for key, expected in TARIFF_EXPECTED.items():
         if payload.get(key) != expected:
             raise Step9Error("tariff_mismatch",
                              f"tariff {key} differs from the approved envelope")
-    for key in ("tariff_eur_per_decimal_gb_hour", "egress_eur_per_decimal_gb"):
-        try:
-            if float(payload[key]) <= 0:
-                raise ValueError
-        except (KeyError, TypeError, ValueError) as error:
-            raise Step9Error("tariff_malformed",
-                             f"tariff {key} is invalid") from error
+    rate_hour = _tariff_decimal(payload.get("tariff_eur_per_decimal_gb_hour"),
+                                "tariff_eur_per_decimal_gb_hour")
+    rate_egress = _tariff_decimal(payload.get("egress_eur_per_decimal_gb"),
+                                  "egress_eur_per_decimal_gb")
+    if rate_hour <= 0 or rate_egress <= 0:
+        raise Step9Error("tariff_malformed", "tariff rates must be positive")
+    operational_stop = _tariff_decimal(payload.get("operational_stop_eur"),
+                                       "operational_stop_eur")
+    absolute_cap = _tariff_decimal(
+        payload.get("absolute_preparation_ceiling_eur"),
+        "absolute_preparation_ceiling_eur")
+    if operational_stop != Decimal("4.5"):
+        raise Step9Error("tariff_mismatch",
+                         "tariff operational stop is not EUR 4.50")
+    if absolute_cap != Decimal(5):
+        raise Step9Error("tariff_mismatch",
+                         "tariff absolute ceiling is not EUR 5")
+    _verify_tariff_math(payload, rate_hour, rate_egress)
     try:
         verified = datetime.strptime(
             payload["verified_utc_date"], "%Y-%m-%d").replace(tzinfo=UTC)
@@ -3212,15 +3238,7 @@ def _tariff_block(payload: dict, core_start: datetime) -> dict:
         raise Step9Error("tariff_stale",
                          "tariff verification is stale or in the future")
     for key in ("with_uncertainty_eur", "operational_stop_eur"):
-        try:
-            if float(payload[key]) <= 0:
-                raise ValueError
-        except (KeyError, TypeError, ValueError) as error:
-            raise Step9Error("tariff_malformed",
-                             f"tariff {key} is invalid") from error
-    if payload["with_uncertainty_eur"] > payload["operational_stop_eur"]:
-        raise Step9Error("tariff_envelope_exceeded",
-                         "approved envelope exceeds the operational stop")
+        _tariff_decimal(payload.get(key), key)
     if not payload.get("source"):
         raise Step9Error("tariff_malformed", "tariff source is missing")
     return {
@@ -3240,6 +3258,48 @@ def _tariff_block(payload: dict, core_start: datetime) -> dict:
             "absolute_preparation_ceiling_eur"],
         "note": "tariff estimate only, never actual billed cost",
     }
+
+
+def _verify_tariff_math(payload: dict, rate_hour: Decimal,
+                        rate_egress: Decimal) -> None:
+    """Recompute the approved envelope from rates and approved quantities."""
+    import math as _math
+
+    try:
+        storage_gb = Decimal(str(payload["rounded_storage_decimal_gb"]))
+        transfer_gb = Decimal(str(
+            payload["conservative_all_transfer_egress_decimal_gb_rounded"]))
+        days = Decimal(str(payload["retention_projection_days"]))
+        uncertainty = Decimal(str(payload["uncertainty_multiplier"]))
+        gib = Decimal(2**30) / Decimal(10**9)
+    except (KeyError, TypeError, ValueError, ArithmeticError) as error:
+        raise Step9Error("tariff_malformed",
+                         "tariff projection inputs are invalid") from error
+    for value in (storage_gb, transfer_gb, days, uncertainty):
+        if not value.is_finite() or value <= 0:
+            raise Step9Error("tariff_malformed",
+                             "tariff projection inputs are invalid")
+    if storage_gb != _math.ceil(Decimal(16) * gib) \
+            or transfer_gb != _math.ceil(Decimal(64) * gib):
+        raise Step9Error("tariff_mismatch",
+                         "tariff rounded quantities disagree with caps")
+    expected = {
+        "storage_projection_eur": storage_gb * days * 24 * rate_hour,
+        "egress_projection_eur": transfer_gb * rate_egress,
+    }
+    expected["combined_projection_eur"] = (
+        expected["storage_projection_eur"] + expected["egress_projection_eur"])
+    expected["with_uncertainty_eur"] = (
+        expected["combined_projection_eur"] * uncertainty)
+    for key, value in expected.items():
+        try:
+            stated = Decimal(str(payload[key]))
+        except (KeyError, TypeError, ValueError, ArithmeticError) as error:
+            raise Step9Error("tariff_malformed",
+                             f"tariff {key} is invalid") from error
+        if stated != value:
+            raise Step9Error("tariff_mismatch",
+                             f"tariff {key} disagrees with rates and caps")
 
 
 def _event_selected_due(event: dict) -> list:

@@ -160,15 +160,15 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 			return nil, fmt.Errorf("register shared interactive API credential: %w", err)
 		}
 	}
+	metrics := newCollectorMetrics()
+	archive.observeStage = metrics.recordStageDuration
+	archive.observeRequest = metrics.recordArchiveRequest
 	if archive.spool == nil {
 		if err := archive.verifyWriteCapability(ctx, ownerToken); err != nil {
 			store.close()
 			return nil, fmt.Errorf("collector startup guard failed: %w", err)
 		}
 	}
-	metrics := newCollectorMetrics()
-	archive.observeStage = metrics.recordStageDuration
-	archive.observeRequest = metrics.recordArchiveRequest
 	store.metrics = metrics
 	app := &application{
 		config:  config,

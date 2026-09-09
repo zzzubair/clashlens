@@ -78,6 +78,11 @@ def _canonical_tariff(**overrides):
         "payload_cap_gib": 16,
         "aggregate_transfer_cap_gib": 64,
         "retention_projection_days": 186,
+        "rounded_storage_decimal_gb": 18,
+        "conservative_all_transfer_egress_decimal_gb_rounded": 69,
+        "storage_projection_eur": 1.767744,
+        "egress_projection_eur": 0.69,
+        "combined_projection_eur": 2.457744,
         "uncertainty_multiplier": 1.5,
         "with_uncertainty_eur": 3.686616,
         "operational_stop_eur": 4.5,
@@ -652,22 +657,6 @@ def _watchdog_args(run_dir: Path, **overrides):
     return mock.Mock(**defaults)
 
 
-def _canonical_tariff(**overrides):
-    payload = {
-        "source": "https://www.scaleway.com/en/pricing/storage/",
-        "verified_utc_date": "2026-09-09",
-        "tariff_eur_per_decimal_gb_hour": "0.000022",
-        "egress_eur_per_decimal_gb": "0.01",
-        "payload_cap_gib": 16,
-        "aggregate_transfer_cap_gib": 64,
-        "retention_projection_days": 186,
-        "uncertainty_multiplier": 1.5,
-        "with_uncertainty_eur": 3.686616,
-        "operational_stop_eur": 4.5,
-        "absolute_preparation_ceiling_eur": 5,
-    }
-    payload.update(overrides)
-    return payload
 
 
 def test_watchdog_single_pass_and_deadline(tmp_path: Path) -> None:
@@ -2943,7 +2932,7 @@ def test_tariff_file_contract(tmp_path: Path) -> None:
         step9._tariff_block(
             step9._read_tariff_file(str(over)),
             datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
-    assert error.value.code == "tariff_envelope_exceeded"
+    assert error.value.code == "tariff_mismatch"
     missing = tmp_path / "missing.json"
     missing.write_text(json.dumps({"source": "x"}))
     with pytest.raises(step9.Step9Error):
@@ -2969,3 +2958,75 @@ def test_start_requires_tariff_file(tmp_path: Path) -> None:
         with pytest.raises(step9.Step9Error) as error:
             step9.cmd_start(arguments, db)
         assert error.value.code == "tariff_unavailable"
+
+
+def test_tariff_oracle_counterexamples(tmp_path: Path) -> None:
+    """Oracle BLOCK cases: enlarged stop, altered rate, nonfinite rate."""
+    core = datetime(2026, 10, 4, 5, 0, tzinfo=UTC)
+
+    def block(**overrides):
+        payload = _canonical_tariff(**overrides)
+        path = tmp_path / f"t-{len(os.listdir(tmp_path))}.json"
+        path.write_text(json.dumps(payload))
+        return step9._tariff_block(
+            step9._read_tariff_file(str(path)), core)
+
+    assert block()["with_uncertainty_eur"] == 3.686616
+    with pytest.raises(step9.Step9Error) as error:
+        block(operational_stop_eur=100, with_uncertainty_eur=99)
+    assert error.value.code == "tariff_mismatch"
+    with pytest.raises(step9.Step9Error) as error:
+        block(tariff_eur_per_decimal_gb_hour="1")
+    assert error.value.code == "tariff_mismatch"
+    with pytest.raises(step9.Step9Error) as error:
+        block(egress_eur_per_decimal_gb="NaN")
+    assert error.value.code == "tariff_malformed"
+    with pytest.raises(step9.Step9Error) as error:
+        block(egress_eur_per_decimal_gb="Infinity")
+    assert error.value.code == "tariff_malformed"
+    with pytest.raises(step9.Step9Error) as error:
+        block(storage_projection_eur=0.01)
+    assert error.value.code == "tariff_mismatch"
+
+
+def test_s3_nonzero_initial_counters(tmp_path: Path) -> None:
+    """Startup/readiness attempts before sampling must not false-reset."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    def rising_metrics(url):
+        slot = len(list((run_dir / "samples").glob("*.json")))
+        total = 5000 + slot * 10
+        return {"process_id": "p1", "started_at": 1.0,
+                "counters": {f"k{total}": float(total)},
+                "digest": str(total)}
+
+    hooks = _sample_hooks(db)
+    hooks["fetch_metrics"] = rising_metrics
+    hooks["max_slots"] = 3
+    hooks["single_pass"] = False
+    seen = []
+
+    original_snapshot = step9._s3_snapshot
+
+    def spy_snapshot(metrics, py):
+        snapshot = original_snapshot(metrics, py)
+        value = int(str(metrics["digest"]))
+        snapshot["go"] = {"put": value}
+        snapshot["go_total"] = value
+        snapshot["total"] = value
+        seen.append(value)
+        return snapshot
+
+    hooks["worker_probe"] = lambda run: []
+    with mock.patch.object(step9, "_s3_snapshot", side_effect=spy_snapshot):
+        assert step9.cmd_sample(arguments, hooks) == 0
+    assert seen[0] == 5000 and seen[-1] == 5020
+    samples = sorted((run_dir / "samples").glob("*.json"))
+    assert len(samples) == 3
+    import json as _json
+
+    cumulative = [ _json.loads(p.read_text())["s3_attempts_cumulative"]
+                   for p in samples]
+    assert cumulative == [21, 31, 41]
+    assert not list((run_dir / "failures").glob("s3_counter_reset-*.json"))
