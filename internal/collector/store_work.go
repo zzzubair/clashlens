@@ -1013,11 +1013,37 @@ func (s *store) beginEndpointRequest(
 	if err != nil {
 		return 0, err
 	}
-	if contractVersion >= 2 {
-		return s.beginEndpointRequestV2(ctx, job, attemptID, endpoint, startedAt)
-	}
 	var requestCount int
-	err = s.pool.QueryRow(ctx, `
+	if contractVersion >= 2 {
+		requestCount, err = s.beginEndpointRequestV2(ctx, job, attemptID, endpoint, startedAt)
+	} else {
+		requestCount, err = s.beginEndpointRequestV1(ctx, job, attemptID, endpoint, startedAt)
+	}
+	if err != nil {
+		return 0, err
+	}
+	// The durable run-scoped budget reserves only after deterministic
+	// admission and request bookkeeping succeed, so lease, provenance,
+	// and storage failures never consume allowance. A denial here still
+	// precedes officialAPIClient.fetch, and a crash after reservation
+	// stays an ambiguous consumed attempt that is never refunded.
+	if s.endpointBudget != nil {
+		if err := s.reserveEndpointBudget(ctx, endpoint); err != nil {
+			return 0, err
+		}
+	}
+	return requestCount, nil
+}
+
+func (s *store) beginEndpointRequestV1(
+	ctx context.Context,
+	job *collectionJob,
+	attemptID int64,
+	endpoint endpointName,
+	startedAt time.Time,
+) (int, error) {
+	var requestCount int
+	err := s.pool.QueryRow(ctx, `
 		UPDATE collector_endpoint_results AS endpoint_result
 		SET request_count = request_count + 1,
 			execution_token = $3,

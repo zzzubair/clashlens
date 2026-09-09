@@ -33,6 +33,13 @@ SAFE_CONFIGURATION_FIELDS = {
     "admission_evidence_start",
     "admission_evidence_end",
     "collector_database_pool_size",
+    "endpoint_budget_battle_log",
+    "endpoint_budget_deadline_at",
+    "endpoint_budget_enabled",
+    "endpoint_budget_global_rankings",
+    "endpoint_budget_profile",
+    "endpoint_budget_run_id",
+    "official_api_proxy_url",
     "player_discovery_enabled",
     "spool_free_inode_floor",
     "spool_free_space_floor",
@@ -45,7 +52,7 @@ SAFE_CONFIGURATION_FIELDS = {
     "worker_lease_seconds",
     "worker_replicas",
 }
-CONFIGURATION_ALLOWLIST_VERSION = "step9-v1"
+CONFIGURATION_ALLOWLIST_VERSION = "step12-v1"
 _IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}\Z")
 _HEX_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -53,6 +60,14 @@ _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _DIGEST = re.compile(r"(?:[A-Za-z0-9._:/@+-]{1,256}@)?sha256:[0-9a-f]{64}\Z")
 _SAFE_VALUE = re.compile(r"[0-9]{1,20}\Z")
 _SAFE_BOOLEAN = re.compile(r"(?:true|false)\Z")
+_SAFE_BOOLEAN_FIELDS = frozenset({"endpoint_budget_enabled", "player_discovery_enabled"})
+_SAFE_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
+_SAFE_PROXY_URL = re.compile(r"https?://[A-Za-z0-9.-]+(?::[0-9]{1,5})?\Z")
+_SAFE_RFC3339 = re.compile(
+    r"[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])"
+    r"T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+    r"(?:\.[0-9]{1,6})?(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\Z"
+)
 _ADMISSION_TIMESTAMP = re.compile(r"(?:disabled|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\Z")
 _MIGRATION = re.compile(r"([0-9]{4})_[a-z0-9_]{1,240}\.sql\Z")
 _VERSION_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._+:/()=-]{0,255}\Z")
@@ -583,13 +598,31 @@ SELECT json_build_object(
 
 
 def _configuration_value(key: str, value: str) -> str:
-    if key == "player_discovery_enabled":
+    if key in _SAFE_BOOLEAN_FIELDS:
         return _bounded(value, _SAFE_BOOLEAN, "configuration value")
+    if key == "endpoint_budget_run_id":
+        if value == "":
+            return ""
+        return _bounded(value, _SAFE_RUN_ID, "configuration value")
+    if key == "endpoint_budget_deadline_at":
+        if value == "":
+            return ""
+        return _bounded(value, _SAFE_RFC3339, "configuration value")
     if key == "admission_evidence_run_id":
         return _bounded(value, _IDENTITY, "configuration value")
     if key in ("admission_evidence_start", "admission_evidence_end"):
         return _bounded(value, _ADMISSION_TIMESTAMP, "configuration value")
+    if key == "official_api_proxy_url":
+        return _bounded(value, _SAFE_PROXY_URL, "configuration value")
     return _bounded(value, _SAFE_VALUE, "configuration value")
+
+
+def _configuration_identity_binding(fields: dict[str, str]) -> None:
+    if fields.get("endpoint_budget_enabled") == "true" and (
+        not fields.get("endpoint_budget_run_id")
+        or not fields.get("endpoint_budget_deadline_at")
+    ):
+        raise ReceiptError("configuration value")
 
 
 def _validate_admission_evidence_fields(fields: dict[str, str]) -> None:
@@ -639,6 +672,7 @@ def _configuration(values: Sequence[str]) -> dict[str, Any]:
         result[key] = _configuration_value(key, value)
     if set(result) != SAFE_CONFIGURATION_FIELDS:
         raise ReceiptError("safe configuration allowlist is incomplete")
+    _configuration_identity_binding(result)
     _validate_admission_evidence_fields(result)
     fingerprint = _sha256(
         json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
@@ -871,14 +905,23 @@ def validate_receipt(receipt: dict[str, Any], *, require_digest: bool = False) -
     if not isinstance(fields, dict) or set(fields) != SAFE_CONFIGURATION_FIELDS:
         raise ReceiptError("receipt configuration is invalid")
     for key, value in fields.items():
-        if key == "player_discovery_enabled":
+        if key in _SAFE_BOOLEAN_FIELDS:
             _require_text(value, _SAFE_BOOLEAN, "configuration value")
+        elif key == "endpoint_budget_run_id":
+            if value != "":
+                _require_text(value, _SAFE_RUN_ID, "configuration value")
+        elif key == "endpoint_budget_deadline_at":
+            if value != "":
+                _require_text(value, _SAFE_RFC3339, "configuration value")
         elif key == "admission_evidence_run_id":
             _require_text(value, _IDENTITY, "configuration value")
         elif key in ("admission_evidence_start", "admission_evidence_end"):
             _require_text(value, _ADMISSION_TIMESTAMP, "configuration value")
+        elif key == "official_api_proxy_url":
+            _require_text(value, _SAFE_PROXY_URL, "configuration value")
         else:
             _require_text(value, _SAFE_VALUE, "configuration value")
+    _configuration_identity_binding(fields)
     _validate_admission_evidence_fields(fields)
     fingerprint = _require_text(configuration["fingerprint"], _DIGEST, "configuration fingerprint")
     expected_fingerprint = "sha256:" + _sha256(

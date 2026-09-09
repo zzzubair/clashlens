@@ -20,7 +20,7 @@ func RunCLI(
 	stderr io.Writer,
 ) error {
 	if len(arguments) == 0 {
-		return errors.New("collector command is required: run, enqueue, or maintenance")
+		return errors.New("collector command is required: run, enqueue, enqueue-global-rankings, or maintenance")
 	}
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -106,6 +106,43 @@ func RunCLI(
 			"job_id":     result.jobID,
 			"attempt_id": result.attemptID,
 			"reused":     result.reused,
+		})
+
+	case "enqueue-global-rankings":
+		flags := flag.NewFlagSet("collector enqueue-global-rankings", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		cycleAt := flags.String("cycle-at", "", "aligned UTC cycle, YYYY-MM-DDTHH:MM:00Z")
+		if err := flags.Parse(arguments[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 || *cycleAt == "" {
+			return errors.New("collector enqueue-global-rankings requires --cycle-at and accepts no positional arguments")
+		}
+		cycle, err := time.Parse(time.RFC3339, *cycleAt)
+		if err != nil {
+			return errors.New("collector enqueue-global-rankings --cycle-at must be RFC 3339")
+		}
+		cycle = cycle.UTC()
+		if cycle.Second() != 0 || cycle.Nanosecond() != 0 || cycle.Minute()%5 != 0 {
+			return errors.New("collector enqueue-global-rankings --cycle-at must be an aligned five-minute UTC cycle")
+		}
+		config, err := loadConfig(getenv)
+		if err != nil {
+			return err
+		}
+		logConfigState(ctx, logger, config)
+		app, err := newApplication(ctx, config, logger)
+		if err != nil {
+			return err
+		}
+		defer app.close()
+		created, err := app.store.enqueueGlobalRankingsCycle(ctx, cycle)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(stdout).Encode(map[string]any{
+			"cycle_at": cycle.Format(time.RFC3339),
+			"created":  created,
 		})
 
 	case "maintenance":

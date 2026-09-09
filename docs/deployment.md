@@ -75,7 +75,40 @@ resource budget.
 every worker replica then starts with `--disable-player-discovery`, so
 ranking and battle evidence is retained without enqueueing `discovery_profile`
 work for outside players. Global Top-200 collection stays enabled, and the
-choice is fingerprinted in the deployment receipt (`step9-v1`).
+choice is fingerprinted in the deployment receipt (`step12-v1`).
+
+`CLASHLENS_ENDPOINT_BUDGET_ENABLED` defaults to `false`. Enable it only for
+a fixed-population bootstrap run, with `CLASHLENS_ENDPOINT_BUDGET_RUN_ID`,
+per-endpoint caps (`CLASHLENS_ENDPOINT_BUDGET_PROFILE`,
+`CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS`,
+`CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG`), and an RFC 3339
+`CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT`. While enabled, every official
+dispatch reserves one durable budget unit before the request, reservations
+survive restarts and are never refunded, and official redirects are refused.
+The enabled flag, the three caps, and the exact run identity and deadline
+are fingerprinted in the deployment receipt, so provenance proves which
+durable budget row the executing collector consumes. The exact official
+proxy URL is fingerprinted alongside them, so provenance proves the
+collector's egress route.
+
+Admit a protected manifest with the Python worker role (validates the whole
+manifest before the first write; replays idempotently under one run-id):
+
+```bash
+python -m clashlens.cli bootstrap-population \
+  --database-url-file /run/secrets/database-url \
+  --cohort-file /path/to/legend-player-tags-2026-09-08.txt \
+  --expected-sha256 558979624d7e8475cd536871c62fc3e04298cec23dbfc35fc63e7148d1933e10 \
+  --expected-count 12857 \
+  --run-id ISSUE92_RUN_ID \
+  --result-file /path/to/result.json
+```
+
+Enqueue the single aligned Global Top-200 cycle with the collector role:
+
+```bash
+collector enqueue-global-rankings --cycle-at 2026-09-08T05:00:00Z
+```
 
 `CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID/_START/_END/_MAX_EVENTS/_MAX_SELECTED_ENTRIES`
 are all-or-none. Leave all five unset for production (evidence disabled,
@@ -117,9 +150,11 @@ volume, never as an upgrade of existing data.
 
 The collector contract version is separate from the schema migration number.
 The production contract is version 5. The current forward-migration set is
-0001 through 0022. Migration 0022 adds the optional bounded regular-admission
+0001 through 0023. Migration 0022 adds the optional bounded regular-admission
 evidence pair (run header plus per-invocation rows, at most 108000 events and
-5000000 selected entries, no automatic deletion, contract stays 5). Migrations 0016–0021 add [compact history and operator-only
+5000000 selected entries, no automatic deletion, contract stays 5). Migration
+0023 adds the population-bootstrap run record and the durable run-scoped
+endpoint budget ledger (contract stays 5). Migrations 0016–0021 add [compact history and operator-only
 retention](history-retention.md); they do not delete existing evidence.
 Migrations 0009 through 0015 add the raw-evidence,
 boundary-publication, parsed-content deduplication, bounded backfill,
