@@ -70,6 +70,13 @@ The relevant settings are `CLASHLENS_WORKER_REPLICAS`,
 the shared queue; increasing the replica count multiplies its per-container
 resource budget.
 
+`CLASHLENS_PLAYER_DISCOVERY_ENABLED` defaults to `true` and accepts only
+`true` or `false`. Set it to `false` only for fixed-population validation:
+every worker replica then starts with `--disable-player-discovery`, so
+ranking and battle evidence is retained without enqueueing `discovery_profile`
+work for outside players. Global Top-200 collection stays enabled, and the
+choice is fingerprinted in the deployment receipt (`step9-v1`).
+
 ### Fixed-egress proxy
 
 `deploy/egress-proxy/` deploys the narrow CONNECT proxy on the fixed-egress
@@ -86,7 +93,12 @@ private listener; never expose it as an open proxy.
 
 PostgreSQL containers use the `step6-v1` metrics profile, preload
 `pg_stat_statements`, and enable statement, I/O, and WAL I/O timing. Migration
-0003 installs the extension in the Clash Lens database.
+0003 installs the extension in the Clash Lens database. The deployment pins
+`PGDATA=/var/lib/postgresql/data` to match the named-volume mount, so a fresh
+PostgreSQL 18 candidate initializes inside the volume instead of the image
+default path. The default image remains `postgres:17-alpine`; select
+PostgreSQL 18 with `CLASHLENS_POSTGRES_IMAGE` only for a fresh isolated
+volume, never as an upgrade of existing data.
 
 ## Lifecycle and migrations
 

@@ -110,6 +110,11 @@ def build_parser() -> argparse.ArgumentParser:
         help=("archive HTTP connection pool size (default: max(4, concurrency))"),
     )
     worker.add_argument("--operating-snapshot-file", default="")
+    worker.add_argument(
+        "--disable-player-discovery",
+        action="store_true",
+        help="retain discovery evidence without enqueueing discovered player profiles",
+    )
 
     ready = subparsers.add_parser(
         "ready", help="check the production worker database and archive dependencies"
@@ -497,6 +502,9 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         _database_url(arguments),
         max_size=database_pool_size,
         expected_contract_version=CONTRACT_VERSION,
+        player_discovery_enabled=not getattr(
+            arguments, "disable_player_discovery", False
+        ),
     )
     assert_contract_version = getattr(database, "assert_contract_version", None)
     if callable(assert_contract_version):

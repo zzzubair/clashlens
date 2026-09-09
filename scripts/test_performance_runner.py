@@ -81,10 +81,11 @@ def _candidate_receipt() -> dict:
 
     migrations = runner._source_migrations()
     fields = {
-        name: "1" for name in sorted(deployment_receipt.SAFE_CONFIGURATION_FIELDS)
+        name: ("true" if name == "player_discovery_enabled" else "1")
+        for name in sorted(deployment_receipt.SAFE_CONFIGURATION_FIELDS)
     }
     configuration = {
-        "allowlist_version": "step8-v1",
+        "allowlist_version": deployment_receipt.CONFIGURATION_ALLOWLIST_VERSION,
         "fields": fields,
         "fingerprint": "sha256:"
         + runner._sha(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()),

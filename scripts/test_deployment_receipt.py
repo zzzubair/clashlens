@@ -132,7 +132,8 @@ def arguments(scope: str = "candidate-preparation") -> Namespace:
         worker_container="step8-python-worker",
         website_container="step8-website",
         safe_config=[
-            f"{name}=1" for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
+            f"{name}={'true' if name == 'player_discovery_enabled' else '1'}"
+            for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
         ],
         created_at="2026-08-28T20:00:00+00:00",
     )
@@ -226,7 +227,7 @@ class DeploymentReceiptTest(unittest.TestCase):
     def test_deployed_receipt_inspects_every_configured_worker(self) -> None:
         deployed = arguments("deployed-stack")
         deployed.safe_config = [
-            f"{name}={'3' if name == 'worker_replicas' else '1'}"
+            f"{name}={'3' if name == 'worker_replicas' else ('true' if name == 'player_discovery_enabled' else '1')}"
             for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
         ]
         runner = FakeRunner()
@@ -406,6 +407,34 @@ class DeploymentReceiptTest(unittest.TestCase):
         sentinel.safe_config[0] = "collector_database_pool_size=sentinel-secret"
         with self.assertRaisesRegex(receipt.ReceiptError, "configuration value"):
             receipt.collect_receipt(sentinel, FakeRunner())
+
+    def test_player_discovery_configuration_is_boolean_and_versioned(self) -> None:
+        for bad in ("1", "0", "True", "yes", ""):
+            with self.subTest(value=bad):
+                args = arguments()
+                args.safe_config = [
+                    f"player_discovery_enabled={bad}" if item.startswith("player_discovery_enabled=") else item
+                    for item in args.safe_config
+                ]
+                with self.assertRaisesRegex(receipt.ReceiptError, "configuration value"):
+                    receipt.collect_receipt(args, FakeRunner())
+
+        for good in ("true", "false"):
+            with self.subTest(value=good):
+                args = arguments()
+                args.safe_config = [
+                    f"player_discovery_enabled={good}" if item.startswith("player_discovery_enabled=") else item
+                    for item in args.safe_config
+                ]
+                result = receipt.collect_receipt(args, FakeRunner())
+                self.assertEqual(result["configuration"]["fields"]["player_discovery_enabled"], good)
+                self.assertEqual(result["configuration"]["allowlist_version"], "step9-v1")
+
+        old = deepcopy(receipt.collect_receipt(arguments(), FakeRunner()))
+        old.pop("receipt_digest")
+        old["configuration"]["allowlist_version"] = "step8-v1"
+        with self.assertRaisesRegex(receipt.ReceiptError, "configuration is invalid"):
+            receipt.validate_receipt(old)
 
     def test_write_is_digest_verified_exclusive_and_mode_0600(self) -> None:
         value = receipt.collect_receipt(arguments(), FakeRunner())

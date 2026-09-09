@@ -28,6 +28,7 @@ CANDIDATE_RECEIPT_OFFICIAL_API_PROOF = (
 )
 SAFE_CONFIGURATION_FIELDS = {
     "collector_database_pool_size",
+    "player_discovery_enabled",
     "spool_free_inode_floor",
     "spool_free_space_floor",
     "spool_max_body_bytes",
@@ -39,12 +40,14 @@ SAFE_CONFIGURATION_FIELDS = {
     "worker_lease_seconds",
     "worker_replicas",
 }
+CONFIGURATION_ALLOWLIST_VERSION = "step9-v1"
 _IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,255}\Z")
 _HEX_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _DIGEST = re.compile(r"(?:[A-Za-z0-9._:/@+-]{1,256}@)?sha256:[0-9a-f]{64}\Z")
 _SAFE_VALUE = re.compile(r"[0-9]{1,20}\Z")
+_SAFE_BOOLEAN = re.compile(r"(?:true|false)\Z")
 _MIGRATION = re.compile(r"([0-9]{4})_[a-z0-9_]{1,240}\.sql\Z")
 _VERSION_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._+:/()=-]{0,255}\Z")
 _PYTHON_VERSION = re.compile(
@@ -573,20 +576,26 @@ SELECT json_build_object(
     return payload
 
 
+def _configuration_value(key: str, value: str) -> str:
+    if key == "player_discovery_enabled":
+        return _bounded(value, _SAFE_BOOLEAN, "configuration value")
+    return _bounded(value, _SAFE_VALUE, "configuration value")
+
+
 def _configuration(values: Sequence[str]) -> dict[str, Any]:
     result: dict[str, str] = {}
     for item in values:
         key, separator, value = item.partition("=")
         if not separator or key not in SAFE_CONFIGURATION_FIELDS or key in result:
             raise ReceiptError("configuration field is not allowlisted")
-        result[key] = _bounded(value, _SAFE_VALUE, "configuration value")
+        result[key] = _configuration_value(key, value)
     if set(result) != SAFE_CONFIGURATION_FIELDS:
         raise ReceiptError("safe configuration allowlist is incomplete")
     fingerprint = _sha256(
         json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
     )
     return {
-        "allowlist_version": "step8-v1",
+        "allowlist_version": CONFIGURATION_ALLOWLIST_VERSION,
         "fields": result,
         "fingerprint": f"sha256:{fingerprint}",
     }
@@ -807,13 +816,16 @@ def validate_receipt(receipt: dict[str, Any], *, require_digest: bool = False) -
     configuration = _require_mapping(
         receipt["configuration"], _CONFIGURATION_FIELDS, "receipt configuration"
     )
-    if configuration["allowlist_version"] != "step8-v1":
+    if configuration["allowlist_version"] != CONFIGURATION_ALLOWLIST_VERSION:
         raise ReceiptError("receipt configuration is invalid")
     fields = configuration["fields"]
     if not isinstance(fields, dict) or set(fields) != SAFE_CONFIGURATION_FIELDS:
         raise ReceiptError("receipt configuration is invalid")
-    for value in fields.values():
-        _require_text(value, _SAFE_VALUE, "configuration value")
+    for key, value in fields.items():
+        if key == "player_discovery_enabled":
+            _require_text(value, _SAFE_BOOLEAN, "configuration value")
+        else:
+            _require_text(value, _SAFE_VALUE, "configuration value")
     fingerprint = _require_text(configuration["fingerprint"], _DIGEST, "configuration fingerprint")
     expected_fingerprint = "sha256:" + _sha256(
         json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()
