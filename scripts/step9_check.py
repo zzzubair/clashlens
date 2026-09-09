@@ -590,6 +590,7 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "transfer_prior_provenance": (
             getattr(arguments, "prior_transfer_provenance", None)
             or TRANSFER_PRIOR_PROVENANCE),
+        "s3_prior": _s3_prior_block(arguments),
         "resource_baseline": collect_resource_facts(
             spool_path=arguments.spool_path,
             postgres_path=arguments.postgres_path, db=db, metrics=None),        "filesystem": filesystem_facts(arguments.spool_path,
@@ -1632,7 +1633,8 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                                         sample["outcome"])
                     return 1
                 previous_s3 = s3
-                cumulative = TRANSFER_PRIOR_ATTEMPTS + s3["total"]
+                prior = _s3_prior(run)
+                cumulative = prior["attempts"] + s3["total"]
                 sample["s3_attempts_cumulative"] = cumulative
                 if cumulative > S3_ATTEMPTS_MAX:
                     sample["failure_code"] = "s3_attempts_breach"
@@ -1862,7 +1864,9 @@ def _finalize_transfer(samples: list[dict], run: dict) -> dict:
         result["status"] = "failed"
         result["failure"] = "s3_counter_reset"
         return result
-    result["s3_attempts"] = TRANSFER_PRIOR_ATTEMPTS + last["total"]
+    result["s3_attempts"] = _s3_prior(run).get("attempts",
+                                                 TRANSFER_PRIOR_ATTEMPTS) \
+        + last["total"]
     if result["s3_attempts"] > S3_ATTEMPTS_MAX:
         result["status"] = "failed"
         result["failure"] = "s3_attempts_breach"
@@ -2565,8 +2569,8 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--archive-egress-interface", dest="archive_interfaces",
                        action="append", default=[])
     start.add_argument("--archive-route-host", default=None)
-    start.add_argument("--prior-transfer-bytes", type=int, default=None)
-    start.add_argument("--prior-transfer-provenance", default=None)
+    start.add_argument("--prior-s3-attempts", type=int, default=None)
+    start.add_argument("--prior-s3-provenance", default=None)
     start.add_argument("--bootstrap-run-id", default=None)
     start.add_argument("--mode", choices=sorted(MODES), default="live-day")
     start.add_argument("--max-invocation-gap-seconds", type=int, default=None,
@@ -2948,6 +2952,8 @@ def _pgdata_probe(podman_bin: str, container: str,
 
 
 TRANSFER_PRIOR_ATTEMPTS = 21
+S3_PRIOR_PROVENANCE = "retained-qualification-21-requests"
+S3_PRIOR_PROVENANCE_MAX = 512
 TRANSFER_PRIOR_BYTES = 21 * 1024**2
 TRANSFER_PRIOR_PROVENANCE = (
     "documented-upper-bound:21-bounded-qualification-requests-x-1MiB-"\
@@ -3296,6 +3302,37 @@ def _verify_tariff_math(payload: dict, rate_hour: Decimal,
         if stated != value:
             raise Step9Error("tariff_mismatch",
                              f"tariff {key} disagrees with rates and caps")
+
+
+def _s3_prior_block(arguments: argparse.Namespace) -> dict:
+    """Mandatory rehearsal prior: bounded int, bounded provenance."""
+    raw_attempts = getattr(arguments, "prior_s3_attempts", None)
+    raw_provenance = getattr(arguments, "prior_s3_provenance", None)
+    attempts = TRANSFER_PRIOR_ATTEMPTS if raw_attempts is None else raw_attempts
+    provenance = S3_PRIOR_PROVENANCE if raw_provenance is None else raw_provenance
+    if isinstance(attempts, bool) or not isinstance(attempts, int) \
+            or attempts < 0 or attempts > S3_ATTEMPTS_MAX:
+        raise Step9Error("s3_prior_invalid",
+                         "prior S3 attempts must be an integer 0..100000")
+    if not isinstance(provenance, str) or not provenance \
+            or len(provenance) > S3_PRIOR_PROVENANCE_MAX:
+        raise Step9Error("s3_prior_invalid",
+                         "prior S3 provenance must be nonempty and bounded")
+    record = {"attempts": attempts, "provenance": provenance}
+    record["record_sha256"] = _sha256(_canonical(record))
+    return record
+
+
+def _s3_prior(run: dict) -> dict:
+    prior = run.get("s3_prior") or {}
+    if isinstance(prior.get("attempts"), int) \
+            and isinstance(prior.get("provenance"), str):
+        return prior
+    return {"attempts": TRANSFER_PRIOR_ATTEMPTS,
+            "provenance": S3_PRIOR_PROVENANCE,
+            "record_sha256": _sha256(_canonical({
+                "attempts": TRANSFER_PRIOR_ATTEMPTS,
+                "provenance": S3_PRIOR_PROVENANCE}))}
 
 
 def _event_selected_due(event: dict) -> list:

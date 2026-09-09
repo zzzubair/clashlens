@@ -477,5 +477,7 @@ qualification requests times the 1 MiB response ceiling), overridable with
 S3 attempts come from real counters only: Go `archive_requests_total`
 per-operation attempts (PUT/HEAD/GET/bucket, retries included) in the
 query-free runtime metrics, plus Python worker `remote_attempts` summed
-across replicas. Decreases fail closed; prior attempts are the exact 21
-retained qualification requests; crossing 100,000 cumulative stops the run.
+across replicas. Decreases fail closed; the mandatory rehearsal prior
+defaults to the exact 21 retained qualification requests and is overridable
+with `--prior-s3-attempts N` (integer 0..100000) plus bounded provenance;
+crossing 100,000 cumulative stops the run.

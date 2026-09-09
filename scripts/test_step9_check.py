@@ -58,7 +58,8 @@ def _start_args(run_dir: Path, cohort: Path, **overrides):
         "max_invocation_gap_seconds": 5, "bootstrap_run_id": None,
         "archive_tariff_file": None, "archive_interfaces": ["test-eth0"],
         "archive_route_host": None, "prior_transfer_bytes": None,
-        "prior_transfer_provenance": None,
+        "prior_transfer_provenance": None, "prior_s3_attempts": None,
+        "prior_s3_provenance": None,
     }
     defaults.update(overrides)
     if defaults.get("archive_tariff_file") is None:
@@ -3034,3 +3035,28 @@ def test_s3_nonzero_initial_counters(tmp_path: Path) -> None:
         [_json.loads(p.read_text()) for p in samples], {})
     assert transfer["status"] == "complete"
     assert transfer["s3_attempts"] == 5041
+
+
+def test_s3_prior_input_contract(tmp_path: Path) -> None:
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        _run_dir, header = _started_run(tmp_path, db, run_dir_name="p0")
+        prior = header["s3_prior"]
+        assert prior["attempts"] == 21
+        assert prior["provenance"] == step9.S3_PRIOR_PROVENANCE
+        assert prior["record_sha256"] == step9._sha256(step9._canonical(
+            {"attempts": 21, "provenance": step9.S3_PRIOR_PROVENANCE}))
+        _run_dir, header = _started_run(
+            tmp_path, db, run_dir_name="p1", prior_s3_attempts=7,
+            prior_s3_provenance="rehearsal-partial-7")
+        assert header["s3_prior"]["attempts"] == 7
+        for index, (bad_attempts, bad_provenance) in enumerate((
+                (-1, "x"), (100001, "x"), (True, "x"), ("7", "x"),
+                (7, ""), (7, "y" * 513))):
+            with pytest.raises(step9.Step9Error) as error:
+                _started_run(tmp_path, db, run_dir_name=f"pbad{index}",
+                             prior_s3_attempts=bad_attempts,
+                             prior_s3_provenance=bad_provenance)
+            assert error.value.code == "s3_prior_invalid"
+
