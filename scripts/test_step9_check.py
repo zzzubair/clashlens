@@ -3028,5 +3028,9 @@ def test_s3_nonzero_initial_counters(tmp_path: Path) -> None:
 
     cumulative = [ _json.loads(p.read_text())["s3_attempts_cumulative"]
                    for p in samples]
-    assert cumulative == [21, 31, 41]
+    assert cumulative == [5021, 5031, 5041]
     assert not list((run_dir / "failures").glob("s3_counter_reset-*.json"))
+    transfer = step9._finalize_transfer(
+        [_json.loads(p.read_text()) for p in samples], {})
+    assert transfer["status"] == "complete"
+    assert transfer["s3_attempts"] == 5041

@@ -1513,7 +1513,6 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
     previous_mono: int | None = None
     previous_wall: datetime | None = None
     previous_s3: dict | None = None
-    first_s3_total: int | None = None
     previous_liveness: dict | None = None
     outcome_strikes = 0
     unavailable_strikes = 0
@@ -1633,10 +1632,7 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                                         sample["outcome"])
                     return 1
                 previous_s3 = s3
-                cumulative = TRANSFER_PRIOR_ATTEMPTS + s3["total"] - (
-                    first_s3_total if first_s3_total is not None else s3["total"])
-                if first_s3_total is None:
-                    first_s3_total = s3["total"]
+                cumulative = TRANSFER_PRIOR_ATTEMPTS + s3["total"]
                 sample["s3_attempts_cumulative"] = cumulative
                 if cumulative > S3_ATTEMPTS_MAX:
                     sample["failure_code"] = "s3_attempts_breach"
@@ -1866,7 +1862,7 @@ def _finalize_transfer(samples: list[dict], run: dict) -> dict:
         result["status"] = "failed"
         result["failure"] = "s3_counter_reset"
         return result
-    result["s3_attempts"] = TRANSFER_PRIOR_ATTEMPTS + last["total"] - first["total"]
+    result["s3_attempts"] = TRANSFER_PRIOR_ATTEMPTS + last["total"]
     if result["s3_attempts"] > S3_ATTEMPTS_MAX:
         result["status"] = "failed"
         result["failure"] = "s3_attempts_breach"
