@@ -345,11 +345,23 @@ with 75 one-minute slots (60 bootstrap + 15 drain) and 15 windows:
 python3 scripts/step9_check.py start --mode preflight \
   --run-dir "$RUN" --cohort-file /protected/legend-tags-2026-09-08.txt \
   --deployed-receipt /retained/clashlens-deployed-stack.json \
-  --core-start 2026-MM-DDTHH:00:00Z --core-end 2026-MM-DDTHH+1:00:00Z \
-  --collector-container clashlens-issue92-COLLECTOR ... --deadline ... \
-  --watchdog-unit clashlens-step9-preflight-RUN
-python3 scripts/step9_check.py sample --run-dir "$RUN"
-python3 scripts/step9_check.py finalize --run-dir "$RUN"
+  --core-start 2026-MM-DDTHH:00:00Z --core-end 2026-MM-DDTHH:15:00Z \
+  --collector-container clashlens-issue92-COLLECTOR ... \
+  --deadline 2026-MM-DDTHH:20:00Z \
+  --watchdog-unit clashlens-step9-preflight-RUN \
+  [--database-url-file /protected/clashlens-issue92-db-url]
+```
+
+The preflight core is exactly 75 minutes: 60 minutes of bootstrap traffic
+followed by a 15-minute processing drain with the collector stopped at
+minute 60 by the watchdog. Metrics may be absent after that proven stop
+only; any earlier or unproven stop fails the run.
+
+```sh
+python3 scripts/step9_check.py sample --run-dir "$RUN" \
+  [--database-url-file /protected/clashlens-issue92-db-url]
+python3 scripts/step9_check.py finalize --run-dir "$RUN" \
+  [--database-url-file /protected/clashlens-issue92-db-url]
 python3 scripts/step9_check.py validate --run-dir "$RUN"
 ```
 
@@ -358,9 +370,9 @@ profile observations, one global-rankings intent, zero battle-log
 observations, and only `discovery_profile` / `endpoint_retry` /
 `global_player_rankings` work. Any `regular_poll`, reset, or interactive root
 is unexpected scheduler traffic and fails the gate, as do pending remote
-verifications or queue residue at finalize. The durable 0023 budget ledger is
-reported `unknown_pending_0023` until that migration merges; the envelope is
-never claimed from supplied aggregates.
+verifications or queue residue at finalize. The durable 0023 budget ledger
+is cross-checked against the receipt (caps, run ID, deadline) and measured
+traffic; the envelope is never claimed from supplied aggregates.
 
 ### Admission accounting (migration 0022-final read side)
 
@@ -412,3 +424,16 @@ archive objects >100k, or estimated archive cost >EUR 4.50. Filesystems
 sharing one pool are evaluated once. Missing probe fields stay unknown
 (recorded, never zero). Pass `--archive-eur-per-gib RATE` to enable the cost
 gate; without a rate the cost stays unknown.
+
+### Operating evidence and container/cgroup probes
+
+`start` pins an operating baseline (`operating-baseline.json`); hourly closing
+samples and `finalize` capture the same worker-safe sectioned snapshot
+(identity, queue depths, relation sizes, processed outcomes, retained
+failures). Any failed section, any hourly failure, or any growth in retained
+failures versus baseline fails validation (`operating_unproven`,
+`operating_failed`, `operating_regressed`); relation growth is reported.
+Each sample also records container state/image/started-at, cgroup OOM/swap
+counters, and mount-identity continuity; a changed or unprovable mount fails
+validation. Until the worker role receives the remaining operating/archive
+`SELECT` grants, these captures stay honestly unknown and the PR stays draft.

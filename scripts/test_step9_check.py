@@ -63,8 +63,15 @@ def _start_args(run_dir: Path, cohort: Path, **overrides):
 
 
 def _receipt_scope(scope: str = "deployed-stack", discovery: str = "false",
-                   budget: bool = True) -> dict:
-    fields = {"player_discovery_enabled": discovery}
+                   budget: bool = True, admission_run_id: str = "testrun01",
+                   admission_start: str = "2026-10-04T05:00:00Z",
+                   admission_end: str = "2026-10-05T05:00:00Z") -> dict:
+    fields = {"player_discovery_enabled": discovery,
+              "admission_evidence_run_id": admission_run_id,
+              "admission_evidence_start": admission_start,
+              "admission_evidence_end": admission_end,
+              "admission_evidence_max_events": "108000",
+              "admission_evidence_max_selected_entries": "5000000"}
     if budget:
         fields.update({
             "endpoint_budget_enabled": "true",
@@ -180,6 +187,16 @@ class FakeDB:
     def wal_generated(self, since_lsn):
         return (0, 0)
 
+    def operating_snapshot(self, relations):
+        return getattr(self, "operating_data", {
+            "status": "complete",
+            "identity": {"status": "complete", "rows": []},
+            "collector_queues": {"status": "complete", "rows": []},
+            "python_queues": {"status": "complete", "rows": []},
+            "relations": {"status": "complete", "rows": []},
+            "processed": {"status": "complete", "rows": []},
+            "failures": {"status": "complete", "rows": []}})
+
     def reset_members(self, sweep_id):
         return [1]
 
@@ -209,7 +226,8 @@ def _args_with_receipt(tmp_path: Path, name: str, cohort: Path, **overrides):
 def _started_run(tmp_path: Path, db: FakeDB, **overrides):
     cohort = _write_cohort(tmp_path / "cohort.txt", TAGS)
     receipt_path = tmp_path / "receipt.json"
-    receipt_path.write_text(json.dumps(_receipt_scope()))
+    run_id = overrides.get("run_id", "testrun01")
+    receipt_path.write_text(json.dumps(_receipt_scope(admission_run_id=run_id)))
     run_dir = tmp_path / overrides.pop("run_dir_name", "run")
     arguments = _start_args(run_dir, cohort,
                             deployed_receipt=str(receipt_path), **overrides)
@@ -503,13 +521,16 @@ def test_sample_records_counter_reset(tmp_path: Path) -> None:
 
 
 def test_sql_is_read_only_and_bound() -> None:
+    static = {step9.SQL_OP_QUEUES, step9.SQL_OP_PYTHON_QUEUES,
+              step9.SQL_OP_PROCESSED, step9.SQL_OP_FAILURES}
     for statement in step9.ALL_RO_STATEMENTS:
         assert ("%s" in statement or "IN ('pending'" in statement
                 or "pg_control_system" in statement
                 or "pg_current_wal_lsn" in statement
                 or "to_regclass" in statement
                 or "pending_remote_verification" in statement
-                or "archive_catalogue" in statement)
+                or "archive_catalogue" in statement
+                or statement in static)
         assert "f\"" not in statement and "\" + " not in statement
         with pytest.raises(step9.Step9Error):
             step9.assert_read_only("SELECT 1; INSERT INTO players VALUES (1)")
@@ -639,38 +660,54 @@ def test_watchdog_stop_failure_is_evidence_failure(tmp_path: Path) -> None:
 
 def _seed_admission(db: FakeDB, run: dict, pid: int, job_base: int = 1000,
                    extra_tail: bool = True) -> None:
-    """One timely gate-open event per window plus tail coverage."""
+    """Boundary-faithful events: open core, suppressed 04:55, reopen tail."""
     core_start = step9._parse_utc(run["core_start"])
     mode = step9.MODES[run.get("mode", "live-day")]
     total = mode["windows"] + (6 if extra_tail else 0)
+    core_end = core_start + mode["interval"]
     bounds = db.admission_run(run["run_id"])
     events, roots, profiles = [], [], {}
+    reopened = False
     for window in range(total):
         cycle = core_start + timedelta(seconds=300 * window)
         at = cycle + timedelta(seconds=1)
         event_id = window + 1
         job = job_base + window
         due = cycle - timedelta(seconds=60)
-        events.append({
+        suppressed = core_end - timedelta(minutes=5) <= cycle < core_end
+        event = {
             "id": event_id, "invocation_id": f"{event_id:032x}",
             "cycle_at": cycle, "scheduler_at": cycle, "database_at": at,
-            "gate_allowed": True, "gate_handoff_at": None, "batch_limit": 1000,
+            "gate_allowed": not suppressed, "gate_handoff_at": None,
+            "batch_limit": 1000,
             "capture_start": bounds["capture_start"],
             "capture_end": bounds["capture_end"],
-            "visible_due_count": 1, "visible_due_min_at": due,
+            "visible_due_count": 0, "visible_due_min_at": None,
             "unselected_visible_due_count": 0,
             "unselected_visible_due_min_at": None,
             "unselected_visible_past_deadline_count": 0,
             "unselected_visible_past_deadline_min_at": None,
             "selected_past_deadline_count": 0,
-            "selected_player_ids": [pid], "selected_due_ats": [due],
-            "selected_profile_version_ids": [101],
-            "selected_eligibility_states": ["eligible"],
-            "inserted_job_ids": [job], "advanced_count": 1,
-            "selected_count": 1, "inserted_count": 1})
-        key = f"regular:{pid}:{int(cycle.timestamp())}"
-        roots.append((pid, key, job, "complete"))
-        profiles[event_id] = (0, 1)
+            "selected_player_ids": [], "selected_due_ats": [],
+            "selected_profile_version_ids": [],
+            "selected_eligibility_states": [],
+            "inserted_job_ids": [], "advanced_count": 0,
+            "selected_count": 0, "inserted_count": 0}
+        if not suppressed:
+            if cycle >= core_end and not reopened:
+                event["gate_handoff_at"] = core_end
+                reopened = True
+            event.update({
+                "visible_due_count": 1, "visible_due_min_at": due,
+                "selected_player_ids": [pid], "selected_due_ats": [due],
+                "selected_profile_version_ids": [101],
+                "selected_eligibility_states": ["eligible"],
+                "inserted_job_ids": [job], "advanced_count": 1,
+                "selected_count": 1, "inserted_count": 1})
+            key = f"regular:{pid}:{int(cycle.timestamp())}"
+            roots.append((pid, key, job, "complete"))
+            profiles[event_id] = (0, 1)
+        events.append(event)
     db.admission_events_data = events
     db.admission_roots_data = roots
     db.admission_profile_data = profiles
@@ -682,9 +719,10 @@ def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
                 late_slots: set = frozenset()):
     cohort = _write_cohort(tmp_path / f"{name}-cohort.txt", TAGS)
     receipt_path = tmp_path / f"{name}-receipt.json"
-    receipt_path.write_text(json.dumps(_receipt_scope()))
+    run_id = name.replace("-", "")
+    receipt_path.write_text(json.dumps(_receipt_scope(admission_run_id=run_id)))
     run_dir = tmp_path / name
-    arguments = _start_args(run_dir, cohort, run_id=name.replace("-", ""),
+    arguments = _start_args(run_dir, cohort, run_id=run_id,
                             deployed_receipt=str(receipt_path),
                             max_invocation_gap_seconds=3600)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
@@ -712,7 +750,10 @@ def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
                      "digest": str(index)},
             metrics_error=None,
             previous_metrics={"counters": {"jobs": index - 1}} if index else None,
-            pressure={}, fs={}, watchdog_active=True)
+            pressure={}, fs=step9.filesystem_facts("/tmp", "/tmp"),
+            watchdog_active=True)
+        if (index + 1) % 60 == 0:
+            sample["operating"] = db.operating_snapshot([])
         step9._exclusive_json(samples / f"minute-{index:04d}.json", sample)
     return run_dir, run
 
@@ -1169,7 +1210,11 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
         # Killed sampler: 3 slots then stop; finalize must refuse a partial run.
         cohort = _write_cohort(base / "cohort.txt", TAGS)
         kill_receipt = base / "receipt.json"
-        kill_receipt.write_text(json.dumps(_receipt_scope()))
+        kill_receipt.write_text(
+            json.dumps(_receipt_scope(admission_run_id="killed1")))
+        deadline_receipt = base / "deadline-receipt.json"
+        deadline_receipt.write_text(
+            json.dumps(_receipt_scope(admission_run_id="deadline1")))
         run_dir = base / "run-killed"
         with mock.patch.object(step9.deployment_receipt, "validate_receipt",
                                return_value=None):
@@ -1187,7 +1232,7 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
         with mock.patch.object(step9.deployment_receipt, "validate_receipt",
                                return_value=None):
             step9.cmd_start(_start_args(run_dir2, cohort, run_id="deadline1",
-                                        deployed_receipt=str(kill_receipt)),
+                                        deployed_receipt=str(deadline_receipt)),
                             database)
         _pin_image(run_dir2)
         podman = FakePodman()
@@ -1409,7 +1454,10 @@ def _sealed_preflight(tmp_path: Path, name: str, db: FakeDB, bad_traffic: bool =
                      "counters": {"jobs_total{}": index},
                      "digest": str(index)},
             metrics_error=None, previous_metrics=None,
-            pressure={}, fs={}, watchdog_active=True)
+            pressure={}, fs=step9.filesystem_facts("/tmp", "/tmp"),
+            watchdog_active=True)
+        if (index + 1) % 60 == 0:
+            sample["operating"] = db.operating_snapshot([])
         step9._exclusive_json(samples / f"minute-{index:04d}.json", sample)
     return run_dir, run
 
@@ -1745,6 +1793,21 @@ def test_admission_handoff_semantics() -> None:
                    "database_at": handoff + timedelta(seconds=2),
                    "selected_due_ats": [handoff - timedelta(hours=2)]})
     reopen_key = key(1, reopen_cycle)
+    # normal gate-open core event long before suppression: never a breach
+    early_open = _admission_event(0, base, pid=1, job=999)
+    early_key = key(1, base)
+    result = step9.evaluate_admission(
+        run=run, header=header, events=[early_open, blocked, reopen],
+        profile_counts={0: (0, 1), 1: (0, 0), 2: (0, 1)},
+        roots=[(1, early_key, 999, "complete"),
+               (1, reopen_key, 1000, "complete")], max_gap_seconds=90000)
+    assert result["failures"] == []
+    # head gap: first event far after capture_start is unknown, not a pass
+    result = step9.evaluate_admission(
+        run=run, header=header, events=[reopen],
+        profile_counts={2: (0, 1)},
+        roots=[(1, reopen_key, 1000, "complete")], max_gap_seconds=5)
+    assert "admission_head_gap" in result["unknown"]
     result = step9.evaluate_admission(
         run=run, header=header, events=[blocked, reopen],
         profile_counts={1: (0, 0), 2: (0, 1)},
@@ -2061,3 +2124,372 @@ def test_archive_usage_real_sql() -> None:
                     " VALUES (%s, %s, %s, 'i1')",
                     (digest, f"ref-{digest[:8]}", size))
         assert database.archive_usage() == (300, 2)
+
+
+def test_start_admission_receipt_binding(tmp_path: Path) -> None:
+    cohort = _write_cohort(tmp_path / "c.txt", TAGS)
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    base = {"core_start": "2026-10-04T05:00:00Z",
+            "core_end": "2026-10-05T05:00:00Z"}
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        receipt = _receipt_scope(admission_run_id="disabled",
+                                 admission_start="disabled",
+                                 admission_end="disabled")
+        receipt["configuration"]["fields"][
+            "admission_evidence_max_events"] = "0"
+        receipt["configuration"]["fields"][
+            "admission_evidence_max_selected_entries"] = "0"
+        path = tmp_path / "disabled.json"
+        path.write_text(json.dumps(receipt))
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(_start_args(tmp_path / "d0", cohort,
+                                        deployed_receipt=str(path), **base), db)
+        assert error.value.code == "admission_disabled"
+        path = tmp_path / "mismatch.json"
+        path.write_text(json.dumps(_receipt_scope(admission_run_id="other")))
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(_start_args(tmp_path / "d1", cohort,
+                                        deployed_receipt=str(path), **base), db)
+        assert error.value.code == "admission_run_mismatch"
+        path = tmp_path / "interval.json"
+        path.write_text(json.dumps(_receipt_scope(
+            admission_end="2026-10-06T05:00:00Z")))
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(_start_args(tmp_path / "d2", cohort,
+                                        deployed_receipt=str(path), **base), db)
+        assert error.value.code == "admission_interval_mismatch"
+
+
+def _seed_admission_event(connection, run_id: str, invocation: str,
+                          cycle: datetime, at: datetime, *, gate: bool,
+                          player=None, version=None, job=None,
+                          handoff=None,
+                          cap_start: datetime = datetime(
+                              2026, 10, 4, 5, 0, tzinfo=UTC)) -> None:
+    due = cycle - timedelta(seconds=60)
+    selected = [player] if player is not None else []
+    connection.execute(
+        "INSERT INTO collector_regular_admission_evidence"
+        " (run_id, invocation_id, cycle_at, scheduler_at, database_at,"
+        " capture_start, capture_end, gate_allowed, gate_handoff_at,"
+        " batch_limit, visible_due_count, visible_due_min_at,"
+        " unselected_visible_due_count, unselected_visible_past_deadline_count,"
+        " selected_past_deadline_count, selected_player_ids, selected_due_ats,"
+        " selected_profile_version_ids, selected_eligibility_states,"
+        " inserted_job_ids, advanced_count)"
+        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 1000, 1, %s, 0, 0, 0,"
+        " %s, %s, %s, %s, %s, %s)",
+        (run_id, invocation, cycle, cycle, at, cap_start,
+         cap_start + timedelta(hours=30),
+         gate, handoff, due, selected,
+         [due] if selected else [], [version] if selected else [],
+         ["eligible"] if selected else [], [job] if selected else [],
+         1 if selected else 0))
+
+
+def test_db_suppression_and_tail_semantics() -> None:
+    """DB-evidence negatives: suppression breach vs late-handoff tail."""
+    import psycopg
+    from domain_test_support import domain_database
+
+    with domain_database(_pg_url(), include_coordinator=True) as info:
+        database = step9.Database(lambda: psycopg.connect(info))
+        with psycopg.connect(info, autocommit=True) as connection:
+            player = _seed_player(connection, TAGS[0])
+            version = connection.execute(
+                "SELECT current_profile_version_id FROM players WHERE id = %s",
+                (player,)).fetchone()[0]
+            cycle0 = datetime(2026, 10, 4, 5, 0, tzinfo=UTC)
+            handoff = datetime(2026, 10, 5, 5, 0, tzinfo=UTC)
+            connection.execute(
+                "INSERT INTO collector_regular_admission_evidence_runs"
+                " (run_id, capture_start, capture_end, max_events,"
+                " max_selected_entries) VALUES ('sup1', %s, %s, 108000,"
+                " 5000000)", (cycle0, cycle0 + timedelta(hours=30)))
+            key = f"regular:{player}:{int(cycle0.timestamp())}"
+            job = connection.execute(
+                "INSERT INTO collector_jobs (work_type, scope, player_id,"
+                " normalized_tag, capacity_pool, priority, due_at,"
+                " coalescing_key, status, created_at)"
+                " VALUES ('regular_poll', 'player', %s, %s, 'normal', 100,"
+                " %s, %s, 'complete', %s) RETURNING id",
+                (player, TAGS[0], cycle0, key, cycle0)).fetchone()[0]
+            # normal gate-open core event: no breach
+            _seed_admission_event(connection, "sup1", "ab" * 16, cycle0,
+                                  cycle0 + timedelta(seconds=1), gate=True,
+                                  player=player, version=version, job=job)
+            # suppressed-window gate-open event: breach (04:55 aligned cycle)
+            bad_cycle = handoff - timedelta(minutes=5)
+            _seed_admission_event(connection, "sup1", "cd" * 16, bad_cycle,
+                                  handoff - timedelta(seconds=30), gate=True,
+                                  player=player, version=version, job=job)
+        header = database.admission_run("sup1")
+        events = database.admission_events(
+            "sup1", "2026-10-04T05:00:00Z", "2026-10-05T05:10:00Z")
+        assert len(events) == 2
+        counts = database.admission_profile_counts(
+            "sup1", "2026-10-04T05:00:00Z", "2026-10-05T05:10:00Z")
+        roots = database.semantic_roots(
+            "2026-10-04T05:00:00Z", "2026-10-05T05:10:00Z")
+        run = {"core_start": "2026-10-04T05:00:00+00:00",
+               "core_end": "2026-10-05T05:00:00+00:00", "mode": "live-day",
+               "max_invocation_gap_seconds": 3600}
+        result = step9.evaluate_admission(
+            run=run, header=header, events=events, profile_counts=counts,
+            roots=roots, max_gap_seconds=3600)
+        assert "admission_suppression_breach" in result["failures"]
+        # late handoff with short tail: tail unknown from real evidence
+        with psycopg.connect(info, autocommit=True) as connection:
+            connection.execute(
+                "INSERT INTO collector_regular_admission_evidence_runs"
+                " (run_id, capture_start, capture_end, max_events,"
+                " max_selected_entries) VALUES ('sup2', %s, %s, 108000,"
+                " 5000000)", (cycle0, cycle0 + timedelta(hours=30)))
+            reopen = handoff + timedelta(minutes=20)
+            _seed_admission_event(connection, "sup2", "ef" * 16, cycle0,
+                                  cycle0 + timedelta(seconds=1), gate=True,
+                                  player=player, version=version, job=job)
+            _seed_admission_event(connection, "sup2", "aa" * 16, reopen,
+                                  reopen + timedelta(seconds=1), gate=True,
+                                  player=player, version=version, job=job,
+                                  handoff=reopen)
+        header2 = database.admission_run("sup2")
+        events2 = database.admission_events(
+            "sup2", "2026-10-04T05:00:00Z", "2026-10-05T05:40:00Z")
+        counts2 = database.admission_profile_counts(
+            "sup2", "2026-10-04T05:00:00Z", "2026-10-05T05:40:00Z")
+        result2 = step9.evaluate_admission(
+            run=run, header=header2, events=events2, profile_counts=counts2,
+            roots=roots, max_gap_seconds=3600)
+        assert "admission_tail_insufficient" in result2["unknown"]
+
+
+def test_device_stats_probe_parsing() -> None:
+    out = ("[--/dev/sda].write_io_errs   3\n"
+           "[--/dev/sda].read_io_errs   0\n"
+           "[--/dev/sdb].write_io_errs   1\n")
+    with mock.patch("subprocess.run") as run:
+        run.return_value = mock.Mock(returncode=0, stdout=out, stderr="")
+        result = step9._btrfs_device_stats("/mnt")
+    assert result == {"errors": {"write_io_errs": 4, "read_io_errs": 0},
+                      "error": None}
+    with mock.patch("subprocess.run") as run:
+        run.return_value = mock.Mock(returncode=1, stdout="", stderr="x")
+        assert step9._btrfs_device_stats("/mnt")["error"] == "device_stats_failed"
+    with mock.patch("subprocess.run",
+                           side_effect=FileNotFoundError):
+        assert step9._btrfs_device_stats("/mnt")["error"] == "tool_missing"
+
+
+def test_device_error_increase_fails() -> None:
+    base = _quiet_facts()
+    for fs in base["filesystems"].values():
+        fs["filesystem_type"] = "btrfs"
+        fs["btrfs"]["device"] = {"errors": {"write_io_errs": 0}, "error": None}
+    current = _quiet_facts()
+    for fs in current["filesystems"].values():
+        fs["filesystem_type"] = "btrfs"
+        fs["btrfs"]["device"] = {"errors": {"write_io_errs": 2}, "error": None}
+    failures, _unknown, _s = step9.evaluate_resource_gates(base, current, 0)
+    assert "btrfs_device_error" in failures
+    current["filesystems"]["pool"]["btrfs"]["device"] = {
+        "errors": {}, "error": "tool_missing"}
+    failures, _unknown, _s = step9.evaluate_resource_gates(base, current, 0)
+    assert "btrfs_device_stats_unavailable" in failures
+
+
+def test_cgroup_probe_uses_inspect_path(tmp_path: Path) -> None:
+    cgroup = tmp_path / "cgroup"
+    cgroup.mkdir()
+    (cgroup / "memory.events").write_text("low 0\nhigh 0\noom_kill 2\n")
+    (cgroup / "memory.swap.current").write_text("4096\n")
+    (cgroup / "memory.current").write_text("8192\n")
+    result = step9._read_cgroup_files(cgroup)
+    assert result == {"oom_kills": 2, "swap_current_bytes": 4096,
+                      "mem_current_bytes": 8192}
+
+    calls: list = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command[0])
+        return mock.Mock(returncode=1, stdout="", stderr="")
+
+    with mock.patch("subprocess.run", side_effect=fake_run):
+        failed = step9._cgroup_numbers("podman-test", "c1")
+    assert failed["error"] == "cgroup_path_unavailable"
+    assert calls == ["podman-test"]
+
+
+def test_podman_probe_honors_bin() -> None:
+    seen: list = []
+
+    def fake_run(command, **kwargs):
+        seen.append(command[0])
+        return mock.Mock(returncode=1, stdout="", stderr="")
+
+    with mock.patch("subprocess.run", side_effect=fake_run):
+        assert step9._podman_container_probe(
+            {"containers": {"collector": "c"}, "podman_bin": "podman-x"}) is None
+    assert seen == ["podman-x"]
+
+
+def test_operating_regression_gates(tmp_path: Path) -> None:
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_run(tmp_path, "opreg", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    run_dir2, _run2 = _sealed_run(tmp_path, "opreg2", db)
+    arguments2 = mock.Mock(run_dir=str(run_dir2), podman_bin="podman")
+    db.operating_data = {
+        "status": "complete",
+        "identity": {"status": "complete", "rows": []},
+        "collector_queues": {"status": "complete", "rows": []},
+        "python_queues": {"status": "complete", "rows": []},
+        "relations": {"status": "complete", "rows": []},
+        "processed": {"status": "complete", "rows": []},
+        "failures": {"status": "complete",
+                     "rows": [["transport", 3]]}}
+    assert step9.cmd_finalize(arguments2, {"db": db}) == 1
+    final = json.loads((run_dir2 / "final.json").read_text())
+    assert final["operating"]["failure_code"] == "operating_regressed"
+    assert step9.cmd_validate(arguments2) == 1
+    db.operating_data = {"status": "unknown", "failure_code": "denied"}
+    run_dir3, _run3 = _sealed_run(tmp_path, "opreg3", db)
+    arguments3 = mock.Mock(run_dir=str(run_dir3), podman_bin="podman")
+    assert step9.cmd_finalize(arguments3, {"db": db}) == 2
+
+
+def test_cgroup_oom_increase_fails() -> None:
+    base = _quiet_facts()
+    base["cgroup"] = {"oom_kills": 0, "swap_current_bytes": 0,
+                      "mem_current_bytes": 1, "mem_peak_bytes": 1,
+                      "error": None}
+    current = _quiet_facts()
+    current["cgroup"] = {"oom_kills": 1, "swap_current_bytes": 99,
+                         "mem_current_bytes": 1, "mem_peak_bytes": 1,
+                         "error": None}
+    failures, _unknown, _s = step9.evaluate_resource_gates(base, current, 0)
+    assert "oom_kill_observed" in failures
+    assert "swap_growth" in failures
+
+
+def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
+    """Metrics may be absent after the proven minute-60 stop only."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    states = {"running": True}
+
+    def container_probe(run):
+        return {"running": states["running"], "image": "sha256:test",
+                "started_at": "t", "stats": None,
+                "cgroup": {"oom_kills": 0, "swap_current_bytes": 0,
+                           "mem_current_bytes": 1, "mem_peak_bytes": 1,
+                           "error": None}}
+
+    def metrics(url):
+        if not states["running"]:
+            raise step9.Step9Error("metrics_unavailable", "stopped")
+        return {"process_id": "p1", "started_at": 1.0, "counters": {},
+                "digest": "x"}
+
+    run_dir, run = _sealed_preflight(tmp_path, "drain", db)
+    # rewrite: drive the loop directly with a stopping collector
+    import shutil
+    shutil.rmtree(run_dir / "samples")
+    (run_dir / "samples").mkdir()
+    mono = [0]
+    walls = [step9._parse_utc(run["core_start"]) - timedelta(seconds=60)]
+
+    def clock():
+        return mono[0]
+
+    def now_utc():
+        mono[0] += 60_000_000_000
+        walls[0] += timedelta(seconds=60)
+        return walls[0]
+
+    hooks = {"db": db, "fixed_ids": db.fixed_ids, "fetch_metrics": metrics,
+             "container_probe": container_probe,
+             "watchdog_check": lambda run: True, "clock": clock,
+             "now_utc": now_utc, "no_sleep": True, "max_slots": 75,
+             "resource_facts": lambda run, db, metrics: {
+                 "filesystems": {}, "memory": {}, "archive": {}}}
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    # collector never stops but metrics vanish at slot 62: failure
+    def flaky_metrics(url):
+        slot = len(list((run_dir / "samples").glob("*.json")))
+        if slot >= 62:
+            raise step9.Step9Error("metrics_unavailable", "gone")
+        return metrics(url)
+
+    hooks["fetch_metrics"] = flaky_metrics
+    assert step9.cmd_sample(arguments, hooks) == 1
+    assert list((run_dir / "failures").glob("two_consecutive_unavailable-*.json"))
+    # authorized stop at minute 60: absent metrics pass through the drain
+    db2 = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir2, _run2 = _sealed_preflight(tmp_path, "drain2", db2)
+    shutil.rmtree(run_dir2 / "samples")
+    (run_dir2 / "samples").mkdir()
+    stopped = {"at": 60}
+
+    def stopping_probe(run):
+        slot = len(list((run_dir2 / "samples").glob("*.json")))
+        return {"running": slot < stopped["at"], "image": "sha256:test",
+                "started_at": "t", "stats": None,
+                "cgroup": {"oom_kills": 0, "swap_current_bytes": 0,
+                             "mem_current_bytes": 1, "mem_peak_bytes": 1,
+                             "error": None}}
+
+    def drain_metrics(url):
+        slot = len(list((run_dir2 / "samples").glob("*.json")))
+        if slot >= stopped["at"]:
+            raise step9.Step9Error("metrics_unavailable", "stopped")
+        return {"process_id": "p1", "started_at": 1.0, "counters": {},
+                "digest": "x"}
+
+    mono2 = [0]
+    walls2 = [step9._parse_utc(run["core_start"]) - timedelta(seconds=60)]
+
+    def clock2():
+        return mono2[0]
+
+    def now_utc2():
+        mono2[0] += 60_000_000_000
+        walls2[0] += timedelta(seconds=60)
+        return walls2[0]
+
+    hooks2 = {"db": db2, "fixed_ids": db2.fixed_ids,
+              "fetch_metrics": drain_metrics,
+              "container_probe": stopping_probe,
+              "watchdog_check": lambda run: True,
+              "clock": clock2, "now_utc": now_utc2,
+              "no_sleep": True, "max_slots": 75,
+              "resource_facts": lambda run, db, metrics: {
+                  "filesystems": {}, "memory": {}, "archive": {}}}
+    arguments2 = mock.Mock(run_dir=str(run_dir2), podman_bin="podman")
+    assert step9.cmd_sample(arguments2, hooks2) == 0
+    assert len(list((run_dir2 / "samples").glob("*.json"))) == 75
+
+
+def test_operating_snapshot_worker_sections() -> None:
+    """Worker-role operating capture: sizes/queues work, failures wait."""
+    import psycopg
+    from domain_test_support import domain_database
+
+    with domain_database(_pg_url(), include_coordinator=True) as info:
+        import re
+
+        from clashlens.operating import RELATION_NAMES
+
+        existing = re.search(r"options='([^']*)'", info)
+        options = ((existing.group(1) + " ") if existing else "") \
+            + "-c role=clashlens_python_worker"
+        worker_db = step9.Database(
+            lambda: psycopg.connect(info, options=options))
+        snap = worker_db.operating_snapshot(list(RELATION_NAMES))
+        assert snap["identity"]["status"] == "complete"
+        assert snap["relations"]["status"] == "complete"
+        assert len(snap["relations"]["rows"]) == len(RELATION_NAMES)
+        assert snap["collector_queues"]["status"] == "complete"
+        assert snap["failures"]["status"] == "unknown"
+        assert snap["status"] == "unknown"

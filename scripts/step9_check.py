@@ -37,6 +37,11 @@ from scripts import deployment_receipt
 
 from clashlens.profile import normalize_player_tag
 
+try:
+    from clashlens.operating import RELATION_NAMES as _OPERATING_RELATIONS
+except ImportError:  # pragma: no cover - production always has the module
+    _OPERATING_RELATIONS = ()
+
 SCHEMA_LIVE = "step9-live-day-v1"
 SCHEMA_PREFLIGHT = "step9-preflight-v1"
 SCHEMA = SCHEMA_LIVE  # default mode; run.json pins the actual schema
@@ -545,6 +550,7 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "watchdog_unit": arguments.watchdog_unit,
         "max_invocation_gap_seconds": getattr(
             arguments, "max_invocation_gap_seconds", 5),
+        "podman_bin": getattr(arguments, "podman_bin", "podman"),
         "database_url_source": ("file" if getattr(
             arguments, "database_url_file", None) else (
                 "argv" if getattr(arguments, "database_url", None)
@@ -555,21 +561,85 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "resource_baseline": collect_resource_facts(
             spool_path=arguments.spool_path,
             postgres_path=arguments.postgres_path, db=db, metrics=None,
-            eur_per_gib=getattr(arguments, "archive_eur_per_gib", None)),
-        "filesystem": filesystem_facts(arguments.spool_path,
+            eur_per_gib=getattr(arguments, "archive_eur_per_gib", None)),        "filesystem": filesystem_facts(arguments.spool_path,
                                         arguments.postgres_path),
         "admission": _admission_header(db, mode_name, run_id, core_start,
                                         core_end),
+        "admission_receipt": _admission_receipt_block(
+            receipt, mode_name, run_id, core_start, core_end,
+            getattr(arguments, "lead_in_seconds", 0),
+            getattr(arguments, "tail_seconds", 0)),
         "script_sha256": _sha256(Path(__file__).read_bytes()),
     }
+    try:
+        header["resource_baseline"]["cgroup"] = _cgroup_numbers(
+            getattr(arguments, "podman_bin", "podman"),
+            arguments.collector_container)
+    except Exception:  # noqa: BLE001 - baseline miss stays unknown
+        header["resource_baseline"]["cgroup"] = {"oom_kills": None,
+            "swap_current_bytes": None, "mem_current_bytes": None,
+            "mem_peak_bytes": None, "error": "baseline_unavailable"}
     digest = _exclusive_json(run_dir / "run.json", header)
     try:
         os.chmod(run_dir / "run.json", 0o600)
     except OSError as error:
         raise Step9Error("run_unwritable", "run.json cannot be secured") from error
+    if db is not None:
+        try:
+            _exclusive_json(run_dir / "operating-baseline.json",
+                            {"schema": mode["schema"], "run_id": run_id,
+                             "captured_at": _utc_now().isoformat(),
+                             "snapshot": db.operating_snapshot(
+                                 list(_OPERATING_RELATIONS))})
+        except Step9Error:
+            raise
+        except Exception as error:  # noqa: BLE001 - capture miss is evidence
+            _exclusive_json(run_dir / "operating-baseline.json",
+                            {"schema": mode["schema"], "run_id": run_id,
+                             "status": "unknown",
+                             "failure_code": type(error).__name__})
     _check_capacity(run_dir)
     header["header_sha256"] = digest
     return header
+
+
+def _admission_receipt_block(receipt: dict, mode_name: str, run_id: str,
+                             core_start: datetime, core_end: datetime,
+                             lead_in: int, tail: int) -> dict | None:
+    """Live-day pins the deployed admission evidence config; fail closed."""
+    if mode_name != "live-day":
+        return None
+    fields = receipt.get("configuration", {}).get("fields", {})
+    evidence_id = fields.get("admission_evidence_run_id", "")
+    start = fields.get("admission_evidence_start", "")
+    end = fields.get("admission_evidence_end", "")
+    if evidence_id == "disabled":
+        raise Step9Error("admission_disabled",
+                         "live-day requires enabled admission evidence")
+    if evidence_id != run_id:
+        raise Step9Error("admission_run_mismatch",
+                         "receipt admission run ID differs from observer run")
+    capture_start = core_start - timedelta(seconds=lead_in or 0)
+    capture_end = core_end + timedelta(seconds=tail or 0)
+    try:
+        want_start = _parse_utc(start)
+        want_end = _parse_utc(end)
+    except Step9Error as error:
+        raise Step9Error("admission_interval_malformed",
+                         "receipt admission interval is invalid") from error
+    if want_start != capture_start or want_end != capture_end:
+        raise Step9Error("admission_interval_mismatch",
+                         "receipt admission interval differs from run capture")
+    try:
+        quotas = (int(fields.get("admission_evidence_max_events", "-1")),
+                  int(fields.get("admission_evidence_max_selected_entries",
+                                 "-1")))
+    except (TypeError, ValueError) as error:
+        raise Step9Error("admission_quota_malformed",
+                         "receipt admission quotas are invalid") from error
+    return {"run_id": evidence_id, "capture_start": start,
+            "capture_end": end, "max_events": quotas[0],
+            "max_selected_entries": quotas[1]}
 
 
 def _budget_receipt_block(receipt: dict, mode_name: str) -> dict | None:
@@ -897,6 +967,36 @@ class Database:
             return tuple(cursor.fetchone())
         return self._one_txn(work)
 
+    def operating_snapshot(self, relations: list[str]) -> dict:
+        """Sectioned worker-safe operating capture; sections fail closed."""
+        snapshot: dict = {}
+
+        def run_section(name, sql, params=None):
+            def work(cursor):
+                cursor.execute(sql, params or ())
+                return list(cursor.fetchall())
+            try:
+                snapshot[name] = {"status": "complete",
+                                  "rows": [list(r) for r in self._one_txn(work)]}
+            except Exception as error:  # noqa: BLE001 - denial is evidence
+                snapshot[name] = {"status": "unknown",
+                                  "failure_code": type(error).__name__}
+        run_section("identity", SQL_OP_IDENTITY)
+        run_section("collector_queues", SQL_OP_QUEUES)
+        run_section("python_queues", SQL_OP_PYTHON_QUEUES)
+        run_section("relations", SQL_OP_RELATIONS, (list(relations),))
+        run_section("processed", SQL_OP_PROCESSED)
+        run_section("failures", SQL_OP_FAILURES)
+        for section in snapshot.values():
+            if isinstance(section, dict) and "rows" in section:
+                section["rows"] = _jsonable(section["rows"])
+        snapshot["status"] = ("complete"
+                               if all(s["status"] == "complete"
+                                      for s in snapshot.values()
+                                      if isinstance(s, dict))
+                               else "unknown")
+        return snapshot
+
     def active_queues(self) -> dict:
         def work(cursor):
             cursor.execute(SQL_ACTIVE_QUEUES)
@@ -1110,6 +1210,7 @@ def build_sample(*, run: dict, index: int, expected_utc: datetime,
             sample["failure_code"] = "process_identity_changed"
             sample["outcome"] = "process_restart"
     sample["admission_latest"] = admission_latest
+    sample["mount_changed"] = _mount_changed(run.get("filesystem") or {}, fs)
     if admission_latest is not None and admission_latest.get("mismatch"):
         sample["failure_code"] = "admission_count_mismatch"
         sample["outcome"] = "admission_mismatch"
@@ -1184,6 +1285,19 @@ def _check_liveness_reset(previous: dict | None, current: dict | None) -> str | 
     return None
 
 
+def _prior_samples(samples_dir: Path) -> list[dict]:
+    """Best-effort read of already-written samples for stop evidence."""
+    prior = []
+    if not samples_dir.is_dir():
+        return prior
+    for path in sorted(samples_dir.glob("minute-*.json")):
+        try:
+            prior.append(json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return prior
+
+
 def _mount_changed(baseline: dict, current: dict) -> bool | None:
     """Mount-identity continuity; None when either side is unknown."""
     try:
@@ -1215,30 +1329,99 @@ def _systemd_watchdog_check(run: dict) -> bool | None:
     return completed.returncode == 0
 
 
+def _cgroup_numbers(podman_bin: str, container: str) -> dict:
+    """Container cgroup OOM/swap/memory counters; unknown stays None."""
+    import subprocess
+
+    result: dict = {"oom_kills": None, "swap_current_bytes": None,
+                    "mem_current_bytes": None, "mem_peak_bytes": None,
+                    "error": None}
+    try:
+        completed = subprocess.run(
+            [podman_bin, "container", "inspect", "--format",
+             "{{.State.CgroupPath}}", container],
+            check=False, capture_output=True, text=True, timeout=30)
+        if completed.returncode != 0:
+            result["error"] = "cgroup_path_unavailable"
+            return result
+        base = Path("/sys/fs/cgroup") / completed.stdout.strip().lstrip("/")
+        result.update(_read_cgroup_files(base))
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as error:
+        result["error"] = "cgroup_unavailable:" + type(error).__name__
+    return result
+
+
+def _read_cgroup_files(base: Path) -> dict:
+    """Read cgroup memory counters below a cgroup directory."""
+    out: dict = {}
+    events = (base / "memory.events").read_text()
+    for line in events.splitlines():
+        if line.startswith("oom_kill"):
+            out["oom_kills"] = int(line.split()[1])
+    out["swap_current_bytes"] = int(
+        (base / "memory.swap.current").read_text().strip())
+    out["mem_current_bytes"] = int(
+        (base / "memory.current").read_text().strip())
+    try:
+        out["mem_peak_bytes"] = int(
+            (base / "memory.peak").read_text().strip())
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+def _btrfs_device_stats(target: str, podman_bin: str | None = None) -> dict:
+    """Real `btrfs device stats` error counters; unavailable fails closed."""
+    import subprocess
+
+    result: dict = {"errors": {}, "error": None}
+    try:
+        completed = subprocess.run(
+            ["btrfs", "device", "stats", str(target)],
+            check=False, capture_output=True, text=True, timeout=30)
+        if completed.returncode != 0:
+            result["error"] = "device_stats_failed"
+            return result
+        totals: dict[str, int] = {}
+        for line in completed.stdout.splitlines():
+            match = re.fullmatch(r"\[(.*)\]\.(\w+)\s+(\d+).*", line.strip())
+            if match:
+                totals[match.group(2)] = totals.get(match.group(2), 0) \
+                    + int(match.group(3))
+        result["errors"] = totals
+    except FileNotFoundError:
+        result["error"] = "tool_missing"
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        result["error"] = "device_stats_unavailable:" + type(error).__name__
+    return result
+
+
 def _podman_container_probe(run: dict) -> dict | None:
     """Best-effort container state/stats; None stays unknown, never zero."""
     import subprocess
 
     containers = run.get("containers", {}) or {}
     name = containers.get("collector")
+    podman_bin = run.get("podman_bin", "podman") or "podman"
     if not name:
         return None
     try:
         inspect = subprocess.run(
-            ["podman", "container", "inspect", "--format",
+            [podman_bin, "container", "inspect", "--format",
              "{{.State.Running}}\n{{.Image}}\n{{.State.StartedAt}}", name],
             check=False, capture_output=True, text=True, timeout=30)
         if inspect.returncode != 0:
             return None
         lines = inspect.stdout.strip().splitlines()
         stats = subprocess.run(
-            ["podman", "stats", "--no-stream", "--format",
+            [podman_bin, "stats", "--no-stream", "--format",
              "{{.CPUPerc}}\n{{.MemUsage}}", name],
             check=False, capture_output=True, text=True, timeout=30)
         return {"running": (lines[0].strip().lower() == "true") if lines else None,
                 "image": lines[1].strip() if len(lines) > 1 else None,
                 "started_at": lines[2].strip() if len(lines) > 2 else None,
-                "stats": stats.stdout.strip() if stats.returncode == 0 else None}
+                "stats": stats.stdout.strip() if stats.returncode == 0 else None,
+                "cgroup": _cgroup_numbers(podman_bin, name)}
     except (OSError, subprocess.SubprocessError, IndexError):
         return None
 
@@ -1275,7 +1458,6 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
     outcome_strikes = 0
     unavailable_strikes = 0
     container_probe = hooks.get("container_probe")
-    baseline_fs = (run.get("filesystem") or {})
     resource_baseline = run.get("resource_baseline") or {}
     eur_per_gib = run.get("archive_eur_per_gib")
     mem_over = 0
@@ -1329,8 +1511,13 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                     if container_probe else _podman_container_probe(run)
             except Exception:  # noqa: BLE001 - probe miss is unknown
                 sample["container"] = None
-            sample["mount_changed"] = _mount_changed(baseline_fs,
-                                                      sample["filesystem"])
+            if db is not None and (index + 1) % 60 == 0:
+                try:
+                    sample["operating"] = db.operating_snapshot(
+                        list(_OPERATING_RELATIONS))
+                except Exception:  # noqa: BLE001 - capture miss is evidence
+                    sample["operating"] = {"status": "unknown",
+                                             "failure_code": "capture_failed"}
             facts_hook = hooks.get("resource_facts")
             if facts_hook is not None:
                 resources = facts_hook(run=run, db=db, metrics=metrics)
@@ -1340,6 +1527,10 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                     postgres_path=run["postgres_path"], db=db,
                     metrics=metrics, eur_per_gib=eur_per_gib,
                     btrfs_probe=hooks.get("btrfs_probe"))
+            cgroup = (sample.get("container") or {}).get("cgroup")
+            if cgroup:
+                resources = dict(resources)
+                resources["cgroup"] = cgroup
             res_failures, res_unknown, mem_over = evaluate_resource_gates(
                 resource_baseline, resources, mem_over)
             sample["resources"] = {"failures": res_failures,
@@ -1372,7 +1563,22 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
             elif outcome == "on_time" and db_error is None \
                     and metrics_error is None:
                 outcome_strikes = 0
-            if db_error is not None or metrics_error is not None:
+            stop_proven = (run_dir / "watchdog-outcome.json").exists() or any(
+                (s.get("container") or {}).get("running") is False
+                for s in _prior_samples(samples_dir))
+            if (sample.get("container") or {}).get("running") is False \
+                    and index < mode.get("bootstrap_slots", mode["slots"]):
+                sample["failure_code"] = "collector_stopped_early"
+                sample["outcome"] = "collector_stopped_early"
+                _record_failure(run_dir, sample["failure_code"], outcome)
+                return 1
+            metrics_absent = metrics_error is not None
+            if metrics_absent and run.get("mode") == "preflight" \
+                    and index >= mode.get("bootstrap_slots", 0) \
+                    and stop_proven:
+                sample["metrics_absent_authorized"] = True
+                metrics_absent = False
+            if db_error is not None or metrics_absent:
                 unavailable_strikes += 1
                 if unavailable_strikes >= 2:
                     _record_failure(run_dir, "two_consecutive_unavailable",
@@ -1445,6 +1651,40 @@ def _finalize_wal(samples: list[dict], db: object | None) -> dict:
     except Exception as error:  # noqa: BLE001 - DB failure is evidence
         return {"status": "unknown",
                 "failure_code": f"database_unavailable: {error}"}
+
+
+def _finalize_operating(run: dict, db: object | None,
+                        run_dir: Path) -> dict:
+    """Final operating capture plus baseline/final failure regression."""
+    if db is None:
+        return {"status": "unknown", "failure_code": "database_unavailable"}
+    try:
+        final = db.operating_snapshot(list(_OPERATING_RELATIONS))
+    except Exception as error:  # noqa: BLE001 - capture miss is evidence
+        return {"status": "unknown",
+                "failure_code": f"database_unavailable: {error}"}
+    try:
+        baseline_path = run_dir / "operating-baseline.json"
+        baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+        base_snap = baseline.get("snapshot", baseline)
+    except (OSError, json.JSONDecodeError):
+        base_snap = {}
+    result: dict = {"status": final.get("status", "unknown"),
+                     "snapshot": final, "regressed": []}
+    if final.get("status") != "complete":
+        result["failure_code"] = "operating_incomplete"
+        return result
+    base_fail = {r[0]: r[1] for r in
+                 base_snap.get("failures", {}).get("rows", [])
+                 if isinstance(base_snap.get("failures"), dict)}
+    final_fail = {r[0]: r[1] for r in final["failures"]["rows"]}
+    for category, count in final_fail.items():
+        if int(count) > int(base_fail.get(category, 0)):
+            result["regressed"].append(category)
+    if result["regressed"]:
+        result["status"] = "failed"
+        result["failure_code"] = "operating_regressed"
+    return result
 
 
 def _finalize_admission(run: dict, db: object | None) -> dict:
@@ -1684,14 +1924,13 @@ def cmd_finalize(arguments: argparse.Namespace, hooks=None) -> int:
             "core_windows": len(windows),
             "non_on_time_slots": missing,
             "reset": resets,
+            "operating": _finalize_operating(run, db, run_dir),
             "reset_deep": (_finalize_reset_deep(run, db, reset_rows)
                             if db is not None and mode["admission"]
                             else {"status": "not_applicable"}),
             "eligibility": _finalize_eligibility(run, db),
             "admission": _finalize_admission(run, db),
             "preflight": _finalize_preflight(run, db),
-            "operating": hooks.get("operating", {"status": "unknown",
-                                  "failure_code": "operating_unavailable"}),
             "filesystem": filesystem_facts(run["spool_path"], run["postgres_path"]),
             "wal": _finalize_wal(samples, db),
             "failure_codes": sorted({s.get("failure_code") for s in samples
@@ -1708,7 +1947,8 @@ def cmd_finalize(arguments: argparse.Namespace, hooks=None) -> int:
 
 def _finalize_exit(final: dict, mode: dict) -> int:
     """Sealed evidence always; nonzero when required blocks fail/are unknown."""
-    required = [final.get("eligibility", {}), final.get("wal", {})]
+    required = [final.get("eligibility", {}), final.get("wal", {}),
+                final.get("operating", {})]
     if mode["admission"]:
         required += [final.get("admission", {}), final.get("reset_deep", {})]
     else:
@@ -1805,6 +2045,15 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
                 raise Step9Error("mount_identity_changed",
                                  f"slot {sample.get('slot')} mount changed",
                                  gate=True)
+            if sample.get("mount_changed") is None:
+                raise Step9Error("mount_identity_unknown",
+                                 f"slot {sample.get('slot')} mount unproven",
+                                 gate=True)
+            operating = sample.get("operating")
+            if operating is not None and operating.get("status") != "complete":
+                raise Step9Error("operating_failed",
+                                 f"slot {sample.get('slot')} operating "
+                                 "capture incomplete", gate=True)
         admission = run.get("admission", {})
         if mode["admission"] and admission.get("status") != "integrated":
             raise Step9Error("admission_unproven",
@@ -1839,6 +2088,15 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
         if mode["admission"] and deep.get("status") != "complete":
             raise Step9Error("reset_deep_unproven",
                              "final.json lacks complete reset reconciliation",
+                             gate=True)
+        operating = final.get("operating", {})
+        if operating.get("status") != "complete":
+            raise Step9Error("operating_unproven",
+                             "final.json lacks complete operating evidence",
+                             gate=True)
+        if operating.get("regressed"):
+            raise Step9Error("operating_regressed",
+                             "operating failures grew during the run",
                              gate=True)
         if final.get("failure_codes"):
             raise Step9Error("sample_evidence_failed",
@@ -2312,6 +2570,89 @@ for _statement in (SQL_0023_TABLES, SQL_BOOTSTRAP_RUN, SQL_ENDPOINT_BUDGETS):
 ALL_RO_STATEMENTS += (SQL_0023_TABLES, SQL_BOOTSTRAP_RUN, SQL_ENDPOINT_BUDGETS)
 
 
+SQL_OP_IDENTITY = """
+SELECT (SELECT system_identifier::text FROM pg_control_system()),
+       (SELECT oid::bigint FROM pg_database
+        WHERE datname = current_database()),
+       statement_timestamp()
+"""
+
+SQL_OP_QUEUES = """
+SELECT status, count(*), min(due_at) FROM collector_jobs GROUP BY status;
+"""
+
+SQL_OP_PYTHON_QUEUES = """
+SELECT status, count(*), min(due_at) FROM python_processing_jobs
+GROUP BY status
+"""
+
+SQL_OP_RELATIONS = """
+SELECT known.name,
+       pg_table_size(class.oid) - CASE WHEN class.reltoastrelid = 0 THEN 0
+           ELSE pg_total_relation_size(class.reltoastrelid) END AS table_bytes,
+       pg_indexes_size(class.oid) AS index_bytes,
+       CASE WHEN class.reltoastrelid = 0 THEN 0
+           ELSE pg_total_relation_size(class.reltoastrelid) END AS toast_bytes,
+       pg_total_relation_size(class.oid) AS total_bytes
+FROM (SELECT unnest(%s::text[]) AS name) AS known
+JOIN pg_class AS class
+  ON class.oid = to_regclass(current_schema() || '.' || known.name)
+"""
+
+SQL_OP_PROCESSED = """
+SELECT 'observations', endpoint, count(*) FROM collector_observations
+GROUP BY endpoint
+UNION ALL
+SELECT 'ranked_day', state, count(*) FROM ranked_day_versions GROUP BY state
+UNION ALL
+SELECT 'army_decode', status, count(*) FROM battle_army_decodes
+GROUP BY status
+UNION ALL
+SELECT 'snapshots', state, count(*) FROM leaderboard_snapshots
+GROUP BY state
+UNION ALL
+SELECT 'outcomes', outcome, count(*) FROM observation_processing_outcomes
+GROUP BY outcome
+"""
+
+SQL_OP_FAILURES = """
+SELECT 'transport', count(*) FROM collector_transport_failures
+UNION ALL
+SELECT 'source_parses', count(*) FROM source_response_parses
+WHERE outcome <> 'valid'
+UNION ALL
+SELECT 'processed_versions', count(*) FROM processed_observation_versions
+WHERE outcome = 'failed'
+"""
+
+for _statement in (SQL_OP_IDENTITY, SQL_OP_QUEUES, SQL_OP_PYTHON_QUEUES,
+                   SQL_OP_RELATIONS, SQL_OP_PROCESSED, SQL_OP_FAILURES):
+    assert_read_only(_statement)
+
+ALL_RO_STATEMENTS += (SQL_OP_IDENTITY, SQL_OP_QUEUES, SQL_OP_PYTHON_QUEUES,
+                      SQL_OP_RELATIONS, SQL_OP_PROCESSED, SQL_OP_FAILURES)
+
+
+def _jsonable(value):
+    """Convert driver-native scalars to retained JSON scalars."""
+    import datetime as _datetime
+    import decimal as _decimal
+
+    if isinstance(value, (_datetime.datetime, _datetime.date)):
+        return value.isoformat()
+    if isinstance(value, _decimal.Decimal):
+        return float(value)
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return bytes(value).hex()
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _jsonable(item) for key, item in value.items()}
+    return value
+
+
 def _event_selected_due(event: dict) -> list:
     return event.get("selected_due_ats") or []
 
@@ -2340,6 +2681,13 @@ def evaluate_admission(*, run: dict, header: dict, events: list[dict],
                       and e.get("gate_handoff_at") is not None), None)
     handoff = (reopening["gate_handoff_at"] if reopening
                else header.get("handoff_at"))
+    suppression_start = core_start + mode["interval"] - timedelta(minutes=5)
+    suppression_end = handoff or (core_start + mode["interval"])
+    if events and max_gap_seconds is not None:
+        head_gap = (events[0]["database_at"]
+                    - header["capture_start"]).total_seconds()
+        if head_gap > max_gap_seconds:
+            unknown.append("admission_head_gap")
     for event in events:
         cycle_at = event["cycle_at"]
         database_at = event["database_at"]
@@ -2368,7 +2716,7 @@ def evaluate_admission(*, run: dict, header: dict, events: list[dict],
         if event["unselected_visible_past_deadline_count"]:
             failures.append("admission_past_deadline_unselected")
             slot["late"] += event["unselected_visible_past_deadline_count"]
-        if handoff is not None and database_at < handoff and (
+        if suppression_start <= database_at < suppression_end and (
                 event["gate_allowed"] or event["selected_count"]
                 or event["inserted_count"]):
             failures.append("admission_suppression_breach")
@@ -2383,9 +2731,8 @@ def evaluate_admission(*, run: dict, header: dict, events: list[dict],
                     failures.append("admission_selected_late_recomputed")
                     slot["late"] += 1
                     break
-    header_handoff = header.get("handoff_at")
     tail_need = max(core_start + mode["interval"],
-                    header_handoff or core_start) + DEADLINE_ALLOWANCE
+                    handoff or core_start) + DEADLINE_ALLOWANCE
     if previous_at is None or previous_at < tail_need:
         unknown.append("admission_tail_insufficient")
     root_check = reconcile_semantic_roots(run, events, roots)
@@ -2589,32 +2936,52 @@ def evaluate_resource_gates(baseline: dict, current: dict,
         else:
             unknown.append("physical_growth_unknown")
         btrfs = facts.get("btrfs") or {}
+        is_btrfs = facts.get("filesystem_type") == "btrfs"
         if btrfs.get("error"):
-            unknown.append("btrfs_evidence_" + str(btrfs["error"]))
+            (failures if is_btrfs else unknown).append(
+                "btrfs_evidence_" + str(btrfs["error"]))
         if btrfs.get("stderr"):
             failures.append("btrfs_diagnostic_stderr")
         old_btrfs = old.get("btrfs") or {}
         if old_btrfs.get("error") is None and btrfs.get("error"):
             failures.append("btrfs_new_error")
-        meta_pct = btrfs.get("metadata_pct")
-        if meta_pct is None:
-            unknown.append("btrfs_metadata_unknown")
-        elif meta_pct >= RES_BTRFS_METADATA_MAX:
-            failures.append("btrfs_metadata_breach")
-        unalloc = btrfs.get("unallocated_bytes")
-        if unalloc is None:
-            unknown.append("btrfs_unallocated_unknown")
-        elif unalloc < RES_BTRFS_UNALLOC_MIN:
-            failures.append("btrfs_unallocated_breach")
+        if is_btrfs:
+            meta_pct = btrfs.get("metadata_pct")
+            if meta_pct is None:
+                failures.append("btrfs_metadata_unproven")
+            elif meta_pct >= RES_BTRFS_METADATA_MAX:
+                failures.append("btrfs_metadata_breach")
+            unalloc = btrfs.get("unallocated_bytes")
+            if unalloc is None:
+                failures.append("btrfs_unallocated_unproven")
+            elif unalloc < RES_BTRFS_UNALLOC_MIN:
+                failures.append("btrfs_unallocated_breach")
+            device = btrfs.get("device") or {}
+            if device.get("error"):
+                failures.append("btrfs_device_stats_unavailable")
+            else:
+                old_dev = (old_btrfs.get("device") or {}).get("errors", {})
+                for kind, count in (device.get("errors") or {}).items():
+                    if int(count) > int(old_dev.get(kind, 0)):
+                        failures.append("btrfs_device_error")
+                        break
     mem = current.get("memory") or {}
     old_mem = baseline.get("memory") or {}
-    if mem.get("oom_kills") is not None \
-            and old_mem.get("oom_kills") is not None:
-        if mem["oom_kills"] > old_mem["oom_kills"]:
+    cgroup = current.get("cgroup") or {}
+    old_cgroup = baseline.get("cgroup") or {}
+    oom_now = cgroup.get("oom_kills", mem.get("oom_kills"))
+    oom_old = old_cgroup.get("oom_kills", old_mem.get("oom_kills"))
+    if oom_now is not None and oom_old is not None:
+        if oom_now > oom_old:
             failures.append("oom_kill_observed")
     else:
         unknown.append("oom_unknown")
-    if mem.get("swap_used_bytes") is not None \
+    cgroup_swap = cgroup.get("swap_current_bytes")
+    old_cgroup_swap = old_cgroup.get("swap_current_bytes")
+    if cgroup_swap is not None and old_cgroup_swap is not None:
+        if cgroup_swap > old_cgroup_swap:
+            failures.append("swap_growth")
+    elif mem.get("swap_used_bytes") is not None \
             and old_mem.get("swap_used_bytes") is not None:
         if mem["swap_used_bytes"] > old_mem["swap_used_bytes"]:
             failures.append("swap_growth")
@@ -2650,8 +3017,9 @@ def evaluate_resource_gates(baseline: dict, current: dict,
 def collect_resource_facts(*, spool_path: str, postgres_path: str,
                            db: object | None, metrics: dict | None,
                            eur_per_gib: float | None,
-                           btrfs_probe=None) -> dict:
+                           btrfs_probe=None, device_probe=None) -> dict:
     probe = btrfs_probe or _btrfs_probe_numbers
+    dev_probe = device_probe or _btrfs_device_stats
     filesystems: dict[str, dict] = {}
     for label, target in (("spool", spool_path), ("postgres", postgres_path)):
         try:
@@ -2677,6 +3045,11 @@ def collect_resource_facts(*, spool_path: str, postgres_path: str,
             "use_pct": use_pct, "labels": [],
             "btrfs": probe(target), "error": facts.get("error")})
         entry["labels"].append(label)
+        if facts.get("filesystem_type") == "btrfs":
+            entry["btrfs"]["device"] = dev_probe(target)
+        else:
+            entry["btrfs"]["device"] = {"errors": {}, "error": None,
+                                            "skipped": "not_btrfs"}
     pressure = host_pressure()
     memory = pressure.get("memory") or {}
     try:
