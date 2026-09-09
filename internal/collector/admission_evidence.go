@@ -169,7 +169,6 @@ func (s *store) scheduleDueRegularWithEvidence(ctx context.Context, now time.Tim
 	if err != nil {
 		return 0, fmt.Errorf("begin admission evidence transaction: %w", err)
 	}
-	committed := false
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, boundaryAdmissionLockKey(now)); err != nil {
@@ -230,8 +229,6 @@ func (s *store) scheduleDueRegularWithEvidence(ctx context.Context, now time.Tim
 	if err := s.commitAdmissionTx(ctx, tx); err != nil {
 		return 0, fmt.Errorf("%w: %w", errAdmissionCommitUnknown, err)
 	}
-	committed = true
-	_ = committed
 	if s.metrics != nil {
 		if !admitted {
 			s.metrics.recordStorageError(failureCodeAfter)
@@ -314,8 +311,8 @@ const admissionEvidenceSchedulerSQL = `
 			min(visible.next_due_at) AS visible_due_min_at,
 			count(*) FILTER (WHERE selected.id IS NULL)::integer AS unselected_visible_due_count,
 			min(visible.next_due_at) FILTER (WHERE selected.id IS NULL) AS unselected_visible_due_min_at,
-			count(*) FILTER (WHERE selected.id IS NULL AND tick.database_at > COALESCE(GREATEST(visible.next_due_at, gate.handoff_at), visible.next_due_at) + interval '5 minutes')::integer AS unselected_past_deadline_count,
-			min(visible.next_due_at) FILTER (WHERE selected.id IS NULL AND tick.database_at > COALESCE(GREATEST(visible.next_due_at, gate.handoff_at), visible.next_due_at) + interval '5 minutes') AS unselected_past_deadline_min_at
+			count(*) FILTER (WHERE selected.id IS NULL AND gate.allowed AND tick.database_at > COALESCE(GREATEST(visible.next_due_at, gate.handoff_at), visible.next_due_at) + interval '5 minutes')::integer AS unselected_past_deadline_count,
+			min(visible.next_due_at) FILTER (WHERE selected.id IS NULL AND gate.allowed AND tick.database_at > COALESCE(GREATEST(visible.next_due_at, gate.handoff_at), visible.next_due_at) + interval '5 minutes') AS unselected_past_deadline_min_at
 		FROM visible_due AS visible
 		LEFT JOIN due AS selected ON selected.id = visible.id
 		CROSS JOIN tick

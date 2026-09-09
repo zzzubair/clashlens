@@ -749,18 +749,23 @@ func TestAdmissionEvidenceResetHandoffGrace(t *testing.T) {
 	if _, err := store.pool.Exec(ctx, `INSERT INTO collector_boundary_admission (boundary_at, regular_drain_complete, reset_drain_complete, safe_handoff, state) VALUES ($1, false, false, false, 'regular_draining') ON CONFLICT (boundary_at) DO UPDATE SET safe_handoff=false, state='regular_draining', handoff_at=NULL`, boundary); err != nil {
 		t.Fatalf("seed draining gate: %v", err)
 	}
-	seedDuePlayers(t, ctx, store, 1, dbNow.Add(-time.Minute))
+	// Seed past the five-minute deadline so a gate-blocked event must still
+	// report zero overdue: blocked backlog stays visible but unclassified.
+	seedDuePlayers(t, ctx, store, 1, dbNow.Add(-6*time.Minute))
 	if _, err := store.scheduleDueRegular(ctx, dbNow, 5*time.Minute, 10); err != nil {
 		t.Fatalf("gate schedule: %v", err)
 	}
 	var allowed bool
 	var selected []int64
-	var visible int
-	store.pool.QueryRow(ctx, `SELECT gate_allowed, selected_player_ids, visible_due_count FROM collector_regular_admission_evidence WHERE run_id=$1 ORDER BY id DESC LIMIT 1`, config.runID).Scan(&allowed, &selected, &visible)
-	closed := !dbNow.Before(boundary.Add(-5*time.Minute))
+	var visible, blockedUnselPast, blockedSelPast int
+	store.pool.QueryRow(ctx, `SELECT gate_allowed, selected_player_ids, visible_due_count, unselected_visible_past_deadline_count, selected_past_deadline_count FROM collector_regular_admission_evidence WHERE run_id=$1 ORDER BY id DESC LIMIT 1`, config.runID).Scan(&allowed, &selected, &visible, &blockedUnselPast, &blockedSelPast)
+	closed := !dbNow.Before(boundary.Add(-5 * time.Minute))
 	if closed {
 		if allowed || len(selected) != 0 || visible == 0 {
 			t.Fatalf("blocked event allowed=%v selected=%v visible=%d, want false [] >=1", allowed, selected, visible)
+		}
+		if blockedUnselPast != 0 || blockedSelPast != 0 {
+			t.Fatalf("blocked event past-deadline = unselected %d selected %d, want 0 0 (backlog without overdue)", blockedUnselPast, blockedSelPast)
 		}
 	} else if visible == 0 && allowed {
 		t.Logf("open pre-window tick retains empty visible set (allowed)")
@@ -869,21 +874,33 @@ func TestAdmissionEvidenceCycleEndSecondsOldDefers(t *testing.T) {
 }
 
 func TestAdmissionEvidenceExactDeadlineIsTimely(t *testing.T) {
-	// Deadline arithmetic: equality is timely, only strictly-greater is late.
+	// Exact-deadline predicate evaluated by PostgreSQL itself: equality is
+	// timely, only strictly-greater is late. Fixed timestamps keep the check
+	// deterministic; the expression mirrors the production visibility FILTER
+	// (COALESCE over GREATEST with the gate handoff), plain and with grace.
+	databaseURL := startAdmissionDatabase(t)
+	ctx := context.Background()
+	store, err := openStore(ctx, databaseURL, 5)
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	t.Cleanup(store.close)
 	due := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	handoff := due.Add(2 * time.Minute)
 	deadline := due.Add(5 * time.Minute)
-	if !deadline.Equal(due.Add(5 * time.Minute)) {
-		t.Fatalf("deadline arithmetic broken")
+	graceDeadline := handoff.Add(5 * time.Minute)
+	var eqTimely, justLate, graceEqTimely, graceJustLate bool
+	if err := store.pool.QueryRow(ctx, `
+		SELECT
+			$1::timestamptz > COALESCE(GREATEST($2::timestamptz, NULL::timestamptz), $2::timestamptz) + interval '5 minutes',
+			$3::timestamptz > COALESCE(GREATEST($2::timestamptz, NULL::timestamptz), $2::timestamptz) + interval '5 minutes',
+			$4::timestamptz > COALESCE(GREATEST($2::timestamptz, $5::timestamptz), $2::timestamptz) + interval '5 minutes',
+			$6::timestamptz > COALESCE(GREATEST($2::timestamptz, $5::timestamptz), $2::timestamptz) + interval '5 minutes'
+	`, deadline, due, deadline.Add(time.Second), graceDeadline, handoff, graceDeadline.Add(time.Second)).Scan(&eqTimely, &justLate, &graceEqTimely, &graceJustLate); err != nil {
+		t.Fatalf("deadline predicate: %v", err)
 	}
-	if !(deadline.After(due.Add(5*time.Minute - time.Second))) {
-		t.Fatalf("deadline ordering broken")
-	}
-	// late iff database_at > deadline.
-	if !(deadline.Add(time.Second).After(deadline)) {
-		t.Fatalf("late comparison broken")
-	}
-	if deadline.After(deadline) {
-		t.Fatalf("equality must be timely, not late")
+	if eqTimely || !justLate || graceEqTimely || !graceJustLate {
+		t.Fatalf("deadline predicate = equal:%v late:%v graceEqual:%v graceLate:%v, want false true false true", eqTimely, justLate, graceEqTimely, graceJustLate)
 	}
 }
 
