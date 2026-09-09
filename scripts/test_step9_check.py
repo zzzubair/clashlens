@@ -61,9 +61,10 @@ def _start_args(run_dir: Path, cohort: Path, **overrides):
     return mock.Mock(**defaults)
 
 
-def _receipt_scope(scope: str = "deployed-stack") -> dict:
+def _receipt_scope(scope: str = "deployed-stack", discovery: str = "false") -> dict:
     return {"receipt_scope": scope, "source": {"revision": "a" * 40},
-            "receipt_digest": "sha256:" + "b" * 64}
+            "receipt_digest": "sha256:" + "b" * 64,
+            "configuration": {"fields": {"player_discovery_enabled": discovery}}}
 
 
 class FakeDB:
@@ -272,6 +273,57 @@ def test_start_zero_eligible_and_foreign_failures(tmp_path: Path) -> None:
         assert error.value.code == "foreign_lineage" and error.value.gate
 
 
+def test_start_rejects_discovery_receipts(tmp_path: Path) -> None:
+    cohort = _write_cohort(tmp_path / "c.txt", TAGS)
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        for scope, discovery in (("deployed-stack", "true"),
+                                 ("deployed-stack", "")):
+            receipt_path = tmp_path / f"r-{discovery or 'missing'}.json"
+            receipt = _receipt_scope(scope, discovery)
+            if not discovery:
+                del receipt["configuration"]["fields"][
+                    "player_discovery_enabled"]
+            receipt_path.write_text(json.dumps(receipt))
+            with pytest.raises(step9.Step9Error) as error:
+                step9.cmd_start(_start_args(tmp_path / f"d-{discovery or 'm'}",
+                                            cohort,
+                                            deployed_receipt=str(receipt_path)),
+                                db)
+            assert error.value.code == "discovery_not_disabled"
+
+
+def test_parse_runtime_metrics_wire_format() -> None:
+    text = ("# HELP clashlens_collector_jobs_total jobs\n"
+            "# TYPE clashlens_collector_jobs_total counter\n"
+            'clashlens_collector_process_identity_info{process_id="abc123"} 1\n'
+            "clashlens_collector_process_start_time_seconds 1700000000\n"
+            'clashlens_collector_jobs_total{work_type="regular_poll",'
+            'pool="normal",outcome="admitted"} 42\n'
+            "clashlens_collector_database_pool_idle_connections 3\n"
+            "unrelated_metric 7\n")
+    parsed = step9.parse_runtime_metrics(text)
+    assert parsed["process_id"] == "abc123"
+    assert parsed["started_at"] == 1700000000
+    key = ('clashlens_collector_jobs_total{outcome=admitted,pool=normal,'
+           'work_type=regular_poll}')
+    assert parsed["counters"][key] == 42
+    assert ("clashlens_collector_database_pool_idle_connections{}" in
+            parsed["counters"])
+    assert "unrelated_metric" not in str(parsed["counters"])
+    with pytest.raises(step9.Step9Error):
+        step9.parse_runtime_metrics("clashlens_collector_jobs_total 1\n")
+    with pytest.raises(step9.Step9Error):
+        step9.parse_runtime_metrics("bogus line here\n")
+    # gauges may fall without tripping counter-reset
+    assert step9._check_counters_decreased(
+        {"clashlens_collector_database_pool_idle_connections{}": 5},
+        {"clashlens_collector_database_pool_idle_connections{}": 2}) is None
+    assert step9._check_counters_decreased({"a_total{}": 5},
+                                            {"a_total{}": 4}) == "a_total{}"
+
+
 def test_start_requires_deployed_receipt_digest(tmp_path: Path) -> None:
     cohort = _write_cohort(tmp_path / "c.txt", TAGS)
     db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
@@ -322,7 +374,9 @@ def _sample_hooks(db: FakeDB, **overrides):
 
     hooks = {
         "db": db, "fixed_ids": db.fixed_ids,
-        "fetch_metrics": lambda url: {"counters": {"jobs": 5}, "digest": "x"},
+        "fetch_metrics": lambda url: {"process_id": "p1", "started_at": 1.0,
+                                        "counters": {"jobs_total{}": 5},
+                                        "digest": "x"},
         "watchdog_check": lambda run: True, "clock": clock, "now_utc": now_utc,
         "no_sleep": True, "single_pass": True, "max_slots": 1,
     }
@@ -363,8 +417,10 @@ def test_sample_two_consecutive_unavailable_fails(tmp_path: Path) -> None:
 def test_sample_records_counter_reset(tmp_path: Path) -> None:
     db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
     _run_dir, run = _started_run(tmp_path, db)
-    counters = [{"counters": {"jobs": 9}, "digest": "a"},
-                {"counters": {"jobs": 4}, "digest": "b"}]
+    counters = [{"process_id": "p1", "started_at": 1.0,
+                   "counters": {"jobs_total{}": 9}, "digest": "a"},
+                {"process_id": "p1", "started_at": 1.0,
+                 "counters": {"jobs_total{}": 4}, "digest": "b"}]
     sample = step9.build_sample(
         run=run, index=0, expected_utc=datetime(2026, 10, 4, 5, 0, tzinfo=UTC),
         captured_utc=datetime(2026, 10, 4, 5, 0, 1, tzinfo=UTC),
@@ -372,7 +428,7 @@ def test_sample_records_counter_reset(tmp_path: Path) -> None:
         db_facts=db.minute_snapshot([]), db_error=None,
         metrics=counters[1], metrics_error=None, previous_metrics=counters[0],
         pressure={}, fs={}, watchdog_active=True)
-    assert sample["counter_reset"] == "jobs"
+    assert sample["counter_reset"] == "jobs_total{}"
 
 
 def test_sql_is_read_only_and_bound() -> None:
@@ -469,6 +525,7 @@ def _seed_admission(db: FakeDB, run: dict, pid: int, job_base: int = 1000,
     core_start = step9._parse_utc(run["core_start"])
     mode = step9.MODES[run.get("mode", "live-day")]
     total = mode["windows"] + (6 if extra_tail else 0)
+    bounds = db.admission_run(run["run_id"])
     events, roots, profiles = [], [], {}
     for window in range(total):
         cycle = core_start + timedelta(seconds=300 * window)
@@ -480,6 +537,8 @@ def _seed_admission(db: FakeDB, run: dict, pid: int, job_base: int = 1000,
             "id": event_id, "invocation_id": f"{event_id:032x}",
             "cycle_at": cycle, "scheduler_at": cycle, "database_at": at,
             "gate_allowed": True, "gate_handoff_at": None, "batch_limit": 1000,
+            "capture_start": bounds["capture_start"],
+            "capture_end": bounds["capture_end"],
             "visible_due_count": 1, "visible_due_min_at": due,
             "unselected_visible_due_count": 0,
             "unselected_visible_due_min_at": None,
@@ -526,7 +585,9 @@ def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
             mono_elapsed=float(index * 60), wall_delta=60.0, mono_delta=60.0,
             boot_id=run["boot_id"], db_facts=db.minute_snapshot([]),
             db_error=None,
-            metrics={"counters": {"jobs": index}, "digest": str(index)},
+            metrics={"process_id": "p1", "started_at": 1.0,
+                     "counters": {"jobs_total{}": index},
+                     "digest": str(index)},
             metrics_error=None,
             previous_metrics={"counters": {"jobs": index - 1}} if index else None,
             pressure={}, fs={}, watchdog_active=True)
@@ -867,7 +928,8 @@ def _rehearsal_hooks(database, fixed_ids, *, slots: int):
         return walls[0]
 
     return {"db": database, "fixed_ids": fixed_ids,
-            "fetch_metrics": lambda url: {"counters": {"jobs": mono[0]},
+            "fetch_metrics": lambda url: {"process_id": "p1", "started_at": 1.0,
+                                          "counters": {"jobs_total{}": mono[0]},
                                           "digest": str(mono[0])},
             "watchdog_check": lambda run: True, "clock": clock,
             "now_utc": now_utc, "no_sleep": True, "max_slots": slots}
@@ -895,6 +957,7 @@ def _mirror_live_run(connection, run_id: str, player: int, tag: str,
         {"pid": player, "tag": tag, "start": core_start,
          "total": total - 1}).fetchall()
     assert len(jobs) == total
+    cap_start, cap_end = core_start, core_start + timedelta(hours=25)
     for window in range(total):
         cycle = core_start + timedelta(seconds=300 * window)
         at = cycle + timedelta(seconds=1)
@@ -902,13 +965,18 @@ def _mirror_live_run(connection, run_id: str, player: int, tag: str,
         connection.execute(
             "INSERT INTO collector_regular_admission_evidence"
             " (run_id, invocation_id, cycle_at, scheduler_at, database_at,"
+            " capture_start, capture_end,"
             " gate_allowed, batch_limit, visible_due_count, visible_due_min_at,"
-            " unselected_visible_due_count, selected_player_ids,"
+            " unselected_visible_due_count,"
+            " unselected_visible_past_deadline_count,"
+            " selected_past_deadline_count,"
+            " selected_player_ids,"
             " selected_due_ats, selected_profile_version_ids,"
             " selected_eligibility_states, inserted_job_ids, advanced_count)"
-            " VALUES (%s, %s, %s, %s, %s, true, 1000, 1, %s, 0,"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, true, 1000, 1, %s, 0, 0, 0,"
             " %s, %s, %s, %s, %s, 1)",
-            (run_id, f"{window + 1:032x}", cycle, cycle, at, due,
+            (run_id, f"{window + 1:032x}", cycle, cycle, at,
+             cap_start, cap_end, due,
              [player], [due], [version], ["eligible"], [jobs[window][0]]))
 
 
@@ -1028,6 +1096,8 @@ def _admission_event(event_id: int, cycle: datetime, pid: int = 1, job: int = 10
     if not timely:
         due = cycle - timedelta(minutes=10)
     event = {"id": event_id, "cycle_at": cycle, "database_at": at,
+             "capture_start": datetime(2026, 10, 4, 5, 0, tzinfo=UTC),
+             "capture_end": datetime(2026, 10, 5, 6, 0, tzinfo=UTC),
              "gate_allowed": gate, "selected_count": 1, "inserted_count": 1,
              "advanced_count": 1, "selected_past_deadline_count": 0,
              "unselected_visible_past_deadline_count": 0,
@@ -1215,7 +1285,9 @@ def _sealed_preflight(tmp_path: Path, name: str, db: FakeDB, bad_traffic: bool =
             mono_elapsed=float(index * 60), wall_delta=60.0, mono_delta=60.0,
             boot_id=run["boot_id"], db_facts=db.minute_snapshot([]),
             db_error=None,
-            metrics={"counters": {"jobs": index}, "digest": str(index)},
+            metrics={"process_id": "p1", "started_at": 1.0,
+                     "counters": {"jobs_total{}": index},
+                     "digest": str(index)},
             metrics_error=None, previous_metrics=None,
             pressure={}, fs={}, watchdog_active=True)
         step9._exclusive_json(samples / f"minute-{index:04d}.json", sample)
@@ -1240,35 +1312,47 @@ def test_preflight_roundtrip(tmp_path: Path) -> None:
     assert step9.cmd_finalize(arguments2, {"db": db2}) == 0
     assert step9.cmd_validate(arguments2) == 1
 
-# --- Mirrored 0022 DDL (test-local) ------------------------------------------
-# Verbatim shape of the validated final handoff. Delete this mirror when
-# migration 0022 merges and point these tests at the migrated schema.
+# --- Frozen 0022 contract (test-local copy) ------------------------------
+# Exact content of the frozen admission-lane migration at
+# issue92-admission-evidence/deploy/migrations/
+# 0022_step9_regular_admission_evidence.sql (BEGIN/COMMIT stripped; the
+# test connection owns the transaction). Delete this mirror and rely on
+# domain_database once migration 0022 merges to main.
+_FROZEN_0022_SQL = """
+-- Clash Lens deployment migration 0022.
+-- Bounded regular-admission evidence for Step 9 validation. One run header
+-- plus one row per scheduleDueRegular invocation inside the configured
+-- capture interval. Disabled by default: the scheduler keeps its existing
+-- single statement when no run is configured. No contract-version bump: this
+-- is an optional backward-compatible table pair. No automatic deletion.
 
-_MIRROR_0022 = """
-CREATE TABLE collector_regular_admission_evidence_runs (
-    run_id text PRIMARY KEY
-        CHECK (run_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'),
+CREATE TABLE IF NOT EXISTS collector_regular_admission_evidence_runs (
+    run_id text PRIMARY KEY CHECK (run_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'),
     capture_start timestamptz NOT NULL,
     capture_end timestamptz NOT NULL,
     max_events integer NOT NULL CHECK (max_events BETWEEN 1 AND 108000),
-    max_selected_entries bigint NOT NULL
-        CHECK (max_selected_entries BETWEEN 1 AND 5000000),
+    max_selected_entries bigint NOT NULL CHECK (max_selected_entries BETWEEN 1 AND 5000000),
     events_written integer NOT NULL DEFAULT 0,
     selected_entries_written bigint NOT NULL DEFAULT 0,
-    state text NOT NULL DEFAULT 'active'
-        CHECK (state IN ('active', 'capacity_exceeded',
-                         'capture_out_of_range')),
+    state text NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'capacity_exceeded', 'capture_out_of_range')),
     stopped_at timestamptz,
     failure_code text,
-    CHECK (capture_end > capture_start
-           AND capture_end <= capture_start + interval '30 hours')
+    CHECK (capture_end > capture_start AND capture_end <= capture_start + interval '30 hours'),
+    CHECK (events_written >= 0 AND events_written <= max_events),
+    CHECK (selected_entries_written >= 0 AND selected_entries_written <= max_selected_entries),
+    CHECK (
+        (state = 'active' AND stopped_at IS NULL AND failure_code IS NULL)
+        OR (state = 'capacity_exceeded' AND stopped_at IS NOT NULL AND failure_code = 'admission_evidence_capacity_exceeded')
+        OR (state = 'capture_out_of_range' AND stopped_at IS NOT NULL AND failure_code = 'admission_evidence_capture_out_of_range')
+    )
 );
-CREATE TABLE collector_regular_admission_evidence (
+
+CREATE TABLE IF NOT EXISTS collector_regular_admission_evidence (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    run_id text NOT NULL
-        REFERENCES collector_regular_admission_evidence_runs(run_id)
-        ON DELETE RESTRICT,
+    run_id text NOT NULL REFERENCES collector_regular_admission_evidence_runs (run_id) ON DELETE RESTRICT,
     invocation_id text NOT NULL CHECK (invocation_id ~ '^[0-9a-f]{32,64}$'),
+    capture_start timestamptz NOT NULL,
+    capture_end timestamptz NOT NULL,
     cycle_at timestamptz NOT NULL,
     scheduler_at timestamptz NOT NULL,
     database_at timestamptz NOT NULL,
@@ -1277,30 +1361,58 @@ CREATE TABLE collector_regular_admission_evidence (
     batch_limit integer NOT NULL CHECK (batch_limit BETWEEN 1 AND 1000),
     visible_due_count integer NOT NULL CHECK (visible_due_count >= 0),
     visible_due_min_at timestamptz,
-    unselected_visible_due_count integer NOT NULL
-        CHECK (unselected_visible_due_count >= 0),
+    unselected_visible_due_count integer NOT NULL CHECK (unselected_visible_due_count >= 0),
     unselected_visible_due_min_at timestamptz,
-    unselected_visible_past_deadline_count integer NOT NULL DEFAULT 0
-        CHECK (unselected_visible_past_deadline_count >= 0),
+    unselected_visible_past_deadline_count integer NOT NULL CHECK (unselected_visible_past_deadline_count >= 0),
     unselected_visible_past_deadline_min_at timestamptz,
-    selected_past_deadline_count integer NOT NULL DEFAULT 0
-        CHECK (selected_past_deadline_count >= 0),
+    selected_past_deadline_count integer NOT NULL CHECK (selected_past_deadline_count >= 0),
     selected_player_ids bigint[] NOT NULL,
     selected_due_ats timestamptz[] NOT NULL,
-    selected_profile_version_ids bigint[],
-    selected_eligibility_states text[],
+    selected_profile_version_ids bigint[] NOT NULL,
+    selected_eligibility_states text[] NOT NULL,
     inserted_job_ids bigint[] NOT NULL,
     advanced_count integer NOT NULL CHECK (advanced_count >= 0),
-    UNIQUE (run_id, invocation_id)
+    UNIQUE (run_id, invocation_id),
+    CHECK (capture_end > capture_start AND capture_end <= capture_start + interval '30 hours'),
+    CHECK (database_at >= capture_start AND database_at < capture_end),
+    CHECK (cycle_at = date_bin(interval '5 minutes', cycle_at, timestamptz '2000-01-01 00:00:00+00')),
+    CHECK (scheduler_at >= cycle_at AND scheduler_at < cycle_at + interval '5 minutes'),
+    CHECK ((visible_due_count = 0) = (visible_due_min_at IS NULL)),
+    CHECK ((unselected_visible_due_count = 0) = (unselected_visible_due_min_at IS NULL)),
+    CHECK ((unselected_visible_past_deadline_count = 0) = (unselected_visible_past_deadline_min_at IS NULL)),
+    CHECK (unselected_visible_due_count <= visible_due_count),
+    CHECK (unselected_visible_past_deadline_count <= unselected_visible_due_count),
+    CHECK (selected_past_deadline_count <= COALESCE(cardinality(selected_player_ids), 0)),
+    CHECK (COALESCE(cardinality(selected_player_ids), 0) <= batch_limit),
+    CHECK (COALESCE(cardinality(selected_due_ats), 0) = COALESCE(cardinality(selected_player_ids), 0)),
+    CHECK (COALESCE(cardinality(selected_profile_version_ids), 0) = COALESCE(cardinality(selected_player_ids), 0)),
+    CHECK (COALESCE(cardinality(selected_eligibility_states), 0) = COALESCE(cardinality(selected_player_ids), 0)),
+    CHECK (COALESCE(cardinality(inserted_job_ids), 0) <= COALESCE(cardinality(selected_player_ids), 0)),
+    CHECK (advanced_count = COALESCE(cardinality(selected_player_ids), 0)),
+    CHECK (array_position(selected_player_ids, NULL) IS NULL),
+    CHECK (array_position(selected_due_ats, NULL) IS NULL),
+    CHECK (gate_allowed OR COALESCE(cardinality(selected_player_ids), 0) = 0)
 );
-CREATE INDEX collector_regular_admission_evidence_run_cycle
-    ON collector_regular_admission_evidence
-       (run_id, cycle_at, database_at, id);
+
+CREATE INDEX IF NOT EXISTS collector_regular_admission_evidence_run_cycle
+    ON collector_regular_admission_evidence (run_id, cycle_at, database_at, id);
+
+REVOKE ALL ON collector_regular_admission_evidence_runs, collector_regular_admission_evidence FROM PUBLIC;
+GRANT SELECT, INSERT ON collector_regular_admission_evidence_runs TO clashlens_collector;
+GRANT UPDATE (events_written, selected_entries_written, state, stopped_at, failure_code)
+    ON collector_regular_admission_evidence_runs TO clashlens_collector;
+GRANT INSERT ON collector_regular_admission_evidence TO clashlens_collector;
+GRANT USAGE, SELECT ON SEQUENCE collector_regular_admission_evidence_id_seq TO clashlens_collector;
+
+-- The collector-owned contract stays at version five. Version six would be a
+-- future breaking scheduler contract; this evidence pair is optional.
+INSERT INTO clash_lens_schema_migrations(version) VALUES (22)
+ON CONFLICT (version) DO NOTHING;
 """
 
 
 def _mirror_0022(connection) -> None:
-    connection.execute(_MIRROR_0022)
+    connection.execute(_FROZEN_0022_SQL)
 
 
 def test_admission_tables_absent_without_mirror() -> None:
@@ -1354,41 +1466,57 @@ def test_admission_queries_against_mirrored_schema() -> None:
             connection.execute(
                 "INSERT INTO collector_regular_admission_evidence"
                 " (run_id, invocation_id, cycle_at, scheduler_at, database_at,"
+                " capture_start, capture_end,"
                 " gate_allowed, batch_limit, visible_due_count,"
                 " visible_due_min_at, unselected_visible_due_count,"
+                " unselected_visible_past_deadline_count,"
+                " selected_past_deadline_count,"
                 " selected_player_ids, selected_due_ats,"
                 " selected_profile_version_ids, selected_eligibility_states,"
                 " inserted_job_ids, advanced_count)"
-                " VALUES ('run1', %s, %s, %s, %s, true, 1000, 1, %s, 0,"
+                " VALUES ('run1', %s, %s, %s, %s, %s, %s,"
+                " true, 1000, 1, %s, 0, 0, 0,"
                 " %s, %s, %s, %s, %s, 1)",
-                ("ab" * 16, cycle, cycle, at, due, [good], [due],
+                ("ab" * 16, cycle, cycle, at, cycle,
+                 cycle + timedelta(hours=30), due, [good], [due],
                  [version], ["eligible"], [job]))
             # gate-blocked empty event: no rows selected, nothing invalid
             connection.execute(
                 "INSERT INTO collector_regular_admission_evidence"
                 " (run_id, invocation_id, cycle_at, scheduler_at, database_at,"
+                " capture_start, capture_end,"
                 " gate_allowed, batch_limit, visible_due_count,"
                 " visible_due_min_at, unselected_visible_due_count,"
+                " unselected_visible_due_min_at,"
+                " unselected_visible_past_deadline_count,"
+                " selected_past_deadline_count,"
                 " selected_player_ids, selected_due_ats,"
                 " selected_profile_version_ids, selected_eligibility_states,"
                 " inserted_job_ids, advanced_count)"
-                " VALUES ('run1', %s, %s, %s, %s, false, 1000, 3, %s, 3,"
+                " VALUES ('run1', %s, %s, %s, %s, %s, %s,"
+                " false, 1000, 3, %s, 3, %s, 0, 0,"
                 " '{}', '{}', '{}', '{}', '{}', 0)",
-                ("cd" * 16, cycle + timedelta(seconds=1), cycle,
-                 at + timedelta(seconds=1), due))
+                ("cd" * 16, cycle, cycle + timedelta(seconds=1),
+                 at + timedelta(seconds=1), cycle,
+                 cycle + timedelta(hours=30), due, due))
             # event selecting the ineligible player: retained, fails validation
-            bad_cycle = cycle + timedelta(seconds=2)
             connection.execute(
                 "INSERT INTO collector_regular_admission_evidence"
                 " (run_id, invocation_id, cycle_at, scheduler_at, database_at,"
+                " capture_start, capture_end,"
                 " gate_allowed, batch_limit, visible_due_count,"
                 " visible_due_min_at, unselected_visible_due_count,"
+                " unselected_visible_past_deadline_count,"
+                " selected_past_deadline_count,"
                 " selected_player_ids, selected_due_ats,"
                 " selected_profile_version_ids, selected_eligibility_states,"
                 " inserted_job_ids, advanced_count)"
-                " VALUES ('run1', %s, %s, %s, %s, true, 1000, 1, %s, 0,"
+                " VALUES ('run1', %s, %s, %s, %s, %s, %s,"
+                " true, 1000, 1, %s, 0, 0, 0,"
                 " %s, %s, %s, %s, '{}', 1)",
-                ("ef" * 16, bad_cycle, bad_cycle, at + timedelta(seconds=2),
+                ("ef" * 16, cycle, cycle + timedelta(seconds=2),
+                 at + timedelta(seconds=2),
+                 cycle, cycle + timedelta(hours=30),
                  due, [bad], [due], [bad_version], ["ineligible"]))
         header = database.admission_run("run1")
         assert header["state"] == "active"
@@ -1446,3 +1574,74 @@ def test_preflight_probes_against_real_schema() -> None:
             workcounts=probes["workcounts"],
             observations=probes["observations"], intents=probes["intents"])
         assert result["failures"] == []
+
+
+def test_observer_role_least_privilege() -> None:
+    """Worker-role read set for the observer; gaps pin the lane grants.
+
+    Least-privilege existing role: clashlens_python_worker (never the public
+    API role, never superuser). Failing asserts name the exact grants the
+    admission lane must add in migration 0022.
+    """
+    import psycopg
+    from domain_test_support import domain_database
+
+    with domain_database(_pg_url(), include_coordinator=True) as info:
+        with psycopg.connect(info, autocommit=True) as connection:
+            _mirror_0022(connection)
+            player = _seed_player(connection, TAGS[0])
+            connection.execute(
+                "INSERT INTO collector_regular_admission_evidence_runs"
+                " (run_id, capture_start, capture_end, max_events,"
+                " max_selected_entries) VALUES ('role1',"
+                " '2026-10-04T05:00:00+00:00', '2026-10-05T06:00:00+00:00',"
+                " 108000, 5000000)")
+            connection.execute("SET ROLE clashlens_python_worker")
+            readable = [
+                ("population", step9.SQL_POPULATION_MAP, (TAGS,)),
+                ("outside", step9.SQL_OUTSIDE_ACTIVE, ([player],)),
+                ("fixed", step9.SQL_FIXED_IDS, ([player],)),
+                ("queues", step9.SQL_ACTIVE_QUEUES, ()),
+                ("identity", step9.SQL_DATABASE_IDENTITY, ()),
+                ("reset", step9.SQL_RESET_IDENTITY,
+                 ("2026-10-04T05:00:00Z", "2026-10-05T05:00:00Z")),
+                ("run", step9.SQL_ADMISSION_RUN, ("role1",)),
+                ("events", step9.SQL_ADMISSION_EVENTS,
+                 ("role1", "2026-10-04T05:00:00Z", "2026-10-05T05:00:00Z")),
+                ("latest", step9.SQL_ADMISSION_LATEST, ("role1",)),
+                ("roots", step9.SQL_SEMANTIC_ROOTS,
+                 ("2026-10-04T05:00:00Z", "2026-10-05T06:00:00Z")),
+                ("preflight_work", step9.SQL_PREFLIGHT_WORKCOUNTS,
+                 ("2026-10-04T04:00:00Z", "2026-10-04T07:00:00Z")),
+                ("preflight_obs", step9.SQL_PREFLIGHT_OBSERVATIONS,
+                 ("2026-10-04T04:00:00Z", "2026-10-04T07:00:00Z")),
+                ("pending_remote", step9.SQL_PREFLIGHT_PENDING_REMOTE, ()),
+            ]
+            for name, sql, params in readable:
+                if name in ("run", "events", "latest"):
+                    continue  # 0022 grants pending: asserted below
+                connection.execute(sql, params if params else None)
+            # Exact gaps the admission lane must close in migration 0022:
+            for name, sql, params in [
+                    ("run", step9.SQL_ADMISSION_RUN, ("role1",)),
+                    ("events", step9.SQL_ADMISSION_EVENTS,
+                     ("role1", "2026-10-04T05:00:00Z", "2026-10-05T05:00:00Z")),
+                    ("latest", step9.SQL_ADMISSION_LATEST, ("role1",)),
+                    ("intents", step9.SQL_PREFLIGHT_RANKING_INTENTS,
+                     ("2026-10-04T04:00:00Z", "2026-10-04T07:00:00Z"))]:
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(sql, params)
+            connection.execute("RESET ROLE")
+            # The exact grant the lane must add resolves the evidence reads.
+            connection.execute(
+                "GRANT SELECT ON collector_regular_admission_evidence_runs,"
+                " collector_regular_admission_evidence TO clashlens_python_worker")
+            connection.execute(
+                "GRANT SELECT (cycle_at) ON global_rankings_intents"
+                " TO clashlens_python_worker")
+            connection.execute("SET ROLE clashlens_python_worker")
+            connection.execute(step9.SQL_ADMISSION_RUN, ("role1",))
+            connection.execute(
+                step9.SQL_PREFLIGHT_RANKING_INTENTS,
+                ("2026-10-04T04:00:00Z", "2026-10-04T07:00:00Z"))
+            connection.execute("RESET ROLE")

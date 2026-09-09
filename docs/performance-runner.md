@@ -374,3 +374,17 @@ exact-root reconciliation by semantic `(player_id, coalescing key)` identity
 with malformed/duplicate/unexplained roots as failures. Missing 0022 tables
 fail `start` closed with `admission_schema_absent`; no sequence watermark is
 used anywhere.
+
+### Observer database role and start gates
+
+The observer connects with the operator-supplied `--database-url` and never
+writes: every statement passes a read-only source-shape guard and runs in one
+`REPEATABLE READ READ ONLY` transaction. The least-privilege existing role is
+`clashlens_python_worker` (never the public API role, never superuser); the
+admission lane owns the remaining 0022 `SELECT` grants for that role plus
+`SELECT (cycle_at)` on `global_rankings_intents`. `start` additionally
+requires a deployed-stack receipt whose configuration pins
+`player_discovery_enabled=false`; enabled, missing, or older-allowlist
+receipts fail closed. Runtime counters come from B1's query-free
+`GET /runtime-metrics` Prometheus exposition; process-identity change stops
+the run and pool gauges are exempt from counter-continuity.

@@ -418,6 +418,11 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         raise Step9Error("receipt_invalid", f"deployed receipt invalid: {error}") from error
     if receipt.get("receipt_scope") != "deployed-stack":
         raise Step9Error("receipt_scope", "Step 9 start requires a deployed-stack receipt")
+    discovery = receipt.get("configuration", {}).get("fields", {}).get(
+        "player_discovery_enabled")
+    if discovery != "false":
+        raise Step9Error("discovery_not_disabled",
+                         "Step 9 start requires player_discovery_enabled=false")
     core_start = _parse_utc(arguments.core_start)
     core_end = _parse_utc(arguments.core_end)
     if core_end - core_start != mode["interval"]:
@@ -685,7 +690,7 @@ class Database:
     def admission_events(self, run_id: str, start: str, end: str) -> list[dict]:
         keys = ("id", "invocation_id", "cycle_at", "scheduler_at",
                 "database_at", "gate_allowed", "gate_handoff_at",
-                "batch_limit", "visible_due_count", "visible_due_min_at",
+                "batch_limit", "capture_start", "capture_end", "visible_due_count", "visible_due_min_at",
                 "unselected_visible_due_count",
                 "unselected_visible_due_min_at",
                 "unselected_visible_past_deadline_count",
@@ -770,15 +775,11 @@ def fetch_runtime_metrics(url: str, timeout: float = 10.0) -> dict:
     """Fetch query-free collector counters; missing/unparseable is unknown."""
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
-            payload = json.loads(response.read(65536).decode("utf-8"))
+            text = response.read(65536).decode("utf-8")
     except Exception as error:
         raise Step9Error("metrics_unavailable",
                          f"runtime metrics unavailable: {error}") from error
-    if not isinstance(payload, dict):
-        raise Step9Error("metrics_malformed", "runtime metrics are not an object")
-    counters = {k: v for k, v in payload.items()
-                if isinstance(v, (int, float)) and not isinstance(v, bool)}
-    return {"counters": counters, "digest": _digest(counters)}
+    return parse_runtime_metrics(text)
 
 
 def host_pressure() -> dict:
@@ -827,10 +828,82 @@ def filesystem_facts(spool: str, postgres: str) -> dict:
 
 # --- sample --------------------------------------------------------------
 
+_RUNTIME_METRIC_LINE = re.compile(
+    r"^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+"
+    r"(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)$"
+)
+# Gauges that may legitimately decrease; everything else numeric is a
+# monotonic counter for continuity purposes.
+_RUNTIME_GAUGES = {
+    "clashlens_collector_database_pool_acquired_connections",
+    "clashlens_collector_database_pool_idle_connections",
+}
+
+
+def _parse_metric_labels(text: str) -> dict:
+    if not text:
+        return {}
+    labels: dict[str, str] = {}
+    pattern = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:[^"\\\\]|\\\\.)*)"(?:,|$)')
+    position = 0
+    while position < len(text):
+        match = pattern.match(text, position)
+        if match is None or match.group(1) in labels:
+            raise Step9Error("metrics_malformed", "bad metric labels")
+        labels[match.group(1)] = match.group(2).replace('\\"', '"').replace(
+            "\\\\", "\\")
+        position = match.end()
+    return labels
+
+
+def parse_runtime_metrics(text: str) -> dict:
+    """Parse B1 query-free /runtime-metrics Prometheus text exposition."""
+    if len(text.encode()) > 65536:
+        raise Step9Error("metrics_malformed", "metrics body too large")
+    process_id: str | None = None
+    started: float | None = None
+    counters: dict[str, float] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _RUNTIME_METRIC_LINE.fullmatch(line)
+        if match is None:
+            raise Step9Error("metrics_malformed", "bad metric line")
+        name, raw_labels, raw_value = match.groups()
+        if not name.startswith("clashlens_collector_"):
+            continue
+        try:
+            value = float(raw_value)
+        except ValueError as error:
+            raise Step9Error("metrics_malformed", "bad metric value") from error
+        labels = _parse_metric_labels(raw_labels or "")
+        if name == "clashlens_collector_process_identity_info":
+            if set(labels) != {"process_id"} or value != 1:
+                raise Step9Error("metrics_malformed", "bad process identity")
+            process_id = labels["process_id"]
+        elif name == "clashlens_collector_process_start_time_seconds":
+            if labels or value < 0:
+                raise Step9Error("metrics_malformed", "bad process start")
+            started = value
+        else:
+            key = name + "{" + ",".join(
+                f"{k}={v}" for k, v in sorted(labels.items())) + "}"
+            counters[key] = value
+    if process_id is None or started is None:
+        raise Step9Error("metrics_malformed", "missing process identity")
+    return {"process_id": process_id, "started_at": started,
+            "counters": counters,
+            "digest": _digest({"p": process_id, "s": started,
+                                 "c": counters})}
+
+
 def _check_counters_decreased(previous: dict | None, current: dict) -> str | None:
     if not previous:
         return None
     for key, value in current.items():
+        if key.split("{", 1)[0] in _RUNTIME_GAUGES:
+            continue
         old = previous.get(key)
         if isinstance(old, (int, float)) and value < old:
             return key
@@ -868,6 +941,10 @@ def build_sample(*, run: dict, index: int, expected_utc: datetime,
         sample["metrics_digest"] = metrics["digest"]
         sample["counter_reset"] = _check_counters_decreased(
             (previous_metrics or {}).get("counters"), metrics["counters"])
+        previous_pid = (previous_metrics or {}).get("process_id")
+        if previous_pid is not None and previous_pid != metrics["process_id"]:
+            sample["failure_code"] = "process_identity_changed"
+            sample["outcome"] = "process_restart"
     sample["admission_latest"] = admission_latest
     if admission_latest is not None and admission_latest.get("mismatch"):
         sample["failure_code"] = "admission_count_mismatch"
@@ -992,9 +1069,9 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
             _check_capacity(run_dir)
             outcome = sample["outcome"]
             if outcome in ("clock_jump", "boot_change", "non_monotonic",
-                           "admission_mismatch"):
+                           "admission_mismatch", "process_restart"):
                 failures += 1
-                if failures >= 2:
+                if failures >= 2 or outcome == "process_restart":
                     _record_failure(run_dir, sample["failure_code"], outcome)
                     return 1
             elif outcome == "on_time":
@@ -1530,6 +1607,7 @@ FROM collector_regular_admission_evidence_runs WHERE run_id = %s
 SQL_ADMISSION_EVENTS = """
 SELECT id, invocation_id, cycle_at, scheduler_at, database_at,
        gate_allowed, gate_handoff_at, batch_limit,
+       capture_start, capture_end,
        visible_due_count, visible_due_min_at,
        unselected_visible_due_count, unselected_visible_due_min_at,
        unselected_visible_past_deadline_count,
@@ -1635,6 +1713,9 @@ def evaluate_admission(*, run: dict, header: dict, events: list[dict],
     for event in events:
         cycle_at = event["cycle_at"]
         database_at = event["database_at"]
+        if (event.get("capture_start") != header["capture_start"]
+                or event.get("capture_end") != header["capture_end"]):
+            failures.append("admission_capture_mismatch")
         if not (header["capture_start"] <= database_at < header["capture_end"]):
             failures.append("admission_event_out_of_range")
         if (previous_at is not None and max_gap_seconds is not None
