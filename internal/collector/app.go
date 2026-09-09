@@ -566,6 +566,10 @@ func (a *application) operationalHandler() http.Handler {
 		response.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		_, _ = response.Write([]byte(metrics))
 	})
+	mux.HandleFunc("GET /runtime-metrics", func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = response.Write([]byte(a.metrics.renderRuntime(a.store)))
+	})
 	return mux
 }
 

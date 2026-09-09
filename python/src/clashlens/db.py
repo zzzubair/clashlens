@@ -553,18 +553,22 @@ class Claim:
 
 
 class Database:
+    player_discovery_enabled = True
+
     def __init__(
         self,
         database_url: str,
         *,
         max_size: int = DEFAULT_POOL_SIZE,
         expected_contract_version: int | None = None,
+        player_discovery_enabled: bool = True,
     ) -> None:
         if max_size < 1:
             raise ValueError("database pool size must be positive")
         if max_size > MAX_POOL_SIZE:
             raise ValueError("database pool size exceeds the supported maximum")
         self.stage_metrics: Any | None = None
+        self.player_discovery_enabled = player_discovery_enabled
         self.pool = ConnectionPool(
             conninfo=database_url,
             min_size=1,
@@ -1708,7 +1712,10 @@ class Database:
                         """,
                         (Jsonb(discoveries), observation_id, battle_log.observed_at),
                     )
-                    if claim.work_type == "process_observation":
+                    if (
+                        self.player_discovery_enabled
+                        and claim.work_type == "process_observation"
+                    ):
                         connection.execute(
                             "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
                             (sorted({item["player_id"] for item in discoveries}),),
@@ -2027,7 +2034,11 @@ class Database:
                     player_ids = {
                         _text_value(tag): int(player_id) for tag, player_id in rows
                     }
-                if claim.work_type == "process_observation" and player_ids:
+                if (
+                    self.player_discovery_enabled
+                    and claim.work_type == "process_observation"
+                    and player_ids
+                ):
                     discovery_ids = sorted(set(player_ids.values()))
                     for offset in range(0, len(discovery_ids), 500):
                         connection.execute(
@@ -2458,7 +2469,10 @@ class Database:
                         """,
                         (Jsonb(discoveries), observation_id, battle_log.observed_at),
                     )
-                    if claim.work_type == "process_observation":
+                    if (
+                        self.player_discovery_enabled
+                        and claim.work_type == "process_observation"
+                    ):
                         connection.execute(
                             "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
                             (sorted({item["player_id"] for item in discoveries}),),
@@ -2845,7 +2859,11 @@ class Database:
                             [entry.source_row_index for entry in rankings.entries],
                         ),
                     )
-                if claim.work_type == "process_observation" and player_ids:
+                if (
+                    self.player_discovery_enabled
+                    and claim.work_type == "process_observation"
+                    and player_ids
+                ):
                     discovery_ids = sorted(set(player_ids.values()))
                     for offset in range(0, len(discovery_ids), 500):
                         connection.execute(

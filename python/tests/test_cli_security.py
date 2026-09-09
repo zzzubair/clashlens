@@ -231,6 +231,14 @@ def test_worker_pool_size_flags_accept_valid_bounds() -> None:
     assert arguments.archive_pool_size == 20
 
 
+def test_worker_discovery_defaults_enabled_and_disables_explicitly() -> None:
+    assert _worker_arguments().disable_player_discovery is False
+    assert (
+        _worker_arguments("--disable-player-discovery").disable_player_discovery
+        is True
+    )
+
+
 def test_worker_invalid_concurrency_output_does_not_expose_archive_credentials(
     capsys,
 ) -> None:

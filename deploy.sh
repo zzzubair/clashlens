@@ -391,6 +391,9 @@ validate_common_settings() {
     (( CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE >= 1 && CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE <= COLLECTOR_POOL_SIZE_MAX )) || \
     die "CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE must be an integer between 1 and $COLLECTOR_POOL_SIZE_MAX"
 
+  [[ "$CLASHLENS_PLAYER_DISCOVERY_ENABLED" == "true" || "$CLASHLENS_PLAYER_DISCOVERY_ENABLED" == "false" ]] || \
+    die "CLASHLENS_PLAYER_DISCOVERY_ENABLED must be true or false"
+
   validate_key_specs CLASHLENS_NORMAL_API_KEY_FILES "$CLASHLENS_NORMAL_API_KEY_FILES" 4
   validate_key_specs CLASHLENS_INTERACTIVE_API_KEY_FILES "$CLASHLENS_INTERACTIVE_API_KEY_FILES" 1
 
@@ -606,6 +609,7 @@ ensure_postgres() {
     --network "$NETWORK_NAME" \
     --network-alias postgres \
     --volume "$POSTGRES_VOLUME:/var/lib/postgresql/data" \
+    --env PGDATA=/var/lib/postgresql/data \
     --env POSTGRES_DB \
     --env POSTGRES_USER \
     --env POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password \
@@ -865,6 +869,7 @@ write_deployment_receipt() {
     --worker-container "$PYTHON_WORKER_CONTAINER" \
     --website-container "$WEBSITE_CONTAINER" \
     --safe-config "collector_database_pool_size=$CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE" \
+    --safe-config "player_discovery_enabled=$CLASHLENS_PLAYER_DISCOVERY_ENABLED" \
     --safe-config "spool_free_inode_floor=$CLASHLENS_SPOOL_FREE_INODE_FLOOR" \
     --safe-config "spool_free_space_floor=$CLASHLENS_SPOOL_FREE_SPACE_FLOOR" \
     --safe-config "spool_max_body_bytes=$CLASHLENS_MAX_BODY_BYTES" \
@@ -1428,8 +1433,11 @@ start_python_workers() {
   # the shared secrets once, then start the configured identical replicas.
   stop_all_worker_containers
 
-  local -a secrets=() env_args=()
+  local -a secrets=() env_args=() discovery_args=()
   worker_secret_args secrets env_args
+  if [[ "$CLASHLENS_PLAYER_DISCOVERY_ENABLED" == "false" ]]; then
+    discovery_args=(--disable-player-discovery)
+  fi
 
   local i
   for ((i = 1; i <= CLASHLENS_WORKER_REPLICAS; i++)); do
@@ -1467,7 +1475,7 @@ start_python_workers() {
       --restart unless-stopped \
       --label org.clashlens.component=python-worker \
       "${secrets[@]}" \
-      "$PYTHON_IMAGE" worker --owner "production-python-${i}" --max-jobs 100 --lease-seconds "$CLASHLENS_WORKER_LEASE_SECONDS" --concurrency "$CLASHLENS_WORKER_CONCURRENCY" --database-pool-size "$CLASHLENS_WORKER_DATABASE_POOL_SIZE" --archive-pool-size "$CLASHLENS_WORKER_ARCHIVE_POOL_SIZE" --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever >/dev/null
+      "$PYTHON_IMAGE" worker --owner "production-python-${i}" --max-jobs 100 --lease-seconds "$CLASHLENS_WORKER_LEASE_SECONDS" --concurrency "$CLASHLENS_WORKER_CONCURRENCY" --database-pool-size "$CLASHLENS_WORKER_DATABASE_POOL_SIZE" --archive-pool-size "$CLASHLENS_WORKER_ARCHIVE_POOL_SIZE" --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever "${discovery_args[@]}" >/dev/null
   done
 }
 
@@ -1651,6 +1659,7 @@ CLASHLENS_WORKER_CONCURRENCY=${CLASHLENS_WORKER_CONCURRENCY:-1}
 CLASHLENS_WORKER_DATABASE_POOL_SIZE=${CLASHLENS_WORKER_DATABASE_POOL_SIZE:-4}
 CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=${CLASHLENS_WORKER_ARCHIVE_POOL_SIZE:-4}
 CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=${CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE:-16}
+CLASHLENS_PLAYER_DISCOVERY_ENABLED=${CLASHLENS_PLAYER_DISCOVERY_ENABLED-true}
 CLASHLENS_SPOOL_ROOT=${CLASHLENS_SPOOL_ROOT:-/tmp/clashlens-spool}
 CLASHLENS_SPOOL_MAX_BYTES=${CLASHLENS_SPOOL_MAX_BYTES:-17179869184}
 CLASHLENS_SPOOL_MAX_OBJECTS=${CLASHLENS_SPOOL_MAX_OBJECTS:-1000000}

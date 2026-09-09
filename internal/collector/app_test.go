@@ -12,7 +12,51 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func TestRuntimeMetricsHandlerIsQueryFreeAndContainsOnlyProcessCounters(t *testing.T) {
+	pool, err := pgxpool.New(context.Background(), "postgres://invalid@127.0.0.1:1/unused")
+	if err != nil {
+		t.Fatalf("create unconnected pool: %v", err)
+	}
+	pool.Close()
+	metrics := newCollectorMetrics()
+	metrics.recordJob("regular_poll", "normal", "handled")
+	metrics.recordAPIOutcome("profile", "2xx")
+	metrics.recordStorageError("archive_write_failed")
+	metrics.recordRetry("battle_log")
+	metrics.recordStageDuration("claim", time.Millisecond)
+	app := &application{store: &store{pool: pool}, metrics: metrics}
+
+	request := httptest.NewRequest(http.MethodGet, "/runtime-metrics", nil)
+	response := httptest.NewRecorder()
+	app.operationalHandler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("runtime metrics status = %d, want %d: %s", response.Code, http.StatusOK, response.Body.String())
+	}
+	output := response.Body.String()
+	for _, metric := range []string{
+		"clashlens_collector_process_identity_info",
+		"clashlens_collector_jobs_total",
+		"clashlens_collector_api_outcomes_total",
+		"clashlens_collector_storage_errors_total",
+		"clashlens_collector_retries_total",
+		"clashlens_collector_stage_duration_seconds_count",
+		"clashlens_collector_database_pool_max_connections",
+	} {
+		if !strings.Contains(output, metric) {
+			t.Errorf("runtime metrics output does not contain %q", metric)
+		}
+	}
+	for _, forbidden := range []string{"clashlens_collector_queue_depth", "clashlens_spool_", "normalized_tag", "player_id", "#"} {
+		if strings.Contains(output, forbidden) {
+			t.Errorf("runtime metrics output contains forbidden dynamic or scanned fact %q", forbidden)
+		}
+	}
+}
 
 func TestSchedulerDoesNotScheduleGlobalRankingsWhenBetaGateIsDisabled(t *testing.T) {
 	ctx := context.Background()
