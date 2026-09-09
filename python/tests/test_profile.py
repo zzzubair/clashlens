@@ -53,6 +53,27 @@ def test_profile_adapter_rejects_off_phase_weekly_current_id() -> None:
     assert profile.source_contract_state == "conflict"
 
 
+def test_profile_adapter_rejects_aligned_future_current_id() -> None:
+    payload = json.loads(FIXTURE.read_bytes())
+    payload["currentLeagueSeasonId"] = "1791176400"
+    payload["previousLeagueSeasonId"] = "1790571600"
+
+    profile = parse_profile(
+        json.dumps(payload).encode(),
+        expected_tag="#2PP",
+        observed_at=datetime(2026, 9, 9, 12, 0, tzinfo=UTC),
+        endpoint_version="profile-v1",
+        parser_version=PROFILE_PARSER_VERSION,
+    )
+
+    assert profile.current_league_season_id == "1791176400"
+    assert profile.previous_league_season_id == "1790571600"
+    assert profile.season_anchor_current_id is None
+    assert profile.season_anchor_previous_id is None
+    assert profile.season_anchor_state == "conflict"
+    assert profile.source_contract_state == "conflict"
+
+
 def test_legacy_profile_parser_keeps_pair_validation() -> None:
     payload = json.loads(FIXTURE.read_bytes())
     payload["currentLeagueSeasonId"] = "1788757200"

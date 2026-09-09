@@ -19,7 +19,9 @@ ENDPOINT_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.endpoint_version
 SCHEMA_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.schema_version
 PARSER_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.default_parser_version
 PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
-SUPPORTED_PARSER_VERSIONS = PROFILE_SOURCE_OBSERVATION_CONTRACT.supported_parser_versions
+SUPPORTED_PARSER_VERSIONS = (
+    PROFILE_SOURCE_OBSERVATION_CONTRACT.supported_parser_versions
+)
 LEGEND_I_TIER_ID = 105000036
 LEGEND_I_TIER_NAME = "Legend I"
 RECOGNIZED_NON_LEGEND_TIERS_V1 = {105000035: "Legend II"}
@@ -140,10 +142,13 @@ def parse_profile(
     try:
         if current_season is None:
             raise DomainRuleError(
-                "invalid_season_anchor", "profile current season is missing or malformed"
+                "invalid_season_anchor",
+                "profile current season is missing or malformed",
             )
         if parser_version == PROFILE_PARSER_VERSION:
-            season_anchor = validate_profile_season_anchor(current_season)
+            season_anchor = validate_profile_season_anchor(
+                current_season, observed_at=observed_utc
+            )
         else:
             if previous_season is None:
                 raise DomainRuleError(
@@ -171,7 +176,9 @@ def parse_profile(
         previous_league_season_id=previous_season,
         season_anchor_state=season_anchor_state,
         season_anchor_current_id=(season_anchor.current_id if season_anchor else None),
-        season_anchor_previous_id=(season_anchor.previous_id if season_anchor else None),
+        season_anchor_previous_id=(
+            season_anchor.previous_id if season_anchor else None
+        ),
         observed_at=observed_utc,
         endpoint_version=endpoint_version,
         schema_version=SCHEMA_VERSION,

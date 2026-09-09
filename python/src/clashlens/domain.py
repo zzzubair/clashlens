@@ -137,19 +137,27 @@ def validate_season_anchor(current_id: str, previous_id: str) -> SeasonAnchor:
     )
 
 
-def validate_profile_season_anchor(current_id: str) -> SeasonAnchor:
+def validate_profile_season_anchor(
+    current_id: str, *, observed_at: datetime
+) -> SeasonAnchor:
     """Validate a profile's current tournament and derive its prior boundary."""
     current = _canonical_season_start(current_id)
     bootstrap = _canonical_season_start(BOOTSTRAP_CURRENT_SEASON_ID)
+    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+        raise DomainRuleError(
+            "invalid_season_anchor",
+            "profile observation time must include a UTC offset",
+        )
     if (
         current < bootstrap
+        or current > observed_at.astimezone(UTC)
         or current.weekday() != 0
         or current.time().replace(tzinfo=None) != datetime.min.time().replace(hour=5)
         or (current - bootstrap) % SEASON_DURATION
     ):
         raise DomainRuleError(
             "invalid_season_anchor",
-            "profile current season is not aligned to the 28-day phase",
+            "profile current season is not aligned to the observed 28-day phase",
         )
     previous = current - SEASON_DURATION
     return SeasonAnchor(
