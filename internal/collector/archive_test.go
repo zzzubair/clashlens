@@ -21,6 +21,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/minio/minio-go/v7"
 )
 
 type fakeS3Object struct {
@@ -543,5 +545,45 @@ func TestS3ArchiveVerifiesObjectCreatedBetweenHeadAndConditionalPut(t *testing.T
 	}
 	if backend.objects[objectKey].writes != 1 {
 		t.Fatalf("concurrently-created object was overwritten")
+	}
+}
+
+func TestArchiveTransportCountsInternalRetries(t *testing.T) {
+	var mu sync.Mutex
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		mu.Lock()
+		attempts++
+		served := attempts
+		mu.Unlock()
+		if served <= 2 {
+			http.Error(response, "slow down", http.StatusServiceUnavailable)
+			return
+		}
+		response.Header().Set("Content-Length", "4")
+		response.Header().Set("ETag", `"prototype"`)
+		response.Header().Set("Last-Modified", time.Unix(1_700_000_000, 0).UTC().Format(http.TimeFormat))
+		response.Header().Set("X-Amz-Meta-Sha256", strings.Repeat("a", 64))
+		response.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	archive, err := newS3Archive(strings.TrimPrefix(server.URL, "http://"), false, "evidence", "access", "secret")
+	if err != nil {
+		t.Fatalf("newS3Archive returned an error: %v", err)
+	}
+	heads := 0
+	archive.observeRequest = func(operation string) {
+		if operation == "head" {
+			heads++
+		}
+	}
+	_, _ = archive.client.StatObject(context.Background(), "evidence", "some-key", minio.StatObjectOptions{})
+	mu.Lock()
+	defer mu.Unlock()
+	if attempts != 3 {
+		t.Fatalf("outbound HTTP attempts = %d, want 3 (initial plus two SDK retries)", attempts)
+	}
+	if heads != 3 {
+		t.Fatalf("counted head attempts = %d, want 3", heads)
 	}
 }

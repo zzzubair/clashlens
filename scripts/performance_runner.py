@@ -47,7 +47,7 @@ ARTIFACT_SCHEMA_VERSION = 10
 CANDIDATE_RECEIPT_SCHEMA_VERSION = 2
 # Migrations 0022 (admission evidence) and 0023 (population bootstrap) are
 # both required; the gap reservation is retired by this integration.
-REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 24))
+REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 25))
 CANONICAL_REPOSITORY_URL = "https://github.com/zzzubair/clashlens"
 CONFIGURATION_KEYS = {
     "mode",

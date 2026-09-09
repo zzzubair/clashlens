@@ -31,6 +31,7 @@ type s3Archive struct {
 	markerCheckedAt   time.Time
 	markerErr         error
 	observeStage      func(string, time.Duration)
+	observeRequest    func(string)
 }
 
 var (
@@ -42,19 +43,55 @@ func newS3Archive(endpoint string, secure bool, bucket, accessKey, secretKey str
 	return newS3ArchiveWithRegion(endpoint, "us-east-1", secure, bucket, accessKey, secretKey)
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
+}
+
+func archiveOperationLabel(method string) string {
+	switch method {
+	case http.MethodPut:
+		return "put"
+	case http.MethodHead:
+		return "head"
+	case http.MethodGet:
+		return "get"
+	default:
+		return "other"
+	}
+}
+
 func newS3ArchiveWithRegion(endpoint, region string, secure bool, bucket, accessKey, secretKey string) (*s3Archive, error) {
 	if endpoint == "" || region == "" || bucket == "" || accessKey == "" || secretKey == "" {
 		return nil, errors.New("archive endpoint, region, bucket, access key, and secret key are required")
 	}
+	base, err := minio.DefaultTransport(secure)
+	if err != nil {
+		return nil, fmt.Errorf("create archive transport: %w", err)
+	}
+	archive := &s3Archive{bucket: bucket, region: region, maximumBodyBytes: 64 << 20}
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		archive.observe(archiveOperationLabel(request.Method))
+		return base.RoundTrip(request)
+	})
 	client, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure: secure,
-		Region: region,
+		Creds:     credentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure:    secure,
+		Region:    region,
+		Transport: transport,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create S3 client: %w", err)
 	}
-	return &s3Archive{client: client, bucket: bucket, region: region, maximumBodyBytes: 64 << 20}, nil
+	archive.client = client
+	return archive, nil
+}
+
+func (a *s3Archive) observe(operation string) {
+	if a.observeRequest != nil {
+		a.observeRequest(operation)
+	}
 }
 
 func (a *s3Archive) spoolReady() error {

@@ -495,3 +495,22 @@ def test_spool_first_lease_loss_discards_the_fallback_result(tmp_path: Path) -> 
         reader.read_verified(reference, digest, heartbeat=lambda: None)
     # Nothing was repaired locally and no result survived.
     assert Spool(str(tmp_path / "spool"), max_body_bytes=1024).verify(digest) is None
+
+
+def test_s3_archive_reader_counts_remote_attempts(archive_server) -> None:
+    endpoint, reference, digest, _handler = archive_server
+    reader = S3ArchiveReader(
+        endpoint=endpoint,
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        secure=False,
+        allow_insecure_test_origin=True,
+        max_retries=0,
+    )
+    assert reader.remote_attempts == {"get": 0, "bucket": 0, "marker": 0}
+    reader.read_verified(reference, digest)
+    assert reader.remote_attempts["get"] == 1
+    reader.check_ready()
+    assert reader.remote_attempts["bucket"] == 1
+    assert reader.remote_attempts["get"] == 1

@@ -88,7 +88,7 @@ uv run --locked --python 3.12 ../scripts/performance_runner.py army-analytics \
 
 The same `--candidate-receipt` option may be used with each workload. The
 receipt must be a schema-2 `candidate-preparation` receipt whose clean source
-SHA, migration filenames/hashes through 0021, application source/revision
+SHA, migration filenames/hashes through 0024, application source/revision
 labels, bounded candidate resource proof, and canonical receipt digest validate
 against this checkout. The
 runner records those identities under `prepared_candidate_images`; they are
@@ -189,7 +189,7 @@ Artifacts are validated before they are
 printed or written; missing/invalid digests, required metrics, or older artifact
 versions fail the run. They require a clean exact source SHA, the runner hash,
 source migration filenames/hashes and the applied database migration versions
-through 0021, a sanitized configuration fingerprint, host/runtime/PostgreSQL
+through 0024, a sanitized configuration fingerprint, host/runtime/PostgreSQL
 execution identity and settings, and fixed workload facts. They include
 generated and retained PostgreSQL WAL and relation sizes,
 per-relation DML and
@@ -266,3 +266,222 @@ target-host outputs for review. The dedicated `army-analytics` mode
 asserts the warmed 200 ms p95, forced-miss five-second bound, four-lane overlap,
 queue-drain, and five-minute gates;
 its output is retained before a hard-gate failure returns nonzero.
+
+## Step 9 live-day observer (issue #92)
+
+`scripts/step9_check.py` is the bounded read-only observer/validator/watchdog
+for the Step 9 full Legend-day test. It is not a scheduler, collector,
+service, or benchmark: it only records evidence and checks it. Exit `0`
+means a complete valid action, `1` an objective live gate failure, and `2`
+absent, malformed, mixed, or unavailable evidence. Each live command writes a
+fixed-code failure record before returning when the run directory is writable.
+
+```sh
+RUN=/home/clashlens/results/step9-YYYYMMDD-SHA
+install -d -m 0700 "$RUN"
+
+python3 scripts/step9_check.py start \
+  --run-dir "$RUN" \
+  --cohort-file /protected/legend-tags-2026-09-08.txt \
+  --deployed-receipt /retained/clashlens-deployed-stack.json \
+  --core-start 2026-MM-DDT05:00:00Z \
+  --core-end 2026-MM-DDT05:00:00Z \
+  --collector-container clashlens-issue92-COLLECTOR \
+  --postgres-container clashlens-issue92-POSTGRES \
+  --python-api-container clashlens-issue92-API \
+  --python-worker-container clashlens-issue92-WORKER \
+  --worker-replicas N \
+  --runtime-metrics-url http://127.0.0.1:PORT/runtime-metrics \
+  --spool-path /actual/spool/path \
+  --postgres-path /actual/postgres/path \
+  --deadline 2026-MM-DDT05:TAIL:00Z \
+  --watchdog-unit clashlens-step9-sampler-RUN \
+  --max-invocation-gap-seconds 5 \
+  --archive-egress-interface ARCHIVE_IFACE \
+  --archive-tariff-file /protected/clashlens-issue92-tariff.json \
+  [--database-url-file /protected/clashlens-issue92-db-url]
+
+systemd-run --user --unit clashlens-step9-watchdog-RUN \
+  --property=Type=exec --property=Restart=on-failure \
+  --property=RestartSec=5s --property=RuntimeMaxSec=RUN_SECONDS \
+  --property='ExecStopPost=/usr/bin/podman stop --ignore --time 30 clashlens-issue92-COLLECTOR' \
+  python3 scripts/step9_check.py watchdog \
+    --run-dir "$RUN" --deadline 2026-MM-DDT05:TAIL:00Z \
+    --max-sample-age-seconds 125 \
+    --collector-container clashlens-issue92-COLLECTOR \
+    --systemd-unit clashlens-step9-sampler-RUN
+
+systemd-run --user --unit clashlens-step9-sampler-RUN \
+  --property=Type=exec --property=Restart=no \
+  python3 scripts/step9_check.py sample --run-dir "$RUN" \
+  --database-url postgresql://OBSERVER@127.0.0.1:5432/clashlens
+
+python3 scripts/step9_check.py finalize --run-dir "$RUN" \
+  --database-url postgresql://OBSERVER@127.0.0.1:5432/clashlens
+python3 scripts/step9_check.py validate --run-dir "$RUN"
+sha256sum "$RUN/manifest.json"
+```
+
+This template documents invocation only; fill every placeholder in the Phase 4
+go/no-go record first. There is no verified live-day command today.
+
+Rules the tool enforces: one continuous 05:00 UTC to 05:00 UTC core day with
+exactly 288 five-minute windows and 1440 minute samples; cohort input capped
+at 1 MiB and 20,000 lines with duplicate-after-normalization rejection;
+fewer than 12,500 eligible supplied players is valid while zero eligible,
+any active outside player, or any outside player-scoped collection lineage
+fails the gate; missing or malformed evidence is unknown/failure, never zero;
+artifacts are written exclusively and never replaced; the run directory is
+capped at 256 MiB; live-day admission accounting follows the validated final
+handoff (deadlines, gaps, tail, capture bounds, exact roots) and `validate`
+refuses any run whose admission, eligibility, reset, sample-outcome, or
+watchdog evidence is not clean and complete.
+
+### Population preflight mode (60m bootstrap + 15m drain)
+
+The same tool also runs the bounded read-only population preflight, distinct
+from the 24-hour day. It reuses cohort/receipt validation, the minute loop,
+the watchdog, and the manifest machinery under schema `step9-preflight-v1`
+with 75 one-minute slots (60 bootstrap + 15 drain) and 15 windows:
+
+```sh
+python3 scripts/step9_check.py start --mode preflight \
+  --run-dir "$RUN" --cohort-file /protected/legend-tags-2026-09-08.txt \
+  --deployed-receipt /retained/clashlens-deployed-stack.json \
+  --core-start 2026-MM-DDTHH:00:00Z --core-end 2026-MM-DDTHH:15:00Z \
+  --collector-container clashlens-issue92-COLLECTOR ... \
+  --deadline 2026-MM-DDTHH:20:00Z \
+  --watchdog-unit clashlens-step9-preflight-RUN \
+  [--database-url-file /protected/clashlens-issue92-db-url]
+```
+
+The preflight core is exactly 75 minutes: 60 minutes of bootstrap traffic
+followed by a 15-minute processing drain with the collector stopped at
+minute 60 by the watchdog. Metrics may be absent after that proven stop
+only; any earlier or unproven stop fails the run.
+
+```sh
+python3 scripts/step9_check.py sample --run-dir "$RUN" \
+  [--database-url-file /protected/clashlens-issue92-db-url]
+python3 scripts/step9_check.py finalize --run-dir "$RUN" \
+  [--database-url-file /protected/clashlens-issue92-db-url]
+python3 scripts/step9_check.py validate --run-dir "$RUN"
+```
+
+Preflight enforces the fixed envelope from real probes only: at most 13,500
+profile observations, one global-rankings intent, zero battle-log
+observations, and only `discovery_profile` / `endpoint_retry` /
+`global_player_rankings` work. Any `regular_poll`, reset, or interactive root
+is unexpected scheduler traffic and fails the gate, as do pending remote
+verifications or queue residue at finalize. The durable 0023 budget ledger
+is cross-checked against the receipt (caps, run ID, deadline) and measured
+traffic; the envelope is never claimed from supplied aggregates.
+
+### Admission accounting (migration 0022-final read side)
+
+For live-day runs the observer integrates the validated final admission
+handoff (which supersedes both accounting addenda): run-header state and
+quotas, per-event selected/inserted/advanced equality with sampler stop on a
+committed mismatch, `IS DISTINCT FROM` invalid-profile detection (null
+pointer, wrong player, non accepted Legend I), exact five-minute
+from-due-timestamp deadlines (equality is timely; reset backlog gets handoff
+grace), consecutive-`database_at` invocation gaps over
+`--max-invocation-gap-seconds` as `admission_visibility_unknown`, tail
+evidence through five minutes past core end, capture-range enforcement, and
+exact-root reconciliation by semantic `(player_id, coalescing key)` identity
+with malformed/duplicate/unexplained roots as failures. Missing 0022 tables
+fail `start` closed with `admission_schema_absent`; no sequence watermark is
+used anywhere.
+
+### Observer database role and start gates
+
+The observer connects with the operator-supplied `--database-url` and never
+writes: every statement passes a read-only source-shape guard and runs in one
+`REPEATABLE READ READ ONLY` transaction. The least-privilege existing role is
+`clashlens_python_worker` (never the public API role, never superuser); the
+admission lane owns the remaining 0022 `SELECT` grants for that role plus
+`SELECT (cycle_at)` on `global_rankings_intents`. `start` additionally
+requires a deployed-stack receipt whose configuration pins
+`player_discovery_enabled=false`; enabled, missing, or older-allowlist
+receipts fail closed. Runtime counters come from B1's query-free
+`GET /runtime-metrics` Prometheus exposition; process-identity change stops
+the run and pool gauges are exempt from counter-continuity.
+
+### Phase 4 resource gates and protected database URL
+
+Every command that touches the database accepts either `--database-url` or
+`--database-url-file`, never both. The file must be absolute, a regular
+private file (no group/other bits), at most 4 KiB, single-line UTF-8 with no
+control characters; symlinks, wrong permissions, and malformed content fail
+closed. The URL value is never written to artifacts, failure records, or
+usage output; run.json records only which source was used.
+
+`start` pins a resource baseline; each minute sample compares real probes
+against these fixed Phase 4 stop/fail thresholds and stops the sampler (exit
+1) on the first breach: filesystem use ≥80%, free space <200 GiB, shared-pool
+physical growth >64 GiB from baseline, Btrfs metadata ≥80% of allocated,
+Btrfs unallocated <100 GiB, any new Btrfs probe error or diagnostic stderr,
+any OOM-kill increase, any swap growth, host memory available <4 GiB for two
+consecutive samples, archive logical >16 GiB, archive physical >64 GiB,
+archive objects >100k, or estimated archive cost >EUR 4.50. Filesystems
+sharing one pool are evaluated once. Missing probe fields stay unknown
+(recorded, never zero). Cost is never computed as logical-bytes times a rate. `start` requires the
+protected verified tariff JSON (`--archive-tariff-file`) and pins its digest,
+source, verification date, horizon, rates, and envelope; missing, malformed,
+stale (>30 days), mismatched, or over-stop tariffs fail closed. The approved
+whole-envelope figure (EUR 3.686616 under the EUR 4.50 stop) is reported
+alongside the measured byte/attempt bounds. All cost figures are tariff
+estimates, never actual billed cost.
+
+### Operating evidence and container/cgroup probes
+
+`start` pins an operating baseline (`operating-baseline.json`); hourly closing
+samples and `finalize` capture the same worker-safe sectioned snapshot
+(identity, queue depths, relation sizes, processed outcomes, retained
+failures). Any failed section, any hourly failure, or any growth in retained
+failures versus baseline fails validation (`operating_unproven`,
+`operating_failed`, `operating_regressed`); relation growth is reported.
+Each sample also records container state/image/started-at, cgroup OOM/swap
+counters, and mount-identity continuity; a changed or unprovable mount fails
+validation. Until the worker role receives the remaining operating/archive
+`SELECT` grants, these captures stay honestly unknown and the PR stays draft.
+
+### Retained WAL from the PostgreSQL container
+
+`pg_ls_waldir` is superuser-only, so the observer never claims retained WAL
+from SQL. Instead each sample runs a bounded read-only podman-exec probe
+against the exact configured PostgreSQL container as its existing default
+user: it resolves and verifies `PGDATA` (absolute, no parent traversal),
+records the container image, and measures `PGDATA` and `PGDATA/pg_wal` bytes
+with capped output and timeouts. Unsafe names/paths, output/time breaches,
+or image changes fail closed; generated LSN WAL stays separate. Finalize
+retains the last captured sizes; validation requires them.
+
+### Transfer accounting (64 GiB stop, 100k attempts)
+
+Official-traffic volume is bounded by host-wire counters, not spool or
+catalogue aggregates: `start` pins kernel RX+TX bytes for each explicitly
+configured `--archive-egress-interface`, plus boot ID, MAC/operstate, and the
+`ip route get` device toward `--archive-route-host` when given. Every sample
+recomputes the conservative bound — prior qualification bytes plus RX+TX
+growth on the path, including unrelated and protocol overhead, retained as
+`conservative_host_wire_bytes` (never exact S3). Missing interfaces, counter
+resets, boot/MAC/route changes, or unresolvable probes fail closed;
+crossing 64 GiB cumulative stops the sampler immediately.
+
+Prior transfer defaults to a documented upper bound of 21 MiB (21 bounded
+qualification requests times the 1 MiB response ceiling), overridable with
+`--prior-transfer-bytes` plus provenance. Retained payload stays separate
+(16 GiB logical envelope).
+
+S3 attempts come from real counters only: Go `archive_requests_total`
+per-operation attempts (PUT/HEAD/GET/bucket, retries included) in the
+query-free runtime metrics, plus Python worker `remote_attempts` summed
+across replicas. Decreases fail closed; the mandatory rehearsal prior
+defaults to the exact 21 retained qualification requests and is overridable
+with `--prior-s3-attempts N` (integer 0..100000) plus bounded provenance;
+crossing 100,000 cumulative stops the run. Before production observer start,
+the host must include the scheduler-once S3 marker's actual retry-aware
+transport count in that prior, or a proven conservative bound: count every
+operation and each transport retry, with no outer-call estimate or double
+counting.
