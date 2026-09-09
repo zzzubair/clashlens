@@ -462,6 +462,7 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
     if discovery != "false":
         raise Step9Error("discovery_not_disabled",
                          "Step 9 start requires player_discovery_enabled=false")
+    budget_receipt = _budget_receipt_block(receipt, mode_name)
     core_start = _parse_utc(arguments.core_start)
     core_end = _parse_utc(arguments.core_end)
     if core_end - core_start != mode["interval"]:
@@ -491,14 +492,17 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         raise Step9Error("run_unwritable", "run directory cannot be created") from error
     os.chmod(run_dir, 0o700)
     collector_image: str | None = None
+    collector_image_error = "image_pin_unattempted"
     try:
-        running, collector_image = Podman(
+        running, pinned = Podman(
             None, getattr(arguments, "podman_bin", "podman")
         ).inspect_running(arguments.collector_container)
-        if not running:
-            collector_image = None
-    except Exception:  # noqa: BLE001 - unpinnable image is unknown
-        collector_image = None
+        if running:
+            collector_image, collector_image_error = pinned, None
+        else:
+            collector_image_error = "collector_not_running_at_start"
+    except Exception as error:  # noqa: BLE001 - unpinnable image is unknown
+        collector_image_error = f"image_inspect_unavailable: {type(error).__name__}"
     initial = {"status": "unknown", "failure_code": "database_unavailable"}
     if db is not None:
         try:
@@ -521,6 +525,7 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "containers": {
             "collector": arguments.collector_container,
             "collector_image": collector_image,
+            "collector_image_error": collector_image_error,
             "postgres": arguments.postgres_container,
             "python_api": arguments.python_api_container,
             "python_worker": arguments.python_worker_container,
@@ -541,6 +546,7 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "max_invocation_gap_seconds": getattr(
             arguments, "max_invocation_gap_seconds", 5),
         "bootstrap_run_id": getattr(arguments, "bootstrap_run_id", None),
+        "budget_receipt": budget_receipt,
         "filesystem": filesystem_facts(arguments.spool_path,
                                         arguments.postgres_path),
         "admission": _admission_header(db, mode_name, run_id, core_start,
@@ -555,6 +561,38 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
     _check_capacity(run_dir)
     header["header_sha256"] = digest
     return header
+
+
+def _budget_receipt_block(receipt: dict, mode_name: str) -> dict | None:
+    """Preflight pins the deployed budget envelope; live-day ignores it."""
+    if mode_name != "preflight":
+        return None
+    fields = receipt.get("configuration", {}).get("fields", {})
+    if fields.get("endpoint_budget_enabled") != "true":
+        raise Step9Error("budget_not_enabled",
+                         "preflight requires endpoint_budget_enabled=true")
+    try:
+        caps = {key: int(fields[key]) for key in (
+            "endpoint_budget_profile", "endpoint_budget_global_rankings",
+            "endpoint_budget_battle_log")}
+    except (KeyError, TypeError, ValueError) as error:
+        raise Step9Error("budget_malformed",
+                         "preflight budget caps are invalid") from error
+    envelope = {"endpoint_budget_profile": PREFLIGHT_ENVELOPE["profile"],
+                "endpoint_budget_global_rankings":
+                    PREFLIGHT_ENVELOPE["global_rankings_intents"],
+                "endpoint_budget_battle_log": PREFLIGHT_ENVELOPE["battle_log"]}
+    for key, ceiling in envelope.items():
+        if caps[key] > ceiling:
+            raise Step9Error("budget_exceeds_envelope",
+                             f"preflight {key} exceeds the fixed envelope")
+    if not fields.get("endpoint_budget_run_id") \
+            or not fields.get("endpoint_budget_deadline_at"):
+        raise Step9Error("budget_unbound",
+                         "preflight budget run ID and deadline are required")
+    return {"caps": caps,
+            "run_id": fields["endpoint_budget_run_id"],
+            "deadline_at": fields["endpoint_budget_deadline_at"]}
 
 
 def _admission_header(db: object | None, mode_name: str, run_id: str,
@@ -1436,6 +1474,29 @@ def _finalize_budget(run: dict, db: object, endpoints: dict) -> dict:
                      "budgets": {b["endpoint"]: {"cap": b["cap"],
                                                      "consumed": b["consumed"]}
                                  for b in data["budgets"]}}
+    pinned = run.get("budget_receipt") or {}
+    if pinned:
+        try:
+            receipt_deadline = _parse_utc(pinned["deadline_at"])
+        except Step9Error:
+            result["status"] = "failed"
+            result["failure"] = "budget_deadline_malformed"
+            return result
+        db_caps = {b["endpoint"]: b["cap"] for b in data["budgets"]}
+        db_deadlines = {str(b["deadline_at"]) for b in data["budgets"]}
+        envelope_map = {"profile": pinned["caps"].get(
+            "endpoint_budget_profile"),
+            "global_player_rankings": pinned["caps"].get(
+                "endpoint_budget_global_rankings"),
+            "battle_log": pinned["caps"].get("endpoint_budget_battle_log")}
+        if pinned.get("run_id") != brow.get("run_id") \
+                or db_caps != envelope_map \
+                or not db_deadlines \
+                or any(_parse_utc(str(d)) != receipt_deadline
+                       for d in db_deadlines):
+            result["status"] = "failed"
+            result["failure"] = "budget_binding_mismatch"
+            return result
     if brow["manifest_sha256"] != cohort.get("raw_sha256") \
             or brow["manifest_count"] != cohort.get("input_count") \
             or brow["normalized_set_sha256"] != cohort.get("canonical_sha256"):
@@ -1864,7 +1925,11 @@ def cmd_watchdog(arguments: argparse.Namespace, hooks=None) -> int:
                         "collector is not running at watchdog start")
         return 1
     pinned_image = (run.get("containers", {}) or {}).get("collector_image")
-    if pinned_image is not None and image != pinned_image:
+    if pinned_image is None:
+        _record_failure(run_dir, "unpinned_image",
+                        "no start-time collector image pin")
+        return 2
+    if image != pinned_image:
         _record_failure(run_dir, "container_image_changed",
                         "collector image differs from start pin")
         return 1

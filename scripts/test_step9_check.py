@@ -61,10 +61,21 @@ def _start_args(run_dir: Path, cohort: Path, **overrides):
     return mock.Mock(**defaults)
 
 
-def _receipt_scope(scope: str = "deployed-stack", discovery: str = "false") -> dict:
+def _receipt_scope(scope: str = "deployed-stack", discovery: str = "false",
+                   budget: bool = True) -> dict:
+    fields = {"player_discovery_enabled": discovery}
+    if budget:
+        fields.update({
+            "endpoint_budget_enabled": "true",
+            "endpoint_budget_profile": "13500",
+            "endpoint_budget_global_rankings": "1",
+            "endpoint_budget_battle_log": "0",
+            "endpoint_budget_run_id": "boot1",
+            "endpoint_budget_deadline_at": "2026-10-04T06:00:00+00:00",
+        })
     return {"receipt_scope": scope, "source": {"revision": "a" * 40},
             "receipt_digest": "sha256:" + "b" * 64,
-            "configuration": {"fields": {"player_discovery_enabled": discovery}}}
+            "configuration": {"fields": fields}}
 
 
 class FakeDB:
@@ -318,6 +329,34 @@ def test_start_rejects_discovery_receipts(tmp_path: Path) -> None:
             assert error.value.code == "discovery_not_disabled"
 
 
+def test_start_preflight_budget_gates(tmp_path: Path) -> None:
+    cohort = _write_cohort(tmp_path / "c.txt", TAGS)
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    base = {"mode": "preflight", "core_start": "2026-10-04T05:00:00Z",
+            "core_end": "2026-10-04T06:15:00Z"}
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        receipt_path = tmp_path / "b.json"
+        receipt_path.write_text(json.dumps(_receipt_scope(budget=False)))
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(_start_args(tmp_path / "b0", cohort,
+                                        deployed_receipt=str(receipt_path),
+                                        **base), db)
+        assert error.value.code == "budget_not_enabled"
+        receipt = _receipt_scope()
+        receipt["configuration"]["fields"]["endpoint_budget_profile"] = "99999"
+        receipt_path.write_text(json.dumps(receipt))
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(_start_args(tmp_path / "b1", cohort,
+                                        deployed_receipt=str(receipt_path),
+                                        **base), db)
+        assert error.value.code == "budget_exceeds_envelope"
+        (tmp_path / "receipt.json").write_text(json.dumps(_receipt_scope()))
+        header = step9.cmd_start(_start_args(
+            tmp_path / "b2", cohort,
+            deployed_receipt=str(tmp_path / "receipt.json"), **base), db)
+        assert header["budget_receipt"]["run_id"] == "boot1"
+
 def test_parse_runtime_metrics_wire_format() -> None:
     text = ("# HELP clashlens_collector_jobs_total jobs\n"
             "# TYPE clashlens_collector_jobs_total counter\n"
@@ -501,6 +540,16 @@ class FakePodman:
         raise AssertionError(f"unexpected podman command: {command}")
 
 
+def _pin_image(run_dir: Path, image: str = "sha256:image") -> None:
+    """Test-only: set the start-time image pin (production pins via podman)."""
+    path = run_dir / "run.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["containers"]["collector_image"] = image
+    payload["containers"]["collector_image_error"] = None
+    path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n",
+                    encoding="utf-8")
+
+
 def _watchdog_args(run_dir: Path, **overrides):
     defaults = {"run_dir": str(run_dir), "podman_bin": "podman",
                 "collector_container": "test-collector",
@@ -513,6 +562,7 @@ def _watchdog_args(run_dir: Path, **overrides):
 def test_watchdog_single_pass_and_deadline(tmp_path: Path) -> None:
     db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
     run_dir, _header = _started_run(tmp_path, db)
+    _pin_image(run_dir)
     podman = FakePodman()
     arguments = _watchdog_args(run_dir)
     # inside startup grace with no samples yet -> wait, no stop
@@ -529,6 +579,7 @@ def test_watchdog_single_pass_and_deadline(tmp_path: Path) -> None:
     # watchdog.json is exclusive and never replaced)
     run_dir2, _header2 = _started_run(tmp_path, db, run_dir_name="run2",
                                         run_id="testrun02")
+    _pin_image(run_dir2)
     arguments2 = _watchdog_args(run_dir2)
     hooks = {"podman_run": podman, "single_pass": True, "max_iterations": 1,
              "no_sleep": True,
@@ -543,9 +594,23 @@ def test_watchdog_single_pass_and_deadline(tmp_path: Path) -> None:
     assert outcome["trigger"] == "sampler_unit_inactive"
 
 
+def test_watchdog_unpinned_image_fails_closed(tmp_path: Path) -> None:
+    """N2: missing start-time image pin fails the watchdog, never skips."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    podman = FakePodman()
+    arguments = _watchdog_args(run_dir)
+    assert step9.cmd_watchdog(arguments, {"podman_run": podman,
+                                           "no_sleep": True}) == 2
+    assert list((run_dir / "failures").glob("unpinned_image-*.json"))
+    verbs = [command[1] for command in podman.commands]
+    assert "update" not in verbs and "stop" not in verbs
+
+
 def test_watchdog_rejects_container_mismatch(tmp_path: Path) -> None:
     db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
     run_dir, _header = _started_run(tmp_path, db)
+    _pin_image(run_dir)
     podman = FakePodman()
     arguments = _watchdog_args(run_dir, collector_container="test-other")
     with pytest.raises(step9.Step9Error):
@@ -556,6 +621,7 @@ def test_watchdog_rejects_container_mismatch(tmp_path: Path) -> None:
 def test_watchdog_stop_failure_is_evidence_failure(tmp_path: Path) -> None:
     db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
     run_dir, _header = _started_run(tmp_path, db)
+    _pin_image(run_dir)
     podman = FakePodman(stop_fails=True)
     arguments = _watchdog_args(run_dir,
                                deadline="2026-10-03T05:00:00Z")  # already past
@@ -1116,6 +1182,7 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
             step9.cmd_start(_start_args(run_dir2, cohort, run_id="deadline1",
                                         deployed_receipt=str(kill_receipt)),
                             database)
+        _pin_image(run_dir2)
         podman = FakePodman()
         watchdog_args = _watchdog_args(run_dir2,
                                        deadline="2026-10-03T05:00:00Z")
@@ -1366,13 +1433,13 @@ def _mirror_0022(connection) -> None:
     assert row is not None, "migration 0022 must be applied"
 
 
-def test_admission_tables_absent_without_mirror() -> None:
+def test_admission_tables_present_via_migration() -> None:
     import psycopg
     from domain_test_support import domain_database
 
     with domain_database(_pg_url(), include_coordinator=True) as info:
         database = step9.Database(lambda: psycopg.connect(info))
-        assert database.admission_present() is False
+        assert database.admission_present() is True
         assert database.admission_run("nope") is None
         assert database.admission_latest("nope") is None
 
@@ -1692,31 +1759,14 @@ def test_admission_handoff_semantics() -> None:
     assert "admission_early_reopen" in result["failures"]
 
 
-_BOOTSTRAP_0023_PATH = (
-    Path("/home/zubair/orca/workspaces/clashlens/issue92-population-bootstrap")
-    / "deploy" / "migrations" / "0023_population_bootstrap.sql"
-)
-
-
-def _read_provisional_0023() -> str:
-    # Read-only use of the B2 worktree file; never edited or committed here.
-    text = _BOOTSTRAP_0023_PATH.read_text(encoding="utf-8")
-    return "".join(
-        line for line in text.splitlines(keepends=True)
-        if line.strip() not in ("BEGIN;", "COMMIT;"))
-
-
-def test_provisional_0023_budget_reads() -> None:
+def test_migrated_0023_budget_reads() -> None:
     import psycopg
     from domain_test_support import domain_database
 
-    assert _BOOTSTRAP_0023_PATH.is_file(), "B2 0023 file must exist to read"
     with domain_database(_pg_url(), include_coordinator=True) as info:
         database = step9.Database(lambda: psycopg.connect(info))
-        assert database.budgets_present() is False
+        assert database.budgets_present() is True  # migrated 0023
         with psycopg.connect(info, autocommit=True) as connection:
-            connection.execute(_read_provisional_0023())
-            assert database.budgets_present() is True
             connection.execute(
                 "INSERT INTO population_bootstrap_runs"
                 " (run_id, manifest_sha256, manifest_count,"
@@ -1778,3 +1828,41 @@ def test_finalize_budget_manifest_match() -> None:
 
     result = step9._finalize_budget(run, DeniedDB(), {})
     assert result["status"] == "unknown_pending_grant"
+
+    bound_run = dict(run, budget_receipt={
+        "caps": {"endpoint_budget_profile": 13500,
+                 "endpoint_budget_global_rankings": 1,
+                 "endpoint_budget_battle_log": 0},
+        "run_id": "boot1",
+        "deadline_at": "2026-10-04T06:00:00+00:00"})
+
+    class BoundDB(FakeDB):
+        def budgets_present(self):
+            return True
+
+        def bootstrap_budgets(self, run_id):
+            return {"run": {"run_id": "boot1",
+                              "manifest_sha256": "ab" * 32,
+                              "manifest_count": 12857,
+                              "normalized_set_sha256": "cd" * 32,
+                              "status": "complete"},
+                    "budgets": [
+                        {"endpoint": "profile", "cap": 13500,
+                         "consumed": 120,
+                         "deadline_at": datetime(
+                             2026, 10, 4, 6, 0, tzinfo=UTC)},
+                        {"endpoint": "global_player_rankings", "cap": 1,
+                         "consumed": 1,
+                         "deadline_at": datetime(
+                             2026, 10, 4, 6, 0, tzinfo=UTC)},
+                        {"endpoint": "battle_log", "cap": 0, "consumed": 0,
+                         "deadline_at": datetime(
+                             2026, 10, 4, 6, 0, tzinfo=UTC)}]}
+
+    result = step9._finalize_budget(bound_run, BoundDB(), {"profile": 100})
+    assert result["status"] == "complete" and result["failure"] is None
+    tampered = dict(bound_run,
+                    budget_receipt=dict(bound_run["budget_receipt"],
+                                       run_id="other"))
+    result = step9._finalize_budget(tampered, BoundDB(), {})
+    assert result["failure"] == "budget_binding_mismatch"

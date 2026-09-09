@@ -310,9 +310,11 @@ systemd-run --user --unit clashlens-step9-watchdog-RUN \
 
 systemd-run --user --unit clashlens-step9-sampler-RUN \
   --property=Type=exec --property=Restart=no \
-  python3 scripts/step9_check.py sample --run-dir "$RUN"
+  python3 scripts/step9_check.py sample --run-dir "$RUN" \
+  --database-url postgresql://OBSERVER@127.0.0.1:5432/clashlens
 
-python3 scripts/step9_check.py finalize --run-dir "$RUN"
+python3 scripts/step9_check.py finalize --run-dir "$RUN" \
+  --database-url postgresql://OBSERVER@127.0.0.1:5432/clashlens
 python3 scripts/step9_check.py validate --run-dir "$RUN"
 sha256sum "$RUN/manifest.json"
 ```
