@@ -3310,6 +3310,9 @@ def _s3_prior_block(arguments: argparse.Namespace) -> dict:
     """Mandatory rehearsal prior: bounded int, bounded provenance."""
     raw_attempts = getattr(arguments, "prior_s3_attempts", None)
     raw_provenance = getattr(arguments, "prior_s3_provenance", None)
+    if raw_attempts is not None and raw_provenance is None:
+        raise Step9Error("s3_prior_invalid",
+                         "prior S3 provenance is required with attempts")
     attempts = TRANSFER_PRIOR_ATTEMPTS if raw_attempts is None else raw_attempts
     provenance = S3_PRIOR_PROVENANCE if raw_provenance is None else raw_provenance
     if isinstance(attempts, bool) or not isinstance(attempts, int) \

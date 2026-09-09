@@ -3053,7 +3053,7 @@ def test_s3_prior_input_contract(tmp_path: Path) -> None:
         assert header["s3_prior"]["attempts"] == 7
         for index, (bad_attempts, bad_provenance) in enumerate((
                 (-1, "x"), (100001, "x"), (True, "x"), ("7", "x"),
-                (7, ""), (7, "y" * 513))):
+                (500, None), (7, ""), (7, "y" * 513))):
             with pytest.raises(step9.Step9Error) as error:
                 _started_run(tmp_path, db, run_dir_name=f"pbad{index}",
                              prior_s3_attempts=bad_attempts,
