@@ -3571,12 +3571,14 @@ def _parse_btrfs_usage(stdout: str) -> dict:
     for line in (stdout or "").splitlines():
         line = line.strip()
         match = re.fullmatch(
-            r"(Metadata\w*),[^:]*: Size: (\d+), Used: (\d+).*", line)
+            # Keep profile parsing unchanged; btrfs may omit spaces after
+            # the Size/Used labels in its actual output.
+            r"(Metadata\w*),[^:]*:\s*Size:\s*(\d+),\s*Used:\s*(\d+).*", line)
         if match:
             meta_size += int(match.group(2))
             meta_used += int(match.group(3))
             continue
-        match = re.fullmatch(r"Unallocated:\s*(\d+).*", line)
+        match = re.fullmatch(r"(?:Device )?[Uu]nallocated:\s*(\d+).*", line)
         if match:
             unallocated = int(match.group(1))
     metadata_pct = (100.0 * meta_used / meta_size) if meta_size else None
