@@ -242,6 +242,7 @@ def test_replay_request_is_a_restricted_host_wrapper() -> None:
     assert "(8#$mode & 0077)" in text
     assert "supercell-source-parser-v2" in text
     assert "supercell-source-parser-v1" in text
+    assert "supercell-profile-parser-v3" in text
     assert "clashlens-domain-processing-v1" in text
     assert "clashlens-domain-rules-v1" in text
     assert "legend-analytics-v1" in text

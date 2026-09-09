@@ -111,6 +111,19 @@ func TestGoCollectorHandoffToPythonSignedPlayerPage(t *testing.T) {
 		"0010_boundary_publication_coordinator.sql",
 		"0011_boundary_publication_contract.sql",
 		"0012_parsed_content_dedup.sql",
+		"0013_army_backfill_priority.sql",
+		"0014_ranked_day_lookup.sql",
+		"0015_python_job_source_contract_security.sql",
+		"0016_compact_battle_reports.sql",
+		"0017_completed_history_retention.sql",
+		"0018_archive_last_seen_retention.sql",
+		"0019_player_season_summaries.sql",
+		"0020_army_season_summaries.sql",
+		"0021_season_detail_retirement.sql",
+		"0022_step9_regular_admission_evidence.sql",
+		"0023_population_bootstrap.sql",
+		"0024_observer_evidence_reads.sql",
+		"0025_profile_parser_v3.sql",
 	} {
 		applySQLFile(t, ctx, connection, filepath.Join("..", "..", "deploy", "migrations", migration))
 	}

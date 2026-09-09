@@ -529,7 +529,6 @@ def test_source_parser_v2_migration_advances_defaults_and_keeps_v1_replayable(
     }
     assert "supercell-source-parser-v1" in replay_definition
     assert "supercell-source-parser-v2" in replay_definition
-    assert "supercell-profile-parser-v3" in replay_definition
     assert migration_count == 1
 
 
