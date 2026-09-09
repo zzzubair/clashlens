@@ -143,21 +143,7 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 		return "", err
 	}
 
-	m.mu.Lock()
-	jobs := cloneCounterMap(m.jobs)
-	apiRequests := cloneCounterMap(m.apiRequests)
-	apiOutcomes := cloneCounterMap(m.apiOutcomes)
-	apiDurationCount := cloneCounterMap(m.apiDurationCount)
-	apiDurationSum := cloneFloatMap(m.apiDurationSum)
-	storageErrors := cloneCounterMap(m.storageErrors)
-	retries := cloneCounterMap(m.retries)
-	quarantines := cloneCounterMap(m.quarantines)
-	stageDurations := cloneHistogramMap(m.stageDurations)
-	m.mu.Unlock()
-
 	var output strings.Builder
-	fmt.Fprintf(&output, "clashlens_collector_process_start_time_seconds %d\n", m.processStartedAt.Unix())
-	fmt.Fprintf(&output, "clashlens_collector_process_identity_info{process_id=%q} 1\n", m.processIdentity)
 	fmt.Fprintf(&output, "clashlens_collector_queue_depth %d\n", statistics.depth)
 	fmt.Fprintf(&output, "clashlens_collector_active_leases %d\n", statistics.activeLeases)
 	fmt.Fprintf(&output, "clashlens_collector_expired_leases %d\n", statistics.expiredLeases)
@@ -223,23 +209,6 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	fmt.Fprintf(&output, "clashlens_collector_live_refresh_coalesced_total %d\n", statistics.liveRefreshCoalesced)
 	fmt.Fprintf(&output, "clashlens_collector_live_refresh_cooldown_hits_total %d\n", statistics.liveRefreshCooldownHits)
 
-	writeCounterMap(&output, "clashlens_collector_jobs_total", []string{"work_type", "pool", "outcome"}, jobs)
-	writeCounterMap(&output, "clashlens_collector_api_requests_total", []string{"endpoint", "pool"}, apiRequests)
-	writeCounterMap(&output, "clashlens_collector_api_outcomes_total", []string{"endpoint", "outcome"}, apiOutcomes)
-	writeCounterMap(&output, "clashlens_collector_api_duration_seconds_count", []string{"endpoint", "pool"}, apiDurationCount)
-	writeFloatMap(&output, "clashlens_collector_api_duration_seconds_sum", []string{"endpoint", "pool"}, apiDurationSum)
-	writeCounterMap(&output, "clashlens_collector_storage_errors_total", []string{"category"}, storageErrors)
-	writeCounterMap(&output, "clashlens_collector_retries_total", []string{"endpoint"}, retries)
-	writeCounterMap(&output, "clashlens_collector_key_quarantines_total", []string{"pool"}, quarantines)
-	writeDurationHistograms(&output, stageDurations)
-	poolStats := store.pool.Stat()
-	fmt.Fprintf(&output, "clashlens_collector_database_pool_max_connections %d\n", poolStats.MaxConns())
-	fmt.Fprintf(&output, "clashlens_collector_database_pool_acquired_connections %d\n", poolStats.AcquiredConns())
-	fmt.Fprintf(&output, "clashlens_collector_database_pool_idle_connections %d\n", poolStats.IdleConns())
-	fmt.Fprintf(&output, "clashlens_collector_database_pool_empty_acquires_total %d\n", poolStats.EmptyAcquireCount())
-	fmt.Fprintf(&output, "clashlens_collector_database_pool_cancelled_acquires_total %d\n", poolStats.CanceledAcquireCount())
-	fmt.Fprintf(&output, "clashlens_collector_database_pool_acquire_duration_seconds_total %s\n", strconv.FormatFloat(poolStats.AcquireDuration().Seconds(), 'f', 6, 64))
-
 	keyTotals := map[string]uint64{}
 	keyHealthy := map[string]uint64{}
 	keyRequests := map[string]uint64{}
@@ -257,7 +226,43 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	writeCounterMap(&output, "clashlens_collector_keys_healthy", []string{"pool"}, keyHealthy)
 	writeCounterMap(&output, "clashlens_collector_key_requests_last_second", []string{"pool"}, keyRequests)
 	writeFloatMap(&output, "clashlens_collector_key_cooldown_seconds", []string{"pool"}, keyCooldown)
+	output.WriteString(m.renderRuntime(store))
 	return output.String(), nil
+}
+
+func (m *collectorMetrics) renderRuntime(store *store) string {
+	m.mu.Lock()
+	jobs := cloneCounterMap(m.jobs)
+	apiRequests := cloneCounterMap(m.apiRequests)
+	apiOutcomes := cloneCounterMap(m.apiOutcomes)
+	apiDurationCount := cloneCounterMap(m.apiDurationCount)
+	apiDurationSum := cloneFloatMap(m.apiDurationSum)
+	storageErrors := cloneCounterMap(m.storageErrors)
+	retries := cloneCounterMap(m.retries)
+	quarantines := cloneCounterMap(m.quarantines)
+	stageDurations := cloneHistogramMap(m.stageDurations)
+	m.mu.Unlock()
+
+	var output strings.Builder
+	fmt.Fprintf(&output, "clashlens_collector_process_start_time_seconds %d\n", m.processStartedAt.Unix())
+	fmt.Fprintf(&output, "clashlens_collector_process_identity_info{process_id=%q} 1\n", m.processIdentity)
+	writeCounterMap(&output, "clashlens_collector_jobs_total", []string{"work_type", "pool", "outcome"}, jobs)
+	writeCounterMap(&output, "clashlens_collector_api_requests_total", []string{"endpoint", "pool"}, apiRequests)
+	writeCounterMap(&output, "clashlens_collector_api_outcomes_total", []string{"endpoint", "outcome"}, apiOutcomes)
+	writeCounterMap(&output, "clashlens_collector_api_duration_seconds_count", []string{"endpoint", "pool"}, apiDurationCount)
+	writeFloatMap(&output, "clashlens_collector_api_duration_seconds_sum", []string{"endpoint", "pool"}, apiDurationSum)
+	writeCounterMap(&output, "clashlens_collector_storage_errors_total", []string{"category"}, storageErrors)
+	writeCounterMap(&output, "clashlens_collector_retries_total", []string{"endpoint"}, retries)
+	writeCounterMap(&output, "clashlens_collector_key_quarantines_total", []string{"pool"}, quarantines)
+	writeDurationHistograms(&output, stageDurations)
+	poolStats := store.pool.Stat()
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_max_connections %d\n", poolStats.MaxConns())
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_acquired_connections %d\n", poolStats.AcquiredConns())
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_idle_connections %d\n", poolStats.IdleConns())
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_empty_acquires_total %d\n", poolStats.EmptyAcquireCount())
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_cancelled_acquires_total %d\n", poolStats.CanceledAcquireCount())
+	fmt.Fprintf(&output, "clashlens_collector_database_pool_acquire_duration_seconds_total %s\n", strconv.FormatFloat(poolStats.AcquireDuration().Seconds(), 'f', 6, 64))
+	return output.String()
 }
 
 func metricAgeSeconds(now, recordedAt time.Time, valid bool) float64 {

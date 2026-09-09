@@ -145,6 +145,7 @@ def test_run_forever_keeps_reported_results_bounded(monkeypatch, capsys) -> None
         database_pool_size=None,
         archive_pool_size=None,
         operating_snapshot_file="/tmp/clashlens-worker-operating.json",
+        disable_player_discovery=False,
     )
 
     result = cli._run_worker(arguments)
@@ -301,6 +302,7 @@ def _worker_namespace(**overrides: object) -> Namespace:
         "database_pool_size": None,
         "archive_pool_size": None,
         "operating_snapshot_file": "",
+        "disable_player_discovery": False,
     }
     values.update(overrides)
     return Namespace(**values)
@@ -451,10 +453,15 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
             return []
 
     def fake_database(
-        _url: str, *, max_size: int, expected_contract_version: int
+        _url: str,
+        *,
+        max_size: int,
+        expected_contract_version: int,
+        player_discovery_enabled: bool,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
         recorded["expected_contract_version"] = expected_contract_version
+        recorded["player_discovery_enabled"] = player_discovery_enabled
         database = PoolRecordingDatabase(_url, max_size=max_size)
         recorded["database"] = database
         return database
@@ -472,6 +479,7 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
     assert result == 0
     assert recorded["database_max_size"] == 4
     assert recorded["expected_contract_version"] == 5
+    assert recorded["player_discovery_enabled"] is True
     assert recorded["archive_pool_size"] == 4
     assert recorded["process_until_idle"]["owner"] == "cli-worker"
     assert recorded["process_until_idle"]["max_jobs"] == 3
@@ -482,6 +490,39 @@ def test_run_worker_defaults_preserve_the_single_thread_path(
     assert database.maintenance_limits == [100]
 
 
+def test_run_worker_disables_player_discovery_when_flagged(monkeypatch) -> None:
+    recorded: dict[str, object] = {}
+
+    class FakeProcessor:
+        def __init__(self, _database: object, _archive: object) -> None:
+            return
+
+        def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
+            return []
+
+    def fake_database(
+        _url: str,
+        *,
+        max_size: int,
+        expected_contract_version: int,
+        player_discovery_enabled: bool,
+    ) -> PoolRecordingDatabase:
+        recorded["player_discovery_enabled"] = player_discovery_enabled
+        return PoolRecordingDatabase(_url, max_size=max_size)
+
+    def fake_archive(_arguments: object, *, pool_size: int = 4) -> PoolRecordingArchive:
+        return PoolRecordingArchive(pool_size)
+
+    monkeypatch.setattr(cli, "Database", fake_database)
+    monkeypatch.setattr(cli, "_archive", fake_archive)
+    monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
+
+    result = cli._run_worker(_worker_namespace(disable_player_discovery=True))
+
+    assert result == 0
+    assert recorded["player_discovery_enabled"] is False
+
+
 def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> None:
     recorded: dict[str, object] = {}
 
@@ -490,7 +531,11 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
             return
 
     def fake_database(
-        _url: str, *, max_size: int, expected_contract_version: int
+        _url: str,
+        *,
+        max_size: int,
+        expected_contract_version: int,
+        player_discovery_enabled: bool,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
         recorded["expected_contract_version"] = expected_contract_version
@@ -548,7 +593,11 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
             return
 
     def fake_database(
-        _url: str, *, max_size: int, expected_contract_version: int
+        _url: str,
+        *,
+        max_size: int,
+        expected_contract_version: int,
+        player_discovery_enabled: bool,
     ) -> PoolRecordingDatabase:
         recorded["database_max_size"] = max_size
         recorded["expected_contract_version"] = expected_contract_version

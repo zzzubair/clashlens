@@ -692,7 +692,7 @@ for argument in \
   candidate-preparation fedora-validation "$RECEIPT_DIR/retained" \
   localhost/clashlens-collector:deployment localhost/clashlens-python:deployment \
   localhost/clashlens-website:deployment collector_database_pool_size=16 \
-  spool_max_body_bytes=4194304 worker_concurrency=20; do
+  player_discovery_enabled=true spool_max_body_bytes=4194304 worker_concurrency=20; do
   grep -Fxq "$argument" "$RECEIPT_DIR/python.log" || \
     fail "deployment-receipt omitted safe argument $argument"
 done
@@ -1189,6 +1189,10 @@ postgres_normalized=$(norm_log <<<"$postgres_run")
   fail 'PostgreSQL did not receive its explicit resource budget'
 [[ "$postgres_normalized" == *'--shm-size 128m'* ]] || \
   fail 'PostgreSQL did not receive its explicit shared-memory budget'
+[[ "$postgres_normalized" == *'--volume clashlens-postgres-data:/var/lib/postgresql/data'* ]] || \
+  fail 'PostgreSQL named volume does not mount the PGDATA parent'
+[[ "$postgres_normalized" == *'--env PGDATA=/var/lib/postgresql/data'* ]] || \
+  fail 'PostgreSQL PGDATA is not pinned inside the named volume'
 [[ "$postgres_normalized" == *'--label org.clashlens.postgres-metrics-profile=step6-v1'* \
   && "$postgres_normalized" == *'shared_preload_libraries=pg_stat_statements'* \
   && "$postgres_normalized" == *'pg_stat_statements.track=all'* \
@@ -1505,6 +1509,8 @@ done
   fail 'worker archive access key file setting is missing'
 [[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
   fail 'worker did not receive the configured lease, concurrency, and pool bounds'
+[[ "$worker_normalized" != *'--disable-player-discovery'* ]] || \
+  fail 'default worker unexpectedly disabled player discovery'
 [[ "$worker_normalized" == *'ready --expected-contract-version 5'* ]] || \
   fail 'worker health does not use the ready seam'
 [[ "$worker_normalized" == *'--memory 384m'* && "$worker_normalized" == *'--pids-limit 256'* && "$worker_normalized" == *'--cpus 1.0'* ]] || \
@@ -1535,6 +1541,53 @@ deploy "$PY_DIR" "$PY_ENV" -- worker-start >/dev/null
 [[ "$(grep -c 'CLASHLENS_ENABLE_GLOBAL_RANKINGS=true' "$PY_LOG")" == "$((enabled_count_before + 2))" ]] || \
   fail 'worker-start did not restore deployment-owned Top-200 enablement'
 printf 'ok: Python start paths enable Top-200 only after a healthy compatible worker and remain build-free\n'
+
+# ---------------------------------------------------------------------------
+# Scenario F1: player discovery defaults to enabled and validates literally.
+# ---------------------------------------------------------------------------
+DISCOVERY_DIR=$(new_scenario)
+DISCOVERY_ENV="$DISCOVERY_DIR/app.env"
+write_scenario_env "$DISCOVERY_ENV" "$DISCOVERY_DIR/keys"
+printf '5' >"$DISCOVERY_DIR/state/contract_version"
+printf '21\n' >"$DISCOVERY_DIR/state/schema_migrations"
+mkdir -p "$DISCOVERY_DIR/state/networks/clashlens-private"
+mkdir -p "$DISCOVERY_DIR/state/containers/clashlens-postgres"
+: >"$DISCOVERY_DIR/state/containers/clashlens-postgres.running"
+mkdir -p "$DISCOVERY_DIR/state/images/localhost"
+: >"$DISCOVERY_DIR/state/images/localhost/clashlens-python:deployment"
+deploy "$DISCOVERY_DIR" "$DISCOVERY_ENV" -- worker-start >/dev/null
+log_lacks "$DISCOVERY_DIR/podman.log" --disable-player-discovery 'default worker unexpectedly disabled player discovery'
+DISCOVERY_OFF_DIR=$(new_scenario)
+DISCOVERY_OFF_ENV="$DISCOVERY_OFF_DIR/app.env"
+write_scenario_env "$DISCOVERY_OFF_ENV" "$DISCOVERY_OFF_DIR/keys"
+printf '%s\n' 'CLASHLENS_PLAYER_DISCOVERY_ENABLED=false' >>"$DISCOVERY_OFF_ENV"
+printf '5' >"$DISCOVERY_OFF_DIR/state/contract_version"
+printf '21\n' >"$DISCOVERY_OFF_DIR/state/schema_migrations"
+mkdir -p "$DISCOVERY_OFF_DIR/state/networks/clashlens-private"
+mkdir -p "$DISCOVERY_OFF_DIR/state/containers/clashlens-postgres"
+: >"$DISCOVERY_OFF_DIR/state/containers/clashlens-postgres.running"
+mkdir -p "$DISCOVERY_OFF_DIR/state/images/localhost"
+: >"$DISCOVERY_OFF_DIR/state/images/localhost/clashlens-python:deployment"
+deploy "$DISCOVERY_OFF_DIR" "$DISCOVERY_OFF_ENV" -- worker-start >/dev/null
+DISCOVERY_OFF_NORM="$DISCOVERY_OFF_DIR/podman.norm.log"
+norm_log "$DISCOVERY_OFF_DIR/podman.log" >"$DISCOVERY_OFF_NORM"
+[[ "$(grep -c -- --disable-player-discovery "$DISCOVERY_OFF_NORM")" == "$(grep -c '^run .*clashlens-python:deployment.*worker ' "$DISCOVERY_OFF_NORM")" ]] || \
+  fail 'disabled discovery flag did not reach every worker replica'
+mkdir "$DISCOVERY_OFF_DIR/retained"
+deploy "$DISCOVERY_OFF_DIR" "$DISCOVERY_OFF_ENV" -- deployment-receipt \
+  candidate-preparation fedora-validation "$DISCOVERY_OFF_DIR/retained" >/dev/null
+grep -Fxq 'player_discovery_enabled=false' "$DISCOVERY_OFF_DIR/python.log" || \
+  fail 'disabled discovery was not forwarded to the receipt seam'
+for bad_value in 1 0 True yes ''; do
+  BAD_DISCOVERY_DIR=$(new_scenario)
+  BAD_DISCOVERY_ENV="$BAD_DISCOVERY_DIR/app.env"
+  write_scenario_env "$BAD_DISCOVERY_ENV" "$BAD_DISCOVERY_DIR/keys"
+  printf '%s\n' "CLASHLENS_PLAYER_DISCOVERY_ENABLED=$bad_value" >>"$BAD_DISCOVERY_ENV"
+  deploy_fails "$BAD_DISCOVERY_DIR" "$BAD_DISCOVERY_ENV" 'CLASHLENS_PLAYER_DISCOVERY_ENABLED must be true or false' -- worker-start
+  [[ ! -s "$BAD_DISCOVERY_DIR/podman.log" ]] || \
+    fail "invalid discovery value had podman side effects"
+done
+printf 'ok: player discovery defaults enabled, disables every worker when false, and rejects non-literal values\n'
 
 # ---------------------------------------------------------------------------
 # Scenario G: rollback selects an existing image tag and never builds.
