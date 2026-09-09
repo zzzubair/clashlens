@@ -42,7 +42,7 @@ def _test_postgres() -> dict[str, object]:
             "max_connections": "100",
             "track_io_timing": "off",
         },
-        "applied_migration_versions": list(range(1, 23)),
+        "applied_migration_versions": list(range(1, 24)),
     }
 
 
@@ -76,13 +76,29 @@ def _valid_artifact(mode: str = "duplicate-heavy") -> dict:
     }
 
 
+def _valid_safe_value(name: str) -> str:
+    if name in ("endpoint_budget_enabled", "player_discovery_enabled"):
+        return "true"
+    if name == "endpoint_budget_run_id":
+        return "issue92"
+    if name == "endpoint_budget_deadline_at":
+        return "2026-09-09T06:00:00Z"
+    return "1"
+
+
 def _candidate_receipt() -> dict:
     from scripts import deployment_receipt
 
     migrations = runner._source_migrations()
     def _field(name: str) -> str:
-        if name == "player_discovery_enabled":
+        if name in ("endpoint_budget_enabled", "player_discovery_enabled"):
             return "true"
+        if name == "endpoint_budget_run_id":
+            return "issue92"
+        if name == "endpoint_budget_deadline_at":
+            return "2026-09-09T06:00:00Z"
+        if name == "official_api_proxy_url":
+            return "http://100.64.0.1:3128"
         if name == "admission_evidence_run_id":
             return "disabled"
         if name in ("admission_evidence_start", "admission_evidence_end"):
@@ -131,7 +147,7 @@ def _candidate_receipt() -> dict:
         "application_images": images,
         "database": {
             "contract_version": 5,
-            "applied_migration_versions": list(range(1, 23)),
+            "applied_migration_versions": list(range(1, 24)),
             "server_version": "18.6",
             "server_version_num": "180006",
             "system_identifier": "1234567890",

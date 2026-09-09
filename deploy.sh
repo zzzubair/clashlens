@@ -28,6 +28,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0020_army_season_summaries.sql"
   "$ROOT_DIR/deploy/migrations/0021_season_detail_retirement.sql"
   "$ROOT_DIR/deploy/migrations/0022_step9_regular_admission_evidence.sql"
+  "$ROOT_DIR/deploy/migrations/0023_population_bootstrap.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -102,7 +103,7 @@ Commands:
   build-python                 Build the immutable Python image only.
   build-website                Build the immutable website image only.
   candidate-prepare            Prepare only the configured disposable
-                               PostgreSQL database through migration 0021.
+                               PostgreSQL database through migration 0023.
   deployment-receipt <scope> <environment> <results-dir>
                                Write a candidate-preparation or deployed-stack
                                evidence receipt outside the checkout.
@@ -442,6 +443,18 @@ validate_common_settings() {
   [[ "$CLASHLENS_PLAYER_DISCOVERY_ENABLED" == "true" || "$CLASHLENS_PLAYER_DISCOVERY_ENABLED" == "false" ]] || \
     die "CLASHLENS_PLAYER_DISCOVERY_ENABLED must be true or false"
 
+  [[ "$CLASHLENS_ENDPOINT_BUDGET_ENABLED" == "true" || "$CLASHLENS_ENDPOINT_BUDGET_ENABLED" == "false" ]] || \
+    die "CLASHLENS_ENDPOINT_BUDGET_ENABLED must be true or false"
+  for budget_setting in CLASHLENS_ENDPOINT_BUDGET_PROFILE CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG; do
+    [[ "${!budget_setting}" =~ ^[0-9]+$ ]] && (( "${!budget_setting}" <= 1000000 )) || \
+      die "$budget_setting must be a non-negative integer"
+  done
+  if [[ "$CLASHLENS_ENDPOINT_BUDGET_ENABLED" == "true" ]]; then
+    [[ "$CLASHLENS_ENDPOINT_BUDGET_RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
+      die "CLASHLENS_ENDPOINT_BUDGET_RUN_ID must use 1-128 safe characters when the endpoint budget is enabled"
+    [[ -n "$CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT" ]] || \
+      die "CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT is required when the endpoint budget is enabled"
+  fi
   validate_admission_evidence_settings
 
   validate_key_specs CLASHLENS_NORMAL_API_KEY_FILES "$CLASHLENS_NORMAL_API_KEY_FILES" 4
@@ -755,6 +768,12 @@ apply_initial_contract() {
   apply_migration_file "${MIGRATION_FILES[0]}"
 }
 
+migration_version() {
+  local base=${1##*/}
+  [[ "$base" =~ ^([0-9]{4})_[a-z0-9_]+\.sql$ ]] || die "migration filename is invalid: $1"
+  printf '%s\n' "$((10#${BASH_REMATCH[1]}))"
+}
+
 schema_migration_applied() {
   local version=$1 applied
   applied=$("$PODMAN_BIN" exec "$POSTGRES_CONTAINER" \
@@ -765,9 +784,12 @@ schema_migration_applied() {
 }
 
 require_current_schema() {
-  local required_version=${#MIGRATION_FILES[@]}
-  schema_migration_applied "$required_version" || \
-    die "forward migration $required_version is required; run up first"
+  local required_version=0 migration_file version
+  for migration_file in "${MIGRATION_FILES[@]}"; do
+    version=$(migration_version "$migration_file")
+    (( version > required_version )) && required_version=$version
+  done
+  schema_migration_applied "$required_version" || die "forward migration $required_version is required; run up first"
 }
 
 ensure_archive_instance_contract() {
@@ -780,8 +802,10 @@ ensure_archive_instance_contract() {
 apply_pending_forward_migrations() {
   local index migration_file version
   for ((index = 1; index < ${#MIGRATION_FILES[@]}; index++)); do
-    version=$((index + 1))
     migration_file=${MIGRATION_FILES[$index]}
+    # Migration 0022 is reserved for separate admission evidence, so the
+    # schema version always comes from the filename, never the list index.
+    version=$(migration_version "$migration_file")
     if (( version == 9 )) && [[ -z "${CLASHLENS_ARCHIVE_INSTANCE_ID:-}" ]]; then continue; fi
     if ! schema_migration_applied "$version"; then
       if (( version == 4 || version == 12 )); then
@@ -923,6 +947,13 @@ write_deployment_receipt() {
     --worker-container "$PYTHON_WORKER_CONTAINER" \
     --website-container "$WEBSITE_CONTAINER" \
     --safe-config "collector_database_pool_size=$CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE" \
+    --safe-config "endpoint_budget_battle_log=$CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG" \
+    --safe-config "endpoint_budget_deadline_at=$CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT" \
+    --safe-config "endpoint_budget_enabled=$CLASHLENS_ENDPOINT_BUDGET_ENABLED" \
+    --safe-config "endpoint_budget_global_rankings=$CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS" \
+    --safe-config "endpoint_budget_profile=$CLASHLENS_ENDPOINT_BUDGET_PROFILE" \
+    --safe-config "endpoint_budget_run_id=$CLASHLENS_ENDPOINT_BUDGET_RUN_ID" \
+    --safe-config "official_api_proxy_url=$CLASHLENS_OFFICIAL_API_PROXY_URL" \
     --safe-config "player_discovery_enabled=$CLASHLENS_PLAYER_DISCOVERY_ENABLED" \
     --safe-config "spool_free_inode_floor=$CLASHLENS_SPOOL_FREE_INODE_FLOOR" \
     --safe-config "spool_free_space_floor=$CLASHLENS_SPOOL_FREE_SPACE_FLOOR" \
@@ -1001,12 +1032,12 @@ prepare_candidate_database() {
   ensure_archive_instance_contract
   [[ "$(contract_version)" == "$(runtime_contract_version)" ]] || \
     die "candidate database did not reach contract version $(runtime_contract_version)"
-  for ((i = 1; i <= ${#MIGRATION_FILES[@]}; i++)); do
-    schema_migration_applied "$i" || \
-      die "candidate database is missing forward migration $i"
+  for migration_file in "${MIGRATION_FILES[@]}"; do
+    version=$(migration_version "$migration_file")
+    schema_migration_applied "$version" || die "candidate database is missing forward migration $version"
   done
   printf 'disposable candidate database is ready through migration %s\n' \
-    "${#MIGRATION_FILES[@]}"
+    "$(migration_version "${MIGRATION_FILES[-1]}")"
 }
 
 image_exists() {
@@ -1715,6 +1746,12 @@ CLASHLENS_WORKER_DATABASE_POOL_SIZE=${CLASHLENS_WORKER_DATABASE_POOL_SIZE:-4}
 CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=${CLASHLENS_WORKER_ARCHIVE_POOL_SIZE:-4}
 CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=${CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE:-16}
 CLASHLENS_PLAYER_DISCOVERY_ENABLED=${CLASHLENS_PLAYER_DISCOVERY_ENABLED-true}
+CLASHLENS_ENDPOINT_BUDGET_ENABLED=${CLASHLENS_ENDPOINT_BUDGET_ENABLED-false}
+CLASHLENS_ENDPOINT_BUDGET_RUN_ID=${CLASHLENS_ENDPOINT_BUDGET_RUN_ID:-}
+CLASHLENS_ENDPOINT_BUDGET_PROFILE=${CLASHLENS_ENDPOINT_BUDGET_PROFILE-0}
+CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS=${CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS-0}
+CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG=${CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG-0}
+CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT=${CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT:-}
 CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID:-}
 CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START:-}
 CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END:-}

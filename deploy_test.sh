@@ -282,7 +282,7 @@ case "$verb" in
       if grep -q 'VALUES (15)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '%s\n' 15 >>"$FAKE_STATE/schema_migrations"
       fi
-      for version in 16 17 18 19 20 21 22; do
+      for version in 16 17 18 19 20 21 22 23; do
         if grep -q "VALUES ($version)" "$FAKE_STATE/stdin/exec-$n"; then
           printf '%s\n' "$version" >>"$FAKE_STATE/schema_migrations"
         fi
@@ -693,6 +693,7 @@ for argument in \
   localhost/clashlens-collector:deployment localhost/clashlens-python:deployment \
   localhost/clashlens-website:deployment collector_database_pool_size=16 \
   player_discovery_enabled=true spool_max_body_bytes=4194304 worker_concurrency=20 \
+  official_api_proxy_url=http://100.64.0.1:3128 \
   admission_evidence_run_id=disabled admission_evidence_start=disabled admission_evidence_end=disabled admission_evidence_max_events=0 admission_evidence_max_selected_entries=0; do
   grep -Fxq "$argument" "$RECEIPT_DIR/python.log" || \
     fail "deployment-receipt omitted safe argument $argument"
@@ -750,8 +751,8 @@ log_lacks "$CANDIDATE_NORM" '^build ' 'candidate-prepare built an application im
 [[ "$(cat "$CANDIDATE_DIR/state/contract_version")" == 5 ]] || \
   fail 'candidate-prepare did not reach contract version 5'
 [[ "$(sort -n -u "$CANDIDATE_DIR/state/schema_migrations" | tr '\n' ' ')" == \
-   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 ' ]] || \
-  fail 'candidate-prepare did not apply the exact migration set through 0022'
+   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 ' ]] || \
+  fail 'candidate-prepare did not apply the exact migration set through 0023'
 [[ "$(cat "$CANDIDATE_DIR/state/networks/clashlens-candidate-private.scope")" == candidate ]] || \
   fail 'candidate network was not stamped with the candidate scope label'
 [[ "$(cat "$CANDIDATE_DIR/state/volumes/clashlens-candidate-postgres-data.scope")" == candidate ]] || \
@@ -1334,7 +1335,7 @@ FAKE_STATE="$V2_DIR/state" FAKE_PODMAN_LOG="$V2_DIR/podman.log" \
   fail 'idempotent v2 up removed a current Python worker'
 if grep -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
   second_up_stdin_count=$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f | wc -l)
-  [[ "$second_up_stdin_count" == "21" ]] || fail 'a recorded forward migration was replayed on second up'
+  [[ "$second_up_stdin_count" == "22" ]] || fail 'a recorded forward migration was replayed on second up'
 fi
 printf 'ok: up on v2 applies only missing forward migrations and starts the required collector\n'
 
@@ -1395,7 +1396,7 @@ RESTART_DIR=$(new_scenario)
 RESTART_ENV="$RESTART_DIR/app.env"
 write_scenario_env "$RESTART_ENV" "$RESTART_DIR/keys"
 printf '5' >"$RESTART_DIR/state/contract_version"
-printf '22\n' >"$RESTART_DIR/state/schema_migrations"
+printf '23\n' >"$RESTART_DIR/state/schema_migrations"
 mkdir -p "$RESTART_DIR/state/images/localhost"
 : >"$RESTART_DIR/state/images/localhost/clashlens-collector:deployment"
 deploy "$RESTART_DIR" "$RESTART_ENV" -- restart >/dev/null
@@ -1421,9 +1422,9 @@ mkdir -p "$RESTART_UNMIGRATED_DIR/state/images/localhost"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-collector:deployment"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-python:deployment"
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 22 is required' -- restart
+  'forward migration 23 is required' -- restart
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 22 is required' -- python-start
+  'forward migration 23 is required' -- python-start
 
 UNKNOWN_DIR=$(new_scenario)
 UNKNOWN_ENV="$UNKNOWN_DIR/app.env"
@@ -1550,7 +1551,7 @@ DISCOVERY_DIR=$(new_scenario)
 DISCOVERY_ENV="$DISCOVERY_DIR/app.env"
 write_scenario_env "$DISCOVERY_ENV" "$DISCOVERY_DIR/keys"
 printf '5' >"$DISCOVERY_DIR/state/contract_version"
-printf '22\n' >"$DISCOVERY_DIR/state/schema_migrations"
+printf '23\n' >"$DISCOVERY_DIR/state/schema_migrations"
 mkdir -p "$DISCOVERY_DIR/state/networks/clashlens-private"
 mkdir -p "$DISCOVERY_DIR/state/containers/clashlens-postgres"
 : >"$DISCOVERY_DIR/state/containers/clashlens-postgres.running"
@@ -1563,7 +1564,7 @@ DISCOVERY_OFF_ENV="$DISCOVERY_OFF_DIR/app.env"
 write_scenario_env "$DISCOVERY_OFF_ENV" "$DISCOVERY_OFF_DIR/keys"
 printf '%s\n' 'CLASHLENS_PLAYER_DISCOVERY_ENABLED=false' >>"$DISCOVERY_OFF_ENV"
 printf '5' >"$DISCOVERY_OFF_DIR/state/contract_version"
-printf '22\n' >"$DISCOVERY_OFF_DIR/state/schema_migrations"
+printf '23\n' >"$DISCOVERY_OFF_DIR/state/schema_migrations"
 mkdir -p "$DISCOVERY_OFF_DIR/state/networks/clashlens-private"
 mkdir -p "$DISCOVERY_OFF_DIR/state/containers/clashlens-postgres"
 : >"$DISCOVERY_OFF_DIR/state/containers/clashlens-postgres.running"
@@ -1591,13 +1592,98 @@ done
 printf 'ok: player discovery defaults enabled, disables every worker when false, and rejects non-literal values\n'
 
 # ---------------------------------------------------------------------------
+# Scenario F2: endpoint budget defaults to disabled with zero caps, validates
+# literally, and requires a run identity plus deadline when enabled.
+# ---------------------------------------------------------------------------
+BUDGET_DIR=$(new_scenario)
+BUDGET_ENV="$BUDGET_DIR/app.env"
+write_scenario_env "$BUDGET_ENV" "$BUDGET_DIR/keys"
+printf '5' >"$BUDGET_DIR/state/contract_version"
+printf '23\n' >"$BUDGET_DIR/state/schema_migrations"
+mkdir -p "$BUDGET_DIR/state/networks/clashlens-private"
+mkdir -p "$BUDGET_DIR/state/containers/clashlens-postgres"
+: >"$BUDGET_DIR/state/containers/clashlens-postgres.running"
+mkdir -p "$BUDGET_DIR/state/images/localhost"
+: >"$BUDGET_DIR/state/images/localhost/clashlens-python:deployment"
+deploy "$BUDGET_DIR" "$BUDGET_ENV" -- worker-start >/dev/null
+mkdir "$BUDGET_DIR/retained"
+deploy "$BUDGET_DIR" "$BUDGET_ENV" -- deployment-receipt \
+  candidate-preparation fedora-validation "$BUDGET_DIR/retained" >/dev/null
+for receipt_line in endpoint_budget_enabled=false endpoint_budget_profile=0 \
+  endpoint_budget_global_rankings=0 endpoint_budget_battle_log=0 \
+  endpoint_budget_run_id= endpoint_budget_deadline_at=; do
+  grep -Fxq "$receipt_line" "$BUDGET_DIR/python.log" || \
+    fail "disabled endpoint budget was not forwarded to the receipt seam ($receipt_line)"
+done
+for bad_value in 1 0 True yes ''; do
+  BAD_BUDGET_DIR=$(new_scenario)
+  BAD_BUDGET_ENV="$BAD_BUDGET_DIR/app.env"
+  write_scenario_env "$BAD_BUDGET_ENV" "$BAD_BUDGET_DIR/keys"
+  printf '%s\n' "CLASHLENS_ENDPOINT_BUDGET_ENABLED=$bad_value" >>"$BAD_BUDGET_ENV"
+  deploy_fails "$BAD_BUDGET_DIR" "$BAD_BUDGET_ENV" 'CLASHLENS_ENDPOINT_BUDGET_ENABLED must be true or false' -- worker-start
+  [[ ! -s "$BAD_BUDGET_DIR/podman.log" ]] || \
+    fail "invalid budget value had podman side effects"
+done
+BAD_CAP_DIR=$(new_scenario)
+BAD_CAP_ENV="$BAD_CAP_DIR/app.env"
+write_scenario_env "$BAD_CAP_ENV" "$BAD_CAP_DIR/keys"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_PROFILE=-1' >>"$BAD_CAP_ENV"
+deploy_fails "$BAD_CAP_DIR" "$BAD_CAP_ENV" 'CLASHLENS_ENDPOINT_BUDGET_PROFILE must be a non-negative integer' -- worker-start
+[[ ! -s "$BAD_CAP_DIR/podman.log" ]] || fail 'invalid budget cap had podman side effects'
+MISSING_RUN_DIR=$(new_scenario)
+MISSING_RUN_ENV="$MISSING_RUN_DIR/app.env"
+write_scenario_env "$MISSING_RUN_ENV" "$MISSING_RUN_DIR/keys"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_ENABLED=true' >>"$MISSING_RUN_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT=2026-09-09T06:00:00Z' >>"$MISSING_RUN_ENV"
+deploy_fails "$MISSING_RUN_DIR" "$MISSING_RUN_ENV" 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID must use 1-128 safe characters when the endpoint budget is enabled' -- worker-start
+BAD_RUN_DIR=$(new_scenario)
+BAD_RUN_ENV="$BAD_RUN_DIR/app.env"
+write_scenario_env "$BAD_RUN_ENV" "$BAD_RUN_DIR/keys"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_ENABLED=true' >>"$BAD_RUN_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID=has space' >>"$BAD_RUN_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT=2026-09-09T06:00:00Z' >>"$BAD_RUN_ENV"
+deploy_fails "$BAD_RUN_DIR" "$BAD_RUN_ENV" 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID must use 1-128 safe characters when the endpoint budget is enabled' -- worker-start
+[[ ! -s "$BAD_RUN_DIR/podman.log" ]] || fail 'invalid budget run-id had podman side effects'
+MISSING_DEADLINE_DIR=$(new_scenario)
+MISSING_DEADLINE_ENV="$MISSING_DEADLINE_DIR/app.env"
+write_scenario_env "$MISSING_DEADLINE_ENV" "$MISSING_DEADLINE_DIR/keys"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_ENABLED=true' >>"$MISSING_DEADLINE_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID=issue92' >>"$MISSING_DEADLINE_ENV"
+deploy_fails "$MISSING_DEADLINE_DIR" "$MISSING_DEADLINE_ENV" 'CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT is required when the endpoint budget is enabled' -- worker-start
+BUDGET_ON_DIR=$(new_scenario)
+BUDGET_ON_ENV="$BUDGET_ON_DIR/app.env"
+write_scenario_env "$BUDGET_ON_ENV" "$BUDGET_ON_DIR/keys"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_ENABLED=true' >>"$BUDGET_ON_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID=issue92' >>"$BUDGET_ON_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_PROFILE=13500' >>"$BUDGET_ON_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS=1' >>"$BUDGET_ON_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG=0' >>"$BUDGET_ON_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT=2026-09-09T06:00:00Z' >>"$BUDGET_ON_ENV"
+printf '5' >"$BUDGET_ON_DIR/state/contract_version"
+printf '23\n' >"$BUDGET_ON_DIR/state/schema_migrations"
+mkdir -p "$BUDGET_ON_DIR/state/networks/clashlens-private"
+mkdir -p "$BUDGET_ON_DIR/state/containers/clashlens-postgres"
+: >"$BUDGET_ON_DIR/state/containers/clashlens-postgres.running"
+mkdir -p "$BUDGET_ON_DIR/state/images/localhost"
+: >"$BUDGET_ON_DIR/state/images/localhost/clashlens-python:deployment"
+deploy "$BUDGET_ON_DIR" "$BUDGET_ON_ENV" -- worker-start >/dev/null
+mkdir "$BUDGET_ON_DIR/retained"
+deploy "$BUDGET_ON_DIR" "$BUDGET_ON_ENV" -- deployment-receipt \
+  candidate-preparation fedora-validation "$BUDGET_ON_DIR/retained" >/dev/null
+for receipt_line in endpoint_budget_enabled=true endpoint_budget_profile=13500 \
+  endpoint_budget_global_rankings=1 endpoint_budget_battle_log=0 \
+  endpoint_budget_run_id=issue92 endpoint_budget_deadline_at=2026-09-09T06:00:00Z; do
+  grep -Fxq "$receipt_line" "$BUDGET_ON_DIR/python.log" || \
+    fail "enabled endpoint budget identity was not forwarded to the receipt seam ($receipt_line)"
+done
+printf 'ok: endpoint budget defaults disabled with zero caps, validates literally, and requires run identity plus deadline\n'
 # Scenario F2: admission evidence defaults disabled and validates all-or-none.
 # ---------------------------------------------------------------------------
 ADMISSION_DIR=$(new_scenario)
 ADMISSION_ENV="$ADMISSION_DIR/app.env"
 write_scenario_env "$ADMISSION_ENV" "$ADMISSION_DIR/keys"
 printf '5' >"$ADMISSION_DIR/state/contract_version"
-printf '22\n' >"$ADMISSION_DIR/state/schema_migrations"
+printf '23\n' >"$ADMISSION_DIR/state/schema_migrations"
 mkdir -p "$ADMISSION_DIR/state/networks/clashlens-private"
 mkdir -p "$ADMISSION_DIR/state/containers/clashlens-postgres"
 : >"$ADMISSION_DIR/state/containers/clashlens-postgres.running"
@@ -1621,7 +1707,7 @@ CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS=90000
 CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES=4000000
 EOF
 printf '5' >"$ADMISSION_ON_DIR/state/contract_version"
-printf '22\n' >"$ADMISSION_ON_DIR/state/schema_migrations"
+printf '23\n' >"$ADMISSION_ON_DIR/state/schema_migrations"
 mkdir -p "$ADMISSION_ON_DIR/state/networks/clashlens-private"
 mkdir -p "$ADMISSION_ON_DIR/state/containers/clashlens-postgres"
 : >"$ADMISSION_ON_DIR/state/containers/clashlens-postgres.running"
@@ -1648,7 +1734,7 @@ ROLLBACK_DIR=$(new_scenario)
 ROLLBACK_ENV="$ROLLBACK_DIR/app.env"
 write_scenario_env "$ROLLBACK_ENV" "$ROLLBACK_DIR/keys"
 printf '5' >"$ROLLBACK_DIR/state/contract_version"
-printf '22\n' >"$ROLLBACK_DIR/state/schema_migrations"
+printf '23\n' >"$ROLLBACK_DIR/state/schema_migrations"
 mkdir -p "$ROLLBACK_DIR/state/networks" "$ROLLBACK_DIR/state/containers" "$ROLLBACK_DIR/state/images/localhost"
 mkdir -p "$ROLLBACK_DIR/state/networks/clashlens-private"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres"
@@ -2008,7 +2094,7 @@ REPLICA_MAX_ENV="$REPLICA_MAX_DIR/app.env"
 write_scenario_env "$REPLICA_MAX_ENV" "$REPLICA_MAX_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=16' >>"$REPLICA_MAX_ENV"
 printf '5' >"$REPLICA_MAX_DIR/state/contract_version"
-printf '22\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
+printf '23\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_MAX_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -2052,7 +2138,7 @@ grep -v -E 'CLASHLENS_WORKER_(CONCURRENCY|DATABASE_POOL_SIZE|ARCHIVE_POOL_SIZE)=
   "$DEFAULTS_RAW" >"$DEFAULTS_ENV"
 chmod 0600 "$DEFAULTS_ENV"
 printf '5' >"$DEFAULTS_DIR/state/contract_version"
-printf '22\n' >"$DEFAULTS_DIR/state/schema_migrations"
+printf '23\n' >"$DEFAULTS_DIR/state/schema_migrations"
 mkdir -p "$DEFAULTS_DIR/state/networks/clashlens-private"
 mkdir -p "$DEFAULTS_DIR/state/containers/clashlens-postgres"
 : >"$DEFAULTS_DIR/state/containers/clashlens-postgres.running"
@@ -2073,7 +2159,7 @@ printf '%s\n' 'CLASHLENS_WORKER_CONCURRENCY=32' \
   'CLASHLENS_WORKER_DATABASE_POOL_SIZE=64' \
   'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=64' >>"$CONCURRENCY_MAX_ENV"
 printf '5' >"$CONCURRENCY_MAX_DIR/state/contract_version"
-printf '22\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
+printf '23\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres"
 : >"$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -2138,7 +2224,7 @@ REPLICA_ENV="$REPLICA_DIR/app.env"
 write_scenario_env "$REPLICA_ENV" "$REPLICA_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=3' >>"$REPLICA_ENV"
 printf '5' >"$REPLICA_DIR/state/contract_version"
-printf '22\n' >"$REPLICA_DIR/state/schema_migrations"
+printf '23\n' >"$REPLICA_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_DIR/state/containers/clashlens-postgres.running"

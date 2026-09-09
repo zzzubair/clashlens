@@ -18,6 +18,7 @@ type store struct {
 	contractVersion         int
 	maxContractVersion      int
 	recoveryRetrySupported  bool
+	endpointBudget          *endpointBudgetConfig
 	commitTx                func(context.Context, pgx.Tx) error
 	inactiveCleanupInterval time.Duration
 	lastInactiveCleanupAt   atomic.Int64

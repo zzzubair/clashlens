@@ -16,14 +16,23 @@ SOURCE_SHA = "01" * 20
 IMAGE_ID = "sha256:" + "02" * 32
 
 
-def _test_safe_value(name: str) -> str:
-    if name == "player_discovery_enabled":
+def _valid_safe_config(name: str) -> str:
+    if name in receipt._SAFE_BOOLEAN_FIELDS:
         return f"{name}=true"
+    if name == "endpoint_budget_run_id":
+        return f"{name}=issue92"
+    if name == "endpoint_budget_deadline_at":
+        return f"{name}=2026-09-09T06:00:00Z"
+    if name == "official_api_proxy_url":
+        return f"{name}=http://100.64.0.1:3128"
     if name == "admission_evidence_run_id":
         return f"{name}=disabled"
     if name in ("admission_evidence_start", "admission_evidence_end"):
         return f"{name}=disabled"
-    if name in ("admission_evidence_max_events", "admission_evidence_max_selected_entries"):
+    if name in (
+        "admission_evidence_max_events",
+        "admission_evidence_max_selected_entries",
+    ):
         return f"{name}=0"
     return f"{name}=1"
 
@@ -45,7 +54,7 @@ class FakeRunner:
     ) -> None:
         self.dirty = dirty
         self.revision_label = revision_label
-        self.applied = applied or list(range(1, 23))
+        self.applied = applied or list(range(1, 24))
         self.image_id = image_id
         self.scope_label = scope_label
         self.present_containers = present_containers or set()
@@ -144,7 +153,7 @@ def arguments(scope: str = "candidate-preparation") -> Namespace:
         worker_container="step8-python-worker",
         website_container="step8-website",
         safe_config=[
-            _test_safe_value(name)
+            _valid_safe_config(name)
             for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
         ],
         created_at="2026-08-28T20:00:00+00:00",
@@ -195,7 +204,7 @@ class DeploymentReceiptTest(unittest.TestCase):
         self.assertTrue(
             all(not item["present"] for item in resources["application_containers"]["worker_replicas"])
         )
-        self.assertEqual(len(result["migrations"]), 22)
+        self.assertEqual(len(result["migrations"]), 23)
         self.assertTrue(all(item["applied"] for item in result["migrations"]))
         self.assertRegex(result["receipt_digest"], r"^sha256:[0-9a-f]{64}$")
         self.assertFalse(
@@ -239,7 +248,7 @@ class DeploymentReceiptTest(unittest.TestCase):
     def test_deployed_receipt_inspects_every_configured_worker(self) -> None:
         deployed = arguments("deployed-stack")
         deployed.safe_config = [
-            f"{name}=3" if name == "worker_replicas" else _test_safe_value(name)
+            f"{name}=3" if name == "worker_replicas" else _valid_safe_config(name)
             for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
         ]
         runner = FakeRunner()
@@ -420,34 +429,147 @@ class DeploymentReceiptTest(unittest.TestCase):
         with self.assertRaisesRegex(receipt.ReceiptError, "configuration value"):
             receipt.collect_receipt(sentinel, FakeRunner())
 
-    def test_player_discovery_configuration_is_boolean_and_versioned(self) -> None:
-        for bad in ("1", "0", "True", "yes", ""):
-            with self.subTest(value=bad):
-                args = arguments()
-                args.safe_config = [
-                    f"player_discovery_enabled={bad}" if item.startswith("player_discovery_enabled=") else item
-                    for item in args.safe_config
-                ]
-                with self.assertRaisesRegex(receipt.ReceiptError, "configuration value"):
-                    receipt.collect_receipt(args, FakeRunner())
+    def test_boolean_safe_configuration_is_boolean_and_versioned(self) -> None:
+        for key in ("endpoint_budget_enabled", "player_discovery_enabled"):
+            for bad in ("1", "0", "True", "yes", ""):
+                with self.subTest(key=key, value=bad):
+                    args = arguments()
+                    args.safe_config = [
+                        f"{key}={bad}" if item.startswith(f"{key}=") else item
+                        for item in args.safe_config
+                    ]
+                    with self.assertRaisesRegex(receipt.ReceiptError, "configuration value"):
+                        receipt.collect_receipt(args, FakeRunner())
 
-        for good in ("true", "false"):
-            with self.subTest(value=good):
-                args = arguments()
-                args.safe_config = [
-                    f"player_discovery_enabled={good}" if item.startswith("player_discovery_enabled=") else item
-                    for item in args.safe_config
-                ]
-                result = receipt.collect_receipt(args, FakeRunner())
-                self.assertEqual(result["configuration"]["fields"]["player_discovery_enabled"], good)
-                self.assertEqual(result["configuration"]["allowlist_version"], "step9-v1")
+            for good in ("true", "false"):
+                with self.subTest(key=key, value=good):
+                    args = arguments()
+                    args.safe_config = [
+                        f"{key}={good}" if item.startswith(f"{key}=") else item
+                        for item in args.safe_config
+                    ]
+                    result = receipt.collect_receipt(args, FakeRunner())
+                    self.assertEqual(result["configuration"]["fields"][key], good)
+                    self.assertEqual(result["configuration"]["allowlist_version"], "step12-v1")
 
         old = deepcopy(receipt.collect_receipt(arguments(), FakeRunner()))
         old.pop("receipt_digest")
-        old["configuration"]["allowlist_version"] = "step8-v1"
+        old["configuration"]["allowlist_version"] = "step11-v1"
         with self.assertRaisesRegex(receipt.ReceiptError, "configuration is invalid"):
             receipt.validate_receipt(old)
 
+    def test_endpoint_budget_identity_is_exact_and_rejects_malformed(self) -> None:
+        result = receipt.collect_receipt(arguments(), FakeRunner())
+        fields = result["configuration"]["fields"]
+        self.assertEqual(fields["endpoint_budget_run_id"], "issue92")
+        self.assertEqual(
+            fields["endpoint_budget_deadline_at"], "2026-09-09T06:00:00Z"
+        )
+
+        for key, bad in (
+            ("endpoint_budget_run_id", "has space"),
+            ("endpoint_budget_run_id", "x" * 129),
+            ("endpoint_budget_run_id", "../escape"),
+            ("endpoint_budget_run_id", "Bearer secret-token-value"),
+            ("endpoint_budget_run_id", "run;id"),
+            ("endpoint_budget_deadline_at", "tomorrow"),
+            ("endpoint_budget_deadline_at", "2026-13-09T06:00:00Z"),
+            ("endpoint_budget_deadline_at", "2026-09-09 06:00:00"),
+            ("endpoint_budget_deadline_at", "2026-09-09T06:00:00"),
+            ("endpoint_budget_deadline_at", "Bearer secret-token-value"),
+            ("endpoint_budget_deadline_at", "2026-09-09T06:00:00+99:99"),
+        ):
+            with self.subTest(key=key, value=bad):
+                args = arguments()
+                args.safe_config = [
+                    f"{key}={bad}" if item.startswith(f"{key}=") else item
+                    for item in args.safe_config
+                ]
+                with self.assertRaisesRegex(
+                    receipt.ReceiptError, "configuration value"
+                ):
+                    receipt.collect_receipt(args, FakeRunner())
+
+        # An enabled budget without its identity binding fails closed, while
+        # a disabled budget travels with both identity fields empty.
+        for key in ("endpoint_budget_run_id", "endpoint_budget_deadline_at"):
+            with self.subTest(key=key):
+                args = arguments()
+                args.safe_config = [
+                    f"{key}=" if item.startswith(f"{key}=") else item
+                    for item in args.safe_config
+                ]
+                with self.assertRaisesRegex(
+                    receipt.ReceiptError, "configuration value"
+                ):
+                    receipt.collect_receipt(args, FakeRunner())
+        disabled = arguments()
+        disabled.safe_config = [
+            "endpoint_budget_enabled=false"
+            if item.startswith("endpoint_budget_enabled=")
+            else (
+                "endpoint_budget_run_id="
+                if item.startswith("endpoint_budget_run_id=")
+                else (
+                    "endpoint_budget_deadline_at="
+                    if item.startswith("endpoint_budget_deadline_at=")
+                    else item
+                )
+            )
+            for item in disabled.safe_config
+        ]
+        disengaged = receipt.collect_receipt(disabled, FakeRunner())
+        self.assertEqual(
+            disengaged["configuration"]["fields"]["endpoint_budget_run_id"], ""
+        )
+        self.assertEqual(
+            disengaged["configuration"]["fields"]["endpoint_budget_deadline_at"],
+            "",
+        )
+
+    def test_official_proxy_url_is_preserved_exactly_and_rejects_unsafe(self) -> None:
+        result = receipt.collect_receipt(arguments(), FakeRunner())
+        self.assertEqual(
+            result["configuration"]["fields"]["official_api_proxy_url"],
+            "http://100.64.0.1:3128",
+        )
+        args = arguments()
+        args.safe_config = [
+            "official_api_proxy_url=https://proxy.example:8080"
+            if item.startswith("official_api_proxy_url=")
+            else item
+            for item in args.safe_config
+        ]
+        preserved = receipt.collect_receipt(args, FakeRunner())
+        self.assertEqual(
+            preserved["configuration"]["fields"]["official_api_proxy_url"],
+            "https://proxy.example:8080",
+        )
+        for bad in (
+            "",
+            "http://user:secret@100.64.0.1:3128",
+            "http://user@100.64.0.1:3128",
+            "http://100.64.0.1:3128/path",
+            "http://100.64.0.1:3128?query=1",
+            "http://100.64.0.1:3128#fragment",
+            "socks5://100.64.0.1:3128",
+            "ftp://100.64.0.1:3128",
+            "HTTP://100.64.0.1:3128",
+            "http://",
+            "100.64.0.1:3128",
+        ):
+            with self.subTest(value=bad):
+                args = arguments()
+                args.safe_config = [
+                    f"official_api_proxy_url={bad}"
+                    if item.startswith("official_api_proxy_url=")
+                    else item
+                    for item in args.safe_config
+                ]
+                with self.assertRaisesRegex(
+                    receipt.ReceiptError, "configuration value"
+                ):
+                    receipt.collect_receipt(args, FakeRunner())
     def test_admission_evidence_configuration_is_all_or_none_and_bounded(self) -> None:
         def with_admission(items: list[str], **overrides: str) -> list[str]:
             result = list(items)
@@ -477,7 +599,7 @@ class DeploymentReceiptTest(unittest.TestCase):
             with self.assertRaisesRegex(receipt.ReceiptError, "all-or-none"):
                 receipt.collect_receipt(args, FakeRunner())
             break
-        # Fully enabled valid run passes and stays on step9-v1.
+        # Fully enabled valid run passes and stays on step12-v1.
         enabled = [item for item in base if not item.startswith("admission_evidence_")] + [
             "admission_evidence_run_id=step9-run-v1",
             "admission_evidence_start=2026-09-10T05:00:00Z",
@@ -488,7 +610,7 @@ class DeploymentReceiptTest(unittest.TestCase):
         args = arguments()
         args.safe_config = enabled
         result = receipt.collect_receipt(args, FakeRunner())
-        self.assertEqual(result["configuration"]["allowlist_version"], "step9-v1")
+        self.assertEqual(result["configuration"]["allowlist_version"], "step12-v1")
         self.assertEqual(result["configuration"]["fields"]["admission_evidence_run_id"], "step9-run-v1")
         # Over-quota and over-duration fail.
         for bad in [

@@ -519,11 +519,52 @@ func (s *store) scheduleGlobalRankings(ctx context.Context, now time.Time, cycle
 		return false, nil
 	}
 	cycleStart := now.UTC().Truncate(cycle)
+	var created bool
+	err = s.withGlobalRankingsCycleLock(ctx, cycleStart, func(tx pgx.Tx) error {
+		var err error
+		created, err = insertGlobalRankingsCycleTx(ctx, tx, cycleStart)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return created, nil
+}
+
+// globalRankingsLockKey scopes one advisory lock per cycle so the
+// scheduler and manual admission fully serialize for the same cycle: a
+// terminal transition cannot slip between lookup and insert.
+func globalRankingsLockKey(cycleStart time.Time) string {
+	return "global-rankings:" + cycleStart.Format(time.RFC3339)
+}
+
+func (s *store) withGlobalRankingsCycleLock(ctx context.Context, cycleStart time.Time, work func(pgx.Tx) error) error {
+	transaction, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin ranking admission transaction: %w", err)
+	}
+	defer func() { _ = transaction.Rollback(ctx) }()
+	if _, err := transaction.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, globalRankingsLockKey(cycleStart)); err != nil {
+		return fmt.Errorf("lock ranking admission cycle: %w", err)
+	}
+	if err := work(transaction); err != nil {
+		return err
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		return fmt.Errorf("commit ranking admission: %w", err)
+	}
+	return nil
+}
+
+// insertGlobalRankingsCycleTx records one immutable global Top-200 intent
+// and its collector root. A repeated cycle inserts nothing and reports
+// false. Callers must hold the cycle lock.
+func insertGlobalRankingsCycleTx(ctx context.Context, transaction pgx.Tx, cycleStart time.Time) (bool, error) {
 	priority := 300
 	if cycleStart.Hour() == 5 && cycleStart.Minute() == 0 {
 		priority = 400
 	}
-	command, err := s.pool.Exec(ctx, `
+	command, err := transaction.Exec(ctx, `
 		WITH intent AS (
 			INSERT INTO global_rankings_intents (cycle_at) VALUES ($2)
 			ON CONFLICT DO NOTHING
@@ -536,11 +577,126 @@ func (s *store) scheduleGlobalRankings(ctx context.Context, now time.Time, cycle
 		SELECT 'global_player_rankings', 'global', NULL, NULL, 'normal',
 		       $1, cycle_at, $3, 'global_player_rankings', 'pending'
 		FROM intent
-	`, priority, cycleStart, "global-player-rankings:"+cycleStart.Format(time.RFC3339))
+	`, priority, cycleStart, globalRankingsCoalescingKey(cycleStart))
 	if err != nil {
 		return false, fmt.Errorf("schedule global player rankings: %w", err)
 	}
 	return command.RowsAffected() == 1, nil
+}
+
+var errGlobalRankingsCollision = errors.New("global rankings cycle collides with a different job identity")
+
+// globalRankingsCoalescingKey is the immutable cycle identity shared by the
+// intent row and its collector root.
+func globalRankingsCoalescingKey(cycleStart time.Time) string {
+	return "global-player-rankings:" + cycleStart.Format(time.RFC3339)
+}
+
+// enqueueGlobalRankingsCycle records exactly one aligned UTC cycle through
+// the same collector-role insert path as the scheduler. A repeated cycle is
+// idempotent only when the existing root carries the identical immutable
+// identity; any other collision fails closed. An intent left without its
+// root is repaired so a partial admission converges.
+func (s *store) enqueueGlobalRankingsCycle(ctx context.Context, cycleStart time.Time) (bool, error) {
+	contractVersion, err := s.currentContractVersion(ctx)
+	if err != nil {
+		return false, err
+	}
+	if contractVersion < 2 {
+		return false, errors.New("global rankings intents need contract version 2")
+	}
+	// A root of any status already admits the cycle: replay is idempotent
+	// and never re-arms a terminal root. Lookup and admission share the
+	// cycle lock, so a concurrent terminal transition cannot interleave.
+	var created bool
+	err = s.withGlobalRankingsCycleLock(ctx, cycleStart, func(transaction pgx.Tx) error {
+		found, identical, err := latestGlobalRankingsRootTx(ctx, transaction, cycleStart)
+		if err != nil {
+			return err
+		}
+		if found {
+			if !identical {
+				return errGlobalRankingsCollision
+			}
+			return nil
+		}
+		admitted, err := insertGlobalRankingsCycleTx(ctx, transaction, cycleStart)
+		if err != nil {
+			return err
+		}
+		if !admitted {
+			// The intent exists but no root does: repair the orphaned
+			// admission.
+			if err := repairGlobalRankingsRootTx(ctx, transaction, cycleStart); err != nil {
+				return err
+			}
+		}
+		found, identical, err = latestGlobalRankingsRootTx(ctx, transaction, cycleStart)
+		if err != nil {
+			return err
+		}
+		if !found || !identical {
+			return errGlobalRankingsCollision
+		}
+		created = true
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return created, nil
+}
+
+func repairGlobalRankingsRootTx(ctx context.Context, transaction pgx.Tx, cycleStart time.Time) error {
+	priority := 300
+	if cycleStart.Hour() == 5 && cycleStart.Minute() == 0 {
+		priority = 400
+	}
+	if _, err := transaction.Exec(ctx, `
+		INSERT INTO collector_jobs (
+			work_type, scope, player_id, normalized_tag, capacity_pool,
+			priority, due_at, coalescing_key, required_endpoint, status
+		)
+		SELECT 'global_player_rankings', 'global', NULL, NULL, 'normal',
+		       $1, cycle_at, $2, 'global_player_rankings', 'pending'
+		FROM global_rankings_intents
+		WHERE cycle_at = $3
+		ON CONFLICT DO NOTHING
+	`, priority, globalRankingsCoalescingKey(cycleStart), cycleStart); err != nil {
+		return fmt.Errorf("repair global player rankings root: %w", err)
+	}
+	return nil
+}
+
+// latestGlobalRankingsRootTx reports whether any root carries the cycle
+// key and whether the newest one bears the immutable ranking identity. The
+// newest row wins because a terminal root supersedes earlier attempts; a
+// terminal replay with identical identity is an idempotent no-op. Callers
+// must hold the cycle lock.
+func latestGlobalRankingsRootTx(ctx context.Context, transaction pgx.Tx, cycleStart time.Time) (found, identical bool, err error) {
+	var workType, scope, pool, requiredEndpoint string
+	var playerID *int64
+	var normalizedTag *string
+	if err := transaction.QueryRow(ctx, `
+		SELECT work_type, scope, capacity_pool, required_endpoint,
+		       player_id, normalized_tag
+		FROM collector_jobs
+		WHERE coalescing_key = $1
+		ORDER BY id DESC
+		LIMIT 1
+	`, globalRankingsCoalescingKey(cycleStart)).Scan(
+		&workType, &scope, &pool, &requiredEndpoint,
+		&playerID, &normalizedTag,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, false, nil
+		}
+		return false, false, fmt.Errorf("read global player rankings root: %w", err)
+	}
+	identical = workType == "global_player_rankings" && scope == "global" &&
+		pool == "normal" && requiredEndpoint == "global_player_rankings" &&
+		playerID == nil && normalizedTag == nil
+	return true, identical, nil
 }
 
 func resetBoundaryAtOrBefore(now time.Time) time.Time {

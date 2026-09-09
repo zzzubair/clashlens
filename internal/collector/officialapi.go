@@ -33,6 +33,7 @@ type officialAPIConfig struct {
 	origin                string
 	proxyURL              string
 	allowInsecureTestHTTP bool
+	disableRedirects       bool
 	connectionTimeout     time.Duration
 	responseHeaderTimeout time.Duration
 	totalTimeout          time.Duration
@@ -103,6 +104,9 @@ func newOfficialAPIClient(config officialAPIConfig) (*officialAPIClient, error) 
 		Timeout:   config.totalTimeout,
 	}
 	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if config.disableRedirects {
+			return errors.New("official API redirects are disabled while the endpoint budget is active")
+		}
 		if len(via) >= 3 {
 			return errors.New("official API redirect limit exceeded")
 		}

@@ -51,6 +51,7 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 		return nil, err
 	}
 	store.archiveInstanceID = config.archiveInstanceID
+	store.setEndpointBudget(config.endpointBudget)
 	if config.admissionEvidence != nil {
 		store.configureAdmissionEvidence(config.admissionEvidence)
 		if err := store.ensureAdmissionEvidenceRun(ctx, config.admissionEvidence); err != nil {
@@ -122,6 +123,7 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 		origin:                config.officialAPIOrigin,
 		proxyURL:              config.officialAPIProxyURL,
 		allowInsecureTestHTTP: config.allowInsecureTestHTTP,
+		disableRedirects:       config.disableOfficialRedirects,
 		connectionTimeout:     config.connectionTimeout,
 		responseHeaderTimeout: config.responseHeaderTimeout,
 		totalTimeout:          config.totalRequestTimeout,
