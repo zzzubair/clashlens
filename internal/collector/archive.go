@@ -31,6 +31,7 @@ type s3Archive struct {
 	markerCheckedAt   time.Time
 	markerErr         error
 	observeStage      func(string, time.Duration)
+	observeRequest    func(string)
 }
 
 var (
@@ -55,6 +56,12 @@ func newS3ArchiveWithRegion(endpoint, region string, secure bool, bucket, access
 		return nil, fmt.Errorf("create S3 client: %w", err)
 	}
 	return &s3Archive{client: client, bucket: bucket, region: region, maximumBodyBytes: 64 << 20}, nil
+}
+
+func (a *s3Archive) observe(operation string) {
+	if a.observeRequest != nil {
+		a.observeRequest(operation)
+	}
 }
 
 func (a *s3Archive) spoolReady() error {
@@ -93,6 +100,7 @@ func (a *s3Archive) ready(ctx context.Context) error {
 	if !a.writeVerified {
 		return errors.New("archive write readiness was not verified")
 	}
+	a.observe("bucket")
 	exists, err := a.client.BucketExists(ctx, a.bucket)
 	if err != nil {
 		return fmt.Errorf("check archive bucket readiness: %w", err)
@@ -120,15 +128,18 @@ func (a *s3Archive) verifyWriteCapability(ctx context.Context, probeID string) e
 		},
 	}
 	putOptions.SetMatchETagExcept("*")
+	a.observe("put")
 	_, err := a.client.PutObject(ctx, a.bucket, objectKey, bytes.NewReader(nil), 0, putOptions)
 	if err != nil {
 		return fmt.Errorf("archive write readiness: %w", err)
 	}
+	a.observe("put")
 	_, err = a.client.PutObject(ctx, a.bucket, objectKey, bytes.NewReader(nil), 0, putOptions)
 	response := minio.ToErrorResponse(err)
 	if err == nil || (response.Code != "PreconditionFailed" && response.StatusCode != http.StatusPreconditionFailed) {
 		return errors.New("archive write readiness did not preserve conditional immutable creation")
 	}
+	a.observe("head")
 	info, err := a.client.StatObject(ctx, a.bucket, objectKey, minio.StatObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("archive write readiness verification: %w", err)
@@ -171,6 +182,7 @@ func (a *s3Archive) putVerifiedAt(ctx context.Context, hash string, body []byte,
 	options := minio.PutObjectOptions{ContentType: "application/octet-stream", SendContentMd5: true, DisableContentSha256: true, DisableMultipart: true, UserMetadata: map[string]string{"sha256": hash}}
 	options.SetMatchETagExcept("*")
 	putStartedAt := time.Now()
+	a.observe("put")
 	_, err := a.client.PutObject(ctx, a.bucket, objectKey, bytes.NewReader(body), int64(len(body)), options)
 	a.recordStage("archive_put", putStartedAt)
 	if err != nil {
@@ -212,6 +224,7 @@ func (a *s3Archive) store(ctx context.Context, hash string, body []byte) (string
 	objectKey := "sha256/" + hash[:2] + "/" + hash
 	reference := "s3://" + a.bucket + "/" + objectKey
 	startedAt := time.Now()
+	a.observe("head")
 	info, err := a.client.StatObject(ctx, a.bucket, objectKey, minio.StatObjectOptions{})
 	a.recordStage("archive_head", startedAt)
 	if err == nil {
@@ -239,12 +252,14 @@ func (a *s3Archive) store(ctx context.Context, hash string, body []byte) (string
 	}
 	putOptions.SetMatchETagExcept("*")
 	startedAt = time.Now()
+	a.observe("put")
 	_, err = a.client.PutObject(ctx, a.bucket, objectKey, bytes.NewReader(body), int64(len(body)), putOptions)
 	a.recordStage("archive_put", startedAt)
 	if err != nil {
 		response := minio.ToErrorResponse(err)
 		if response.Code == "PreconditionFailed" || response.StatusCode == http.StatusPreconditionFailed {
 			startedAt = time.Now()
+			a.observe("head")
 			info, statErr := a.client.StatObject(ctx, a.bucket, objectKey, minio.StatObjectOptions{})
 			a.recordStage("archive_head", startedAt)
 			if statErr != nil {
@@ -306,6 +321,7 @@ func (a *s3Archive) evidenceObjectKey(reference, hash string) (string, error) {
 
 func (a *s3Archive) readObjectBytes(ctx context.Context, objectKey, reference, expectedHash string, expectedSize int64) ([]byte, error) {
 	startedAt := time.Now()
+	a.observe("get")
 	object, err := a.client.GetObject(ctx, a.bucket, objectKey, minio.GetObjectOptions{})
 	if err != nil {
 		if archiveErrorIsTerminal(err) {
@@ -342,6 +358,7 @@ func (a *s3Archive) markerHealth(ctx context.Context, markerKey, expectedHash st
 		return a.markerErr
 	}
 	a.markerCheckedAt = time.Now()
+	a.observe("get")
 	object, err := a.client.GetObject(ctx, a.bucket, markerKey, minio.GetObjectOptions{})
 	if err == nil {
 		defer object.Close()

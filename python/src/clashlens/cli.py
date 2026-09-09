@@ -650,6 +650,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                                 "check_marker_health",
                                 lambda: "unconfigured",
                             )(),
+                            "remote_attempts": dict(
+                                getattr(archive, "remote_attempts", {}) or {}),
                         },
                     }
                 ),
@@ -706,6 +708,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                         "remote_health": getattr(
                             archive, "check_marker_health", lambda: "unconfigured"
                         )(),
+                        "remote_attempts": dict(
+                            getattr(archive, "remote_attempts", {}) or {}),
                     },
                 }
             )

@@ -202,6 +202,7 @@ class S3ArchiveReader:
         )
         self._marker_checked_at = 0.0
         self._marker_error: ArchiveReadError | None = None
+        self.remote_attempts = {"get": 0, "bucket": 0, "marker": 0}
         self.secure = secure
         self.max_body_bytes = max_body_bytes
         self.connect_timeout_seconds = connect_timeout_seconds
@@ -248,6 +249,7 @@ class S3ArchiveReader:
         # this legacy adapter probe only for callers without a local spool.
         for attempt in range(self.max_retries + 1):
             try:
+                self.remote_attempts["bucket"] += 1
                 return bool(self.client.bucket_exists(self.bucket))
             except Exception:  # noqa: BLE001 - readiness is a safe boolean
                 if attempt == self.max_retries:
@@ -276,6 +278,7 @@ class S3ArchiveReader:
             return "terminal" if self._marker_error and not self._marker_error.retryable else ("degraded" if self._marker_error else "ready")
         self._marker_checked_at = now
         try:
+            self.remote_attempts["marker"] += 1
             response = self.client.get_object(self.bucket, config.marker_key)
             try:
                 body = response.read(1_048_577)
@@ -314,6 +317,7 @@ class S3ArchiveReader:
             )
         for attempt in range(self.max_retries + 1):
             try:
+                self.remote_attempts["get"] += 1
                 return self._read_once(reference, bucket, object_key, expected_hash)
             except ArchiveReadError as error:
                 if not error.retryable or attempt == self.max_retries:

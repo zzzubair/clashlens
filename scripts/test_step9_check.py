@@ -56,7 +56,9 @@ def _start_args(run_dir: Path, cohort: Path, **overrides):
         "max_sample_age_seconds": 125, "watchdog_unit": "test-unit",
         "run_id": "testrun01", "database_url": None, "mode": "live-day",
         "max_invocation_gap_seconds": 5, "bootstrap_run_id": None,
-        "archive_eur_per_gib": None,
+        "archive_eur_per_gib": None, "archive_interfaces": ["test-eth0"],
+        "archive_route_host": None, "prior_transfer_bytes": None,
+        "prior_transfer_provenance": None,
     }
     defaults.update(overrides)
     return mock.Mock(**defaults)
@@ -474,6 +476,15 @@ def _sample_hooks(db: FakeDB, **overrides):
             "pgdata": "/var/lib/postgresql/data",
             "source": "podman-exec:test-pg",
             "pgdata_bytes": 1000, "pg_wal_bytes": 100},
+        "wire_facts": lambda run: {
+            "status": "captured", "failure_code": None,
+            "boot_id": run.get("boot_id"),
+            "interfaces": {"test-eth0": {
+                "present": True, "rx_bytes": 1000, "tx_bytes": 500,
+                "mac": "aa:bb:cc:dd:ee:ff", "operstate": "up"}}},
+        "worker_probe": lambda run: [
+            {"archive": {"remote_attempts": {"get": 3, "bucket": 1,
+                                                "marker": 1}}}],
         "no_sleep": True, "single_pass": True, "max_slots": 1,
     }
     hooks.update(overrides)
@@ -767,6 +778,11 @@ def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
                     "pgdata_bytes": 1000, "pg_wal_bytes": 100})
         if (index + 1) % 60 == 0:
             sample["operating"] = db.operating_snapshot([])
+        sample["wire"] = {"failures": [], "unknown": [],
+                          "conservative_host_wire_bytes": 1000}
+        sample["s3"] = {"go": {}, "go_total": 0, "python": {}, "python_total": 0,
+                        "total": 0, "error": None}
+        sample["s3_attempts_cumulative"] = 21
         step9._exclusive_json(samples / f"minute-{index:04d}.json", sample)
     return run_dir, run
 
@@ -1090,6 +1106,14 @@ def _rehearsal_hooks(database, fixed_ids, *, slots: int):
             "watchdog_check": lambda run: True,
             "resource_facts": lambda run, db, metrics: {
                 "filesystems": {}, "memory": {}, "archive": {}},
+            "wire_facts": lambda run: {
+                "status": "captured", "failure_code": None,
+                "boot_id": run.get("boot_id"),
+                "interfaces": {"test-eth0": {
+                    "present": True, "rx_bytes": 1000, "tx_bytes": 500,
+                    "mac": "aa:bb:cc:dd:ee:ff", "operstate": "up"}}},
+            "worker_probe": lambda run: [
+                {"archive": {"remote_attempts": {"get": 1}}}],
             "pgdata_probe": lambda run: {
                 "status": "captured", "failure_code": None,
                 "captured_at": "2026-10-04T05:00:00+00:00",
@@ -1484,6 +1508,11 @@ def _sealed_preflight(tmp_path: Path, name: str, db: FakeDB, bad_traffic: bool =
                     "pgdata_bytes": 1000, "pg_wal_bytes": 100})
         if (index + 1) % 60 == 0:
             sample["operating"] = db.operating_snapshot([])
+        sample["wire"] = {"failures": [], "unknown": [],
+                          "conservative_host_wire_bytes": 1000}
+        sample["s3"] = {"go": {}, "go_total": 0, "python": {}, "python_total": 0,
+                        "total": 0, "error": None}
+        sample["s3_attempts_cumulative"] = 21
         step9._exclusive_json(samples / f"minute-{index:04d}.json", sample)
     return run_dir, run
 
@@ -1797,6 +1826,14 @@ def test_shifted_sampler_fails_lateness_gate(tmp_path: Path) -> None:
              "watchdog_check": lambda run: True,
             "resource_facts": lambda run, db, metrics: {
                 "filesystems": {}, "memory": {}, "archive": {}},
+            "wire_facts": lambda run: {
+                "status": "captured", "failure_code": None,
+                "boot_id": run.get("boot_id"),
+                "interfaces": {"test-eth0": {
+                    "present": True, "rx_bytes": 1000, "tx_bytes": 500,
+                    "mac": "aa:bb:cc:dd:ee:ff", "operstate": "up"}}},
+            "worker_probe": lambda run: [
+                {"archive": {"remote_attempts": {"get": 1}}}],
             "pgdata_probe": lambda run: {
                 "status": "captured", "failure_code": None,
                 "captured_at": "2026-10-04T05:00:00+00:00",
@@ -2462,12 +2499,28 @@ def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
         walls[0] += timedelta(seconds=60)
         return walls[0]
 
+    quiet_wire = {
+        "status": "captured", "failure_code": None, "boot_id": run.get("boot_id"),
+        "interfaces": {"test-eth0": {
+            "present": True, "rx_bytes": 1000, "tx_bytes": 500,
+            "mac": "aa:bb:cc:dd:ee:ff", "operstate": "up"}}}
+    benign_pgdata = {
+        "status": "captured", "failure_code": None,
+        "captured_at": "2026-10-04T05:00:00+00:00",
+        "container": "test-pg", "image": "sha256:pg",
+        "pgdata": "/var/lib/postgresql/data",
+        "source": "podman-exec:test-pg",
+        "pgdata_bytes": 1000, "pg_wal_bytes": 100}
+    benign_s3 = [{"archive": {"remote_attempts": {"get": 1}}}]
     hooks = {"db": db, "fixed_ids": db.fixed_ids, "fetch_metrics": metrics,
              "container_probe": container_probe,
              "watchdog_check": lambda run: True, "clock": clock,
              "now_utc": now_utc, "no_sleep": True, "max_slots": 75,
              "resource_facts": lambda run, db, metrics: {
-                 "filesystems": {}, "memory": {}, "archive": {}}}
+                 "filesystems": {}, "memory": {}, "archive": {}},
+             "wire_facts": lambda run: quiet_wire,
+             "worker_probe": lambda run: benign_s3,
+             "pgdata_probe": lambda run: benign_pgdata}
     arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
     # collector never stops but metrics vanish at slot 62: failure
     def flaky_metrics(url):
@@ -2520,6 +2573,14 @@ def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
               "no_sleep": True, "max_slots": 75,
               "resource_facts": lambda run, db, metrics: {
                   "filesystems": {}, "memory": {}, "archive": {}},
+              "wire_facts": lambda run: {
+                  "status": "captured", "failure_code": None,
+                  "boot_id": run.get("boot_id"),
+                  "interfaces": {"test-eth0": {
+                      "present": True, "rx_bytes": 1000, "tx_bytes": 500,
+                      "mac": "aa:bb:cc:dd:ee:ff", "operstate": "up"}}},
+              "worker_probe": lambda run: [
+                  {"archive": {"remote_attempts": {"get": 1}}}],
               "pgdata_probe": lambda run: {
                   "status": "captured", "failure_code": None,
                   "captured_at": "2026-10-04T05:00:00+00:00",
@@ -2628,3 +2689,92 @@ def test_pgdata_unavailable_strikes(tmp_path: Path) -> None:
     hooks["single_pass"] = False
     assert step9.cmd_sample(arguments, hooks) == 1
     assert list((run_dir / "failures").glob("two_consecutive_unavailable-*.json"))
+
+
+def _quiet_wire(rx: int = 1000, tx: int = 500, **overrides):
+    facts = {"status": "captured", "failure_code": None, "boot_id": "boot-1",
+             "interfaces": {"test-eth0": {
+                 "present": True, "rx_bytes": rx, "tx_bytes": tx,
+                 "mac": "aa:bb:cc:dd:ee:ff", "operstate": "up"}}}
+    facts.update(overrides)
+    return facts
+
+
+def test_wire_gates() -> None:
+    base = _quiet_wire()
+    failures, unknown, total = step9.evaluate_wire(base, _quiet_wire(), 100)
+    assert failures == [] and unknown == []
+    assert total == 100  # no growth: prior only, never zero-claimed traffic
+    grown = _quiet_wire(rx=2000, tx=1500)
+    failures, _unknown, total = step9.evaluate_wire(base, grown, 100)
+    assert failures == [] and total == 100 + 2000
+    over = _quiet_wire(rx=1000 + 70 * 1024**3, tx=500)
+    failures, _u, _t = step9.evaluate_wire(base, over, 100)
+    assert "transfer_breach" in failures
+    reset = _quiet_wire(rx=10, tx=500)
+    failures, _u, _t = step9.evaluate_wire(base, reset, 100)
+    assert "wire_counter_reset" in failures
+    gone = _quiet_wire()
+    gone["interfaces"] = {}
+    failures, _u, _t = step9.evaluate_wire(base, gone, 100)
+    assert "wire_interface_missing" in failures
+    renamed = _quiet_wire()
+    renamed["interfaces"]["test-eth0"]["mac"] = "00:00:00:00:00:00"
+    failures, _u, _t = step9.evaluate_wire(base, renamed, 100)
+    assert "wire_identity_changed" in failures
+    assert step9.evaluate_wire(base, {"status": "unknown"}, 100)[0] == [
+        "wire_unavailable"]
+    boot = _quiet_wire()
+    boot["boot_id"] = "boot-2"
+    assert step9.evaluate_wire(base, boot, 100)[0] == ["wire_boot_changed"]
+
+
+def test_wire_route_continuity() -> None:
+    base = _quiet_wire()
+    base["interfaces"]["test-eth0"]["route_dev"] = "test-eth0"
+    base["interfaces"]["test-eth0"]["route_error"] = None
+    moved = _quiet_wire()
+    moved["interfaces"]["test-eth0"]["route_dev"] = "other0"
+    moved["interfaces"]["test-eth0"]["route_error"] = None
+    failures, _u, _t = step9.evaluate_wire(base, moved, 0)
+    assert "wire_route_changed" in failures
+    noprobe = _quiet_wire()
+    noprobe["interfaces"]["test-eth0"]["route_dev"] = None
+    noprobe["interfaces"]["test-eth0"]["route_error"] = "route_lookup_failed"
+    failures, _u, _t = step9.evaluate_wire(base, noprobe, 0)
+    assert "wire_route_unavailable" in failures
+
+
+def test_proc_net_dev_parsing(tmp_path: Path) -> None:
+    sample = ("Inter-|   Receive                                                |  Transmit\n"
+              " face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n"
+              "  eth0: 1000       1    0    0    0     0          0         0     2000       2    0    0    0     0       0          0\n"
+              "    lo: 50       1    0    0    0     0          0         0       50       1    0    0    0     0       0          0\n")
+    with mock.patch.object(step9.Path, "read_text") as reader:
+        reader.return_value = sample
+        parsed = step9._read_proc_net_dev()
+    assert parsed == {"eth0": {"rx_bytes": 1000, "tx_bytes": 2000},
+                      "lo": {"rx_bytes": 50, "tx_bytes": 50}}
+
+
+def test_s3_accounting() -> None:
+    metrics = {"counters": {
+        "clashlens_collector_archive_requests_total{operation=put}": 10.0,
+        "clashlens_collector_archive_requests_total{operation=get}": 5.0,
+        "clashlens_collector_jobs_total{work_type=x}": 99.0}}
+    snapshot = step9._s3_snapshot(metrics, {"get": 2, "bucket": 1})
+    assert snapshot == {"go": {
+        "clashlens_collector_archive_requests_total{operation=put}": 10,
+        "clashlens_collector_archive_requests_total{operation=get}": 5},
+        "go_total": 15, "python": {"get": 2, "bucket": 1}, "python_total": 3,
+        "total": 18}
+    assert step9._s3_decreased({"go": {"a": 5}}, {"go": {"a": 4}}) is True
+    assert step9._s3_decreased({"go": {"a": 5}}, {"go": {"a": 5}}) is False
+    files = [{"archive": {"remote_attempts": {"get": 2}}},
+             {"archive": {"remote_attempts": {"get": 1, "marker": 1}}}]
+    totals, error = step9._worker_snapshots(
+        {}, lambda run: files)
+    assert totals == {"get": 3, "marker": 1} and error is None
+    totals, error = step9._worker_snapshots(
+        {}, lambda run: [{"archive": {}}])
+    assert totals == {} and error is not None

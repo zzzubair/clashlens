@@ -448,3 +448,26 @@ records the container image, and measures `PGDATA` and `PGDATA/pg_wal` bytes
 with capped output and timeouts. Unsafe names/paths, output/time breaches,
 or image changes fail closed; generated LSN WAL stays separate. Finalize
 retains the last captured sizes; validation requires them.
+
+### Transfer accounting (64 GiB stop, 100k attempts)
+
+Official-traffic volume is bounded by host-wire counters, not spool or
+catalogue aggregates: `start` pins kernel RX+TX bytes for each explicitly
+configured `--archive-egress-interface`, plus boot ID, MAC/operstate, and the
+`ip route get` device toward `--archive-route-host` when given. Every sample
+recomputes the conservative bound — prior qualification bytes plus RX+TX
+growth on the path, including unrelated and protocol overhead, retained as
+`conservative_host_wire_bytes` (never exact S3). Missing interfaces, counter
+resets, boot/MAC/route changes, or unresolvable probes fail closed;
+crossing 64 GiB cumulative stops the sampler immediately.
+
+Prior transfer defaults to a documented upper bound of 21 MiB (21 bounded
+qualification requests times the 1 MiB response ceiling), overridable with
+`--prior-transfer-bytes` plus provenance. Retained payload stays separate
+(16 GiB logical envelope).
+
+S3 attempts come from real counters only: Go `archive_requests_total`
+per-operation attempts (PUT/HEAD/GET/bucket, retries included) in the
+query-free runtime metrics, plus Python worker `remote_attempts` summed
+across replicas. Decreases fail closed; prior attempts are the exact 21
+retained qualification requests; crossing 100,000 cumulative stops the run.

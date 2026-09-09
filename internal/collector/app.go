@@ -168,6 +168,7 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 	}
 	metrics := newCollectorMetrics()
 	archive.observeStage = metrics.recordStageDuration
+	archive.observeRequest = metrics.recordArchiveRequest
 	store.metrics = metrics
 	app := &application{
 		config:  config,

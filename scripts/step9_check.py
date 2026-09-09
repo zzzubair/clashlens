@@ -571,6 +571,16 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "bootstrap_run_id": getattr(arguments, "bootstrap_run_id", None),
         "budget_receipt": budget_receipt,
         "archive_eur_per_gib": getattr(arguments, "archive_eur_per_gib", None),
+        "archive_interfaces": list(getattr(arguments, "archive_interfaces",
+                                            None) or []),
+        "archive_route_host": getattr(arguments, "archive_route_host", None),
+        "transfer_prior_bytes": (
+            getattr(arguments, "prior_transfer_bytes", None)
+            if getattr(arguments, "prior_transfer_bytes", None) is not None
+            else TRANSFER_PRIOR_BYTES),
+        "transfer_prior_provenance": (
+            getattr(arguments, "prior_transfer_provenance", None)
+            or TRANSFER_PRIOR_PROVENANCE),
         "resource_baseline": collect_resource_facts(
             spool_path=arguments.spool_path,
             postgres_path=arguments.postgres_path, db=db, metrics=None,
@@ -594,6 +604,12 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
             "mem_peak_bytes": None, "error": "baseline_unavailable"}
     header["pgdata_baseline"] = _pgdata_probe(
         podman_bin, arguments.postgres_container, postgres_image)
+    if not header["archive_interfaces"]:
+        raise Step9Error("archive_interface_missing",
+                         "at least one archive egress interface is required")
+    header["wire_baseline"] = collect_wire_facts(
+        interfaces=header["archive_interfaces"],
+        route_host=header["archive_route_host"])
     digest = _exclusive_json(run_dir / "run.json", header)
     try:
         os.chmod(run_dir / "run.json", 0o600)
@@ -1150,7 +1166,7 @@ def parse_runtime_metrics(text: str) -> dict:
         if match is None:
             raise Step9Error("metrics_malformed", "bad metric line")
         name, raw_labels, raw_value = match.groups()
-        if not name.startswith("clashlens_collector_"):
+        if not name.startswith(("clashlens_collector_", "clashlens_spool_")):
             continue
         try:
             value = float(raw_value)
@@ -1471,6 +1487,8 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
     previous_metrics: dict | None = None
     previous_mono: int | None = None
     previous_wall: datetime | None = None
+    previous_s3: dict | None = None
+    first_s3_total: int | None = None
     previous_liveness: dict | None = None
     outcome_strikes = 0
     unavailable_strikes = 0
@@ -1523,6 +1541,7 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                 fs=filesystem_facts(run["spool_path"], run["postgres_path"]),
                 watchdog_active=watchdog_check(run),
                 admission_latest=admission_latest)
+            name = f"minute-{index:04d}.json"
             try:
                 sample["container"] = container_probe(run) \
                     if container_probe else _podman_container_probe(run)
@@ -1548,6 +1567,61 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
             if cgroup:
                 resources = dict(resources)
                 resources["cgroup"] = cgroup
+            wire_hook = hooks.get("wire_facts")
+            if wire_hook is not None:
+                wire = wire_hook(run=run)
+            else:
+                wire = collect_wire_facts(
+                    interfaces=run.get("archive_interfaces") or [],
+                    route_host=run.get("archive_route_host"))
+            wire_failures, wire_unknown, wire_total = evaluate_wire(
+                run.get("wire_baseline") or {}, wire,
+                run.get("transfer_prior_bytes", TRANSFER_PRIOR_BYTES))
+            sample["wire"] = {"failures": wire_failures,
+                                "unknown": wire_unknown,
+                                "conservative_host_wire_bytes": wire_total}
+            if wire_failures:
+                sample["failure_code"] = wire_failures[0]
+                sample["outcome"] = "transfer_gate"
+                _exclusive_json(samples_dir / name, sample,
+                                max_bytes=SAMPLE_MAX_BYTES)
+                _record_failure(run_dir, sample["failure_code"],
+                                    sample["outcome"])
+                return 1
+            s3_py, s3_error = _worker_snapshots(
+                run, hooks.get("worker_probe"))
+            s3 = _s3_snapshot(metrics, s3_py)
+            s3["error"] = s3_error
+            sample["s3"] = s3
+            if s3_error is not None:
+                unavailable_strikes += 1
+                if unavailable_strikes >= 2:
+                    _record_failure(run_dir, "two_consecutive_unavailable",
+                                    "two consecutive unavailable samples")
+                    return 1
+            else:
+                if _s3_decreased(previous_s3, s3):
+                    sample["failure_code"] = "s3_counter_reset"
+                    sample["outcome"] = "s3_counter_reset"
+                    _exclusive_json(samples_dir / name, sample,
+                                    max_bytes=SAMPLE_MAX_BYTES)
+                    _record_failure(run_dir, sample["failure_code"],
+                                        sample["outcome"])
+                    return 1
+                previous_s3 = s3
+                cumulative = TRANSFER_PRIOR_ATTEMPTS + s3["total"] - (
+                    first_s3_total if first_s3_total is not None else s3["total"])
+                if first_s3_total is None:
+                    first_s3_total = s3["total"]
+                sample["s3_attempts_cumulative"] = cumulative
+                if cumulative > S3_ATTEMPTS_MAX:
+                    sample["failure_code"] = "s3_attempts_breach"
+                    sample["outcome"] = "s3_attempts_breach"
+                    _exclusive_json(samples_dir / name, sample,
+                                    max_bytes=SAMPLE_MAX_BYTES)
+                    _record_failure(run_dir, sample["failure_code"],
+                                        sample["outcome"])
+                    return 1
             pgdata_probe = hooks.get("pgdata_probe")
             if pgdata_probe is not None:
                 try:
@@ -1571,7 +1645,6 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                 sample["outcome"] = "resource_gate"
             if metrics is not None:
                 previous_metrics = metrics
-            name = f"minute-{index:04d}.json"
             if (samples_dir / name).exists():
                 raise Step9Error("duplicate_sample", f"slot {index} already written",
                                  gate=True)
@@ -1604,7 +1677,8 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
             outcome = sample["outcome"]
             if outcome in ("clock_jump", "boot_change", "non_monotonic",
                            "out_of_order", "late", "admission_mismatch",
-                           "process_restart", "resource_gate"):
+                           "process_restart", "resource_gate", "transfer_gate",
+                           "s3_counter_reset", "s3_attempts_breach"):
                 _record_failure(run_dir, sample["failure_code"], outcome)
                 outcome_strikes += 1
                 if outcome_strikes >= 2 or outcome in ("process_restart",
@@ -1733,6 +1807,47 @@ def _finalize_operating(run: dict, db: object | None,
     if result["regressed"]:
         result["status"] = "failed"
         result["failure_code"] = "operating_regressed"
+    return result
+
+
+def _finalize_transfer(samples: list[dict], run: dict) -> dict:
+    """Retained transfer totals: wire bound plus S3 attempt accounting."""
+    wire_last = next((s.get("wire") for s in reversed(samples)
+                      if isinstance(s.get("wire"), dict)), None)
+    s3_seen = [s.get("s3") for s in samples
+               if isinstance(s.get("s3"), dict)
+               and s["s3"].get("error") is None]
+    result: dict = {
+        "prior_bytes": run.get("transfer_prior_bytes", TRANSFER_PRIOR_BYTES),
+        "prior_provenance": run.get("transfer_prior_provenance",
+                                      TRANSFER_PRIOR_PROVENANCE),
+        "prior_attempts": TRANSFER_PRIOR_ATTEMPTS,
+        "cap_bytes": TRANSFER_CUMULATIVE_MAX,
+        "attempts_cap": S3_ATTEMPTS_MAX,
+        "wire_bytes": (wire_last or {}).get("conservative_host_wire_bytes"),
+        "status": "unknown", "failure": None,
+    }
+    if wire_last is None or wire_last.get("conservative_host_wire_bytes") is None:
+        result["failure"] = "transfer_unknown"
+        return result
+    if wire_last.get("failures"):
+        result["status"] = "failed"
+        result["failure"] = wire_last["failures"][0]
+        return result
+    if not s3_seen:
+        result["failure"] = "transfer_unknown"
+        return result
+    first, last = s3_seen[0], s3_seen[-1]
+    if _s3_decreased(first, last):
+        result["status"] = "failed"
+        result["failure"] = "s3_counter_reset"
+        return result
+    result["s3_attempts"] = TRANSFER_PRIOR_ATTEMPTS + last["total"] - first["total"]
+    if result["s3_attempts"] > S3_ATTEMPTS_MAX:
+        result["status"] = "failed"
+        result["failure"] = "s3_attempts_breach"
+        return result
+    result["status"] = "complete"
     return result
 
 
@@ -1973,6 +2088,7 @@ def cmd_finalize(arguments: argparse.Namespace, hooks=None) -> int:
             "core_windows": len(windows),
             "non_on_time_slots": missing,
             "reset": resets,
+            "transfer": _finalize_transfer(samples, run),
             "operating": _finalize_operating(run, db, run_dir),
             "reset_deep": (_finalize_reset_deep(run, db, reset_rows)
                             if db is not None and mode["admission"]
@@ -1998,6 +2114,7 @@ def _finalize_exit(final: dict, mode: dict) -> int:
     """Sealed evidence always; nonzero when required blocks fail/are unknown."""
     required = [final.get("eligibility", {}), final.get("wal", {}),
                 final.get("operating", {})]
+    transfer = final.get("transfer", {})
     if mode["admission"]:
         required += [final.get("admission", {}), final.get("reset_deep", {})]
     else:
@@ -2006,6 +2123,8 @@ def _finalize_exit(final: dict, mode: dict) -> int:
         return 1
     if any(block.get("status") != "complete" for block in required):
         return 2
+    if transfer.get("status") != "complete":
+        return 2 if transfer.get("failure") in ("transfer_unknown", None) else 1
     return 0
 
 
@@ -2094,6 +2213,11 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
                 raise Step9Error("sample_evidence_failed",
                                  f"slot {sample.get('slot')} pgdata "
                                  f"{pgdata.get('failure_code')}", gate=True)
+            s3err = (sample.get("s3") or {}).get("error")
+            if s3err is not None:
+                raise Step9Error("sample_evidence_failed",
+                                 f"slot {sample.get('slot')} s3 {s3err}",
+                                 gate=True)
             if sample.get("watchdog_active") is not True:
                 raise Step9Error("watchdog_liveness_unproven",
                                  f"slot {sample.get('slot')} watchdog not active",
@@ -2146,6 +2270,12 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
             raise Step9Error("reset_deep_unproven",
                              "final.json lacks complete reset reconciliation",
                              gate=True)
+        transfer = final.get("transfer", {})
+        if transfer.get("status") != "complete":
+            raise Step9Error("transfer_unproven",
+                             "final.json lacks complete transfer accounting",
+                             gate=transfer.get("failure") not in (
+                                 "transfer_unknown", None))
         operating = final.get("operating", {})
         if operating.get("status") != "complete":
             raise Step9Error("operating_unproven",
@@ -2403,6 +2533,11 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--database-url", default=None)
     start.add_argument("--database-url-file", default=None)
     start.add_argument("--archive-eur-per-gib", type=float, default=None)
+    start.add_argument("--archive-egress-interface", dest="archive_interfaces",
+                       action="append", default=[])
+    start.add_argument("--archive-route-host", default=None)
+    start.add_argument("--prior-transfer-bytes", type=int, default=None)
+    start.add_argument("--prior-transfer-provenance", default=None)
     start.add_argument("--bootstrap-run-id", default=None)
     start.add_argument("--mode", choices=sorted(MODES), default="live-day")
     start.add_argument("--max-invocation-gap-seconds", type=int, default=5)
@@ -2780,6 +2915,204 @@ def _pgdata_probe(podman_bin: str, container: str,
     except (OSError, subprocess.SubprocessError, ValueError, IndexError):
         result["failure_code"] = "pgdata_probe_unavailable"
         return result
+
+
+TRANSFER_PRIOR_ATTEMPTS = 21
+TRANSFER_PRIOR_BYTES = 21 * 1024**2
+TRANSFER_PRIOR_PROVENANCE = (
+    "documented-upper-bound:21-bounded-qualification-requests-x-1MiB-"\
+    "response-ceiling")
+TRANSFER_CUMULATIVE_MAX = 64 * 1024**3
+S3_ATTEMPTS_MAX = 100_000
+
+
+def _read_proc_net_dev() -> dict:
+    """Kernel per-interface RX/TX byte counters; raises on miss."""
+    counters: dict[str, dict] = {}
+    for line in Path("/proc/net/dev").read_text().splitlines():
+        if ":" not in line:
+            continue
+        name, _, rest = line.partition(":")
+        name = name.strip()
+        fields = rest.split()
+        if not name or len(fields) < 16:
+            continue
+        counters[name] = {"rx_bytes": int(fields[0]),
+                          "tx_bytes": int(fields[8])}
+    if not counters:
+        raise OSError("empty proc net dev")
+    return counters
+
+
+def _interface_identity(interface: str) -> dict:
+    """MAC/operstate pin for rename/replace detection; unknowns stay None."""
+    result: dict = {"mac": None, "operstate": None, "error": None}
+    base = Path("/sys/class/net") / interface
+    try:
+        if not base.is_dir() or base.is_symlink():
+            result["error"] = "interface_not_present"
+            return result
+        result["mac"] = (base / "address").read_text().strip() or None
+        result["operstate"] = (base / "operstate").read_text().strip() or None
+    except OSError as error:
+        result["error"] = "identity_unavailable:" + type(error).__name__
+    return result
+
+
+def _route_device(host: str, ip_bin: str = "ip") -> tuple[str | None, str | None]:
+    """Resolve the egress device toward host; (dev, error)."""
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            [ip_bin, "-o", "route", "get", host],
+            check=False, capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+        return None, "route_probe_unavailable:" + type(error).__name__
+    if completed.returncode != 0 \
+            or len(completed.stdout.encode()) > 4096:
+        return None, "route_lookup_failed"
+    match = re.search(r"\bdev\s+(\S+)", completed.stdout)
+    if not match:
+        return None, "route_device_unparseable"
+    return match.group(1), None
+
+
+def collect_wire_facts(*, interfaces: list[str], route_host: str | None,
+                       ip_bin: str = "ip",
+                       net_dev=None) -> dict:
+    """Baseline/current host-wire facts; never raises."""
+    try:
+        counters = net_dev() if net_dev else _read_proc_net_dev()
+    except OSError as error:
+        return {"status": "unknown",
+                "failure_code": "wire_counters_unavailable:" +
+                                  type(error).__name__,
+                "interfaces": {}}
+    facts: dict[str, dict] = {}
+    for interface in interfaces:
+        if interface not in counters:
+            facts[interface] = {"present": False,
+                                "failure_code": "wire_interface_missing"}
+            continue
+        entry = {"present": True,
+                 "rx_bytes": counters[interface]["rx_bytes"],
+                 "tx_bytes": counters[interface]["tx_bytes"]}
+        entry.update(_interface_identity(interface))
+        if route_host:
+            dev, error = _route_device(route_host, ip_bin)
+            entry["route_dev"] = dev
+            entry["route_error"] = error
+        facts[interface] = entry
+    return {"status": "captured", "failure_code": None,
+            "boot_id": _boot_id(), "interfaces": facts}
+
+
+def evaluate_wire(baseline: dict, current: dict,
+                  prior_bytes: int) -> tuple[list[str], list[str], int | None]:
+    """Conservative host-wire bound; all path traffic counts."""
+    failures: list[str] = []
+    unknown: list[str] = []
+    if current.get("status") != "captured":
+        return ["wire_unavailable"], [], None
+    if (baseline.get("boot_id") or current.get("boot_id")) and \
+            baseline.get("boot_id") != current.get("boot_id"):
+        return ["wire_boot_changed"], [], None
+    total = prior_bytes
+    base_ifaces = baseline.get("interfaces") or {}
+    for name in base_ifaces:
+        if name not in (current.get("interfaces") or {}):
+            failures.append("wire_interface_missing")
+    for name, facts in (current.get("interfaces") or {}).items():
+        if not facts.get("present"):
+            failures.append("wire_interface_missing")
+            continue
+        old = base_ifaces.get(name)
+        if old is None or not old.get("present"):
+            unknown.append("wire_baseline_unknown")
+            continue
+        if facts["rx_bytes"] < old["rx_bytes"] \
+                or facts["tx_bytes"] < old["tx_bytes"]:
+            failures.append("wire_counter_reset")
+            continue
+        if facts.get("mac") != old.get("mac"):
+            failures.append("wire_identity_changed")
+        if facts.get("route_dev") is not None \
+                and old.get("route_dev") is not None \
+                and facts["route_dev"] != old["route_dev"]:
+            failures.append("wire_route_changed")
+        if facts.get("route_error"):
+            failures.append("wire_route_unavailable")
+        total += (facts["rx_bytes"] - old["rx_bytes"]) + \
+                 (facts["tx_bytes"] - old["tx_bytes"])
+    if not failures and total > TRANSFER_CUMULATIVE_MAX:
+        failures.append("transfer_breach")
+    return sorted(set(failures)), sorted(set(unknown)), total
+
+
+def _worker_snapshots(run: dict, worker_probe=None) -> tuple[dict, str | None]:
+    """Sum Python worker remote attempts across replicas; (totals, error)."""
+    probe = worker_probe or _podman_worker_files
+    try:
+        files = probe(run)
+    except Exception as error:  # noqa: BLE001 - probe miss is unknown
+        return {}, "s3_worker_unavailable:" + type(error).__name__
+    totals: dict[str, int] = {}
+    for payload in files:
+        try:
+            attempts = payload["archive"]["remote_attempts"]
+            for operation, count in attempts.items():
+                totals[operation] = totals.get(operation, 0) + int(count)
+        except (KeyError, TypeError, ValueError) as error:
+            return {}, "s3_worker_malformed:" + type(error).__name__
+    return totals, None
+
+
+def _podman_worker_files(run: dict) -> list[dict]:
+    """Read worker operating snapshots via podman exec cat."""
+    import subprocess
+
+    containers = run.get("containers", {}) or {}
+    base = containers.get("python_worker")
+    replicas = int(containers.get("worker_replicas", 0) or 0)
+    podman_bin = run.get("podman_bin", "podman") or "podman"
+    if not base or replicas < 1:
+        raise RuntimeError("worker replicas unconfigured")
+    snapshots = []
+    for replica in range(1, replicas + 1):
+        completed = subprocess.run(
+            [podman_bin, "exec", f"{base}-{replica}", "cat",
+             "/tmp/clashlens-worker-operating.json"],
+            check=False, capture_output=True, text=True, timeout=30)
+        if completed.returncode != 0 \
+                or len(completed.stdout.encode()) > 65536:
+            raise RuntimeError(f"worker {replica} snapshot unavailable")
+        snapshots.append(json.loads(completed.stdout))
+    return snapshots
+
+
+def _s3_decreased(previous: dict | None, current: dict) -> bool:
+    if not previous:
+        return False
+    for section in ("go", "python"):
+        for key, value in (current.get(section) or {}).items():
+            old = (previous.get(section) or {}).get(key)
+            if isinstance(old, int) and isinstance(value, int) and value < old:
+                return True
+    return False
+
+
+def _s3_snapshot(metrics: dict | None, py_totals: dict) -> dict:
+    """Go + Python attempt totals from query-free counters."""
+    go_total = 0
+    go: dict[str, int] = {}
+    for key, value in ((metrics or {}).get("counters") or {}).items():
+        if key.startswith("clashlens_collector_archive_requests_total{"):
+            go[key] = int(value)
+            go_total += int(value)
+    py_total = sum(py_totals.values())
+    return {"go": go, "go_total": go_total, "python": dict(py_totals),
+            "python_total": py_total, "total": go_total + py_total}
 
 
 def _event_selected_due(event: dict) -> list:

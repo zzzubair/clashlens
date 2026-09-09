@@ -15,6 +15,7 @@ type collectorMetrics struct {
 	processIdentity  string
 	processStartedAt time.Time
 	jobs             map[string]uint64
+	archiveRequests  map[string]uint64
 	apiRequests      map[string]uint64
 	apiOutcomes      map[string]uint64
 	apiDurationCount map[string]uint64
@@ -45,6 +46,7 @@ func newCollectorMetrics() *collectorMetrics {
 		processIdentity:  identity,
 		processStartedAt: time.Now().UTC(),
 		jobs:             map[string]uint64{},
+		archiveRequests:  map[string]uint64{},
 		apiRequests:      map[string]uint64{},
 		apiOutcomes:      map[string]uint64{},
 		apiDurationCount: map[string]uint64{},
@@ -63,6 +65,13 @@ func (m *collectorMetrics) increment(target map[string]uint64, key string) {
 	m.mu.Lock()
 	target[key]++
 	m.mu.Unlock()
+}
+
+func (m *collectorMetrics) recordArchiveRequest(operation string) {
+	if m == nil {
+		return
+	}
+	m.increment(m.archiveRequests, operation)
 }
 
 func (m *collectorMetrics) recordJob(workType, pool, outcome string) {
@@ -233,6 +242,7 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 func (m *collectorMetrics) renderRuntime(store *store) string {
 	m.mu.Lock()
 	jobs := cloneCounterMap(m.jobs)
+	archiveRequests := cloneCounterMap(m.archiveRequests)
 	apiRequests := cloneCounterMap(m.apiRequests)
 	apiOutcomes := cloneCounterMap(m.apiOutcomes)
 	apiDurationCount := cloneCounterMap(m.apiDurationCount)
@@ -247,6 +257,7 @@ func (m *collectorMetrics) renderRuntime(store *store) string {
 	fmt.Fprintf(&output, "clashlens_collector_process_start_time_seconds %d\n", m.processStartedAt.Unix())
 	fmt.Fprintf(&output, "clashlens_collector_process_identity_info{process_id=%q} 1\n", m.processIdentity)
 	writeCounterMap(&output, "clashlens_collector_jobs_total", []string{"work_type", "pool", "outcome"}, jobs)
+	writeCounterMap(&output, "clashlens_collector_archive_requests_total", []string{"operation"}, archiveRequests)
 	writeCounterMap(&output, "clashlens_collector_api_requests_total", []string{"endpoint", "pool"}, apiRequests)
 	writeCounterMap(&output, "clashlens_collector_api_outcomes_total", []string{"endpoint", "outcome"}, apiOutcomes)
 	writeCounterMap(&output, "clashlens_collector_api_duration_seconds_count", []string{"endpoint", "pool"}, apiDurationCount)

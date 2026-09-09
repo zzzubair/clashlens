@@ -140,3 +140,41 @@ func TestMetricsRenderCarriesExplicitCapacityMeaning(t *testing.T) {
 		t.Fatal("unconfigured spool fabricated finite capacity")
 	}
 }
+
+func TestCollectorMetricsArchiveRequestsTotal(t *testing.T) {
+	var nilMetrics *collectorMetrics
+	nilMetrics.recordArchiveRequest("put")
+
+	metrics := newCollectorMetrics()
+	metrics.recordArchiveRequest("put")
+	metrics.recordArchiveRequest("put")
+	metrics.recordArchiveRequest("head")
+	metrics.recordArchiveRequest("get")
+	if got := metrics.archiveRequests["put"]; got != 2 {
+		t.Fatalf("put attempts = %d, want 2", got)
+	}
+	var output strings.Builder
+	writeCounterMap(&output, "clashlens_collector_archive_requests_total", []string{"operation"}, metrics.archiveRequests)
+	rendered := output.String()
+	for _, want := range []string{
+		`clashlens_collector_archive_requests_total{operation="put"} 2`,
+		`clashlens_collector_archive_requests_total{operation="head"} 1`,
+		`clashlens_collector_archive_requests_total{operation="get"} 1`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("archive exposition missing %q in:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestArchiveObserveRequestCallback(t *testing.T) {
+	var got []string
+	archive := &s3Archive{observeRequest: func(operation string) { got = append(got, operation) }}
+	archive.observe("put")
+	archive.observe("head")
+	archive.observe("get")
+	if strings.Join(got, ",") != "put,head,get" {
+		t.Fatalf("observed operations = %q", got)
+	}
+	(&s3Archive{}).observe("put")
+}
