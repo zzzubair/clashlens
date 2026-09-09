@@ -330,3 +330,47 @@ artifacts are written exclusively and never replaced; the run directory is
 capped at 256 MiB; semantic regular-window admission reconciliation stays
 pending the validated admission handoff and `validate` refuses any run that
 claims it complete before that integration.
+
+### Population preflight mode (60m bootstrap + 15m drain)
+
+The same tool also runs the bounded read-only population preflight, distinct
+from the 24-hour day. It reuses cohort/receipt validation, the minute loop,
+the watchdog, and the manifest machinery under schema `step9-preflight-v1`
+with 75 one-minute slots (60 bootstrap + 15 drain) and 15 windows:
+
+```sh
+python3 scripts/step9_check.py start --mode preflight \
+  --run-dir "$RUN" --cohort-file /protected/legend-tags-2026-09-08.txt \
+  --deployed-receipt /retained/clashlens-deployed-stack.json \
+  --core-start 2026-MM-DDTHH:00:00Z --core-end 2026-MM-DDTHH+1:00:00Z \
+  --collector-container clashlens-issue92-COLLECTOR ... --deadline ... \
+  --watchdog-unit clashlens-step9-preflight-RUN
+python3 scripts/step9_check.py sample --run-dir "$RUN"
+python3 scripts/step9_check.py finalize --run-dir "$RUN"
+python3 scripts/step9_check.py validate --run-dir "$RUN"
+```
+
+Preflight enforces the fixed envelope from real probes only: at most 13,500
+profile observations, one global-rankings intent, zero battle-log
+observations, and only `discovery_profile` / `endpoint_retry` /
+`global_player_rankings` work. Any `regular_poll`, reset, or interactive root
+is unexpected scheduler traffic and fails the gate, as do pending remote
+verifications or queue residue at finalize. The durable 0023 budget ledger is
+reported `unknown_pending_0023` until that migration merges; the envelope is
+never claimed from supplied aggregates.
+
+### Admission accounting (migration 0022-final read side)
+
+For live-day runs the observer integrates the validated final admission
+handoff (which supersedes both accounting addenda): run-header state and
+quotas, per-event selected/inserted/advanced equality with sampler stop on a
+committed mismatch, `IS DISTINCT FROM` invalid-profile detection (null
+pointer, wrong player, non accepted Legend I), exact five-minute
+from-due-timestamp deadlines (equality is timely; reset backlog gets handoff
+grace), consecutive-`database_at` invocation gaps over
+`--max-invocation-gap-seconds` as `admission_visibility_unknown`, tail
+evidence through five minutes past core end, capture-range enforcement, and
+exact-root reconciliation by semantic `(player_id, coalescing key)` identity
+with malformed/duplicate/unexplained roots as failures. Missing 0022 tables
+fail `start` closed with `admission_schema_absent`; no sequence watermark is
+used anywhere.

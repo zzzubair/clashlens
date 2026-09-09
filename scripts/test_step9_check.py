@@ -54,7 +54,8 @@ def _start_args(run_dir: Path, cohort: Path, **overrides):
         "lead_in_seconds": 0, "tail_seconds": 0,
         "deadline": "2026-10-05T05:10:00Z",
         "max_sample_age_seconds": 125, "watchdog_unit": "test-unit",
-        "run_id": "testrun01", "database_url": None,
+        "run_id": "testrun01", "database_url": None, "mode": "live-day",
+        "max_invocation_gap_seconds": 5,
     }
     defaults.update(overrides)
     return mock.Mock(**defaults)
@@ -69,13 +70,20 @@ class FakeDB:
     """In-memory stand-in for step9.Database."""
 
     def __init__(self, rows=(), outside: int = 0, roots: int = 0,
-                 fail: str | None = None, resets=()) -> None:
+                 fail: str | None = None, resets=(),
+                 admission_present: bool = True) -> None:
         self.rows = list(rows)
         self.outside = outside
         self.roots = roots
         self.fail = fail
         self.resets = list(resets)
         self.fixed_ids: list[int] = [r[0] for r in self.rows]
+        self.admission_tables = admission_present
+        self.admission_events_data: list[dict] = []
+        self.admission_profile_data: dict = {}
+        self.admission_roots_data: list[tuple] = []
+        self.admission_header_data: dict | None = None
+        self.preflight_data: dict | None = None
 
     def identity(self):
         return {"system_identifier": "123", "database_name": "test",
@@ -101,6 +109,52 @@ class FakeDB:
 
     def reset_identity(self, start, end):
         return self.resets
+
+    # --- admission (0022-final read side) ---
+
+    def admission_present(self):
+        return self.admission_tables
+
+    def admission_run(self, run_id):
+        if self.admission_header_data is not None:
+            return self.admission_header_data
+        return {"run_id": run_id,
+                "capture_start": datetime(2026, 10, 4, 5, 0, tzinfo=UTC),
+                "capture_end": datetime(2026, 10, 5, 6, 0, tzinfo=UTC),
+                "max_events": 108000, "max_selected_entries": 5000000,
+                "events_written": 0, "selected_entries_written": 0,
+                "state": "active", "stopped_at": None, "failure_code": None}
+
+    def admission_events(self, run_id, start, end):
+        return self.admission_events_data
+
+    def admission_profile_counts(self, run_id, start, end):
+        return self.admission_profile_data
+
+    def admission_latest(self, run_id):
+        if not self.admission_events_data:
+            return None
+        last = self.admission_events_data[-1]
+        return {"id": last["id"], "database_at": last["database_at"],
+                "gate_allowed": last["gate_allowed"],
+                "selected_count": last["selected_count"],
+                "inserted_count": last["inserted_count"],
+                "advanced_count": last["advanced_count"]}
+
+    def semantic_roots(self, start, end):
+        return self.admission_roots_data
+
+    # --- preflight ---
+
+    def preflight_probes(self, start, end):
+        if self.preflight_data is not None:
+            return self.preflight_data
+        return {"workcounts": [], "observations": [],
+                "intents": (0, None, None), "pending_remote": 0}
+
+    def active_queues(self):
+        return getattr(self, "queue_residue_data",
+                       {"collector": [], "python": []})
 
 
 def _eligible_row(pid: int, tag: str):
@@ -159,7 +213,8 @@ def test_start_creates_exclusive_header(tmp_path: Path) -> None:
     db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
     run_dir, header = _started_run(tmp_path, db)
     assert header["cohort"]["input_count"] == len(TAGS)
-    assert header["admission_reconciliation"] == {"status": step9.ADMISSION_STATUS}
+    assert header["admission"]["status"] == "integrated"
+    assert header["admission"]["schema"] == step9.ADMISSION_SCHEMA_VERSION
     assert (run_dir / "run.json").stat().st_mode & 0o777 == 0o600
     assert run_dir.stat().st_mode & 0o777 == 0o700
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
@@ -324,7 +379,9 @@ def test_sql_is_read_only_and_bound() -> None:
     for statement in step9.ALL_RO_STATEMENTS:
         assert ("%s" in statement or "IN ('pending'" in statement
                 or "pg_control_system" in statement
-                or "pg_current_wal_lsn" in statement)
+                or "pg_current_wal_lsn" in statement
+                or "to_regclass" in statement
+                or "pending_remote_verification" in statement)
         assert "f\"" not in statement and "\" + " not in statement
         with pytest.raises(step9.Step9Error):
             step9.assert_read_only("SELECT 1; INSERT INTO players VALUES (1)")
@@ -406,6 +463,42 @@ def test_watchdog_stop_failure_is_evidence_failure(tmp_path: Path) -> None:
     assert outcome["stop_error"] == "container_still_running"
 
 
+def _seed_admission(db: FakeDB, run: dict, pid: int, job_base: int = 1000,
+                   extra_tail: bool = True) -> None:
+    """One timely gate-open event per window plus tail coverage."""
+    core_start = step9._parse_utc(run["core_start"])
+    mode = step9.MODES[run.get("mode", "live-day")]
+    total = mode["windows"] + (6 if extra_tail else 0)
+    events, roots, profiles = [], [], {}
+    for window in range(total):
+        cycle = core_start + timedelta(seconds=300 * window)
+        at = cycle + timedelta(seconds=1)
+        event_id = window + 1
+        job = job_base + window
+        due = cycle - timedelta(seconds=60)
+        events.append({
+            "id": event_id, "invocation_id": f"{event_id:032x}",
+            "cycle_at": cycle, "scheduler_at": cycle, "database_at": at,
+            "gate_allowed": True, "gate_handoff_at": None, "batch_limit": 1000,
+            "visible_due_count": 1, "visible_due_min_at": due,
+            "unselected_visible_due_count": 0,
+            "unselected_visible_due_min_at": None,
+            "unselected_visible_past_deadline_count": 0,
+            "unselected_visible_past_deadline_min_at": None,
+            "selected_past_deadline_count": 0,
+            "selected_player_ids": [pid], "selected_due_ats": [due],
+            "selected_profile_version_ids": [101],
+            "selected_eligibility_states": ["eligible"],
+            "inserted_job_ids": [job], "advanced_count": 1,
+            "selected_count": 1, "inserted_count": 1})
+        key = f"regular:{pid}:{int(cycle.timestamp())}"
+        roots.append((pid, key, job, "complete"))
+        profiles[event_id] = (0, 1)
+    db.admission_events_data = events
+    db.admission_roots_data = roots
+    db.admission_profile_data = profiles
+
+
 def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
                 boundary=(datetime(2026, 10, 5, 5, 0, tzinfo=UTC), 1,
                           True, True, True, 2, 2, 0)):
@@ -414,15 +507,18 @@ def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
     receipt_path.write_text(json.dumps(_receipt_scope()))
     run_dir = tmp_path / name
     arguments = _start_args(run_dir, cohort, run_id=name.replace("-", ""),
-                            deployed_receipt=str(receipt_path))
+                            deployed_receipt=str(receipt_path),
+                            max_invocation_gap_seconds=3600)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
                            return_value=None):
         run = step9.cmd_start(arguments, db)
     db.resets = [boundary]
+    _seed_admission(db, run, pid=1)
     core_start = step9._parse_utc(run["core_start"])
+    mode = step9.MODES[run.get("mode", "live-day")]
     samples = run_dir / "samples"
     samples.mkdir()
-    for index in range(step9.CORE_SLOTS):
+    for index in range(mode["slots"]):
         expected = step9.slot_expected_utc(core_start, index)
         sample = step9.build_sample(
             run=run, index=index, expected_utc=expected,
@@ -521,7 +617,9 @@ def _pg_url() -> str:
     sock = base / "sock"
     sock.mkdir()
     for binary in ("initdb", "pg_ctl", "postgres", "psql", "createdb"):
-        (bindir / binary).chmod(0o755)
+        path = bindir / binary
+        if path.exists():
+            path.chmod(0o755)
     port = "55439"
     try:
         subprocess.run([str(bindir / "initdb"), "-D", str(data), "-U", "postgres",
@@ -775,6 +873,45 @@ def _rehearsal_hooks(database, fixed_ids, *, slots: int):
             "now_utc": now_utc, "no_sleep": True, "max_slots": slots}
 
 
+def _mirror_live_run(connection, run_id: str, player: int, tag: str,
+                    version: int, core_start: datetime,
+                    windows: int = 288, tail_windows: int = 6) -> None:
+    """Seed one timely gate-open admission event per window plus tail."""
+    connection.execute(
+        "INSERT INTO collector_regular_admission_evidence_runs"
+        " (run_id, capture_start, capture_end, max_events,"
+        " max_selected_entries) VALUES (%s, %s, %s, 108000, 5000000)",
+        (run_id, core_start, core_start + timedelta(hours=25)))
+    total = windows + tail_windows
+    jobs = connection.execute(
+        "INSERT INTO collector_jobs (work_type, scope, player_id,"
+        " normalized_tag, capacity_pool, priority, due_at, coalescing_key,"
+        " status, created_at) SELECT 'regular_poll', 'player', %(pid)s,"
+        " %(tag)s, 'normal', 100, cycle, 'regular:' || %(pid)s || ':' ||"
+        " extract(epoch FROM cycle)::bigint, 'complete', cycle"
+        " FROM generate_series(%(start)s::timestamptz,"
+        " %(start)s::timestamptz + make_interval(secs => %(total)s * 300),"
+        " interval '5 minutes') AS cycle RETURNING id",
+        {"pid": player, "tag": tag, "start": core_start,
+         "total": total - 1}).fetchall()
+    assert len(jobs) == total
+    for window in range(total):
+        cycle = core_start + timedelta(seconds=300 * window)
+        at = cycle + timedelta(seconds=1)
+        due = cycle - timedelta(seconds=60)
+        connection.execute(
+            "INSERT INTO collector_regular_admission_evidence"
+            " (run_id, invocation_id, cycle_at, scheduler_at, database_at,"
+            " gate_allowed, batch_limit, visible_due_count, visible_due_min_at,"
+            " unselected_visible_due_count, selected_player_ids,"
+            " selected_due_ats, selected_profile_version_ids,"
+            " selected_eligibility_states, inserted_job_ids, advanced_count)"
+            " VALUES (%s, %s, %s, %s, %s, true, 1000, 1, %s, 0,"
+            " %s, %s, %s, %s, %s, 1)",
+            (run_id, f"{window + 1:032x}", cycle, cycle, at, due,
+             [player], [due], [version], ["eligible"], [jobs[window][0]]))
+
+
 def test_no_official_traffic_rehearsal() -> None:
     """Full 1440-slot loop on a disposable migrated DB; no official calls."""
     import psycopg
@@ -782,14 +919,22 @@ def test_no_official_traffic_rehearsal() -> None:
 
     with domain_database(_pg_url(), include_coordinator=True) as info:
         database = step9.Database(lambda: psycopg.connect(info))
-        with psycopg.connect(info) as connection:
-            player = _seed_player(connection, TAGS[0])
-            _seed_reset(connection, [player])
-            connection.commit()
         cohort = Path(tempfile.mkdtemp(prefix="step9-cohort-")) / "cohort.txt"
         _write_cohort(cohort, TAGS)
         run_dir = cohort.parent / "run"
-        arguments = _start_args(run_dir, cohort, database_url=info)
+        arguments = _start_args(run_dir, cohort, database_url=info,
+                                run_id="rehearsal1",
+                                max_invocation_gap_seconds=3600)
+        with psycopg.connect(info) as connection:
+            _mirror_0022(connection)
+            player = _seed_player(connection, TAGS[0])
+            version = connection.execute(
+                "SELECT current_profile_version_id FROM players"
+                " WHERE id = %s", (player,)).fetchone()[0]
+            _seed_reset(connection, [player])
+            _mirror_live_run(connection, "rehearsal1", player, TAGS[0],
+                             version, datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
+            connection.commit()
         with mock.patch.object(step9.deployment_receipt, "validate_receipt",
                                return_value=None):
             receipt_path = cohort.parent / "receipt.json"
@@ -821,7 +966,20 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
     with domain_database(_pg_url(), include_coordinator=True) as info:
         database = step9.Database(lambda: psycopg.connect(info))
         with psycopg.connect(info) as connection:
+            _mirror_0022(connection)
             player = _seed_player(connection, TAGS[0])
+            connection.execute(
+                "INSERT INTO collector_regular_admission_evidence_runs"
+                " (run_id, capture_start, capture_end, max_events,"
+                " max_selected_entries) VALUES ('killed1',"
+                " '2026-10-04T05:00:00+00:00', '2026-10-05T06:00:00+00:00',"
+                " 108000, 5000000)")
+            connection.execute(
+                "INSERT INTO collector_regular_admission_evidence_runs"
+                " (run_id, capture_start, capture_end, max_events,"
+                " max_selected_entries) VALUES ('deadline1',"
+                " '2026-10-04T05:00:00+00:00', '2026-10-05T06:00:00+00:00',"
+                " 108000, 5000000)")
             connection.commit()
         base = Path(tempfile.mkdtemp(prefix="step9-kill-"))
         # Killed sampler: 3 slots then stop; finalize must refuse a partial run.
@@ -831,7 +989,7 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
         run_dir = base / "run-killed"
         with mock.patch.object(step9.deployment_receipt, "validate_receipt",
                                return_value=None):
-            step9.cmd_start(_start_args(run_dir, cohort,
+            step9.cmd_start(_start_args(run_dir, cohort, run_id="killed1",
                                         deployed_receipt=str(kill_receipt)),
                             database)
         sample_args = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
@@ -853,3 +1011,438 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
         assert step9.cmd_watchdog(watchdog_args, {"podman_run": podman}) == 1
         assert ["podman", "stop", "--ignore", "--time", "30",
                 "test-collector"] in podman.commands
+
+
+def _admission_run_header(**overrides):
+    header = {"run_id": "t", "state": "active", "failure_code": None,
+              "capture_start": datetime(2026, 10, 4, 5, 0, tzinfo=UTC),
+              "capture_end": datetime(2026, 10, 5, 6, 0, tzinfo=UTC)}
+    header.update(overrides)
+    return header
+
+
+def _admission_event(event_id: int, cycle: datetime, pid: int = 1, job: int = 1000,
+                     timely: bool = True, gate: bool = True, **overrides):
+    at = cycle + timedelta(seconds=1)
+    due = cycle - timedelta(seconds=60)
+    if not timely:
+        due = cycle - timedelta(minutes=10)
+    event = {"id": event_id, "cycle_at": cycle, "database_at": at,
+             "gate_allowed": gate, "selected_count": 1, "inserted_count": 1,
+             "advanced_count": 1, "selected_past_deadline_count": 0,
+             "unselected_visible_past_deadline_count": 0,
+             "selected_player_ids": [pid], "selected_due_ats": [due],
+             "inserted_job_ids": [job]}
+    event.update(overrides)
+    return event
+
+
+def _admission_run_dict(**overrides):
+    run = {"core_start": "2026-10-04T05:00:00+00:00",
+           "core_end": "2026-10-05T05:00:00+00:00", "mode": "live-day",
+           "max_invocation_gap_seconds": 3600}
+    run.update(overrides)
+    return run
+
+
+def test_evaluate_admission_failures_and_unknown() -> None:
+    base = datetime(2026, 10, 4, 5, 0, tzinfo=UTC)
+    run = _admission_run_dict()
+    key = f"regular:1:{int(base.timestamp())}"
+    good = _admission_event(1, base)
+    roots = [(1, key, 1000, "complete")]
+    profiles = {1: (0, 1)}
+    result = step9.evaluate_admission(
+        run=run, header=_admission_run_header(), events=[good],
+        profile_counts=profiles, roots=roots, max_gap_seconds=3600)
+    assert result["failures"] == []
+    assert result["unknown"] == ["admission_tail_insufficient"]
+    # full tail coverage passes
+    tail = _admission_event(2, base + timedelta(hours=24, minutes=6), job=1001)
+    tail_key = f"regular:1:{int((base + timedelta(hours=24, minutes=6)).timestamp())}"
+    result = step9.evaluate_admission(
+        run=run, header=_admission_run_header(), events=[good, tail],
+        profile_counts={1: (0, 1), 2: (0, 1)},
+        roots=roots + [(1, tail_key, 1001, "complete")], max_gap_seconds=90000)
+    assert result["failures"] == [] and result["unknown"] == []
+    # late selected recompute + stored past-deadline counts fail the window
+    late = _admission_event(3, base, timely=False, job=1002,
+                            selected_past_deadline_count=1,
+                            unselected_visible_past_deadline_count=2)
+    result = step9.evaluate_admission(
+        run=run, header=_admission_run_header(), events=[late],
+        profile_counts={3: (0, 1)}, roots=[], max_gap_seconds=3600)
+    assert "admission_selected_late_recomputed" in result["failures"]
+    assert "admission_past_deadline_selected" in result["failures"]
+    assert "admission_past_deadline_unselected" in result["failures"]
+    # count mismatch, invalid profile, out-of-range event, gap
+    bad = _admission_event(4, base + timedelta(seconds=10), job=1003)
+    bad["inserted_count"] = 0
+    result = step9.evaluate_admission(
+        run=run, header=_admission_run_header(), events=[good, bad],
+        profile_counts={1: (0, 1), 4: (2, 1)}, roots=roots, max_gap_seconds=3600)
+    assert "admission_count_mismatch" in result["failures"]
+    assert "invalid_selected_profile" in result["failures"]
+    far = _admission_event(5, base, job=1004)
+    far["database_at"] = datetime(2026, 10, 6, 5, 0, tzinfo=UTC)
+    result = step9.evaluate_admission(
+        run=run, header=_admission_run_header(), events=[far],
+        profile_counts={5: (0, 1)}, roots=[], max_gap_seconds=5)
+    assert "admission_event_out_of_range" in result["failures"]
+    header = _admission_run_header(state="capacity_exceeded",
+                                   failure_code="admission_evidence_capacity_exceeded")
+    result = step9.evaluate_admission(
+        run=run, header=header, events=[], profile_counts={}, roots=[],
+        max_gap_seconds=5)
+    assert "admission_evidence_capacity_exceeded" in result["failures"]
+    header = _admission_run_header(state="bogus")
+    result = step9.evaluate_admission(
+        run=run, header=header, events=[], profile_counts={}, roots=[],
+        max_gap_seconds=5)
+    assert "admission_run_state_invalid" in result["failures"]
+
+
+def test_reconcile_semantic_roots_cases() -> None:
+    run = _admission_run_dict()
+    base = datetime(2026, 10, 4, 5, 0, tzinfo=UTC)
+    event = _admission_event(1, base)
+    key = f"regular:1:{int(base.timestamp())}"
+    ok = step9.reconcile_semantic_roots(run, [event], [(1, key, 1000, "complete")])
+    assert ok["failures"] == []
+    dup = step9.reconcile_semantic_roots(
+        run, [event], [(1, key, 1000, "complete"), (1, key, 1001, "complete")])
+    assert "admission_root_count" in dup["failures"]
+    missing = step9.reconcile_semantic_roots(run, [event], [])
+    assert "admission_root_count" in missing["failures"]
+    foreign = step9.reconcile_semantic_roots(
+        run, [event], [(1, key, 1000, "complete"), (9, "regular:9:1", 1002, "x")])
+    assert "admission_unexplained_regular_root" in foreign["failures"]
+    malformed = step9.reconcile_semantic_roots(run, [], [(1, "bogus", 1000, "x")])
+    assert "admission_malformed_coalescing_key" in malformed["failures"]
+    wrong_player = step9.reconcile_semantic_roots(
+        run, [], [(1, "regular:2:123", 1000, "x")])
+    assert "admission_malformed_coalescing_key" in wrong_player["failures"]
+    wrong_job = step9.reconcile_semantic_roots(
+        run, [event], [(1, key, 9999, "complete")])
+    assert "admission_root_identity" in wrong_job["failures"]
+
+
+def test_start_preflight_mode(tmp_path: Path) -> None:
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    cohort = _write_cohort(tmp_path / "c.txt", TAGS)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope()))
+    arguments = _start_args(tmp_path / "pf", cohort,
+                            deployed_receipt=str(receipt_path),
+                            mode="preflight",
+                            core_start="2026-10-04T05:00:00Z",
+                            core_end="2026-10-04T06:00:00Z",
+                            run_id="preflight1")
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        header = step9.cmd_start(arguments, db)
+    assert header["mode"] == "preflight"
+    assert header["schema"] == step9.SCHEMA_PREFLIGHT
+    assert header["admission"] == {"schema": None, "status": "not_applicable"}
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        with pytest.raises(step9.Step9Error):  # 24h rejected in preflight
+            step9.cmd_start(_args_with_receipt(tmp_path, "pf2", cohort,
+                                              mode="preflight",
+                                              core_end="2026-10-05T06:00:00Z"), db)
+        with pytest.raises(step9.Step9Error):  # 1h rejected in live-day
+            step9.cmd_start(_args_with_receipt(tmp_path, "lv2", cohort,
+                                              core_start="2026-10-04T05:00:00Z",
+                                              core_end="2026-10-04T06:00:00Z"), db)
+
+
+def test_start_fails_closed_without_admission_tables(tmp_path: Path) -> None:
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])], admission_present=False)
+    cohort = _write_cohort(tmp_path / "c.txt", TAGS)
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(_args_with_receipt(tmp_path, "noadm", cohort), db)
+        assert error.value.code == "admission_schema_absent"
+
+
+def test_preflight_envelope_cases() -> None:
+    ok = step9.evaluate_preflight_envelope(
+        workcounts=[("discovery_profile", "complete", 100)],
+        observations=[("profile", 100)],
+        intents=(1, "2026-10-04T05:00:00+00:00", "2026-10-04T05:00:00+00:00"))
+    assert ok["failures"] == []
+    assert ok["budget_ledger"] == "unknown_pending_0023"
+    bad = step9.evaluate_preflight_envelope(
+        workcounts=[("regular_poll", "pending", 2),
+                    ("discovery_profile", "complete", 13501)],
+        observations=[("profile", 13501), ("battle_log", 3)],
+        intents=(2, None, None))
+    assert "unexpected_scheduler_traffic" in bad["failures"]
+    assert "preflight_profile_budget_exceeded" in bad["failures"]
+    assert "preflight_unexpected_battle_traffic" in bad["failures"]
+    assert "preflight_rankings_budget_exceeded" in bad["failures"]
+
+
+def _sealed_preflight(tmp_path: Path, name: str, db: FakeDB, bad_traffic: bool = False):
+    cohort = _write_cohort(tmp_path / f"{name}-cohort.txt", TAGS)
+    receipt_path = tmp_path / f"{name}-receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope()))
+    run_dir = tmp_path / name
+    arguments = _start_args(run_dir, cohort, run_id=name.replace("-", ""),
+                            deployed_receipt=str(receipt_path),
+                            mode="preflight",
+                            core_start="2026-10-04T05:00:00Z",
+                            core_end="2026-10-04T06:00:00Z")
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        run = step9.cmd_start(arguments, db)
+    db.preflight_data = {
+        "workcounts": ([("regular_poll", "pending", 1)] if bad_traffic
+                        else [("discovery_profile", "complete", 4)]),
+        "observations": [("profile", 4 if not bad_traffic else 1)],
+        "intents": (1, datetime(2026, 10, 4, 5, 0, tzinfo=UTC),
+                    datetime(2026, 10, 4, 5, 0, tzinfo=UTC)),
+        "pending_remote": 0}
+    core_start = step9._parse_utc(run["core_start"])
+    samples = run_dir / "samples"
+    samples.mkdir()
+    for index in range(step9.MODES["preflight"]["slots"]):
+        expected = step9.slot_expected_utc(core_start, index)
+        sample = step9.build_sample(
+            run=run, index=index, expected_utc=expected,
+            captured_utc=expected + timedelta(seconds=1),
+            mono_elapsed=float(index * 60), wall_delta=60.0, mono_delta=60.0,
+            boot_id=run["boot_id"], db_facts=db.minute_snapshot([]),
+            db_error=None,
+            metrics={"counters": {"jobs": index}, "digest": str(index)},
+            metrics_error=None, previous_metrics=None,
+            pressure={}, fs={}, watchdog_active=True)
+        step9._exclusive_json(samples / f"minute-{index:04d}.json", sample)
+    return run_dir, run
+
+
+def test_preflight_roundtrip(tmp_path: Path) -> None:
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_preflight(tmp_path, "pfsealed", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    final = json.loads((run_dir / "final.json").read_text())
+    assert final["core_windows"] == 15
+    assert final["preflight"]["status"] == "complete"
+    assert final["admission"]["status"] == "not_applicable"
+    assert step9.cmd_validate(arguments) == 0
+    # scheduler traffic during preflight fails the gate (fresh run dir)
+    db2 = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir2, _run2 = _sealed_preflight(tmp_path, "pfbad", db2,
+                                        bad_traffic=True)
+    arguments2 = mock.Mock(run_dir=str(run_dir2), podman_bin="podman")
+    assert step9.cmd_finalize(arguments2, {"db": db2}) == 0
+    assert step9.cmd_validate(arguments2) == 1
+
+# --- Mirrored 0022 DDL (test-local) ------------------------------------------
+# Verbatim shape of the validated final handoff. Delete this mirror when
+# migration 0022 merges and point these tests at the migrated schema.
+
+_MIRROR_0022 = """
+CREATE TABLE collector_regular_admission_evidence_runs (
+    run_id text PRIMARY KEY
+        CHECK (run_id ~ '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'),
+    capture_start timestamptz NOT NULL,
+    capture_end timestamptz NOT NULL,
+    max_events integer NOT NULL CHECK (max_events BETWEEN 1 AND 108000),
+    max_selected_entries bigint NOT NULL
+        CHECK (max_selected_entries BETWEEN 1 AND 5000000),
+    events_written integer NOT NULL DEFAULT 0,
+    selected_entries_written bigint NOT NULL DEFAULT 0,
+    state text NOT NULL DEFAULT 'active'
+        CHECK (state IN ('active', 'capacity_exceeded',
+                         'capture_out_of_range')),
+    stopped_at timestamptz,
+    failure_code text,
+    CHECK (capture_end > capture_start
+           AND capture_end <= capture_start + interval '30 hours')
+);
+CREATE TABLE collector_regular_admission_evidence (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    run_id text NOT NULL
+        REFERENCES collector_regular_admission_evidence_runs(run_id)
+        ON DELETE RESTRICT,
+    invocation_id text NOT NULL CHECK (invocation_id ~ '^[0-9a-f]{32,64}$'),
+    cycle_at timestamptz NOT NULL,
+    scheduler_at timestamptz NOT NULL,
+    database_at timestamptz NOT NULL,
+    gate_allowed boolean NOT NULL,
+    gate_handoff_at timestamptz,
+    batch_limit integer NOT NULL CHECK (batch_limit BETWEEN 1 AND 1000),
+    visible_due_count integer NOT NULL CHECK (visible_due_count >= 0),
+    visible_due_min_at timestamptz,
+    unselected_visible_due_count integer NOT NULL
+        CHECK (unselected_visible_due_count >= 0),
+    unselected_visible_due_min_at timestamptz,
+    unselected_visible_past_deadline_count integer NOT NULL DEFAULT 0
+        CHECK (unselected_visible_past_deadline_count >= 0),
+    unselected_visible_past_deadline_min_at timestamptz,
+    selected_past_deadline_count integer NOT NULL DEFAULT 0
+        CHECK (selected_past_deadline_count >= 0),
+    selected_player_ids bigint[] NOT NULL,
+    selected_due_ats timestamptz[] NOT NULL,
+    selected_profile_version_ids bigint[],
+    selected_eligibility_states text[],
+    inserted_job_ids bigint[] NOT NULL,
+    advanced_count integer NOT NULL CHECK (advanced_count >= 0),
+    UNIQUE (run_id, invocation_id)
+);
+CREATE INDEX collector_regular_admission_evidence_run_cycle
+    ON collector_regular_admission_evidence
+       (run_id, cycle_at, database_at, id);
+"""
+
+
+def _mirror_0022(connection) -> None:
+    connection.execute(_MIRROR_0022)
+
+
+def test_admission_tables_absent_without_mirror() -> None:
+    import psycopg
+    from domain_test_support import domain_database
+
+    with domain_database(_pg_url(), include_coordinator=True) as info:
+        database = step9.Database(lambda: psycopg.connect(info))
+        assert database.admission_present() is False
+        assert database.admission_run("nope") is None
+        assert database.admission_latest("nope") is None
+
+
+def test_admission_queries_against_mirrored_schema() -> None:
+    import psycopg
+    from domain_test_support import domain_database
+
+    with domain_database(_pg_url(), include_coordinator=True) as info:
+        database = step9.Database(lambda: psycopg.connect(info))
+        with psycopg.connect(info, autocommit=True) as connection:
+            _mirror_0022(connection)
+            assert database.admission_present() is True
+            good = _seed_player(connection, TAGS[0])
+            bad = _seed_player(connection, TAGS[1], tier_id=105000035,
+                               tier_name="Legend II", velig="ineligible",
+                               state="ineligible")
+            version = connection.execute(
+                "SELECT current_profile_version_id FROM players WHERE id = %s",
+                (good,)).fetchone()[0]
+            bad_version = connection.execute(
+                "SELECT current_profile_version_id FROM players WHERE id = %s",
+                (bad,)).fetchone()[0]
+            cycle = datetime(2026, 10, 4, 5, 0, tzinfo=UTC)
+            connection.execute(
+                "INSERT INTO collector_regular_admission_evidence_runs"
+                " (run_id, capture_start, capture_end, max_events,"
+                " max_selected_entries)"
+                " VALUES ('run1', %s, %s, 108000, 5000000)",
+                (cycle, cycle + timedelta(hours=30)))
+            key = f"regular:{good}:{int(cycle.timestamp())}"
+            job = connection.execute(
+                "INSERT INTO collector_jobs (work_type, scope, player_id,"
+                " normalized_tag, capacity_pool, priority, due_at,"
+                " coalescing_key, status, created_at)"
+                " VALUES ('regular_poll', 'player',"
+                " %s, %s, 'normal', 100, %s, %s, 'complete',"
+                " '2026-10-04T05:00:01+00:00') RETURNING id",
+                (good, TAGS[0], cycle, key)).fetchone()[0]
+            due = cycle - timedelta(seconds=60)
+            at = cycle + timedelta(seconds=1)
+            connection.execute(
+                "INSERT INTO collector_regular_admission_evidence"
+                " (run_id, invocation_id, cycle_at, scheduler_at, database_at,"
+                " gate_allowed, batch_limit, visible_due_count,"
+                " visible_due_min_at, unselected_visible_due_count,"
+                " selected_player_ids, selected_due_ats,"
+                " selected_profile_version_ids, selected_eligibility_states,"
+                " inserted_job_ids, advanced_count)"
+                " VALUES ('run1', %s, %s, %s, %s, true, 1000, 1, %s, 0,"
+                " %s, %s, %s, %s, %s, 1)",
+                ("ab" * 16, cycle, cycle, at, due, [good], [due],
+                 [version], ["eligible"], [job]))
+            # gate-blocked empty event: no rows selected, nothing invalid
+            connection.execute(
+                "INSERT INTO collector_regular_admission_evidence"
+                " (run_id, invocation_id, cycle_at, scheduler_at, database_at,"
+                " gate_allowed, batch_limit, visible_due_count,"
+                " visible_due_min_at, unselected_visible_due_count,"
+                " selected_player_ids, selected_due_ats,"
+                " selected_profile_version_ids, selected_eligibility_states,"
+                " inserted_job_ids, advanced_count)"
+                " VALUES ('run1', %s, %s, %s, %s, false, 1000, 3, %s, 3,"
+                " '{}', '{}', '{}', '{}', '{}', 0)",
+                ("cd" * 16, cycle + timedelta(seconds=1), cycle,
+                 at + timedelta(seconds=1), due))
+            # event selecting the ineligible player: retained, fails validation
+            bad_cycle = cycle + timedelta(seconds=2)
+            connection.execute(
+                "INSERT INTO collector_regular_admission_evidence"
+                " (run_id, invocation_id, cycle_at, scheduler_at, database_at,"
+                " gate_allowed, batch_limit, visible_due_count,"
+                " visible_due_min_at, unselected_visible_due_count,"
+                " selected_player_ids, selected_due_ats,"
+                " selected_profile_version_ids, selected_eligibility_states,"
+                " inserted_job_ids, advanced_count)"
+                " VALUES ('run1', %s, %s, %s, %s, true, 1000, 1, %s, 0,"
+                " %s, %s, %s, %s, '{}', 1)",
+                ("ef" * 16, bad_cycle, bad_cycle, at + timedelta(seconds=2),
+                 due, [bad], [due], [bad_version], ["ineligible"]))
+        header = database.admission_run("run1")
+        assert header["state"] == "active"
+        events = database.admission_events(
+            "run1", "2026-10-04T05:00:00Z", "2026-10-05T05:00:00Z")
+        assert len(events) == 3
+        assert events[0]["selected_count"] == 1
+        assert events[0]["inserted_count"] == 1
+        assert events[1]["selected_count"] == 0  # gate-blocked empty event
+        counts = database.admission_profile_counts(
+            "run1", "2026-10-04T00:00:00Z", "2026-10-05T00:00:00Z")
+        assert counts[events[0]["id"]] == (0, 1)
+        assert events[1]["id"] not in counts  # empty event has no rows
+        bad_id = next(row["id"] for row in database.admission_events(
+            "run1", "2026-10-04T00:00:00Z", "2026-10-05T00:00:00Z")
+            if row["selected_player_ids"] == [bad])
+        assert counts[bad_id][0] == 1
+        latest = database.admission_latest("run1")
+        assert latest is not None and latest["selected_count"] == 1
+        roots = database.semantic_roots(
+            "2026-10-04T05:00:00Z", "2026-10-05T06:00:00Z")
+        assert (good, key, job, "complete") in roots
+
+
+def test_preflight_probes_against_real_schema() -> None:
+    import psycopg
+    from domain_test_support import domain_database
+
+    with domain_database(_pg_url(), include_coordinator=True) as info:
+        database = step9.Database(lambda: psycopg.connect(info))
+        with psycopg.connect(info) as connection:
+            player = _seed_player(connection, TAGS[0])
+            connection.execute(
+                "INSERT INTO collector_jobs (work_type, scope, player_id,"
+                " normalized_tag, capacity_pool, priority, due_at,"
+                " coalescing_key, status, required_endpoint, created_at)"
+                " VALUES ('discovery_profile', 'player', %s, %s, 'normal',"
+                " 100, now(), %s, 'complete', 'profile',"
+                " '2026-10-04T05:30:00+00:00')",
+                (player, TAGS[0], f"preflight-{player}"))
+            connection.execute(
+                "INSERT INTO global_rankings_intents (cycle_at)"
+                " VALUES ('2026-10-04T05:00:00+00:00')")
+            connection.commit()
+        probes = database.preflight_probes(
+            "2026-10-04T04:00:00Z", "2026-10-04T07:00:00Z")
+        work = {(w, s): c for w, s, c in probes["workcounts"]}
+        assert work[("discovery_profile", "complete")] == 1
+        assert ("regular_poll", "pending") not in work
+        endpoints = dict(probes["observations"])
+        assert endpoints == {}
+        assert probes["intents"][0] == 1
+        assert probes["pending_remote"] == 0
+        result = step9.evaluate_preflight_envelope(
+            workcounts=probes["workcounts"],
+            observations=probes["observations"], intents=probes["intents"])
+        assert result["failures"] == []
