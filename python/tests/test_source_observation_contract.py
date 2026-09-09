@@ -18,7 +18,13 @@ from clashlens.source_observation_contract import (
             "profile",
             "profile-v1",
             "profile-schema-v1",
-            frozenset({"supercell-source-parser-v1", "supercell-source-parser-v2"}),
+            frozenset(
+                {
+                    "supercell-source-parser-v1",
+                    "supercell-source-parser-v2",
+                    "supercell-profile-parser-v3",
+                }
+            ),
         ),
         (
             "battle_log",
@@ -46,14 +52,19 @@ def test_source_observation_contract_accepts_each_installed_endpoint(
     assert contract.endpoint == endpoint
     assert contract.endpoint_version == endpoint_version
     assert contract.schema_version == schema_version
-    assert contract.default_parser_version == "supercell-source-parser-v2"
+    expected_default = (
+        "supercell-profile-parser-v3"
+        if endpoint == "profile"
+        else "supercell-source-parser-v2"
+    )
+    assert contract.default_parser_version == expected_default
     assert contract.supported_parser_versions == parser_versions
     assert (
         validate_source_observation_contract(
             endpoint,
             endpoint_version,
             schema_version,
-            "supercell-source-parser-v2",
+            expected_default,
         )
         is None
     )

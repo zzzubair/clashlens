@@ -104,7 +104,7 @@ positive_bigint_pattern='^[1-9][0-9]{0,17}$'
 [[ ${#reason} -ge 8 && ${#reason} -le 500 ]] || status_denied
 [[ "$reason" =~ ^[[:print:]]+$ ]] || status_denied
 case "$replay_parser_version" in
-    supercell-source-parser-v1|supercell-source-parser-v2) ;;
+    supercell-source-parser-v1|supercell-source-parser-v2|supercell-profile-parser-v3) ;;
     *) status_denied ;;
 esac
 

@@ -44,7 +44,11 @@ from .domain import (
     validate_season_anchor,
 )
 from .operating import database_pool_health
-from .profile import ParsedProfile, normalize_player_tag
+from .profile import (
+    PROFILE_PARSER_VERSION,
+    ParsedProfile,
+    normalize_player_tag,
+)
 from .rankings import ParsedOfficialRankings
 from .reconciliation import (
     RECONCILIATION_RULE_VERSION,
@@ -406,7 +410,7 @@ def _claim_select_statement(
         "job.state = 'waiting_dependency' OR " if supports_dependency else ""
     )
     dependency_column = "job.dependency_deferral_count" if supports_dependency else "0"
-    claim_versions = "1, 2, 3, 4" if supports_coordinator else "1, 2, 3"
+    claim_versions = "1, 2, 3, 4, 5" if supports_coordinator else "1, 2, 3"
     job_filter = f"""job.claim_compatibility_version IN ({claim_versions})
         AND ({dependency_filter}job.attempt_count < job.max_attempts)
         AND {supported_filter}"""
@@ -10870,17 +10874,27 @@ class Database:
         anchor = None
         if profile.eligibility_state == "eligible":
             try:
-                if (
-                    profile.current_league_season_id is None
-                    or profile.previous_league_season_id is None
-                ):
-                    raise DomainRuleError(
-                        "invalid_season_anchor", "profile season values are missing"
+                if profile.parser_version == PROFILE_PARSER_VERSION:
+                    if profile.season_anchor_current_id is None:
+                        raise DomainRuleError(
+                            "invalid_season_anchor", "profile current season is missing"
+                        )
+                    anchor = validate_season_anchor(
+                        profile.season_anchor_current_id,
+                        profile.season_anchor_previous_id or "",
                     )
-                anchor = validate_season_anchor(
-                    profile.current_league_season_id,
-                    profile.previous_league_season_id,
-                )
+                else:
+                    if (
+                        profile.current_league_season_id is None
+                        or profile.previous_league_season_id is None
+                    ):
+                        raise DomainRuleError(
+                            "invalid_season_anchor", "profile season values are missing"
+                        )
+                    anchor = validate_season_anchor(
+                        profile.current_league_season_id,
+                        profile.previous_league_season_id,
+                    )
                 outcome = "accepted"
             except DomainRuleError as error:
                 outcome = "conflict"

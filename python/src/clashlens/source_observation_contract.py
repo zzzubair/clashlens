@@ -13,6 +13,7 @@ class SourceObservationContract:
 
 
 _DEFAULT_PARSER_VERSION = "supercell-source-parser-v2"
+_PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
 _SUPPORTED_PARSER_VERSIONS = frozenset(
     {"supercell-source-parser-v1", _DEFAULT_PARSER_VERSION}
 )
@@ -21,8 +22,10 @@ PROFILE_SOURCE_OBSERVATION_CONTRACT = SourceObservationContract(
     endpoint="profile",
     endpoint_version="profile-v1",
     schema_version="profile-schema-v1",
-    default_parser_version=_DEFAULT_PARSER_VERSION,
-    supported_parser_versions=_SUPPORTED_PARSER_VERSIONS,
+    default_parser_version=_PROFILE_PARSER_VERSION,
+    supported_parser_versions=frozenset(
+        {*_SUPPORTED_PARSER_VERSIONS, _PROFILE_PARSER_VERSION}
+    ),
 )
 BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT = SourceObservationContract(
     endpoint="battle_log",

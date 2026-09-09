@@ -8,12 +8,17 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .domain import DomainRuleError, validate_season_anchor
+from .domain import (
+    DomainRuleError,
+    validate_profile_season_anchor,
+    validate_season_anchor,
+)
 from .source_observation_contract import PROFILE_SOURCE_OBSERVATION_CONTRACT
 
 ENDPOINT_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.endpoint_version
 SCHEMA_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.schema_version
 PARSER_VERSION = PROFILE_SOURCE_OBSERVATION_CONTRACT.default_parser_version
+PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
 SUPPORTED_PARSER_VERSIONS = (
     PROFILE_SOURCE_OBSERVATION_CONTRACT.supported_parser_versions
 )
@@ -59,6 +64,8 @@ class ParsedProfile:
     current_league_season_id: str | None
     previous_league_season_id: str | None
     season_anchor_state: str
+    season_anchor_current_id: str | None
+    season_anchor_previous_id: str | None
     observed_at: datetime
     endpoint_version: str
     schema_version: str
@@ -131,13 +138,24 @@ def parse_profile(
     current_season = _source_season_id(profile.current_league_season_id)
     previous_season = _source_season_id(profile.previous_league_season_id)
     season_anchor_state = "valid"
+    season_anchor = None
     try:
-        if current_season is None or previous_season is None:
+        if current_season is None:
             raise DomainRuleError(
                 "invalid_season_anchor",
-                "profile season values are missing or malformed",
+                "profile current season is missing or malformed",
             )
-        validate_season_anchor(current_season, previous_season)
+        if parser_version == PROFILE_PARSER_VERSION:
+            season_anchor = validate_profile_season_anchor(
+                current_season, observed_at=observed_utc
+            )
+        else:
+            if previous_season is None:
+                raise DomainRuleError(
+                    "invalid_season_anchor",
+                    "profile season values are missing or malformed",
+                )
+            season_anchor = validate_season_anchor(current_season, previous_season)
     except DomainRuleError:
         season_anchor_state = "conflict"
     source_contract_state = (
@@ -157,6 +175,10 @@ def parse_profile(
         current_league_season_id=current_season,
         previous_league_season_id=previous_season,
         season_anchor_state=season_anchor_state,
+        season_anchor_current_id=(season_anchor.current_id if season_anchor else None),
+        season_anchor_previous_id=(
+            season_anchor.previous_id if season_anchor else None
+        ),
         observed_at=observed_utc,
         endpoint_version=endpoint_version,
         schema_version=SCHEMA_VERSION,

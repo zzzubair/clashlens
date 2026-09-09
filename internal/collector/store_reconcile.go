@@ -155,6 +155,9 @@ func newObservationCommitIntent(
 }
 
 func parserVersionForEndpoint(endpoint endpointName) string {
+	if endpoint == profileEndpoint {
+		return "supercell-profile-parser-v3"
+	}
 	return "supercell-source-parser-v2"
 }
 
