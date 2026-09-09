@@ -3099,8 +3099,16 @@ def _worker_snapshots(run: dict, worker_probe=None) -> tuple[dict, str | None]:
     for payload in files:
         try:
             attempts = payload["archive"]["remote_attempts"]
+            if not isinstance(attempts, dict):
+                raise TypeError("remote_attempts must be an object")
+            if not attempts:
+                raise ValueError("remote_attempts must not be empty")
             for operation, count in attempts.items():
-                totals[operation] = totals.get(operation, 0) + int(count)
+                if not isinstance(operation, str) or not operation:
+                    raise TypeError("remote attempt operation must be named")
+                if type(count) is not int or count < 0:
+                    raise ValueError("remote attempt count must be a nonnegative integer")
+                totals[operation] = totals.get(operation, 0) + count
         except (KeyError, TypeError, ValueError) as error:
             return {}, "s3_worker_malformed:" + type(error).__name__
     return totals, None

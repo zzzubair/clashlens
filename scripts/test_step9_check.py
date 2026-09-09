@@ -2881,6 +2881,15 @@ def test_s3_accounting() -> None:
     totals, error = step9._worker_snapshots(
         {}, lambda run: [{"archive": {}}])
     assert totals == {} and error is not None
+    totals, error = step9._worker_snapshots(
+        {}, lambda run: [{"archive": {"remote_attempts": {}}}])
+    assert totals == {} and error == "s3_worker_malformed:ValueError"
+    for count in (-1, True, 1.5, "2"):
+        totals, error = step9._worker_snapshots(
+            {}, lambda run, count=count: [
+                {"archive": {"remote_attempts": {"get": count}}}
+            ])
+        assert totals == {} and error == "s3_worker_malformed:ValueError"
 
 
 def test_slot_zero_transfer_breach_records(tmp_path: Path) -> None:

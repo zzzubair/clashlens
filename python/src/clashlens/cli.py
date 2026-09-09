@@ -618,12 +618,32 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         processed_count = 0
 
         def operating_snapshot() -> dict[str, Any]:
+            readiness = getattr(archive, "readiness", None)
+            if callable(readiness):
+                spool = readiness()
+                remote_health = (
+                    spool.get("remote_health", "unconfigured")
+                    if isinstance(spool, dict)
+                    else "unconfigured"
+                )
+            else:
+                spool = {"ready": True}
+                remote_health = getattr(
+                    archive, "check_marker_health", lambda: "unconfigured"
+                )()
+            archive_snapshot = {
+                "remote_health": remote_health,
+                "remote_attempts": dict(
+                    getattr(archive, "remote_attempts", {}) or {}
+                ),
+            }
             snapshot = worker_metrics.snapshot(
                 stages=stage_metrics.snapshot(),
                 database_pool=getattr(database, "pool_health", dict)(),
                 queue=getattr(database, "queue_health", dict)(),
-                spool=getattr(archive, "readiness", lambda: {"ready": True})(),
+                spool=spool,
             )
+            snapshot["archive"] = archive_snapshot
             snapshot_file = getattr(arguments, "operating_snapshot_file", "")
             if snapshot_file:
                 try:
@@ -645,13 +665,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                         "stages": process_snapshot["stages"],
                         "archive": {
                             "spool": process_snapshot["spool"],
-                            "remote_health": getattr(
-                                archive,
-                                "check_marker_health",
-                                lambda: "unconfigured",
-                            )(),
-                            "remote_attempts": dict(
-                                getattr(archive, "remote_attempts", {}) or {}),
+                            **process_snapshot["archive"],
                         },
                     }
                 ),
@@ -693,28 +707,22 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         finally:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=5)
+        final_snapshot = operating_snapshot()
         print(
             json.dumps(
                 {
                     "status": "stopped",
                     "processed_count": processed_count,
                     "results": [asdict(result) for result in recent_results],
-                    "database_pool": getattr(database, "pool_health", dict)(),
-                    "stages": stage_metrics.snapshot(),
+                    "database_pool": final_snapshot["database_pool"],
+                    "stages": final_snapshot["stages"],
                     "archive": {
-                        "spool": getattr(
-                            archive, "readiness", lambda: {"ready": True}
-                        )(),
-                        "remote_health": getattr(
-                            archive, "check_marker_health", lambda: "unconfigured"
-                        )(),
-                        "remote_attempts": dict(
-                            getattr(archive, "remote_attempts", {}) or {}),
+                        "spool": final_snapshot["spool"],
+                        **final_snapshot["archive"],
                     },
                 }
             )
         )
-        operating_snapshot()
         return 0
     finally:
         database.close()
