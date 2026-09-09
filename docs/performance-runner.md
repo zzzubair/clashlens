@@ -88,7 +88,7 @@ uv run --locked --python 3.12 ../scripts/performance_runner.py army-analytics \
 
 The same `--candidate-receipt` option may be used with each workload. The
 receipt must be a schema-2 `candidate-preparation` receipt whose clean source
-SHA, migration filenames/hashes through 0023, application source/revision
+SHA, migration filenames/hashes through 0024, application source/revision
 labels, bounded candidate resource proof, and canonical receipt digest validate
 against this checkout. The
 runner records those identities under `prepared_candidate_images`; they are
@@ -189,7 +189,7 @@ Artifacts are validated before they are
 printed or written; missing/invalid digests, required metrics, or older artifact
 versions fail the run. They require a clean exact source SHA, the runner hash,
 source migration filenames/hashes and the applied database migration versions
-through 0023, a sanitized configuration fingerprint, host/runtime/PostgreSQL
+through 0024, a sanitized configuration fingerprint, host/runtime/PostgreSQL
 execution identity and settings, and fixed workload facts. They include
 generated and retained PostgreSQL WAL and relation sizes,
 per-relation DML and
@@ -437,3 +437,14 @@ Each sample also records container state/image/started-at, cgroup OOM/swap
 counters, and mount-identity continuity; a changed or unprovable mount fails
 validation. Until the worker role receives the remaining operating/archive
 `SELECT` grants, these captures stay honestly unknown and the PR stays draft.
+
+### Retained WAL from the PostgreSQL container
+
+`pg_ls_waldir` is superuser-only, so the observer never claims retained WAL
+from SQL. Instead each sample runs a bounded read-only podman-exec probe
+against the exact configured PostgreSQL container as its existing default
+user: it resolves and verifies `PGDATA` (absolute, no parent traversal),
+records the container image, and measures `PGDATA` and `PGDATA/pg_wal` bytes
+with capped output and timeouts. Unsafe names/paths, output/time breaches,
+or image changes fail closed; generated LSN WAL stays separate. Finalize
+retains the last captured sizes; validation requires them.

@@ -496,18 +496,29 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
     except OSError as error:
         raise Step9Error("run_unwritable", "run directory cannot be created") from error
     os.chmod(run_dir, 0o700)
+    podman_bin = getattr(arguments, "podman_bin", "podman")
     collector_image: str | None = None
     collector_image_error = "image_pin_unattempted"
+    postgres_image: str | None = None
+    postgres_image_error = "image_pin_unattempted"
     try:
-        running, pinned = Podman(
-            None, getattr(arguments, "podman_bin", "podman")
-        ).inspect_running(arguments.collector_container)
+        running, pinned = Podman(None, podman_bin).inspect_running(
+            arguments.collector_container)
         if running:
             collector_image, collector_image_error = pinned, None
         else:
             collector_image_error = "collector_not_running_at_start"
     except Exception as error:  # noqa: BLE001 - unpinnable image is unknown
         collector_image_error = f"image_inspect_unavailable: {type(error).__name__}"
+    try:
+        pg_running, pg_pinned = Podman(None, podman_bin).inspect_running(
+            arguments.postgres_container)
+        if pg_running:
+            postgres_image, postgres_image_error = pg_pinned, None
+        else:
+            postgres_image_error = "postgres_not_running_at_start"
+    except Exception as error:  # noqa: BLE001 - unpinnable image is unknown
+        postgres_image_error = f"image_inspect_unavailable: {type(error).__name__}"
     initial = {"status": "unknown", "failure_code": "database_unavailable"}
     if db is not None:
         try:
@@ -532,6 +543,8 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
             "collector_image": collector_image,
             "collector_image_error": collector_image_error,
             "postgres": arguments.postgres_container,
+            "postgres_image": postgres_image,
+            "postgres_image_error": postgres_image_error,
             "python_api": arguments.python_api_container,
             "python_worker": arguments.python_worker_container,
             "worker_replicas": arguments.worker_replicas,
@@ -579,6 +592,8 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         header["resource_baseline"]["cgroup"] = {"oom_kills": None,
             "swap_current_bytes": None, "mem_current_bytes": None,
             "mem_peak_bytes": None, "error": "baseline_unavailable"}
+    header["pgdata_baseline"] = _pgdata_probe(
+        podman_bin, arguments.postgres_container, postgres_image)
     digest = _exclusive_json(run_dir / "run.json", header)
     try:
         os.chmod(run_dir / "run.json", 0o600)
@@ -1182,6 +1197,7 @@ def build_sample(*, run: dict, index: int, expected_utc: datetime,
                  previous_metrics: dict | None,
                  pressure: dict, fs: dict, watchdog_active: bool | None,
                  admission_latest: dict | None = None,
+                 pgdata: dict | None = None,
                  ) -> dict:
     classification = classify_slot(
         expected_utc, captured_utc, wall_delta, mono_delta,
@@ -1210,6 +1226,7 @@ def build_sample(*, run: dict, index: int, expected_utc: datetime,
             sample["failure_code"] = "process_identity_changed"
             sample["outcome"] = "process_restart"
     sample["admission_latest"] = admission_latest
+    sample["pgdata"] = pgdata
     sample["mount_changed"] = _mount_changed(run.get("filesystem") or {}, fs)
     if admission_latest is not None and admission_latest.get("mismatch"):
         sample["failure_code"] = "admission_count_mismatch"
@@ -1531,6 +1548,20 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
             if cgroup:
                 resources = dict(resources)
                 resources["cgroup"] = cgroup
+            pgdata_probe = hooks.get("pgdata_probe")
+            if pgdata_probe is not None:
+                try:
+                    pgdata = pgdata_probe(run=run)
+                except Exception:  # noqa: BLE001 - probe miss is unknown
+                    pgdata = {"status": "unknown",
+                              "failure_code": "pgdata_probe_failed"}
+            else:
+                pgdata = _pgdata_probe(
+                    run.get("podman_bin", "podman") or "podman",
+                    (run.get("containers", {}) or {}).get("postgres", ""),
+                    (run.get("containers", {}) or {}).get("postgres_image"))
+            sample["pgdata"] = pgdata
+            pgdata_bad = (sample.get("pgdata") or {}).get("failure_code")
             res_failures, res_unknown, mem_over = evaluate_resource_gates(
                 resource_baseline, resources, mem_over)
             sample["resources"] = {"failures": res_failures,
@@ -1578,7 +1609,7 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                     and stop_proven:
                 sample["metrics_absent_authorized"] = True
                 metrics_absent = False
-            if db_error is not None or metrics_absent:
+            if db_error is not None or metrics_absent or pgdata_bad:
                 unavailable_strikes += 1
                 if unavailable_strikes >= 2:
                     _record_failure(run_dir, "two_consecutive_unavailable",
@@ -1636,7 +1667,7 @@ def _plus_minutes(iso: str, minutes: int) -> str:
 
 
 def _finalize_wal(samples: list[dict], db: object | None) -> dict:
-    """Generated WAL bytes across the run plus current database size."""
+    """Generated LSN WAL plus retained PGDATA/pg_wal bytes from probes."""
     if db is None:
         return {"status": "unknown", "failure_code": "database_unavailable"}
     try:
@@ -1644,8 +1675,21 @@ def _finalize_wal(samples: list[dict], db: object | None) -> dict:
         if not first_lsn:
             return {"status": "unknown", "failure_code": "wal_lsn_missing"}
         generated, size = db.wal_generated(first_lsn)
-        return {"status": "complete", "generated_bytes": int(generated),
-                "database_bytes": int(size)}
+        retained = next((s.get("pgdata") for s in reversed(samples)
+                         if isinstance(s.get("pgdata"), dict)
+                         and s["pgdata"].get("status") == "captured"), None)
+        result: dict = {"status": "complete",
+                        "generated_bytes": int(generated),
+                        "database_bytes": int(size)}
+        if retained is None:
+            result["status"] = "unknown"
+            result["failure_code"] = "pgdata_retained_unknown"
+        else:
+            result["retained_pgdata_bytes"] = retained.get("pgdata_bytes")
+            result["retained_pg_wal_bytes"] = retained.get("pg_wal_bytes")
+            result["retained_pgdata"] = retained.get("pgdata")
+            result["retained_captured_at"] = retained.get("captured_at")
+        return result
     except Step9Error as error:
         return {"status": "unknown", "failure_code": error.code}
     except Exception as error:  # noqa: BLE001 - DB failure is evidence
@@ -2037,6 +2081,11 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
                     raise Step9Error("sample_evidence_failed",
                                      f"slot {sample.get('slot')} {field} set",
                                      gate=True)
+            pgdata = sample.get("pgdata") or {}
+            if pgdata.get("failure_code") is not None:
+                raise Step9Error("sample_evidence_failed",
+                                 f"slot {sample.get('slot')} pgdata "
+                                 f"{pgdata.get('failure_code')}", gate=True)
             if sample.get("watchdog_active") is not True:
                 raise Step9Error("watchdog_liveness_unproven",
                                  f"slot {sample.get('slot')} watchdog not active",
@@ -2651,6 +2700,78 @@ def _jsonable(value):
     if isinstance(value, dict):
         return {key: _jsonable(item) for key, item in value.items()}
     return value
+
+
+def _pgdata_probe(podman_bin: str, container: str,
+                  expected_image: str | None = None) -> dict:
+    """Bounded read-only PGDATA/pg_wal measurement inside the PG container.
+
+    Runs as the container's existing default user (no --user override).
+    Fail closed on unsafe names/paths, output/time caps, or identity change.
+    """
+    import subprocess
+
+    result: dict = {"status": "unknown", "failure_code": None,
+                    "captured_at": None, "container": container,
+                    "image": None, "pgdata": None, "source": None,
+                    "pgdata_bytes": None, "pg_wal_bytes": None}
+    if not _CONTAINER.fullmatch(container or ""):
+        result["failure_code"] = "pgdata_unsafe_container"
+        return result
+    if not podman_bin or "/" in podman_bin or "\\" in podman_bin \
+            or " " in podman_bin:
+        result["failure_code"] = "pgdata_unsafe_bin"
+        return result
+    try:
+        ident = subprocess.run(
+            [podman_bin, "container", "inspect", "--format",
+             "{{.Image}}\n{{.ImageName}}", container],
+            check=False, capture_output=True, text=True, timeout=30)
+        if ident.returncode != 0:
+            result["failure_code"] = "pgdata_inspect_unavailable"
+            return result
+        lines = ident.stdout.strip().splitlines()
+        result["image"] = lines[0].strip() if lines else None
+        if expected_image is not None and result["image"] != expected_image:
+            result["failure_code"] = "pgdata_image_changed"
+            return result
+        env = subprocess.run(
+            [podman_bin, "exec", container, "printenv", "PGDATA"],
+            check=False, capture_output=True, text=True, timeout=30)
+        if env.returncode != 0 or len(env.stdout.encode()) > 4096:
+            result["failure_code"] = "pgdata_unresolvable"
+            return result
+        pgdata = env.stdout.strip()
+        if not pgdata.startswith("/") or ".." in pgdata.split("/") \
+                or any(ord(c) < 32 for c in pgdata):
+            result["failure_code"] = "pgdata_unsafe_path"
+            return result
+        result["pgdata"] = pgdata
+        measured = subprocess.run(
+            [podman_bin, "exec", container, "du", "-sb",
+             pgdata, pgdata + "/pg_wal"],
+            check=False, capture_output=True, text=True, timeout=60)
+        if measured.returncode != 0 \
+                or len(measured.stdout.encode()) > 4096:
+            result["failure_code"] = "pgdata_measure_failed"
+            return result
+        sizes = {}
+        for line in measured.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0].isdigit():
+                sizes[parts[1]] = int(parts[0])
+        if pgdata not in sizes:
+            result["failure_code"] = "pgdata_measure_malformed"
+            return result
+        result["pgdata_bytes"] = sizes[pgdata]
+        result["pg_wal_bytes"] = sizes.get(pgdata + "/pg_wal")
+        result["source"] = "podman-exec:" + container
+        result["captured_at"] = _utc_now().isoformat()
+        result["status"] = "captured"
+        return result
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError):
+        result["failure_code"] = "pgdata_probe_unavailable"
+        return result
 
 
 def _event_selected_due(event: dict) -> list:

@@ -467,6 +467,13 @@ def _sample_hooks(db: FakeDB, **overrides):
         "watchdog_check": lambda run: True, "clock": clock, "now_utc": now_utc,
         "resource_facts": lambda run, db, metrics: {
             "filesystems": {}, "memory": {}, "archive": {}},
+        "pgdata_probe": lambda run: {
+            "status": "captured", "failure_code": None,
+            "captured_at": "2026-10-04T05:00:00+00:00",
+            "container": "test-pg", "image": "sha256:pg",
+            "pgdata": "/var/lib/postgresql/data",
+            "source": "podman-exec:test-pg",
+            "pgdata_bytes": 1000, "pg_wal_bytes": 100},
         "no_sleep": True, "single_pass": True, "max_slots": 1,
     }
     hooks.update(overrides)
@@ -751,7 +758,13 @@ def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
             metrics_error=None,
             previous_metrics={"counters": {"jobs": index - 1}} if index else None,
             pressure={}, fs=step9.filesystem_facts("/tmp", "/tmp"),
-            watchdog_active=True)
+            watchdog_active=True,
+            pgdata={"status": "captured", "failure_code": None,
+                    "captured_at": "2026-10-04T05:00:00+00:00",
+                    "container": "test-pg", "image": "sha256:pg",
+                    "pgdata": "/var/lib/postgresql/data",
+                    "source": "podman-exec:test-pg",
+                    "pgdata_bytes": 1000, "pg_wal_bytes": 100})
         if (index + 1) % 60 == 0:
             sample["operating"] = db.operating_snapshot([])
         step9._exclusive_json(samples / f"minute-{index:04d}.json", sample)
@@ -1077,6 +1090,13 @@ def _rehearsal_hooks(database, fixed_ids, *, slots: int):
             "watchdog_check": lambda run: True,
             "resource_facts": lambda run, db, metrics: {
                 "filesystems": {}, "memory": {}, "archive": {}},
+            "pgdata_probe": lambda run: {
+                "status": "captured", "failure_code": None,
+                "captured_at": "2026-10-04T05:00:00+00:00",
+                "container": "test-pg", "image": "sha256:pg",
+                "pgdata": "/var/lib/postgresql/data",
+                "source": "podman-exec:test-pg",
+                "pgdata_bytes": 1000, "pg_wal_bytes": 100},
             "clock": clock,
             "now_utc": now_utc, "no_sleep": True, "max_slots": slots}
 
@@ -1455,7 +1475,13 @@ def _sealed_preflight(tmp_path: Path, name: str, db: FakeDB, bad_traffic: bool =
                      "digest": str(index)},
             metrics_error=None, previous_metrics=None,
             pressure={}, fs=step9.filesystem_facts("/tmp", "/tmp"),
-            watchdog_active=True)
+            watchdog_active=True,
+            pgdata={"status": "captured", "failure_code": None,
+                    "captured_at": "2026-10-04T05:00:00+00:00",
+                    "container": "test-pg", "image": "sha256:pg",
+                    "pgdata": "/var/lib/postgresql/data",
+                    "source": "podman-exec:test-pg",
+                    "pgdata_bytes": 1000, "pg_wal_bytes": 100})
         if (index + 1) % 60 == 0:
             sample["operating"] = db.operating_snapshot([])
         step9._exclusive_json(samples / f"minute-{index:04d}.json", sample)
@@ -1689,9 +1715,21 @@ def test_observer_role_least_privilege() -> None:
                 ("preflight_obs", step9.SQL_PREFLIGHT_OBSERVATIONS,
                  ("2026-10-04T04:00:00Z", "2026-10-04T07:00:00Z")),
                 ("pending_remote", step9.SQL_PREFLIGHT_PENDING_REMOTE, ()),
+                ("transport",
+                 "SELECT count(*) FROM collector_transport_failures", ()),
+                ("processed_versions",
+                 "SELECT count(*) FROM processed_observation_versions", ()),
+                ("source_parses",
+                 "SELECT count(*) FROM source_response_parses", ()),
+                ("catalogue", "SELECT count(*) FROM archive_catalogue", ()),
             ]
             for name, sql, params in readable:
                 connection.execute(sql, params if params else None)
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute(
+                    "INSERT INTO archive_catalogue (response_hash,"
+                    " archive_reference, byte_size, archive_instance_id)"
+                    " VALUES (%s, 'x', 1, 'i1')", ("ab" * 32,))
             connection.execute("RESET ROLE")
 
 
@@ -1759,6 +1797,13 @@ def test_shifted_sampler_fails_lateness_gate(tmp_path: Path) -> None:
              "watchdog_check": lambda run: True,
             "resource_facts": lambda run, db, metrics: {
                 "filesystems": {}, "memory": {}, "archive": {}},
+            "pgdata_probe": lambda run: {
+                "status": "captured", "failure_code": None,
+                "captured_at": "2026-10-04T05:00:00+00:00",
+                "container": "test-pg", "image": "sha256:pg",
+                "pgdata": "/var/lib/postgresql/data",
+                "source": "podman-exec:test-pg",
+                "pgdata_bytes": 1000, "pg_wal_bytes": 100},
             "clock": clock,
              "now_utc": now_utc, "no_sleep": True, "max_slots": 5,
              "single_pass": False}
@@ -1839,6 +1884,15 @@ def test_migrated_0023_budget_reads() -> None:
     with domain_database(_pg_url(), include_coordinator=True) as info:
         database = step9.Database(lambda: psycopg.connect(info))
         assert database.budgets_present() is True  # migrated 0023
+        with psycopg.connect(info, autocommit=True) as connection:
+            connection.execute("SET ROLE clashlens_python_worker")
+            connection.execute(step9.SQL_ENDPOINT_BUDGETS, ("none",))
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                connection.execute(
+                    "INSERT INTO collector_endpoint_budgets"
+                    " (run_id, endpoint, cap, consumed, deadline_at)"
+                    " VALUES ('none', 'profile', 1, 0, now())")
+            connection.execute("RESET ROLE")
         with psycopg.connect(info, autocommit=True) as connection:
             connection.execute(
                 "INSERT INTO population_bootstrap_runs"
@@ -2465,7 +2519,14 @@ def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
               "clock": clock2, "now_utc": now_utc2,
               "no_sleep": True, "max_slots": 75,
               "resource_facts": lambda run, db, metrics: {
-                  "filesystems": {}, "memory": {}, "archive": {}}}
+                  "filesystems": {}, "memory": {}, "archive": {}},
+              "pgdata_probe": lambda run: {
+                  "status": "captured", "failure_code": None,
+                  "captured_at": "2026-10-04T05:00:00+00:00",
+                  "container": "test-pg", "image": "sha256:pg",
+                  "pgdata": "/var/lib/postgresql/data",
+                  "source": "podman-exec:test-pg",
+                  "pgdata_bytes": 1000, "pg_wal_bytes": 100}}
     arguments2 = mock.Mock(run_dir=str(run_dir2), podman_bin="podman")
     assert step9.cmd_sample(arguments2, hooks2) == 0
     assert len(list((run_dir2 / "samples").glob("*.json"))) == 75
@@ -2491,5 +2552,73 @@ def test_operating_snapshot_worker_sections() -> None:
         assert snap["relations"]["status"] == "complete"
         assert len(snap["relations"]["rows"]) == len(RELATION_NAMES)
         assert snap["collector_queues"]["status"] == "complete"
-        assert snap["failures"]["status"] == "unknown"
-        assert snap["status"] == "unknown"
+        assert snap["failures"]["status"] == "complete"
+        assert snap["status"] == "complete"
+
+
+def test_pgdata_probe_contract() -> None:
+    ok_out = {"inspect": "sha256:pgimg\nlocalhost/pg\n",
+              "env": "/var/lib/postgresql/data\n",
+              "du": "1048576\t/var/lib/postgresql/data\n65536\t/var/lib/postgresql/data/pg_wal\n"}
+
+    def fake_run(command, **kwargs):
+        if "inspect" in command:
+            return mock.Mock(returncode=0, stdout=ok_out["inspect"], stderr="")
+        if "printenv" in command:
+            return mock.Mock(returncode=0, stdout=ok_out["env"], stderr="")
+        if "du" in command:
+            return mock.Mock(returncode=0, stdout=ok_out["du"], stderr="")
+        raise AssertionError(command)
+
+    seen = []
+
+    def spy_run(command, **kwargs):
+        seen.append(command)
+        return fake_run(command, **kwargs)
+
+    with mock.patch("subprocess.run", side_effect=spy_run):
+        result = step9._pgdata_probe("podman-x", "test-pg", "sha256:pgimg")
+    assert result["status"] == "captured"
+    assert result["pgdata_bytes"] == 1048576
+    assert result["pg_wal_bytes"] == 65536
+    assert result["pgdata"] == "/var/lib/postgresql/data"
+    assert all(command[0] == "podman-x" for command in seen)
+    assert step9._pgdata_probe("podman-x", "bad name!")["failure_code"] == \
+        "pgdata_unsafe_container"
+    assert step9._pgdata_probe("/bin/pod", "test-pg")["failure_code"] == \
+        "pgdata_unsafe_bin"
+    with mock.patch("subprocess.run", side_effect=spy_run):
+        changed = step9._pgdata_probe("podman-x", "test-pg", "sha256:other")
+    assert changed["failure_code"] == "pgdata_image_changed"
+    assert "password" not in json.dumps(result)
+
+    def bad_env(command, **kwargs):
+        if "printenv" in command:
+            return mock.Mock(returncode=0, stdout="../../etc\n", stderr="")
+        return fake_run(command, **kwargs)
+
+    with mock.patch("subprocess.run", side_effect=bad_env):
+        assert step9._pgdata_probe("podman-x", "test-pg")["failure_code"] == \
+            "pgdata_unsafe_path"
+
+    def missing_du(command, **kwargs):
+        if "du" in command:
+            raise FileNotFoundError("no du")
+        return fake_run(command, **kwargs)
+
+    with mock.patch("subprocess.run", side_effect=missing_du):
+        result = step9._pgdata_probe("podman-x", "test-pg")
+    assert result["failure_code"] == "pgdata_probe_unavailable"
+
+
+def test_pgdata_unavailable_strikes(tmp_path: Path) -> None:
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    hooks = _sample_hooks(db)
+    hooks["pgdata_probe"] = lambda run: {"status": "unknown",
+                                         "failure_code": "pgdata_gone"}
+    hooks["max_slots"] = 3
+    hooks["single_pass"] = False
+    assert step9.cmd_sample(arguments, hooks) == 1
+    assert list((run_dir / "failures").glob("two_consecutive_unavailable-*.json"))

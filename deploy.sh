@@ -29,6 +29,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0021_season_detail_retirement.sql"
   "$ROOT_DIR/deploy/migrations/0022_step9_regular_admission_evidence.sql"
   "$ROOT_DIR/deploy/migrations/0023_population_bootstrap.sql"
+  "$ROOT_DIR/deploy/migrations/0024_observer_evidence_reads.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}

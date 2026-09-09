@@ -282,7 +282,7 @@ case "$verb" in
       if grep -q 'VALUES (15)' "$FAKE_STATE/stdin/exec-$n"; then
         printf '%s\n' 15 >>"$FAKE_STATE/schema_migrations"
       fi
-      for version in 16 17 18 19 20 21 22 23; do
+      for version in 16 17 18 19 20 21 22 23 24; do
         if grep -q "VALUES ($version)" "$FAKE_STATE/stdin/exec-$n"; then
           printf '%s\n' "$version" >>"$FAKE_STATE/schema_migrations"
         fi
@@ -751,8 +751,8 @@ log_lacks "$CANDIDATE_NORM" '^build ' 'candidate-prepare built an application im
 [[ "$(cat "$CANDIDATE_DIR/state/contract_version")" == 5 ]] || \
   fail 'candidate-prepare did not reach contract version 5'
 [[ "$(sort -n -u "$CANDIDATE_DIR/state/schema_migrations" | tr '\n' ' ')" == \
-   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 ' ]] || \
-  fail 'candidate-prepare did not apply the exact migration set through 0023'
+   '1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 ' ]] || \
+  fail 'candidate-prepare did not apply the exact migration set through 0024'
 [[ "$(cat "$CANDIDATE_DIR/state/networks/clashlens-candidate-private.scope")" == candidate ]] || \
   fail 'candidate network was not stamped with the candidate scope label'
 [[ "$(cat "$CANDIDATE_DIR/state/volumes/clashlens-candidate-postgres-data.scope")" == candidate ]] || \
@@ -1335,7 +1335,7 @@ FAKE_STATE="$V2_DIR/state" FAKE_PODMAN_LOG="$V2_DIR/podman.log" \
   fail 'idempotent v2 up removed a current Python worker'
 if grep -q '^exec --interactive clashlens-postgres psql ' <<<"$v2_second_up"; then
   second_up_stdin_count=$(find "$V2_DIR/state/stdin" -maxdepth 1 -type f | wc -l)
-  [[ "$second_up_stdin_count" == "22" ]] || fail 'a recorded forward migration was replayed on second up'
+  [[ "$second_up_stdin_count" == "23" ]] || fail 'a recorded forward migration was replayed on second up'
 fi
 printf 'ok: up on v2 applies only missing forward migrations and starts the required collector\n'
 
@@ -1396,7 +1396,7 @@ RESTART_DIR=$(new_scenario)
 RESTART_ENV="$RESTART_DIR/app.env"
 write_scenario_env "$RESTART_ENV" "$RESTART_DIR/keys"
 printf '5' >"$RESTART_DIR/state/contract_version"
-printf '23\n' >"$RESTART_DIR/state/schema_migrations"
+printf '24\n' >"$RESTART_DIR/state/schema_migrations"
 mkdir -p "$RESTART_DIR/state/images/localhost"
 : >"$RESTART_DIR/state/images/localhost/clashlens-collector:deployment"
 deploy "$RESTART_DIR" "$RESTART_ENV" -- restart >/dev/null
@@ -1422,9 +1422,9 @@ mkdir -p "$RESTART_UNMIGRATED_DIR/state/images/localhost"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-collector:deployment"
 : >"$RESTART_UNMIGRATED_DIR/state/images/localhost/clashlens-python:deployment"
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 23 is required' -- restart
+  'forward migration 24 is required' -- restart
 deploy_fails "$RESTART_UNMIGRATED_DIR" "$RESTART_UNMIGRATED_ENV" \
-  'forward migration 23 is required' -- python-start
+  'forward migration 24 is required' -- python-start
 
 UNKNOWN_DIR=$(new_scenario)
 UNKNOWN_ENV="$UNKNOWN_DIR/app.env"
@@ -1551,7 +1551,7 @@ DISCOVERY_DIR=$(new_scenario)
 DISCOVERY_ENV="$DISCOVERY_DIR/app.env"
 write_scenario_env "$DISCOVERY_ENV" "$DISCOVERY_DIR/keys"
 printf '5' >"$DISCOVERY_DIR/state/contract_version"
-printf '23\n' >"$DISCOVERY_DIR/state/schema_migrations"
+printf '24\n' >"$DISCOVERY_DIR/state/schema_migrations"
 mkdir -p "$DISCOVERY_DIR/state/networks/clashlens-private"
 mkdir -p "$DISCOVERY_DIR/state/containers/clashlens-postgres"
 : >"$DISCOVERY_DIR/state/containers/clashlens-postgres.running"
@@ -1564,7 +1564,7 @@ DISCOVERY_OFF_ENV="$DISCOVERY_OFF_DIR/app.env"
 write_scenario_env "$DISCOVERY_OFF_ENV" "$DISCOVERY_OFF_DIR/keys"
 printf '%s\n' 'CLASHLENS_PLAYER_DISCOVERY_ENABLED=false' >>"$DISCOVERY_OFF_ENV"
 printf '5' >"$DISCOVERY_OFF_DIR/state/contract_version"
-printf '23\n' >"$DISCOVERY_OFF_DIR/state/schema_migrations"
+printf '24\n' >"$DISCOVERY_OFF_DIR/state/schema_migrations"
 mkdir -p "$DISCOVERY_OFF_DIR/state/networks/clashlens-private"
 mkdir -p "$DISCOVERY_OFF_DIR/state/containers/clashlens-postgres"
 : >"$DISCOVERY_OFF_DIR/state/containers/clashlens-postgres.running"
@@ -1599,7 +1599,7 @@ BUDGET_DIR=$(new_scenario)
 BUDGET_ENV="$BUDGET_DIR/app.env"
 write_scenario_env "$BUDGET_ENV" "$BUDGET_DIR/keys"
 printf '5' >"$BUDGET_DIR/state/contract_version"
-printf '23\n' >"$BUDGET_DIR/state/schema_migrations"
+printf '24\n' >"$BUDGET_DIR/state/schema_migrations"
 mkdir -p "$BUDGET_DIR/state/networks/clashlens-private"
 mkdir -p "$BUDGET_DIR/state/containers/clashlens-postgres"
 : >"$BUDGET_DIR/state/containers/clashlens-postgres.running"
@@ -1660,7 +1660,7 @@ printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS=1' >>"$BUDGET_ON_ENV"
 printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG=0' >>"$BUDGET_ON_ENV"
 printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT=2026-09-09T06:00:00Z' >>"$BUDGET_ON_ENV"
 printf '5' >"$BUDGET_ON_DIR/state/contract_version"
-printf '23\n' >"$BUDGET_ON_DIR/state/schema_migrations"
+printf '24\n' >"$BUDGET_ON_DIR/state/schema_migrations"
 mkdir -p "$BUDGET_ON_DIR/state/networks/clashlens-private"
 mkdir -p "$BUDGET_ON_DIR/state/containers/clashlens-postgres"
 : >"$BUDGET_ON_DIR/state/containers/clashlens-postgres.running"
@@ -1683,7 +1683,7 @@ ADMISSION_DIR=$(new_scenario)
 ADMISSION_ENV="$ADMISSION_DIR/app.env"
 write_scenario_env "$ADMISSION_ENV" "$ADMISSION_DIR/keys"
 printf '5' >"$ADMISSION_DIR/state/contract_version"
-printf '23\n' >"$ADMISSION_DIR/state/schema_migrations"
+printf '24\n' >"$ADMISSION_DIR/state/schema_migrations"
 mkdir -p "$ADMISSION_DIR/state/networks/clashlens-private"
 mkdir -p "$ADMISSION_DIR/state/containers/clashlens-postgres"
 : >"$ADMISSION_DIR/state/containers/clashlens-postgres.running"
@@ -1707,7 +1707,7 @@ CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS=90000
 CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES=4000000
 EOF
 printf '5' >"$ADMISSION_ON_DIR/state/contract_version"
-printf '23\n' >"$ADMISSION_ON_DIR/state/schema_migrations"
+printf '24\n' >"$ADMISSION_ON_DIR/state/schema_migrations"
 mkdir -p "$ADMISSION_ON_DIR/state/networks/clashlens-private"
 mkdir -p "$ADMISSION_ON_DIR/state/containers/clashlens-postgres"
 : >"$ADMISSION_ON_DIR/state/containers/clashlens-postgres.running"
@@ -1734,7 +1734,7 @@ ROLLBACK_DIR=$(new_scenario)
 ROLLBACK_ENV="$ROLLBACK_DIR/app.env"
 write_scenario_env "$ROLLBACK_ENV" "$ROLLBACK_DIR/keys"
 printf '5' >"$ROLLBACK_DIR/state/contract_version"
-printf '23\n' >"$ROLLBACK_DIR/state/schema_migrations"
+printf '24\n' >"$ROLLBACK_DIR/state/schema_migrations"
 mkdir -p "$ROLLBACK_DIR/state/networks" "$ROLLBACK_DIR/state/containers" "$ROLLBACK_DIR/state/images/localhost"
 mkdir -p "$ROLLBACK_DIR/state/networks/clashlens-private"
 : >"$ROLLBACK_DIR/state/containers/clashlens-postgres"
@@ -2094,7 +2094,7 @@ REPLICA_MAX_ENV="$REPLICA_MAX_DIR/app.env"
 write_scenario_env "$REPLICA_MAX_ENV" "$REPLICA_MAX_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=16' >>"$REPLICA_MAX_ENV"
 printf '5' >"$REPLICA_MAX_DIR/state/contract_version"
-printf '23\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
+printf '24\n' >"$REPLICA_MAX_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_MAX_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -2138,7 +2138,7 @@ grep -v -E 'CLASHLENS_WORKER_(CONCURRENCY|DATABASE_POOL_SIZE|ARCHIVE_POOL_SIZE)=
   "$DEFAULTS_RAW" >"$DEFAULTS_ENV"
 chmod 0600 "$DEFAULTS_ENV"
 printf '5' >"$DEFAULTS_DIR/state/contract_version"
-printf '23\n' >"$DEFAULTS_DIR/state/schema_migrations"
+printf '24\n' >"$DEFAULTS_DIR/state/schema_migrations"
 mkdir -p "$DEFAULTS_DIR/state/networks/clashlens-private"
 mkdir -p "$DEFAULTS_DIR/state/containers/clashlens-postgres"
 : >"$DEFAULTS_DIR/state/containers/clashlens-postgres.running"
@@ -2159,7 +2159,7 @@ printf '%s\n' 'CLASHLENS_WORKER_CONCURRENCY=32' \
   'CLASHLENS_WORKER_DATABASE_POOL_SIZE=64' \
   'CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=64' >>"$CONCURRENCY_MAX_ENV"
 printf '5' >"$CONCURRENCY_MAX_DIR/state/contract_version"
-printf '23\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
+printf '24\n' >"$CONCURRENCY_MAX_DIR/state/schema_migrations"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/networks/clashlens-private"
 mkdir -p "$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres"
 : >"$CONCURRENCY_MAX_DIR/state/containers/clashlens-postgres.running"
@@ -2224,7 +2224,7 @@ REPLICA_ENV="$REPLICA_DIR/app.env"
 write_scenario_env "$REPLICA_ENV" "$REPLICA_DIR/keys"
 printf '%s\n' 'CLASHLENS_WORKER_REPLICAS=3' >>"$REPLICA_ENV"
 printf '5' >"$REPLICA_DIR/state/contract_version"
-printf '23\n' >"$REPLICA_DIR/state/schema_migrations"
+printf '24\n' >"$REPLICA_DIR/state/schema_migrations"
 mkdir -p "$REPLICA_DIR/state/networks/clashlens-private"
 mkdir -p "$REPLICA_DIR/state/containers/clashlens-postgres"
 : >"$REPLICA_DIR/state/containers/clashlens-postgres.running"
