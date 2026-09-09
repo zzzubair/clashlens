@@ -7,3 +7,4 @@
 *.secret
 /results/
 **/__pycache__/
+.tmp-test-private/

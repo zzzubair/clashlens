@@ -80,8 +80,18 @@ def _candidate_receipt() -> dict:
     from scripts import deployment_receipt
 
     migrations = runner._source_migrations()
+    def _field(name: str) -> str:
+        if name == "player_discovery_enabled":
+            return "true"
+        if name == "admission_evidence_run_id":
+            return "disabled"
+        if name in ("admission_evidence_start", "admission_evidence_end"):
+            return "disabled"
+        if name in ("admission_evidence_max_events", "admission_evidence_max_selected_entries"):
+            return "0"
+        return "1"
     fields = {
-        name: ("true" if name == "player_discovery_enabled" else "1")
+        name: _field(name)
         for name in sorted(deployment_receipt.SAFE_CONFIGURATION_FIELDS)
     }
     configuration = {

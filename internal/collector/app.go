@@ -51,6 +51,13 @@ func newApplication(ctx context.Context, config collectorConfig, logger *slog.Lo
 		return nil, err
 	}
 	store.archiveInstanceID = config.archiveInstanceID
+	if config.admissionEvidence != nil {
+		store.configureAdmissionEvidence(config.admissionEvidence)
+		if err := store.ensureAdmissionEvidenceRun(ctx, config.admissionEvidence); err != nil {
+			store.close()
+			return nil, err
+		}
+	}
 	if err := store.validateArchiveInstance(ctx, config.archiveEndpoint, config.archiveRegion, config.archiveBucket, config.archiveMarkerKey, config.archiveMarkerHash, config.archiveMarkerPayloadVersion); err != nil {
 		store.close()
 		return nil, err
