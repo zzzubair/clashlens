@@ -16,6 +16,16 @@ SOURCE_SHA = "01" * 20
 IMAGE_ID = "sha256:" + "02" * 32
 
 
+def _valid_safe_value(name: str) -> str:
+    if name in receipt._SAFE_BOOLEAN_FIELDS:
+        return "true"
+    if name == "endpoint_budget_run_id":
+        return "issue92"
+    if name == "endpoint_budget_deadline_at":
+        return "2026-09-09T06:00:00Z"
+    return "1"
+
+
 class FakeRunner:
     def __init__(
         self,
@@ -132,7 +142,7 @@ def arguments(scope: str = "candidate-preparation") -> Namespace:
         worker_container="step8-python-worker",
         website_container="step8-website",
         safe_config=[
-            f"{name}={'true' if name in receipt._SAFE_BOOLEAN_FIELDS else '1'}"
+            f"{name}={_valid_safe_value(name)}"
             for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
         ],
         created_at="2026-08-28T20:00:00+00:00",
@@ -227,7 +237,7 @@ class DeploymentReceiptTest(unittest.TestCase):
     def test_deployed_receipt_inspects_every_configured_worker(self) -> None:
         deployed = arguments("deployed-stack")
         deployed.safe_config = [
-            f"{name}={'3' if name == 'worker_replicas' else ('true' if name in receipt._SAFE_BOOLEAN_FIELDS else '1')}"
+            f"{name}={'3' if name == 'worker_replicas' else _valid_safe_value(name)}"
             for name in sorted(receipt.SAFE_CONFIGURATION_FIELDS)
         ]
         runner = FakeRunner()
@@ -436,6 +446,75 @@ class DeploymentReceiptTest(unittest.TestCase):
         old["configuration"]["allowlist_version"] = "step9-v1"
         with self.assertRaisesRegex(receipt.ReceiptError, "configuration is invalid"):
             receipt.validate_receipt(old)
+
+    def test_endpoint_budget_identity_is_exact_and_rejects_malformed(self) -> None:
+        result = receipt.collect_receipt(arguments(), FakeRunner())
+        fields = result["configuration"]["fields"]
+        self.assertEqual(fields["endpoint_budget_run_id"], "issue92")
+        self.assertEqual(
+            fields["endpoint_budget_deadline_at"], "2026-09-09T06:00:00Z"
+        )
+
+        for key, bad in (
+            ("endpoint_budget_run_id", "has space"),
+            ("endpoint_budget_run_id", "x" * 129),
+            ("endpoint_budget_run_id", "../escape"),
+            ("endpoint_budget_run_id", "Bearer secret-token-value"),
+            ("endpoint_budget_run_id", "run;id"),
+            ("endpoint_budget_deadline_at", "tomorrow"),
+            ("endpoint_budget_deadline_at", "2026-13-09T06:00:00Z"),
+            ("endpoint_budget_deadline_at", "2026-09-09 06:00:00"),
+            ("endpoint_budget_deadline_at", "2026-09-09T06:00:00"),
+            ("endpoint_budget_deadline_at", "Bearer secret-token-value"),
+            ("endpoint_budget_deadline_at", "2026-09-09T06:00:00+99:99"),
+        ):
+            with self.subTest(key=key, value=bad):
+                args = arguments()
+                args.safe_config = [
+                    f"{key}={bad}" if item.startswith(f"{key}=") else item
+                    for item in args.safe_config
+                ]
+                with self.assertRaisesRegex(
+                    receipt.ReceiptError, "configuration value"
+                ):
+                    receipt.collect_receipt(args, FakeRunner())
+
+        # An enabled budget without its identity binding fails closed, while
+        # a disabled budget travels with both identity fields empty.
+        for key in ("endpoint_budget_run_id", "endpoint_budget_deadline_at"):
+            with self.subTest(key=key):
+                args = arguments()
+                args.safe_config = [
+                    f"{key}=" if item.startswith(f"{key}=") else item
+                    for item in args.safe_config
+                ]
+                with self.assertRaisesRegex(
+                    receipt.ReceiptError, "configuration value"
+                ):
+                    receipt.collect_receipt(args, FakeRunner())
+        disabled = arguments()
+        disabled.safe_config = [
+            "endpoint_budget_enabled=false"
+            if item.startswith("endpoint_budget_enabled=")
+            else (
+                "endpoint_budget_run_id="
+                if item.startswith("endpoint_budget_run_id=")
+                else (
+                    "endpoint_budget_deadline_at="
+                    if item.startswith("endpoint_budget_deadline_at=")
+                    else item
+                )
+            )
+            for item in disabled.safe_config
+        ]
+        disengaged = receipt.collect_receipt(disabled, FakeRunner())
+        self.assertEqual(
+            disengaged["configuration"]["fields"]["endpoint_budget_run_id"], ""
+        )
+        self.assertEqual(
+            disengaged["configuration"]["fields"]["endpoint_budget_deadline_at"],
+            "",
+        )
 
     def test_write_is_digest_verified_exclusive_and_mode_0600(self) -> None:
         value = receipt.collect_receipt(arguments(), FakeRunner())

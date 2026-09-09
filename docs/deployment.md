@@ -85,7 +85,9 @@ per-endpoint caps (`CLASHLENS_ENDPOINT_BUDGET_PROFILE`,
 `CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT`. While enabled, every official
 dispatch reserves one durable budget unit before the request, reservations
 survive restarts and are never refunded, and official redirects are refused.
-The enabled flag and caps are fingerprinted in the deployment receipt.
+The enabled flag, the three caps, and the exact run identity and deadline
+are fingerprinted in the deployment receipt, so provenance proves which
+durable budget row the executing collector consumes.
 
 Admit a protected manifest with the Python worker role (validates the whole
 manifest before the first write; replays idempotently under one run-id):

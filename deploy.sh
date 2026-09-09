@@ -402,8 +402,8 @@ validate_common_settings() {
       die "$budget_setting must be a non-negative integer"
   done
   if [[ "$CLASHLENS_ENDPOINT_BUDGET_ENABLED" == "true" ]]; then
-    [[ -n "$CLASHLENS_ENDPOINT_BUDGET_RUN_ID" ]] || \
-      die "CLASHLENS_ENDPOINT_BUDGET_RUN_ID is required when the endpoint budget is enabled"
+    [[ "$CLASHLENS_ENDPOINT_BUDGET_RUN_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || \
+      die "CLASHLENS_ENDPOINT_BUDGET_RUN_ID must use 1-128 safe characters when the endpoint budget is enabled"
     [[ -n "$CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT" ]] || \
       die "CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT is required when the endpoint budget is enabled"
   fi
@@ -895,9 +895,11 @@ write_deployment_receipt() {
     --website-container "$WEBSITE_CONTAINER" \
     --safe-config "collector_database_pool_size=$CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE" \
     --safe-config "endpoint_budget_battle_log=$CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG" \
+    --safe-config "endpoint_budget_deadline_at=$CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT" \
     --safe-config "endpoint_budget_enabled=$CLASHLENS_ENDPOINT_BUDGET_ENABLED" \
     --safe-config "endpoint_budget_global_rankings=$CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS" \
     --safe-config "endpoint_budget_profile=$CLASHLENS_ENDPOINT_BUDGET_PROFILE" \
+    --safe-config "endpoint_budget_run_id=$CLASHLENS_ENDPOINT_BUDGET_RUN_ID" \
     --safe-config "player_discovery_enabled=$CLASHLENS_PLAYER_DISCOVERY_ENABLED" \
     --safe-config "spool_free_inode_floor=$CLASHLENS_SPOOL_FREE_INODE_FLOOR" \
     --safe-config "spool_free_space_floor=$CLASHLENS_SPOOL_FREE_SPACE_FLOOR" \

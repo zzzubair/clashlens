@@ -1608,7 +1608,8 @@ mkdir "$BUDGET_DIR/retained"
 deploy "$BUDGET_DIR" "$BUDGET_ENV" -- deployment-receipt \
   candidate-preparation fedora-validation "$BUDGET_DIR/retained" >/dev/null
 for receipt_line in endpoint_budget_enabled=false endpoint_budget_profile=0 \
-  endpoint_budget_global_rankings=0 endpoint_budget_battle_log=0; do
+  endpoint_budget_global_rankings=0 endpoint_budget_battle_log=0 \
+  endpoint_budget_run_id= endpoint_budget_deadline_at=; do
   grep -Fxq "$receipt_line" "$BUDGET_DIR/python.log" || \
     fail "disabled endpoint budget was not forwarded to the receipt seam ($receipt_line)"
 done
@@ -1632,13 +1633,47 @@ MISSING_RUN_ENV="$MISSING_RUN_DIR/app.env"
 write_scenario_env "$MISSING_RUN_ENV" "$MISSING_RUN_DIR/keys"
 printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_ENABLED=true' >>"$MISSING_RUN_ENV"
 printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT=2026-09-09T06:00:00Z' >>"$MISSING_RUN_ENV"
-deploy_fails "$MISSING_RUN_DIR" "$MISSING_RUN_ENV" 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID is required when the endpoint budget is enabled' -- worker-start
+deploy_fails "$MISSING_RUN_DIR" "$MISSING_RUN_ENV" 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID must use 1-128 safe characters when the endpoint budget is enabled' -- worker-start
+BAD_RUN_DIR=$(new_scenario)
+BAD_RUN_ENV="$BAD_RUN_DIR/app.env"
+write_scenario_env "$BAD_RUN_ENV" "$BAD_RUN_DIR/keys"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_ENABLED=true' >>"$BAD_RUN_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID=has space' >>"$BAD_RUN_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT=2026-09-09T06:00:00Z' >>"$BAD_RUN_ENV"
+deploy_fails "$BAD_RUN_DIR" "$BAD_RUN_ENV" 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID must use 1-128 safe characters when the endpoint budget is enabled' -- worker-start
+[[ ! -s "$BAD_RUN_DIR/podman.log" ]] || fail 'invalid budget run-id had podman side effects'
 MISSING_DEADLINE_DIR=$(new_scenario)
 MISSING_DEADLINE_ENV="$MISSING_DEADLINE_DIR/app.env"
 write_scenario_env "$MISSING_DEADLINE_ENV" "$MISSING_DEADLINE_DIR/keys"
 printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_ENABLED=true' >>"$MISSING_DEADLINE_ENV"
 printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID=issue92' >>"$MISSING_DEADLINE_ENV"
 deploy_fails "$MISSING_DEADLINE_DIR" "$MISSING_DEADLINE_ENV" 'CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT is required when the endpoint budget is enabled' -- worker-start
+BUDGET_ON_DIR=$(new_scenario)
+BUDGET_ON_ENV="$BUDGET_ON_DIR/app.env"
+write_scenario_env "$BUDGET_ON_ENV" "$BUDGET_ON_DIR/keys"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_ENABLED=true' >>"$BUDGET_ON_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_RUN_ID=issue92' >>"$BUDGET_ON_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_PROFILE=13500' >>"$BUDGET_ON_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS=1' >>"$BUDGET_ON_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG=0' >>"$BUDGET_ON_ENV"
+printf '%s\n' 'CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT=2026-09-09T06:00:00Z' >>"$BUDGET_ON_ENV"
+printf '5' >"$BUDGET_ON_DIR/state/contract_version"
+printf '23\n' >"$BUDGET_ON_DIR/state/schema_migrations"
+mkdir -p "$BUDGET_ON_DIR/state/networks/clashlens-private"
+mkdir -p "$BUDGET_ON_DIR/state/containers/clashlens-postgres"
+: >"$BUDGET_ON_DIR/state/containers/clashlens-postgres.running"
+mkdir -p "$BUDGET_ON_DIR/state/images/localhost"
+: >"$BUDGET_ON_DIR/state/images/localhost/clashlens-python:deployment"
+deploy "$BUDGET_ON_DIR" "$BUDGET_ON_ENV" -- worker-start >/dev/null
+mkdir "$BUDGET_ON_DIR/retained"
+deploy "$BUDGET_ON_DIR" "$BUDGET_ON_ENV" -- deployment-receipt \
+  candidate-preparation fedora-validation "$BUDGET_ON_DIR/retained" >/dev/null
+for receipt_line in endpoint_budget_enabled=true endpoint_budget_profile=13500 \
+  endpoint_budget_global_rankings=1 endpoint_budget_battle_log=0 \
+  endpoint_budget_run_id=issue92 endpoint_budget_deadline_at=2026-09-09T06:00:00Z; do
+  grep -Fxq "$receipt_line" "$BUDGET_ON_DIR/python.log" || \
+    fail "enabled endpoint budget identity was not forwarded to the receipt seam ($receipt_line)"
+done
 printf 'ok: endpoint budget defaults disabled with zero caps, validates literally, and requires run identity plus deadline\n'
 
 # ---------------------------------------------------------------------------

@@ -76,12 +76,22 @@ def _valid_artifact(mode: str = "duplicate-heavy") -> dict:
     }
 
 
+def _valid_safe_value(name: str) -> str:
+    if name in ("endpoint_budget_enabled", "player_discovery_enabled"):
+        return "true"
+    if name == "endpoint_budget_run_id":
+        return "issue92"
+    if name == "endpoint_budget_deadline_at":
+        return "2026-09-09T06:00:00Z"
+    return "1"
+
+
 def _candidate_receipt() -> dict:
     from scripts import deployment_receipt
 
     migrations = runner._source_migrations()
     fields = {
-        name: ("true" if name in deployment_receipt._SAFE_BOOLEAN_FIELDS else "1")
+        name: _valid_safe_value(name)
         for name in sorted(deployment_receipt.SAFE_CONFIGURATION_FIELDS)
     }
     configuration = {
