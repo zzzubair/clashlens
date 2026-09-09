@@ -58,6 +58,7 @@ IGNORED_COLLECTOR_SCALARS = {
     "clashlens_spool_orphan_count",
 }
 IGNORED_COLLECTOR_LABELS = {
+    "clashlens_collector_archive_requests_total": ("operation",),
     "clashlens_collector_api_duration_seconds_count": ("endpoint", "pool"),
     "clashlens_collector_api_duration_seconds_sum": ("endpoint", "pool"),
     "clashlens_collector_api_requests_total": ("endpoint", "pool"),
@@ -722,6 +723,11 @@ def parse_collector_metrics(metrics: str) -> dict[str, Any]:
             if "pool" in labels and labels["pool"] not in COLLECTOR_POOLS:
                 raise ValueError("metrics_invalid")
             if "endpoint" in labels and labels["endpoint"] not in COLLECTOR_ENDPOINTS:
+                raise ValueError("metrics_invalid")
+            if (
+                "operation" in labels
+                and labels["operation"] not in {"put", "head", "get", "other"}
+            ):
                 raise ValueError("metrics_invalid")
             if (
                 "category" in labels

@@ -48,6 +48,10 @@ def _metrics() -> str:
     lines.append(
         'clashlens_collector_api_outcomes_total{endpoint="profile",outcome="2xx"} 4'
     )
+    lines.extend(
+        f'clashlens_collector_archive_requests_total{{operation="{operation}"}} 2'
+        for operation in ("put", "head", "get", "other")
+    )
     for bound in operating_check.LATENCY_BUCKETS_SECONDS:
         value = 1 if bound >= 0.01 else 0
         lines.append(
@@ -84,6 +88,13 @@ def test_dynamic_selected_metric_label_is_rejected() -> None:
     injected = _metrics() + (
         'clashlens_collector_stage_duration_seconds_count{stage="player-SECRET"} 1\n'
     )
+
+    with pytest.raises(ValueError, match="metrics_invalid"):
+        operating_check.parse_collector_metrics(injected)
+
+
+def test_archive_request_metric_requires_a_known_operation() -> None:
+    injected = _metrics().replace('operation="get"', 'operation="delete"')
 
     with pytest.raises(ValueError, match="metrics_invalid"):
         operating_check.parse_collector_metrics(injected)
