@@ -327,9 +327,10 @@ fewer than 12,500 eligible supplied players is valid while zero eligible,
 any active outside player, or any outside player-scoped collection lineage
 fails the gate; missing or malformed evidence is unknown/failure, never zero;
 artifacts are written exclusively and never replaced; the run directory is
-capped at 256 MiB; semantic regular-window admission reconciliation stays
-pending the validated admission handoff and `validate` refuses any run that
-claims it complete before that integration.
+capped at 256 MiB; live-day admission accounting follows the validated final
+handoff (deadlines, gaps, tail, capture bounds, exact roots) and `validate`
+refuses any run whose admission, eligibility, reset, sample-outcome, or
+watchdog evidence is not clean and complete.
 
 ### Population preflight mode (60m bootstrap + 15m drain)
 

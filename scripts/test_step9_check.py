@@ -55,7 +55,7 @@ def _start_args(run_dir: Path, cohort: Path, **overrides):
         "deadline": "2026-10-05T05:10:00Z",
         "max_sample_age_seconds": 125, "watchdog_unit": "test-unit",
         "run_id": "testrun01", "database_url": None, "mode": "live-day",
-        "max_invocation_gap_seconds": 5,
+        "max_invocation_gap_seconds": 5, "bootstrap_run_id": None,
     }
     defaults.update(overrides)
     return mock.Mock(**defaults)
@@ -153,6 +153,30 @@ class FakeDB:
         return {"workcounts": [], "observations": [],
                 "intents": (0, None, None), "pending_remote": 0}
 
+    def transitions(self, ids, start, end):
+        return []
+
+    def budgets_present(self):
+        return getattr(self, "budgets_tables", False)
+
+    def bootstrap_budgets(self, run_id):
+        if getattr(self, "budgets_error", None):
+            raise self.budgets_error
+        return getattr(self, "budgets_data",
+                       {"run": None, "budgets": []})
+
+    def wal_generated(self, since_lsn):
+        return (0, 0)
+
+    def reset_members(self, sweep_id):
+        return [1]
+
+    def generation_members(self, sweep_id, boundary):
+        return [(1, 1, "ab" * 64, 1)]
+
+    def paired_baselines(self, sweep_id):
+        return {1: 1}
+
     def active_queues(self):
         return getattr(self, "queue_residue_data",
                        {"collector": [], "python": []})
@@ -174,7 +198,7 @@ def _started_run(tmp_path: Path, db: FakeDB, **overrides):
     cohort = _write_cohort(tmp_path / "cohort.txt", TAGS)
     receipt_path = tmp_path / "receipt.json"
     receipt_path.write_text(json.dumps(_receipt_scope()))
-    run_dir = tmp_path / "run"
+    run_dir = tmp_path / overrides.pop("run_dir_name", "run")
     arguments = _start_args(run_dir, cohort,
                             deployed_receipt=str(receipt_path), **overrides)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
@@ -348,8 +372,13 @@ def test_start_requires_deployed_receipt_digest(tmp_path: Path) -> None:
 def test_classify_slot_outcomes() -> None:
     base = datetime(2026, 10, 4, 5, 0, tzinfo=UTC)
     assert step9.classify_slot(base, base, 0.0, 0.0, False)["outcome"] == "on_time"
-    late = step9.classify_slot(base, base, 70.0, 70.0, False)
+    late = step9.classify_slot(base, base + timedelta(seconds=70),
+                                 70.0, 70.0, False)
     assert late["outcome"] == "late" and late["failure_code"] == "sample_late"
+    assert late["shift_seconds"] == 70.0
+    drifted = step9.classify_slot(base, base + timedelta(seconds=3),
+                                  1.0, 1.0, False)
+    assert drifted["outcome"] == "on_time"
     jump = step9.classify_slot(base, base, 60.0, 5.0, False)
     assert jump["outcome"] == "clock_jump"
     boot = step9.classify_slot(base, base, 1.0, 1.0, True)
@@ -362,13 +391,13 @@ def test_classify_slot_outcomes() -> None:
 
 def _sample_hooks(db: FakeDB, **overrides):
     mono = [0]
-    walls = [datetime(2026, 10, 4, 5, 0, tzinfo=UTC)]
+    walls = [datetime(2026, 10, 4, 5, 0, tzinfo=UTC) - timedelta(seconds=60)]
 
     def clock():
-        mono[0] += 60_000_000_000
         return mono[0]
 
     def now_utc():
+        mono[0] += 60_000_000_000
         walls[0] += timedelta(seconds=60)
         return walls[0]
 
@@ -451,6 +480,7 @@ class FakePodman:
     def __init__(self, running: bool = True, stop_fails: bool = False) -> None:
         self.running = running
         self.stop_fails = stop_fails
+        self.updated = False
         self.commands: list[list[str]] = []
 
     def __call__(self, command: list[str]) -> str:
@@ -458,8 +488,11 @@ class FakePodman:
         targets = [part for part in command if part.startswith("test-")]
         assert targets, f"refusing non-test container: {command}"
         if command[1:3] == ["container", "inspect"]:
+            if any("HostConfig" in part for part in command):
+                return "no\n" if self.updated else "unless-stopped\n"
             return "true\nsha256:image\n" if self.running else "false\nsha256:image\n"
         if command[1] == "update":
+            self.updated = True
             return ""
         if command[1] == "stop":
             if not self.stop_fails:
@@ -482,17 +515,32 @@ def test_watchdog_single_pass_and_deadline(tmp_path: Path) -> None:
     run_dir, _header = _started_run(tmp_path, db)
     podman = FakePodman()
     arguments = _watchdog_args(run_dir)
+    # inside startup grace with no samples yet -> wait, no stop
     hooks = {"podman_run": podman, "single_pass": True, "max_iterations": 1,
+             "no_sleep": True,
              "now_utc": lambda: datetime(2026, 10, 4, 5, 1, tzinfo=UTC)}
-    # no samples yet -> stop path with exact command
-    assert step9.cmd_watchdog(arguments, hooks) == 1
+    assert step9.cmd_watchdog(arguments, hooks) == 0
+    assert ["podman", "update", "--restart=no", "test-collector"] in podman.commands
+    watchdog = json.loads((run_dir / "watchdog.json").read_text())
+    assert watchdog["prior_restart_policy"] == "unless-stopped"
+    assert watchdog["verified_restart"] == "no"
+    assert not (run_dir / "watchdog-outcome.json").exists()
+    # past grace with inactive sampler unit -> exact stop command (fresh dir:
+    # watchdog.json is exclusive and never replaced)
+    run_dir2, _header2 = _started_run(tmp_path, db, run_dir_name="run2",
+                                        run_id="testrun02")
+    arguments2 = _watchdog_args(run_dir2)
+    hooks = {"podman_run": podman, "single_pass": True, "max_iterations": 1,
+             "no_sleep": True,
+             "sampler_check": lambda run: False,
+             "now_utc": lambda: datetime(2026, 10, 4, 6, 0, tzinfo=UTC)}
+    assert step9.cmd_watchdog(arguments2, hooks) == 1
     flat = [part for command in podman.commands for part in command]
     assert flat[:2] == ["podman", "container"]
-    assert ["podman", "update", "--restart=no", "test-collector"] in podman.commands
     assert ["podman", "stop", "--ignore", "--time", "30",
             "test-collector"] in podman.commands
-    outcome = json.loads((run_dir / "watchdog-outcome.json").read_text())
-    assert outcome["trigger"] == "no_samples"
+    outcome = json.loads((run_dir2 / "watchdog-outcome.json").read_text())
+    assert outcome["trigger"] == "sampler_unit_inactive"
 
 
 def test_watchdog_rejects_container_mismatch(tmp_path: Path) -> None:
@@ -560,7 +608,8 @@ def _seed_admission(db: FakeDB, run: dict, pid: int, job_base: int = 1000,
 
 def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
                 boundary=(datetime(2026, 10, 5, 5, 0, tzinfo=UTC), 1,
-                          True, True, True, 2, 2, 0)):
+                          True, True, True, 2, 2, 0),
+                late_slots: set = frozenset()):
     cohort = _write_cohort(tmp_path / f"{name}-cohort.txt", TAGS)
     receipt_path = tmp_path / f"{name}-receipt.json"
     receipt_path.write_text(json.dumps(_receipt_scope()))
@@ -579,9 +628,12 @@ def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
     samples.mkdir()
     for index in range(mode["slots"]):
         expected = step9.slot_expected_utc(core_start, index)
+        captured = expected + timedelta(seconds=1)
+        if index in late_slots:
+            captured = expected + timedelta(seconds=70)
         sample = step9.build_sample(
             run=run, index=index, expected_utc=expected,
-            captured_utc=expected + timedelta(seconds=1),
+            captured_utc=captured,
             mono_elapsed=float(index * 60), wall_delta=60.0, mono_delta=60.0,
             boot_id=run["boot_id"], db_facts=db.minute_snapshot([]),
             db_error=None,
@@ -648,59 +700,22 @@ def test_finalize_unproven_reset_is_gate_failure(tmp_path: Path) -> None:
         boundary=(datetime(2026, 10, 5, 5, 0, tzinfo=UTC), 1,
                   True, False, False, 0, 0, 3))
     arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
-    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    assert step9.cmd_finalize(arguments, {"db": db}) == 1
     assert step9.cmd_validate(arguments) == 1  # gate: reset_handoff_unproven
 
 
 # --- Real PostgreSQL tests (migrated disposable schema, no skips) ----------
 
-_PG_SERVER: dict = {}
-
-
 def _pg_url() -> str:
-    url = os.environ.get("CLASHLENS_TEST_DATABASE_URL")
-    if url:
-        return url
-    if _PG_SERVER.get("url"):
-        return _PG_SERVER["url"]
-    import subprocess
-    import tarfile
+    """Fail fast without a database: no skips, no silent embedded boot.
 
-    cache = (Path.home() / ".embedded-postgres-go" /
-             "embedded-postgres-binaries-linux-amd64-18.0.0.txz")
-    if not cache.is_file():
-        pytest.fail("no CLASHLENS_TEST_DATABASE_URL and no embedded pg cache")
-    base = Path(tempfile.mkdtemp(prefix="step9-pg-"))
-    with tarfile.open(cache) as archive:
-        archive.extractall(base)
-    bindir = base / "bin"
-    data = base / "data"
-    sock = base / "sock"
-    sock.mkdir()
-    for binary in ("initdb", "pg_ctl", "postgres", "psql", "createdb"):
-        path = bindir / binary
-        if path.exists():
-            path.chmod(0o755)
-    port = "55439"
-    try:
-        subprocess.run([str(bindir / "initdb"), "-D", str(data), "-U", "postgres",
-                        "-E", "UTF8"], check=True, capture_output=True, text=True,
-                       timeout=120)
-        subprocess.run([str(bindir / "pg_ctl"), "-D", str(data), "-l",
-                        str(base / "log"), "-o",
-                        f"-p {port} -k {sock} -c listen_addresses=127.0.0.1",
-                        "start"], check=True, capture_output=True, text=True,
-                       timeout=120)
-        subprocess.run([str(bindir / "psql"), "-h", "127.0.0.1", "-p", port,
-                        "-U", "postgres", "-c",
-                        "CREATE DATABASE clashlens"], check=True,
-                       capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError) as error:
-        pytest.fail(f"embedded PostgreSQL boot failed: {error}")
-    _PG_SERVER["url"] = (
-        f"postgresql://postgres@127.0.0.1:{port}/clashlens")
-    _PG_SERVER["base"] = base
-    return _PG_SERVER["url"]
+    Booting a second cluster per session wasted disk and contended with the
+    shared scratch server; CI always provides the service URL.
+    """
+    url = os.environ.get("CLASHLENS_TEST_DATABASE_URL")
+    if not url:
+        pytest.fail("set CLASHLENS_TEST_DATABASE_URL for real PostgreSQL tests")
+    return url
 
 
 def _seed_player(connection, tag: str, *, active: bool = True,
@@ -774,6 +789,18 @@ def _seed_reset(connection, player_ids: list[int],
         connection.execute(
             "INSERT INTO collector_reset_sweep_members (sweep_id, player_id)"
             " VALUES (%s, %s) ON CONFLICT DO NOTHING", (sweep, player))
+        baseline = connection.execute(
+            "INSERT INTO collector_reset_baseline_sweeps"
+            " (reset_sweep_id, player_id, boundary_at, evidence_kind, state)"
+            " VALUES (%s, %s, %s, 'paired_v2', 'complete') RETURNING id",
+            (sweep, player, boundary)).fetchone()[0]
+        connection.execute(
+            "INSERT INTO collector_jobs (work_type, scope, player_id,"
+            " normalized_tag, capacity_pool, priority, due_at, coalescing_key,"
+            " status, sweep_id, reset_baseline_sweep_id)"
+            " VALUES ('reset_baseline', 'player', %s, %s, 'normal', 100,"
+            " now(), %s, 'complete', %s, %s)",
+            (player, "#SEED", f"reset:{player}:{sweep}", sweep, baseline))
     generation = connection.execute(
         "INSERT INTO boundary_publication_generations (boundary_at, target_at,"
         " generation, sweep_id, ordering_rule_version, freshness_rule_version,"
@@ -871,7 +898,8 @@ def test_outside_roots_against_real_schema() -> None:
                 " %s, %s, 'normal', 100, now(), %s, 'pending')",
                 (outsider, "#289QJR91", f"outside-{outsider}"))
             connection.commit()
-        assert database.outside_roots([good]) == 1
+        assert database.outside_roots([good]) == 2  # seed + discovery roots,
+        # any status counts since P2-12 (terminal history included)
         assert database.outside_roots([good, outsider]) == 0
 
 
@@ -917,13 +945,13 @@ def test_all_statements_execute_on_migrated_schema() -> None:
 
 def _rehearsal_hooks(database, fixed_ids, *, slots: int):
     mono = [0]
-    walls = [datetime(2026, 10, 4, 5, 0, tzinfo=UTC)]
+    walls = [datetime(2026, 10, 4, 5, 0, tzinfo=UTC) - timedelta(seconds=60)]
 
     def clock():
-        mono[0] += 1_000_000_000
         return mono[0]
 
     def now_utc():
+        mono[0] += 60_000_000_000
         walls[0] += timedelta(seconds=60)
         return walls[0]
 
@@ -1206,7 +1234,7 @@ def test_start_preflight_mode(tmp_path: Path) -> None:
                             deployed_receipt=str(receipt_path),
                             mode="preflight",
                             core_start="2026-10-04T05:00:00Z",
-                            core_end="2026-10-04T06:00:00Z",
+                            core_end="2026-10-04T06:15:00Z",
                             run_id="preflight1")
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
                            return_value=None):
@@ -1223,7 +1251,7 @@ def test_start_preflight_mode(tmp_path: Path) -> None:
         with pytest.raises(step9.Step9Error):  # 1h rejected in live-day
             step9.cmd_start(_args_with_receipt(tmp_path, "lv2", cohort,
                                               core_start="2026-10-04T05:00:00Z",
-                                              core_end="2026-10-04T06:00:00Z"), db)
+                                              core_end="2026-10-04T06:15:00Z"), db)
 
 
 def test_start_fails_closed_without_admission_tables(tmp_path: Path) -> None:
@@ -1242,7 +1270,6 @@ def test_preflight_envelope_cases() -> None:
         observations=[("profile", 100)],
         intents=(1, "2026-10-04T05:00:00+00:00", "2026-10-04T05:00:00+00:00"))
     assert ok["failures"] == []
-    assert ok["budget_ledger"] == "unknown_pending_0023"
     bad = step9.evaluate_preflight_envelope(
         workcounts=[("regular_poll", "pending", 2),
                     ("discovery_profile", "complete", 13501)],
@@ -1263,7 +1290,7 @@ def _sealed_preflight(tmp_path: Path, name: str, db: FakeDB, bad_traffic: bool =
                             deployed_receipt=str(receipt_path),
                             mode="preflight",
                             core_start="2026-10-04T05:00:00Z",
-                            core_end="2026-10-04T06:00:00Z")
+                            core_end="2026-10-04T06:15:00Z")
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
                            return_value=None):
         run = step9.cmd_start(arguments, db)
@@ -1309,7 +1336,7 @@ def test_preflight_roundtrip(tmp_path: Path) -> None:
     run_dir2, _run2 = _sealed_preflight(tmp_path, "pfbad", db2,
                                         bad_traffic=True)
     arguments2 = mock.Mock(run_dir=str(run_dir2), podman_bin="podman")
-    assert step9.cmd_finalize(arguments2, {"db": db2}) == 0
+    assert step9.cmd_finalize(arguments2, {"db": db2}) == 1
     assert step9.cmd_validate(arguments2) == 1
 
 # --- Frozen 0022 contract (test-local copy) ------------------------------
@@ -1645,3 +1672,210 @@ def test_observer_role_least_privilege() -> None:
                 step9.SQL_PREFLIGHT_RANKING_INTENTS,
                 ("2026-10-04T04:00:00Z", "2026-10-04T07:00:00Z"))
             connection.execute("RESET ROLE")
+
+
+def test_script_main_path_binds_all_definitions() -> None:
+    """P1-2: everything must bind when executed as a script, not just import."""
+    import subprocess
+
+    path = ROOT / "scripts" / "step9_check.py"
+    completed = subprocess.run(
+        [sys.executable, str(path), "--help"],
+        check=False, capture_output=True, text=True, timeout=60)
+    assert completed.returncode == 0
+    probe = ("import ast\n"
+               "tree = ast.parse(open(r'" + str(path) + "').read())\n"
+               "seen_guard = False\n"
+               "late = []\n"
+               "for node in tree.body:\n"
+               "    if isinstance(node, ast.If):\n"
+               "        src = ast.dump(node.test)\n"
+               "        if \"__name__\" in src and \"__main__\" in src:\n"
+               "            seen_guard = True\n"
+               "            continue\n"
+               "    if seen_guard and isinstance(node, (ast.FunctionDef, ast.ClassDef, ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Import, ast.ImportFrom)):\n"
+               "        late.append(getattr(node, 'name', type(node).__name__))\n"
+               "assert not late, f'definitions after CLI guard: {late}'\n")
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        check=False, capture_output=True, text=True, timeout=60)
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_admission_present_reraises_non_missing_errors() -> None:
+    assert step9.Database._missing_table(
+        type("E", (Exception,), {"sqlstate": "42P01"})()) is True
+    assert step9.Database._missing_table(RuntimeError("x")) is False
+
+    class RefusingDB:
+        def __call__(self):
+            raise RuntimeError("connection refused")
+
+    with pytest.raises(RuntimeError):
+        step9.Database(RefusingDB()).admission_present()
+
+
+def test_shifted_sampler_fails_lateness_gate(tmp_path: Path) -> None:
+    """P1-8: a sampler started late cannot certify shifted boundaries."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    mono = [0]
+    walls = [datetime(2026, 10, 4, 5, 0, tzinfo=UTC) - timedelta(seconds=60)
+             + timedelta(seconds=70)]
+
+    def clock():
+        return mono[0]
+
+    def now_utc():
+        mono[0] += 60_000_000_000
+        walls[0] += timedelta(seconds=60)
+        return walls[0]
+
+    hooks = {"db": db, "fixed_ids": db.fixed_ids,
+             "fetch_metrics": lambda url: {"process_id": "p1", "started_at": 1.0,
+                                           "counters": {}, "digest": "x"},
+             "watchdog_check": lambda run: True, "clock": clock,
+             "now_utc": now_utc, "no_sleep": True, "max_slots": 5,
+             "single_pass": False}
+    assert step9.cmd_sample(arguments, hooks) == 1
+    assert list((run_dir / "failures").glob("sample_late-*.json"))
+    # a sealed run with one shifted slot fails validation on outcomes
+    db2 = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir2, _run2 = _sealed_run(tmp_path, "shifted", db2, late_slots={5})
+    arguments2 = mock.Mock(run_dir=str(run_dir2), podman_bin="podman")
+    assert step9.cmd_finalize(arguments2, {"db": db2}) == 0
+    assert step9.cmd_validate(arguments2) == 1
+
+
+def test_admission_handoff_semantics() -> None:
+    base = datetime(2026, 10, 4, 5, 0, tzinfo=UTC)
+    handoff = base + timedelta(hours=24)
+    run = _admission_run_dict()
+    header = _admission_run_header()
+    def _key(pid, at):
+        return f"regular:{pid}:{int(at.timestamp())}"
+    key = _key
+    # suppressed pre-handoff event passes
+    blocked = _admission_event(1, base, pid=0, job=0)
+    blocked.update({"gate_allowed": False, "selected_count": 0,
+                    "inserted_count": 0, "advanced_count": 0,
+                    "selected_player_ids": [], "selected_due_ats": [],
+                    "inserted_job_ids": [], "database_at": handoff - timedelta(seconds=10)})
+    # reopening event at handoff with an old due passes via grace
+    reopen_cycle = handoff + timedelta(seconds=1)
+    reopen = _admission_event(2, reopen_cycle, pid=1, job=1000)
+    reopen.update({"gate_handoff_at": handoff,
+                   "database_at": handoff + timedelta(seconds=2),
+                   "selected_due_ats": [handoff - timedelta(hours=2)]})
+    reopen_key = key(1, reopen_cycle)
+    result = step9.evaluate_admission(
+        run=run, header=header, events=[blocked, reopen],
+        profile_counts={1: (0, 0), 2: (0, 1)},
+        roots=[(1, reopen_key, 1000, "complete")], max_gap_seconds=90000)
+    assert result["failures"] == []
+    # suppressed interval admitting work breaches
+    breach = dict(blocked)
+    breach.update({"gate_allowed": True, "id": 3,
+                   "selected_count": 1, "inserted_count": 1})
+    result = step9.evaluate_admission(
+        run=run, header=header, events=[breach, reopen],
+        profile_counts={3: (0, 1), 2: (0, 1)},
+        roots=[(1, reopen_key, 1000, "complete")], max_gap_seconds=90000)
+    assert "admission_suppression_breach" in result["failures"]
+    # reopening before the handoff timestamp fails
+    early = dict(reopen)
+    early.update({"id": 4, "database_at": handoff - timedelta(seconds=1)})
+    result = step9.evaluate_admission(
+        run=run, header=header, events=[blocked, early],
+        profile_counts={1: (0, 0), 4: (0, 1)},
+        roots=[(1, reopen_key, 1000, "complete")], max_gap_seconds=90000)
+    assert "admission_early_reopen" in result["failures"]
+
+
+_BOOTSTRAP_0023_PATH = (
+    Path("/home/zubair/orca/workspaces/clashlens/issue92-population-bootstrap")
+    / "deploy" / "migrations" / "0023_population_bootstrap.sql"
+)
+
+
+def _read_provisional_0023() -> str:
+    # Read-only use of the B2 worktree file; never edited or committed here.
+    text = _BOOTSTRAP_0023_PATH.read_text(encoding="utf-8")
+    return "".join(
+        line for line in text.splitlines(keepends=True)
+        if line.strip() not in ("BEGIN;", "COMMIT;"))
+
+
+def test_provisional_0023_budget_reads() -> None:
+    import psycopg
+    from domain_test_support import domain_database
+
+    assert _BOOTSTRAP_0023_PATH.is_file(), "B2 0023 file must exist to read"
+    with domain_database(_pg_url(), include_coordinator=True) as info:
+        database = step9.Database(lambda: psycopg.connect(info))
+        assert database.budgets_present() is False
+        with psycopg.connect(info, autocommit=True) as connection:
+            connection.execute(_read_provisional_0023())
+            assert database.budgets_present() is True
+            connection.execute(
+                "INSERT INTO population_bootstrap_runs"
+                " (run_id, manifest_sha256, manifest_count,"
+                " normalized_set_sha256, status, batch_size, completed_at)"
+                " VALUES ('boot1', %s, 12857, %s, 'complete', 500, now())",
+                ("ab" * 32, "cd" * 32))
+            for endpoint, cap, consumed in (
+                    ("profile", 13500, 120), ("global_player_rankings", 1, 1),
+                    ("battle_log", 0, 0)):
+                connection.execute(
+                    "INSERT INTO collector_endpoint_budgets"
+                    " (run_id, endpoint, cap, consumed, deadline_at)"
+                    " VALUES ('boot1', %s, %s, %s, now() + interval '1 hour')",
+                    (endpoint, cap, consumed))
+        data = database.bootstrap_budgets("boot1")
+        assert data["run"]["status"] == "complete"
+        assert {b["endpoint"]: b["consumed"] for b in data["budgets"]} == {
+            "profile": 120, "global_player_rankings": 1, "battle_log": 0}
+        assert database.bootstrap_budgets("missing") == {
+            "run": None, "budgets": []}
+
+
+def test_finalize_budget_manifest_match() -> None:
+    run = {"bootstrap_run_id": "boot1",
+           "cohort": {"raw_sha256": "ab" * 32, "input_count": 12857,
+                        "canonical_sha256": "cd" * 32}}
+
+    class BudgetDB(FakeDB):
+        budgets_tables = True
+
+        def budgets_present(self):
+            return True
+
+        def bootstrap_budgets(self, run_id):
+            return {"run": {"manifest_sha256": "ab" * 32,
+                              "manifest_count": 12857,
+                              "normalized_set_sha256": "cd" * 32,
+                              "status": "complete"},
+                    "budgets": [{"endpoint": "profile", "cap": 13500,
+                                   "consumed": 120}]}
+
+    result = step9._finalize_budget(run, BudgetDB(), {"profile": 100})
+    assert result["status"] == "complete" and result["failure"] is None
+    result = step9._finalize_budget(run, BudgetDB(), {"profile": 121})
+    assert result["failure"] == "budget_evidence_mismatch"
+    result = step9._finalize_budget({"bootstrap_run_id": None},
+                                    BudgetDB(), {})
+    assert result["status"] == "unknown_pending_0023"
+    result = step9._finalize_budget(run, FakeDB(), {})
+    assert result["status"] == "unknown_pending_0023"
+
+    class DeniedDB(FakeDB):
+        def budgets_present(self):
+            return True
+
+        def bootstrap_budgets(self, run_id):
+            raise type("E", (Exception,), {"sqlstate": "42501"})(
+                "permission denied")
+
+    result = step9._finalize_budget(run, DeniedDB(), {})
+    assert result["status"] == "unknown_pending_grant"

@@ -49,9 +49,9 @@ MODES = {
                   "interval": timedelta(hours=24), "require_0500": True,
                   "admission": True},
     "preflight": {"schema": SCHEMA_PREFLIGHT, "slots": 75, "windows": 15,
-                    "interval": timedelta(hours=1), "require_0500": False,
+                    "interval": timedelta(minutes=75), "require_0500": False,
                     "admission": False,
-                    "drain_slots": 15},
+                    "drain_slots": 15, "bootstrap_slots": 60},
 }
 # Fixed preflight official-traffic envelope (Phase 4 ceiling, probes measured).
 PREFLIGHT_ENVELOPE = {"profile": 13500, "global_rankings_intents": 1,
@@ -84,6 +84,7 @@ PLAYER_SCOPED_WORK = (
     "discovery_profile",
     "initial_collection",
     "live_refresh",
+    "endpoint_retry",
 )
 LEGEND_I_TIER_ID = 105000036
 LEGEND_I_TIER_NAME = "Legend I"
@@ -183,13 +184,17 @@ def _read_cohort(path_str: str) -> tuple[list[str], str, str]:
     return tags, raw_sha, _digest(tags)
 
 
-def _exclusive_json(destination: Path, payload: dict) -> str:
+def _exclusive_json(destination: Path, payload: dict,
+                    max_bytes: int | None = None) -> str:
     """Write one artifact exclusively (O_EXCL + fsync + dir fsync); return SHA."""
     destination = destination.absolute()
     if destination.is_symlink():
         raise Step9Error("artifact_occupied", "artifact path must not be a symlink")
     text = json.dumps(payload, indent=1, sort_keys=True) + "\n"
     data = text.encode()
+    if max_bytes is not None and len(data) > max_bytes:
+        raise Step9Error("artifact_capacity_exceeded",
+                         "artifact exceeds its byte cap")
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
@@ -214,8 +219,6 @@ def _exclusive_json(destination: Path, payload: dict) -> str:
     finally:
         temporary.unlink(missing_ok=True)
     digest = _sha256(data)
-    if len(data) > SAMPLE_MAX_BYTES and destination.parent.name == "samples":
-        raise Step9Error("artifact_capacity_exceeded", "minute sample exceeds 64 KiB")
     return digest
 
 
@@ -247,7 +250,8 @@ def _load_run(run_dir: Path) -> dict:
     return payload
 
 
-def _record_failure(run_dir: Path | None, code: str, message: str) -> None:
+def _record_failure(run_dir: Path | None, code: str, message: str = "") -> None:
+    """Durable fixed-code failure record; raw messages are never retained."""
     if run_dir is None:
         return
     try:
@@ -255,7 +259,7 @@ def _record_failure(run_dir: Path | None, code: str, message: str) -> None:
         failures.mkdir(parents=True, exist_ok=True)
         stamp = _utc_now().strftime("%Y%m%dT%H%M%S%fZ")
         (_exclusive_json(failures / f"{code}-{stamp}.json",
-                         {"code": code, "message": message, "at": stamp}))
+                         {"code": code, "at": stamp}))
     except Step9Error:
         pass
     except OSError:
@@ -293,11 +297,46 @@ SELECT count(*) FROM players WHERE active AND NOT (id = ANY(%s::bigint[]))
 """
 
 SQL_OUTSIDE_ROOTS = """
-SELECT count(*) FROM collector_jobs AS j
-WHERE j.work_type = ANY(%s::text[])
-  AND j.player_id IS NOT NULL
-  AND NOT (j.player_id = ANY(%s::bigint[]))
-  AND j.status IN ('pending','leased','waiting_retry','waiting_dependency')
+SELECT (SELECT count(*) FROM collector_jobs AS j
+        WHERE j.work_type = ANY(%s::text[])
+          AND j.player_id IS NOT NULL
+          AND NOT (j.player_id = ANY(%s::bigint[])))
+     + (SELECT count(*) FROM collector_jobs AS r
+        JOIN collector_attempts AS a ON a.id = r.parent_attempt_id
+        JOIN collector_jobs AS p ON p.id = a.job_id
+        WHERE r.work_type = 'endpoint_retry'
+          AND p.player_id IS NOT NULL
+          AND NOT (p.player_id = ANY(%s::bigint[])))
+"""
+
+SQL_RESET_MEMBERS = """
+SELECT m.player_id FROM collector_reset_sweep_members AS m
+WHERE m.sweep_id = %s ORDER BY m.player_id
+"""
+
+SQL_GENERATION_MEMBERS = """
+SELECT m.player_id, g.expected_population_count,
+       g.expected_population_hash, g.generation
+FROM boundary_publication_generation_members AS m
+JOIN boundary_publication_generations AS g ON g.id = m.generation_id
+WHERE g.sweep_id = %s AND g.boundary_at = %s
+ORDER BY m.player_id
+"""
+
+SQL_PAIRED_BASELINES = """
+SELECT m.player_id, count(DISTINCT j.id) AS roots
+FROM collector_reset_sweep_members AS m
+LEFT JOIN collector_jobs AS j
+  ON j.player_id = m.player_id
+ AND j.work_type IN ('reset_baseline', 'legacy_reset_profile')
+ AND j.sweep_id = m.sweep_id
+WHERE m.sweep_id = %s
+GROUP BY m.player_id
+"""
+
+SQL_WAL_GENERATED = """
+SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), %s::pg_lsn),
+       pg_database_size(current_database())
 """
 
 SQL_FIXED_IDS = """
@@ -451,6 +490,15 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
     except OSError as error:
         raise Step9Error("run_unwritable", "run directory cannot be created") from error
     os.chmod(run_dir, 0o700)
+    collector_image: str | None = None
+    try:
+        running, collector_image = Podman(
+            None, getattr(arguments, "podman_bin", "podman")
+        ).inspect_running(arguments.collector_container)
+        if not running:
+            collector_image = None
+    except Exception:  # noqa: BLE001 - unpinnable image is unknown
+        collector_image = None
     initial = {"status": "unknown", "failure_code": "database_unavailable"}
     if db is not None:
         try:
@@ -472,6 +520,7 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "database_identity": initial.get("database_identity"),
         "containers": {
             "collector": arguments.collector_container,
+            "collector_image": collector_image,
             "postgres": arguments.postgres_container,
             "python_api": arguments.python_api_container,
             "python_worker": arguments.python_worker_container,
@@ -491,6 +540,9 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
         "watchdog_unit": arguments.watchdog_unit,
         "max_invocation_gap_seconds": getattr(
             arguments, "max_invocation_gap_seconds", 5),
+        "bootstrap_run_id": getattr(arguments, "bootstrap_run_id", None),
+        "filesystem": filesystem_facts(arguments.spool_path,
+                                        arguments.postgres_path),
         "admission": _admission_header(db, mode_name, run_id, core_start,
                                         core_end),
         "script_sha256": _sha256(Path(__file__).read_bytes()),
@@ -539,22 +591,24 @@ def _admission_header(db: object | None, mode_name: str, run_id: str,
 def _capture_initial(db: object, tags: list[str]) -> dict:
     rows = db.snapshot_population(tags)
     eligible: list[int] = []
+    matched: list[int] = []
     counts = {"eligible": 0, "ineligible_or_inactive": 0,
               "not_legend_one": 0, "profile_disagree": 0, "unmatched": 0}
     seen = set()
     for row in rows:
         seen.add(row[1])
+        matched.append(row[0])
         bucket = _classify_eligible(row)
         counts[bucket] = counts.get(bucket, 0) + 1
         if bucket == "eligible":
             eligible.append(row[0])
     counts["unmatched"] = len(tags) - len(seen)
-    outside = db.outside_active(sorted(eligible))
+    outside = db.outside_active(matched)
     if outside:
         raise Step9Error(
             "foreign_population",
             f"{outside} active players outside the supplied file", gate=True)
-    if db.outside_roots(sorted(eligible)):
+    if db.outside_roots(matched):
         raise Step9Error(
             "foreign_lineage", "outside player-scoped collection lineage exists",
             gate=True)
@@ -573,6 +627,7 @@ def classify_slot(expected_utc: datetime, captured_utc: datetime,
                  wall_delta: float, mono_delta: float,
                  boot_changed: bool, late_allowance: float = 5.0) -> dict:
     """Pure slot classification; all inputs injectable for tests."""
+    shift = (captured_utc - expected_utc).total_seconds()
     jump = abs(wall_delta - mono_delta)
     if boot_changed:
         outcome, failure = "boot_change", "boot_id_changed"
@@ -582,13 +637,13 @@ def classify_slot(expected_utc: datetime, captured_utc: datetime,
         outcome, failure = "non_monotonic", "non_monotonic_time"
     elif wall_delta < 0:
         outcome, failure = "out_of_order", "sample_out_of_order"
-    elif mono_delta > SLOT_SECONDS + late_allowance:
+    elif shift > late_allowance:
         outcome, failure = "late", "sample_late"
     else:
         outcome, failure = "on_time", None
     return {"outcome": outcome, "failure_code": failure,
             "wall_delta_seconds": wall_delta, "mono_delta_seconds": mono_delta,
-            "clock_jump_seconds": jump}
+            "clock_jump_seconds": jump, "shift_seconds": shift}
 
 
 def slot_expected_utc(core_start: datetime, index: int) -> datetime:
@@ -638,8 +693,33 @@ class Database:
 
     def outside_roots(self, ids: list[int]) -> int:
         def work(cursor):
-            cursor.execute(SQL_OUTSIDE_ROOTS, (list(PLAYER_SCOPED_WORK), ids))
+            cursor.execute(SQL_OUTSIDE_ROOTS,
+                           (list(PLAYER_SCOPED_WORK), ids, ids))
             return int(cursor.fetchone()[0])
+        return self._one_txn(work)
+
+    def reset_members(self, sweep_id: int) -> list[int]:
+        def work(cursor):
+            cursor.execute(SQL_RESET_MEMBERS, (sweep_id,))
+            return [row[0] for row in cursor.fetchall()]
+        return self._one_txn(work)
+
+    def generation_members(self, sweep_id: int, boundary: str) -> list[tuple]:
+        def work(cursor):
+            cursor.execute(SQL_GENERATION_MEMBERS, (sweep_id, boundary))
+            return list(cursor.fetchall())
+        return self._one_txn(work)
+
+    def paired_baselines(self, sweep_id: int) -> dict:
+        def work(cursor):
+            cursor.execute(SQL_PAIRED_BASELINES, (sweep_id,))
+            return {row[0]: row[1] for row in cursor.fetchall()}
+        return self._one_txn(work)
+
+    def wal_generated(self, since_lsn: str) -> tuple:
+        def work(cursor):
+            cursor.execute(SQL_WAL_GENERATED, (since_lsn,))
+            return tuple(cursor.fetchone())
         return self._one_txn(work)
 
     def reset_identity(self, start: str, end: str) -> list[tuple]:
@@ -662,8 +742,10 @@ class Database:
             return bool(cursor.fetchone()[0])
         try:
             return self._one_txn(work)
-        except Exception:  # noqa: BLE001 - probe absence is evidence
-            return False
+        except Exception as error:
+            if self._missing_table(error):
+                return False
+            raise
 
     @staticmethod
     def _missing_table(error: Exception) -> bool:
@@ -731,6 +813,35 @@ class Database:
         def work(cursor):
             cursor.execute(SQL_SEMANTIC_ROOTS, (start, end))
             return list(cursor.fetchall())
+        return self._one_txn(work)
+
+    def budgets_present(self) -> bool:
+        def work(cursor):
+            cursor.execute(SQL_0023_TABLES)
+            return bool(cursor.fetchone()[0])
+        try:
+            return self._one_txn(work)
+        except Exception as error:
+            if self._missing_table(error):
+                return False
+            raise
+
+    def bootstrap_budgets(self, run_id: str) -> dict:
+        def work(cursor):
+            cursor.execute(SQL_BOOTSTRAP_RUN, (run_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return {"run": None, "budgets": []}
+            keys = ("run_id", "manifest_sha256", "manifest_count",
+                    "normalized_set_sha256", "status", "batch_size",
+                    "players_registered", "discovery_jobs_created",
+                    "created_at", "completed_at")
+            run_row = dict(zip(keys, row))
+            cursor.execute(SQL_ENDPOINT_BUDGETS, (run_id,))
+            budgets = [dict(zip(("endpoint", "cap", "consumed",
+                                      "deadline_at", "updated_at"), r))
+                         for r in cursor.fetchall()]
+            return {"run": run_row, "budgets": budgets}
         return self._one_txn(work)
 
     def active_queues(self) -> dict:
@@ -983,7 +1094,9 @@ def build_sample(*, run: dict, index: int, expected_utc: datetime,
             "cycle_end": slot_expected_utc(
                 _parse_utc(run["core_start"]),
                 (window_index + 1) * SLOTS_PER_WINDOW).isoformat(),
-            "role": "core",
+            "role": ("drain" if run.get("mode") == "preflight"
+                       and index >= mode.get("bootstrap_slots", 0)
+                       else "core"),
             "admission": "integrated_at_finalize" if mode["admission"]
                          else "not_applicable",
         }
@@ -995,6 +1108,88 @@ def build_sample(*, run: dict, index: int, expected_utc: datetime,
     return sample
 
 
+def _sample_fixed_ids(run: dict, db: object) -> list[int]:
+    """Re-derive eligible fixed IDs at sample/finalize time from the pinned cohort."""
+    cohort = run.get("cohort", {})
+    tags, _raw, _canonical = _read_cohort(cohort["path"])
+    if _raw != cohort.get("raw_sha256"):
+        raise Step9Error("cohort_changed", "cohort file changed after start",
+                         gate=True)
+    rows = db.snapshot_population(tags)
+    return [row[0] for row in rows if _classify_eligible(row) == "eligible"]
+
+
+def _check_liveness_reset(previous: dict | None, current: dict | None) -> str | None:
+    """High-water IDs must never decrease; a drop is a counter reset."""
+    if not previous or not current:
+        return None
+    for key in ("collector_max_job_id", "attempt_max_id",
+                "observation_max_id", "python_max_job_id"):
+        old, new = previous.get(key), current.get(key)
+        if isinstance(old, int) and isinstance(new, int) and new < old:
+            return key
+    return None
+
+
+def _mount_changed(baseline: dict, current: dict) -> bool | None:
+    """Mount-identity continuity; None when either side is unknown."""
+    try:
+        for label in ("spool", "postgres"):
+            old, new = baseline[label], current[label]
+            for field in ("mount_point", "source", "mnt_id"):
+                if old.get(field) is None or new.get(field) is None:
+                    return None
+                if old[field] != new[field]:
+                    return True
+        return False
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
+def _systemd_watchdog_check(run: dict) -> bool | None:
+    """Report sampler-unit liveness; None when the unit is not configured."""
+    import subprocess
+
+    unit = (run.get("watchdog_unit") or "").strip()
+    if not unit:
+        return None
+    try:
+        completed = subprocess.run(
+            ["systemctl", "--user", "is-active", "--quiet", unit],
+            check=False, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.returncode == 0
+
+
+def _podman_container_probe(run: dict) -> dict | None:
+    """Best-effort container state/stats; None stays unknown, never zero."""
+    import subprocess
+
+    containers = run.get("containers", {}) or {}
+    name = containers.get("collector")
+    if not name:
+        return None
+    try:
+        inspect = subprocess.run(
+            ["podman", "container", "inspect", "--format",
+             "{{.State.Running}}\n{{.Image}}\n{{.State.StartedAt}}", name],
+            check=False, capture_output=True, text=True, timeout=30)
+        if inspect.returncode != 0:
+            return None
+        lines = inspect.stdout.strip().splitlines()
+        stats = subprocess.run(
+            ["podman", "stats", "--no-stream", "--format",
+             "{{.CPUPerc}}\n{{.MemUsage}}", name],
+            check=False, capture_output=True, text=True, timeout=30)
+        return {"running": (lines[0].strip().lower() == "true") if lines else None,
+                "image": lines[1].strip() if len(lines) > 1 else None,
+                "started_at": lines[2].strip() if len(lines) > 2 else None,
+                "stats": stats.stdout.strip() if stats.returncode == 0 else None}
+    except (OSError, subprocess.SubprocessError, IndexError):
+        return None
+
+
 def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
     """Minute loop; hooks injects (db, metrics_fetch, watchdog_check, clock)."""
     run_dir = _resolve_run_dir(arguments.run_dir)
@@ -1002,18 +1197,32 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
     hooks = hooks or {}
     db = hooks.get("db")
     fetch_metrics = hooks.get("fetch_metrics", fetch_runtime_metrics)
-    watchdog_check = hooks.get("watchdog_check", lambda run: None)
+    watchdog_check = hooks.get("watchdog_check", _systemd_watchdog_check)
     clock = hooks.get("clock", time.monotonic_ns)
     mode = MODES.get(run.get("mode", "live-day"), MODES["live-day"])
     max_slots = hooks.get("max_slots", mode["slots"])
     core_start = _parse_utc(run["core_start"])
     samples_dir = run_dir / "samples"
     samples_dir.mkdir(parents=True, exist_ok=True)
+    fixed_ids: list[int] | None = hooks.get("fixed_ids", [])
+    derivation_error: str | None = None
+    if db is not None and not fixed_ids:
+        try:
+            fixed_ids = _sample_fixed_ids(run, db)
+        except Step9Error:
+            raise
+        except Exception as error:  # noqa: BLE001 - derivation miss is evidence
+            derivation_error = f"database_unavailable: {error}"
+            fixed_ids = []
     start_mono = clock()
     previous_metrics: dict | None = None
     previous_mono: int | None = None
     previous_wall: datetime | None = None
-    failures = 0
+    previous_liveness: dict | None = None
+    outcome_strikes = 0
+    unavailable_strikes = 0
+    container_probe = hooks.get("container_probe")
+    baseline_fs = (run.get("filesystem") or {})
     for index in range(max_slots):
         expected_utc = slot_expected_utc(core_start, index)
         captured_utc = hooks.get("now_utc", _utc_now)()
@@ -1023,13 +1232,13 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
         wall_delta = (0.0 if previous_wall is None
                       else (captured_utc - previous_wall).total_seconds())
         try:
-            db_facts, db_error = (None, None)
-            if db is not None:
+            db_facts, db_error = (None, derivation_error)
+            if db is not None and derivation_error is None:
                 try:
-                    db_facts = db.minute_snapshot(hooks.get("fixed_ids", []))
+                    db_facts = db.minute_snapshot(fixed_ids or [])
                 except Exception as error:  # noqa: BLE001 - adapter failure is evidence
                     db_error = f"database_unavailable: {error}"
-            else:
+            elif db is None:
                 db_error = "database_unavailable"
             metrics, metrics_error = None, None
             try:
@@ -1059,31 +1268,45 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                 fs=filesystem_facts(run["spool_path"], run["postgres_path"]),
                 watchdog_active=watchdog_check(run),
                 admission_latest=admission_latest)
+            try:
+                sample["container"] = container_probe(run) \
+                    if container_probe else _podman_container_probe(run)
+            except Exception:  # noqa: BLE001 - probe miss is unknown
+                sample["container"] = None
+            sample["mount_changed"] = _mount_changed(baseline_fs,
+                                                      sample["filesystem"])
             if metrics is not None:
                 previous_metrics = metrics
             name = f"minute-{index:04d}.json"
             if (samples_dir / name).exists():
                 raise Step9Error("duplicate_sample", f"slot {index} already written",
                                  gate=True)
-            _exclusive_json(samples_dir / name, sample)
+            sample["liveness_reset"] = _check_liveness_reset(
+                previous_liveness, sample.get("liveness"))
+            if isinstance(sample.get("liveness"), dict):
+                previous_liveness = sample["liveness"]
+            _exclusive_json(samples_dir / name, sample,
+                            max_bytes=SAMPLE_MAX_BYTES)
             _check_capacity(run_dir)
             outcome = sample["outcome"]
             if outcome in ("clock_jump", "boot_change", "non_monotonic",
-                           "admission_mismatch", "process_restart"):
-                failures += 1
-                if failures >= 2 or outcome == "process_restart":
-                    _record_failure(run_dir, sample["failure_code"], outcome)
+                           "out_of_order", "late", "admission_mismatch",
+                           "process_restart"):
+                _record_failure(run_dir, sample["failure_code"], outcome)
+                outcome_strikes += 1
+                if outcome_strikes >= 2 or outcome == "process_restart":
                     return 1
-            elif outcome == "on_time":
-                failures = 0
+            elif outcome == "on_time" and db_error is None \
+                    and metrics_error is None:
+                outcome_strikes = 0
             if db_error is not None or metrics_error is not None:
-                failures += 1
-                if failures >= 2:
+                unavailable_strikes += 1
+                if unavailable_strikes >= 2:
                     _record_failure(run_dir, "two_consecutive_unavailable",
                                     "two consecutive unavailable samples")
                     return 1
             else:
-                failures = 0
+                unavailable_strikes = 0
         except Step9Error as error:
             _record_failure(run_dir, error.code, str(error))
             return 1 if error.gate else 2
@@ -1133,6 +1356,24 @@ def _plus_minutes(iso: str, minutes: int) -> str:
     return (_parse_utc(iso) + timedelta(minutes=minutes)).isoformat()
 
 
+def _finalize_wal(samples: list[dict], db: object | None) -> dict:
+    """Generated WAL bytes across the run plus current database size."""
+    if db is None:
+        return {"status": "unknown", "failure_code": "database_unavailable"}
+    try:
+        first_lsn = (samples[0].get("liveness") or {}).get("wal_lsn")
+        if not first_lsn:
+            return {"status": "unknown", "failure_code": "wal_lsn_missing"}
+        generated, size = db.wal_generated(first_lsn)
+        return {"status": "complete", "generated_bytes": int(generated),
+                "database_bytes": int(size)}
+    except Step9Error as error:
+        return {"status": "unknown", "failure_code": error.code}
+    except Exception as error:  # noqa: BLE001 - DB failure is evidence
+        return {"status": "unknown",
+                "failure_code": f"database_unavailable: {error}"}
+
+
 def _finalize_admission(run: dict, db: object | None) -> dict:
     """Full admission reconciliation for live-day; preflight is N/A."""
     if not MODES.get(run.get("mode", "live-day"), MODES["live-day"])["admission"]:
@@ -1168,6 +1409,46 @@ def _finalize_admission(run: dict, db: object | None) -> dict:
                 "failure_code": f"database_unavailable: {error}"}
 
 
+def _finalize_budget(run: dict, db: object, endpoints: dict) -> dict:
+    """Provisional 0023 durable-budget cross-check; unknown until merged."""
+    bootstrap_id = run.get("bootstrap_run_id")
+    if not bootstrap_id:
+        return {"status": "unknown_pending_0023", "failure": None}
+    try:
+        if not db.budgets_present():
+            return {"status": "unknown_pending_0023", "failure": None}
+        data = db.bootstrap_budgets(bootstrap_id)
+    except Step9Error as error:
+        return {"status": "unknown", "failure": None,
+                "failure_code": error.code}
+    except Exception as error:  # noqa: BLE001 - denial is evidence
+        if getattr(error, "sqlstate", "") == "42501":
+            return {"status": "unknown_pending_grant", "failure": None}
+        return {"status": "unknown", "failure": None,
+                "failure_code": f"database_unavailable: {error}"}
+    brow = data["run"]
+    if brow is None:
+        return {"status": "unknown", "failure": None,
+                "failure_code": "budget_run_missing"}
+    cohort = run.get("cohort", {})
+    result: dict = {"status": "complete", "failure": None,
+                     "bootstrap_status": brow["status"],
+                     "budgets": {b["endpoint"]: {"cap": b["cap"],
+                                                     "consumed": b["consumed"]}
+                                 for b in data["budgets"]}}
+    if brow["manifest_sha256"] != cohort.get("raw_sha256") \
+            or brow["manifest_count"] != cohort.get("input_count") \
+            or brow["normalized_set_sha256"] != cohort.get("canonical_sha256"):
+        result["status"] = "failed"
+        result["failure"] = "budget_manifest_mismatch"
+        return result
+    consumed = {b["endpoint"]: b["consumed"] for b in data["budgets"]}
+    if endpoints.get("profile", 0) > consumed.get("profile", -1):
+        result["status"] = "failed"
+        result["failure"] = "budget_evidence_mismatch"
+    return result
+
+
 def _finalize_preflight(run: dict, db: object | None) -> dict:
     """Envelope reconciliation for preflight; live-day is N/A."""
     if MODES.get(run.get("mode", "live-day"), MODES["live-day"])["admission"]:
@@ -1183,6 +1464,10 @@ def _finalize_preflight(run: dict, db: object | None) -> dict:
         if probes["pending_remote"]:
             result["failures"] = sorted(set(result["failures"]) |
                                           {"preflight_pending_remote"})
+        result["budget"] = _finalize_budget(run, db, result["endpoints"])
+        if result["budget"].get("failure"):
+            result["failures"] = sorted(set(result["failures"]) |
+                                          {result["budget"]["failure"]})
         residue = db.active_queues()
         result["queue_residue"] = {
             "collector": [(s, int(c)) for s, c, _m in residue["collector"]],
@@ -1192,6 +1477,73 @@ def _finalize_preflight(run: dict, db: object | None) -> dict:
                                           {"preflight_queue_residue"})
         result["status"] = "complete" if not result["failures"] else "failed"
         return result
+    except Step9Error as error:
+        return {"status": "unknown", "failure_code": error.code}
+    except Exception as error:  # noqa: BLE001 - DB failure is evidence
+        return {"status": "unknown",
+                "failure_code": f"database_unavailable: {error}"}
+
+
+def _finalize_eligibility(run: dict, db: object | None) -> dict:
+    """Final cohort/eligibility reconciliation plus domain transitions."""
+    if db is None:
+        return {"status": "unknown", "failure_code": "database_unavailable"}
+    try:
+        cohort = run.get("cohort", {})
+        tags, _raw, _canonical = _read_cohort(cohort["path"])
+        if _raw != cohort.get("raw_sha256"):
+            return {"status": "unknown", "failure_code": "cohort_changed"}
+        rows = db.snapshot_population(tags)
+        eligible = [r[0] for r in rows if _classify_eligible(r) == "eligible"]
+        matched = [r[0] for r in rows]
+        outside = db.outside_active(matched)
+        lineage = db.outside_roots(matched)
+        effects = db.transitions(matched, run["core_start"], run["core_end"])
+        result: dict = {
+            "status": "complete", "eligible_count": len(eligible),
+            "eligible_digest": _eligible_digest(eligible),
+            "matched_count": len(matched),
+            "outside_active": outside, "outside_lineage": lineage,
+            "effect_rows": len(effects),
+        }
+        if outside or lineage:
+            result["status"] = "failed"
+            result["failure_code"] = "foreign_population_recheck"
+        return result
+    except Step9Error as error:
+        return {"status": "unknown", "failure_code": error.code}
+    except Exception as error:  # noqa: BLE001 - DB failure is evidence
+        return {"status": "unknown",
+                "failure_code": f"database_unavailable: {error}"}
+
+
+def _finalize_reset_deep(run: dict, db: object,
+                         rows: list[tuple]) -> dict:
+    """Sweep/generation membership equality, paired roots, drain gate."""
+    deep: dict = {"boundaries": len(rows)}
+    failures: list[str] = []
+    try:
+        for row in rows:
+            boundary_at, sweep_id = row[0], row[1]
+            sweep_members = db.reset_members(sweep_id)
+            gen_rows = db.generation_members(sweep_id, str(boundary_at))
+            gen_members = [r[0] for r in gen_rows]
+            if sorted(sweep_members) != sorted(gen_members):
+                failures.append("reset_membership_mismatch")
+            paired = db.paired_baselines(sweep_id)
+            unpaired = [p for p in sweep_members if paired.get(p, 0) < 1]
+            if unpaired:
+                failures.append("reset_baseline_unpaired")
+            if gen_rows:
+                expected_count = gen_rows[0][1]
+                if expected_count != len(gen_members):
+                    failures.append("reset_generation_count")
+                deep.setdefault("expected_hashes", []).append(gen_rows[0][2])
+            if int(row[7]) > 0:
+                failures.append("reset_drain_incomplete")
+        deep["failures"] = sorted(set(failures))
+        deep["status"] = "complete" if not failures else "failed"
+        return deep
     except Step9Error as error:
         return {"status": "unknown", "failure_code": error.code}
     except Exception as error:  # noqa: BLE001 - DB failure is evidence
@@ -1214,16 +1566,16 @@ def cmd_finalize(arguments: argparse.Namespace, hooks=None) -> int:
                              gate=True)
         missing = [s["slot"] for s in samples if s.get("outcome") != "on_time"]
         resets: dict = {"status": "unknown", "failure_code": "database_unavailable"}
-        transitions: dict = {"status": "unknown",
-                             "failure_code": "database_unavailable"}
+        reset_rows: list = []
         db = hooks.get("db")
         if db is not None:
             try:
-                rows = db.reset_identity(run["core_start"], run["core_end"])
-                resets = {"status": "captured", "boundaries": len(rows),
-                          "safe_handoffs": sum(1 for r in rows if r[4]),
-                          "nonterminal_reset_jobs": sum(int(r[7]) for r in rows)}
-                if len(rows) != 1 or not rows[0][4]:
+                reset_rows = db.reset_identity(run["core_start"], run["core_end"])
+                resets = {"status": "captured", "boundaries": len(reset_rows),
+                          "safe_handoffs": sum(1 for r in reset_rows if r[4]),
+                          "nonterminal_reset_jobs": sum(int(r[7]) for r in reset_rows)}
+                if mode["admission"] and (len(reset_rows) != 1
+                                            or not reset_rows[0][4]):
                     resets["failure_code"] = "reset_handoff_unproven"
             except Exception as error:  # noqa: BLE001 - DB failure is evidence
                 resets = {"status": "unknown",
@@ -1235,22 +1587,41 @@ def cmd_finalize(arguments: argparse.Namespace, hooks=None) -> int:
             "core_slots": len(samples),
             "core_windows": len(windows),
             "non_on_time_slots": missing,
-            "reset": resets, "transitions": transitions,
+            "reset": resets,
+            "reset_deep": (_finalize_reset_deep(run, db, reset_rows)
+                            if db is not None and mode["admission"]
+                            else {"status": "not_applicable"}),
+            "eligibility": _finalize_eligibility(run, db),
             "admission": _finalize_admission(run, db),
             "preflight": _finalize_preflight(run, db),
             "operating": hooks.get("operating", {"status": "unknown",
                                   "failure_code": "operating_unavailable"}),
             "filesystem": filesystem_facts(run["spool_path"], run["postgres_path"]),
+            "wal": _finalize_wal(samples, db),
             "failure_codes": sorted({s.get("failure_code") for s in samples
                                      if s.get("failure_code")}),
         }
         _exclusive_json(run_dir / "final.json", final)
         _write_manifest(run_dir)
         _check_capacity(run_dir)
-        return 0
+        return _finalize_exit(final, mode)
     except Step9Error as error:
         _record_failure(run_dir, error.code, str(error))
         return 1 if error.gate else 2
+
+
+def _finalize_exit(final: dict, mode: dict) -> int:
+    """Sealed evidence always; nonzero when required blocks fail/are unknown."""
+    required = [final.get("eligibility", {}), final.get("wal", {})]
+    if mode["admission"]:
+        required += [final.get("admission", {}), final.get("reset_deep", {})]
+    else:
+        required += [final.get("preflight", {})]
+    if any(block.get("status") == "failed" for block in required):
+        return 1
+    if any(block.get("status") != "complete" for block in required):
+        return 2
+    return 0
 
 
 def _write_manifest(run_dir: Path) -> dict:
@@ -1319,6 +1690,25 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
             raise Step9Error("sample_order",
                              f"samples are not exactly 0..{mode['slots'] - 1}",
                              gate=True)
+        for sample in samples:
+            if sample.get("outcome") != "on_time":
+                raise Step9Error("sample_outcome_failed",
+                                 f"slot {sample.get('slot')} outcome "
+                                 f"{sample.get('outcome')}", gate=True)
+            for field in ("database_error", "metrics_error", "counter_reset",
+                          "liveness_reset"):
+                if sample.get(field) is not None:
+                    raise Step9Error("sample_evidence_failed",
+                                     f"slot {sample.get('slot')} {field} set",
+                                     gate=True)
+            if sample.get("watchdog_active") is not True:
+                raise Step9Error("watchdog_liveness_unproven",
+                                 f"slot {sample.get('slot')} watchdog not active",
+                                 gate=True)
+            if sample.get("mount_changed") is True:
+                raise Step9Error("mount_identity_changed",
+                                 f"slot {sample.get('slot')} mount changed",
+                                 gate=True)
         admission = run.get("admission", {})
         if mode["admission"] and admission.get("status") != "integrated":
             raise Step9Error("admission_unproven",
@@ -1337,6 +1727,26 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
                 raise Step9Error("cohort_changed",
                                  "cohort file changed after start")
         final = json.loads(final_path.read_text(encoding="utf-8"))
+        if final.get("non_on_time_slots"):
+            raise Step9Error("sample_outcome_failed",
+                             "final.json records non-on-time slots", gate=True)
+        eligibility = final.get("eligibility", {})
+        if eligibility.get("status") != "complete":
+            raise Step9Error("eligibility_unproven",
+                             "final.json lacks complete eligibility reconciliation",
+                             gate=True)
+        if eligibility.get("outside_active") or eligibility.get("outside_lineage"):
+            raise Step9Error("foreign_population_recheck",
+                             "final eligibility recheck found outside population",
+                             gate=True)
+        deep = final.get("reset_deep", {})
+        if mode["admission"] and deep.get("status") != "complete":
+            raise Step9Error("reset_deep_unproven",
+                             "final.json lacks complete reset reconciliation",
+                             gate=True)
+        if final.get("failure_codes"):
+            raise Step9Error("sample_evidence_failed",
+                             "final.json records failure codes", gate=True)
         admission_result = final.get("admission", {})
         if mode["admission"]:
             if admission_result.get("status") != "complete":
@@ -1406,6 +1816,14 @@ class Podman:
             return None, "inspect_malformed"
         return lines[0].strip().lower() == "true", lines[1].strip()
 
+    def inspect_restart_policy(self, container: str) -> str | None:
+        try:
+            output = self._run([self._bin, "container", "inspect", "--format",
+                                "{{.HostConfig.RestartPolicy.Name}}", container])
+        except Exception:  # noqa: BLE001 - stop adapter reports only
+            return None
+        return output.strip() or None
+
     def disable_restart(self, container: str) -> str | None:
         try:
             self._run([self._bin, "update", "--restart=no", container])
@@ -1445,14 +1863,22 @@ def cmd_watchdog(arguments: argparse.Namespace, hooks=None) -> int:
         _record_failure(run_dir, "collector_not_running",
                         "collector is not running at watchdog start")
         return 1
-    error = podman.disable_restart(collector)
-    if error is not None:
-        _record_failure(run_dir, "restart_disable_failed", error)
+    pinned_image = (run.get("containers", {}) or {}).get("collector_image")
+    if pinned_image is not None and image != pinned_image:
+        _record_failure(run_dir, "container_image_changed",
+                        "collector image differs from start pin")
+        return 1
+    verified, prior = _verified_restart_disabled(
+        podman, collector,
+        tries=1 if hooks.get("no_sleep") else 6)
+    if not verified:
+        _record_failure(run_dir, "restart_not_disabled",
+                        "restart policy is not verified no")
         return 1
     _exclusive_json(run_dir / "watchdog.json", {
         "schema": run.get("schema", SCHEMA), "run_id": run["run_id"],
         "collector": collector, "image": image,
-        "prior_restart_policy": "recorded_by_operator",
+        "prior_restart_policy": prior,
         "verified_restart": "no", "started_at": _utc_now().isoformat(),
         "deadline": deadline.isoformat(),
         "max_sample_age_seconds": arguments.max_sample_age_seconds,
@@ -1461,10 +1887,12 @@ def cmd_watchdog(arguments: argparse.Namespace, hooks=None) -> int:
     now_utc = hooks.get("now_utc", _utc_now)
     max_iterations = hooks.get("max_iterations", 2**31)
     iteration = 0
+    sampler_check = hooks.get("sampler_check", _systemd_watchdog_check)
     while iteration < max_iterations:
         iteration += 1
         outcome = _watchdog_once(run_dir, run, podman, collector, deadline,
-                                 arguments.max_sample_age_seconds, now_utc)
+                                 arguments.max_sample_age_seconds, now_utc,
+                                 sampler_check)
         if outcome is not None:
             _record_failure(run_dir, outcome, f"watchdog stop: {outcome}")
             stop_error = podman.stop(collector)
@@ -1483,8 +1911,23 @@ def cmd_watchdog(arguments: argparse.Namespace, hooks=None) -> int:
     return 0
 
 
+def _verified_restart_disabled(podman: Podman, container: str,
+                               tries: int = 6) -> tuple[bool, str | None]:
+    """Disable restart and re-inspect until exactly 'no'."""
+    prior = podman.inspect_restart_policy(container)
+    error = podman.disable_restart(container)
+    if error is not None:
+        return False, prior
+    for _attempt in range(tries):
+        if podman.inspect_restart_policy(container) == "no":
+            return True, prior
+        time.sleep(2)
+    return False, prior
+
+
 def _watchdog_once(run_dir: Path, run: dict, podman: Podman, collector: str,
-                   deadline: datetime, max_age: int, now_utc) -> str | None:
+                   deadline: datetime, max_age: int, now_utc,
+                   sampler_check=None) -> str | None:
     now = now_utc()
     if now >= deadline:
         return "deadline_reached"
@@ -1493,9 +1936,18 @@ def _watchdog_once(run_dir: Path, run: dict, podman: Podman, collector: str,
         return "inspect_unavailable"
     if not running:
         return "collector_stopped"
+    try:
+        core_start = _parse_utc(run["core_start"])
+    except Step9Error:
+        return "run_malformed"
+    grace_ends = core_start + timedelta(seconds=max_age + 60)
     samples = sorted((run_dir / "samples").glob("minute-*.json")) if (
         run_dir / "samples").is_dir() else []
     if not samples:
+        if now < grace_ends:
+            return None  # sampler still starting; deadline still enforced
+        if sampler_check is not None and sampler_check(run) is False:
+            return "sampler_unit_inactive"
         return "no_samples"
     try:
         latest = json.loads(samples[-1].read_text(encoding="utf-8"))
@@ -1534,14 +1986,17 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--watchdog-unit", required=True)
     start.add_argument("--run-id", default=None)
     start.add_argument("--database-url", default=None)
+    start.add_argument("--bootstrap-run-id", default=None)
     start.add_argument("--mode", choices=sorted(MODES), default="live-day")
     start.add_argument("--max-invocation-gap-seconds", type=int, default=5)
 
     sample = sub.add_parser("sample", help="run the minute sampling loop")
     _add_common(sample)
+    sample.add_argument("--database-url", default=None)
 
     finalize = sub.add_parser("finalize", help="reconcile once and seal a manifest")
     _add_common(finalize)
+    finalize.add_argument("--database-url", default=None)
 
     validate = sub.add_parser("validate",
                               help="validate a sealed run without traffic or DB")
@@ -1554,6 +2009,16 @@ def build_parser() -> argparse.ArgumentParser:
     watchdog.add_argument("--max-sample-age-seconds", type=int, default=125)
     watchdog.add_argument("--systemd-unit", required=True)
     return parser
+
+
+def _cli_hooks(arguments: argparse.Namespace) -> dict:
+    """Build production hooks: real DB when --database-url is given."""
+    url = getattr(arguments, "database_url", None)
+    if not url:
+        return {}
+    import psycopg
+
+    return {"db": Database(lambda: psycopg.connect(url))}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1572,9 +2037,9 @@ def main(argv: list[str] | None = None) -> int:
                               "header_sha256": header["header_sha256"]}))
             return 0
         if arguments.command == "sample":
-            return cmd_sample(arguments)
+            return cmd_sample(arguments, _cli_hooks(arguments))
         if arguments.command == "finalize":
-            return cmd_finalize(arguments)
+            return cmd_finalize(arguments, _cli_hooks(arguments))
         if arguments.command == "validate":
             return cmd_validate(arguments)
         if arguments.command == "watchdog":
@@ -1586,8 +2051,6 @@ def main(argv: list[str] | None = None) -> int:
     raise AssertionError("unreachable")
 
 
-if __name__ == "__main__":
-    sys.exit(main())
 
 # --- Admission evidence (migration 0022-final read side) -------------------
 # Table/column names follow the validated final handoff exactly. The observer
@@ -1686,6 +2149,29 @@ ALL_RO_STATEMENTS += (SQL_ADMISSION_TABLES, SQL_ADMISSION_RUN,
 DEADLINE_ALLOWANCE = timedelta(minutes=5)
 
 
+SQL_0023_TABLES = """
+SELECT to_regclass('population_bootstrap_runs') IS NOT NULL
+   AND to_regclass('collector_endpoint_budgets') IS NOT NULL
+"""
+
+SQL_BOOTSTRAP_RUN = """
+SELECT run_id, manifest_sha256, manifest_count, normalized_set_sha256,
+       status, batch_size, players_registered, discovery_jobs_created,
+       created_at, completed_at
+FROM population_bootstrap_runs WHERE run_id = %s
+"""
+
+SQL_ENDPOINT_BUDGETS = """
+SELECT endpoint, cap, consumed, deadline_at, updated_at
+FROM collector_endpoint_budgets WHERE run_id = %s ORDER BY endpoint
+"""
+
+for _statement in (SQL_0023_TABLES, SQL_BOOTSTRAP_RUN, SQL_ENDPOINT_BUDGETS):
+    assert_read_only(_statement)
+
+ALL_RO_STATEMENTS += (SQL_0023_TABLES, SQL_BOOTSTRAP_RUN, SQL_ENDPOINT_BUDGETS)
+
+
 def _event_selected_due(event: dict) -> list:
     return event.get("selected_due_ats") or []
 
@@ -1710,6 +2196,10 @@ def evaluate_admission(*, run: dict, header: dict, events: list[dict],
             and header.get("failure_code") not in ADMISSION_FAILURE_CODES):
         failures.append("admission_failure_code_unknown")
     previous_at = None
+    reopening = next((e for e in events if e["gate_allowed"]
+                      and e.get("gate_handoff_at") is not None), None)
+    handoff = (reopening["gate_handoff_at"] if reopening
+               else header.get("handoff_at"))
     for event in events:
         cycle_at = event["cycle_at"]
         database_at = event["database_at"]
@@ -1738,15 +2228,24 @@ def evaluate_admission(*, run: dict, header: dict, events: list[dict],
         if event["unselected_visible_past_deadline_count"]:
             failures.append("admission_past_deadline_unselected")
             slot["late"] += event["unselected_visible_past_deadline_count"]
+        if handoff is not None and database_at < handoff and (
+                event["gate_allowed"] or event["selected_count"]
+                or event["inserted_count"]):
+            failures.append("admission_suppression_breach")
         if event["gate_allowed"]:
+            if handoff is not None and reopening is event \
+                    and database_at < handoff:
+                failures.append("admission_early_reopen")
+            grace = event.get("gate_handoff_at") or handoff
             for due_at in _event_selected_due(event):
-                if database_at > due_at + DEADLINE_ALLOWANCE:
+                effective = max(due_at, grace) if grace else due_at
+                if database_at > effective + DEADLINE_ALLOWANCE:
                     failures.append("admission_selected_late_recomputed")
                     slot["late"] += 1
                     break
-    handoff_at = header.get("handoff_at")
+    header_handoff = header.get("handoff_at")
     tail_need = max(core_start + mode["interval"],
-                    handoff_at or core_start) + DEADLINE_ALLOWANCE
+                    header_handoff or core_start) + DEADLINE_ALLOWANCE
     if previous_at is None or previous_at < tail_need:
         unknown.append("admission_tail_insufficient")
     root_check = reconcile_semantic_roots(run, events, roots)
@@ -1857,5 +2356,8 @@ def evaluate_preflight_envelope(*, workcounts: list[tuple],
             "endpoints": endpoints,
             "ranking_intents": {"count": int(intents[0]),
                                 "min_cycle_at": str(intents[1]),
-                                "max_cycle_at": str(intents[2])},
-            "budget_ledger": "unknown_pending_0023"}
+                                "max_cycle_at": str(intents[2])}}
+
+
+if __name__ == "__main__":
+    sys.exit(main())
