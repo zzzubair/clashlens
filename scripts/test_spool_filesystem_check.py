@@ -83,6 +83,38 @@ def test_btrfs_probe_failure_blocks_qualification(tmp_path: Path) -> None:
         assert complete is False
 
 
+def test_btrfs_probe_requires_complete_allocation_output(tmp_path: Path) -> None:
+    target = tmp_path / "spool"
+    cases = (
+        ("", "empty_output", None),
+        ("Data,single: Size: 1, Used: 1\n", "allocation_evidence_missing", None),
+        ("Data+Metadata,single: Size: 2, Used: 1\n", None, "combined"),
+        ("Data,single: Size: 1, Used: 1\nMetadata,DUP: Size: 1, Used: 1\n", None, "separate"),
+    )
+    for stdout, expected_error, expected_evidence in cases:
+        completed = subprocess.CompletedProcess(
+            args=["btrfs"], returncode=0, stdout=stdout, stderr=""
+        )
+        with mock.patch.object(check.subprocess, "run", return_value=completed):
+            result = check._btrfs_probe(target)
+        assert result["error"] == expected_error
+        assert result["allocation_evidence"] == expected_evidence
+        assert result["stdout"] == stdout
+
+    long_output = (
+        "Data,single: Size: 1, Used: 1\nMetadata,DUP: Size: 1, Used: 1\n"
+        + "x" * check.PROBE_STDOUT_LIMIT
+    )
+    completed = subprocess.CompletedProcess(
+        args=["btrfs"], returncode=0, stdout=long_output, stderr=""
+    )
+    with mock.patch.object(check.subprocess, "run", return_value=completed):
+        result = check._btrfs_probe(target)
+    assert result["error"] == "output_truncated"
+    assert result["stdout_truncated"] is True
+    assert len(result["stdout"]) == check.PROBE_STDOUT_LIMIT
+
+
 def test_btrfs_probe_maps_subprocess_outcomes(tmp_path: Path) -> None:
     target = tmp_path / "spool"
     with mock.patch.object(check.subprocess, "run", side_effect=FileNotFoundError("btrfs")):
@@ -139,6 +171,60 @@ def test_btrfs_mount_capacity_consistency_gates_completeness(tmp_path: Path) -> 
     assert payload["paths"]["spool"]["btrfs_usage"]["error"] is None
 
 
+def test_supplied_candidate_provenance_must_be_available_and_match_source(
+    tmp_path: Path,
+) -> None:
+    missing = check._candidate_reference(tmp_path / "missing.json", "a" * 40)
+    assert missing["error"] == "unavailable"
+    invalid = tmp_path / "invalid.json"
+    invalid.write_text("{}", encoding="utf-8")
+    assert check._candidate_reference(invalid, "a" * 40)["error"] == "unavailable"
+
+    candidate = tmp_path / "candidate.json"
+    candidate.write_text(
+        json.dumps(
+            {
+                "receipt_scope": "candidate-preparation",
+                "receipt_digest": "sha256:" + "b" * 64,
+                "source": {"revision": "a" * 40},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with mock.patch("scripts.deployment_receipt.validate_receipt"):
+        reference = check._candidate_reference(candidate, "a" * 40)
+        mismatch = check._candidate_reference(candidate, "c" * 40)
+        unknown = check._candidate_reference(candidate, "unknown")
+    assert reference["error"] is None
+    assert reference["digest"] == check._sha_file(candidate)
+    assert mismatch["error"] == "source_mismatch"
+    assert unknown["error"] == "source_mismatch"
+
+
+def test_unavailable_candidate_or_unknown_revision_blocks_qualification(tmp_path: Path) -> None:
+    mount = _payload()["mount"]
+    capacity = _payload()["capacity"]
+    with (
+        mock.patch.object(check, "_mount_facts", return_value=mount),
+        mock.patch.object(check, "_capacity_facts", return_value=capacity),
+    ):
+        payload, complete = check.collect(
+            tmp_path / "spool", tmp_path / "pg", tmp_path / "missing.json"
+        )
+    assert complete is False
+    assert payload["candidate_receipt"]["error"] == "unavailable"
+
+    failed_git = subprocess.CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+    with (
+        mock.patch.object(check, "_mount_facts", return_value=mount),
+        mock.patch.object(check, "_capacity_facts", return_value=capacity),
+        mock.patch.object(check.subprocess, "run", return_value=failed_git),
+    ):
+        payload, complete = check.collect(tmp_path / "spool", tmp_path / "pg", None)
+    assert complete is False
+    assert payload["source_revision"] == "unknown"
+
+
 def test_unknown_identity_or_model_blocks_qualification(tmp_path: Path) -> None:
     base_mount = _payload()["mount"]
     base_capacity = _payload()["capacity"]
@@ -154,6 +240,38 @@ def test_unknown_identity_or_model_blocks_qualification(tmp_path: Path) -> None:
         ):
             _, complete = check.collect(tmp_path / "spool", tmp_path / "pg", None)
         assert complete is False
+
+
+def test_artifact_publication_is_exclusive_and_cleans_partial_pair(tmp_path: Path) -> None:
+    output = tmp_path / "evidence.json"
+    digest = check._atomic_write_json(output, {"complete": True})
+    original = output.read_bytes()
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert Path(str(output) + ".sha256").stat().st_mode & 0o777 == 0o600
+    with pytest.raises(RuntimeError, match="occupied"):
+        check._atomic_write_json(output, {"replacement": True})
+    assert output.read_bytes() == original
+    assert Path(str(output) + ".sha256").read_text().startswith(digest)
+
+    partial = tmp_path / "partial.json"
+    real_link = check.os.link
+    calls = 0
+
+    def fail_second_link(source: Path, destination: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected")
+        real_link(source, destination)
+
+    with (
+        mock.patch.object(check.os, "link", side_effect=fail_second_link),
+        pytest.raises(RuntimeError, match="atomically"),
+    ):
+        check._atomic_write_json(partial, {"complete": False})
+    assert not partial.exists()
+    assert not Path(str(partial) + ".sha256").exists()
+    assert list(tmp_path.glob(".*.tmp")) == []
 
 
 def test_main_returns_nonzero_for_incomplete_evidence(tmp_path: Path, capsys) -> None:
