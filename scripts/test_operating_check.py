@@ -59,6 +59,7 @@ def _metrics() -> str:
             'clashlens_collector_stage_duration_seconds_bucket{stage="claim",le="+Inf"} 1',
             'clashlens_collector_stage_duration_seconds_count{stage="claim"} 1',
             'clashlens_collector_stage_duration_seconds_sum{stage="claim"} 0.01',
+            'clashlens_spool_inode_model_info{filesystem_type="ext4",model="finite"} 1',
         )
     )
     return "\n".join(lines) + "\n"
@@ -73,6 +74,9 @@ def test_collector_metrics_are_typed_and_include_hard_spool_facts() -> None:
     assert result["stages"]["claim"]["count"] == 1
     assert result["spool"]["abandoned_temporary_bytes"] == 3
     assert result["spool"]["free_bytes"] == 10_000
+    assert result["spool"]["filesystem_type"] == "ext4"
+    assert result["spool"]["inode_model"] == "finite"
+    assert result["schema_version"] == 2
     assert "key_label" not in json.dumps(result)
 
 
@@ -101,6 +105,43 @@ def test_missing_required_metric_is_rejected_instead_of_becoming_zero() -> None:
 
     with pytest.raises(ValueError, match="metrics_invalid"):
         operating_check.parse_collector_metrics(missing)
+
+
+def test_capacity_model_metric_requires_exact_single_truthful_fact() -> None:
+    base = _metrics()
+    # Missing model metric is rejected, not defaulted to finite/dynamic.
+    missing = "\n".join(
+        line for line in base.splitlines() if not line.startswith("clashlens_spool_inode_model_info")
+    )
+    with pytest.raises(ValueError, match="metrics_invalid"):
+        operating_check.parse_collector_metrics(missing)
+    # Duplicate model facts are rejected.
+    duplicate = base + 'clashlens_spool_inode_model_info{filesystem_type="ext4",model="finite"} 1\n'
+    with pytest.raises(ValueError, match="metrics_invalid"):
+        operating_check.parse_collector_metrics(duplicate)
+    # Malformed labels/values and contradictory dynamic-without-btrfs fail.
+    for bad in (
+        'clashlens_spool_inode_model_info{filesystem_type="ext4",model="dynamic"} 1\n',
+        'clashlens_spool_inode_model_info{filesystem_type="btrfs",model="finite"} 1\n',
+        'clashlens_spool_inode_model_info{filesystem_type="ext4",model="finite"} 0\n',
+        'clashlens_spool_inode_model_info{filesystem_type="ext4"} 1\n',
+    ):
+        without = "\n".join(
+            line for line in base.splitlines() if not line.startswith("clashlens_spool_inode_model_info")
+        )
+        with pytest.raises(ValueError, match="metrics_invalid"):
+            operating_check.parse_collector_metrics(without + "\n" + bad)
+    # Btrfs dynamic round-trips truthfully with zero inodes.
+    btrfs = "\n".join(
+        line
+        for line in base.splitlines()
+        if not line.startswith(("clashlens_spool_inode_model_info", "clashlens_spool_free_inodes "))
+    )
+    btrfs += '\nclashlens_spool_free_inodes 0\nclashlens_spool_inode_model_info{filesystem_type="btrfs",model="dynamic"} 1\n'
+    result = operating_check.parse_collector_metrics(btrfs)
+    assert result["spool"]["filesystem_type"] == "btrfs"
+    assert result["spool"]["inode_model"] == "dynamic"
+    assert result["spool"]["free_inodes"] == 0
 
 
 def test_database_contract_is_one_repeatable_read_only_transaction() -> None:

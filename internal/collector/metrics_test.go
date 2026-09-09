@@ -110,3 +110,33 @@ func TestMetricsIncludeRequiredDurableOperationalGauges(t *testing.T) {
 		t.Fatal("collector metrics exposed a configured API key label")
 	}
 }
+
+func TestMetricsRenderCarriesExplicitCapacityMeaning(t *testing.T) {
+	databaseURL := startContractDatabase(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	store, err := openStore(ctx, databaseURL, 1)
+	if err != nil {
+		t.Fatalf("openStore returned an error: %v", err)
+	}
+	t.Cleanup(store.close)
+	keys, err := newKeyPool([]APIKey{
+		{Label: "normal", Secret: "normal-secret", Pool: normalPool},
+		{Label: "interactive", Secret: "interactive-secret", Pool: interactivePool},
+	}, 30, false)
+	if err != nil {
+		t.Fatalf("newKeyPool returned an error: %v", err)
+	}
+	metrics := newCollectorMetrics()
+	// Without a spool the render must emit unknown, not fabricated finite.
+	output, err := metrics.render(ctx, store, keys, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("render metrics: %v", err)
+	}
+	if !strings.Contains(output, `clashlens_spool_inode_model_info{filesystem_type="unknown",model="unknown"} 1`) {
+		t.Fatalf("unconfigured spool did not render unknown capacity: %s", output)
+	}
+	if strings.Contains(output, `model="finite"`) {
+		t.Fatal("unconfigured spool fabricated finite capacity")
+	}
+}

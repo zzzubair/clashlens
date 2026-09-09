@@ -43,7 +43,7 @@ DUPLICATE_ENDPOINT_MIX = {
     "global_player_rankings": 24,
 }
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
-ARTIFACT_SCHEMA_VERSION = 9
+ARTIFACT_SCHEMA_VERSION = 10
 CANDIDATE_RECEIPT_SCHEMA_VERSION = 2
 REQUIRED_MIGRATION_VERSIONS = tuple(range(1, 22))
 CANONICAL_REPOSITORY_URL = "https://github.com/zzzubair/clashlens"
@@ -3132,6 +3132,33 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             ("measured_local_growth_bytes", "days_to_80_percent", "checks"),
             f"{label} storage_runway",
         )
+        _validate_capacity_facts(
+            sample["storage_runway"],
+            f"{label} storage",
+        )
+        # Coordinator samples retain no spool; standard samples must
+        # carry explicit spool capacity meaning alongside free inodes.
+        if isinstance(sample.get("spool"), dict):
+            spool_facts = sample["spool"]
+            require_exact(
+                spool_facts,
+                frozenset(
+                    {
+                        "final_bytes",
+                        "temporary_bytes",
+                        "high_water_bytes",
+                        "final_object_count",
+                        "temporary_object_count",
+                        "live_reservations",
+                        "allocated_blocks",
+                        "free_inodes",
+                        "filesystem_type",
+                        "inode_model",
+                    }
+                ),
+                f"{label} spool",
+            )
+            _validate_capacity_facts(spool_facts, f"{label} spool")
         if isinstance(sample.get("workload"), dict) and "hard_failures" in sample["workload"]:
             require_failure_codes(sample["workload"]["hard_failures"], f"{label} workload")
         if isinstance(sample.get("workload"), dict) and "processing_summary" in sample["workload"]:
@@ -6028,13 +6055,42 @@ def _orphan_metrics(connection_info: str, spool_root: Path) -> dict[str, int]:
     return {"count": count, "bytes": bytes_total}
 
 
-def _free_inodes(path: Path) -> int | None:
+def _capacity_facts(path: Path) -> dict[str, Any]:
+    """Return explicit filesystem_type/inode_model/free_inodes for path."""
     try:
-        import os
+        from clashlens.filesystem import filesystem_capacity
 
-        return os.statvfs(path).f_favail
+        capacity = filesystem_capacity(path)
+        return {
+            "filesystem_type": str(capacity["filesystem_type"]),
+            "inode_model": str(capacity["inode_model"]),
+            "free_inodes": int(capacity["free_inodes"]),
+        }
     except OSError:
-        return None
+        return {"filesystem_type": "unknown", "inode_model": "unknown", "free_inodes": None}
+
+
+def _validate_capacity_facts(value: Any, label: str) -> None:
+    """Reject fabricated or contradictory capacity meaning."""
+    if not isinstance(value, dict):
+        raise TypeError(f"{label} capacity facts are invalid")
+    filesystem_type = value.get("filesystem_type")
+    inode_model = value.get("inode_model")
+    if filesystem_type not in ("btrfs", "ext4", "xfs", "other", "unknown"):
+        raise ValueError(f"{label} filesystem type is invalid")
+    if inode_model not in ("finite", "dynamic", "unknown"):
+        raise ValueError(f"{label} inode model is invalid")
+    if (inode_model == "dynamic") != (filesystem_type == "btrfs"):
+        raise ValueError(f"{label} capacity model contradicts filesystem type")
+    if "free_inodes" not in value:
+        return
+    free_inodes = value.get("free_inodes")
+    if free_inodes is None:
+        if inode_model != "unknown":
+            raise ValueError(f"{label} missing inode count requires unknown model")
+        return
+    if not isinstance(free_inodes, int) or isinstance(free_inodes, bool) or free_inodes < 0:
+        raise ValueError(f"{label} free inode count is invalid")
 
 
 def _filesystem_usage(path: Path) -> dict[str, Any]:
@@ -6047,6 +6103,8 @@ def _filesystem_usage(path: Path) -> dict[str, Any]:
     )
     usable_capacity = max(0, raw_capacity - reserved)
     used = max(0, usable_capacity - available)
+    # Reuse the shared classifier instead of an independent inode reading.
+    facts = _capacity_facts(path)
     return {
         "path": str(path),
         "capacity_bytes": usable_capacity,
@@ -6055,7 +6113,9 @@ def _filesystem_usage(path: Path) -> dict[str, Any]:
         "available_bytes": available,
         "used_bytes": used,
         "used_ratio": used / usable_capacity if usable_capacity else 0.0,
-        "free_inodes": int(filesystem.f_favail),
+        "free_inodes": facts["free_inodes"],
+        "filesystem_type": facts["filesystem_type"],
+        "inode_model": facts["inode_model"],
     }
 
 
@@ -6090,6 +6150,8 @@ def _runway_inputs(
     )
     return {
         "filesystem_path": filesystem_after["path"],
+        "filesystem_type": filesystem_after.get("filesystem_type", "unknown"),
+        "inode_model": filesystem_after.get("inode_model", "unknown"),
         "filesystem_capacity_bytes": capacity,
         "filesystem_usable_capacity_bytes": capacity,
         "filesystem_raw_capacity_bytes": int(
@@ -6612,6 +6674,15 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                     }
                 )
             orphans = _orphan_metrics(connection_info, spool_root)
+            # Honest fallback: only probe the host when the workload spool
+            # omits capacity meaning; never default to finite/dynamic.
+            fallback = None
+            if not isinstance(spool, dict) or any(key not in spool for key in ("filesystem_type", "inode_model", "free_inodes")):
+                fallback = _capacity_facts(spool_root)
+            spool_facts = spool if isinstance(spool, dict) else {}
+            spool_free_inodes = spool_facts.get("free_inodes", fallback["free_inodes"] if fallback else None)
+            spool_filesystem_type = spool_facts.get("filesystem_type", fallback["filesystem_type"] if fallback else "unknown")
+            spool_inode_model = spool_facts.get("inode_model", fallback["inode_model"] if fallback else "unknown")
             processing_summary = workload.get("processing_summary", {})
             if "total" in processing_summary:
                 processing_summary = processing_summary["total"]
@@ -6671,18 +6742,18 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         "latency_ms": latency,
                     },
                     "spool": {
-                        "final_bytes": int(spool.get("final_bytes", 0)),
-                        "temporary_bytes": int(spool.get("temporary_bytes", 0)),
-                        "high_water_bytes": int(spool.get("high_water_bytes", 0)),
-                        "final_object_count": int(spool.get("final_objects", 0)),
+                        "final_bytes": int(spool_facts.get("final_bytes", 0)),
+                        "temporary_bytes": int(spool_facts.get("temporary_bytes", 0)),
+                        "high_water_bytes": int(spool_facts.get("high_water_bytes", 0)),
+                        "final_object_count": int(spool_facts.get("final_objects", 0)),
                         "temporary_object_count": int(
-                            spool.get("temporary_objects", 0)
+                            spool_facts.get("temporary_objects", 0)
                         ),
-                        "live_reservations": int(spool.get("reserved_objects", 0)),
-                        "allocated_blocks": spool.get("allocated_blocks"),
-                        "free_inodes": spool.get(
-                            "free_inodes", _free_inodes(spool_root)
-                        ),
+                        "live_reservations": int(spool_facts.get("reserved_objects", 0)),
+                        "allocated_blocks": spool_facts.get("allocated_blocks"),
+                        "free_inodes": spool_free_inodes,
+                        "filesystem_type": spool_filesystem_type,
+                        "inode_model": spool_inode_model,
                     },
                     "elapsed_seconds": time.perf_counter() - elapsed_start,
                     "cpu_seconds": time.process_time() - cpu_start,

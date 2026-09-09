@@ -69,7 +69,7 @@ def _valid_artifact(mode: str = "duplicate-heavy") -> dict:
         "official_api_requests": {"count": 0, "source": "committed fixtures"},
         "collector_probe": None,
         "samples": [
-            {"database": {}, "archive_operations": {}, "storage_runway": {}}
+            {"database": {}, "archive_operations": {}, "storage_runway": {"filesystem_type": "ext4", "inode_model": "finite"}}
         ],
         "army_read_sample": None,
         "hard_failures": [],
@@ -327,6 +327,8 @@ def _valid_duplicate_artifact(observations: int = 6, cycles: int = 1) -> dict:
                 "measured_local_growth_bytes": 0,
                 "days_to_80_percent": None,
                 "checks": {},
+                "filesystem_type": "ext4",
+                "inode_model": "finite",
             },
             "evidence": {
                 "response_count": observations * cycles,
@@ -365,6 +367,8 @@ def _valid_duplicate_artifact(observations: int = 6, cycles: int = 1) -> dict:
                 "live_reservations": 0,
                 "allocated_blocks": 1,
                 "free_inodes": 100,
+                "filesystem_type": "ext4",
+                "inode_model": "finite",
             },
             "elapsed_seconds": 1.0,
             "cpu_seconds": 1.0,
@@ -1741,6 +1745,34 @@ class PerformanceRunnerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "schema_version"):
             runner.validate_artifact(artifact)
 
+    def test_artifact_schema_10_requires_explicit_capacity_meaning(self) -> None:
+        self.assertEqual(runner.ARTIFACT_SCHEMA_VERSION, 10)
+        artifact = _valid_duplicate_artifact(20)
+        runner.validate_artifact(artifact)
+        sample = artifact["samples"][0]
+        self.assertEqual(sample["spool"]["filesystem_type"], "ext4")
+        self.assertEqual(sample["spool"]["inode_model"], "finite")
+        self.assertEqual(sample["storage_runway"]["filesystem_type"], "ext4")
+        # Missing model facts are not defaulted to finite/dynamic.
+        bad = dict(sample["spool"])
+        del bad["inode_model"]
+        sample["spool"] = bad
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "spool"):
+            runner.validate_artifact(artifact)
+        # Contradictory dynamic-without-btrfs is rejected.
+        artifact = _valid_duplicate_artifact(20)
+        artifact["samples"][0]["spool"]["inode_model"] = "dynamic"
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "contradicts"):
+            runner.validate_artifact(artifact)
+        # Old schema 9 artifacts are rejected, not silently upgraded.
+        artifact = _valid_duplicate_artifact(20)
+        artifact["schema_version"] = 9
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        with self.assertRaisesRegex(ValueError, "schema_version"):
+            runner.validate_artifact(artifact)
+
     def test_duplicate_artifact_rejects_old_per_occurrence_shape(self) -> None:
         database_keys = (
             "wal_bytes",
@@ -1775,6 +1807,8 @@ class PerformanceRunnerTest(unittest.TestCase):
                 "measured_local_growth_bytes": 0,
                 "days_to_80_percent": None,
                 "checks": {},
+                "filesystem_type": "ext4",
+                "inode_model": "finite",
             },
             "workload": {
                 "response_counts_by_endpoint": {},

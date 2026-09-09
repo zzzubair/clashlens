@@ -177,8 +177,15 @@ statistics-readiness, request-budget, or other workload failure after a verified
 seed retains only fixed failure codes, the completed selection prefix, and
 readable aggregate database/resource facts. It never retries a timed request.
 
-Results use artifact schema 9 and include an `artifact_digest` SHA-256 over
-canonical JSON excluding that field. Artifacts are validated before they are
+Results use artifact schema 10 and include an `artifact_digest` SHA-256 over
+canonical JSON excluding that field. Spool and filesystem capacity now carry
+explicit `filesystem_type` (`btrfs`, `ext4`, `xfs`, `other`, `unknown`) and
+`inode_model` (`finite`, `dynamic`, `unknown`) alongside truthful counts:
+Btrfs `0/0` stays zero with `dynamic`, non-Btrfs `0/0`/sentinel/inconsistent
+stays `unknown` and fails validation, and unavailable measurements stay
+`unknown` instead of defaulting to `finite`/`dynamic`. Filesystem capacity
+and logical spool occupancy remain distinct; runway mathematics are unchanged.
+Artifacts are validated before they are
 printed or written; missing/invalid digests, required metrics, or older artifact
 versions fail the run. They require a clean exact source SHA, the runner hash,
 source migration filenames/hashes and the applied database migration versions
@@ -251,7 +258,7 @@ Without `CLASHLENS_TEST_DATABASE_URL`, PostgreSQL checks are skipped. A skip is
 not performance acceptance. Bootstrap, unreadable aggregate/provenance state,
 and collector-probe failures return a short nonzero diagnostic and do not emit
 a partial JSON result. After a verified army seed, statistics-readiness,
-request-budget, and other workload failures retain a bounded schema-9 artifact
+request-budget, and other workload failures retain a bounded schema-10 artifact
 whenever the aggregate/provenance snapshots remain readable. The runner
 publishes a complete artifact atomically and exclusively before returning a
 hard workload failure; an occupied output path is rejected. Retain real Fedora

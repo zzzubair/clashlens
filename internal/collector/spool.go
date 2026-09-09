@@ -29,6 +29,7 @@ var (
 	errSpoolCapacity       = errors.New("spool backpressure: capacity reservation denied")
 	errSpoolFreeSpaceFloor = errors.New("spool backpressure: free-space floor reached")
 	errSpoolFreeInodeFloor = errors.New("spool backpressure: free-inode floor reached")
+	errSpoolUnknownCapacity = errors.New("spool backpressure: unknown filesystem capacity")
 )
 
 // archiveFailureCategory maps raw-evidence errors into the collector failure
@@ -46,6 +47,7 @@ func archiveFailureCategory(err error) string {
 	case errors.Is(err, errSpoolCapacity),
 		errors.Is(err, errSpoolFreeSpaceFloor),
 		errors.Is(err, errSpoolFreeInodeFloor),
+		errors.Is(err, errSpoolUnknownCapacity),
 		errors.Is(err, syscall.ENOSPC):
 		return "degraded_capacity"
 	default:
@@ -629,16 +631,22 @@ func (s *evidenceSpool) reserve(limit int64) (*spoolReservation, error) {
 	if ledger.FinalBytes+ledger.TemporaryBytes+ledger.AbandonedTempBytes+reservedBytes+limit > s.cfg.maxBytes || ledger.FinalObjects+ledger.TemporaryObjects+reservedObjects+1 > s.cfg.maxObjects {
 		return nil, errSpoolCapacity
 	}
-	if s.cfg.freeSpaceFloor > 0 || s.cfg.freeInodeFloor > 0 {
-		var stat syscall.Statfs_t
-		if err := syscall.Statfs(s.cfg.root, &stat); err == nil {
-			if s.cfg.freeSpaceFloor > 0 && stat.Bavail*uint64(stat.Bsize) < s.cfg.freeSpaceFloor+uint64(limit) {
-				return nil, errSpoolFreeSpaceFloor
-			}
-			if s.cfg.freeInodeFloor > 0 && stat.Ffree < s.cfg.freeInodeFloor+1 {
-				return nil, errSpoolFreeInodeFloor
-			}
-		}
+	// Capacity facts share one classifier across reservation, metrics and
+	// readiness. A failed probe must not create a reservation; unknown
+	// capacity must not admit work. Btrfs (dynamic) skips only the inode
+	// floor — byte/object limits stay active.
+	_, inodeModel, freeBytes, freeInodes, err := probeSpoolCapacity(s.cfg.root)
+	if err != nil {
+		return nil, fmt.Errorf("%w: capacity probe failed: %v", errSpoolCapacity, err)
+	}
+	if inodeModel == "unknown" {
+		return nil, errSpoolUnknownCapacity
+	}
+	if s.cfg.freeSpaceFloor > 0 && freeBytes < s.cfg.freeSpaceFloor+uint64(limit) {
+		return nil, errSpoolFreeSpaceFloor
+	}
+	if inodeModel == "finite" && freeInodes < s.cfg.freeInodeFloor+1 {
+		return nil, errSpoolFreeInodeFloor
 	}
 	name := uuid.NewString() + ".json"
 	path := filepath.Join(s.cfg.root, ".control", "reservations", name)

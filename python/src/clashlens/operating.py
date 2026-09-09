@@ -137,7 +137,24 @@ SPOOL_FIELDS = (
     "high_water_bytes",
     "free_bytes",
     "free_inodes",
+    "filesystem_type",
+    "inode_model",
 )
+SPOOL_INT_FIELDS = (
+    "final_bytes",
+    "final_objects",
+    "temporary_bytes",
+    "temporary_objects",
+    "abandoned_temporary_bytes",
+    "abandoned_temporary_objects",
+    "reserved_bytes",
+    "reserved_objects",
+    "high_water_bytes",
+    "free_bytes",
+    "free_inodes",
+)
+FILESYSTEM_TYPES = ("btrfs", "ext4", "xfs", "other", "unknown")
+INODE_MODELS = ("finite", "dynamic", "unknown")
 SPOOL_CONFIG_FIELDS = (
     "max_body_bytes",
     "max_bytes",
@@ -838,7 +855,7 @@ def _validate_collector(value: Any) -> None:
             "spool",
         ),
     )
-    if collector["schema_version"] != 1:
+    if collector["schema_version"] != 2:
         raise OperatingFactsError("required_fact_invalid")
     _validate_process_identity(collector["process"])
     pool = _exact_keys(
@@ -863,8 +880,19 @@ def _validate_collector(value: Any) -> None:
     for count in (*jobs.values(), *official_api.values()):
         _nonnegative_int(count)
     spool = _exact_keys(collector["spool"], SPOOL_FIELDS)
-    for item in spool.values():
-        _nonnegative_int(item)
+    for name in SPOOL_INT_FIELDS:
+        _nonnegative_int(spool[name])
+    filesystem_type = spool["filesystem_type"]
+    inode_model = spool["inode_model"]
+    if filesystem_type not in FILESYSTEM_TYPES or inode_model not in INODE_MODELS:
+        raise OperatingFactsError("required_fact_invalid")
+    # Dynamic is the positive Btrfs exemption only: dynamic without Btrfs,
+    # or Btrfs without dynamic, is an impossible combination. Unknown
+    # capacity is never healthy: reuse the indeterminate mechanism.
+    if (inode_model == "dynamic") != (filesystem_type == "btrfs"):
+        raise OperatingFactsError("required_fact_invalid")
+    if inode_model == "unknown":
+        raise OperatingFactsError("required_fact_invalid")
 
 
 def _validate_queue(value: Any) -> None:
@@ -1116,7 +1144,7 @@ def _comparison(
             ),
         )
         if (
-            previous["schema_version"] != 1
+            previous["schema_version"] != 2
             or not isinstance(previous["snapshot_id"], str)
             or previous["snapshot_id"]
             != _canonical_digest(previous, omit="snapshot_id")
@@ -1258,7 +1286,7 @@ def build_operating_snapshot(
         _validate_spool_config(spool_config)
     except OperatingFactsError as error:
         result = {
-            "schema_version": 1,
+            "schema_version": 2,
             "captured_at": datetime.now(tz=UTC).isoformat(),
             "check": {
                 "status": "indeterminate",
@@ -1278,7 +1306,7 @@ def build_operating_snapshot(
         "spool": deepcopy(spool_config),
     }
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "captured_at": database["captured_at"],
         "check": {"status": "healthy", "exit_code": 0, "reasons": []},
         "configuration": configuration,
@@ -1318,7 +1346,10 @@ def build_operating_snapshot(
         spool_config["free_space_floor"] + spool_config["max_body_bytes"]
     ):
         reasons.add("spool_free_space_below_floor")
-    if spool["free_inodes"] < spool_config["free_inode_floor"] + 1:
+    # The inode floor applies only to finite capacity. Dynamic (Btrfs)
+    # skips it; unknown was already rejected as indeterminate above while
+    # byte/object limits stay active for dynamic.
+    if spool["inode_model"] == "finite" and spool["free_inodes"] < spool_config["free_inode_floor"] + 1:
         reasons.add("spool_free_inodes_below_floor")
     if database["failures"]["active_boundary_blocking"]["total"]:
         reasons.add("active_boundary_failure")

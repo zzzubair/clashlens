@@ -600,6 +600,7 @@ def parse_collector_metrics(metrics: str) -> dict[str, Any]:
     api = dict.fromkeys(COLLECTOR_API_OUTCOMES, 0)
     scalars: dict[str, float] = {}
     process_id: str | None = None
+    capacity_model: dict[str, str] | None = None
     seen_histogram_parts: set[tuple[str, str, str]] = set()
     scalar_names = {
         "clashlens_collector_process_start_time_seconds",
@@ -630,6 +631,17 @@ def parse_collector_metrics(metrics: str) -> dict[str, Any]:
             if set(labels) != {"process_id"} or value != 1 or process_id is not None:
                 raise ValueError("metrics_invalid")
             process_id = labels["process_id"]
+        elif name == "clashlens_spool_inode_model_info":
+            if (
+                set(labels) != {"filesystem_type", "model"}
+                or value != 1
+                or capacity_model is not None
+                or labels["filesystem_type"] not in {"btrfs", "ext4", "xfs", "other", "unknown"}
+                or labels["model"] not in {"finite", "dynamic", "unknown"}
+                or (labels["model"] == "dynamic") != (labels["filesystem_type"] == "btrfs")
+            ):
+                raise ValueError("metrics_invalid")
+            capacity_model = {"filesystem_type": labels["filesystem_type"], "model": labels["model"]}
         elif name.startswith("clashlens_collector_stage_duration_seconds_"):
             stage = labels.get("stage")
             if stage not in histograms:
@@ -718,13 +730,13 @@ def parse_collector_metrics(metrics: str) -> dict[str, Any]:
                 raise ValueError("metrics_invalid")
         elif name.startswith("clashlens_"):
             raise ValueError("metrics_invalid")
-    if set(scalars) != scalar_names or process_id is None:
+    if set(scalars) != scalar_names or process_id is None or capacity_model is None:
         raise ValueError("metrics_invalid")
     started_at = datetime.fromtimestamp(
         scalars["clashlens_collector_process_start_time_seconds"], tz=UTC
     ).isoformat()
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "process": {"id": process_id, "started_at": started_at},
         "database_pool": {
             "max_connections": _nonnegative_integer(
@@ -768,6 +780,8 @@ def parse_collector_metrics(metrics: str) -> dict[str, Any]:
             ),
             "free_bytes": _nonnegative_integer(scalars["clashlens_spool_free_bytes"]),
             "free_inodes": _nonnegative_integer(scalars["clashlens_spool_free_inodes"]),
+            "filesystem_type": capacity_model["filesystem_type"],
+            "inode_model": capacity_model["model"],
         },
     }
 
