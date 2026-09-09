@@ -16,19 +16,26 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestRuntimeMetricsHandlerIsQueryFreeAndContainsOnlyProcessCounters(t *testing.T) {
+func TestRuntimeMetricsHandlerIsQueryFreeAndContainsProcessAndSpoolCounters(t *testing.T) {
 	pool, err := pgxpool.New(context.Background(), "postgres://invalid@127.0.0.1:1/unused")
 	if err != nil {
 		t.Fatalf("create unconnected pool: %v", err)
 	}
 	pool.Close()
+	spool, err := newEvidenceSpool(spoolConfig{
+		root: t.TempDir(), maxBytes: 1 << 20, maxObjects: 10, staleTempAge: time.Hour,
+	})
+	if err != nil {
+		t.Fatalf("create spool: %v", err)
+	}
+	t.Cleanup(spool.close)
 	metrics := newCollectorMetrics()
 	metrics.recordJob("regular_poll", "normal", "handled")
 	metrics.recordAPIOutcome("profile", "2xx")
 	metrics.recordStorageError("archive_write_failed")
 	metrics.recordRetry("battle_log")
 	metrics.recordStageDuration("claim", time.Millisecond)
-	app := &application{store: &store{pool: pool}, metrics: metrics}
+	app := &application{store: &store{pool: pool}, archive: &s3Archive{spool: spool}, metrics: metrics}
 
 	request := httptest.NewRequest(http.MethodGet, "/runtime-metrics", nil)
 	response := httptest.NewRecorder()
@@ -46,15 +53,34 @@ func TestRuntimeMetricsHandlerIsQueryFreeAndContainsOnlyProcessCounters(t *testi
 		"clashlens_collector_retries_total",
 		"clashlens_collector_stage_duration_seconds_count",
 		"clashlens_collector_database_pool_max_connections",
+		"clashlens_spool_final_bytes 0",
+		"clashlens_spool_temporary_bytes 0",
+		"clashlens_spool_abandoned_temporary_bytes 0",
+		"clashlens_spool_high_water_bytes 0",
+		"clashlens_spool_final_objects 0",
+		"clashlens_spool_temporary_objects 0",
+		"clashlens_spool_abandoned_temporary_objects 0",
+		"clashlens_spool_reserved_bytes 0",
+		"clashlens_spool_live_reservations 0",
+		"clashlens_spool_free_bytes ",
+		"clashlens_spool_free_inodes ",
+		"clashlens_spool_inode_model_info{filesystem_type=",
 	} {
 		if !strings.Contains(output, metric) {
 			t.Errorf("runtime metrics output does not contain %q", metric)
 		}
 	}
-	for _, forbidden := range []string{"clashlens_collector_queue_depth", "clashlens_spool_", "normalized_tag", "player_id", "#"} {
+	for _, forbidden := range []string{"clashlens_collector_queue_depth", "clashlens_spool_orphan_", "normalized_tag", "player_id", "#"} {
 		if strings.Contains(output, forbidden) {
 			t.Errorf("runtime metrics output contains forbidden dynamic or scanned fact %q", forbidden)
 		}
+	}
+
+	spool.close()
+	failed := httptest.NewRecorder()
+	app.operationalHandler().ServeHTTP(failed, request)
+	if failed.Code != http.StatusServiceUnavailable {
+		t.Fatalf("runtime metrics probe failure status = %d, want %d", failed.Code, http.StatusServiceUnavailable)
 	}
 }
 

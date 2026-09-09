@@ -173,19 +173,8 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 			return "", fmt.Errorf("read orphan metrics: %w", spoolErr)
 		}
 	}
-	fmt.Fprintf(&output, "clashlens_spool_final_bytes %d\n", spool.finalBytes)
-	fmt.Fprintf(&output, "clashlens_spool_temporary_bytes %d\n", spool.temporaryBytes)
-	fmt.Fprintf(&output, "clashlens_spool_abandoned_temporary_bytes %d\n", spool.abandonedTemporaryBytes)
-	fmt.Fprintf(&output, "clashlens_spool_high_water_bytes %d\n", spool.highWaterBytes)
-	fmt.Fprintf(&output, "clashlens_spool_final_objects %d\n", spool.finalObjects)
-	fmt.Fprintf(&output, "clashlens_spool_temporary_objects %d\n", spool.temporaryObjects)
-	fmt.Fprintf(&output, "clashlens_spool_abandoned_temporary_objects %d\n", spool.abandonedTemporaryObjects)
-	fmt.Fprintf(&output, "clashlens_spool_reserved_bytes %d\n", spool.reservedBytes)
-	fmt.Fprintf(&output, "clashlens_spool_live_reservations %d\n", spool.reservedObjects)
+	writeSpoolRuntimeMetrics(&output, spool)
 	fmt.Fprintf(&output, "clashlens_spool_allocated_bytes %d\n", spool.allocatedBytes)
-	fmt.Fprintf(&output, "clashlens_spool_free_bytes %d\n", spool.freeBytes)
-	fmt.Fprintf(&output, "clashlens_spool_free_inodes %d\n", spool.freeInodes)
-	fmt.Fprintf(&output, "clashlens_spool_inode_model_info{filesystem_type=%q,model=%q} 1\n", spool.filesystemType, spool.inodeModel)
 	fmt.Fprintf(&output, "clashlens_spool_orphan_count %d\n", orphanCount)
 	fmt.Fprintf(&output, "clashlens_spool_orphan_bytes %d\n", orphanBytes)
 	fmt.Fprintf(&output, "clashlens_collector_incomplete_attempts %d\n", statistics.incompleteAttempts)
@@ -235,11 +224,15 @@ func (m *collectorMetrics) render(ctx context.Context, store *store, keys *keyPo
 	writeCounterMap(&output, "clashlens_collector_keys_healthy", []string{"pool"}, keyHealthy)
 	writeCounterMap(&output, "clashlens_collector_key_requests_last_second", []string{"pool"}, keyRequests)
 	writeFloatMap(&output, "clashlens_collector_key_cooldown_seconds", []string{"pool"}, keyCooldown)
-	output.WriteString(m.renderRuntime(store))
+	runtime, err := m.renderRuntime(store)
+	if err != nil {
+		return "", err
+	}
+	output.WriteString(runtime)
 	return output.String(), nil
 }
 
-func (m *collectorMetrics) renderRuntime(store *store) string {
+func (m *collectorMetrics) renderRuntime(store *store, spools ...*evidenceSpool) (string, error) {
 	m.mu.Lock()
 	jobs := cloneCounterMap(m.jobs)
 	archiveRequests := cloneCounterMap(m.archiveRequests)
@@ -256,6 +249,13 @@ func (m *collectorMetrics) renderRuntime(store *store) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "clashlens_collector_process_start_time_seconds %d\n", m.processStartedAt.Unix())
 	fmt.Fprintf(&output, "clashlens_collector_process_identity_info{process_id=%q} 1\n", m.processIdentity)
+	if len(spools) > 0 && spools[0] != nil {
+		spool, err := spools[0].metrics()
+		if err != nil {
+			return "", fmt.Errorf("read runtime spool metrics: %w", err)
+		}
+		writeSpoolRuntimeMetrics(&output, spool)
+	}
 	writeCounterMap(&output, "clashlens_collector_jobs_total", []string{"work_type", "pool", "outcome"}, jobs)
 	writeCounterMap(&output, "clashlens_collector_archive_requests_total", []string{"operation"}, archiveRequests)
 	writeCounterMap(&output, "clashlens_collector_api_requests_total", []string{"endpoint", "pool"}, apiRequests)
@@ -273,7 +273,22 @@ func (m *collectorMetrics) renderRuntime(store *store) string {
 	fmt.Fprintf(&output, "clashlens_collector_database_pool_empty_acquires_total %d\n", poolStats.EmptyAcquireCount())
 	fmt.Fprintf(&output, "clashlens_collector_database_pool_cancelled_acquires_total %d\n", poolStats.CanceledAcquireCount())
 	fmt.Fprintf(&output, "clashlens_collector_database_pool_acquire_duration_seconds_total %s\n", strconv.FormatFloat(poolStats.AcquireDuration().Seconds(), 'f', 6, 64))
-	return output.String()
+	return output.String(), nil
+}
+
+func writeSpoolRuntimeMetrics(output *strings.Builder, spool spoolMetrics) {
+	fmt.Fprintf(output, "clashlens_spool_final_bytes %d\n", spool.finalBytes)
+	fmt.Fprintf(output, "clashlens_spool_temporary_bytes %d\n", spool.temporaryBytes)
+	fmt.Fprintf(output, "clashlens_spool_abandoned_temporary_bytes %d\n", spool.abandonedTemporaryBytes)
+	fmt.Fprintf(output, "clashlens_spool_high_water_bytes %d\n", spool.highWaterBytes)
+	fmt.Fprintf(output, "clashlens_spool_final_objects %d\n", spool.finalObjects)
+	fmt.Fprintf(output, "clashlens_spool_temporary_objects %d\n", spool.temporaryObjects)
+	fmt.Fprintf(output, "clashlens_spool_abandoned_temporary_objects %d\n", spool.abandonedTemporaryObjects)
+	fmt.Fprintf(output, "clashlens_spool_reserved_bytes %d\n", spool.reservedBytes)
+	fmt.Fprintf(output, "clashlens_spool_live_reservations %d\n", spool.reservedObjects)
+	fmt.Fprintf(output, "clashlens_spool_free_bytes %d\n", spool.freeBytes)
+	fmt.Fprintf(output, "clashlens_spool_free_inodes %d\n", spool.freeInodes)
+	fmt.Fprintf(output, "clashlens_spool_inode_model_info{filesystem_type=%q,model=%q} 1\n", spool.filesystemType, spool.inodeModel)
 }
 
 func metricAgeSeconds(now, recordedAt time.Time, valid bool) float64 {

@@ -1070,7 +1070,10 @@ func TestAdmissionEvidenceMetricsPrivacy(t *testing.T) {
 	store.metrics = newCollectorMetrics()
 	store.metrics.recordJob("regular_poll", "normal", "scheduled")
 	store.metrics.recordStorageError("admission_evidence_capacity_exceeded")
-	output := store.metrics.renderRuntime(store)
+	output, err := store.metrics.renderRuntime(store)
+	if err != nil {
+		t.Fatalf("render runtime metrics: %v", err)
+	}
 	for _, forbidden := range []string{"#", "normalized_tag", "player_id", "regular:"} {
 		if strings.Contains(output, forbidden) {
 			t.Fatalf("runtime metrics leaks %q", forbidden)

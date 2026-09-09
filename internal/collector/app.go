@@ -577,8 +577,17 @@ func (a *application) operationalHandler() http.Handler {
 		_, _ = response.Write([]byte(metrics))
 	})
 	mux.HandleFunc("GET /runtime-metrics", func(response http.ResponseWriter, _ *http.Request) {
+		var spool *evidenceSpool
+		if a.archive != nil {
+			spool = a.archive.spool
+		}
+		runtime, err := a.metrics.renderRuntime(a.store, spool)
+		if err != nil {
+			http.Error(response, "runtime metrics unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		response.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = response.Write([]byte(a.metrics.renderRuntime(a.store)))
+		_, _ = response.Write([]byte(runtime))
 	})
 	return mux
 }
