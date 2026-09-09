@@ -415,6 +415,8 @@ def test_parse_runtime_metrics_wire_format() -> None:
             'clashlens_collector_jobs_total{work_type="regular_poll",'
             'pool="normal",outcome="admitted"} 42\n'
             "clashlens_collector_database_pool_idle_connections 3\n"
+            "clashlens_spool_final_bytes 123\n"
+            'clashlens_spool_inode_model_info{filesystem_type="btrfs",model="dynamic"} 1\n'
             "unrelated_metric 7\n")
     parsed = step9.parse_runtime_metrics(text)
     assert parsed["process_id"] == "abc123"
@@ -424,6 +426,9 @@ def test_parse_runtime_metrics_wire_format() -> None:
     assert parsed["counters"][key] == 42
     assert ("clashlens_collector_database_pool_idle_connections{}" in
             parsed["counters"])
+    assert parsed["counters"]["clashlens_spool_final_bytes{}"] == 123
+    assert parsed["counters"][
+        "clashlens_spool_inode_model_info{filesystem_type=btrfs,model=dynamic}"] == 1
     assert "unrelated_metric" not in str(parsed["counters"])
     with pytest.raises(step9.Step9Error):
         step9.parse_runtime_metrics("clashlens_collector_jobs_total 1\n")
