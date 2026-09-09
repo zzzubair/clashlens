@@ -70,6 +70,7 @@ type collectorConfig struct {
 	maximumResponseBytes        int64
 	healthListenAddress         string
 	collectorVersion            string
+	admissionEvidence           *admissionEvidenceConfig
 }
 
 type maintenanceConfig struct {
@@ -338,6 +339,19 @@ func loadConfig(getenv func(string) string) (collectorConfig, error) {
 	if len(normalKeys) == 0 || len(interactiveKeys) == 0 {
 		return collectorConfig{}, errors.New("normal and interactive API key pools must each contain at least one key")
 	}
+	admissionEvidence, err := parseAdmissionEvidenceConfig(getenv)
+	if err != nil {
+		return collectorConfig{}, err
+	}
+	config.admissionEvidence = admissionEvidence
+	if admissionEvidence != nil {
+		if config.pollCycle != 5*time.Minute {
+			return collectorConfig{}, errors.New("admission evidence requires the pinned one-second scheduler interval and five-minute poll cycle")
+		}
+		if config.schedulerInterval != time.Second {
+			return collectorConfig{}, errors.New("admission evidence requires the pinned one-second scheduler interval and five-minute poll cycle")
+		}
+	}
 	config.keys = append(normalKeys, interactiveKeys...)
 	labels := make(map[string]struct{}, len(config.keys))
 	for _, key := range config.keys {
@@ -381,6 +395,7 @@ func logConfigState(ctx context.Context, logger *slog.Logger, config collectorCo
 		ctx,
 		"collector configuration loaded",
 		"global_rankings_enabled", config.enableGlobalRankings,
+		"admission_evidence_enabled", config.admissionEvidence != nil,
 	)
 }
 

@@ -27,6 +27,7 @@ MIGRATION_FILES=(
   "$ROOT_DIR/deploy/migrations/0019_player_season_summaries.sql"
   "$ROOT_DIR/deploy/migrations/0020_army_season_summaries.sql"
   "$ROOT_DIR/deploy/migrations/0021_season_detail_retirement.sql"
+  "$ROOT_DIR/deploy/migrations/0022_step9_regular_admission_evidence.sql"
 )
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
@@ -248,6 +249,53 @@ validate_resource_budgets() {
   validate_resource_setting CLASHLENS_POSTGRES_SHM_SIZE memory
 }
 
+validate_admission_evidence_settings() {
+  local run_id="${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID:-}"
+  local start="${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START:-}"
+  local end="${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END:-}"
+  local max_events="${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS:-}"
+  local max_selected="${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES:-}"
+  local set_count=0
+  [[ -n "$run_id" ]] && set_count=$((set_count + 1))
+  [[ -n "$start" ]] && set_count=$((set_count + 1))
+  [[ -n "$end" ]] && set_count=$((set_count + 1))
+  [[ -n "$max_events" ]] && set_count=$((set_count + 1))
+  [[ -n "$max_selected" ]] && set_count=$((set_count + 1))
+  [[ "$set_count" == 0 || "$set_count" == 5 ]] || \
+    die "admission evidence settings must be set all-or-none: run ID, start, end, max events, max selected entries"
+  [[ "$set_count" == 0 ]] && return 0
+  [[ "$run_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || \
+    die "CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID is malformed"
+  [[ "$start" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || \
+    die "CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START must be RFC3339 UTC"
+  [[ "$end" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || \
+    die "CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END must be RFC3339 UTC"
+  [[ "$start" < "$end" ]] || \
+    die "CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END must be after start"
+  [[ "$max_events" =~ ^[0-9]+$ ]] && (( max_events >= 1 && max_events <= 108000 )) || \
+    die "CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS must be between 1 and 108000"
+  [[ "$max_selected" =~ ^[0-9]+$ ]] && (( max_selected >= 1 && max_selected <= 5000000 )) || \
+    die "CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES must be between 1 and 5000000"
+}
+
+admission_evidence_receipt_args() {
+  if [[ -n "${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID:-}" ]]; then
+    printf '%s\n' \
+      "admission_evidence_run_id=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID}" \
+      "admission_evidence_start=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START}" \
+      "admission_evidence_end=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END}" \
+      "admission_evidence_max_events=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS}" \
+      "admission_evidence_max_selected_entries=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES}"
+  else
+    printf '%s\n' \
+      "admission_evidence_run_id=disabled" \
+      "admission_evidence_start=disabled" \
+      "admission_evidence_end=disabled" \
+      "admission_evidence_max_events=0" \
+      "admission_evidence_max_selected_entries=0"
+  fi
+}
+
 validate_key_specs() {
   local name=$1
   local specs=$2
@@ -393,6 +441,8 @@ validate_common_settings() {
 
   [[ "$CLASHLENS_PLAYER_DISCOVERY_ENABLED" == "true" || "$CLASHLENS_PLAYER_DISCOVERY_ENABLED" == "false" ]] || \
     die "CLASHLENS_PLAYER_DISCOVERY_ENABLED must be true or false"
+
+  validate_admission_evidence_settings
 
   validate_key_specs CLASHLENS_NORMAL_API_KEY_FILES "$CLASHLENS_NORMAL_API_KEY_FILES" 4
   validate_key_specs CLASHLENS_INTERACTIVE_API_KEY_FILES "$CLASHLENS_INTERACTIVE_API_KEY_FILES" 1
@@ -849,6 +899,10 @@ build_website_image() {
 
 write_deployment_receipt() {
   local scope=$1 environment=$2 results_dir=$3
+  local admission_arg admission_args=()
+  while IFS= read -r admission_arg; do
+    admission_args+=(--safe-config "$admission_arg")
+  done < <(admission_evidence_receipt_args)
   "$PYTHON_BIN" "$ROOT_DIR/scripts/deployment_receipt.py" \
     --root "$ROOT_DIR" \
     --scope "$scope" \
@@ -879,7 +933,8 @@ write_deployment_receipt() {
     --safe-config "worker_concurrency=$CLASHLENS_WORKER_CONCURRENCY" \
     --safe-config "worker_database_pool_size=$CLASHLENS_WORKER_DATABASE_POOL_SIZE" \
     --safe-config "worker_lease_seconds=$CLASHLENS_WORKER_LEASE_SECONDS" \
-    --safe-config "worker_replicas=$CLASHLENS_WORKER_REPLICAS"
+    --safe-config "worker_replicas=$CLASHLENS_WORKER_REPLICAS" \
+    "${admission_args[@]}"
 }
 
 prepare_candidate_database() {
@@ -1660,6 +1715,11 @@ CLASHLENS_WORKER_DATABASE_POOL_SIZE=${CLASHLENS_WORKER_DATABASE_POOL_SIZE:-4}
 CLASHLENS_WORKER_ARCHIVE_POOL_SIZE=${CLASHLENS_WORKER_ARCHIVE_POOL_SIZE:-4}
 CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE=${CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE:-16}
 CLASHLENS_PLAYER_DISCOVERY_ENABLED=${CLASHLENS_PLAYER_DISCOVERY_ENABLED-true}
+CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID:-}
+CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START:-}
+CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END:-}
+CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS:-}
+CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES:-}
 CLASHLENS_SPOOL_ROOT=${CLASHLENS_SPOOL_ROOT:-/tmp/clashlens-spool}
 CLASHLENS_SPOOL_MAX_BYTES=${CLASHLENS_SPOOL_MAX_BYTES:-17179869184}
 CLASHLENS_SPOOL_MAX_OBJECTS=${CLASHLENS_SPOOL_MAX_OBJECTS:-1000000}

@@ -240,13 +240,17 @@ func TestConfigLogExposesOnlyGlobalRankingsBoolean(t *testing.T) {
 		enableGlobalRankings: true,
 		databaseURL:          "postgres://collector:database-secret@postgres/collector",
 		archiveSecretKey:     "archive-secret",
+		admissionEvidence:    &admissionEvidenceConfig{runID: "step9-run-v1"},
 	})
 
 	logOutput := output.String()
 	if !strings.Contains(logOutput, `"global_rankings_enabled":true`) {
 		t.Fatalf("configuration log = %q, want boolean global-rankings state", logOutput)
 	}
-	for _, secret := range []string{"database-secret", "archive-secret", "postgres://"} {
+	if !strings.Contains(logOutput, `"admission_evidence_enabled":true`) {
+		t.Fatalf("configuration log = %q, want admission evidence enabled flag", logOutput)
+	}
+	for _, secret := range []string{"database-secret", "archive-secret", "postgres://", "step9-run-v1"} {
 		if strings.Contains(logOutput, secret) {
 			t.Fatalf("configuration log contains secret or connection data %q: %s", secret, logOutput)
 		}
