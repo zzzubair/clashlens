@@ -67,6 +67,32 @@ func seedDuePlayers(t *testing.T, ctx context.Context, store *store, count int, 
 	return ids
 }
 
+// seedOpenAdmissionGate records a safe handoff for the boundary covering the
+// database clock so selection-assuming tests do not depend on wall-clock
+// gate state (the final-plan gate is closed after 05:00 until handoff).
+// The handoff instant predates every test due date, leaving
+// effective-deadline math identical to the open pre-window. It skips inside
+// the 5-minute pre-reset window, where the gate is closed by definition.
+func seedOpenAdmissionGate(t *testing.T, ctx context.Context, store *store) {
+	t.Helper()
+	var now time.Time
+	if err := store.pool.QueryRow(ctx, `SELECT statement_timestamp()`).Scan(&now); err != nil {
+		t.Fatalf("read database clock: %v", err)
+	}
+	now = now.UTC()
+	boundary := boundaryAdmissionBoundary(now)
+	if !now.Before(boundary.Add(-5*time.Minute)) && now.Before(boundary) {
+		t.Skip("closed pre-reset window is wall-clock dependent")
+	}
+	// Cover a post-wait tick landing on either side of 05:00.
+	for _, day := range []time.Time{now.Add(-24 * time.Hour), now, now.Add(24 * time.Hour)} {
+		edge := boundaryAdmissionBoundary(day)
+		if _, err := store.pool.Exec(ctx, `INSERT INTO collector_boundary_admission (boundary_at, regular_drain_complete, reset_drain_complete, safe_handoff, state, handoff_at) VALUES ($1, true, true, true, 'safe_handoff', $2) ON CONFLICT (boundary_at) DO UPDATE SET safe_handoff=true, state='safe_handoff', handoff_at=EXCLUDED.handoff_at, regular_drain_complete=true, reset_drain_complete=true`, edge, now.Add(-3*time.Hour)); err != nil {
+			t.Fatalf("seed open gate: %v", err)
+		}
+	}
+}
+
 func TestAdmissionEvidenceConfigParsing(t *testing.T) {
 	t.Parallel()
 	valid := map[string]string{
@@ -141,6 +167,7 @@ func TestAdmissionEvidenceQuotaBoundaryCommitsStop(t *testing.T) {
 	start, end := admissionCaptureAroundNow(10 * time.Minute)
 	config := newAdmissionConfig("quota-boundary-v1", start, end, 1, 1000)
 	store := openAdmissionStore(t, ctx, databaseURL, config)
+	seedOpenAdmissionGate(t, ctx, store)
 	dueAt := time.Now().UTC().Add(-time.Minute)
 	seedDuePlayers(t, ctx, store, 1, dueAt)
 	if _, err := store.scheduleDueRegular(ctx, time.Now().UTC(), 5*time.Minute, 10); err != nil {
@@ -183,6 +210,7 @@ func TestAdmissionEvidenceSelectedEntryOverflowCommitsStop(t *testing.T) {
 	start, end := admissionCaptureAroundNow(10 * time.Minute)
 	config := newAdmissionConfig("selected-overflow-v1", start, end, 108000, 1)
 	store := openAdmissionStore(t, ctx, databaseURL, config)
+	seedOpenAdmissionGate(t, ctx, store)
 	dueAt := time.Now().UTC().Add(-time.Minute)
 	seedDuePlayers(t, ctx, store, 2, dueAt)
 	_, err := store.scheduleDueRegular(ctx, time.Now().UTC(), 5*time.Minute, 10)
@@ -397,6 +425,7 @@ func TestAdmissionEvidenceHeldLockVisibleButUnselected(t *testing.T) {
 	start, end := admissionCaptureAroundNow(10 * time.Minute)
 	config := newAdmissionConfig("held-lock-v1", start, end, 100, 1000)
 	store := openAdmissionStore(t, ctx, databaseURL, config)
+	seedOpenAdmissionGate(t, ctx, store)
 	dueAt := time.Now().UTC().Add(-time.Minute)
 	ids := seedDuePlayers(t, ctx, store, 2, dueAt)
 	holder, err := store.pool.Acquire(ctx)
@@ -434,6 +463,7 @@ func TestAdmissionEvidenceLockReleaseBeforeDeadlinePasses(t *testing.T) {
 	start, end := admissionCaptureAroundNow(10 * time.Minute)
 	config := newAdmissionConfig("lock-early-v1", start, end, 100, 1000)
 	store := openAdmissionStore(t, ctx, databaseURL, config)
+	seedOpenAdmissionGate(t, ctx, store)
 	// Due 1 minute ago: deadline 4 minutes in the future.
 	dueAt := time.Now().UTC().Add(-time.Minute)
 	ids := seedDuePlayers(t, ctx, store, 1, dueAt)
@@ -460,6 +490,7 @@ func TestAdmissionEvidenceLockHeldPastDeadlineFailsEvenWhenSelected(t *testing.T
 	start, end := admissionCaptureAroundNow(10 * time.Minute)
 	config := newAdmissionConfig("lock-late-v1", start, end, 100, 1000)
 	store := openAdmissionStore(t, ctx, databaseURL, config)
+	seedOpenAdmissionGate(t, ctx, store)
 	// Due 6 minutes ago: deadline already passed.
 	dueAt := time.Now().UTC().Add(-6 * time.Minute)
 	ids := seedDuePlayers(t, ctx, store, 1, dueAt)
@@ -491,6 +522,7 @@ func TestAdmissionEvidenceBatchDeferralDrains(t *testing.T) {
 	start, end := admissionCaptureAroundNow(10 * time.Minute)
 	config := newAdmissionConfig("batch-defer-v1", start, end, 100, 1000)
 	store := openAdmissionStore(t, ctx, databaseURL, config)
+	seedOpenAdmissionGate(t, ctx, store)
 	dueAt := time.Now().UTC().Add(-time.Minute)
 	seedDuePlayers(t, ctx, store, 2, dueAt)
 	if _, err := store.scheduleDueRegular(ctx, time.Now().UTC(), 5*time.Minute, 1); err != nil {
@@ -554,6 +586,7 @@ func TestAdmissionEvidenceNullAndNonEligibleStateRetained(t *testing.T) {
 	start, end := admissionCaptureAroundNow(10 * time.Minute)
 	config := newAdmissionConfig("nullable-state-v1", start, end, 100, 1000)
 	store := openAdmissionStore(t, ctx, databaseURL, config)
+	seedOpenAdmissionGate(t, ctx, store)
 	dueAt := time.Now().UTC().Add(-time.Minute)
 	ids := seedDuePlayers(t, ctx, store, 2, dueAt)
 	if _, err := store.pool.Exec(ctx, `UPDATE players SET current_profile_version_id=NULL, eligibility_state='unknown' WHERE id=$1`, ids[0]); err != nil {
@@ -620,6 +653,7 @@ func TestAdmissionEvidenceRootConflictsFailReconciliation(t *testing.T) {
 		start, end := admissionCaptureAroundNow(10 * time.Minute)
 		config := newAdmissionConfig("root-active-v1", start, end, 100, 1000)
 		store := openAdmissionStore(t, ctx, databaseURL, config)
+		seedOpenAdmissionGate(t, ctx, store)
 		dueAt := time.Now().UTC().Add(-time.Minute)
 		ids := seedDuePlayers(t, ctx, store, 1, dueAt)
 		// Pre-create the exact semantic root the scheduler would insert.
@@ -646,6 +680,7 @@ func TestAdmissionEvidenceRootConflictsFailReconciliation(t *testing.T) {
 		start, end := admissionCaptureAroundNow(10 * time.Minute)
 		config := newAdmissionConfig("root-dupe-v1", start, end, 100, 1000)
 		store := openAdmissionStore(t, ctx, databaseURL, config)
+		seedOpenAdmissionGate(t, ctx, store)
 		dueAt := time.Now().UTC().Add(-time.Minute)
 		ids := seedDuePlayers(t, ctx, store, 1, dueAt)
 		now := time.Now().UTC()
@@ -1072,19 +1107,237 @@ func TestAdmissionEvidenceIndexPlanAndSizes(t *testing.T) {
 	// advance; the invariant is indexed visible-due access and no history
 	// scans, asserted separately.
 	_ = planText
+	var walBefore string
+	if err := store.pool.QueryRow(ctx, `SELECT pg_current_wal_lsn()::text`).Scan(&walBefore); err != nil {
+		t.Fatalf("wal lsn before: %v", err)
+	}
 	started := time.Now()
 	if _, err := store.scheduleDueRegular(ctx, time.Now().UTC(), 5*time.Minute, 10); err != nil {
 		t.Fatalf("schedule: %v", err)
 	}
 	latency := time.Since(started)
 	t.Logf("admission scheduler latency with 3 due rows: %v", latency)
-	var evidenceBytes, runsBytes int64
-	store.pool.QueryRow(ctx, `SELECT pg_total_relation_size('collector_regular_admission_evidence')`).Scan(&evidenceBytes)
-	store.pool.QueryRow(ctx, `SELECT pg_total_relation_size('collector_regular_admission_evidence_runs')`).Scan(&runsBytes)
-	t.Logf("relation sizes evidence=%d runs=%d", evidenceBytes, runsBytes)
-	var wal string
-	if err := store.pool.QueryRow(ctx, `SELECT pg_current_wal_lsn()::text`).Scan(&wal); err != nil {
-		t.Fatalf("wal lsn: %v", err)
+	var walBytes int64
+	if err := store.pool.QueryRow(ctx, `SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), $1::pg_lsn)::bigint`, walBefore).Scan(&walBytes); err != nil {
+		t.Fatalf("wal diff: %v", err)
 	}
-	t.Logf("wal lsn after admission: %s", wal)
+	if walBytes <= 0 {
+		t.Fatalf("wal bytes=%d, want > 0 for one committed admission", walBytes)
+	}
+	t.Logf("wal bytes for one admission: %d", walBytes)
+	for _, table := range []string{"collector_regular_admission_evidence", "collector_regular_admission_evidence_runs"} {
+		var heapBytes, indexBytes, totalBytes int64
+		if err := store.pool.QueryRow(ctx, `SELECT pg_relation_size($1), pg_indexes_size($1), pg_total_relation_size($1)`, table).Scan(&heapBytes, &indexBytes, &totalBytes); err != nil {
+			t.Fatalf("sizes %s: %v", table, err)
+		}
+		t.Logf("relation %s heap=%d index=%d total=%d", table, heapBytes, indexBytes, totalBytes)
+	}
+	var evidenceIndex int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes WHERE tablename='collector_regular_admission_evidence' AND indexname='collector_regular_admission_evidence_run_cycle'`).Scan(&evidenceIndex); err != nil {
+		t.Fatalf("index lookup: %v", err)
+	}
+	if evidenceIndex != 1 {
+		t.Fatal("collector_regular_admission_evidence_run_cycle index is missing")
+	}
+}
+
+func TestAdmissionEvidenceObserverLeastPrivilege(t *testing.T) {
+	databaseURL := startAdmissionDatabase(t)
+	ctx := context.Background()
+	start, end := admissionCaptureAroundNow(10 * time.Minute)
+	config := newAdmissionConfig("observer-lp-v1", start, end, 100, 1000)
+	store := openAdmissionStore(t, ctx, databaseURL, config)
+	seedDuePlayers(t, ctx, store, 1, time.Now().UTC().Add(-time.Minute))
+	if _, err := store.scheduleDueRegular(ctx, time.Now().UTC(), 5*time.Minute, 10); err != nil {
+		t.Fatalf("seed admission row: %v", err)
+	}
+	connection, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect for role probe: %v", err)
+	}
+	defer connection.Close(ctx)
+	if _, err := connection.Exec(ctx, `SET ROLE clashlens_python_worker`); err != nil {
+		t.Fatalf("set worker role: %v", err)
+	}
+	defer connection.Exec(context.Background(), `RESET ROLE`)
+	// Positive reads: run header, event rows, and ranking cycle identities.
+	var runs, events int
+	if err := connection.QueryRow(ctx, `SELECT count(*) FROM collector_regular_admission_evidence_runs WHERE run_id=$1`, config.runID).Scan(&runs); err != nil {
+		t.Fatalf("worker SELECT runs: %v", err)
+	}
+	if err := connection.QueryRow(ctx, `SELECT count(*) FROM collector_regular_admission_evidence WHERE run_id=$1`, config.runID).Scan(&events); err != nil {
+		t.Fatalf("worker SELECT evidence: %v", err)
+	}
+	if runs != 1 || events != 1 {
+		t.Fatalf("worker reads runs=%d events=%d, want 1 1", runs, events)
+	}
+	var cycles int
+	if err := connection.QueryRow(ctx, `SELECT count(*) FROM global_rankings_intents`).Scan(&cycles); err != nil {
+		// Empty intents table still proves the column grant via a scoped probe.
+		if !strings.Contains(err.Error(), "permission denied") {
+			t.Fatalf("worker SELECT cycle_at: %v", err)
+		}
+	}
+	if _, err := connection.Exec(ctx, `SELECT cycle_at FROM global_rankings_intents LIMIT 1`); err != nil {
+		t.Fatalf("worker SELECT cycle_at column: %v", err)
+	}
+	// Other columns stay denied: created_at probes fail.
+	if _, err := connection.Exec(ctx, `SELECT created_at FROM global_rankings_intents LIMIT 1`); err == nil {
+		t.Fatal("worker SELECT created_at succeeded, want denial")
+	} else if !isPermissionDenied(err) {
+		t.Fatalf("created_at error = %v, want permission denied", err)
+	}
+	// Write paths stay denied.
+	for _, stmt := range []string{
+		`INSERT INTO collector_regular_admission_evidence_runs (run_id, capture_start, capture_end, max_events, max_selected_entries) VALUES ('lp-deny', now(), now()+interval '1 hour', 1, 1)`,
+		`UPDATE collector_regular_admission_evidence_runs SET state='active' WHERE run_id='observer-lp-v1'`,
+		`DELETE FROM collector_regular_admission_evidence_runs WHERE run_id='observer-lp-v1'`,
+		`INSERT INTO collector_regular_admission_evidence (run_id, invocation_id, capture_start, capture_end, cycle_at, scheduler_at, database_at, gate_allowed, batch_limit, visible_due_count, unselected_visible_due_count, unselected_visible_past_deadline_count, selected_past_deadline_count, selected_player_ids, selected_due_ats, selected_profile_version_ids, selected_eligibility_states, inserted_job_ids, advanced_count) VALUES ('observer-lp-v1', 'ffffffffffffffffffffffffffffffff', now()-interval '1 hour', now()+interval '1 hour', date_bin('5 minutes', now(), timestamptz '2000-01-01 00:00:00+00'), now(), now(), true, 10, 0, 0, 0, 0, '{}', '{}', '{}', '{}', '{}', 0)`,
+		`UPDATE collector_regular_admission_evidence SET gate_allowed=false WHERE run_id='observer-lp-v1'`,
+		`DELETE FROM collector_regular_admission_evidence WHERE run_id='observer-lp-v1'`,
+	} {
+		if _, err := connection.Exec(ctx, stmt); err == nil {
+			t.Fatalf("worker write succeeded, want denial: %.80s", stmt)
+		} else if !isPermissionDenied(err) {
+			t.Fatalf("worker write error = %v, want permission denied: %.80s", err, stmt)
+		}
+	}
+	// Public API role gains nothing.
+	var apiSelect bool
+	if err := connection.QueryRow(ctx, `SELECT has_table_privilege('clashlens_python_api', 'collector_regular_admission_evidence', 'SELECT')`).Scan(&apiSelect); err != nil {
+		t.Fatalf("inspect api privilege: %v", err)
+	}
+	if apiSelect {
+		t.Fatal("clashlens_python_api has SELECT on admission evidence, want none")
+	}
+}
+
+func isPermissionDenied(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "42501") || strings.Contains(strings.ToLower(err.Error()), "permission denied")
+}
+
+func TestAdmissionEvidenceTickAfterRunHeaderWait(t *testing.T) {
+	databaseURL := startAdmissionDatabase(t)
+	ctx := context.Background()
+	start, end := admissionCaptureAroundNow(10 * time.Minute)
+	config := newAdmissionConfig("tick-wait-v1", start, end, 100, 1000)
+	store := openAdmissionStore(t, ctx, databaseURL, config)
+	var dbNow time.Time
+	if err := store.pool.QueryRow(ctx, `SELECT statement_timestamp()`).Scan(&dbNow); err != nil {
+		t.Fatalf("read database clock: %v", err)
+	}
+	dbNow = dbNow.UTC()
+	boundary := boundaryAdmissionBoundary(dbNow)
+	if !dbNow.Before(boundary.Add(-5*time.Minute)) && dbNow.Before(boundary) {
+		t.Skip("closed pre-reset window is wall-clock dependent")
+	}
+	// Safe handoff rows around today cover a post-boundary tick no matter
+	// which side of 05:00 the post-wait read lands on.
+	for _, day := range []time.Time{dbNow.Add(-24 * time.Hour), dbNow, dbNow.Add(24 * time.Hour)} {
+		edge := boundaryAdmissionBoundary(day)
+		if _, err := store.pool.Exec(ctx, `INSERT INTO collector_boundary_admission (boundary_at, regular_drain_complete, reset_drain_complete, safe_handoff, state, handoff_at) VALUES ($1, true, true, true, 'safe_handoff', $2) ON CONFLICT (boundary_at) DO UPDATE SET safe_handoff=true, state='safe_handoff', handoff_at=EXCLUDED.handoff_at, regular_drain_complete=true, reset_drain_complete=true`, edge, dbNow); err != nil {
+			t.Fatalf("seed handoff: %v", err)
+		}
+	}
+	seedDuePlayers(t, ctx, store, 1, dbNow.Add(-time.Minute))
+	// Hold only the run-header row lock. The scheduler takes the free
+	// advisory lock, then blocks inside its locked run-header SELECT, whose
+	// statement_timestamp() predates this wait by construction.
+	holder, err := store.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer holder.Release()
+	holderTx, err := holder.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	var heldState string
+	if err := holderTx.QueryRow(ctx, `SELECT state FROM collector_regular_admission_evidence_runs WHERE run_id=$1 FOR UPDATE`, config.runID).Scan(&heldState); err != nil {
+		t.Fatalf("hold run header: %v", err)
+	}
+	// A stale caller tick must not leak into the evidence: the scheduler
+	// tick comes from the post-wait database read, not this argument.
+	staleNow := dbNow.Add(-time.Hour)
+	waiterStart := time.Now().UTC()
+	done := make(chan error, 1)
+	go func() {
+		_, schedErr := store.scheduleDueRegular(ctx, staleNow, 5*time.Minute, 10)
+		done <- schedErr
+	}()
+	time.Sleep(2 * time.Second)
+	release := time.Now().UTC()
+	if err := holderTx.Commit(ctx); err != nil {
+		t.Fatalf("release run header: %v", err)
+	}
+	select {
+	case schedErr := <-done:
+		if schedErr != nil {
+			t.Fatalf("scheduler after run-header wait: %v", schedErr)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("scheduler did not finish after run-header release")
+	}
+	var schedulerAt, databaseAt, cycleAt time.Time
+	if err := store.pool.QueryRow(ctx, `SELECT scheduler_at, database_at, cycle_at FROM collector_regular_admission_evidence WHERE run_id=$1 ORDER BY id DESC LIMIT 1`, config.runID).Scan(&schedulerAt, &databaseAt, &cycleAt); err != nil {
+		t.Fatalf("read evidence tick: %v", err)
+	}
+	// Post-wait tick: a pre-wait statement_timestamp() would sit at
+	// waiterStart, so require a full second past it after a 2s hold.
+	if !schedulerAt.UTC().After(waiterStart.Add(time.Second)) {
+		t.Fatalf("scheduler_at %v not after waiter start %v + 1s (tick predates run-header wait)", schedulerAt, waiterStart)
+	}
+	if schedulerAt.UTC().Before(release.Add(-2 * time.Second)) {
+		t.Fatalf("scheduler_at %v older than release %v - 2s", schedulerAt, release)
+	}
+	if schedulerAt.UTC().Before(staleNow.Add(30 * time.Minute)) {
+		t.Fatalf("scheduler_at %v follows stale caller now %v", schedulerAt, staleNow)
+	}
+	if databaseAt.UTC().Before(schedulerAt.UTC()) {
+		t.Fatalf("database_at %v before scheduler_at %v", databaseAt, schedulerAt)
+	}
+	if !cycleAt.UTC().Equal(schedulerAt.UTC().Truncate(5 * time.Minute)) {
+		t.Fatalf("cycle_at %v != truncate(scheduler_at %v)", cycleAt, schedulerAt)
+	}
+}
+
+func TestBoundaryAdmissionBoundaryResetEdges(t *testing.T) {
+	t.Parallel()
+	day0930 := time.Date(2026, 9, 10, 5, 0, 0, 0, time.UTC)
+	day0930Prev := time.Date(2026, 9, 9, 5, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		at   time.Time
+		want time.Time
+	}{
+		{"pre-window open edge", time.Date(2026, 9, 10, 4, 54, 59, 0, time.UTC), day0930},
+		{"pre-window closed edge", time.Date(2026, 9, 10, 4, 55, 0, 0, time.UTC), day0930},
+		{"reset instant", day0930, day0930},
+		{"just after reset", day0930.Add(time.Second), day0930},
+		{"midnight", time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC), day0930},
+		{"late evening", time.Date(2026, 9, 10, 23, 0, 0, 0, time.UTC), day0930},
+		{"previous evening", time.Date(2026, 9, 9, 23, 59, 59, 0, time.UTC), day0930Prev},
+	} {
+		if got := boundaryAdmissionBoundary(tc.at); !got.Equal(tc.want) {
+			t.Fatalf("%s: boundary(%v)=%v, want %v", tc.name, tc.at, got, tc.want)
+		}
+	}
+	// The 04:55 gate edge: open strictly before boundary-5m, closed after.
+	openAt := time.Date(2026, 9, 10, 4, 54, 59, 0, time.UTC)
+	closedAt := time.Date(2026, 9, 10, 4, 55, 0, 0, time.UTC)
+	if !openAt.Before(boundaryAdmissionBoundary(openAt).Add(-5 * time.Minute)) {
+		t.Fatalf("04:54:59 must be before the pre-reset gate edge")
+	}
+	if closedAt.Before(boundaryAdmissionBoundary(closedAt).Add(-5 * time.Minute)) {
+		t.Fatalf("04:55:00 must not be before the pre-reset gate edge")
+	}
+	// The advisory key is intentionally constant across dates: a wait that
+	// spans 05:00 serializes on the same lock, so no pre-wait key can go
+	// stale.
+	if boundaryAdmissionLockKey(openAt) != boundaryAdmissionLockKey(day0930.Add(time.Hour)) {
+		t.Fatalf("boundary lock key varies across 05:00, want constant")
+	}
 }

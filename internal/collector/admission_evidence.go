@@ -148,9 +148,10 @@ func (s *store) commitAdmissionTx(ctx context.Context, tx pgx.Tx) error {
 }
 
 // scheduleDueRegularWithEvidence implements the final-plan evidence path:
-// advisory lock in its own statement, locked run-header validation, then the
-// scheduler statement with a fresh snapshot. The durable stop commits before
-// Go returns its fixed error.
+// explicit READ COMMITTED transaction, advisory lock in its own statement,
+// locked run-header validation, a fresh post-wait database tick, then the
+// scheduler statement. The durable stop commits before Go returns its fixed
+// error.
 func (s *store) scheduleDueRegularWithEvidence(ctx context.Context, now time.Time, cycle time.Duration, batchSize int, config *admissionEvidenceConfig) (int, error) {
 	if config == nil {
 		return 0, errors.New("admission evidence configuration is required")
@@ -164,7 +165,7 @@ func (s *store) scheduleDueRegularWithEvidence(ctx context.Context, now time.Tim
 	if batchSize < 1 || batchSize > 1000 {
 		return 0, errors.New("scheduler batch size must be between 1 and 1000")
 	}
-	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return 0, fmt.Errorf("begin admission evidence transaction: %w", err)
 	}
@@ -178,15 +179,13 @@ func (s *store) scheduleDueRegularWithEvidence(ctx context.Context, now time.Tim
 	var runMaxEvents int
 	var runMaxSelected int64
 	var runState string
-	var databaseNow time.Time
 	if err := tx.QueryRow(ctx, `
 		SELECT run.capture_start, run.capture_end,
-		       run.max_events, run.max_selected_entries, run.state,
-		       statement_timestamp()
+		       run.max_events, run.max_selected_entries, run.state
 		FROM collector_regular_admission_evidence_runs AS run
 		WHERE run.run_id = $1
 		FOR UPDATE OF run
-	`, config.runID).Scan(&runCaptureStart, &runCaptureEnd, &runMaxEvents, &runMaxSelected, &runState, &databaseNow); err != nil {
+	`, config.runID).Scan(&runCaptureStart, &runCaptureEnd, &runMaxEvents, &runMaxSelected, &runState); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, fmt.Errorf("%w: %q", errAdmissionRunMissing, config.runID)
 		}
@@ -196,8 +195,15 @@ func (s *store) scheduleDueRegularWithEvidence(ctx context.Context, now time.Tim
 		runMaxEvents != config.maxEvents || runMaxSelected != config.maxSelectedEntries {
 		return 0, fmt.Errorf("%w: %q", errAdmissionRunConflict, config.runID)
 	}
-	// Refresh the scheduler tick after the lock wait so a stale caller time
-	// cannot admit against a pre-wait boundary.
+	// Refresh the scheduler tick after the lock waits so a stale caller time
+	// cannot admit against a pre-wait boundary. statement_timestamp() in the
+	// locked SELECT above predates a run-header row-lock wait (statement
+	// start precedes blocking), so read the database clock in a new
+	// statement after both the advisory-lock and run-header-lock waits.
+	var databaseNow time.Time
+	if err := tx.QueryRow(ctx, `SELECT statement_timestamp()`).Scan(&databaseNow); err != nil {
+		return 0, fmt.Errorf("read admission evidence tick: %w", err)
+	}
 	schedulerAt := databaseNow.UTC()
 	cycleAt := schedulerAt.Truncate(cycle).UTC()
 	boundary := boundaryAdmissionBoundary(schedulerAt)

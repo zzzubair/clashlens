@@ -247,6 +247,8 @@ RELATION_NAMES = (
     "collector_interactive_intent_events",
     "collector_jobs",
     "collector_observations",
+    "collector_regular_admission_evidence",
+    "collector_regular_admission_evidence_runs",
     "collector_reset_baseline_sweeps",
     "collector_reset_sweep_members",
     "collector_reset_sweeps",

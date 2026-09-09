@@ -83,6 +83,11 @@ GRANT UPDATE (events_written, selected_entries_written, state, stopped_at, failu
     ON collector_regular_admission_evidence_runs TO clashlens_collector;
 GRANT INSERT ON collector_regular_admission_evidence TO clashlens_collector;
 GRANT USAGE, SELECT ON SEQUENCE collector_regular_admission_evidence_id_seq TO clashlens_collector;
+-- Operating observer reads only: the Step 9 validator runs as the existing
+-- Python worker role and needs the run header, per-invocation rows, and the
+-- ranking cycle identities. No INSERT/UPDATE/DELETE and no broader columns.
+GRANT SELECT ON collector_regular_admission_evidence_runs, collector_regular_admission_evidence TO clashlens_python_worker;
+GRANT SELECT (cycle_at) ON global_rankings_intents TO clashlens_python_worker;
 
 -- The collector-owned contract stays at version five. Version six would be a
 -- future breaking scheduler contract; this evidence pair is optional.
