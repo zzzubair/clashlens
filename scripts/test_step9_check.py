@@ -2530,6 +2530,12 @@ def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
     arguments2 = mock.Mock(run_dir=str(run_dir2), podman_bin="podman")
     assert step9.cmd_sample(arguments2, hooks2) == 0
     assert len(list((run_dir2 / "samples").glob("*.json"))) == 75
+    slot60 = json.loads((run_dir2 / "samples" / "minute-0060.json").read_text())
+    assert slot60["metrics_absent_authorized"] is True
+    assert slot60["stop_proven"] is True
+    assert slot60["metrics_error"] == "metrics_unavailable"
+    assert step9.cmd_finalize(arguments2, {"db": db2}) == 0
+    assert step9.cmd_validate(arguments2) == 0
 
 
 def test_operating_snapshot_worker_sections() -> None:

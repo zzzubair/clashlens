@@ -1579,6 +1579,25 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                 previous_liveness, sample.get("liveness"))
             if isinstance(sample.get("liveness"), dict):
                 previous_liveness = sample["liveness"]
+            stop_proven = (run_dir / "watchdog-outcome.json").exists() or any(
+                (s.get("container") or {}).get("running") is False
+                for s in _prior_samples(samples_dir)) or (
+                    (sample.get("container") or {}).get("running") is False)
+            sample["stop_proven"] = bool(stop_proven)
+            if (sample.get("container") or {}).get("running") is False \
+                    and index < mode.get("bootstrap_slots", mode["slots"]):
+                sample["failure_code"] = "collector_stopped_early"
+                sample["outcome"] = "collector_stopped_early"
+                _exclusive_json(samples_dir / name, sample,
+                                max_bytes=SAMPLE_MAX_BYTES)
+                _record_failure(run_dir, sample["failure_code"], "collector")
+                return 1
+            metrics_absent = metrics_error is not None
+            if metrics_absent and run.get("mode") == "preflight" \
+                    and index >= mode.get("bootstrap_slots", 0) \
+                    and stop_proven:
+                sample["metrics_absent_authorized"] = True
+                metrics_absent = False
             _exclusive_json(samples_dir / name, sample,
                             max_bytes=SAMPLE_MAX_BYTES)
             _check_capacity(run_dir)
@@ -1592,23 +1611,9 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                                                       "resource_gate"):
                     return 1
             elif outcome == "on_time" and db_error is None \
-                    and metrics_error is None:
+                    and (metrics_error is None
+                         or sample.get("metrics_absent_authorized")):
                 outcome_strikes = 0
-            stop_proven = (run_dir / "watchdog-outcome.json").exists() or any(
-                (s.get("container") or {}).get("running") is False
-                for s in _prior_samples(samples_dir))
-            if (sample.get("container") or {}).get("running") is False \
-                    and index < mode.get("bootstrap_slots", mode["slots"]):
-                sample["failure_code"] = "collector_stopped_early"
-                sample["outcome"] = "collector_stopped_early"
-                _record_failure(run_dir, sample["failure_code"], outcome)
-                return 1
-            metrics_absent = metrics_error is not None
-            if metrics_absent and run.get("mode") == "preflight" \
-                    and index >= mode.get("bootstrap_slots", 0) \
-                    and stop_proven:
-                sample["metrics_absent_authorized"] = True
-                metrics_absent = False
             if db_error is not None or metrics_absent or pgdata_bad:
                 unavailable_strikes += 1
                 if unavailable_strikes >= 2:
@@ -2077,6 +2082,9 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
                                  f"{sample.get('outcome')}", gate=True)
             for field in ("database_error", "metrics_error", "counter_reset",
                           "liveness_reset"):
+                if field == "metrics_error" \
+                        and sample.get("metrics_absent_authorized") is True:
+                    continue
                 if sample.get(field) is not None:
                     raise Step9Error("sample_evidence_failed",
                                      f"slot {sample.get('slot')} {field} set",
