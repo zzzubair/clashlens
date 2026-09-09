@@ -56,12 +56,35 @@ def _start_args(run_dir: Path, cohort: Path, **overrides):
         "max_sample_age_seconds": 125, "watchdog_unit": "test-unit",
         "run_id": "testrun01", "database_url": None, "mode": "live-day",
         "max_invocation_gap_seconds": 5, "bootstrap_run_id": None,
-        "archive_eur_per_gib": None, "archive_interfaces": ["test-eth0"],
+        "archive_tariff_file": None, "archive_interfaces": ["test-eth0"],
         "archive_route_host": None, "prior_transfer_bytes": None,
         "prior_transfer_provenance": None,
     }
     defaults.update(overrides)
+    if defaults.get("archive_tariff_file") is None:
+        tariff_path = run_dir.parent / "tariff.json"
+        if not tariff_path.exists():
+            tariff_path.write_text(json.dumps(_canonical_tariff()))
+        defaults["archive_tariff_file"] = str(tariff_path)
     return mock.Mock(**defaults)
+
+
+def _canonical_tariff(**overrides):
+    payload = {
+        "source": "https://www.scaleway.com/en/pricing/storage/",
+        "verified_utc_date": "2026-09-09",
+        "tariff_eur_per_decimal_gb_hour": "0.000022",
+        "egress_eur_per_decimal_gb": "0.01",
+        "payload_cap_gib": 16,
+        "aggregate_transfer_cap_gib": 64,
+        "retention_projection_days": 186,
+        "uncertainty_multiplier": 1.5,
+        "with_uncertainty_eur": 3.686616,
+        "operational_stop_eur": 4.5,
+        "absolute_preparation_ceiling_eur": 5,
+    }
+    payload.update(overrides)
+    return payload
 
 
 def _receipt_scope(scope: str = "deployed-stack", discovery: str = "false",
@@ -621,7 +644,30 @@ def _watchdog_args(run_dir: Path, **overrides):
                 "deadline": "2026-10-05T05:10:00Z",
                 "max_sample_age_seconds": 125, "systemd_unit": "test-unit"}
     defaults.update(overrides)
+    if defaults.get("archive_tariff_file") is None:
+        tariff_path = run_dir.parent / "tariff.json"
+        if not tariff_path.exists():
+            tariff_path.write_text(json.dumps(_canonical_tariff()))
+        defaults["archive_tariff_file"] = str(tariff_path)
     return mock.Mock(**defaults)
+
+
+def _canonical_tariff(**overrides):
+    payload = {
+        "source": "https://www.scaleway.com/en/pricing/storage/",
+        "verified_utc_date": "2026-09-09",
+        "tariff_eur_per_decimal_gb_hour": "0.000022",
+        "egress_eur_per_decimal_gb": "0.01",
+        "payload_cap_gib": 16,
+        "aggregate_transfer_cap_gib": 64,
+        "retention_projection_days": 186,
+        "uncertainty_multiplier": 1.5,
+        "with_uncertainty_eur": 3.686616,
+        "operational_stop_eur": 4.5,
+        "absolute_preparation_ceiling_eur": 5,
+    }
+    payload.update(overrides)
+    return payload
 
 
 def test_watchdog_single_pass_and_deadline(tmp_path: Path) -> None:
@@ -2069,7 +2115,7 @@ def _quiet_facts():
                    "swap_used_bytes": 0,
                    "oom_kills": 0, "psi_avg10": 0.0, "error": None},
         "archive": {"logical_bytes": 100, "objects": 2,
-                    "physical_bytes": 100, "cost_eur": 0.01, "error": None}}
+                    "physical_bytes": 100, "error": None}}
 
 
 def test_parse_btrfs_usage_cases() -> None:
@@ -2102,7 +2148,7 @@ def test_resource_gates_all_thresholds() -> None:
                         "swap_used_bytes": 99,
                         "oom_kills": 3, "psi_avg10": 1.0, "error": None}
     breach["archive"] = {"logical_bytes": 20 * 1024**3, "objects": 200_000,
-                         "physical_bytes": 70 * 1024**3, "cost_eur": 9.0,
+                         "physical_bytes": 70 * 1024**3,
                          "error": None}
     failures, unknown, strikes = step9.evaluate_resource_gates(base, breach, 1)
     for code in ("filesystem_use_breach", "filesystem_free_breach",
@@ -2110,8 +2156,7 @@ def test_resource_gates_all_thresholds() -> None:
                  "btrfs_unallocated_breach", "btrfs_diagnostic_stderr",
                  "btrfs_new_error", "oom_kill_observed", "swap_growth",
                  "memory_low", "archive_logical_breach",
-                 "archive_objects_breach", "archive_physical_breach",
-                 "archive_cost_breach"):
+                 "archive_objects_breach", "archive_physical_breach"):
         assert code in failures, code
     assert strikes == 2
     # memory needs two consecutive samples
@@ -2126,7 +2171,7 @@ def test_resource_gates_all_thresholds() -> None:
     failures, unknown, _strikes = step9.evaluate_resource_gates(empty, empty, 0)
     assert failures == [] and set(unknown) >= {
         "oom_unknown", "swap_unknown", "memory_unknown", "archive_unknown",
-        "archive_physical_unknown", "archive_cost_unknown"}
+        "archive_physical_unknown"}
 
 
 def _write_url_file(path: Path, data: bytes, mode: int = 0o600) -> str:
@@ -2201,6 +2246,8 @@ def test_no_credential_in_artifacts(tmp_path: Path) -> None:
 def test_cli_start_accepts_url_file(tmp_path: Path) -> None:
     db_url = _write_url_file(tmp_path / "db.url", b"postgresql://x\n")
     assert db_url.endswith("db.url")
+    tariff_path = tmp_path / "tariff.json"
+    tariff_path.write_text(json.dumps(_canonical_tariff()))
     cohort = _write_cohort(tmp_path / "cohort.txt", TAGS)
     receipt_path = tmp_path / "receipt.json"
     receipt_path.write_text(json.dumps(_receipt_scope()))
@@ -2225,6 +2272,7 @@ def test_cli_start_accepts_url_file(tmp_path: Path) -> None:
                 "--run-id", "testrun01",
                 "--max-invocation-gap-seconds", "5",
                 "--archive-egress-interface", "test-eth0",
+                "--archive-tariff-file", str(tariff_path),
                 "--database-url-file", db_url])
     assert code == 0
 
@@ -2865,3 +2913,59 @@ def test_slot_zero_transfer_breach_records(tmp_path: Path) -> None:
     sample = json.loads((run_dir / "samples" / "minute-0000.json").read_text())
     assert sample["outcome"] == "transfer_gate"
     assert list((run_dir / "failures").glob("transfer_breach-*.json"))
+
+
+def test_tariff_file_contract(tmp_path: Path) -> None:
+    good = tmp_path / "tariff.json"
+    good.write_text(json.dumps(_canonical_tariff()))
+    block = step9._tariff_block(
+        step9._read_tariff_file(str(good)),
+        datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
+    assert block["with_uncertainty_eur"] == 3.686616
+    assert block["digest"] and block["note"].startswith("tariff estimate")
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(_canonical_tariff(payload_cap_gib=17)))
+    with pytest.raises(step9.Step9Error) as error:
+        step9._tariff_block(
+            step9._read_tariff_file(str(bad)),
+            datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
+    assert error.value.code == "tariff_mismatch"
+    stale = tmp_path / "stale.json"
+    stale.write_text(json.dumps(_canonical_tariff(verified_utc_date="2026-01-01")))
+    with pytest.raises(step9.Step9Error) as error:
+        step9._tariff_block(
+            step9._read_tariff_file(str(stale)),
+            datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
+    assert error.value.code == "tariff_stale"
+    over = tmp_path / "over.json"
+    over.write_text(json.dumps(_canonical_tariff(with_uncertainty_eur=9.99)))
+    with pytest.raises(step9.Step9Error) as error:
+        step9._tariff_block(
+            step9._read_tariff_file(str(over)),
+            datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
+    assert error.value.code == "tariff_envelope_exceeded"
+    missing = tmp_path / "missing.json"
+    missing.write_text(json.dumps({"source": "x"}))
+    with pytest.raises(step9.Step9Error):
+        step9._tariff_block(
+            step9._read_tariff_file(str(missing)),
+            datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
+    with pytest.raises(step9.Step9Error):
+        step9._read_tariff_file(str(tmp_path / "absent.json"))
+    with pytest.raises(step9.Step9Error):
+        step9._read_tariff_file("relative.json")
+
+
+def test_start_requires_tariff_file(tmp_path: Path) -> None:
+    cohort = _write_cohort(tmp_path / "c.txt", TAGS)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope()))
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    arguments = _start_args(tmp_path / "notariff", cohort,
+                            deployed_receipt=str(receipt_path),
+                            archive_tariff_file="/nonexistent-tariff.json")
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None):
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(arguments, db)
+        assert error.value.code == "tariff_unavailable"

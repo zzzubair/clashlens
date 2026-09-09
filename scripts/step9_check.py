@@ -571,10 +571,12 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
                 else "none")),
         "bootstrap_run_id": getattr(arguments, "bootstrap_run_id", None),
         "budget_receipt": budget_receipt,
-        "archive_eur_per_gib": getattr(arguments, "archive_eur_per_gib", None),
         "cost_basis": {
             "note": "tariff estimate only, never actual billed cost",
-            "tariff": "preparation-tariff-20260909.json (reverify before traffic)",
+            "tariff": _tariff_block(
+                _read_tariff_file(getattr(arguments, "archive_tariff_file",
+                                          None) or ""),
+                core_start),
         },
         "archive_interfaces": list(getattr(arguments, "archive_interfaces",
                                             None) or []),
@@ -588,8 +590,7 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
             or TRANSFER_PRIOR_PROVENANCE),
         "resource_baseline": collect_resource_facts(
             spool_path=arguments.spool_path,
-            postgres_path=arguments.postgres_path, db=db, metrics=None,
-            eur_per_gib=getattr(arguments, "archive_eur_per_gib", None)),        "filesystem": filesystem_facts(arguments.spool_path,
+            postgres_path=arguments.postgres_path, db=db, metrics=None),        "filesystem": filesystem_facts(arguments.spool_path,
                                         arguments.postgres_path),
         "admission": _admission_header(db, mode_name, run_id, core_start,
                                         core_end),
@@ -1516,7 +1517,6 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
     unavailable_strikes = 0
     container_probe = hooks.get("container_probe")
     resource_baseline = run.get("resource_baseline") or {}
-    eur_per_gib = run.get("archive_eur_per_gib")
     mem_over = 0
     for index in range(max_slots):
         expected_utc = slot_expected_utc(core_start, index)
@@ -1583,7 +1583,7 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                 resources = collect_resource_facts(
                     spool_path=run["spool_path"],
                     postgres_path=run["postgres_path"], db=db,
-                    metrics=metrics, eur_per_gib=eur_per_gib,
+                    metrics=metrics,
                     btrfs_probe=hooks.get("btrfs_probe"))
             cgroup = (sample.get("container") or {}).get("cgroup")
             if cgroup:
@@ -2563,7 +2563,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--run-id", default=None)
     start.add_argument("--database-url", default=None)
     start.add_argument("--database-url-file", default=None)
-    start.add_argument("--archive-eur-per-gib", type=float, default=None)
+    start.add_argument("--archive-tariff-file", default=None)
     start.add_argument("--archive-egress-interface", dest="archive_interfaces",
                        action="append", default=[])
     start.add_argument("--archive-route-host", default=None)
@@ -3147,6 +3147,101 @@ def _s3_snapshot(metrics: dict | None, py_totals: dict) -> dict:
             "python_total": py_total, "total": go_total + py_total}
 
 
+TARIFF_MAX_BYTES = 65536
+TARIFF_STALE_DAYS = 30
+TARIFF_EXPECTED = {
+    "payload_cap_gib": 16,
+    "aggregate_transfer_cap_gib": 64,
+    "retention_projection_days": 186,
+    "uncertainty_multiplier": 1.5,
+    "absolute_preparation_ceiling_eur": 5,
+}
+
+
+def _read_tariff_file(path_str: str) -> dict:
+    """Read the protected verified tariff JSON; fail closed, never estimate."""
+    if not path_str or not os.path.isabs(path_str):
+        raise Step9Error("tariff_unavailable",
+                         "tariff file path must be absolute")
+    try:
+        descriptor = os.open(path_str, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as error:
+        raise Step9Error("tariff_unavailable",
+                         "tariff file is unreadable") from error
+    try:
+        size = os.fstat(descriptor).st_size
+        if size > TARIFF_MAX_BYTES:
+            raise Step9Error("tariff_malformed", "tariff file is too large")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            raw = handle.read(TARIFF_MAX_BYTES + 1)
+    finally:
+        os.close(descriptor)
+    if len(raw) > TARIFF_MAX_BYTES:
+        raise Step9Error("tariff_malformed", "tariff file is too large")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise Step9Error("tariff_malformed",
+                         "tariff file is not valid JSON") from error
+    if not isinstance(payload, dict):
+        raise Step9Error("tariff_malformed", "tariff file is not an object")
+    return payload
+
+
+def _tariff_block(payload: dict, core_start: datetime) -> dict:
+    """Validate exact bounds/provenance; the envelope is reported, not billed."""
+    for key, expected in TARIFF_EXPECTED.items():
+        if payload.get(key) != expected:
+            raise Step9Error("tariff_mismatch",
+                             f"tariff {key} differs from the approved envelope")
+    for key in ("tariff_eur_per_decimal_gb_hour", "egress_eur_per_decimal_gb"):
+        try:
+            if float(payload[key]) <= 0:
+                raise ValueError
+        except (KeyError, TypeError, ValueError) as error:
+            raise Step9Error("tariff_malformed",
+                             f"tariff {key} is invalid") from error
+    try:
+        verified = datetime.strptime(
+            payload["verified_utc_date"], "%Y-%m-%d").replace(tzinfo=UTC)
+    except (KeyError, ValueError, TypeError) as error:
+        raise Step9Error("tariff_malformed",
+                         "tariff verified date is invalid") from error
+    age_days = (core_start - verified).total_seconds() / 86400
+    if age_days < 0 or age_days > TARIFF_STALE_DAYS:
+        raise Step9Error("tariff_stale",
+                         "tariff verification is stale or in the future")
+    for key in ("with_uncertainty_eur", "operational_stop_eur"):
+        try:
+            if float(payload[key]) <= 0:
+                raise ValueError
+        except (KeyError, TypeError, ValueError) as error:
+            raise Step9Error("tariff_malformed",
+                             f"tariff {key} is invalid") from error
+    if payload["with_uncertainty_eur"] > payload["operational_stop_eur"]:
+        raise Step9Error("tariff_envelope_exceeded",
+                         "approved envelope exceeds the operational stop")
+    if not payload.get("source"):
+        raise Step9Error("tariff_malformed", "tariff source is missing")
+    return {
+        "digest": _sha256(json.dumps(payload, sort_keys=True).encode()),
+        "source": payload["source"],
+        "verified_utc_date": payload["verified_utc_date"],
+        "retention_projection_days": payload["retention_projection_days"],
+        "tariff_eur_per_decimal_gb_hour": payload[
+            "tariff_eur_per_decimal_gb_hour"],
+        "egress_eur_per_decimal_gb": payload["egress_eur_per_decimal_gb"],
+        "payload_cap_gib": payload["payload_cap_gib"],
+        "aggregate_transfer_cap_gib": payload["aggregate_transfer_cap_gib"],
+        "uncertainty_multiplier": payload["uncertainty_multiplier"],
+        "with_uncertainty_eur": payload["with_uncertainty_eur"],
+        "operational_stop_eur": payload["operational_stop_eur"],
+        "absolute_preparation_ceiling_eur": payload[
+            "absolute_preparation_ceiling_eur"],
+        "note": "tariff estimate only, never actual billed cost",
+    }
+
+
 def _event_selected_due(event: dict) -> list:
     return event.get("selected_due_ats") or []
 
@@ -3359,7 +3454,6 @@ RES_MEM_AVAIL_MIN = 4 * 1024**3
 RES_ARCHIVE_LOGICAL_MAX = 16 * 1024**3
 RES_ARCHIVE_PHYSICAL_MAX = 64 * 1024**3
 RES_ARCHIVE_OBJECTS_MAX = 100_000
-RES_ARCHIVE_COST_MAX = 4.50
 
 
 def _parse_btrfs_usage(stdout: str) -> dict:
@@ -3501,16 +3595,11 @@ def evaluate_resource_gates(baseline: dict, current: dict,
         unknown.append("archive_physical_unknown")
     elif archive["physical_bytes"] > RES_ARCHIVE_PHYSICAL_MAX:
         failures.append("archive_physical_breach")
-    if archive.get("cost_eur") is None:
-        unknown.append("archive_cost_unknown")
-    elif archive["cost_eur"] > RES_ARCHIVE_COST_MAX:
-        failures.append("archive_cost_breach")
     return sorted(set(failures)), sorted(set(unknown)), mem_over
 
 
 def collect_resource_facts(*, spool_path: str, postgres_path: str,
                            db: object | None, metrics: dict | None,
-                           eur_per_gib: float | None,
                            btrfs_probe=None, device_probe=None) -> dict:
     probe = btrfs_probe or _btrfs_probe_numbers
     dev_probe = device_probe or _btrfs_device_stats
@@ -3563,7 +3652,7 @@ def collect_resource_facts(*, spool_path: str, postgres_path: str,
     swap_total = memory.get("swap_total_bytes")
     swap_free = memory.get("swap_free_bytes")
     archive: dict = {"logical_bytes": None, "objects": None,
-                     "physical_bytes": None, "cost_eur": None,
+                     "physical_bytes": None,
                      "error": None}
     if db is not None:
         try:
@@ -3582,8 +3671,6 @@ def collect_resource_facts(*, spool_path: str, postgres_path: str,
                 break
     if isinstance(spool_bytes, (int, float)):
         archive["physical_bytes"] = int(spool_bytes)
-    if archive["logical_bytes"] is not None and eur_per_gib is not None:
-        archive["cost_eur"] = archive["logical_bytes"] / 1024**3 * eur_per_gib
     return {"filesystems": filesystems,
             "memory": {"used_bytes": (total_b - avail_b
                                           if total_b is not None

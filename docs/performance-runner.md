@@ -298,6 +298,7 @@ python3 scripts/step9_check.py start \
   --watchdog-unit clashlens-step9-sampler-RUN \
   --max-invocation-gap-seconds 5 \
   --archive-egress-interface ARCHIVE_IFACE \
+  --archive-tariff-file /protected/clashlens-issue92-tariff.json \
   [--database-url-file /protected/clashlens-issue92-db-url]
 
 systemd-run --user --unit clashlens-step9-watchdog-RUN \
@@ -424,8 +425,13 @@ any OOM-kill increase, any swap growth, host memory available <4 GiB for two
 consecutive samples, archive logical >16 GiB, archive physical >64 GiB,
 archive objects >100k, or estimated archive cost >EUR 4.50. Filesystems
 sharing one pool are evaluated once. Missing probe fields stay unknown
-(recorded, never zero). Pass `--archive-eur-per-gib RATE` to enable the cost
-gate; without a rate the cost stays unknown.
+(recorded, never zero). Cost is never computed as logical-bytes times a rate. `start` requires the
+protected verified tariff JSON (`--archive-tariff-file`) and pins its digest,
+source, verification date, horizon, rates, and envelope; missing, malformed,
+stale (>30 days), mismatched, or over-stop tariffs fail closed. The approved
+whole-envelope figure (EUR 3.686616 under the EUR 4.50 stop) is reported
+alongside the measured byte/attempt bounds. All cost figures are tariff
+estimates, never actual billed cost.
 
 ### Operating evidence and container/cgroup probes
 
