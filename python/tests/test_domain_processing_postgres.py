@@ -17,6 +17,7 @@ from psycopg_pool import ConnectionPool
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import DEFAULT_POOL_SIZE, Database
 from clashlens.domain import ranked_day_for
+from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.worker import ObservationProcessor
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
@@ -1428,6 +1429,64 @@ def test_recognized_legend_tier_classifies_player_despite_season_anchor_conflict
             assert text(row[3]) == "conflict"
             assert text(row[4]) == "conflict"
             assert text(row[5]) == "season_anchor_conflict"
+        finally:
+            database.close()
+
+
+def test_profile_v3_promotes_current_anchor_and_preserves_raw_previous_id(
+    database_url: str,
+    archive_server,
+) -> None:
+    observed_at = datetime(2026, 9, 9, 12, 5, tzinfo=UTC)
+    with domain_database(database_url) as connection_info:
+        payload = json.loads(PROFILE_FIXTURE.read_bytes())
+        payload["tag"] = "#8PP"
+        payload["currentLeagueSeasonId"] = "1788757200"
+        payload["previousLeagueSeasonId"] = "1788152400"
+        _observation_id, job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="profile-v3-current-anchor",
+            endpoint="profile",
+            body=json.dumps(payload).encode(),
+            observed_at=observed_at,
+            normalized_tag="#8PP",
+            parser_version=PROFILE_PARSER_VERSION,
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            result = processor.process_job(job_id, owner="profile-v3-worker")
+            assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                row = connection.execute(
+                    """
+                    SELECT p.current_profile_version_id,
+                           v.source_contract_state, v.season_anchor_state,
+                           v.current_league_season_id,
+                           v.previous_league_season_id,
+                           a.current_league_season_id,
+                           a.previous_league_season_id,
+                           o.failure_category
+                    FROM players AS p
+                    JOIN player_profile_versions AS v ON v.player_id = p.id
+                    JOIN season_anchor_evidence AS a
+                      ON a.profile_version_id = v.id
+                    JOIN observation_processing_outcomes AS o
+                      ON o.observation_id = v.observation_id
+                    WHERE p.normalized_tag = '#8PP'
+                    """
+                ).fetchone()
+            assert row is not None
+            assert row[0] is not None
+            assert tuple(text(value) for value in row[1:7]) == (
+                "accepted",
+                "valid",
+                "1788757200",
+                "1788152400",
+                "1788757200",
+                "1786338000",
+            )
+            assert row[7] is None
         finally:
             database.close()
 

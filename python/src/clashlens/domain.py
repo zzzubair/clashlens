@@ -104,18 +104,20 @@ def allocate_trophies(stars: int, destruction: int) -> TrophyAllocation:
     )
 
 
-def validate_season_anchor(current_id: str, previous_id: str) -> SeasonAnchor:
+def _canonical_season_start(value: str) -> datetime:
     try:
-        if not current_id.isascii() or not previous_id.isascii():
+        if not value.isascii() or str(int(value)) != value:
             raise ValueError
-        if str(int(current_id)) != current_id or str(int(previous_id)) != previous_id:
-            raise ValueError
-        current = datetime.fromtimestamp(int(current_id), tz=UTC)
-        previous = datetime.fromtimestamp(int(previous_id), tz=UTC)
+        return datetime.fromtimestamp(int(value), tz=UTC)
     except (OverflowError, OSError, ValueError) as error:
         raise DomainRuleError(
             "invalid_season_anchor", "season IDs must be canonical Unix seconds"
         ) from error
+
+
+def validate_season_anchor(current_id: str, previous_id: str) -> SeasonAnchor:
+    current = _canonical_season_start(current_id)
+    previous = _canonical_season_start(previous_id)
     if (
         current - previous != SEASON_DURATION
         or current.weekday() != 0
@@ -130,6 +132,29 @@ def validate_season_anchor(current_id: str, previous_id: str) -> SeasonAnchor:
     return SeasonAnchor(
         current_id=current_id,
         previous_id=previous_id,
+        current_start=current,
+        previous_start=previous,
+    )
+
+
+def validate_profile_season_anchor(current_id: str) -> SeasonAnchor:
+    """Validate a profile's current tournament and derive its prior boundary."""
+    current = _canonical_season_start(current_id)
+    bootstrap = _canonical_season_start(BOOTSTRAP_CURRENT_SEASON_ID)
+    if (
+        current < bootstrap
+        or current.weekday() != 0
+        or current.time().replace(tzinfo=None) != datetime.min.time().replace(hour=5)
+        or (current - bootstrap) % SEASON_DURATION
+    ):
+        raise DomainRuleError(
+            "invalid_season_anchor",
+            "profile current season is not aligned to the 28-day phase",
+        )
+    previous = current - SEASON_DURATION
+    return SeasonAnchor(
+        current_id=current_id,
+        previous_id=str(int(previous.timestamp())),
         current_start=current,
         previous_start=previous,
     )

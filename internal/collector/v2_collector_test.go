@@ -351,13 +351,14 @@ func TestVersionTwoWorkerArchivesGlobalRankingsWithValidationHandoffProvenance(t
 }
 
 func TestParserVersionForEndpointUsesPythonSourceContract(t *testing.T) {
-	for _, endpoint := range []endpointName{
-		profileEndpoint,
-		battleLogEndpoint,
-		globalPlayerRankingsEndpoint,
-	} {
-		if got := parserVersionForEndpoint(endpoint); got != "supercell-source-parser-v2" {
-			t.Fatalf("parser version for %q = %q", endpoint, got)
+	want := map[endpointName]string{
+		profileEndpoint:              "supercell-profile-parser-v3",
+		battleLogEndpoint:            "supercell-source-parser-v2",
+		globalPlayerRankingsEndpoint: "supercell-source-parser-v2",
+	}
+	for endpoint, expected := range want {
+		if got := parserVersionForEndpoint(endpoint); got != expected {
+			t.Fatalf("parser version for %q = %q, want %q", endpoint, got, expected)
 		}
 	}
 }
