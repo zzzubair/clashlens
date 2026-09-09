@@ -39,6 +39,7 @@ def test_same_season_anchor_common_path_does_not_lock_confirmed_row() -> None:
     connection = _Connection()
     profile: Any = SimpleNamespace(
         eligibility_state="eligible",
+        parser_version="supercell-source-parser-v2",
         current_league_season_id="1783918800",
         previous_league_season_id="1781499600",
         observed_at=datetime(2026, 8, 9, 1, tzinfo=UTC),

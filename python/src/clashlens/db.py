@@ -410,7 +410,7 @@ def _claim_select_statement(
         "job.state = 'waiting_dependency' OR " if supports_dependency else ""
     )
     dependency_column = "job.dependency_deferral_count" if supports_dependency else "0"
-    claim_versions = "1, 2, 3, 4" if supports_coordinator else "1, 2, 3"
+    claim_versions = "1, 2, 3, 4, 5" if supports_coordinator else "1, 2, 3"
     job_filter = f"""job.claim_compatibility_version IN ({claim_versions})
         AND ({dependency_filter}job.attempt_count < job.max_attempts)
         AND {supported_filter}"""

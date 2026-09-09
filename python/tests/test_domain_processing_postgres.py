@@ -1438,7 +1438,7 @@ def test_profile_v3_promotes_current_anchor_and_preserves_raw_previous_id(
     archive_server,
 ) -> None:
     observed_at = datetime(2026, 9, 9, 12, 5, tzinfo=UTC)
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         payload = json.loads(PROFILE_FIXTURE.read_bytes())
         payload["tag"] = "#8PP"
         payload["currentLeagueSeasonId"] = "1788757200"
