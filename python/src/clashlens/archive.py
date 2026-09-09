@@ -437,6 +437,11 @@ class SpoolFirstReader:
     def counters(self) -> dict[str, int]:
         return dict(self._counters)
 
+    @property
+    def remote_attempts(self) -> dict[str, int]:
+        """Copy provider-attempt counters without exposing mutable state."""
+        return dict(getattr(self.archive, "remote_attempts", {}) or {})
+
     def stats(self) -> dict[str, Any]:
         return self.spool.stats()
 
