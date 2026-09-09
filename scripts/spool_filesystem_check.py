@@ -269,7 +269,7 @@ def _candidate_reference(path: Path | None, source_revision: str) -> dict:
     return reference
 
 
-def collect(spool_path: Path, postgres_path: Path, candidate_receipt: Path | None) -> tuple[dict, bool]:
+def _source_provenance() -> tuple[str, bool | None]:
     try:
         revision_result = subprocess.run(
             ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD^{commit}"],
@@ -278,16 +278,36 @@ def collect(spool_path: Path, postgres_path: Path, candidate_receipt: Path | Non
             check=False,
             timeout=30,
         )
-        revision = revision_result.stdout.strip() if revision_result.returncode == 0 else "unknown"
+        status_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(ROOT),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
     except (OSError, subprocess.SubprocessError):
-        revision = "unknown"
+        return "unknown", None
+    revision = revision_result.stdout.strip() if revision_result.returncode == 0 else "unknown"
     if len(revision) not in {40, 64} or any(
         character not in "0123456789abcdef" for character in revision
     ):
         revision = "unknown"
+    clean = not status_result.stdout if status_result.returncode == 0 else None
+    return revision, clean
+
+
+def collect(spool_path: Path, postgres_path: Path, candidate_receipt: Path | None) -> tuple[dict, bool]:
+    revision, source_clean = _source_provenance()
     candidate = _candidate_reference(candidate_receipt, revision)
     entries = {}
-    complete = revision != "unknown" and candidate["error"] is None
+    complete = revision != "unknown" and source_clean is True and candidate["error"] is None
     for name, target in (("spool", spool_path), ("postgres", postgres_path)):
         mount = _mount_facts(target)
         capacity = _capacity_facts(target)
@@ -311,7 +331,7 @@ def collect(spool_path: Path, postgres_path: Path, candidate_receipt: Path | Non
             and capacity.get("inode_model") == "dynamic"
         )
         probe = _btrfs_probe(target) if is_btrfs else None
-        if probe is not None and probe["error"] is not None:
+        if probe is None or probe["error"] is not None:
             complete = False
         entries[name] = {
             "requested_path": str(target),
@@ -323,6 +343,8 @@ def collect(spool_path: Path, postgres_path: Path, candidate_receipt: Path | Non
         "captured_at": datetime.now(tz=UTC).isoformat(),
         "host": {"platform": platform.platform(), "uname": dict(platform.uname()._asdict())},
         "source_revision": revision,
+        "source_clean": source_clean,
+        "source_clean_check": "git-status-porcelain-v1-with-untracked-files",
         "candidate_receipt": candidate,
         "paths": entries,
         "notes": (

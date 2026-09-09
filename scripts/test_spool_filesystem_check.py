@@ -45,13 +45,28 @@ def _payload(**overrides):
 
 def test_collect_success_writes_artifact(tmp_path: Path) -> None:
     output = tmp_path / "evidence.json"
+    mount = _payload()["mount"] | {"filesystem_type": "btrfs"}
+    capacity = _payload()["capacity"] | {
+        "filesystem_type": "btrfs",
+        "inode_model": "dynamic",
+    }
+    probe = check._btrfs_result(
+        tmp_path / "spool",
+        exit_status=0,
+        stdout="Data,single: 1\nMetadata,DUP: 2\n",
+        stderr="",
+        error=None,
+    )
     with (
-        mock.patch.object(check, "_mount_facts", return_value=_payload()["mount"]),
-        mock.patch.object(check, "_capacity_facts", return_value=_payload()["capacity"]),
+        mock.patch.object(check, "_source_provenance", return_value=("a" * 40, True)),
+        mock.patch.object(check, "_mount_facts", return_value=mount),
+        mock.patch.object(check, "_capacity_facts", return_value=capacity),
+        mock.patch.object(check, "_btrfs_probe", return_value=probe),
     ):
         payload, complete = check.collect(tmp_path / "spool", tmp_path / "pg", None)
     assert complete is True
-    assert payload["paths"]["spool"]["btrfs_usage"] is None
+    assert payload["source_clean"] is True
+    assert payload["paths"]["spool"]["btrfs_usage"]["allocation_evidence"] == "separate"
     digest = check._atomic_write_json(output, payload)
     assert json.loads(output.read_text())["paths"]["spool"]["capacity"]["free_inodes"] == 100
     sidecar = Path(str(output) + ".sha256")
@@ -162,6 +177,7 @@ def test_btrfs_mount_capacity_consistency_gates_completeness(tmp_path: Path) -> 
         "error": None,
     }
     with (
+        mock.patch.object(check, "_source_provenance", return_value=("a" * 40, True)),
         mock.patch.object(check, "_mount_facts", return_value=btrfs_mount),
         mock.patch.object(check, "_capacity_facts", return_value=dynamic_btrfs),
         mock.patch.object(check, "_btrfs_probe", return_value=success_probe),
@@ -169,6 +185,49 @@ def test_btrfs_mount_capacity_consistency_gates_completeness(tmp_path: Path) -> 
         payload, complete = check.collect(tmp_path / "spool", tmp_path / "pg", None)
     assert complete is True
     assert payload["paths"]["spool"]["btrfs_usage"]["error"] is None
+
+
+def test_non_btrfs_paths_cannot_qualify_without_allocation_evidence(tmp_path: Path) -> None:
+    with (
+        mock.patch.object(check, "_source_provenance", return_value=("a" * 40, True)),
+        mock.patch.object(check, "_mount_facts", return_value=_payload()["mount"]),
+        mock.patch.object(check, "_capacity_facts", return_value=_payload()["capacity"]),
+    ):
+        payload, complete = check.collect(tmp_path / "spool", tmp_path / "pg", None)
+    assert complete is False
+    assert payload["paths"]["spool"]["btrfs_usage"] is None
+
+
+def test_source_provenance_requires_clean_successful_git_results(tmp_path: Path) -> None:
+    revision = subprocess.CompletedProcess(
+        args=["git"], returncode=0, stdout="a" * 40 + "\n", stderr=""
+    )
+    clean = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr="")
+    dirty = subprocess.CompletedProcess(
+        args=["git"], returncode=0, stdout=" M scripts/spool_filesystem_check.py\n", stderr=""
+    )
+    unavailable = subprocess.CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
+
+    for status, expected in ((clean, True), (dirty, False), (unavailable, None)):
+        with mock.patch.object(check.subprocess, "run", side_effect=(revision, status)):
+            assert check._source_provenance() == ("a" * 40, expected)
+    with mock.patch.object(check.subprocess, "run", side_effect=OSError("git missing")):
+        assert check._source_provenance() == ("unknown", None)
+
+    mount = _payload()["mount"] | {"filesystem_type": "btrfs"}
+    capacity = _payload()["capacity"] | {
+        "filesystem_type": "btrfs",
+        "inode_model": "dynamic",
+    }
+    with (
+        mock.patch.object(check, "_source_provenance", return_value=("a" * 40, False)),
+        mock.patch.object(check, "_mount_facts", return_value=mount),
+        mock.patch.object(check, "_capacity_facts", return_value=capacity),
+        mock.patch.object(check, "_btrfs_probe", return_value={"error": None}),
+    ):
+        payload, complete = check.collect(tmp_path / "spool", tmp_path / "pg", None)
+    assert complete is False
+    assert payload["source_clean"] is False
 
 
 def test_supplied_candidate_provenance_must_be_available_and_match_source(
@@ -214,11 +273,10 @@ def test_unavailable_candidate_or_unknown_revision_blocks_qualification(tmp_path
     assert complete is False
     assert payload["candidate_receipt"]["error"] == "unavailable"
 
-    failed_git = subprocess.CompletedProcess(args=["git"], returncode=1, stdout="", stderr="")
     with (
         mock.patch.object(check, "_mount_facts", return_value=mount),
         mock.patch.object(check, "_capacity_facts", return_value=capacity),
-        mock.patch.object(check.subprocess, "run", return_value=failed_git),
+        mock.patch.object(check, "_source_provenance", return_value=("unknown", None)),
     ):
         payload, complete = check.collect(tmp_path / "spool", tmp_path / "pg", None)
     assert complete is False
