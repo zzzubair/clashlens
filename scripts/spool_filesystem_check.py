@@ -22,14 +22,19 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "python" / "src")]
+sys.path[:0] = [str(ROOT), str(ROOT / "python" / "src")]
+
+from scripts import deployment_receipt
 
 PROBE_TIMEOUT_SECONDS = 30
 PROBE_COMMAND = ("btrfs", "filesystem", "usage", "-b")
+PROBE_STDOUT_LIMIT = 65536
+PROBE_STDERR_LIMIT = 16384
 
 
 def _sha_file(path: Path) -> str:
@@ -41,18 +46,54 @@ def _sha_file(path: Path) -> str:
 
 
 def _atomic_write_json(path: Path, payload: dict) -> str:
+    """Publish a complete artifact and digest without replacing evidence."""
+    path = path.absolute()
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(payload, indent=1, sort_keys=True, default=str)
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(tmp, path)
-    with open(str(path) + ".sha256", "w", encoding="utf-8") as handle:
-        handle.write(digest + "  " + path.name + "\n")
-    return digest
+    sidecar = Path(str(path) + ".sha256")
+    temporary_paths: list[Path] = []
+    linked: list[Path] = []
+    published = False
+    try:
+        for destination, content in (
+            (path, text),
+            (sidecar, digest + "  " + path.name + "\n"),
+        ):
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{destination.name}.", suffix=".tmp", dir=path.parent
+            )
+            temporary = Path(temporary_name)
+            temporary_paths.append(temporary)
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        for temporary, destination in zip(temporary_paths, (path, sidecar), strict=True):
+            os.link(temporary, destination)
+            linked.append(destination)
+        directory_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+        if _sha_file(path) != digest or sidecar.read_text(encoding="utf-8") != (
+            digest + "  " + path.name + "\n"
+        ):
+            raise OSError("published evidence verification failed")
+        published = True
+        return digest
+    except FileExistsError as error:
+        raise RuntimeError("evidence output is already occupied") from error
+    except (OSError, UnicodeError) as error:
+        raise RuntimeError("evidence could not be written atomically") from error
+    finally:
+        if not published:
+            for destination in reversed(linked):
+                destination.unlink(missing_ok=True)
+        for temporary in temporary_paths:
+            temporary.unlink(missing_ok=True)
 
 
 def _mount_facts(target: Path) -> dict:
@@ -105,7 +146,60 @@ def _capacity_facts(target: Path) -> dict:
         }
 
 
-def _btrfs_probe(target: Path) -> dict | None:
+def _probe_text(value: str | bytes | None, limit: int) -> tuple[str, bool]:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    value = value or ""
+    return value[:limit], len(value) > limit
+
+
+def _allocation_evidence(stdout: str) -> str | None:
+    kinds = {
+        line.lstrip().split(",", 1)[0]
+        for line in stdout.splitlines()
+        if "," in line
+    }
+    if "Data+Metadata" in kinds:
+        return "combined"
+    if {"Data", "Metadata"}.issubset(kinds):
+        return "separate"
+    return None
+
+
+def _btrfs_result(
+    target: Path,
+    *,
+    exit_status: int | None,
+    stdout: str | bytes | None,
+    stderr: str | bytes | None,
+    error: str | None,
+) -> dict:
+    stdout_text, stdout_truncated = _probe_text(stdout, PROBE_STDOUT_LIMIT)
+    stderr_text, stderr_truncated = _probe_text(stderr, PROBE_STDERR_LIMIT)
+    allocation_evidence = _allocation_evidence(stdout_text)
+    if error is None:
+        if not stdout_text.strip():
+            error = "empty_output"
+        elif stdout_truncated or stderr_truncated:
+            error = "output_truncated"
+        elif stderr_text.strip():
+            error = "diagnostic_stderr"
+        elif allocation_evidence is None:
+            error = "allocation_evidence_missing"
+    return {
+        "command": [*PROBE_COMMAND, str(target)],
+        "exit_status": exit_status,
+        "stdout": stdout_text,
+        "stderr": stderr_text,
+        "stdout_truncated": stdout_truncated,
+        "stderr_truncated": stderr_truncated,
+        "allocation_evidence": allocation_evidence,
+        "timeout_seconds": PROBE_TIMEOUT_SECONDS,
+        "error": error,
+    }
+
+
+def _btrfs_probe(target: Path) -> dict:
     try:
         completed = subprocess.run(
             [*PROBE_COMMAND, str(target)],
@@ -114,71 +208,108 @@ def _btrfs_probe(target: Path) -> dict | None:
             timeout=PROBE_TIMEOUT_SECONDS,
             check=False,
         )
-        return {
-            "command": [*PROBE_COMMAND, str(target)],
-            "exit_status": completed.returncode,
-            "stdout": completed.stdout[-16384:],
-            "stderr": completed.stderr[-4096:],
-            "timeout_seconds": PROBE_TIMEOUT_SECONDS,
-            "error": None if completed.returncode == 0 else "probe_failed",
-        }
+        return _btrfs_result(
+            target,
+            exit_status=completed.returncode,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            error=None if completed.returncode == 0 else "probe_failed",
+        )
     except FileNotFoundError:
-        return {
-            "command": [*PROBE_COMMAND, str(target)],
-            "exit_status": None,
-            "stdout": "",
-            "stderr": "",
-            "timeout_seconds": PROBE_TIMEOUT_SECONDS,
-            "error": "tool_missing",
-        }
+        return _btrfs_result(
+            target, exit_status=None, stdout="", stderr="", error="tool_missing"
+        )
     except subprocess.TimeoutExpired as error:
-        return {
-            "command": [*PROBE_COMMAND, str(target)],
-            "exit_status": None,
-            "stdout": (error.stdout or b"")[-16384:]
-            if isinstance(error.stdout, (bytes, str))
-            else "",
-            "stderr": (error.stderr or b"")[-4096:]
-            if isinstance(error.stderr, (bytes, str))
-            else "",
-            "timeout_seconds": PROBE_TIMEOUT_SECONDS,
-            "error": "timeout",
-        }
+        return _btrfs_result(
+            target,
+            exit_status=None,
+            stdout=error.stdout,
+            stderr=error.stderr,
+            error="timeout",
+        )
     except OSError as error:
-        return {
-            "command": [*PROBE_COMMAND, str(target)],
-            "exit_status": None,
-            "stdout": "",
-            "stderr": "",
-            "timeout_seconds": PROBE_TIMEOUT_SECONDS,
-            "error": f"probe_error:{type(error).__name__}",
-        }
+        return _btrfs_result(
+            target,
+            exit_status=None,
+            stdout="",
+            stderr="",
+            error=f"probe_error:{type(error).__name__}",
+        )
 
 
-def _candidate_reference(path: Path | None) -> dict:
+def _candidate_reference(path: Path | None, source_revision: str) -> dict:
     if path is None:
-        return {"path": None, "digest": None}
+        return {"path": None, "digest": None, "receipt_digest": None, "error": None}
+    reference = {
+        "path": str(path),
+        "digest": None,
+        "receipt_digest": None,
+        "error": "unavailable",
+    }
     try:
-        return {"path": str(path), "digest": _sha_file(path)}
-    except OSError:
-        return {"path": str(path), "digest": None}
+        raw = path.read_bytes()
+        receipt = json.loads(raw)
+        deployment_receipt.validate_receipt(receipt, require_digest=True)
+        reference["digest"] = hashlib.sha256(raw).hexdigest()
+        reference["receipt_digest"] = receipt["receipt_digest"]
+        if receipt["receipt_scope"] != "candidate-preparation":
+            reference["error"] = "wrong_scope"
+        elif source_revision == "unknown" or receipt["source"]["revision"] != source_revision:
+            reference["error"] = "source_mismatch"
+        else:
+            reference["error"] = None
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        deployment_receipt.ReceiptError,
+        KeyError,
+        TypeError,
+    ):
+        # Supplied provenance is untrusted evidence. Keep only a bounded status.
+        return reference
+    return reference
 
 
-def collect(spool_path: Path, postgres_path: Path, candidate_receipt: Path | None) -> tuple[dict, bool]:
+def _source_provenance() -> tuple[str, bool | None]:
     try:
-        revision = subprocess.run(
+        revision_result = subprocess.run(
             ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD^{commit}"],
             capture_output=True,
             text=True,
             check=False,
             timeout=30,
-        ).stdout.strip()
+        )
+        status_result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(ROOT),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
     except (OSError, subprocess.SubprocessError):
+        return "unknown", None
+    revision = revision_result.stdout.strip() if revision_result.returncode == 0 else "unknown"
+    if len(revision) not in {40, 64} or any(
+        character not in "0123456789abcdef" for character in revision
+    ):
         revision = "unknown"
-    if not revision:
-        revision = "unknown"
+    clean = not status_result.stdout if status_result.returncode == 0 else None
+    return revision, clean
+
+
+def collect(spool_path: Path, postgres_path: Path, candidate_receipt: Path | None) -> tuple[dict, bool]:
+    revision, source_clean = _source_provenance()
+    candidate = _candidate_reference(candidate_receipt, revision)
     entries = {}
-    complete = True
+    complete = revision != "unknown" and source_clean is True and candidate["error"] is None
     for name, target in (("spool", spool_path), ("postgres", postgres_path)):
         mount = _mount_facts(target)
         capacity = _capacity_facts(target)
@@ -202,7 +333,7 @@ def collect(spool_path: Path, postgres_path: Path, candidate_receipt: Path | Non
             and capacity.get("inode_model") == "dynamic"
         )
         probe = _btrfs_probe(target) if is_btrfs else None
-        if probe is not None and probe["error"] is not None:
+        if probe is None or probe["error"] is not None:
             complete = False
         entries[name] = {
             "requested_path": str(target),
@@ -214,7 +345,9 @@ def collect(spool_path: Path, postgres_path: Path, candidate_receipt: Path | Non
         "captured_at": datetime.now(tz=UTC).isoformat(),
         "host": {"platform": platform.platform(), "uname": dict(platform.uname()._asdict())},
         "source_revision": revision,
-        "candidate_receipt": _candidate_reference(candidate_receipt),
+        "source_clean": source_clean,
+        "source_clean_check": "git-status-porcelain-v1-with-untracked-files",
+        "candidate_receipt": candidate,
         "paths": entries,
         "notes": (
             "Different Btrfs subvolumes may share the same allocation pool; "
