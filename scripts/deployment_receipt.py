@@ -27,6 +27,11 @@ CANDIDATE_RECEIPT_OFFICIAL_API_PROOF = (
     "receipt-command-inspects-images-database-and-bounded-candidate-resources-only"
 )
 SAFE_CONFIGURATION_FIELDS = {
+    "admission_evidence_max_events",
+    "admission_evidence_max_selected_entries",
+    "admission_evidence_run_id",
+    "admission_evidence_start",
+    "admission_evidence_end",
     "collector_database_pool_size",
     "player_discovery_enabled",
     "spool_free_inode_floor",
@@ -48,6 +53,7 @@ _IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _DIGEST = re.compile(r"(?:[A-Za-z0-9._:/@+-]{1,256}@)?sha256:[0-9a-f]{64}\Z")
 _SAFE_VALUE = re.compile(r"[0-9]{1,20}\Z")
 _SAFE_BOOLEAN = re.compile(r"(?:true|false)\Z")
+_ADMISSION_TIMESTAMP = re.compile(r"(?:disabled|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\Z")
 _MIGRATION = re.compile(r"([0-9]{4})_[a-z0-9_]{1,240}\.sql\Z")
 _VERSION_TEXT = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._+:/()=-]{0,255}\Z")
 _PYTHON_VERSION = re.compile(
@@ -579,7 +585,49 @@ SELECT json_build_object(
 def _configuration_value(key: str, value: str) -> str:
     if key == "player_discovery_enabled":
         return _bounded(value, _SAFE_BOOLEAN, "configuration value")
+    if key == "admission_evidence_run_id":
+        return _bounded(value, _IDENTITY, "configuration value")
+    if key in ("admission_evidence_start", "admission_evidence_end"):
+        return _bounded(value, _ADMISSION_TIMESTAMP, "configuration value")
     return _bounded(value, _SAFE_VALUE, "configuration value")
+
+
+def _validate_admission_evidence_fields(fields: dict[str, str]) -> None:
+    run_id = fields.get("admission_evidence_run_id", "")
+    start = fields.get("admission_evidence_start", "")
+    end = fields.get("admission_evidence_end", "")
+    try:
+        max_events = int(fields.get("admission_evidence_max_events", "-1"))
+    except ValueError:
+        raise ReceiptError("configuration value")
+    try:
+        max_selected = int(fields.get("admission_evidence_max_selected_entries", "-1"))
+    except ValueError:
+        raise ReceiptError("configuration value")
+    disabled = (
+        run_id == "disabled"
+        and start == "disabled"
+        and end == "disabled"
+        and max_events == 0
+        and max_selected == 0
+    )
+    if disabled:
+        return
+    if run_id == "disabled" or start == "disabled" or end == "disabled":
+        raise ReceiptError("admission evidence settings must be enabled all-or-none")
+    if not 1 <= max_events <= 108000:
+        raise ReceiptError("configuration value")
+    if not 1 <= max_selected <= 5000000:
+        raise ReceiptError("configuration value")
+    try:
+        start_dt = datetime.strptime(start, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        end_dt = datetime.strptime(end, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        raise ReceiptError("configuration value")
+    if not end_dt > start_dt:
+        raise ReceiptError("configuration value")
+    if (end_dt - start_dt).total_seconds() > 30 * 3600:
+        raise ReceiptError("configuration value")
 
 
 def _configuration(values: Sequence[str]) -> dict[str, Any]:
@@ -591,6 +639,7 @@ def _configuration(values: Sequence[str]) -> dict[str, Any]:
         result[key] = _configuration_value(key, value)
     if set(result) != SAFE_CONFIGURATION_FIELDS:
         raise ReceiptError("safe configuration allowlist is incomplete")
+    _validate_admission_evidence_fields(result)
     fingerprint = _sha256(
         json.dumps(result, sort_keys=True, separators=(",", ":")).encode()
     )
@@ -824,8 +873,13 @@ def validate_receipt(receipt: dict[str, Any], *, require_digest: bool = False) -
     for key, value in fields.items():
         if key == "player_discovery_enabled":
             _require_text(value, _SAFE_BOOLEAN, "configuration value")
+        elif key == "admission_evidence_run_id":
+            _require_text(value, _IDENTITY, "configuration value")
+        elif key in ("admission_evidence_start", "admission_evidence_end"):
+            _require_text(value, _ADMISSION_TIMESTAMP, "configuration value")
         else:
             _require_text(value, _SAFE_VALUE, "configuration value")
+    _validate_admission_evidence_fields(fields)
     fingerprint = _require_text(configuration["fingerprint"], _DIGEST, "configuration fingerprint")
     expected_fingerprint = "sha256:" + _sha256(
         json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()

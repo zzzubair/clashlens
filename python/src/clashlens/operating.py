@@ -247,6 +247,8 @@ RELATION_NAMES = (
     "collector_interactive_intent_events",
     "collector_jobs",
     "collector_observations",
+    "collector_regular_admission_evidence",
+    "collector_regular_admission_evidence_runs",
     "collector_reset_baseline_sweeps",
     "collector_reset_sweep_members",
     "collector_reset_sweeps",
@@ -1046,7 +1048,7 @@ def _validate_database(value: Any) -> None:
     migrations = database["migrations"]
     if not isinstance(migrations, list) or any(
         not isinstance(item, dict) for item in migrations
-    ) or [item.get("version") for item in migrations] != list(range(1, 22)):
+    ) or [item.get("version") for item in migrations] != list(range(1, 23)):
         raise OperatingFactsError("required_fact_invalid")
     for item in migrations:
         _exact_keys(item, ("version", "applied_at"))

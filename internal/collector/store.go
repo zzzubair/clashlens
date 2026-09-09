@@ -24,6 +24,7 @@ type store struct {
 	metrics                 *collectorMetrics
 	archiveInstanceID       string
 	archiveRetention        bool
+	admissionEvidence       *admissionEvidenceConfig
 }
 
 func openStore(ctx context.Context, databaseURL string, expectedContractVersion int) (*store, error) {
@@ -108,6 +109,9 @@ func (s *store) close() {
 }
 
 func (s *store) scheduleDueRegular(ctx context.Context, now time.Time, cycle time.Duration, batchSize int) (int, error) {
+	if s.admissionEvidence != nil {
+		return s.scheduleDueRegularWithEvidence(ctx, now, cycle, batchSize, s.admissionEvidence)
+	}
 	if cycle <= 0 {
 		return 0, errors.New("poll cycle must be positive")
 	}

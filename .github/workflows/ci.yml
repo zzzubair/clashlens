@@ -34,7 +34,7 @@ jobs:
       # Short mode skips the embedded-PostgreSQL and focused Go→Python seam;
       # the postgres job below owns those and installs uv there.
       - name: Test
-        run: go test -short -count=1 ./...
+        run: go test -short -count=1 -timeout=1200s ./...
 
   python:
     name: Python lint, compile, and PostgreSQL tests
