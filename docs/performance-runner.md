@@ -335,13 +335,36 @@ artifacts are written exclusively and never replaced; the run directory is
 capped at 256 MiB; live-day admission accounting follows the validated final
 handoff (deadlines, gaps, tail, capture bounds, exact roots) and `validate`
 refuses any run whose admission, eligibility, reset, sample-outcome, or
-watchdog evidence is not clean and complete.
+watchdog evidence is not clean and complete. Resource evidence uses a bounded
+five-second `du` probe (`--block-size=1 --summarize --one-file-system
+--no-dereference --`) to
+measure host-visible allocated spool bytes before and after collector shutdown.
+A single-threaded selectors loop with nonblocking reads caps stdout and stderr
+independently against one monotonic five-second TOTAL deadline: select/drain stop at
+the deadline minus a small cleanup reserve, then kill gets a bounded wait from the
+reserve so the direct child is actually reaped inside the total, including pipe-close
+races; oversize stays unknown without waiting out the deadline. Each probe records schema
+`step9-resource-v2`, configured/resolved paths, before/after mount identity,
+start/end, timeout, and sanitized error; every minute sample retains its bounded
+`archive.allocated_probe` on success as well as failure/unknown, so metrics=None
+after a proven stop stays known when the host probe succeeds. `validate` requires
+the full v2 probe on every v2 sample: no probe error, an exact non-negative int byte
+count, `normpath(abspath(configured_path))` exactly equal to the recorded path and the
+pinned spool path (legitimate relative configured paths supported, suffix matching not
+accepted), the exact GNU du argv with `--` and the resolved target, matching known
+before/after mount identity consistent with the pinned mount plus a recorded
+`mount_identity` equal to both, ordered UTC timestamps bounded by `timeout_seconds`,
+and valid timeout metadata. V1 runs stay readable but their ledger-based `physical_bytes` never
+gains v2 meaning and v1/v2 samples never mix.
+Runtime ledger bytes remain separately labeled. A timeout, probe error, or mount
+identity change is unknown/failure; on Btrfs the sum is not exclusive ownership
+of shared pool extents, so filesystem allocation evidence remains separate.
 
 ### Population preflight mode (60m bootstrap + 15m drain)
 
 The same tool also runs the bounded read-only population preflight, distinct
 from the 24-hour day. It reuses cohort/receipt validation, the minute loop,
-the watchdog, and the manifest machinery under schema `step9-preflight-v1`
+the watchdog, and the manifest machinery under schema `step9-preflight-v2`
 with 75 one-minute slots (60 bootstrap + 15 drain) and 15 windows:
 
 ```sh
