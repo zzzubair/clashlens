@@ -423,16 +423,18 @@ func (s *evidenceSpool) writeLedger(value spoolLedger) error {
 }
 
 func (s *evidenceSpool) reconcile() error {
-	for _, file := range s.locks {
-		if err := s.lock(file, true); err != nil {
-			return err
-		}
-	}
+	locked := 0
 	defer func() {
-		for i := len(s.locks) - 1; i >= 0; i-- {
-			unlock(s.locks[i])
+		for i := locked - 1; i >= 0; i-- {
+			s.unlockStripe(i)
 		}
 	}()
+	for i := range s.locks {
+		if err := s.lockStripe(i, true); err != nil {
+			return err
+		}
+		locked++
+	}
 	if err := s.lockCapacity(); err != nil {
 		return err
 	}
@@ -726,7 +728,6 @@ func (r *spoolReservation) releaseLocked(batch *spoolCapacityBatch) error {
 		ledger.ReservedBytes = 0
 	}
 	ledger.ReservedInodes = ledger.ReservedObjects
-	_ = batch.writeLedger(ledger)
 	if err := syscall.Flock(int(r.file.Fd()), syscall.LOCK_UN); err != nil {
 		return err
 	}
@@ -740,7 +741,9 @@ func (r *spoolReservation) releaseLocked(batch *spoolCapacityBatch) error {
 	if err := batch.syncDir(filepath.Dir(r.path)); err != nil {
 		return err
 	}
-	return nil
+	// Failed release must retain its accounting, even if retried. Publishing
+	// a decrement before these operations could consume another reservation.
+	return batch.writeLedger(ledger)
 }
 
 // bindTemporaryPath records the live temporary path on the reservation

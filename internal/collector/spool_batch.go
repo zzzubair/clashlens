@@ -2,10 +2,11 @@ package collector
 
 import (
 	"errors"
-	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"golang.org/x/sys/unix"
 )
 
 // Capacity transactions keep the existing cross-process flock and JSON ledger.

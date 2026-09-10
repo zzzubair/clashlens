@@ -58,6 +58,61 @@ func TestSpoolCapacityBatchLimitsAndDurability(t *testing.T) {
 	}
 }
 
+func TestSpoolReconciliationWaitsForItsOwnInFlightStripe(t *testing.T) {
+	spool := newFaultTestSpool(t)
+	if err := spool.lockStripe(0, true); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- spool.reconcile() }()
+	select {
+	case err := <-done:
+		spool.unlockStripe(0)
+		t.Fatalf("reconciliation bypassed an in-flight writer: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	spool.unlockStripe(0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reconciliation did not resume after the writer finished")
+	}
+}
+
+func TestSpoolFailedReleaseCannotConsumeAnotherReservation(t *testing.T) {
+	spool := newFaultTestSpool(t)
+	first, err := spool.reserve(1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := spool.reserve(1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.release()
+	// Force release to fail after reading its ledger but before unlocking.
+	if err := first.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := first.release(); err == nil {
+			t.Fatal("release unexpectedly succeeded with a closed descriptor")
+		}
+		if ledger := ledgerFinalBytes(t, spool); ledger.ReservedBytes != 2048 || ledger.ReservedObjects != 2 {
+			t.Fatalf("failed release consumed reserved capacity: %+v", ledger)
+		}
+	}
+	if err := spool.reconcile(); err != nil {
+		t.Fatal(err)
+	}
+	if ledger := ledgerFinalBytes(t, spool); ledger.ReservedBytes != 1024 || ledger.ReservedObjects != 1 {
+		t.Fatalf("reconciliation did not retain the other live reservation: %+v", ledger)
+	}
+}
+
 func TestSpoolCapacityBatchFailureBlocksAdmissionUntilReconcile(t *testing.T) {
 	spool := newFaultTestSpool(t)
 	spool.faults = &spoolFaults{dirSyncErr: syscall.EIO}
