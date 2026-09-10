@@ -258,6 +258,16 @@ func lockCurrentAttemptV2(ctx context.Context, transaction pgx.Tx, job *collecti
 	return nil
 }
 
+func endpointRetryLimit(job *collectionJob, category string, configured int) int {
+	// Only ordinary failed polls wait for the next pass. Storage and crash
+	// recovery keep their existing allowances, including on older contracts.
+	if job.workType == "regular_poll" && job.retryClass != "recovery" &&
+		!dependencyDeferralCategory(category) && category != "database_transaction_failed" {
+		return 0
+	}
+	return configured
+}
+
 func (s *store) resolveAttempt(
 	ctx context.Context,
 	job *collectionJob,
@@ -289,7 +299,7 @@ func (s *store) resolveAttempt(
 	}
 
 	rows, err := transaction.Query(ctx, `
-		SELECT endpoint, retry_count, next_retry_at
+		SELECT endpoint, retry_count, next_retry_at, COALESCE(failure_category, '')
 		FROM collector_endpoint_results
 		WHERE attempt_id = $1 AND outcome <> 'observed'
 		ORDER BY endpoint
@@ -299,14 +309,15 @@ func (s *store) resolveAttempt(
 		return fmt.Errorf("select incomplete endpoints: %w", err)
 	}
 	type incompleteEndpoint struct {
-		name        endpointName
-		retryCount  int
-		nextRetryAt pgtype.Timestamptz
+		name            endpointName
+		retryCount      int
+		nextRetryAt     pgtype.Timestamptz
+		failureCategory string
 	}
 	var incomplete []incompleteEndpoint
 	for rows.Next() {
 		var endpoint incompleteEndpoint
-		if err := rows.Scan(&endpoint.name, &endpoint.retryCount, &endpoint.nextRetryAt); err != nil {
+		if err := rows.Scan(&endpoint.name, &endpoint.retryCount, &endpoint.nextRetryAt, &endpoint.failureCategory); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan incomplete endpoint: %w", err)
 		}
@@ -359,7 +370,7 @@ func (s *store) resolveAttempt(
 		if job.workType == "endpoint_retry" && string(endpoint.name) != job.requiredEndpoint.String {
 			continue
 		}
-		if endpoint.retryCount >= maximumRetries {
+		if endpoint.retryCount >= endpointRetryLimit(job, endpoint.failureCategory, maximumRetries) {
 			terminal = true
 			if _, err := transaction.Exec(ctx, `
 				UPDATE collector_endpoint_results
@@ -778,7 +789,7 @@ func (s *store) resolveAttemptV2(
 		if dependency {
 			hasDependency = true
 		}
-		if endpoint.retryCount >= maximumRetries && !dependency {
+		if endpoint.retryCount >= endpointRetryLimit(job, endpoint.failureCategory.String, maximumRetries) && !dependency {
 			terminal = true
 			command, err := transaction.Exec(ctx, `
 				UPDATE collector_endpoint_results AS endpoint_result

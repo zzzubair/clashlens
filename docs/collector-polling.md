@@ -25,10 +25,13 @@ reset retries retain their existing behavior. Crash recovery, pending remote
 verification and storage dependency deferrals remain protected: downloaded
 raw evidence is not discarded just to move the loop along.
 
-Manual refresh uses the separate interactive allowance and existing duplicate
-request protection. It does not change the regular due time or suppress the
-next regular poll because the player was recently refreshed. Normal eligibility
-changes still remove players who are no longer eligible.
+The Refresh button and JavaScript-enabled browser reloads both submit through
+the existing protected refresh endpoint, using separate interactive allowance
+and duplicate-request protection. Ordinary visits and back navigation remain
+read-only; loader revalidation does not create a refresh loop. Without JavaScript,
+the existing Refresh form still works. Neither action changes the regular due
+time or suppresses the next regular poll because the player was recently
+refreshed. Normal eligibility changes still remove newly ineligible players.
 
 The 05:00 UTC reset admission gate, raw-evidence verification, storage limits and
 lease fencing remain in force. A delayed poll cannot be assumed to recover every
@@ -65,7 +68,9 @@ Use only the authorized tracked cohort, refreshing its eligibility first.
 The historical fixed-window `normal-capacity` qualification and Step 9
 five-minute deadline checks describe the previous policy. Their historical
 artifacts must not be relabelled as proof of this rolling policy or reused as a
-live-run acceptance gate. The pre-change Fedora fixture collector drained
+live-run acceptance gate. The `normal-capacity` CLI and its opt-in Go probe
+refuse execution under this new policy rather than produce misleading results.
+The pre-change Fedora fixture collector drained
 25,667 ordinary requests plus 402 immediate retries in approximately 262 seconds
 at at most 25 requests/second per key and 100 total, without worker errors. That
 is storage/collector evidence, not real-provider or rolling-policy evidence.

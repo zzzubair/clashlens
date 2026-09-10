@@ -141,19 +141,12 @@ func (w *worker) runOnce(ctx context.Context, pool capacityPool) (bool, error) {
 		endpointErrors = append(endpointErrors, endpointError)
 	}
 	resolutionStartedAt := time.Now()
-	maximumRetries := w.config.maximumRetries
-	if job.workType == "regular_poll" && job.retryClass != "recovery" {
-		// A regular pass records missing endpoints honestly and moves on.
-		// The next pass retries the player; pending raw evidence and storage
-		// dependencies still use the resolver's existing recovery path.
-		maximumRetries = 0
-	}
 	finishError := w.store.resolveAttempt(
 		jobContext,
 		job,
 		attemptID,
 		time.Now().UTC(),
-		maximumRetries,
+		w.config.maximumRetries,
 	)
 	w.config.metrics.recordStageDuration("attempt_resolution", time.Since(resolutionStartedAt))
 	if finishError != nil {

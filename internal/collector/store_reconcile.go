@@ -890,15 +890,16 @@ func readCollectorAttemptState(ctx context.Context, queryer pgxQueryer, attemptI
 }
 
 type endpointResolutionState struct {
-	endpoint    string
-	outcome     string
-	retryCount  int
-	nextRetryAt pgtype.Timestamptz
+	endpoint        string
+	outcome         string
+	retryCount      int
+	nextRetryAt     pgtype.Timestamptz
+	failureCategory string
 }
 
 func readEndpointResolutionStates(ctx context.Context, queryer pgxQueryer, attemptID int64) ([]endpointResolutionState, error) {
 	rows, err := queryer.Query(ctx, `
-		SELECT endpoint, outcome, retry_count, next_retry_at
+		SELECT endpoint, outcome, retry_count, next_retry_at, COALESCE(failure_category, '')
 		FROM collector_endpoint_results
 		WHERE attempt_id = $1
 		ORDER BY endpoint
@@ -911,7 +912,7 @@ func readEndpointResolutionStates(ctx context.Context, queryer pgxQueryer, attem
 	states := make([]endpointResolutionState, 0, 2)
 	for rows.Next() {
 		var state endpointResolutionState
-		if err := rows.Scan(&state.endpoint, &state.outcome, &state.retryCount, &state.nextRetryAt); err != nil {
+		if err := rows.Scan(&state.endpoint, &state.outcome, &state.retryCount, &state.nextRetryAt, &state.failureCategory); err != nil {
 			return nil, err
 		}
 		states = append(states, state)
@@ -1276,7 +1277,7 @@ func validateAttemptCommitTarget(
 		return false, "collection job or attempt status is not a committed target state"
 	}
 
-	if !allEndpointStatesMatch(kind, snapshot.endpoints, intent.maximumRetries) {
+	if !allEndpointStatesMatch(kind, snapshot.endpoints, &intent.job, intent.maximumRetries) {
 		return false, "collection endpoint terminal states are incomplete or contradictory"
 	}
 	if !jobLeasesMatchTarget(snapshot.current, kind) ||
@@ -1366,13 +1367,14 @@ func jobLeasesMatchTarget(row collectorJobState, kind string) bool {
 	return !row.leaseOwner.Valid && !row.leaseToken.Valid && !row.leaseExpiresAt.Valid
 }
 
-func allEndpointStatesMatch(kind string, endpoints []endpointResolutionState, maximumRetries int) bool {
+func allEndpointStatesMatch(kind string, endpoints []endpointResolutionState, job *collectionJob, maximumRetries int) bool {
 	if len(endpoints) == 0 {
 		return false
 	}
 	hasRetrying := false
 	hasFailed := false
 	for _, endpoint := range endpoints {
+		limit := endpointRetryLimit(job, endpoint.failureCategory, maximumRetries)
 		switch kind {
 		case "complete":
 			if endpoint.outcome != "observed" {
@@ -1382,12 +1384,12 @@ func allEndpointStatesMatch(kind string, endpoints []endpointResolutionState, ma
 			switch endpoint.outcome {
 			case "observed":
 			case "retrying":
-				if endpoint.retryCount < 1 || endpoint.retryCount > maximumRetries {
+				if endpoint.retryCount < 1 || endpoint.retryCount > limit {
 					return false
 				}
 				hasRetrying = true
 			case "failed":
-				if endpoint.retryCount < maximumRetries {
+				if endpoint.retryCount < limit {
 					return false
 				}
 				hasFailed = true
@@ -1398,7 +1400,7 @@ func allEndpointStatesMatch(kind string, endpoints []endpointResolutionState, ma
 			switch endpoint.outcome {
 			case "observed":
 			case "failed":
-				if endpoint.retryCount < maximumRetries {
+				if endpoint.retryCount < limit {
 					return false
 				}
 				hasFailed = true
