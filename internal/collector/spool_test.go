@@ -641,3 +641,98 @@ func TestSpoolReserveFiniteZeroFloorStillRequiresOneInode(t *testing.T) {
 	}
 	_ = reservation.release()
 }
+
+func TestSpoolRelativeReadStatRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	relative := filepath.Join("sha256", "ab", "file")
+	body := []byte("relative-payload")
+	if err := os.MkdirAll(filepath.Join(root, "sha256", "ab"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, relative), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readSpoolRelative(root, relative, 1<<20)
+	if err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("readSpoolRelative = %q, %v, want %q", got, err, body)
+	}
+	capped, err := readSpoolRelative(root, relative, 4)
+	if err != nil || !bytes.Equal(capped, body[:4]) {
+		t.Fatalf("limited readSpoolRelative = %q, %v, want %q", capped, err, body[:4])
+	}
+	info, err := statSpoolRelative(root, relative, true)
+	if err != nil || info.Size() != int64(len(body)) {
+		t.Fatalf("statSpoolRelative = %v, %v, want size %d", info, err, len(body))
+	}
+	if err := os.Symlink("file", filepath.Join(root, "sha256", "ab", "link")); err != nil {
+		t.Fatal(err)
+	}
+	linkInfo, err := statSpoolRelative(root, filepath.Join("sha256", "ab", "link"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linkInfo.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("statSpoolRelative with follow=false did not report the link itself")
+	}
+}
+
+func TestSpoolRelativeHelpersSurviveDescriptorChurn(t *testing.T) {
+	root := t.TempDir()
+	relative := filepath.Join("data", "file")
+	body := []byte("churn-payload")
+	if err := os.MkdirAll(filepath.Join(root, "data"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, relative), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	errCh := make(chan error, 1024)
+	report := func(err error) {
+		if err == nil {
+			return
+		}
+		select {
+		case errCh <- err:
+		default:
+		}
+	}
+	var workers sync.WaitGroup
+	for w := 0; w < 8; w++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := 0; i < 30000; i++ {
+				file, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
+				if err != nil {
+					report(err)
+					continue
+				}
+				// A stray second close from another goroutine's helper
+				// surfaces here as EBADF on our own descriptor.
+				report(file.Close())
+			}
+		}()
+	}
+	for r := 0; r < 4; r++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for i := 0; i < 1000; i++ {
+				if _, err := readSpoolRelative(root, relative, 1<<20); err != nil {
+					report(err)
+					return
+				}
+				if _, err := statSpoolRelative(root, relative, true); err != nil {
+					report(err)
+					return
+				}
+			}
+		}()
+	}
+	workers.Wait()
+	select {
+	case err := <-errCh:
+		t.Fatalf("descriptor churn exposed a helper close error: %v", err)
+	default:
+	}
+}

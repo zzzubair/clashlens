@@ -82,11 +82,14 @@ func readSpoolRelative(root, path string, limit int64) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unix.Close(fd)
 	if limit <= 0 {
 		limit = 8 << 20
 	}
 	file := os.NewFile(uintptr(fd), "")
+	if file == nil {
+		unix.Close(fd)
+		return nil, errors.New("open spool file")
+	}
 	defer file.Close()
 	return io.ReadAll(io.LimitReader(file, limit))
 }
@@ -102,8 +105,11 @@ func statSpoolRelative(root, path string, follow bool) (os.FileInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer unix.Close(fd)
 	file := os.NewFile(uintptr(fd), "")
+	if file == nil {
+		unix.Close(fd)
+		return nil, errors.New("open spool file")
+	}
 	defer file.Close()
 	return file.Stat()
 }
