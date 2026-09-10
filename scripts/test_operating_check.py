@@ -225,3 +225,53 @@ def test_unreadable_source_returns_bounded_indeterminate_json(monkeypatch, capsy
     payload = json.loads(output.out)
     assert payload["check"]["status"] == "indeterminate"
     assert "SECRET" not in output.out + output.err
+
+
+def test_worker_snapshots_use_per_replica_persistent_paths(monkeypatch) -> None:
+    """Worker reads hit each replica's persistent live path, not the singleton."""
+    import types
+
+    recorded: list[list[str]] = []
+
+    def fake_run(command: list[str], *, input_text=None) -> str:
+        recorded.append(list(command))
+        if command[0] == "curl":
+            return ""
+        if any("operatorz" in part for part in command):
+            return "{}"
+        if command[-2] == "cat":
+            return '{"ok": true}'
+        raise ValueError("db-last")
+
+    monkeypatch.setattr(operating_check, "_run", fake_run)
+    monkeypatch.setattr(
+        operating_check, "parse_collector_metrics", lambda _text: {}
+    )
+    arguments = types.SimpleNamespace(
+        curl_bin="curl",
+        collector_metrics_url="http://127.0.0.1:8081/metrics",
+        podman_bin="podman",
+        python_api_container="api",
+        api_hmac_caller="site",
+        api_hmac_key_id="current",
+        api_hmac_secret_file="/run/secrets/api-hmac",
+        python_worker_container="worker",
+        worker_replicas=3,
+        postgres_container="postgres",
+        postgres_user="operator",
+        postgres_database="clashlens",
+        spool_max_body_bytes=100,
+        spool_max_bytes=1000,
+        spool_max_objects=100,
+        spool_free_space_floor=100,
+        spool_free_inode_floor=10,
+        previous_snapshot=None,
+    )
+    with pytest.raises(ValueError, match="db-last"):
+        operating_check.collect_snapshot(arguments)
+    cats = [command for command in recorded if command[-2] == "cat"]
+    assert cats == [
+        ["podman", "exec", f"worker-{replica}", "cat",
+         f"/spool/.control/live/worker-{replica}.json"]
+        for replica in (1, 2, 3)
+    ]

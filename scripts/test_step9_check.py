@@ -8,6 +8,7 @@ that does not start with "test-".
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -51,22 +52,33 @@ def _start_args(run_dir: Path, cohort: Path, **overrides):
         "python_api_container": "test-api",
         "python_worker_container": "test-worker", "worker_replicas": 1,
         "runtime_metrics_url": "http://127.0.0.1:9/runtime-metrics",
-        "spool_path": "/tmp", "postgres_path": "/tmp",
+        # Per-test private spool: shared /tmp is not reliably du-clean
+        # (unreadable systemd entries fail the probe), unlike a dedicated
+        # production spool directory.
+        "spool_path": str(run_dir.parent),
+        "postgres_path": str(run_dir.parent),
         "lead_in_seconds": 0, "tail_seconds": 0,
         "deadline": "2026-10-05T05:10:00Z",
         "max_sample_age_seconds": 125, "watchdog_unit": "test-unit",
         "run_id": "testrun01", "database_url": None, "mode": "live-day",
-        "max_invocation_gap_seconds": 5, "bootstrap_run_id": None,
+        "max_invocation_gap_seconds": 5, "bootstrap_run_id": "boot1",
+        "budget_run_id": "budget1",
         "archive_tariff_file": None, "archive_interfaces": ["test-eth0"],
         "archive_route_host": None, "prior_transfer_bytes": None,
         "prior_transfer_provenance": None, "prior_s3_attempts": None,
         "prior_s3_provenance": None,
+        "archive_retained_cap_bytes": 16 * 1024**3,
+        "transfer_cap_bytes": 64 * 1024**3, "s3_cap_attempts": 100_000,
+        "spool_allocated_cap_bytes": 64 * 1024**3,
     }
     defaults.update(overrides)
     if defaults.get("archive_tariff_file") is None:
-        tariff_path = run_dir.parent / "tariff.json"
+        live = defaults.get("mode", "live-day") == "live-day"
+        tariff_path = run_dir.parent / ("tariff-live.json" if live
+                                        else "tariff.json")
         if not tariff_path.exists():
-            tariff_path.write_text(json.dumps(_canonical_tariff()))
+            tariff_path.write_text(json.dumps(
+                _canonical_live_tariff() if live else _canonical_tariff()))
         defaults["archive_tariff_file"] = str(tariff_path)
     return mock.Mock(**defaults)
 
@@ -94,10 +106,67 @@ def _canonical_tariff(**overrides):
     return payload
 
 
+def _canonical_live_tariff(**overrides):
+    """Test-only: exact canonical prospective refresh payload."""
+    payload = {
+        "billable_units_round_up": True,
+        "combined_tax_and_uncertainty_factor": "1.5",
+        "cost_scope": ("run transfer and first186days of newly retained "
+                        "storage; not lifetime retention"),
+        "currency": "EUR",
+        "egress_eur_per_decimal_gb": "0.01",
+        "envelopes": {
+            "absolute": {
+                "aggregate_transfer_bytes": 600000000000,
+                "before_factor_eur": "35.462400",
+                "ceiling_eur": "55",
+                "egress_projection_eur": "6.00",
+                "fits": True,
+                "new_retained_bytes": 300000000000,
+                "storage_projection_eur": "29.462400",
+                "with_factor_eur": "53.1936000",
+            },
+            "operational": {
+                "aggregate_transfer_bytes": 570000000000,
+                "before_factor_eur": "32.707200",
+                "ceiling_eur": "50",
+                "egress_projection_eur": "5.70",
+                "fits": True,
+                "new_retained_bytes": 275000000000,
+                "storage_projection_eur": "27.007200",
+                "with_factor_eur": "49.0608000",
+            },
+        },
+        "free_egress_allowance_used": False,
+        "ingress_included": True,
+        "listed_prices_exclude_tax": True,
+        "provider": "Scaleway",
+        "region": "Paris",
+        "requests_included": True,
+        "retrieved_at": "2026-09-10T06:46:59.328362+00:00",
+        "run_authorized": False,
+        "schema": "issue92-phase5-tariff-refresh-v1",
+        "source_url": "https://www.scaleway.com/en/pricing/storage/",
+        "storage_class": "Standard Multi-AZ",
+        "storage_eur_per_decimal_gb_hour": "0.000022",
+        "storage_horizon_days": 186,
+        "tax_rate_claimed": None,
+        "verification_method": (
+            "official pricing page content returned by web search; "
+            "full-page web open exceeded size limit and direct urllib "
+            "fetch returned403"),
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _receipt_scope(scope: str = "deployed-stack", discovery: str = "false",
                    budget: bool = True, admission_run_id: str = "testrun01",
                    admission_start: str = "2026-10-04T05:00:00Z",
-                   admission_end: str = "2026-10-05T05:00:00Z") -> dict:
+                   admission_end: str = "2026-10-05T05:00:00Z",
+                   budget_run_id: str = "budget1",
+                   budget_deadline_at: str = "2026-10-05T06:00:00+00:00",
+                   budget_caps: tuple = (13500, 1, 0)) -> dict:
     fields = {"player_discovery_enabled": discovery,
               "admission_evidence_run_id": admission_run_id,
               "admission_evidence_start": admission_start,
@@ -107,11 +176,11 @@ def _receipt_scope(scope: str = "deployed-stack", discovery: str = "false",
     if budget:
         fields.update({
             "endpoint_budget_enabled": "true",
-            "endpoint_budget_profile": "13500",
-            "endpoint_budget_global_rankings": "1",
-            "endpoint_budget_battle_log": "0",
-            "endpoint_budget_run_id": "boot1",
-            "endpoint_budget_deadline_at": "2026-10-04T06:00:00+00:00",
+            "endpoint_budget_profile": str(budget_caps[0]),
+            "endpoint_budget_global_rankings": str(budget_caps[1]),
+            "endpoint_budget_battle_log": str(budget_caps[2]),
+            "endpoint_budget_run_id": budget_run_id,
+            "endpoint_budget_deadline_at": budget_deadline_at,
         })
     return {"receipt_scope": scope, "source": {"revision": "a" * 40},
             "receipt_digest": "sha256:" + "b" * 64,
@@ -213,8 +282,36 @@ class FakeDB:
     def bootstrap_budgets(self, run_id):
         if getattr(self, "budgets_error", None):
             raise self.budgets_error
+        mapping = getattr(self, "budgets_by_run", None)
+        if mapping is not None:
+            return mapping.get(run_id, {"run": None, "budgets": []})
         return getattr(self, "budgets_data",
                        {"run": None, "budgets": []})
+
+    def seed_endpoint_budgets(self, run_id, budgets):
+        # Shares the budgets_by_run store with bootstrap_budgets so seeded
+        # rows are visible to later reads, exactly like durable state.
+        if getattr(self, "seed_error", None):
+            raise self.seed_error
+        mapping = self.__dict__.setdefault("budgets_by_run", {})
+        entry = mapping.setdefault(run_id, {"run": None, "budgets": []})
+        have = {row["endpoint"] for row in entry["budgets"]}
+        inserted = []
+        for item in budgets:
+            if item["endpoint"] not in have:
+                entry["budgets"].append({
+                    "endpoint": item["endpoint"], "cap": item["cap"],
+                    "consumed": 0,
+                    "deadline_at": datetime.fromisoformat(
+                        item["deadline_at"])})
+                inserted.append(item["endpoint"])
+        return {"inserted": inserted,
+                "budgets": [dict(row) for row in entry["budgets"]]}
+
+    def archive_usage(self):
+        # A healthy catalogue reports integer bytes/objects; tests override
+        # archive_usage_data for missing/malformed/negative evidence.
+        return getattr(self, "archive_usage_data", (0, 0))
 
     def wal_generated(self, since_lsn):
         return (0, 0)
@@ -263,8 +360,9 @@ def _started_run(tmp_path: Path, db: FakeDB, **overrides):
     run_dir = tmp_path / overrides.pop("run_dir_name", "run")
     arguments = _start_args(run_dir, cohort,
                             deployed_receipt=str(receipt_path), **overrides)
+    _wire_budget_fixture(db, cohort)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         header = step9.cmd_start(arguments, db)
     _pin_resources(run_dir)
     return run_dir, header
@@ -345,7 +443,7 @@ def test_start_fewer_than_12500_eligible_succeeds(tmp_path: Path) -> None:
 def test_start_zero_eligible_and_foreign_failures(tmp_path: Path) -> None:
     cohort = _write_cohort(tmp_path / "c.txt", TAGS)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         with pytest.raises(step9.Step9Error) as error:
             step9.cmd_start(_args_with_receipt(tmp_path, "z", cohort),
                             FakeDB(rows=[]))
@@ -404,10 +502,221 @@ def test_start_preflight_budget_gates(tmp_path: Path) -> None:
                                         **base), db)
         assert error.value.code == "budget_exceeds_envelope"
         (tmp_path / "receipt.json").write_text(json.dumps(_receipt_scope()))
+        _wire_budget_fixture(db, cohort)
+        with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                               return_value=None), _healthy_start_hosts():
+            header = step9.cmd_start(_start_args(
+                tmp_path / "b2", cohort,
+                deployed_receipt=str(tmp_path / "receipt.json"),
+                archive_retained_cap_bytes=None, transfer_cap_bytes=None,
+                s3_cap_attempts=None, spool_allocated_cap_bytes=None,
+                **base), db)
+        assert header["budget_receipt"]["run_id"] == "budget1"
+
+
+def test_start_budget_binding_before_admission(tmp_path: Path) -> None:
+    """Pre-traffic binding: bootstrap provenance plus budget rows.
+
+    The bootstrap selector pins immutable cohort provenance only and is
+    never compared to the receipt budget run; the separate budget selector
+    binds the receipt to freshly seeded endpoint-budget rows.
+    """
+    live = {"mode": "live-day", "core_start": "2026-10-04T05:00:00Z",
+            "core_end": "2026-10-05T05:00:00Z"}
+
+    def _begin(name, *, receipt_fields=None, db_setup=None,
+               start_overrides=None, **mode_over):
+        cohort = _write_cohort(tmp_path / f"{name}-cohort.txt", TAGS)
+        fields = {"budget_run_id": "budget1",
+                  "budget_deadline_at": "2026-10-05T06:00:00+00:00"}
+        fields.update(receipt_fields or {})
+        receipt_path = tmp_path / f"{name}-receipt.json"
+        receipt_path.write_text(json.dumps(_receipt_scope(
+            admission_run_id=name.replace("-", ""), **fields)))
+        db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+        if db_setup is None:
+            _wire_budget_fixture(db, cohort)
+        else:
+            db_setup(db, cohort)
+        arguments = _start_args(
+            tmp_path / name, cohort, run_id=name.replace("-", ""),
+            deployed_receipt=str(receipt_path), **{**live, **mode_over},
+            **(start_overrides or {}))
+        with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                               return_value=None), _healthy_start_hosts():
+            return step9.cmd_start(arguments, db)
+
+    def _fails(name, code, **kwargs):
+        with pytest.raises(step9.Step9Error) as error:
+            _begin(name, **kwargs)
+        assert error.value.code == code
+        return error
+
+    # Budget selector mismatch is refused before run creation/traffic.
+    _fails("crossbind", "budget_binding_mismatch",
+           receipt_fields={"budget_run_id": "issue92-phase4-20260909T1600",
+                           "budget_deadline_at": "2026-09-09T17:00:00+00:00"},
+           start_overrides={"budget_run_id": "budgetX"})
+    assert not (tmp_path / "crossbind").exists()
+    _fails("nosel", "budget_selector_missing",
+           start_overrides={"budget_run_id": None})
+    assert not (tmp_path / "nosel").exists()
+    _fails("noboot", "budget_bootstrap_missing",
+           start_overrides={"bootstrap_run_id": None})
+    _fails("notables", "budget_store_missing",
+           db_setup=lambda db, cohort: None)
+    _fails("norow", "budget_run_missing",
+           db_setup=_wire_no_row)
+    _fails("grant", "budget_grant_denied",
+           db_setup=_wire_grant_denied)
+    _fails("negcap", "budget_malformed",
+           db_setup=lambda db, cohort: _wire_mutated(
+               db, cohort, cap0=-1))
+    _fails("overused", "budget_evidence_mismatch",
+           db_setup=lambda db, cohort: _wire_mutated(
+               db, cohort, consumed0=13501))
+    _fails("endpoints", "budget_binding_mismatch",
+           db_setup=lambda db, cohort: _wire_dropped_endpoint(db, cohort))
+    _fails("baddeadline", "budget_deadline_malformed",
+           receipt_fields={"budget_deadline_at": "soon"})
+    _fails("expired", "budget_deadline_expired",
+           receipt_fields={"budget_deadline_at": "2026-09-01T00:00:00+00:00"},
+           db_setup=lambda db, cohort: _wire_budget_fixture(
+               db, cohort, deadline_at="2026-09-01T00:00:00+00:00"))
+    _fails("short", "budget_deadline_short",
+           receipt_fields={"budget_deadline_at": "2026-10-04T06:00:00+00:00"},
+           db_setup=lambda db, cohort: _wire_budget_fixture(
+               db, cohort, deadline_at="2026-10-04T06:00:00+00:00"))
+    _fails("mixeddeadline", "budget_binding_mismatch",
+           db_setup=lambda db, cohort: _wire_mixed_deadline(db, cohort))
+    _fails("caps", "budget_binding_mismatch",
+           receipt_fields={"budget_caps": (100, 1, 0)})
+    _fails("count", "budget_manifest_mismatch",
+           db_setup=lambda db, cohort: _wire_mutated(
+               db, cohort, count_bump=1))
+    _fails("raw", "budget_manifest_mismatch",
+           db_setup=lambda db, cohort: _wire_mutated(
+               db, cohort, raw="ff" * 32))
+    _fails("canonical", "budget_manifest_mismatch",
+           db_setup=lambda db, cohort: _wire_mutated(
+               db, cohort, canonical="ee" * 32))
+    header = _begin("boundlive")
+    assert header["budget_receipt"]["run_id"] == "budget1"
+    assert header["bootstrap_run_id"] == "boot1"
+    assert header["budget_run_id"] == "budget1"
+    assert (tmp_path / "boundlive" / "run.json").is_file()
+    header = _begin("boundpre", mode="preflight",
+                    core_end="2026-10-04T06:15:00Z",
+                    start_overrides={"archive_retained_cap_bytes": None,
+                                     "transfer_cap_bytes": None,
+                                     "s3_cap_attempts": None,
+                                     "spool_allocated_cap_bytes": None})
+    assert header["budget_receipt"]["run_id"] == "budget1"
+
+
+def test_seed_budget_insert_verify_conflict(tmp_path: Path, capsys) -> None:
+    """Pre-admission seeding: insert-once, verify, never mutate."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+
+    def _args(**overrides):
+        base = {"budget_run_id": "budget9", "budget_cap_profile": 100,
+                "budget_cap_global_rankings": 2, "budget_cap_battle_log": 0,
+                "budget_deadline_at": "2026-10-05T06:00:00+00:00"}
+        base.update(overrides)
+        return mock.Mock(**base)
+
+    with pytest.raises(step9.Step9Error) as error:
+        step9.cmd_seed_budget(_args(), None)
+    assert error.value.code == "database_required"
+    assert step9.cmd_seed_budget(_args(), db) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert first["run_id"] == "budget9"
+    assert sorted(first["inserted"]) == [
+        "battle_log", "global_player_rankings", "profile"]
+    assert step9.cmd_seed_budget(_args(), db) == 0
+    again = json.loads(capsys.readouterr().out)
+    assert again["inserted"] == []
+    with pytest.raises(step9.Step9Error) as error:
+        step9.cmd_seed_budget(_args(budget_cap_profile=101), db)
+    assert error.value.code == "budget_binding_mismatch"
+    with pytest.raises(step9.Step9Error) as error:
+        step9.cmd_seed_budget(_args(budget_run_id="has space"), db)
+    assert error.value.code == "budget_malformed"
+    with pytest.raises(step9.Step9Error) as error:
+        step9.cmd_seed_budget(_args(budget_cap_battle_log=-1), db)
+    assert error.value.code == "budget_malformed"
+    with pytest.raises(step9.Step9Error) as error:
+        step9.cmd_seed_budget(_args(budget_deadline_at="soon"), db)
+    assert error.value.code == "budget_deadline_malformed"
+    denied = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    refused = RuntimeError("permission denied")
+    refused.sqlstate = "42501"
+    denied.seed_error = refused
+    with pytest.raises(step9.Step9Error) as error:
+        step9.cmd_seed_budget(_args(), denied)
+    assert error.value.code == "budget_grant_denied"
+    missing = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    absent = RuntimeError("no such table")
+    absent.sqlstate = "42P01"
+    missing.seed_error = absent
+    with pytest.raises(step9.Step9Error) as error:
+        step9.cmd_seed_budget(_args(), missing)
+    assert error.value.code == "budget_store_missing"
+
+
+def test_seed_budget_then_start_binds_without_traffic(tmp_path: Path) -> None:
+    """Seeded rows resolve the pre-admission chicken-and-egg."""
+    cohort = _write_cohort(tmp_path / "seedstart-cohort.txt", TAGS)
+    receipt_path = tmp_path / "seedstart-receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope(
+        admission_run_id="seedstart",
+        budget_run_id="budget7",
+        budget_deadline_at="2026-10-05T06:00:00+00:00",
+        budget_caps=(50, 1, 0))))
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    _wire_budget_fixture(db, cohort)
+    seed_args = mock.Mock(
+        budget_run_id="budget7", budget_cap_profile=50,
+        budget_cap_global_rankings=1, budget_cap_battle_log=0,
+        budget_deadline_at="2026-10-05T06:00:00+00:00")
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None), _healthy_start_hosts():
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(_start_args(
+                tmp_path / "seedstart", cohort, run_id="seedstart",
+                deployed_receipt=str(receipt_path),
+                bootstrap_run_id="boot1", budget_run_id="budget7"), db)
+        assert error.value.code == "budget_binding_mismatch"
+        assert not (tmp_path / "seedstart").exists()
+        assert step9.cmd_seed_budget(seed_args, db) == 0
         header = step9.cmd_start(_start_args(
-            tmp_path / "b2", cohort,
-            deployed_receipt=str(tmp_path / "receipt.json"), **base), db)
-        assert header["budget_receipt"]["run_id"] == "boot1"
+            tmp_path / "seedstart", cohort, run_id="seedstart",
+            deployed_receipt=str(receipt_path),
+            bootstrap_run_id="boot1", budget_run_id="budget7"), db)
+    assert header["budget_run_id"] == "budget7"
+
+
+def test_start_refuses_unseeded_budget_without_traffic(tmp_path: Path) -> None:
+    """No seeded rows means no admission: the lazy chicken-and-egg stays shut."""
+    cohort = _write_cohort(tmp_path / "seedstart-cohort.txt", TAGS)
+    receipt_path = tmp_path / "seedstart-receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope(
+        admission_run_id="seedstart",
+        budget_run_id="budget7",
+        budget_deadline_at="2026-10-05T06:00:00+00:00",
+        budget_caps=(50, 1, 0))))
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    _wire_budget_fixture(db, cohort)
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None), _healthy_start_hosts():
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(_start_args(
+                tmp_path / "seedstart", cohort, run_id="seedstart",
+                deployed_receipt=str(receipt_path),
+                bootstrap_run_id="boot1", budget_run_id="budget7"), db)
+        assert error.value.code == "budget_binding_mismatch"
+        assert not (tmp_path / "seedstart").exists()
+
 
 def test_parse_runtime_metrics_wire_format() -> None:
     text = ("# HELP clashlens_collector_jobs_total jobs\n"
@@ -472,8 +781,9 @@ def test_start_requires_deployed_receipt_digest(tmp_path: Path) -> None:
     receipt_path.write_text(json.dumps(_receipt_scope()))
     arguments = _start_args(tmp_path / "ok", cohort,
                             deployed_receipt=str(receipt_path))
+    _wire_budget_fixture(db, cohort)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           side_effect=_validate):
+                           side_effect=_validate), _healthy_start_hosts():
         header = step9.cmd_start(arguments, db)
     assert seen["require_digest"] is True
     assert header["receipt_digest"] == "sha256:" + "b" * 64
@@ -664,6 +974,94 @@ def _quiet_facts_with_probe(run: dict) -> dict:
     return facts
 
 
+def _wire_budget_fixture(db: FakeDB, cohort: Path, *, bootstrap_id: str = "boot1",
+                         budget_id: str = "budget1",
+                         deadline_at: str = "2026-10-05T06:00:00+00:00",
+                         caps: tuple = (13500, 1, 0)) -> None:
+    """Test-only: bootstrap provenance plus fresh budget rows.
+
+    The bootstrap entry pins immutable cohort provenance; the separate
+    budget entry carries newly seeded endpoint rows. IDs stay distinct to
+    prove the two identities are never conflated.
+    """
+    _tags, raw, canonical = step9._read_cohort(str(cohort))
+    db.budgets_tables = True
+    db.budgets_by_run = {
+        bootstrap_id: {
+            "run": {"run_id": bootstrap_id, "manifest_sha256": raw,
+                     "manifest_count": len(_tags),
+                     "normalized_set_sha256": canonical,
+                     "status": "complete"},
+            "budgets": []},
+        budget_id: {
+            "run": None,
+            "budgets": [{"endpoint": name, "cap": cap, "consumed": cap,
+                           "deadline_at": datetime.fromisoformat(deadline_at)}
+                          for name, cap in zip(
+                              ("profile", "global_player_rankings",
+                               "battle_log"), caps)]}}
+
+
+def _wire_no_row(db: FakeDB, cohort: Path) -> None:
+    _wire_budget_fixture(db, cohort)
+    db.budgets_by_run["boot1"]["run"] = None
+
+
+def _wire_grant_denied(db: FakeDB, cohort: Path) -> None:
+    db.budgets_tables = True
+    denied = RuntimeError("permission denied")
+    denied.sqlstate = "42501"
+    db.budgets_error = denied
+
+
+def _wire_mutated(db: FakeDB, cohort: Path, *, cap0=None, consumed0=None,
+                  count_bump=0, raw=None, canonical=None) -> None:
+    _wire_budget_fixture(db, cohort)
+    row = db.budgets_by_run["budget1"]["budgets"][0]
+    if cap0 is not None:
+        row["cap"] = cap0
+    if consumed0 is not None:
+        row["consumed"] = consumed0
+    if count_bump:
+        db.budgets_by_run["boot1"]["run"]["manifest_count"] += count_bump
+    if raw is not None:
+        db.budgets_by_run["boot1"]["run"]["manifest_sha256"] = raw
+    if canonical is not None:
+        db.budgets_by_run["boot1"]["run"]["normalized_set_sha256"] = canonical
+
+
+def _wire_dropped_endpoint(db: FakeDB, cohort: Path) -> None:
+    _wire_budget_fixture(db, cohort)
+    db.budgets_by_run["budget1"]["budgets"] = \
+        db.budgets_by_run["budget1"]["budgets"][:2]
+
+
+def _wire_mixed_deadline(db: FakeDB, cohort: Path) -> None:
+    _wire_budget_fixture(db, cohort)
+    db.budgets_by_run["budget1"]["budgets"][0]["deadline_at"] = datetime(
+        2026, 10, 6, 6, 0, tzinfo=UTC)
+
+
+def _present_wire_baseline(**kwargs):
+    """Test-only: present archive-interface baseline matching sample hooks."""
+    return {"status": "captured", "failure_code": None,
+            "boot_id": step9._boot_id(),
+            "interfaces": {"test-eth0": {
+                "present": True, "rx_bytes": 1000, "tx_bytes": 500,
+                "mac": "aa:bb:cc:dd:ee:ff", "operstate": "up"}}}
+
+
+@contextlib.contextmanager
+def _healthy_start_hosts():
+    """Test-only: stopped-but-pinned collector plus present wire facts."""
+    with mock.patch.object(step9, "collect_wire_facts",
+                           side_effect=lambda **kwargs:
+                           _present_wire_baseline()), \
+         mock.patch.object(step9.Podman, "inspect_running",
+                           lambda self, container: (False, "sha256:image")):
+        yield
+
+
 def _pin_resources(run_dir: Path) -> None:
     """Test-only: align the start baseline with quiet fake loop facts."""
     path = run_dir / "run.json"
@@ -687,6 +1085,15 @@ def _pin_wire(run_dir: Path, rx: int = 1000, tx: int = 500) -> None:
                     encoding="utf-8")
 
 
+def _unpin_image(run_dir: Path) -> None:
+    """Test-only: drop the image pin to simulate a legacy unpinned run."""
+    path = run_dir / "run.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["containers"]["collector_image"] = None
+    path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n",
+                    encoding="utf-8")
+
+
 def _pin_image(run_dir: Path, image: str = "sha256:image") -> None:
     """Test-only: set the start-time image pin (production pins via podman)."""
     path = run_dir / "run.json"
@@ -701,7 +1108,8 @@ def _watchdog_args(run_dir: Path, **overrides):
     defaults = {"run_dir": str(run_dir), "podman_bin": "podman",
                 "collector_container": "test-collector",
                 "deadline": "2026-10-05T05:10:00Z",
-                "max_sample_age_seconds": 125, "systemd_unit": "test-unit"}
+                "max_sample_age_seconds": 125, "systemd_unit": "test-unit",
+                "poll_seconds": 30, "stop_grace_seconds": 30}
     defaults.update(overrides)
     if defaults.get("archive_tariff_file") is None:
         tariff_path = run_dir.parent / "tariff.json"
@@ -729,29 +1137,49 @@ def test_watchdog_single_pass_and_deadline(tmp_path: Path) -> None:
     assert watchdog["prior_restart_policy"] == "unless-stopped"
     assert watchdog["verified_restart"] == "no"
     assert not (run_dir / "watchdog-outcome.json").exists()
-    # past grace with inactive sampler unit -> exact stop command (fresh dir:
-    # watchdog.json is exclusive and never replaced)
+    # past grace with inactive sampler unit -> safety return at once with
+    # durable evidence and NO collector-only stop grace/inspect round trip
+    # (fresh dir: watchdog.json is exclusive and never replaced). The
+    # parent group-stop hook owns the immediate whole-group TERM.
     run_dir2, _header2 = _started_run(tmp_path, db, run_dir_name="run2",
                                         run_id="testrun02")
     _pin_image(run_dir2)
     arguments2 = _watchdog_args(run_dir2)
+    stopped = len(podman.commands)
     hooks = {"podman_run": podman, "single_pass": True, "max_iterations": 1,
              "no_sleep": True,
              "sampler_check": lambda run: False,
              "now_utc": lambda: datetime(2026, 10, 4, 6, 0, tzinfo=UTC)}
     assert step9.cmd_watchdog(arguments2, hooks) == 1
-    flat = [part for command in podman.commands for part in command]
-    assert flat[:2] == ["podman", "container"]
-    assert ["podman", "stop", "--ignore", "--time", "30",
-            "test-collector"] in podman.commands
+    assert "stop" not in [command[1] for command in podman.commands[stopped:]]
+    assert list((run_dir2 / "failures").glob(
+        "sampler_unit_inactive-*.json"))
     outcome = json.loads((run_dir2 / "watchdog-outcome.json").read_text())
     assert outcome["trigger"] == "sampler_unit_inactive"
+    assert outcome["stop"] == "delegated_to_group_stop"
+    # planned core-end deadline still performs the graceful stop itself
+    # and succeeds, so the driver can reach the monitored drain.
+    run_dir3, _header3 = _started_run(tmp_path, db, run_dir_name="run3",
+                                        run_id="testrun03")
+    _pin_image(run_dir3)
+    arguments3 = _watchdog_args(run_dir3,
+                                deadline="2026-10-04T05:10:00Z")
+    hooks = {"podman_run": podman, "single_pass": True, "max_iterations": 1,
+             "no_sleep": True,
+             "now_utc": lambda: datetime(2026, 10, 4, 6, 0, tzinfo=UTC)}
+    assert step9.cmd_watchdog(arguments3, hooks) == 0
+    assert ["podman", "stop", "--ignore", "--time", "30",
+            "test-collector"] in podman.commands
+    outcome = json.loads((run_dir3 / "watchdog-outcome.json").read_text())
+    assert outcome["trigger"] == "deadline_reached"
+    assert not list((run_dir3 / "failures").glob("deadline_reached-*.json"))
 
 
 def test_watchdog_unpinned_image_fails_closed(tmp_path: Path) -> None:
     """N2: missing start-time image pin fails the watchdog, never skips."""
     db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
     run_dir, _header = _started_run(tmp_path, db)
+    _unpin_image(run_dir)
     podman = FakePodman()
     arguments = _watchdog_args(run_dir)
     assert step9.cmd_watchdog(arguments, {"podman_run": podman,
@@ -759,6 +1187,84 @@ def test_watchdog_unpinned_image_fails_closed(tmp_path: Path) -> None:
     assert list((run_dir / "failures").glob("unpinned_image-*.json"))
     verbs = [command[1] for command in podman.commands]
     assert "update" not in verbs and "stop" not in verbs
+
+
+def _started_stopped_collector(tmp_path: Path, db: FakeDB,
+                               image: str = "sha256:image",
+                               run_dir_name: str = "run"):
+    """Test-only: start while the collector is stopped but inspectable."""
+    cohort = _write_cohort(tmp_path / "cohort.txt", TAGS)
+    receipt_path = tmp_path / "receipt.json"
+    run_id = "testrun01"
+    receipt_path.write_text(json.dumps(_receipt_scope(admission_run_id=run_id)))
+    run_dir = tmp_path / run_dir_name
+    arguments = _start_args(run_dir, cohort,
+                            deployed_receipt=str(receipt_path))
+    _wire_budget_fixture(db, cohort)
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None), _healthy_start_hosts(), \
+            mock.patch.object(step9.Podman, "inspect_running",
+                              lambda self, container: (False, image)):
+        header = step9.cmd_start(arguments, db)
+    _pin_resources(run_dir)
+    return run_dir, header
+
+
+def test_start_pins_stopped_collector_image(tmp_path: Path) -> None:
+    """A stopped-but-inspectable collector still pins its image."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, header = _started_stopped_collector(tmp_path, db)
+    assert header["containers"]["collector_image"] == "sha256:image"
+    assert header["containers"]["collector_image_error"] is None
+    assert (run_dir / "run.json").is_file()
+
+
+def test_start_empty_collector_image_fails_closed(tmp_path: Path) -> None:
+    """Ambiguous inspection fails closed before admission, pinning nothing."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    cohort = _write_cohort(tmp_path / "cohort.txt", TAGS)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope()))
+    run_dir = tmp_path / "run"
+    arguments = _start_args(run_dir, cohort,
+                            deployed_receipt=str(receipt_path))
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None), \
+            mock.patch.object(step9.Podman, "inspect_running",
+                              lambda self, container: (False, "")):
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(arguments, db)
+        assert error.value.code == "collector_inspect_invalid"
+    assert not run_dir.exists()
+
+
+def test_watchdog_accepts_stopped_start_pin_once_running(tmp_path: Path) -> None:
+    """Stopped-at-start pin verifies once the same image runs."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_stopped_collector(tmp_path, db)
+    podman = FakePodman()
+    arguments = _watchdog_args(run_dir)
+    hooks = {"podman_run": podman, "single_pass": True, "max_iterations": 1,
+             "no_sleep": True,
+             "now_utc": lambda: datetime(2026, 10, 4, 5, 1, tzinfo=UTC)}
+    assert step9.cmd_watchdog(arguments, hooks) == 0
+    assert (run_dir / "watchdog.json").is_file()
+
+
+def test_watchdog_rejects_changed_image_after_stopped_start(tmp_path: Path) -> None:
+    """A different running image never matches the stopped start pin."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_stopped_collector(tmp_path, db)
+
+    def podman_run(command):
+        if command[1:3] == ["container", "inspect"]:
+            return "true\nsha256:other\n"
+        raise AssertionError(f"unexpected podman command: {command}")
+
+    arguments = _watchdog_args(run_dir)
+    assert step9.cmd_watchdog(arguments, {"podman_run": podman_run,
+                                           "no_sleep": True}) == 1
+    assert list((run_dir / "failures").glob("container_image_changed-*.json"))
 
 
 def test_watchdog_rejects_container_mismatch(tmp_path: Path) -> None:
@@ -854,9 +1360,11 @@ def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
     arguments = _start_args(run_dir, cohort, run_id=run_id,
                             deployed_receipt=str(receipt_path),
                             max_invocation_gap_seconds=3600)
+    _wire_budget_fixture(db, cohort)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         run = step9.cmd_start(arguments, db)
+    _pin_resources(run_dir)
     db.resets = [boundary]
     _seed_admission(db, run, pid=1)
     core_start = step9._parse_utc(run["core_start"])
@@ -891,14 +1399,110 @@ def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
             sample["operating"] = db.operating_snapshot([])
         sample["resources"] = {
             "failures": [], "unknown": [],
-            "allocated_probe": _good_probe(run)}
+            "allocated_probe": _good_probe(run),
+            "archive_retained": {
+                "baseline_bytes": 100, "current_bytes": 100 + index,
+                "newly_retained_bytes": index,
+                "cap_bytes": run["archive_retained_cap_bytes"]}}
         sample["wire"] = {"failures": [], "unknown": [],
                           "conservative_host_wire_bytes": 1000}
         sample["s3"] = {"go": {}, "go_total": 0, "python": {}, "python_total": 0,
-                        "total": 0, "error": None}
+                        "total": 0, "error": None,
+                        "producers": _sealed_producers(run)}
         sample["s3_attempts_cumulative"] = 21
         step9._exclusive_json(samples / f"minute-{index:04d}.json", sample)
+    if run.get("schema") == step9.SCHEMA_LIVE:
+        _seal_terminal_chain(run_dir, run, mode["slots"], db)
     return run_dir, run
+
+
+def _sealed_producers(run: dict) -> list:
+    """Test-only: core-observed identities matching the terminal fixtures."""
+    try:
+        replicas = int((run.get("containers", {}) or {}).get(
+            "worker_replicas", 0) or 0) or 1
+    except (TypeError, ValueError):
+        replicas = 1
+    producers = [{
+        "producer": "collector", "replica": None,
+        "process_id": "test-collector-pid",
+        "process_started_at": run["core_start"], "terminal": False,
+    }]
+    for replica in range(1, replicas + 1):
+        producers.append({
+            "producer": "worker", "replica": replica,
+            "process_id": f"test-worker-{replica}",
+            "process_started_at": run["core_start"], "terminal": False,
+        })
+    return producers
+
+
+def _seal_terminal_chain(run_dir: Path, run: dict, slots: int,
+                         db: FakeDB) -> None:
+    """Test-only: consistent drain/terminal/post-stop fixtures.
+
+    Mirrors a quiesced production run with zero drain delta: the drain
+    record repeats the last core sample, terminal snapshots carry matching
+    zero totals, and the pinned post-stop capture repeats both. Tests for
+    positive drain deltas overwrite these fixtures explicitly.
+    """
+    last = json.loads(
+        (run_dir / "samples" / f"minute-{slots - 1:04d}.json").read_text())
+    wire = last["wire"]["conservative_host_wire_bytes"]
+    retained = last["resources"]["archive_retained"]["current_bytes"]
+    replicas = int((run.get("containers", {}) or {}).get(
+        "worker_replicas", 0) or 0) or 1
+    spool = Path(run["spool_path"])
+    terminal_dir = spool / ".control" / "terminal"
+    terminal_dir.mkdir(parents=True, exist_ok=True)
+    captured = run["core_end"]
+    (terminal_dir / "collector.json").write_text(json.dumps({
+        "schema": step9.TERMINAL_GO_SCHEMA, "producer": "collector",
+        "process_id": "test-collector-pid",
+        "process_started_at": run["core_start"],
+        "captured_at": captured, "terminal": True, "operations": {},
+    }), encoding="utf-8")
+    for replica in range(1, replicas + 1):
+        (terminal_dir / f"worker-{replica}.json").write_text(json.dumps({
+            "schema": step9.TERMINAL_WORKER_SCHEMA, "producer": "worker",
+            "process": {"id": f"test-worker-{replica}",
+                         "started_at": run["core_start"]},
+            "captured_at": captured, "terminal": True,
+            "archive": {"remote_attempts": {}},
+        }), encoding="utf-8")
+    (run_dir / "drain-monitor.json").write_text(json.dumps({
+        "schema": run.get("schema"), "run_id": run["run_id"],
+        "drain_pid": 99999, "started_at": captured,
+        "finished_at": captured, "poll_seconds": 5,
+        "timeout_seconds": 300, "polls": 1, "outcome": "drained",
+        "detail": None,
+        "observations": {
+            "wire_total": wire, "s3_total": 0,
+            "s3_prior_attempts": 21, "retained_bytes": retained,
+            "spool_allocated_bytes": 100,
+        },
+    }), encoding="utf-8")
+    db.archive_usage_data = (retained, 2)
+    _pin_live_wire(run_dir)
+
+
+def _pin_live_wire(run_dir: Path) -> None:
+    """Test-only: re-pin the wire baseline to this host's loopback.
+
+    Sealed runs start against the canned test-eth0 baseline, but the
+    post-stop capture observes the live host through the read-only path.
+    Re-pinning to loopback keeps the sealed world self-consistent so
+    live observation is meaningful: loopback counters only advance and
+    interface identity is stable, so totals stay deterministic.
+    """
+    live = step9.collect_wire_facts(interfaces=["lo"], route_host=None)
+    live["boot_id"] = step9._boot_id()
+    path = run_dir / "run.json"
+    payload = json.loads(path.read_text())
+    payload["wire_baseline"] = live
+    payload["archive_interfaces"] = ["lo"]
+    path.write_text(json.dumps(payload, indent=1, sort_keys=True) + "\n",
+                    encoding="utf-8")
 
 
 def test_finalize_validate_roundtrip(tmp_path: Path) -> None:
@@ -1302,7 +1906,10 @@ def test_no_official_traffic_rehearsal() -> None:
         arguments = _start_args(run_dir, cohort, database_url=info,
                                 run_id="rehearsal1", mode="preflight",
                                 core_start="2026-10-04T05:00:00Z",
-                                core_end="2026-10-04T06:15:00Z")
+                                core_end="2026-10-04T06:15:00Z",
+                                archive_retained_cap_bytes=None,
+                                transfer_cap_bytes=None, s3_cap_attempts=None,
+                                spool_allocated_cap_bytes=None)
         with psycopg.connect(info) as connection:
             player = _seed_player(connection, TAGS[0])
             connection.execute(
@@ -1322,7 +1929,9 @@ def test_no_official_traffic_rehearsal() -> None:
             receipt_path = cohort.parent / "receipt.json"
             receipt_path.write_text(json.dumps(_receipt_scope()))
             arguments.deployed_receipt = str(receipt_path)
-            header = step9.cmd_start(arguments, database)
+            _seed_bootstrap(cohort, info)
+            with _healthy_start_hosts():
+                header = step9.cmd_start(arguments, database)
         assert header["initial"]["eligible_count"] == 1
         assert header["mode"] == "preflight"
         _pin_resources(run_dir)
@@ -1340,6 +1949,81 @@ def test_no_official_traffic_rehearsal() -> None:
             assert tag not in retained
         assert "api.clashofclans.com" not in retained
         assert "supercell" not in retained.lower()
+
+
+def _seed_bootstrap(cohort: Path, info: str, *, bootstrap_id: str = "boot1",
+                    budget_id: str = "budget1",
+                    deadline_at: str = "2026-10-05T06:00:00+00:00") -> None:
+    """Test-only: bootstrap provenance plus fresh budget rows.
+
+    IDs stay distinct: the bootstrap row pins immutable cohort provenance
+    while the separate budget rows carry the receipt-bound endpoint caps.
+    """
+    import psycopg
+
+    _tags, raw, canonical = step9._read_cohort(str(cohort))
+    with psycopg.connect(info, autocommit=True) as connection:
+        connection.execute(
+            "INSERT INTO population_bootstrap_runs"
+            " (run_id, manifest_sha256, manifest_count,"
+            " normalized_set_sha256, status, batch_size, completed_at)"
+            " VALUES (%s, %s, %s, %s, 'complete', 500, now())",
+            (bootstrap_id, raw, len(_tags), canonical))
+        for endpoint, cap in (("profile", 13500),
+                              ("global_player_rankings", 1),
+                              ("battle_log", 0)):
+            connection.execute(
+                "INSERT INTO collector_endpoint_budgets"
+                " (run_id, endpoint, cap, consumed, deadline_at)"
+                " VALUES (%s, %s, %s, %s, %s)",
+                (budget_id, endpoint, cap, cap, deadline_at))
+
+
+def test_budget_binding_completed_bootstrap_seeded_budget() -> None:
+    """PG18: completed bootstrap plus distinct seeded budget admits a start.
+
+    The budget rows are seeded first (as the driver preseed does) under a
+    budget ID that intentionally has no bootstrap row of its own; start
+    binds them without re-bootstrapping the cohort. Env-gated like the
+    other real-DB contracts: parent runs this on PG18.
+    """
+    import psycopg
+    from domain_test_support import domain_database
+
+    with domain_database(_pg_url(), include_coordinator=True) as info:
+        database = step9.Database(lambda: psycopg.connect(info))
+        cohort = Path(tempfile.mkdtemp(prefix="step9-bind-")) / "cohort.txt"
+        _write_cohort(cohort, TAGS)
+        with psycopg.connect(info) as connection:
+            _seed_player(connection, TAGS[0])
+            connection.commit()
+        _seed_bootstrap(cohort, info, bootstrap_id="pgboot1",
+                        budget_id="pgbudget1")
+        # Fresh budget IDs carry endpoint rows but no bootstrap row.
+        data = database.bootstrap_budgets("pgbudget1")
+        assert data["run"] is None
+        assert {b["endpoint"] for b in data["budgets"]} == {
+            "profile", "global_player_rankings", "battle_log"}
+        run_dir = cohort.parent / "run"
+        receipt_path = cohort.parent / "receipt.json"
+        receipt_path.write_text(json.dumps(_receipt_scope(
+            admission_run_id="pgbind1", budget_run_id="pgbudget1",
+            budget_deadline_at="2026-10-05T06:00:00+00:00")))
+        arguments = _start_args(
+            run_dir, cohort, run_id="pgbind1",
+            deployed_receipt=str(receipt_path),
+            bootstrap_run_id="pgboot1", budget_run_id="pgbudget1",
+            database_url=info, mode="preflight",
+            core_start="2026-10-04T05:00:00Z",
+            core_end="2026-10-04T06:15:00Z",
+            archive_retained_cap_bytes=None, transfer_cap_bytes=None,
+            s3_cap_attempts=None, spool_allocated_cap_bytes=None)
+        with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                               return_value=None), _healthy_start_hosts():
+            header = step9.cmd_start(arguments, database)
+        assert header["bootstrap_run_id"] == "pgboot1"
+        assert header["budget_run_id"] == "pgbudget1"
+        assert header["budget_receipt"]["run_id"] == "pgbudget1"
 
 
 def test_rehearsal_kill_and_deadline_paths() -> None:
@@ -1368,6 +2052,7 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
         base = Path(tempfile.mkdtemp(prefix="step9-kill-"))
         # Killed sampler: 3 slots then stop; finalize must refuse a partial run.
         cohort = _write_cohort(base / "cohort.txt", TAGS)
+        _seed_bootstrap(cohort, info)
         kill_receipt = base / "receipt.json"
         kill_receipt.write_text(
             json.dumps(_receipt_scope(admission_run_id="killed1")))
@@ -1376,7 +2061,7 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
             json.dumps(_receipt_scope(admission_run_id="deadline1")))
         run_dir = base / "run-killed"
         with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                               return_value=None):
+                               return_value=None), _healthy_start_hosts():
             step9.cmd_start(_start_args(run_dir, cohort, run_id="killed1",
                                         deployed_receipt=str(kill_receipt)),
                             database)
@@ -1387,10 +2072,10 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
                                                  slots=3)) == 0
         assert len(list((run_dir / "samples").glob("*.json"))) == 3
         assert step9.cmd_finalize(sample_args, {"db": database}) == 1
-        # Expired deadline on a fresh run: exact stop command, outcome kept.
+        # Planned deadline on a fresh run: exact stop command succeeds.
         run_dir2 = base / "run-deadline"
         with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                               return_value=None):
+                               return_value=None), _healthy_start_hosts():
             step9.cmd_start(_start_args(run_dir2, cohort, run_id="deadline1",
                                         deployed_receipt=str(deadline_receipt)),
                             database)
@@ -1402,7 +2087,7 @@ def test_rehearsal_kill_and_deadline_paths() -> None:
         assert step9.cmd_watchdog(watchdog_args, {
             "podman_run": podman, "single_pass": True, "no_sleep": True,
             "now_utc": lambda: datetime(2026, 10, 4, 5, 0, tzinfo=UTC),
-        }) == 1
+        }) == 0
         assert ["podman", "stop", "--ignore", "--time", "30",
                 "test-collector"] in podman.commands
 
@@ -1533,9 +2218,13 @@ def test_start_preflight_mode(tmp_path: Path) -> None:
                             mode="preflight",
                             core_start="2026-10-04T05:00:00Z",
                             core_end="2026-10-04T06:15:00Z",
-                            run_id="preflight1")
+                            run_id="preflight1",
+                            archive_retained_cap_bytes=None,
+                            transfer_cap_bytes=None, s3_cap_attempts=None,
+                            spool_allocated_cap_bytes=None)
+    _wire_budget_fixture(db, cohort)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         header = step9.cmd_start(arguments, db)
     assert header["mode"] == "preflight"
     assert header["schema"] == step9.SCHEMA_PREFLIGHT
@@ -1556,7 +2245,7 @@ def test_start_fails_closed_without_admission_tables(tmp_path: Path) -> None:
     db = FakeDB(rows=[_eligible_row(1, TAGS[0])], admission_present=False)
     cohort = _write_cohort(tmp_path / "c.txt", TAGS)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         with pytest.raises(step9.Step9Error) as error:
             step9.cmd_start(_args_with_receipt(tmp_path, "noadm", cohort), db)
         assert error.value.code == "admission_schema_absent"
@@ -1588,9 +2277,13 @@ def _sealed_preflight(tmp_path: Path, name: str, db: FakeDB, bad_traffic: bool =
                             deployed_receipt=str(receipt_path),
                             mode="preflight",
                             core_start="2026-10-04T05:00:00Z",
-                            core_end="2026-10-04T06:15:00Z")
+                            core_end="2026-10-04T06:15:00Z",
+                            archive_retained_cap_bytes=None,
+                            transfer_cap_bytes=None, s3_cap_attempts=None,
+                            spool_allocated_cap_bytes=None)
+    _wire_budget_fixture(db, cohort)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         run = step9.cmd_start(arguments, db)
     db.preflight_data = {
         "workcounts": ([("regular_poll", "pending", 1)] if bad_traffic
@@ -2072,7 +2765,7 @@ def test_migrated_0023_budget_reads() -> None:
 
 
 def test_finalize_budget_manifest_match() -> None:
-    run = {"bootstrap_run_id": "boot1",
+    run = {"bootstrap_run_id": "boot1", "budget_run_id": "boot1",
            "cohort": {"raw_sha256": "ab" * 32, "input_count": 12857,
                         "canonical_sha256": "cd" * 32}}
 
@@ -2655,8 +3348,10 @@ def test_validate_v2_probe_tampering_fails_closed(tmp_path: Path) -> None:
                                        finished_at="2026-10-04T05:00:06+00:00"))
     # A legitimate relative configured path still validates.
     sample = json.loads(json.dumps(pristine))
+    pinned_spool = json.loads((run_dir / "run.json").read_text())[
+        "spool_path"]
     sample["resources"]["allocated_probe"]["configured_path"] = (
-        os.path.relpath("/tmp"))
+        os.path.relpath(pinned_spool))
     victim.write_text(json.dumps(sample))
     (run_dir / "manifest.json").unlink()
     step9._write_manifest(run_dir)
@@ -2809,8 +3504,9 @@ def test_no_credential_in_artifacts(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     arguments = _start_args(run_dir, cohort, deployed_receipt=str(receipt_path),
                             database_url=None, database_url_file=url_file)
+    _wire_budget_fixture(db, cohort)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         step9.cmd_start(arguments, db)
     _pin_resources(run_dir)
     sample_args = mock.Mock(run_dir=str(run_dir), podman_bin="podman",
@@ -2828,13 +3524,14 @@ def test_cli_start_accepts_url_file(tmp_path: Path) -> None:
     db_url = _write_url_file(tmp_path / "db.url", b"postgresql://x\n")
     assert db_url.endswith("db.url")
     tariff_path = tmp_path / "tariff.json"
-    tariff_path.write_text(json.dumps(_canonical_tariff()))
+    tariff_path.write_text(json.dumps(_canonical_live_tariff()))
     cohort = _write_cohort(tmp_path / "cohort.txt", TAGS)
     receipt_path = tmp_path / "receipt.json"
     receipt_path.write_text(json.dumps(_receipt_scope()))
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         fake_db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+        _wire_budget_fixture(fake_db, cohort)
         with mock.patch.object(step9, "Database", lambda url: fake_db):
             code = step9.main([
                 "start", "--run-dir", str(tmp_path / "run"),
@@ -2847,11 +3544,18 @@ def test_cli_start_accepts_url_file(tmp_path: Path) -> None:
                 "--python-api-container", "test-api",
                 "--python-worker-container", "test-worker",
                 "--runtime-metrics-url", "http://127.0.0.1:9/x",
-                "--spool-path", "/tmp", "--postgres-path", "/tmp",
+                "--spool-path", str(tmp_path), "--postgres-path",
+                str(tmp_path),
                 "--deadline", "2026-10-05T05:10:00Z",
                 "--watchdog-unit", "test-unit",
                 "--run-id", "testrun01",
                 "--max-invocation-gap-seconds", "5",
+                "--bootstrap-run-id", "boot1",
+                "--budget-run-id", "budget1",
+                "--archive-retained-cap-bytes", "17179869184",
+                "--transfer-cap-bytes", "68719476736",
+                "--s3-cap-attempts", "100000",
+                "--spool-allocated-cap-bytes", "17179869184",
                 "--archive-egress-interface", "test-eth0",
                 "--archive-tariff-file", str(tariff_path),
                 "--database-url-file", db_url])
@@ -2867,7 +3571,7 @@ def test_start_requires_explicit_gap(tmp_path: Path) -> None:
                             deployed_receipt=str(receipt_path),
                             max_invocation_gap_seconds=None)
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         with pytest.raises(step9.Step9Error) as error:
             step9.cmd_start(arguments, db)
         assert error.value.code == "invocation_gap_unpinned"
@@ -2917,7 +3621,7 @@ def test_start_admission_receipt_binding(tmp_path: Path) -> None:
     base = {"core_start": "2026-10-04T05:00:00Z",
             "core_end": "2026-10-05T05:00:00Z"}
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         receipt = _receipt_scope(admission_run_id="disabled",
                                  admission_start="disabled",
                                  admission_end="disabled")
@@ -3511,7 +4215,7 @@ def test_tariff_file_contract(tmp_path: Path) -> None:
     good = tmp_path / "tariff.json"
     good.write_text(json.dumps(_canonical_tariff()))
     block = step9._tariff_block(
-        step9._read_tariff_file(str(good)),
+        step9._read_tariff_file(str(good))[0],
         datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
     assert block["with_uncertainty_eur"] == 3.686616
     assert block["digest"] and block["note"].startswith("tariff estimate")
@@ -3519,33 +4223,996 @@ def test_tariff_file_contract(tmp_path: Path) -> None:
     bad.write_text(json.dumps(_canonical_tariff(payload_cap_gib=17)))
     with pytest.raises(step9.Step9Error) as error:
         step9._tariff_block(
-            step9._read_tariff_file(str(bad)),
+            step9._read_tariff_file(str(bad))[0],
             datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
     assert error.value.code == "tariff_mismatch"
     stale = tmp_path / "stale.json"
     stale.write_text(json.dumps(_canonical_tariff(verified_utc_date="2026-01-01")))
     with pytest.raises(step9.Step9Error) as error:
         step9._tariff_block(
-            step9._read_tariff_file(str(stale)),
+            step9._read_tariff_file(str(stale))[0],
             datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
     assert error.value.code == "tariff_stale"
     over = tmp_path / "over.json"
     over.write_text(json.dumps(_canonical_tariff(with_uncertainty_eur=9.99)))
     with pytest.raises(step9.Step9Error) as error:
         step9._tariff_block(
-            step9._read_tariff_file(str(over)),
+            step9._read_tariff_file(str(over))[0],
             datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
     assert error.value.code == "tariff_mismatch"
     missing = tmp_path / "missing.json"
     missing.write_text(json.dumps({"source": "x"}))
     with pytest.raises(step9.Step9Error):
         step9._tariff_block(
-            step9._read_tariff_file(str(missing)),
+            step9._read_tariff_file(str(missing))[0],
             datetime(2026, 10, 4, 5, 0, tzinfo=UTC))
     with pytest.raises(step9.Step9Error):
         step9._read_tariff_file(str(tmp_path / "absent.json"))
     with pytest.raises(step9.Step9Error):
         step9._read_tariff_file("relative.json")
+
+
+_CANONICAL_TARIFF_DIGEST = (
+    "d3903d0e5f1b3b303aba768324656571032667f5468809d140c2f0ed15ba759f"
+)
+
+_CANONICAL_TARIFF_RAW = b'{\n  "billable_units_round_up": true,\n  "combined_tax_and_uncertainty_factor": "1.5",\n  "cost_scope": "run transfer and first186days of newly retained storage; not lifetime retention",\n  "currency": "EUR",\n  "egress_eur_per_decimal_gb": "0.01",\n  "envelopes": {\n    "absolute": {\n      "aggregate_transfer_bytes": 600000000000,\n      "before_factor_eur": "35.462400",\n      "ceiling_eur": "55",\n      "egress_projection_eur": "6.00",\n      "fits": true,\n      "new_retained_bytes": 300000000000,\n      "storage_projection_eur": "29.462400",\n      "with_factor_eur": "53.1936000"\n    },\n    "operational": {\n      "aggregate_transfer_bytes": 570000000000,\n      "before_factor_eur": "32.707200",\n      "ceiling_eur": "50",\n      "egress_projection_eur": "5.70",\n      "fits": true,\n      "new_retained_bytes": 275000000000,\n      "storage_projection_eur": "27.007200",\n      "with_factor_eur": "49.0608000"\n    }\n  },\n  "free_egress_allowance_used": false,\n  "ingress_included": true,\n  "listed_prices_exclude_tax": true,\n  "provider": "Scaleway",\n  "region": "Paris",\n  "requests_included": true,\n  "retrieved_at": "2026-09-10T06:46:59.328362+00:00",\n  "run_authorized": false,\n  "schema": "issue92-phase5-tariff-refresh-v1",\n  "source_url": "https://www.scaleway.com/en/pricing/storage/",\n  "storage_class": "Standard Multi-AZ",\n  "storage_eur_per_decimal_gb_hour": "0.000022",\n  "storage_horizon_days": 186,\n  "tax_rate_claimed": null,\n  "verification_method": "official pricing page content returned by web search; full-page web open exceeded size limit and direct urllib fetch returned403"\n}\n'
+
+
+def _write_live_tariff(tmp_path: Path, raw: bytes = _CANONICAL_TARIFF_RAW,
+                       name: str = "tariff-live.json") -> Path:
+    """Test-only: byte-exact canonical refresh file (hash verified)."""
+    path = tmp_path / name
+    path.write_bytes(raw)
+    return path
+
+
+def _live_core() -> datetime:
+    return datetime(2026, 10, 4, 5, 0, tzinfo=UTC)
+
+
+def test_live_tariff_exact_canonical_accept(tmp_path: Path) -> None:
+    """The byte-exact refresh binds schema/digest/economics; no authority."""
+    payload, digest = step9._read_tariff_file(
+        str(_write_live_tariff(tmp_path)))
+    assert digest == _CANONICAL_TARIFF_DIGEST
+    block = step9._tariff_block_live(payload, digest, _live_core())
+    assert block["schema"] == "issue92-phase5-tariff-refresh-v1"
+    assert block["digest"] == _CANONICAL_TARIFF_DIGEST
+    assert block["source_url"] == "https://www.scaleway.com/en/pricing/storage/"
+    assert block["retrieved_at"] == "2026-09-10T06:46:59.328362+00:00"
+    assert block["verification_method"].startswith("official pricing page")
+    assert block["run_authorized"] is False
+    assert block["storage_horizon_days"] == 186
+    operational = block["envelopes"]["operational"]
+    assert operational["new_retained_bytes"] == 275000000000
+    assert operational["aggregate_transfer_bytes"] == 570000000000
+    assert operational["storage_projection_eur"] == "27.007200"
+    assert operational["egress_projection_eur"] == "5.70"
+    assert operational["before_factor_eur"] == "32.707200"
+    assert operational["with_factor_eur"] == "49.0608000"
+    assert operational["ceiling_eur"] == "50"
+    assert operational["fits"] is True
+    absolute = block["envelopes"]["absolute"]
+    assert absolute["new_retained_bytes"] == 300000000000
+    assert absolute["aggregate_transfer_bytes"] == 600000000000
+    assert absolute["storage_projection_eur"] == "29.462400"
+    assert absolute["egress_projection_eur"] == "6.00"
+    assert absolute["before_factor_eur"] == "35.462400"
+    assert absolute["with_factor_eur"] == "53.1936000"
+    assert absolute["ceiling_eur"] == "55"
+    assert absolute["fits"] is True
+
+
+def test_live_tariff_rejects_preparation_schema(tmp_path: Path) -> None:
+    """The old EUR 4.50/5 preparation file can never bind live-day v2."""
+    path = tmp_path / "prep.json"
+    path.write_text(json.dumps(_canonical_tariff()))
+    payload, digest = step9._read_tariff_file(str(path))
+    with pytest.raises(step9.Step9Error) as error:
+        step9._tariff_block_live(payload, digest, _live_core())
+    assert error.value.code == "tariff_mismatch"
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    cohort = _write_cohort(tmp_path / "c.txt", TAGS)
+    receipt_path = tmp_path / "receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope()))
+    arguments = _start_args(tmp_path / "run", cohort,
+                            deployed_receipt=str(receipt_path),
+                            archive_tariff_file=str(path))
+    with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                           return_value=None), _healthy_start_hosts():
+        with pytest.raises(step9.Step9Error) as error:
+            step9.cmd_start(arguments, db)
+        assert error.value.code == "tariff_mismatch"
+
+
+def test_live_tariff_rejects_prior_280_580(tmp_path: Path) -> None:
+    """Prior 280/580 GB drafts are rejected for live-day v2."""
+    payload = _canonical_live_tariff()
+    payload["envelopes"]["operational"]["new_retained_bytes"] = 280000000000
+    payload["envelopes"]["operational"]["aggregate_transfer_bytes"] = (
+        580000000000)
+    path = tmp_path / "draft.json"
+    path.write_text(json.dumps(payload))
+    loaded, digest = step9._read_tariff_file(str(path))
+    with pytest.raises(step9.Step9Error) as error:
+        step9._tariff_block_live(loaded, digest, _live_core())
+    assert error.value.code == "tariff_mismatch"
+
+
+def test_live_tariff_rejects_math_and_authority_tamper(tmp_path: Path) -> None:
+    """Wrong economics, false fits, or run authority all fail."""
+    def block(**overrides):
+        payload = _canonical_live_tariff(**overrides)
+        path = tmp_path / f"t-{len(os.listdir(tmp_path))}.json"
+        path.write_text(json.dumps(payload))
+        loaded, digest = step9._read_tariff_file(str(path))
+        return step9._tariff_block_live(loaded, digest, _live_core())
+    assert block()["envelopes"]["operational"]["fits"] is True
+    bad_envelope = _canonical_live_tariff()
+    bad_envelope["envelopes"]["operational"]["with_factor_eur"] = (
+        "49.0608001")
+    with pytest.raises(step9.Step9Error) as error:
+        block(envelopes=bad_envelope["envelopes"])
+    assert error.value.code == "tariff_mismatch"
+    bad_storage = _canonical_live_tariff()
+    bad_storage["envelopes"]["absolute"]["storage_projection_eur"] = (
+        "29.462401")
+    with pytest.raises(step9.Step9Error) as error:
+        block(envelopes=bad_storage["envelopes"])
+    assert error.value.code == "tariff_mismatch"
+    bad_fits = _canonical_live_tariff()
+    bad_fits["envelopes"]["operational"]["fits"] = False
+    with pytest.raises(step9.Step9Error) as error:
+        block(envelopes=bad_fits["envelopes"])
+    assert error.value.code == "tariff_mismatch"
+    with pytest.raises(step9.Step9Error) as error:
+        block(run_authorized=True)
+    assert error.value.code == "tariff_mismatch"
+    with pytest.raises(step9.Step9Error) as error:
+        block(tax_rate_claimed=0.2)
+    assert error.value.code == "tariff_mismatch"
+    with pytest.raises(step9.Step9Error) as error:
+        block(storage_eur_per_decimal_gb_hour="0.000023")
+    assert error.value.code == "tariff_mismatch"
+
+
+def test_live_tariff_digest_binds_bytes_and_stale_rejected(
+        tmp_path: Path) -> None:
+    """Any byte change rebinds the digest; stale refreshes fail."""
+    tampered = _CANONICAL_TARIFF_RAW.replace(b"Paris", b"Parix")
+    path = _write_live_tariff(tmp_path, tampered, "tampered.json")
+    payload, digest = step9._read_tariff_file(str(path))
+    assert digest != _CANONICAL_TARIFF_DIGEST
+    with pytest.raises(step9.Step9Error) as error:
+        step9._tariff_block_live(payload, digest, _live_core())
+    assert error.value.code == "tariff_mismatch"
+    stale = _canonical_live_tariff(retrieved_at="2026-01-01T00:00:00+00:00")
+    stale_path = tmp_path / "stale.json"
+    stale_path.write_text(json.dumps(stale))
+    loaded, stale_digest = step9._read_tariff_file(str(stale_path))
+    with pytest.raises(step9.Step9Error) as error:
+        step9._tariff_block_live(loaded, stale_digest, _live_core())
+    assert error.value.code == "tariff_stale"
+
+
+def test_start_binds_live_tariff_without_authority(tmp_path: Path) -> None:
+    """Live-day admission pins the refresh; run_authorized stays false."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    _run_dir, header = _started_run(tmp_path, db)
+    tariff = header["cost_basis"]["tariff"]
+    assert tariff["schema"] == "issue92-phase5-tariff-refresh-v1"
+    assert tariff["run_authorized"] is False
+    assert tariff["digest"] and len(tariff["digest"]) == 64
+
+
+def test_start_archive_controls_binding(tmp_path: Path) -> None:
+    """Live-day v2 caps: required, exact, reused; preflight keeps constants."""
+    cohort = _write_cohort(tmp_path / "c-controls.txt", TAGS)
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    _wire_budget_fixture(db, cohort)
+
+    def _live(name, **overrides):
+        args = {"archive_retained_cap_bytes": 10**9,
+                "transfer_cap_bytes": 10**9, "s3_cap_attempts": 10**6}
+        args.update(overrides)
+        receipt_path = tmp_path / f"{name}-receipt.json"
+        receipt_path.write_text(json.dumps(_receipt_scope(
+            admission_run_id=name.replace("-", ""))))
+        with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                               return_value=None), _healthy_start_hosts():
+            return step9.cmd_start(_start_args(
+                tmp_path / name, cohort, deployed_receipt=str(receipt_path),
+                run_id=name.replace("-", ""), **args), db)
+
+    for index, bad in enumerate(({"archive_retained_cap_bytes": None},
+                                 {"transfer_cap_bytes": -1},
+                                 {"s3_cap_attempts": True},
+                                 {"s3_cap_attempts": "3000"},
+                                 {"spool_allocated_cap_bytes": None})):
+        with pytest.raises(step9.Step9Error) as error:
+            _live(f"ctlbad{index}", **bad)
+        assert error.value.code == "archive_controls_invalid"
+        assert not (tmp_path / f"ctlbad{index}").exists()
+    receipt_path = tmp_path / "ctlpre-receipt.json"
+    receipt_path.write_text(json.dumps(_receipt_scope(
+        admission_run_id="ctlpre")))
+    with pytest.raises(step9.Step9Error) as error:
+        with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                               return_value=None), _healthy_start_hosts():
+            step9.cmd_start(_start_args(
+                tmp_path / "ctlpre", cohort,
+                deployed_receipt=str(receipt_path), run_id="ctlpre",
+                mode="preflight", core_start="2026-10-04T05:00:00Z",
+                core_end="2026-10-04T06:15:00Z",
+                archive_retained_cap_bytes=1000), db)
+    assert error.value.code == "archive_controls_mixed"
+    with pytest.raises(step9.Step9Error) as error:
+        _live("ctlprior", prior_transfer_bytes=10**9 + 1,
+              prior_transfer_provenance="p")
+    assert error.value.code == "archive_controls_invalid"
+    with pytest.raises(step9.Step9Error) as error:
+        _live("ctls3prior", s3_cap_attempts=100, prior_s3_attempts=101,
+              prior_s3_provenance="q")
+    assert error.value.code == "archive_controls_invalid"
+    header = _live("ctlok")
+    assert (header["archive_retained_cap_bytes"],
+            header["transfer_cap_bytes"],
+            header["s3_cap_attempts"]) == (10**9, 10**9, 10**6)
+
+
+def test_archive_retained_gates_use_pins_not_constants() -> None:
+    """Newly retained remote bytes: exact subtraction against the pin."""
+
+    def _facts(logical, physical=100, objects=2):
+        facts = _quiet_facts()
+        facts["archive"] = {"logical_bytes": logical, "objects": objects,
+                             "physical_bytes": physical, "error": None}
+        return facts
+
+    base = _facts(1000)
+    assert step9.evaluate_resource_gates(
+        base, _facts(1500), 0, retained_cap=500)[0] == []
+    failures, _unknown, _s = step9.evaluate_resource_gates(
+        base, _facts(1501), 0, retained_cap=500)
+    assert failures == ["archive_retained_breach"]
+    failures, _unknown, _s = step9.evaluate_resource_gates(
+        base, _facts(999), 0, retained_cap=500)
+    assert failures == ["archive_retained_reset"]
+    _f, unknown, _s = step9.evaluate_resource_gates(
+        _facts(1000), _facts(None), 0, retained_cap=500)
+    assert unknown == ["archive_unknown"]
+    nobase = _quiet_facts()
+    nobase["archive"] = {"logical_bytes": None, "objects": 2,
+                          "physical_bytes": 100, "error": None}
+    _f, unknown, _s = step9.evaluate_resource_gates(
+        nobase, _facts(1500), 0, retained_cap=500)
+    assert unknown == ["archive_retained_unknown"]
+    # Legacy envelope still applies without a pin, and pins override it.
+    failures, _u, _s = step9.evaluate_resource_gates(
+        base, _facts(17 * 1024**3), 0)
+    assert failures == ["archive_logical_breach"]
+    assert step9.evaluate_resource_gates(
+        base, _facts(1000 + 20 * 1024**3), 0,
+        retained_cap=10**15)[0] == []
+    failures, _u, _s = step9.evaluate_resource_gates(
+        base, _facts(1200), 0, retained_cap=100)
+    assert failures == ["archive_retained_breach"]
+
+
+def test_live_day_v2_ignores_preparation_object_envelope() -> None:
+    """Object counts never gate live-day v2 retained accounting."""
+
+    def _facts(logical, objects):
+        facts = _quiet_facts()
+        facts["archive"] = {"logical_bytes": logical, "objects": objects,
+                             "physical_bytes": 100, "error": None}
+        return facts
+
+    base = _facts(100, 2)
+    failures, unknown, _s = step9.evaluate_resource_gates(
+        base, _facts(200, 200_000), 0, retained_cap=500)
+    assert failures == [] and unknown == []
+    failures, _u, _s = step9.evaluate_resource_gates(
+        base, _facts(200, 200_000), 0)
+    assert failures == ["archive_objects_breach"]
+
+
+def test_archive_retained_sample_monotonic() -> None:
+    """Retained bytes must be monotonic sample-to-sample, not just capped."""
+
+    def _facts(logical):
+        facts = _quiet_facts()
+        facts["archive"] = {"logical_bytes": logical, "objects": 2,
+                             "physical_bytes": 100, "error": None}
+        return facts
+
+    base = _facts(0)
+    failures, _u, _s = step9.evaluate_resource_gates(
+        base, _facts(50), 0, retained_cap=10**9, prev_retained=100)
+    assert failures == ["archive_retained_reset"]
+    assert step9.evaluate_resource_gates(
+        base, _facts(100), 0, retained_cap=10**9,
+        prev_retained=100)[0] == []
+    _f, unknown, _s = step9.evaluate_resource_gates(
+        base, _facts(100), 0, retained_cap=10**9, prev_retained=None)
+    assert unknown == ["archive_retained_unknown"]
+    _f, unknown, _s = step9.evaluate_resource_gates(
+        base, _facts(100), 0, retained_cap=10**9, prev_retained="x")
+    assert unknown == ["archive_retained_unknown"]
+    _f, unknown, _s = step9.evaluate_resource_gates(
+        base, _facts(100), 0, retained_cap=10**9, prev_retained=-5)
+    assert unknown == ["archive_retained_unknown"]
+
+
+def test_spool_cap_pin_selected_over_constant() -> None:
+    """Pinned spool bytes bind the pin, never shared-pool constants."""
+
+    def _facts(physical):
+        facts = _quiet_facts()
+        facts["archive"] = {"logical_bytes": 100, "objects": 2,
+                             "physical_bytes": physical, "error": None}
+        return facts
+
+    base = _facts(100)
+    assert step9.evaluate_resource_gates(
+        base, _facts(5000), 0, spool_cap=5000)[0] == []
+    failures, _u, _s = step9.evaluate_resource_gates(
+        base, _facts(5001), 0, spool_cap=5000)
+    assert failures == ["archive_physical_breach"]
+    # A pin above the legacy constant passes what the constant rejects.
+    assert step9.evaluate_resource_gates(
+        base, _facts(70 * 1024**3), 0, spool_cap=10**15)[0] == []
+    failures, _u, _s = step9.evaluate_resource_gates(
+        base, _facts(70 * 1024**3), 0)
+    assert failures == ["archive_physical_breach"]
+
+
+def test_spool_cap_bounds_independently_probed_bytes(tmp_path: Path) -> None:
+    """Real du allocated bytes pass at cap and breach at cap minus one."""
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    (spool / "blob").write_bytes(b"x" * 4096)
+    facts = step9.collect_resource_facts(
+        spool_path=str(spool), postgres_path=str(spool), db=None,
+        metrics=None,
+        btrfs_probe=lambda _path: {"metadata_pct": None,
+                                       "unallocated_bytes": None,
+                                       "error": None, "stderr": None},
+        device_probe=lambda _path: {"errors": {}, "error": None})
+    physical = facts["archive"]["physical_bytes"]
+    assert type(physical) is int and physical >= 0
+    quiet = _quiet_facts()
+    facts["memory"] = quiet["memory"]
+    facts["filesystems"] = quiet["filesystems"]
+    failures, _u, _s = step9.evaluate_resource_gates(
+        quiet, facts, 0, spool_cap=physical)
+    assert failures == []
+    failures, _u, _s = step9.evaluate_resource_gates(
+        quiet, facts, 0, spool_cap=physical - 1)
+    assert failures == ["archive_physical_breach"]
+
+
+def test_transfer_cap_pin_selected_over_constant() -> None:
+    base = {"boot_id": "b", "interfaces": {"test-eth0": {
+        "present": True, "rx_bytes": 1000, "tx_bytes": 500,
+        "mac": "m"}}}
+    current = {"status": "captured", "boot_id": "b",
+               "interfaces": {"test-eth0": {
+                   "present": True, "rx_bytes": 1100, "tx_bytes": 500,
+                   "mac": "m"}}}
+    assert step9.evaluate_wire(base, current, 0, 100)[0] == []
+    assert step9.evaluate_wire(base, current, 0, 99)[0] == [
+        "transfer_breach"]
+    assert step9.evaluate_wire(base, current, 0)[0] == []
+
+
+def test_finalize_transfer_reuses_pinned_caps() -> None:
+    samples = [{"wire": {"failures": [], "unknown": [],
+                           "conservative_host_wire_bytes": 150},
+                "s3": {"error": None, "go": {}, "go_total": 0,
+                         "python": {}, "python_total": 0, "total": 100},
+                "resources": {"failures": [], "unknown": [],
+                                "allocated_probe": None,
+                                "archive_retained": {
+                                    "baseline_bytes": 0,
+                                    "current_bytes": 100,
+                                    "newly_retained_bytes": 100,
+                                    "cap_bytes": 10**9}}}]
+    run = {"mode": "live-day", "schema": step9.SCHEMA_LIVE,
+           "archive_retained_cap_bytes": 10**9,
+           "transfer_cap_bytes": 200, "s3_cap_attempts": 121,
+           "spool_allocated_cap_bytes": 10**9,
+           "transfer_prior_bytes": 0,
+           "resource_baseline": {"archive": {"logical_bytes": 0}},
+           "s3_prior": {"attempts": 21, "provenance": "p"}}
+    result = step9._finalize_transfer(samples, run)
+    assert result["status"] == "complete"
+    assert result["s3_attempts"] == 121
+    assert (result["cap_bytes"], result["attempts_cap"]) == (200, 121)
+    tight = step9._finalize_transfer(samples, dict(run, s3_cap_attempts=120))
+    assert tight["status"] == "failed"
+    assert tight["failure"] == "s3_attempts_breach"
+
+
+def test_sample_archive_retained_cap_end_to_end(tmp_path: Path) -> None:
+    """Minute gates enforce the pinned retained cap, exactly."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(
+        tmp_path, db, run_dir_name="retainedok",
+        archive_retained_cap_bytes=500)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+
+    def _hook(logical):
+        def facts(run, db, metrics):
+            current = _quiet_facts()
+            current["archive"] = {"logical_bytes": logical, "objects": 2,
+                                    "physical_bytes": 100, "error": None}
+            return current
+        return facts
+
+    hooks = _sample_hooks(db)
+    hooks["resource_facts"] = _hook(600)
+    assert step9.cmd_sample(arguments, hooks) == 0
+    db2 = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir2, _h2 = _started_run(
+        tmp_path, db2, run_dir_name="retainedbad",
+        archive_retained_cap_bytes=500)
+    arguments2 = mock.Mock(run_dir=str(run_dir2), podman_bin="podman")
+    hooks2 = _sample_hooks(db2)
+    hooks2["resource_facts"] = _hook(601)
+    assert step9.cmd_sample(arguments2, hooks2) == 1
+    bad = json.loads((run_dir2 / "samples" / "minute-0000.json"
+                      ).read_text())
+    assert bad["failure_code"] == "archive_retained_breach"
+    assert bad["outcome"] == "resource_gate"
+
+
+def test_sample_archive_retained_monotonic_end_to_end(tmp_path: Path) -> None:
+    """A mid-run retained decrease gates the minute even under the cap."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(
+        tmp_path, db, run_dir_name="monotonic",
+        archive_retained_cap_bytes=10**9)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    logicals = iter([100, 150, 120])
+
+    def facts(run, db, metrics):
+        current = _quiet_facts()
+        current["archive"] = {"logical_bytes": next(logicals),
+                                "objects": 2, "physical_bytes": 100,
+                                "error": None}
+        return current
+
+    hooks = _sample_hooks(db)
+    hooks["resource_facts"] = facts
+    hooks["max_slots"] = 3
+    hooks["single_pass"] = False
+    assert step9.cmd_sample(arguments, hooks) == 1
+    bad = json.loads((run_dir / "samples" / "minute-0002.json"
+                      ).read_text())
+    assert bad["failure_code"] == "archive_retained_reset"
+    assert bad["outcome"] == "resource_gate"
+    kept = bad["resources"]["archive_retained"]
+    assert kept == {"baseline_bytes": 100, "current_bytes": 120,
+                    "newly_retained_bytes": 20,
+                    "cap_bytes": 10**9}
+
+
+def test_start_live_day_baseline_evidence_gates(tmp_path: Path) -> None:
+    """Missing/malformed/negative baselines fail before admission."""
+    cohort = _write_cohort(tmp_path / "c-base.txt", TAGS)
+
+    def _begin(name, db, **overrides):
+        receipt_path = tmp_path / f"{name}-receipt.json"
+        receipt_path.write_text(json.dumps(_receipt_scope(
+            admission_run_id=name.replace("-", ""))))
+        # Podman only: wire facts stay real (or per-case mocked) so the
+        # malformed-wire cases below exercise the true collection path.
+        with mock.patch.object(step9.deployment_receipt, "validate_receipt",
+                               return_value=None), \
+                mock.patch.object(step9.Podman, "inspect_running",
+                                  lambda self, container: (False, "sha256:image")):
+            return step9.cmd_start(_start_args(
+                tmp_path / name, cohort, run_id=name.replace("-", ""),
+                deployed_receipt=str(receipt_path), **overrides), db)
+
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    with pytest.raises(step9.Step9Error) as error:
+        _begin("badprior", db, prior_transfer_bytes=-5)
+    assert error.value.code == "transfer_prior_invalid"
+    assert not (tmp_path / "badprior").exists()
+    for index, usage in enumerate((None, (-5, 2), ("x", 2), (0, -1))):
+        bad = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+        bad.archive_usage_data = usage
+        with pytest.raises(step9.Step9Error) as error:
+            _begin(f"badarchive{index}", bad)
+        assert error.value.code == "archive_baseline_invalid"
+        assert not (tmp_path / f"badarchive{index}").exists()
+    with mock.patch.object(step9, "collect_wire_facts",
+                           return_value={"status": "unknown",
+                                         "interfaces": {}}):
+        db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+        with pytest.raises(step9.Step9Error) as error:
+            _begin("badwire", db)
+        assert error.value.code == "wire_baseline_invalid"
+        assert not (tmp_path / "badwire").exists()
+    with mock.patch.object(
+            step9, "collect_wire_facts",
+            return_value={"status": "captured", "boot_id": "b",
+                          "interfaces": {"test-eth0": {
+                              "present": True, "rx_bytes": -1,
+                              "tx_bytes": 0}}}):
+        db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+        with pytest.raises(step9.Step9Error) as error:
+            _begin("badwirebytes", db)
+        assert error.value.code == "wire_baseline_invalid"
+
+
+def test_validate_recomputes_wire_and_retained(tmp_path: Path) -> None:
+    """Strict validation recomputes numbers; tampered math fails closed."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_run(tmp_path, "recompute", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    assert step9.cmd_validate(arguments) == 0
+    victim = run_dir / "samples" / "minute-0007.json"
+    pristine = json.loads(victim.read_text())
+
+    def _break(mutate) -> None:
+        sample = json.loads(json.dumps(pristine))
+        mutate(sample)
+        victim.write_text(json.dumps(sample))
+        (run_dir / "manifest.json").unlink()
+        step9._write_manifest(run_dir)
+        assert step9.cmd_validate(arguments) == 1
+
+    # Retained delta must equal current minus the pinned baseline.
+    _break(lambda sample: sample["resources"]["archive_retained"].update(
+        newly_retained_bytes=9999))
+    # Retained current below the previous sample is a missed reset.
+    _break(lambda sample: sample["resources"]["archive_retained"].update(
+        current_bytes=50, newly_retained_bytes=-50))
+    # Missing retained facts cannot validate.
+    _break(lambda sample: sample["resources"].pop("archive_retained"))
+    # Cap above the run pin cannot validate.
+    _break(lambda sample: sample["resources"]["archive_retained"].update(
+        cap_bytes=10**15))
+    # Wire bytes above the transfer pin cannot validate.
+    _break(lambda sample: sample["wire"].update(
+        conservative_host_wire_bytes=step9.TRANSFER_CUMULATIVE_MAX + 1))
+    # Wire bytes below the previous sample is a missed counter reset.
+    _break(lambda sample: sample["wire"].update(
+        conservative_host_wire_bytes=500))
+    # Malformed wire bytes cannot validate.
+    _break(lambda sample: sample["wire"].update(
+        conservative_host_wire_bytes="1000"))
+    # Probed spool bytes above the pinned cap cannot validate, even with a
+    # clean sample verdict: validation recomputes, never trusts the strings.
+    _break(lambda sample: sample["resources"]["allocated_probe"].update(
+        allocated_bytes=step9.RES_ARCHIVE_PHYSICAL_MAX + 1))
+
+
+def test_validate_rejects_final_cap_mismatch(tmp_path: Path) -> None:
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_run(tmp_path, "ctlcap", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    assert step9.cmd_validate(arguments) == 0
+    final_path = run_dir / "final.json"
+    final = json.loads(final_path.read_text())
+    final["transfer"]["cap_bytes"] -= 1
+    final_path.write_text(json.dumps(final))
+    (run_dir / "manifest.json").unlink()
+    step9._write_manifest(run_dir)
+    assert step9.cmd_validate(arguments) == 1
+
+
+def test_s3_strikes_persist_across_healthy_db_samples(tmp_path: Path) -> None:
+    """Repeated S3 archive misses stop even when DB/metrics stay healthy."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    def no_archive(run):
+        raise RuntimeError("archive unreachable")
+    hooks = _sample_hooks(db, worker_probe=no_archive)
+    hooks["max_slots"] = 3
+    hooks["single_pass"] = False
+    assert step9.cmd_sample(arguments, hooks) == 1
+    assert list((run_dir / "failures").glob(
+        "two_consecutive_unavailable-*.json"))
+
+
+def test_sample_wire_unknown_stops_live_day(tmp_path: Path) -> None:
+    """A live-day wire interface outside the pinned baseline stops at once."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    def extra_iface(run):
+        facts = _quiet_wire()
+        facts["boot_id"] = run.get("boot_id")
+        facts["interfaces"]["eth9"] = {
+            "present": True, "rx_bytes": 10, "tx_bytes": 5}
+        return facts
+    hooks = _sample_hooks(db, wire_facts=extra_iface)
+    assert step9.cmd_sample(arguments, hooks) == 1
+    assert list((run_dir / "failures").glob("wire_unknown-*.json"))
+
+
+def test_sample_wire_between_sample_decrease_stops(tmp_path: Path) -> None:
+    """Wire totals falling between samples stop, even above the baseline."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    calls = []
+    def falling(run):
+        calls.append(1)
+        facts = _quiet_wire(rx=1200 if len(calls) == 1 else 1100)
+        facts["boot_id"] = run.get("boot_id")
+        return facts
+    hooks = _sample_hooks(db, wire_facts=falling)
+    hooks["max_slots"] = 3
+    hooks["single_pass"] = False
+    assert step9.cmd_sample(arguments, hooks) == 1
+    assert list((run_dir / "failures").glob("wire_counter_reset-*.json"))
+
+
+def test_sample_resource_unknown_stops_live_day(tmp_path: Path) -> None:
+    """A live-day required resource fact of unknown stops at once."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    def unknown_archive(run, db, metrics):
+        facts = _quiet_facts()
+        facts["archive"] = {"logical_bytes": None, "objects": 2,
+                            "physical_bytes": 100, "error": None}
+        return facts
+    hooks = _sample_hooks(db, resource_facts=unknown_archive)
+    assert step9.cmd_sample(arguments, hooks) == 1
+    assert list((run_dir / "failures").glob("archive_unknown-*.json"))
+
+
+def test_validate_rejects_final_wire_numeric_mismatch(tmp_path: Path) -> None:
+    """Sealed totals must equal the sample chain: cap+1/missing/mismatch fail."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_run(tmp_path, "wirenumer", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    assert step9.cmd_validate(arguments) == 0
+    final_path = run_dir / "final.json"
+    pristine = json.loads(final_path.read_text())
+    cap = pristine["transfer"]["cap_bytes"]
+    wire = pristine["transfer"]["wire_bytes"]
+    attempts = pristine["transfer"]["s3_attempts"]
+    assert type(wire) is int and wire <= cap and wire >= 0
+    def reseal(mutator):
+        final = json.loads(json.dumps(pristine))
+        mutator(final)
+        final_path.write_text(json.dumps(final))
+        (run_dir / "manifest.json").unlink()
+        step9._write_manifest(run_dir)
+        assert step9.cmd_validate(arguments) == 1
+    reseal(lambda final: final["transfer"].update({"wire_bytes": cap + 1}))
+    # A post-stop total merely below the sealed value still satisfies the
+    # monotonic chain (bounds, not point equality, bind post-stop facts);
+    # decreases below the sealed drain observation fail in the chain test.
+    reseal(lambda final: final["transfer"].pop("wire_bytes"))
+    reseal(lambda final: final["transfer"].update(
+        {"s3_attempts": attempts + 1}))
+
+
+def test_validate_rejects_terminal_chain_tampering(tmp_path: Path) -> None:
+    """Chain stages disagree, go missing, or decrease: validate fails."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_run(tmp_path, "chaintamp", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    assert step9.cmd_validate(arguments) == 0
+    final_path = run_dir / "final.json"
+    pristine = json.loads(final_path.read_text())
+    cap = pristine["transfer"]["cap_bytes"]
+    attempts_cap = pristine["transfer"]["attempts_cap"]
+    def reseal(mutator):
+        final = json.loads(json.dumps(pristine))
+        mutator(final)
+        final_path.write_text(json.dumps(final))
+        (run_dir / "manifest.json").unlink()
+        step9._write_manifest(run_dir)
+        assert step9.cmd_validate(arguments) == 1
+    # Drain record disagrees with the sealed final copy.
+    reseal(lambda final: final["transfer"].update(
+        {"drain_wire_bytes": pristine["transfer"]["drain_wire_bytes"] + 1}))
+    # Post-stop wire below the sealed drain observation (decrease).
+    reseal(lambda final: final["transfer"].update(
+        {"wire_bytes": pristine["transfer"]["drain_wire_bytes"] - 1}))
+    # Post-stop wire at cap+1.
+    reseal(lambda final: final["transfer"].update({"wire_bytes": cap + 1}))
+    # Terminal total disagrees with sealed per-producer attribution.
+    reseal(lambda final: final["transfer"].update(
+        {"terminal_s3_total": pristine["transfer"]["terminal_s3_total"] + 1}))
+    # Attempts at cap+1 with consistent labels.
+    reseal(lambda final: final["transfer"].update(
+        {"s3_attempts": attempts_cap + 1,
+         "terminal_s3_total": attempts_cap + 1 - 21}))
+    # Duplicated producer attribution.
+    def duplicate(final):
+        final["transfer"]["terminal_producers"].append(
+            dict(final["transfer"]["terminal_producers"][0]))
+    reseal(duplicate)
+    # Missing retained post-stop block.
+    reseal(lambda final: final["transfer"].pop("retained_post_stop"))
+    # Wrong incarnation with higher totals that still sum exactly.
+    def impostor(final):
+        producers = final["transfer"]["terminal_producers"]
+        producers[1]["process_id"] = "impostor-worker"
+        producers[1]["total"] += 100
+        final["transfer"]["terminal_s3_total"] += 100
+        final["transfer"]["s3_attempts"] += 100
+    reseal(impostor)
+    # Worker replica IDs must be exactly 1..N.
+    def renumber(final):
+        final["transfer"]["terminal_producers"][1]["replica"] = 2
+    reseal(renumber)
+    # Collector replica must be null.
+    def collector_replica(final):
+        final["transfer"]["terminal_producers"][0]["replica"] = 1
+    reseal(collector_replica)
+    # Invalid and stale capture timestamps fail.
+    def bad_timestamp(final):
+        final["transfer"]["terminal_producers"][1]["captured_at"] = \
+            "not-a-date"
+    reseal(bad_timestamp)
+    def stale_timestamp(final):
+        final["transfer"]["terminal_producers"][1]["captured_at"] = \
+            "2026-10-03T05:00:00+00:00"
+    reseal(stale_timestamp)
+    # A missing worker entry fails even with consistent totals.
+    def drop_worker(final):
+        producers = final["transfer"]["terminal_producers"]
+        dropped = producers.pop(1)
+        final["transfer"]["terminal_s3_total"] -= dropped["total"]
+        final["transfer"]["s3_attempts"] -= dropped["total"]
+    reseal(drop_worker)
+
+
+def test_validate_rejects_absent_core_identity(tmp_path: Path) -> None:
+    """Live-day v2 has no unobserved-producer bypass at validate."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_run(tmp_path, "noident", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    assert step9.cmd_validate(arguments) == 0
+    last_path = run_dir / "samples" / "minute-1439.json"
+    sample = json.loads(last_path.read_text())
+    sample["s3"]["producers"][1] = None
+    last_path.write_text(json.dumps(sample))
+    (run_dir / "manifest.json").unlink()
+    step9._write_manifest(run_dir)
+    assert step9.cmd_validate(arguments) == 1
+
+
+def test_drain_reset_below_core_fails(tmp_path: Path) -> None:
+    """Reset at drain fails even when terminal totals later rise."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    # S3 reset at drain: core subtotal 30, drain observes only 10.
+    run_dir, _run = _sealed_run(tmp_path, "drsthree", db)
+    last_path = run_dir / "samples" / "minute-1439.json"
+    sample = json.loads(last_path.read_text())
+    sample["s3_attempts_cumulative"] = 51
+    last_path.write_text(json.dumps(sample))
+    drain_path = run_dir / "drain-monitor.json"
+    drain = json.loads(drain_path.read_text())
+    drain["observations"]["s3_total"] = 10
+    drain_path.write_text(json.dumps(drain))
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 1
+    final = json.loads((run_dir / "final.json").read_text())
+    assert final["transfer"]["failure"] == "s3_counter_reset"
+    # Retained reset at drain: observation below the core current.
+    run_dir2, _run2 = _sealed_run(tmp_path, "drretained", db)
+    drain_path2 = run_dir2 / "drain-monitor.json"
+    drain2 = json.loads(drain_path2.read_text())
+    assert drain2["observations"]["retained_bytes"] > 0
+    drain2["observations"]["retained_bytes"] -= 5
+    drain_path2.write_text(json.dumps(drain2))
+    arguments2 = mock.Mock(run_dir=str(run_dir2), podman_bin="podman")
+    assert step9.cmd_finalize(arguments2, {"db": db}) == 1
+    final2 = json.loads((run_dir2 / "final.json").read_text())
+    assert final2["transfer"]["failure"] == "archive_retained_reset"
+    # Validate side: sealed drain reset below a positive core subtotal.
+    run_dir3, _run3 = _sealed_run(tmp_path, "drval", db)
+    arguments3 = mock.Mock(run_dir=str(run_dir3), podman_bin="podman")
+    assert step9.cmd_finalize(arguments3, {"db": db}) == 0
+    assert step9.cmd_validate(arguments3) == 0
+    last_path3 = run_dir3 / "samples" / "minute-1439.json"
+    sample3 = json.loads(last_path3.read_text())
+    sample3["s3_attempts_cumulative"] = 51
+    last_path3.write_text(json.dumps(sample3))
+    drain_path3 = run_dir3 / "drain-monitor.json"
+    drain3 = json.loads(drain_path3.read_text())
+    drain3["observations"]["s3_total"] = 10
+    drain_path3.write_text(json.dumps(drain3))
+    (run_dir3 / "manifest.json").unlink()
+    step9._write_manifest(run_dir3)
+    assert step9.cmd_validate(arguments3) == 1
+    drain3["observations"]["s3_total"] = 30
+    drain3["observations"]["retained_bytes"] -= 5
+    drain_path3.write_text(json.dumps(drain3))
+    (run_dir3 / "manifest.json").unlink()
+    step9._write_manifest(run_dir3)
+    assert step9.cmd_validate(arguments3) == 1
+
+
+def test_finalize_rejects_drain_counter_gaps(tmp_path: Path) -> None:
+    """Drain retained/S3 missing, non-integer, or negative stays incomplete."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_run(tmp_path, "draingaps", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    drain_path = run_dir / "drain-monitor.json"
+    pristine_drain = json.loads(drain_path.read_text())
+    for label, override in (
+            ("s3neg", {"s3_total": -5}),
+            ("s3str", {"s3_total": "40"}),
+            ("s3miss", {"s3_total": None}),
+            ("retneg", {"retained_bytes": -1}),
+            ("retnull", {"retained_bytes": None}),
+            ("wiremiss", {"wire_total": None})):
+        drain = json.loads(json.dumps(pristine_drain))
+        drain["observations"].update(override)
+        drain_path.write_text(json.dumps(drain))
+        (run_dir / "final.json").unlink(missing_ok=True)
+        (run_dir / "manifest.json").unlink(missing_ok=True)
+        assert step9.cmd_finalize(arguments, {"db": db}) != 0, label
+        if (run_dir / "final.json").exists():
+            final = json.loads((run_dir / "final.json").read_text())
+            assert final["transfer"]["status"] != "complete", label
+    drain_path.write_text(json.dumps(pristine_drain))
+    (run_dir / "final.json").unlink(missing_ok=True)
+    (run_dir / "manifest.json").unlink(missing_ok=True)
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+
+
+def test_finalize_rejects_terminal_identity_gaps(tmp_path: Path) -> None:
+    """Wrong/stale/missing producer identity stays incomplete or failing."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, run = _sealed_run(tmp_path, "termident", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    spool = Path(run["spool_path"]) / ".control" / "terminal"
+    pristine_collector = (spool / "collector.json").read_text()
+    pristine_worker = (spool / "worker-1.json").read_text()
+    def attempt(label, mutate=None, remove=None):
+        for name, content in (("collector.json", pristine_collector),
+                              ("worker-1.json", pristine_worker)):
+            (spool / name).write_text(content)
+        if remove is not None:
+            (spool / remove).unlink()
+        if mutate is not None:
+            mutate()
+        (run_dir / "final.json").unlink(missing_ok=True)
+        (run_dir / "manifest.json").unlink(missing_ok=True)
+        assert step9.cmd_finalize(arguments, {"db": db}) != 0, label
+    def rewrite_worker(payload):
+        (spool / "worker-1.json").write_text(json.dumps(payload))
+    worker = json.loads(pristine_worker)
+    # Higher totals under the wrong incarnation still fail.
+    tampered = json.loads(json.dumps(worker))
+    tampered["process"]["id"] = "impostor-worker"
+    tampered["archive"]["remote_attempts"] = {"put": 10**6}
+    attempt("wrong-incarnation", lambda: rewrite_worker(tampered))
+    # Stale capture predating the run fails.
+    tampered = json.loads(json.dumps(worker))
+    tampered["captured_at"] = "2026-10-03T05:00:00+00:00"
+    attempt("stale-capture", lambda: rewrite_worker(tampered))
+    # Invalid timestamp is malformed.
+    tampered = json.loads(json.dumps(worker))
+    tampered["captured_at"] = "not-a-date"
+    attempt("bad-timestamp", lambda: rewrite_worker(tampered))
+    # Unmarked snapshot is not terminal evidence.
+    tampered = json.loads(json.dumps(worker))
+    tampered["terminal"] = False
+    attempt("unmarked", lambda: rewrite_worker(tampered))
+    # Missing replica or collector is incomplete, never zero.
+    attempt("missing-worker", remove="worker-1.json")
+    attempt("missing-collector", remove="collector.json")
+    for name, content in (("collector.json", pristine_collector),
+                          ("worker-1.json", pristine_worker)):
+        (spool / name).write_text(content)
+    (run_dir / "final.json").unlink(missing_ok=True)
+    (run_dir / "manifest.json").unlink(missing_ok=True)
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+
+
+def test_finalize_rejects_post_stop_wire_failure(tmp_path: Path) -> None:
+    """Post-stop wire failures propagate instead of being discarded."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_run(tmp_path, "postwire", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    hooks = {"db": db,
+             "wire_facts": lambda run: {"status": "captured",
+                                          "failure_code": None,
+                                          "boot_id": run.get("boot_id"),
+                                          "interfaces": {}}}
+    assert step9.cmd_finalize(arguments, hooks) == 1
+    final = json.loads((run_dir / "final.json").read_text())
+    assert final["transfer"]["status"] == "failed"
+    assert final["transfer"]["failure"] == "wire_interface_missing"
+
+
+def test_post_stop_reads_catalogue_through_hooks_db(tmp_path: Path) -> None:
+    """Post-stop retained facts come from the read-only catalogue path."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_run(tmp_path, "catread", db)
+    calls: list = []
+    original = db.archive_usage
+    def spy():
+        calls.append(1)
+        return original()
+    db.archive_usage = spy
+    baseline = json.loads((run_dir / "run.json").read_text())["wire_baseline"]
+    grown = json.loads(json.dumps(baseline))
+    grown["interfaces"]["lo"]["rx_bytes"] += 100
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    hooks = {"db": db, "wire_facts": lambda run: grown}
+    assert step9.cmd_finalize(arguments, hooks) == 0
+    assert calls, "catalogue archive_usage was never consulted"
+    final = json.loads((run_dir / "final.json").read_text())
+    assert final["transfer"]["wire_bytes"] == \
+        step9.TRANSFER_PRIOR_BYTES + 100
+
+
+def test_finalize_includes_positive_drain_and_shutdown_bytes(tmp_path: Path) -> None:
+    """Final totals bind drain + shutdown activity, not samples[-1]."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, run = _sealed_run(tmp_path, "drainpos", db)
+    last = json.loads(
+        (run_dir / "samples" / "minute-1439.json").read_text())
+    sample_wire = last["wire"]["conservative_host_wire_bytes"]
+    sample_cumulative = last["s3_attempts_cumulative"]
+    sample_retained = last["resources"]["archive_retained"]["current_bytes"]
+    assert sample_cumulative == 21
+    # Bounded drain activity: +400 wire bytes, 40 Python attempts.
+    drain = json.loads((run_dir / "drain-monitor.json").read_text())
+    drain["observations"].update({
+        "wire_total": sample_wire + 400, "s3_total": 40,
+        "retained_bytes": sample_retained + 10})
+    (run_dir / "drain-monitor.json").write_text(json.dumps(drain))
+    # Shutdown activity after drain: +100 wire bytes, +5 attempts.
+    spool = Path(run["spool_path"])
+    worker_file = spool / ".control" / "terminal" / "worker-1.json"
+    worker_file.write_text(json.dumps({
+        "schema": step9.TERMINAL_WORKER_SCHEMA, "producer": "worker",
+        "process": {"id": "test-worker-1",
+                     "started_at": run["core_start"]},
+        "captured_at": run["core_end"], "terminal": True,
+        "archive": {"remote_attempts": {"put": 40, "head": 5}},
+    }), encoding="utf-8")
+    # Post-stop capture through the read-only observation hooks (the same
+    # seam production serves via CLI/database hooks): loopback advanced
+    # 500 bytes past the pinned baseline, catalogue retained +10.
+    baseline = json.loads((run_dir / "run.json").read_text())["wire_baseline"]
+    grown = json.loads(json.dumps(baseline))
+    grown["interfaces"]["lo"]["rx_bytes"] += 500
+    retained_facts = _quiet_facts()
+    retained_facts["archive"]["logical_bytes"] = sample_retained + 10
+    hooks = {"db": db,
+             "wire_facts": lambda run: grown,
+             "resource_facts": lambda run, db, metrics: retained_facts}
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, hooks) == 0
+    final = json.loads((run_dir / "final.json").read_text())
+    transfer = final["transfer"]
+    assert transfer["status"] == "complete"
+    assert transfer["wire_bytes"] == step9.TRANSFER_PRIOR_BYTES + 500
+    assert transfer["wire_bytes"] > sample_wire
+    assert transfer["drain_wire_bytes"] == sample_wire + 400
+    assert transfer["s3_attempts"] == 21 + 45
+    assert transfer["s3_attempts"] > sample_cumulative
+    assert transfer["terminal_s3_total"] == 45
+    assert transfer["retained_post_stop"]["newly_retained_bytes"] == \
+        sample_retained + 10 - 100
+    assert step9.cmd_validate(arguments) == 0
 
 
 def test_start_requires_tariff_file(tmp_path: Path) -> None:
@@ -3557,7 +5224,7 @@ def test_start_requires_tariff_file(tmp_path: Path) -> None:
                             deployed_receipt=str(receipt_path),
                             archive_tariff_file="/nonexistent-tariff.json")
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
-                           return_value=None):
+                           return_value=None), _healthy_start_hosts():
         with pytest.raises(step9.Step9Error) as error:
             step9.cmd_start(arguments, db)
         assert error.value.code == "tariff_unavailable"
@@ -3572,7 +5239,7 @@ def test_tariff_oracle_counterexamples(tmp_path: Path) -> None:
         path = tmp_path / f"t-{len(os.listdir(tmp_path))}.json"
         path.write_text(json.dumps(payload))
         return step9._tariff_block(
-            step9._read_tariff_file(str(path)), core)
+            step9._read_tariff_file(str(path))[0], core)
 
     assert block()["with_uncertainty_eur"] == 3.686616
     with pytest.raises(step9.Step9Error) as error:
@@ -3698,9 +5365,218 @@ def test_cli_parses_all_prior_flags(tmp_path: Path) -> None:
         "--postgres-path", "/tmp", "--deadline", "2026-10-05T05:10:00Z",
         "--watchdog-unit", "unit",
         "--prior-transfer-bytes", "10", "--prior-transfer-provenance", "p",
-        "--prior-s3-attempts", "11", "--prior-s3-provenance", "q"]
+        "--prior-s3-attempts", "11", "--prior-s3-provenance", "q",
+        "--archive-retained-cap-bytes", "12",
+        "--transfer-cap-bytes", "13", "--s3-cap-attempts", "14",
+        "--spool-allocated-cap-bytes", "17179869184"]
     namespace = step9.build_parser().parse_args(args)
     assert namespace.prior_transfer_bytes == 10
     assert namespace.prior_transfer_provenance == "p"
     assert namespace.prior_s3_attempts == 11
     assert namespace.prior_s3_provenance == "q"
+    assert namespace.archive_retained_cap_bytes == 12
+    assert namespace.transfer_cap_bytes == 13
+    assert namespace.s3_cap_attempts == 14
+    assert namespace.spool_allocated_cap_bytes == 17179869184
+
+
+def _monitor_args(run_dir: Path, pid: int, **overrides):
+    defaults = {"run_dir": str(run_dir), "drain_pid": pid,
+                "poll_seconds": 1, "timeout_seconds": 30}
+    defaults.update(overrides)
+    return mock.Mock(**defaults)
+
+
+def _write_monitor_seed(run_dir: Path, run: dict) -> None:
+    """Test-only: final-core-sample seed plus Go terminal file.
+
+    _started_run writes neither samples nor terminal snapshots, but the
+    live-day monitor requires a seeded chain and the stopped collector's
+    terminal identity. Values match _healthy_monitor_hooks exactly, so
+    healthy polls observe no drift; producer identities stay unverified
+    (None) exactly like the hook files.
+    """
+    samples = run_dir / "samples"
+    samples.mkdir(exist_ok=True)
+    (samples / "minute-1439.json").write_text(json.dumps({
+        "slot": 1439, "captured_utc": "2026-10-04T05:01:00+00:00",
+        "wire": {"conservative_host_wire_bytes": 0},
+        "s3_attempts_cumulative": 26,
+        "resources": {"archive_retained": {"current_bytes": 100}},
+        "s3": {"producers": [None, None]},
+    }), encoding="utf-8")
+    terminal = Path(run["spool_path"]) / ".control" / "terminal"
+    terminal.mkdir(parents=True, exist_ok=True)
+    (terminal / "collector.json").write_text(json.dumps({
+        "schema": step9.TERMINAL_GO_SCHEMA, "producer": "collector",
+        "process_id": "test-collector-pid",
+        "process_started_at": run["core_start"],
+        "captured_at": run["core_end"], "terminal": True,
+        "operations": {},
+    }), encoding="utf-8")
+
+
+def _healthy_monitor_hooks(db: FakeDB, run: dict) -> dict:
+    """Live-loop-equivalent facts: quiet resources, matching wire, S3 totals."""
+    def wire_facts(run):
+        facts = _quiet_wire()
+        facts["boot_id"] = run.get("boot_id")
+        return facts
+    return {
+        "wire_facts": wire_facts,
+        "resource_facts": lambda run, db, metrics: _quiet_facts_with_probe(
+            run),
+        "worker_probe": lambda run: [
+            {"archive": {"remote_attempts": {"get": 3, "bucket": 1,
+                                             "marker": 1}}}],
+    }
+
+
+def test_drain_monitor_dead_child_is_drained(tmp_path: Path) -> None:
+    """An already-exited drain child returns success with a record."""
+    import subprocess as _subprocess
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, header = _started_run(tmp_path, db)
+    _write_monitor_seed(run_dir, header)
+    done = _subprocess.Popen(["true"])
+    assert done.wait(timeout=30) == 0
+    arguments = _monitor_args(run_dir, done.pid)
+    assert step9.cmd_drain_monitor(arguments, _healthy_monitor_hooks(
+        db, header)) == 0
+    record = json.loads((run_dir / "drain-monitor.json").read_text())
+    assert record["outcome"] == "drained"
+    assert record["finished_at"] >= record["started_at"]
+
+
+def test_drain_monitor_zombie_counts_as_done(tmp_path: Path) -> None:
+    """An unreaped zombie is done: the driver reaps only after return."""
+    import subprocess as _subprocess
+    import time as _time
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, header = _started_run(tmp_path, db)
+    _write_monitor_seed(run_dir, header)
+    child = _subprocess.Popen(["sleep", "0.3"])
+    while child.poll() is None:
+        _time.sleep(0.05)
+    # Unreaped by design here: reap only after the monitor returns.
+    started = _time.monotonic()
+    try:
+        arguments = _monitor_args(run_dir, child.pid, timeout_seconds=20)
+        assert step9.cmd_drain_monitor(arguments, _healthy_monitor_hooks(
+            db, header)) == 0
+    finally:
+        child.wait(timeout=30)
+    assert _time.monotonic() - started < 10
+
+
+def test_drain_monitor_spool_breach_stops(tmp_path: Path) -> None:
+    """Allocated spool past the pinned cap fails the drain at once."""
+    import subprocess as _subprocess
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, header = _started_run(tmp_path, db)
+    _write_monitor_seed(run_dir, header)
+    hooks = _healthy_monitor_hooks(db, header)
+    def breached(run, db, metrics):
+        facts = _quiet_facts_with_probe(run)
+        facts["archive"] = {**facts["archive"],
+                            "physical_bytes": 2**40}
+        return facts
+    hooks["resource_facts"] = breached
+    child = _subprocess.Popen(["sleep", "30"])
+    try:
+        arguments = _monitor_args(run_dir, child.pid)
+        assert step9.cmd_drain_monitor(arguments, hooks) == 1
+    finally:
+        child.kill()
+        child.wait(timeout=30)
+    record = json.loads((run_dir / "drain-monitor.json").read_text())
+    assert record["outcome"] == "archive_physical_breach"
+
+
+def test_drain_monitor_stall_times_out(tmp_path: Path) -> None:
+    """A drain child that never exits hits the bounded timeout."""
+    import subprocess as _subprocess
+    import time as _time
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, header = _started_run(tmp_path, db)
+    _write_monitor_seed(run_dir, header)
+    child = _subprocess.Popen(["sleep", "30"])
+    try:
+        started = _time.monotonic()
+        arguments = _monitor_args(run_dir, child.pid, timeout_seconds=2)
+        assert step9.cmd_drain_monitor(arguments, _healthy_monitor_hooks(
+            db, header)) == 1
+        assert _time.monotonic() - started < 15
+    finally:
+        child.kill()
+        child.wait(timeout=30)
+    record = json.loads((run_dir / "drain-monitor.json").read_text())
+    assert record["outcome"] == "drain_timeout"
+
+
+def test_drain_monitor_missing_producer_fails_with_dead_child(
+        tmp_path: Path) -> None:
+    """A missing producer is incomplete at once, child already gone."""
+    import subprocess as _subprocess
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, header = _started_run(tmp_path, db)
+    _write_monitor_seed(run_dir, header)
+    hooks = _healthy_monitor_hooks(db, header)
+    def no_workers(run):
+        raise RuntimeError("workers gone")
+    hooks["worker_probe"] = no_workers
+    done = _subprocess.Popen(["true"])
+    assert done.wait(timeout=30) == 0
+    arguments = _monitor_args(run_dir, done.pid)
+    assert step9.cmd_drain_monitor(arguments, hooks) == 1
+    record = json.loads((run_dir / "drain-monitor.json").read_text())
+    assert record["outcome"] == "terminal_capture_missing"
+
+
+def test_drain_monitor_stopped_collector_and_live_workers(tmp_path: Path) -> None:
+    """Stopped collector terminal plus live workers aggregate exactly."""
+    import subprocess as _subprocess
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, header = _started_run(tmp_path, db)
+    _write_monitor_seed(run_dir, header)
+    terminal = Path(header["spool_path"]) / ".control" / "terminal"
+    (terminal / "collector.json").write_text(json.dumps({
+        "schema": step9.TERMINAL_GO_SCHEMA, "producer": "collector",
+        "process_id": "test-collector-pid",
+        "process_started_at": header["core_start"],
+        "captured_at": header["core_end"], "terminal": True,
+        "operations": {"put": 7},
+    }), encoding="utf-8")
+    done = _subprocess.Popen(["true"])
+    assert done.wait(timeout=30) == 0
+    arguments = _monitor_args(run_dir, done.pid)
+    assert step9.cmd_drain_monitor(arguments, _healthy_monitor_hooks(
+        db, header)) == 0
+    record = json.loads((run_dir / "drain-monitor.json").read_text())
+    assert record["outcome"] == "drained"
+    assert record["observations"]["s3_total"] == 12
+
+
+def test_s3_single_miss_is_retained_failed_evidence(tmp_path: Path) -> None:
+    """One S3 miss is retained failed evidence; recovery clears strikes."""
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    calls = []
+    def flaky(run):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("archive unreachable")
+        return [{"archive": {"remote_attempts": {"get": 3, "bucket": 1,
+                                                 "marker": 1}}}]
+    hooks = _sample_hooks(db, worker_probe=flaky)
+    hooks["max_slots"] = 2
+    hooks["single_pass"] = False
+    assert step9.cmd_sample(arguments, hooks) == 0
+    missed = json.loads((run_dir / "samples" / "minute-0000.json").read_text())
+    assert missed["outcome"] == "s3_unavailable"
+    assert missed["s3"]["error"] is not None
+    assert list((run_dir / "failures").glob("s3_unavailable-*.json"))
+    recovered = json.loads(
+        (run_dir / "samples" / "minute-0001.json").read_text())
+    assert recovered["outcome"] == "on_time"

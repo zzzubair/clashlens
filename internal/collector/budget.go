@@ -74,6 +74,11 @@ func loadEndpointBudgetConfig(getenv func(string) string) (endpointBudgetConfig,
 	}, nil
 }
 
+// maxEndpointBudgetCap bounds one endpoint budget: 100 requests per second
+// sustained for a full day, covering multi-week live-day runs without
+// treating the bound as spending authority.
+const maxEndpointBudgetCap = 8640000
+
 func endpointBudgetCap(getenv func(string) string, name string) (int, error) {
 	raw := strings.TrimSpace(getenv(name))
 	if raw == "" {
@@ -85,7 +90,7 @@ func endpointBudgetCap(getenv func(string) string, name string) (int, error) {
 			return 0, fmt.Errorf("%s must be a non-negative integer", name)
 		}
 		parsed = parsed*10 + int(digit-'0')
-		if parsed > 1000000 {
+		if parsed > maxEndpointBudgetCap {
 			return 0, fmt.Errorf("%s must be a non-negative integer", name)
 		}
 	}

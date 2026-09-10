@@ -625,6 +625,21 @@ func TestBudgetedClientDeniesRedirects(t *testing.T) {
 	}
 }
 
+func TestEndpointBudgetCapBoundaries(t *testing.T) {
+	for _, raw := range []string{"0", "1", "1000000", "8640000"} {
+		if _, err := endpointBudgetCap(func(string) string { return raw },
+			"CAP"); err != nil {
+			t.Fatalf("endpointBudgetCap(%q) rejected: %v", raw, err)
+		}
+	}
+	for _, raw := range []string{"", "-1", "12x", "8640001", "99999999"} {
+		if _, err := endpointBudgetCap(func(string) string { return raw },
+			"CAP"); err == nil {
+			t.Fatalf("endpointBudgetCap(%q) accepted", raw)
+		}
+	}
+}
+
 func TestLoadEndpointBudgetConfig(t *testing.T) {
 	deadline := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
 	settings := map[string]string{

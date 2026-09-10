@@ -730,3 +730,202 @@ def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:
     assert recorded["database_max_size"] == 6
     assert recorded["expected_contract_version"] == 5
     assert recorded["archive_pool_size"] == 12
+
+
+def _terminal_namespace(tmp_path: Path, **overrides: object) -> Namespace:
+    defaults = {
+        "database_url": "postgresql://prototype@postgres/db",
+        "database_url_file": "",
+        "archive_endpoint": "archive.example:9000",
+        "owner": "terminal-worker-1",
+        "max_jobs": 1,
+        "lease_seconds": 30,
+        "run_forever": True,
+        "poll_interval_seconds": 0.01,
+        "concurrency": 1,
+        "database_pool_size": None,
+        "archive_pool_size": None,
+        "operating_snapshot_file": str(tmp_path / "live.json"),
+        "terminal_snapshot_file": str(tmp_path / "terminal.json"),
+        "disable_player_discovery": False,
+    }
+    defaults.update(overrides)
+    return Namespace(**defaults)
+
+
+def test_worker_writes_terminal_snapshot_after_quiescence(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """Final per-replica snapshot lands on its own path after the loop."""
+    from clashlens.cli import ProcessResult
+
+    class FakeDatabase:
+        def __init__(self, _url: str, **kwargs: object) -> None:
+            del _url, kwargs
+
+        def close(self) -> None:
+            return None
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            return 0
+
+    class FakeArchive:
+        def check_ready(self) -> bool:
+            return True
+
+    class FakeProcessor:
+        def __init__(self, _database: object, _archive: object) -> None:
+            return None
+
+        def process_until_idle(self, **kwargs: object) -> list:
+            kwargs["stop_requested"].set()
+            return [ProcessResult(0, "processed")]
+
+    monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: FakeDatabase(_url))
+    monkeypatch.setattr(
+        cli, "_archive", lambda _args, **kwargs: FakeArchive()
+    )
+    monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
+    result = cli._run_worker(_terminal_namespace(tmp_path))
+    assert result == 0
+    live = json.loads((tmp_path / "live.json").read_text(encoding="utf-8"))
+    assert "terminal" not in live
+    terminal = json.loads(
+        (tmp_path / "terminal.json").read_text(encoding="utf-8")
+    )
+    assert terminal["schema"] == "clashlens-worker-terminal-v1"
+    assert terminal["producer"] == "worker"
+    assert terminal["terminal"] is True
+    assert terminal["captured_at"]
+    assert terminal["process"]["id"]
+    assert terminal["process"]["started_at"]
+    assert isinstance(terminal["archive"]["remote_attempts"], dict)
+    output = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+    ][-1]
+    assert output["status"] == "stopped"
+    assert output["terminal_snapshot"] == "written"
+
+
+def test_worker_terminal_write_failure_stays_incomplete(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """An unwritable terminal path fails visibly, never silently complete."""
+    from clashlens.cli import ProcessResult
+
+    class FakeDatabase:
+        def __init__(self, _url: str, **kwargs: object) -> None:
+            del _url, kwargs
+
+        def close(self) -> None:
+            return None
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            return 0
+
+    class FakeArchive:
+        def check_ready(self) -> bool:
+            return True
+
+    class FakeProcessor:
+        def __init__(self, _database: object, _archive: object) -> None:
+            return None
+
+        def process_until_idle(self, **kwargs: object) -> list:
+            kwargs["stop_requested"].set()
+            return [ProcessResult(0, "processed")]
+
+    monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: FakeDatabase(_url))
+    monkeypatch.setattr(
+        cli, "_archive", lambda _args, **kwargs: FakeArchive()
+    )
+    monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
+    result = cli._run_worker(
+        _terminal_namespace(
+            tmp_path, terminal_snapshot_file="/proc/clashlens-no-dir/t.json"
+        )
+    )
+    assert result == 1
+    output = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines()
+    ][-1]
+    assert output["status"] == "stopped"
+    assert output["terminal_snapshot"] == "unavailable"
+
+
+def test_worker_terminal_refused_when_heartbeat_stuck(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """A heartbeat wedged in readiness blocks any terminal claim."""
+    import threading as _threading
+    import time as _time
+
+    from clashlens.cli import ProcessResult
+
+    release = _threading.Event()
+    calls = []
+
+    class FakeDatabase:
+        def __init__(self, _url: str, **kwargs: object) -> None:
+            del _url, kwargs
+
+        def close(self) -> None:
+            return None
+
+        def maintain_queue(self, *, max_jobs: int) -> int:
+            return 0
+
+    class FakeArchive:
+        def check_ready(self) -> bool:
+            return True
+
+        def readiness(self) -> dict:
+            calls.append(_time.monotonic())
+            if len(calls) > 1:
+                assert release.wait(timeout=30)
+            return {"ready": True}
+
+        @property
+        def remote_attempts(self) -> dict:
+            return {}
+
+    class FakeProcessor:
+        def __init__(self, _database: object, _archive: object) -> None:
+            return None
+
+        def process_until_idle(self, **kwargs: object) -> list:
+            _time.sleep(0.3)
+            kwargs["stop_requested"].set()
+            return [ProcessResult(0, "processed")]
+
+    monkeypatch.setattr(cli, "Database", lambda _url, **kwargs: FakeDatabase(_url))
+    monkeypatch.setattr(
+        cli, "_archive", lambda _args, **kwargs: FakeArchive()
+    )
+    monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
+    monkeypatch.setattr(cli, "WORKER_SNAPSHOT_INTERVAL_SECONDS", 0.01)
+    written: list = []
+    real_write = cli.write_private_snapshot
+
+    def record_write(path, snapshot):
+        written.append(str(path))
+        return real_write(path, snapshot)
+
+    monkeypatch.setattr(cli, "write_private_snapshot", record_write)
+    terminal = tmp_path / "terminal.json"
+    result = cli._run_worker(
+        _terminal_namespace(
+            tmp_path, terminal_snapshot_file=str(terminal)
+        )
+    )
+    try:
+        assert result == 1
+        assert not terminal.exists()
+        assert str(terminal) not in written
+        output = [
+            json.loads(line) for line in capsys.readouterr().out.splitlines()
+        ][-1]
+        assert output["status"] == "stopped"
+        assert output["terminal_snapshot"] == "heartbeat_unfinished"
+    finally:
+        release.set()
