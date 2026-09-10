@@ -26,9 +26,9 @@ const spoolStripeCount = 4096
 // Capacity sentinels classify admission failures as retryable degraded
 // capacity instead of generic storage failure (see archiveFailureCategory).
 var (
-	errSpoolCapacity       = errors.New("spool backpressure: capacity reservation denied")
-	errSpoolFreeSpaceFloor = errors.New("spool backpressure: free-space floor reached")
-	errSpoolFreeInodeFloor = errors.New("spool backpressure: free-inode floor reached")
+	errSpoolCapacity        = errors.New("spool backpressure: capacity reservation denied")
+	errSpoolFreeSpaceFloor  = errors.New("spool backpressure: free-space floor reached")
+	errSpoolFreeInodeFloor  = errors.New("spool backpressure: free-inode floor reached")
 	errSpoolUnknownCapacity = errors.New("spool backpressure: unknown filesystem capacity")
 )
 
@@ -108,10 +108,14 @@ type evidenceSpool struct {
 	// open file description, so one shared descriptor cannot arbitrate
 	// concurrent in-process lockers; stripeMu serializes those first and the
 	// flock keeps cross-process (Go vs Python) exclusion.
-	locks      []*os.File
-	stripeMu   [spoolStripeCount]sync.Mutex
-	capacity   *os.File
-	capacityMu sync.Mutex
+	locks        []*os.File
+	stripeMu     [spoolStripeCount]sync.Mutex
+	capacity     *os.File
+	capacityMu   sync.Mutex
+	batchMu      sync.Mutex
+	batchQueue   []spoolCapacityRequest
+	batchRunning bool
+	batchFailure error // guarded by capacityMu; cleared by reconciliation
 	// faults is nil in production; tests set it to inject filesystem errors.
 	faults *spoolFaults
 }
@@ -541,7 +545,11 @@ func (s *evidenceSpool) reconcile() error {
 	}
 	ledger.ReservedInodes = ledger.ReservedObjects
 	ledger.HighWaterBytes = ledger.FinalBytes + ledger.TemporaryBytes + ledger.AbandonedTempBytes + ledger.ReservedBytes
-	return s.writeLedger(ledger)
+	if err := s.writeLedger(ledger); err != nil {
+		return err
+	}
+	s.batchFailure = nil
+	return nil
 }
 
 func (s *evidenceSpool) reservationLocked() bool {
@@ -605,20 +613,32 @@ func (s *evidenceSpool) reserve(limit int64) (*spoolReservation, error) {
 	if limit <= 0 || limit > s.cfg.maxBytes {
 		return nil, errors.New("spool reservation exceeds configured body limit")
 	}
-	if err := s.lockCapacity(); err != nil {
-		return nil, err
-	}
-	hasDeadReservation := s.deadReservationExists()
-	s.unlockCapacity()
+	var reservation *spoolReservation
+	hasDeadReservation := false
+	err := s.withCapacity(func(batch *spoolCapacityBatch) error {
+		hasDeadReservation = s.deadReservationExists()
+		if hasDeadReservation {
+			return errors.New("spool backpressure: dead reservation requires reconciliation")
+		}
+		var err error
+		reservation, err = s.reserveLocked(batch, limit)
+		return err
+	})
 	if hasDeadReservation {
 		_ = s.reconcile()
-		return nil, errors.New("spool backpressure: dead reservation requires reconciliation")
 	}
-	if err := s.lockCapacity(); err != nil {
+	if err != nil {
+		if reservation != nil {
+			// No body was admitted. Leave an unlocked record for reconciliation.
+			_ = reservation.file.Close()
+		}
 		return nil, err
 	}
-	defer s.unlockCapacity()
-	ledger, err := s.ledger()
+	return reservation, nil
+}
+
+func (s *evidenceSpool) reserveLocked(batch *spoolCapacityBatch, limit int64) (*spoolReservation, error) {
+	ledger, err := batch.ledger()
 	if err != nil {
 		return nil, err
 	}
@@ -670,42 +690,30 @@ func (s *evidenceSpool) reserve(limit int64) (*spoolReservation, error) {
 		_ = unlinkSpoolRelative(s.cfg.root, path)
 		return nil, err
 	}
-	if err := file.Sync(); err != nil {
+	if err := batch.syncFile(file); err != nil {
 		_ = file.Close()
 		_ = unlinkSpoolRelative(s.cfg.root, path)
 		return nil, err
 	}
-	if err := s.syncDir(filepath.Dir(path)); err != nil {
-		_ = file.Close()
-		_ = unlinkSpoolRelative(s.cfg.root, path)
-		return nil, err
-	}
+	_ = batch.syncDir(filepath.Dir(path))
 	ledger.ReservedObjects++
 	ledger.ReservedBytes += limit
 	ledger.ReservedInodes = ledger.ReservedObjects
 	ledger.HighWaterBytes = maxInt64(ledger.HighWaterBytes, ledger.FinalBytes+ledger.TemporaryBytes+ledger.AbandonedTempBytes+ledger.ReservedBytes)
-	if err := s.writeLedger(ledger); err != nil {
-		_ = file.Close()
-		_ = unlinkSpoolRelative(s.cfg.root, path)
-		return nil, err
-	}
+	_ = batch.writeLedger(ledger)
 	return &spoolReservation{spool: s, file: file, path: path, limit: limit}, nil
 }
 func (r *spoolReservation) release() error {
 	if r == nil || r.released {
 		return nil
 	}
-	if err := r.spool.lockCapacity(); err != nil {
-		return err
-	}
-	defer r.spool.unlockCapacity()
-	return r.releaseLocked()
+	return r.spool.withCapacity(r.releaseLocked)
 }
-func (r *spoolReservation) releaseLocked() error {
+func (r *spoolReservation) releaseLocked(batch *spoolCapacityBatch) error {
 	if r == nil || r.released {
 		return nil
 	}
-	ledger, err := r.spool.ledger()
+	ledger, err := batch.ledger()
 	if err != nil {
 		return err
 	}
@@ -718,9 +726,7 @@ func (r *spoolReservation) releaseLocked() error {
 		ledger.ReservedBytes = 0
 	}
 	ledger.ReservedInodes = ledger.ReservedObjects
-	if err := r.spool.writeLedger(ledger); err != nil {
-		return err
-	}
+	_ = batch.writeLedger(ledger)
 	if err := syscall.Flock(int(r.file.Fd()), syscall.LOCK_UN); err != nil {
 		return err
 	}
@@ -731,7 +737,7 @@ func (r *spoolReservation) releaseLocked() error {
 	if err := unlinkSpoolRelative(r.spool.cfg.root, r.path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err := r.spool.syncDir(filepath.Dir(r.path)); err != nil {
+	if err := batch.syncDir(filepath.Dir(r.path)); err != nil {
 		return err
 	}
 	return nil
@@ -744,10 +750,12 @@ func (r *spoolReservation) bindTemporaryPath(tempPath string) error {
 		return nil
 	}
 	r.temporaryPath = tempPath
-	if err := r.spool.lockCapacity(); err != nil {
-		return err
-	}
-	defer r.spool.unlockCapacity()
+	return r.spool.withCapacity(func(batch *spoolCapacityBatch) error {
+		return r.bindTemporaryPathLocked(batch, tempPath)
+	})
+}
+
+func (r *spoolReservation) bindTemporaryPathLocked(batch *spoolCapacityBatch, tempPath string) error {
 	record := fmt.Sprintf(`{"limit":%d,"created_at":%d,"temporary_path":%q}`, r.limit, time.Now().UnixNano(), tempPath)
 	if _, err := r.file.Seek(0, io.SeekStart); err != nil {
 		return err
@@ -758,15 +766,13 @@ func (r *spoolReservation) bindTemporaryPath(tempPath string) error {
 	if err := r.file.Truncate(int64(len(record))); err != nil {
 		return err
 	}
-	return r.file.Sync()
+	return batch.syncFile(r.file)
 }
 
 func (s *evidenceSpool) removeOrAbandonTemporary(tempPath string) error {
-	if err := s.lockCapacity(); err != nil {
-		return err
-	}
-	defer s.unlockCapacity()
-	return s.removeOrAbandonTemporaryLocked(tempPath)
+	return s.withCapacity(func(batch *spoolCapacityBatch) error {
+		return s.removeOrAbandonTemporaryLocked(batch, tempPath)
+	})
 }
 
 // removeOrAbandonTemporaryLocked deletes a failed temporary file while the
@@ -774,7 +780,7 @@ func (s *evidenceSpool) removeOrAbandonTemporary(tempPath string) error {
 // the durable abandoned-temporary ledger so admission keeps accounting for it.
 // Any failure is returned so callers can keep the covering reservation alive:
 // releasing it would free capacity that the surviving temporary still holds.
-func (s *evidenceSpool) removeOrAbandonTemporaryLocked(tempPath string) error {
+func (s *evidenceSpool) removeOrAbandonTemporaryLocked(batch *spoolCapacityBatch, tempPath string) error {
 	unlinkErr := unlinkSpoolRelative(s.cfg.root, tempPath)
 	if unlinkErr == nil || os.IsNotExist(unlinkErr) {
 		return nil
@@ -786,14 +792,14 @@ func (s *evidenceSpool) removeOrAbandonTemporaryLocked(tempPath string) error {
 		}
 		return statErr
 	}
-	ledger, ledgerErr := s.ledger()
+	ledger, ledgerErr := batch.ledger()
 	if ledgerErr != nil {
 		return ledgerErr
 	}
 	ledger.AbandonedTempBytes += info.Size()
 	ledger.AbandonedTempObjects++
 	ledger.HighWaterBytes = maxInt64(ledger.HighWaterBytes, ledger.FinalBytes+ledger.TemporaryBytes+ledger.AbandonedTempBytes+ledger.ReservedBytes)
-	return s.writeLedger(ledger)
+	return batch.writeLedger(ledger)
 }
 
 // discardFailedTemporary removes the failed temporary or transfers its size
@@ -807,11 +813,11 @@ func (r *spoolReservation) discardFailedTemporary(tempPath string) error {
 	return r.release()
 }
 
-func (r *spoolReservation) discardFailedTemporaryLocked(tempPath string) error {
-	if err := r.spool.removeOrAbandonTemporaryLocked(tempPath); err != nil {
+func (r *spoolReservation) discardFailedTemporaryLocked(batch *spoolCapacityBatch, tempPath string) error {
+	if err := r.spool.removeOrAbandonTemporaryLocked(batch, tempPath); err != nil {
 		return err
 	}
-	return r.releaseLocked()
+	return r.releaseLocked(batch)
 }
 
 func (s *evidenceSpool) beginOperation(hash, temporaryPath string) (*os.File, string, error) {
@@ -956,117 +962,72 @@ func (s *evidenceSpool) write(reservation *spoolReservation, body io.Reader, hel
 		return localEvidence{}, err
 	}
 	defer func() { _ = s.finishOperation(operation, operationPath) }()
-	if err := s.lockCapacity(); err != nil {
-		if abandonErr := reservation.discardFailedTemporary(tempPath); abandonErr != nil {
-			return localEvidence{}, abandonErr
-		}
+	err = s.withCapacity(func(batch *spoolCapacityBatch) error {
+		return s.promoteLocked(batch, reservation, tempPath, digest, written)
+	})
+	if err != nil {
 		return localEvidence{}, err
 	}
-	defer s.unlockCapacity()
+	return localEvidence{Hash: digest, Size: written, Path: s.finalPath(digest)}, nil
+}
+
+func (s *evidenceSpool) promoteLocked(batch *spoolCapacityBatch, reservation *spoolReservation, tempPath, digest string, written int64) error {
+	fail := func(err error) error {
+		return errors.Join(err, reservation.discardFailedTemporaryLocked(batch, tempPath))
+	}
 	final := s.finalPath(digest)
 	if err := safeSpoolPath(s.cfg.root, final); err != nil {
-		if abandonErr := reservation.discardFailedTemporaryLocked(tempPath); abandonErr != nil {
-			return localEvidence{}, abandonErr
-		}
-		return localEvidence{}, err
+		return fail(err)
 	}
 	if err := mkdirAllSpoolRelative(s.cfg.root, filepath.Dir(final), 0700); err != nil {
-		if abandonErr := reservation.discardFailedTemporaryLocked(tempPath); abandonErr != nil {
-			return localEvidence{}, abandonErr
-		}
-		return localEvidence{}, err
+		return fail(err)
 	}
 	_, statErr := statSpoolRelative(s.cfg.root, filepath.Join("sha256", digest[:2], digest), false)
-	created := os.IsNotExist(statErr)
-	promote := func() error {
-		if s.faults != nil && s.faults.promoteErr != nil {
-			return s.faults.promoteErr
-		}
-		return linkSpoolRelative(s.cfg.root, tempPath, final)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return fail(statErr)
 	}
+	created := os.IsNotExist(statErr)
 	var replacedSize int64
-	if created {
-		if err := promote(); err != nil && !os.IsExist(err) {
-			if abandonErr := reservation.discardFailedTemporaryLocked(tempPath); abandonErr != nil {
-				return localEvidence{}, abandonErr
-			}
-			return localEvidence{}, err
-		}
-		if abandonErr := s.removeOrAbandonTemporaryLocked(tempPath); abandonErr != nil {
-			return localEvidence{}, abandonErr
-		}
-		if err := s.syncDir(filepath.Dir(final)); err != nil {
-			_ = reservation.releaseLocked()
-			return localEvidence{}, err
-		}
-	} else {
-		// Hash-verify the winning inode without traversing symlinks; a
-		// corrupt or unreadable winner is replaced under the exclusive stripe.
+	needsPromotion := created
+	if !created {
+		// Verify the winning inode under the exclusive stripe before replacement.
 		winner, readErr := s.readFinalNoFollow(final)
 		winnerDigest := sha256.Sum256(winner)
 		if readErr != nil || int64(len(winner)) != written || hex.EncodeToString(winnerDigest[:]) != digest {
 			replacedSize = int64(len(winner))
-			if removeErr := unlinkSpoolRelative(s.cfg.root, final); removeErr != nil && !os.IsNotExist(removeErr) {
-				_ = reservation.releaseLocked()
-				return localEvidence{}, removeErr
+			if err := unlinkSpoolRelative(s.cfg.root, final); err != nil && !os.IsNotExist(err) {
+				return fail(err)
 			}
-			if err := promote(); err != nil {
-				if abandonErr := reservation.discardFailedTemporaryLocked(tempPath); abandonErr != nil {
-					return localEvidence{}, abandonErr
-				}
-				return localEvidence{}, err
-			}
-			if abandonErr := s.removeOrAbandonTemporaryLocked(tempPath); abandonErr != nil {
-				return localEvidence{}, abandonErr
-			}
-			if err := s.syncDir(filepath.Dir(final)); err != nil {
-				_ = reservation.releaseLocked()
-				return localEvidence{}, err
-			}
-		} else {
-			if abandonErr := s.removeOrAbandonTemporaryLocked(tempPath); abandonErr != nil {
-				return localEvidence{}, abandonErr
-			}
+			needsPromotion = true
 		}
 	}
-	ledger, err := s.ledger()
+	if needsPromotion {
+		if s.faults != nil && s.faults.promoteErr != nil {
+			return fail(s.faults.promoteErr)
+		}
+		if err := linkSpoolRelative(s.cfg.root, tempPath, final); err != nil {
+			return fail(err)
+		}
+		_ = batch.syncDir(filepath.Dir(final))
+		// Persist a newly created hash-prefix directory as well as its contents.
+		_ = batch.syncDir(filepath.Dir(filepath.Dir(final)))
+	}
+	if err := s.removeOrAbandonTemporaryLocked(batch, tempPath); err != nil {
+		return err
+	}
+	_ = batch.syncDir(filepath.Join(s.cfg.root, "tmp"))
+	ledger, err := batch.ledger()
 	if err != nil {
-		_ = reservation.releaseLocked()
-		return localEvidence{}, err
+		return err
 	}
 	if created {
 		ledger.FinalBytes += written
 		ledger.FinalObjects++
-	} else if replacedSize != 0 {
+	} else if needsPromotion {
 		ledger.FinalBytes += written - replacedSize
 	}
-	if ledger.ReservedObjects > 0 {
-		ledger.ReservedObjects--
-	}
-	if ledger.ReservedBytes >= reservation.limit {
-		ledger.ReservedBytes -= reservation.limit
-	} else {
-		ledger.ReservedBytes = 0
-	}
-	ledger.ReservedInodes = ledger.ReservedObjects
-	ledger.HighWaterBytes = maxInt64(ledger.HighWaterBytes, ledger.FinalBytes+ledger.TemporaryBytes+ledger.AbandonedTempBytes+ledger.ReservedBytes)
-	if err := s.writeLedger(ledger); err != nil {
-		return localEvidence{}, err
-	}
-	if err := syscall.Flock(int(reservation.file.Fd()), syscall.LOCK_UN); err != nil {
-		return localEvidence{}, err
-	}
-	if err := reservation.file.Close(); err != nil {
-		return localEvidence{}, err
-	}
-	reservation.released = true
-	if err := unlinkSpoolRelative(s.cfg.root, reservation.path); err != nil && !os.IsNotExist(err) {
-		return localEvidence{}, err
-	}
-	if err := s.syncDir(filepath.Dir(reservation.path)); err != nil {
-		return localEvidence{}, err
-	}
-	return localEvidence{Hash: digest, Size: written, Path: final}, nil
+	_ = batch.writeLedger(ledger)
+	return reservation.releaseLocked(batch)
 }
 
 func (s *evidenceSpool) verify(hash string, expectedSize int64, heldStripe ...*os.File) (bool, error) {

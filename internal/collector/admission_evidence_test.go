@@ -96,19 +96,19 @@ func seedOpenAdmissionGate(t *testing.T, ctx context.Context, store *store) {
 func TestAdmissionEvidenceConfigParsing(t *testing.T) {
 	t.Parallel()
 	valid := map[string]string{
-		"CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID":                  "step9-run-v1",
-		"CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START":                   "2026-09-10T05:00:00Z",
-		"CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END":                     "2026-09-11T05:00:00Z",
-		"CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS":              "90000",
-		"CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES":    "4000000",
-		"CLASHLENS_DATABASE_URL":                                       "postgres://collector@127.0.0.1/collector",
-		"CLASHLENS_ARCHIVE_ENDPOINT":                                   "127.0.0.1:9000",
-		"CLASHLENS_ARCHIVE_BUCKET":                                     "raw",
-		"CLASHLENS_ARCHIVE_ACCESS_KEY":                                 "archive-access",
-		"CLASHLENS_ARCHIVE_SECRET_KEY":                                 "archive-secret",
-		"CLASHLENS_NORMAL_API_KEYS":                                    "normal-1=one,normal-2=two,normal-3=three,normal-4=four",
-		"CLASHLENS_INTERACTIVE_API_KEYS":                               "interactive-1=five",
-		"CLASHLENS_OFFICIAL_API_ORIGIN":                                "https://api.clashofclans.com",
+		"CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID":               "step9-run-v1",
+		"CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START":                "2026-09-10T05:00:00Z",
+		"CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END":                  "2026-09-11T05:00:00Z",
+		"CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS":           "90000",
+		"CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES": "4000000",
+		"CLASHLENS_DATABASE_URL":                                    "postgres://collector@127.0.0.1/collector",
+		"CLASHLENS_ARCHIVE_ENDPOINT":                                "127.0.0.1:9000",
+		"CLASHLENS_ARCHIVE_BUCKET":                                  "raw",
+		"CLASHLENS_ARCHIVE_ACCESS_KEY":                              "archive-access",
+		"CLASHLENS_ARCHIVE_SECRET_KEY":                              "archive-secret",
+		"CLASHLENS_NORMAL_API_KEYS":                                 "normal-1=one,normal-2=two,normal-3=three,normal-4=four",
+		"CLASHLENS_INTERACTIVE_API_KEYS":                            "interactive-1=five",
+		"CLASHLENS_OFFICIAL_API_ORIGIN":                             "https://api.clashofclans.com",
 	}
 	config, err := loadConfig(func(name string) string { return valid[name] })
 	if err != nil {
@@ -135,13 +135,15 @@ func TestAdmissionEvidenceConfigParsing(t *testing.T) {
 		t.Fatalf("disabled evidence should be nil, got %+v", off.admissionEvidence)
 	}
 	for _, tc := range []struct {
-		name  string
+		name   string
 		mutate func(map[string]string)
-		want  string
+		want   string
 	}{
 		{"partial", func(m map[string]string) { delete(m, "CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END") }, "all-or-none"},
 		{"bad run", func(m map[string]string) { m["CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID"] = "bad id!" }, "RUN_ID"},
-		{"non-utc", func(m map[string]string) { m["CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START"] = "2026-09-10T05:00:00+01:00" }, "UTC"},
+		{"non-utc", func(m map[string]string) {
+			m["CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START"] = "2026-09-10T05:00:00+01:00"
+		}, "UTC"},
 		{"end before start", func(m map[string]string) { m["CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END"] = "2026-09-10T04:00:00Z" }, "after start"},
 		{"too long", func(m map[string]string) { m["CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END"] = "2026-09-12T05:00:01Z" }, "30 hours"},
 		{"events zero", func(m map[string]string) { m["CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS"] = "0" }, "MAX_EVENTS"},
@@ -646,8 +648,8 @@ func TestAdmissionEvidenceNullAndNonEligibleStateRetained(t *testing.T) {
 	}
 }
 
-func TestAdmissionEvidenceRootConflictsFailReconciliation(t *testing.T) {
-	t.Run("active coalescing conflict", func(t *testing.T) {
+func TestAdmissionEvidenceExistingRoots(t *testing.T) {
+	t.Run("active root keeps its queue position", func(t *testing.T) {
 		databaseURL := startAdmissionDatabase(t)
 		ctx := context.Background()
 		start, end := admissionCaptureAroundNow(10 * time.Minute)
@@ -663,15 +665,19 @@ func TestAdmissionEvidenceRootConflictsFailReconciliation(t *testing.T) {
 		if _, err := store.pool.Exec(ctx, `INSERT INTO collector_jobs (work_type, player_id, normalized_tag, capacity_pool, priority, due_at, coalescing_key, status) SELECT 'regular_poll', id, normalized_tag, 'normal', 100, $2, $3, 'pending' FROM players WHERE id=$1`, ids[0], now, coalescing); err != nil {
 			t.Fatalf("seed conflicting root: %v", err)
 		}
-		_, err := store.scheduleDueRegular(ctx, now, 5*time.Minute, 10)
-		if err == nil || !strings.Contains(err.Error(), "root mismatch") {
-			t.Fatalf("conflict error = %v, want root mismatch", err)
+		created, err := store.scheduleDueRegular(ctx, now, 5*time.Minute, 10)
+		if err != nil || created != 0 {
+			t.Fatalf("active root must be skipped: created=%d err=%v", created, err)
 		}
-		// The mismatch is committed as evidence; validator finds selected != inserted.
 		var selected, inserted int
-		store.pool.QueryRow(ctx, `SELECT cardinality(selected_player_ids), cardinality(inserted_job_ids) FROM collector_regular_admission_evidence WHERE run_id=$1`, config.runID).Scan(&selected, &inserted)
-		if selected != 1 || inserted != 0 {
-			t.Fatalf("selected=%d inserted=%d, want 1 0", selected, inserted)
+		if err := store.pool.QueryRow(ctx, `SELECT cardinality(selected_player_ids), cardinality(inserted_job_ids) FROM collector_regular_admission_evidence WHERE run_id=$1`, config.runID).Scan(&selected, &inserted); err != nil {
+			t.Fatal(err)
+		}
+		if selected != 0 || inserted != 0 {
+			t.Fatalf("selected=%d inserted=%d, want 0 0", selected, inserted)
+		}
+		if due := readNextDueAt(t, ctx, store, ids[0]); !due.Equal(dueAt.Truncate(time.Microsecond)) {
+			t.Fatalf("active player's queue position moved: %s", due)
 		}
 	})
 	t.Run("completed duplicate semantic root", func(t *testing.T) {

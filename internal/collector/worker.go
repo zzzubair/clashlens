@@ -141,12 +141,19 @@ func (w *worker) runOnce(ctx context.Context, pool capacityPool) (bool, error) {
 		endpointErrors = append(endpointErrors, endpointError)
 	}
 	resolutionStartedAt := time.Now()
+	maximumRetries := w.config.maximumRetries
+	if job.workType == "regular_poll" && job.retryClass != "recovery" {
+		// A regular pass records missing endpoints honestly and moves on.
+		// The next pass retries the player; pending raw evidence and storage
+		// dependencies still use the resolver's existing recovery path.
+		maximumRetries = 0
+	}
 	finishError := w.store.resolveAttempt(
 		jobContext,
 		job,
 		attemptID,
 		time.Now().UTC(),
-		w.config.maximumRetries,
+		maximumRetries,
 	)
 	w.config.metrics.recordStageDuration("attempt_resolution", time.Since(resolutionStartedAt))
 	if finishError != nil {
@@ -207,7 +214,7 @@ func (w *worker) collectEndpoint(
 		if job.pool == interactivePool || job.retryClass == "recovery" {
 			key, err = w.keys.sharedInteractiveKey()
 		} else {
-			key, err = w.keys.acquire(ctx, job.pool)
+			err = w.keys.readyForPool(job.pool)
 		}
 		if err != nil {
 			return err
@@ -237,9 +244,24 @@ func (w *worker) collectEndpoint(
 				return err
 			}
 		}
+		localPermit := job.pool != interactivePool && job.retryClass != "recovery"
+		if localPermit {
+			// Durable request accounting and spool admission can stall. Acquire
+			// local rate capacity only after those waits, immediately before HTTP.
+			key, err = w.keys.acquire(ctx, job.pool)
+			if err != nil {
+				if reservation != nil {
+					err = errors.Join(err, reservation.release())
+				}
+				return err
+			}
+		}
 		w.config.metrics.recordAPIRequest(string(endpoint), string(job.pool))
 
 		response, err := w.api.fetch(ctx, endpoint, job.normalizedTag, key.Secret)
+		if localPermit {
+			w.keys.finishRequest(key, time.Now())
+		}
 		duration := time.Duration(0)
 		if !response.requestStartedAt.IsZero() {
 			duration = time.Since(response.requestStartedAt)
@@ -541,7 +563,7 @@ func transportFailureCategory(err error) string {
 
 func (p *keyPool) acquire(ctx context.Context, requestedPool capacityPool) (APIKey, error) {
 	for {
-		key, wait, err := p.tryAcquire(time.Now().UTC(), requestedPool)
+		key, wait, err := p.tryAcquire(time.Now(), requestedPool)
 		if err == nil {
 			return key, nil
 		}

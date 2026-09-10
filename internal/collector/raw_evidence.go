@@ -36,7 +36,7 @@ func (a *s3Archive) reserve(ctx context.Context) (*spoolReservation, error) {
 	return a.spool.reserve(a.maximumBodyBytes)
 }
 
-func (a *s3Archive) secureAndCommit(ctx context.Context, reservation *spoolReservation, body []byte, commit evidenceCommit, pending pendingEvidence, response ...officialResponse) error {
+func (a *s3Archive) secureAndCommit(ctx context.Context, reservation *spoolReservation, body []byte, commit evidenceCommit, pending pendingEvidence, response ...officialResponse) (result error) {
 	if reservation == nil || a.spool == nil {
 		return errors.New("raw-evidence reservation is required")
 	}
@@ -49,7 +49,7 @@ func (a *s3Archive) secureAndCommit(ctx context.Context, reservation *spoolReser
 	// The admission reservation covers only the in-flight body. Every exit
 	// path releases it; promoted final bytes are accounted separately by the
 	// spool write, and a leaked reservation would wedge future admission.
-	defer reservation.release()
+	defer func() { result = errors.Join(result, reservation.release()) }()
 	stripeIndex, err := a.spool.stripeIndex(digest)
 	if err != nil {
 		_ = reservation.release()
@@ -108,9 +108,10 @@ func (a *s3Archive) secureAndCommit(ctx context.Context, reservation *spoolReser
 		if _, err := a.spool.write(reservation, bytesReader(localBody), a.spool.locks[stripeIndex]); err != nil {
 			return err
 		}
-	} else {
-		_ = reservation.release()
 	}
+	// A local hit creates no bytes. Keep its covering reservation until the
+	// deferred release, after unlocking the stripe, so identical responses
+	// do not serialize capacity fsyncs while holding the same hash lock.
 	if !verified {
 		if _, putErr := a.putVerifiedAt(ctx, digest, body, reference); putErr != nil {
 			// reference stays the deterministic bucket path so the fenced

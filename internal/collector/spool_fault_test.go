@@ -352,21 +352,17 @@ func TestSpoolStripeLockInteroperatesWithPython(t *testing.T) {
 		stripePath,
 	)
 	child := exec.Command(python, "-c", holdExclusive)
-	stdout := &bytes.Buffer{}
-	child.Stdout = stdout
+	stdout, err := child.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := child.Start(); err != nil {
 		t.Fatalf("start python holder: %v", err)
 	}
-	defer func() { _ = child.Process.Kill(); _, _ = child.Process.Wait() }()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if strings.Contains(stdout.String(), "held") {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("python holder never acquired its lock")
-		}
-		time.Sleep(5 * time.Millisecond)
+	defer func() { _ = child.Process.Kill(); _ = child.Wait() }()
+	held := make([]byte, len("held\n"))
+	if _, err := io.ReadFull(stdout, held); err != nil || string(held) != "held\n" {
+		t.Fatalf("python holder never acquired its lock: %q, %v", held, err)
 	}
 	// Phase 1: while Python holds the exclusive flock, Go's non-blocking
 	// exclusive attempt must fail.

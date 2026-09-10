@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestWorkerArchivesRetryableHTTPResponsesAndRetriesWithBackoff(t *testing.T) {
+func TestWorkerInitialCollectionArchivesRetryableResponsesAndRetriesWithBackoff(t *testing.T) {
 	databaseURL := startContractDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -27,8 +27,11 @@ func TestWorkerArchivesRetryableHTTPResponsesAndRetriesWithBackoff(t *testing.T)
 	`, now.Add(-time.Hour)); err != nil {
 		t.Fatalf("insert active player: %v", err)
 	}
-	if _, err := store.scheduleDueRegular(ctx, now, 5*time.Minute, 100); err != nil {
-		t.Fatalf("schedule due player: %v", err)
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO collector_jobs (work_type, player_id, normalized_tag, capacity_pool, priority, due_at, coalescing_key, status)
+		SELECT 'initial_collection', id, normalized_tag, 'normal', 100, $1, 'initial-test', 'pending' FROM players
+	`, now); err != nil {
+		t.Fatalf("schedule initial collection: %v", err)
 	}
 
 	var requestMu sync.Mutex

@@ -129,7 +129,9 @@ func (s *store) scheduleDueRegular(ctx context.Context, now time.Time, cycle tim
 
 	cycleStart := now.Truncate(cycle)
 	boundary := boundaryAdmissionBoundary(now)
-	nextCycleStart := cycleStart.Add(cycle)
+	// The cycle is a minimum revisit interval, not a wall-clock deadline.
+	// Queue oldest-due players first and put each admission at the back.
+	nextCycleStart := now.Add(cycle)
 	cycleSeconds := int64(cycle / time.Second)
 	var created int
 	gateCTE, fromPlayers, wherePlayers := "", "FROM players", "WHERE active"
@@ -176,6 +178,12 @@ func (s *store) scheduleDueRegular(ctx context.Context, now time.Time, cycle tim
 			SELECT id, normalized_tag, next_due_at
 			%s
 			%s AND next_due_at <= $1
+			  AND NOT EXISTS (
+				SELECT 1 FROM collector_jobs AS active_job
+				WHERE active_job.player_id = players.id
+				  AND active_job.work_type = 'regular_poll'
+				  AND active_job.status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
+			  )
 			ORDER BY next_due_at, id
 			FOR NO KEY UPDATE SKIP LOCKED
 			LIMIT $2
@@ -193,10 +201,7 @@ func (s *store) scheduleDueRegular(ctx context.Context, now time.Time, cycle tim
 			RETURNING 1
 		), advanced AS (
 			UPDATE players AS player
-			SET next_due_at = $4::timestamptz + CASE
-				WHEN $5::bigint < 1 THEN interval '0 seconds'
-				ELSE ((player.id - 1) %% $5::bigint) * interval '1 second'
-			END
+			SET next_due_at = $4::timestamptz
 			FROM due
 			WHERE player.id = due.id
 			RETURNING player.id

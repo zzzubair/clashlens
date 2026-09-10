@@ -545,7 +545,12 @@ def _capacity_tag_index(tag: str) -> int:
     return index
 
 
-def _processor(connection_info: str, archive: tuple[str, str, str, Any]):
+def _processor(
+    connection_info: str,
+    archive: tuple[str, str, str, Any],
+    *,
+    capacity_spool: Path | None = None,
+):
     from clashlens.archive import S3ArchiveReader, SpoolFirstReader
     from clashlens.db import Database
     from clashlens.worker import ObservationProcessor, StageMetrics
@@ -561,11 +566,17 @@ def _processor(connection_info: str, archive: tuple[str, str, str, Any]):
         allow_insecure_test_origin=True,
         pool_size=_LANES,
     )
-    spool = SpoolFirstReader(
-        s3,
-        spool_root=tempfile.mkdtemp(prefix="clashlens-perf-spool-"),
-        stage_metrics=metrics,
+    spool_options = (
+        {"spool_root": tempfile.mkdtemp(prefix="clashlens-perf-spool-")}
+        if capacity_spool is None
+        else {
+            "spool_root": str(capacity_spool),
+            "max_body_bytes": 1 << 20,
+            "max_bytes": CAPACITY_SPOOL_BYTES,
+            "max_objects": 30000,
+        }
     )
+    spool = SpoolFirstReader(s3, stage_metrics=metrics, **spool_options)
     return database, ObservationProcessor(database, spool, metrics), metrics, spool
 
 
@@ -6042,6 +6053,7 @@ def _drain_downstream(
     archive: Any,
     expected: int,
     deadline_seconds: float,
+    spool_dir: Path,
 ) -> tuple[dict[str, Any], dict[str, Any], float, str]:
     """Drain python_processing_jobs through the production processor.
 
@@ -6052,15 +6064,18 @@ def _drain_downstream(
     shutdown forever. The deadline here is cooperative: worker threads are
     never hard-cancelled, so on timeout or error with threads still active
     this function marks the drain incomplete and deliberately leaves the
-    database connection and the owned spool directory alone for the
-    external wrapper to clean up. Returns (summary, spool_stats,
-    elapsed_seconds, downstream_spool_root).
+    database connection alone for the external wrapper to clean up. Reuse the
+    collector's caller-owned spool, as production does, rather than creating
+    a cold second cache with a separate reservation budget. Never delete it
+    here. Returns (summary, spool_stats, elapsed_seconds, spool_root).
     """
     import concurrent.futures
 
     import psycopg
 
-    database, processor, _metrics, spool = _processor(connection_info, archive)
+    database, processor, _metrics, spool = _processor(
+        connection_info, archive, capacity_spool=spool_dir
+    )
     started = time.perf_counter()
     deadline = started + deadline_seconds
     leaked = False
@@ -6160,11 +6175,7 @@ def _drain_downstream(
         # corrupt their in-flight work and hang pool shutdown.
         if not leaked:
             database.close()
-            pls_root = getattr(getattr(spool, "spool", None), "root", "")
-            _remove_owned_spool_dir(
-                pls_root,
-                prefixes=("capacity-spool-", "clashlens-perf-spool-"),
-            )
+            spool.spool.close()
 
 
 def _check_downstream_peaks(spool: Any) -> None:
@@ -6218,7 +6229,7 @@ def _run_normal_capacity(
         return failed, spool_dir, identity, False
     try:
         downstream_summary, downstream_spool, downstream_seconds, _downstream_root = (
-            _drain_downstream(connection_info, archive, total, remaining)
+            _drain_downstream(connection_info, archive, total, remaining, spool_dir)
         )
         downstream_alloc = int(downstream_spool.get("allocated_peak_bytes", 0))
     except _CapacityProbeFailure as failure:
@@ -8606,6 +8617,14 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = parse_arguments(argv)
+    if arguments.mode == NORMAL_CAPACITY_MODE:
+        print(
+            "performance runner: normal-capacity models the retired fixed-window "
+            "and immediate-retry policy; see docs/collector-polling.md for the "
+            "rolling-poll validation contract. Historical artifacts remain readable.",
+            file=sys.stderr,
+        )
+        return 2
     if not arguments.database_url:
         print(
             "performance runner: --database-url or CLASHLENS_TEST_DATABASE_URL is required",

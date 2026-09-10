@@ -2,14 +2,9 @@ package collector
 
 // Regression coverage for the one-active-regular-poll-per-player contract.
 //
-// The production scheduler enqueues one regular_poll job per player per
-// five-minute cycle. The coalescing key embeds the cycle timestamp, so a
-// backed-up queue accumulates one active job per cycle for the same player.
-// These tests prove that after the fix, each player has at most one active
-// regular_poll job (pending, leased, or waiting_retry) at any time, that the
-// scheduler still advances next_due_at when the insert is suppressed, that a
-// terminal job releases the slot for a later cycle, and that concurrent
-// scheduler runs cannot create duplicate active jobs.
+// Oldest-due players are admitted in a continuous loop, with a minimum
+// revisit interval. An active job keeps its place without blocking others;
+// terminal work releases its slot. Concurrent schedulers must not duplicate it.
 
 import (
 	"context"
@@ -100,6 +95,50 @@ func readNextDueAt(t *testing.T, ctx context.Context, store *store, playerID int
 	return nextDue
 }
 
+func TestRegularPollingRotatesWithoutWaitingForSlowPlayer(t *testing.T) {
+	ctx := context.Background()
+	store := regularPollSchedulerStore(t, ctx)
+	now := time.Date(2026, time.August, 2, 12, 2, 0, 0, time.UTC)
+	ids := []int64{
+		insertActiveDuePlayer(t, ctx, store, "#2PP", now),
+		insertActiveDuePlayer(t, ctx, store, "#2PQ", now),
+		insertActiveDuePlayer(t, ctx, store, "#2PY", now),
+	}
+	for i, id := range ids {
+		tick := now.Add(time.Duration(i) * time.Second)
+		if count, err := store.scheduleDueRegular(ctx, tick, 5*time.Minute, 1); err != nil || count != 1 {
+			t.Fatalf("round slot %d: count=%d err=%v", i, count, err)
+		}
+		if countActiveRegularPolls(t, ctx, store, id) != 1 {
+			t.Fatalf("oldest-due player %d was skipped", id)
+		}
+		if due := readNextDueAt(t, ctx, store, id); !due.Equal(tick.Add(5 * time.Minute)) {
+			t.Fatalf("minimum revisit is relative to admission, got %s", due)
+		}
+	}
+	// Leave the first player slow. A recent interactive refresh on the third
+	// player must not remove it from the next regular pass.
+	if _, err := store.pool.Exec(ctx, `UPDATE collector_jobs SET status='complete' WHERE player_id <> $1`, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `INSERT INTO collector_jobs
+		(work_type, player_id, normalized_tag, capacity_pool, priority, due_at, coalescing_key, status)
+		VALUES ('live_refresh', $1, '#2PY', 'interactive', 250, $2, 'refresh-third', 'complete')`, ids[2], now.Add(6*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	for i, id := range ids[1:] {
+		if count, err := store.scheduleDueRegular(ctx, now.Add(6*time.Minute+time.Duration(i)*time.Second), 5*time.Minute, 1); err != nil || count != 1 {
+			t.Fatalf("next pass: count=%d err=%v", count, err)
+		}
+		if countActiveRegularPolls(t, ctx, store, id) != 1 {
+			t.Fatalf("slow player or refresh blocked regular player %d", id)
+		}
+	}
+	if due := readNextDueAt(t, ctx, store, ids[0]); !due.Equal(now.Add(5 * time.Minute)) {
+		t.Fatalf("slow player's queue position was moved: %s", due)
+	}
+}
+
 func TestRegularPollSchedulerKeepsOneActiveJobAcrossLaterCycles(t *testing.T) {
 	ctx := context.Background()
 	store := regularPollSchedulerStore(t, ctx)
@@ -134,8 +173,8 @@ func TestRegularPollSchedulerKeepsOneActiveJobAcrossLaterCycles(t *testing.T) {
 		t.Fatal("second cycle left more than one active regular poll")
 	}
 	secondDue := readNextDueAt(t, ctx, store, playerID)
-	if !secondDue.After(firstDue) {
-		t.Fatalf("second cycle next_due_at = %s, want after %s", secondDue, firstDue)
+	if !secondDue.Equal(firstDue) {
+		t.Fatalf("active player's position changed: %s, want %s", secondDue, firstDue)
 	}
 
 	thirdCycle := secondCycle.Add(5 * time.Minute)
@@ -150,8 +189,8 @@ func TestRegularPollSchedulerKeepsOneActiveJobAcrossLaterCycles(t *testing.T) {
 		t.Fatal("third cycle left more than one active regular poll")
 	}
 	thirdDue := readNextDueAt(t, ctx, store, playerID)
-	if !thirdDue.After(secondDue) {
-		t.Fatalf("third cycle next_due_at = %s, want after %s", thirdDue, secondDue)
+	if !thirdDue.Equal(secondDue) {
+		t.Fatalf("active player's position changed: %s, want %s", thirdDue, secondDue)
 	}
 
 	if _, err := store.pool.Exec(ctx, `
@@ -332,107 +371,44 @@ func TestRegularPollSchedulerConcurrentRunsNeverCreateDuplicateActiveJobs(t *tes
 }
 
 func TestRegularPollSchedulerDoesNotDeadlockLeaseAdvance(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	store := regularPollSchedulerStore(t, ctx)
 	now := time.Now().UTC()
 	playerID := insertActiveDuePlayer(t, ctx, store, "#2PP", now)
-	insertRegularPollJob(t, ctx, store, playerID, "#2PP", "seed-pending", "pending", now)
-
-	if _, err := store.pool.Exec(ctx, `
-		CREATE FUNCTION test_wait_before_regular_insert() RETURNS trigger
-		LANGUAGE plpgsql AS $$
-		BEGIN
-			PERFORM pg_advisory_xact_lock(734702);
-			RETURN NEW;
-		END
-		$$;
-		CREATE TRIGGER test_wait_before_regular_insert
-		BEFORE INSERT ON collector_jobs
-		FOR EACH ROW EXECUTE FUNCTION test_wait_before_regular_insert();
-	`); err != nil {
-		t.Fatalf("install scheduler ordering gate: %v", err)
-	}
-
-	gateConnection, err := pgx.Connect(ctx, store.pool.Config().ConnString())
+	jobID := insertRegularPollJob(t, ctx, store, playerID, "#2PP", "seed-pending", "pending", now)
+	otherID := insertActiveDuePlayer(t, ctx, store, "#2PQ", now)
+	worker, err := store.pool.Begin(ctx)
 	if err != nil {
-		t.Fatalf("connect scheduler ordering gate: %v", err)
+		t.Fatal(err)
 	}
-	defer gateConnection.Close(context.Background())
-	gateTransaction, err := gateConnection.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin scheduler ordering gate: %v", err)
+	defer worker.Rollback(context.Background())
+	if _, err := worker.Exec(ctx, `SELECT id FROM collector_jobs WHERE id=$1 FOR UPDATE`, jobID); err != nil {
+		t.Fatal(err)
 	}
-	defer func() { _ = gateTransaction.Rollback(context.Background()) }()
-	if _, err := gateTransaction.Exec(ctx, `SELECT pg_advisory_xact_lock(734702)`); err != nil {
-		t.Fatalf("lock scheduler ordering gate: %v", err)
-	}
-
-	workerConnection, err := pgx.Connect(ctx, store.pool.Config().ConnString())
-	if err != nil {
-		t.Fatalf("connect lease worker: %v", err)
-	}
-	defer workerConnection.Close(context.Background())
-
-	type schedulerResult struct {
-		created int
-		err     error
-	}
-	schedulerResults := make(chan schedulerResult, 1)
+	// A worker owns the active row. Admission must skip it, not wait on a
+	// conflicting insert/FK lock, and still admit another due player.
+	finished := make(chan error, 1)
 	go func() {
-		created, err := store.scheduleDueRegular(ctx, now, 5*time.Minute, 100)
-		schedulerResults <- schedulerResult{created: created, err: err}
-	}()
-
-	gateWaiting := false
-	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
-		if err := workerConnection.QueryRow(ctx, `
-			SELECT EXISTS (
-				SELECT 1
-				FROM pg_stat_activity
-				WHERE pid <> pg_backend_pid()
-					AND query LIKE '%INSERT INTO collector_jobs (%'
-					AND wait_event = 'advisory'
-			)
-		`).Scan(&gateWaiting); err != nil {
-			t.Fatalf("observe scheduler ordering-gate wait: %v", err)
+		count, err := store.scheduleDueRegular(ctx, now, 5*time.Minute, 100)
+		if err == nil && count != 1 {
+			err = errors.New("scheduler did not admit exactly the other player")
 		}
-		if gateWaiting {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !gateWaiting {
-		t.Fatal("scheduler did not reach the ordering gate after locking the player")
-	}
-
-	type claimResult struct {
-		job *collectionJob
-		err error
-	}
-	claimResults := make(chan claimResult, 1)
-	go func() {
-		job, err := store.claimNext(ctx, "worker", normalPool, now, time.Minute, "token")
-		claimResults <- claimResult{job: job, err: err}
+		finished <- err
 	}()
-
-	time.Sleep(100 * time.Millisecond)
-	if err := gateTransaction.Commit(ctx); err != nil {
-		t.Fatalf("release scheduler ordering gate: %v", err)
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("scheduler blocked on the worker's active job")
 	}
-	claimed := <-claimResults
-	result := <-schedulerResults
-	if claimed.err != nil {
-		t.Fatalf("claim regular poll while scheduler waits: %v", claimed.err)
+	if err := worker.Commit(ctx); err != nil {
+		t.Fatal(err)
 	}
-	if claimed.job == nil {
-		t.Fatal("claim regular poll returned no job")
-	}
-	if result.err != nil {
-		t.Fatalf("schedule while lease generation advances: %v", result.err)
-	}
-	if result.created != 0 {
-		t.Fatalf("scheduler created %d jobs while one is leased, want 0", result.created)
+	if countActiveRegularPolls(t, ctx, store, otherID) != 1 {
+		t.Fatal("unrelated due player was not admitted")
 	}
 }
 
