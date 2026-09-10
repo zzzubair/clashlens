@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from datetime import UTC, datetime, timedelta
@@ -631,6 +632,38 @@ class FakePodman:
         raise AssertionError(f"unexpected podman command: {command}")
 
 
+def _good_probe(run: dict, nbytes: int = 100) -> dict:
+    """Test-only: a fully valid v2 allocated probe tied to the run pins."""
+    spool = run["spool_path"]
+    resolved = os.path.normpath(spool)
+    pin = ((run.get("filesystem") or {}).get("spool") or {})
+    mount = {key: pin.get(key) for key in
+             ("mount_point", "source", "mnt_id", "filesystem_type")}
+    return {
+        "schema": step9.RESOURCE_EVIDENCE_SCHEMA,
+        "definition": "gnu-du-allocated-bytes-one-filesystem",
+        "configured_path": spool, "path": resolved,
+        "resolved_path": resolved,
+        "command": ["du", "--block-size=1", "--summarize",
+                    "--one-file-system", "--no-dereference", "--",
+                    resolved],
+        "mount_identity": dict(mount), "mount_before": dict(mount),
+        "mount_after": dict(mount), "allocated_bytes": nbytes,
+        "started_at": "2026-10-04T05:00:00+00:00",
+        "finished_at": "2026-10-04T05:00:01+00:00",
+        "timeout_seconds": 5, "error": None,
+        "btrfs_limitation": ("summed allocated blocks are not exclusive "
+                              "shared-pool ownership")}
+
+
+def _quiet_facts_with_probe(run: dict) -> dict:
+    """Test-only: quiet loop facts carrying a fully valid v2 probe."""
+    facts = _quiet_facts()
+    facts["archive"] = {**facts["archive"],
+                        "allocated_probe": _good_probe(run)}
+    return facts
+
+
 def _pin_resources(run_dir: Path) -> None:
     """Test-only: align the start baseline with quiet fake loop facts."""
     path = run_dir / "run.json"
@@ -856,6 +889,9 @@ def _sealed_run(tmp_path: Path, name: str, db: FakeDB,
                     "pgdata_bytes": 1000, "pg_wal_bytes": 100})
         if (index + 1) % 60 == 0:
             sample["operating"] = db.operating_snapshot([])
+        sample["resources"] = {
+            "failures": [], "unknown": [],
+            "allocated_probe": _good_probe(run)}
         sample["wire"] = {"failures": [], "unknown": [],
                           "conservative_host_wire_bytes": 1000}
         sample["s3"] = {"go": {}, "go_total": 0, "python": {}, "python_total": 0,
@@ -1182,7 +1218,8 @@ def _rehearsal_hooks(database, fixed_ids, *, slots: int):
                                               "started_at": "t",
                                               "stats": None},
             "watchdog_check": lambda run: True,
-            "resource_facts": lambda run, db, metrics: _quiet_facts(),
+            "resource_facts": lambda run, db,
+            metrics: _quiet_facts_with_probe(run),
             "wire_facts": lambda run: {
                 "status": "captured", "failure_code": None,
                 "boot_id": run.get("boot_id"),
@@ -1587,6 +1624,9 @@ def _sealed_preflight(tmp_path: Path, name: str, db: FakeDB, bad_traffic: bool =
                     "pgdata_bytes": 1000, "pg_wal_bytes": 100})
         if (index + 1) % 60 == 0:
             sample["operating"] = db.operating_snapshot([])
+        sample["resources"] = {
+            "failures": [], "unknown": [],
+            "allocated_probe": _good_probe(run)}
         sample["wire"] = {"failures": [], "unknown": [],
                           "conservative_host_wire_bytes": 1000}
         sample["s3"] = {"go": {}, "go_total": 0, "python": {}, "python_total": 0,
@@ -2151,6 +2191,478 @@ def test_parse_btrfs_usage_cases() -> None:
         "metadata_pct": None, "unallocated_bytes": None}
 
 
+def test_spool_allocated_usage_is_independent_of_apparent_bytes(
+        tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    sparse = spool / "sparse"
+    with sparse.open("wb") as body:
+        body.seek(8 * 1024**2 - 1)
+        body.write(b"x")
+    identity = {"mount_point": "/", "source": "/dev/test", "mnt_id": 7,
+                "filesystem_type": "btrfs"}
+    result = step9._spool_allocated_usage(
+        str(spool), identity, identity_probe=lambda _path: identity)
+    assert result["error"] is None
+    assert result["allocated_bytes"] < sparse.stat().st_size
+    assert result["definition"] == "gnu-du-allocated-bytes-one-filesystem"
+    assert result["schema"] == step9.RESOURCE_EVIDENCE_SCHEMA
+
+
+def test_spool_allocated_usage_fails_closed() -> None:
+    identity = {"mount_point": "/", "source": "/dev/test", "mnt_id": 7,
+                "filesystem_type": "btrfs"}
+    timeout = mock.Mock(side_effect=subprocess.TimeoutExpired("du", 5))
+    result = step9._spool_allocated_usage("/tmp", identity,
+                                          run_command=timeout)
+    assert result["allocated_bytes"] is None
+    assert result["error"] == "allocated_probe_timeout"
+
+    completed = mock.Mock(returncode=0, stdout="4096\t/tmp\n", stderr="")
+    changed = dict(identity, mnt_id=8)
+    result = step9._spool_allocated_usage(
+        "/tmp", identity, run_command=lambda *args, **kwargs: completed,
+        identity_probe=lambda _path: changed)
+    assert result["allocated_bytes"] is None
+    assert result["error"] == "allocated_probe_unavailable:ValueError"
+    denied = mock.Mock(side_effect=PermissionError("denied"))
+    result = step9._spool_allocated_usage("/tmp", identity,
+                                          run_command=denied)
+    assert result["allocated_bytes"] is None
+    assert result["error"].startswith("allocated_probe_unavailable")
+
+
+def test_spool_allocated_usage_rejects_malformed_or_unbounded_output(
+        tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    identity = {"mount_point": "/", "source": "/dev/test", "mnt_id": 7,
+                "filesystem_type": "btrfs"}
+    malformed = mock.Mock(returncode=0, stdout="4096 /wrong\n", stderr="")
+    result = step9._spool_allocated_usage(
+        str(spool), identity, run_command=lambda *args, **kwargs: malformed,
+        identity_probe=lambda _path: identity)
+    assert result["allocated_bytes"] is None
+    assert result["error"] == "allocated_probe_unavailable:ValueError"
+    oversized = mock.Mock(
+        returncode=0, stdout="9\t" + str(spool) + "\n" + "x" * 4096,
+        stderr="")
+    result = step9._spool_allocated_usage(
+        str(spool), identity, run_command=lambda *args, **kwargs: oversized,
+        identity_probe=lambda _path: identity)
+    assert result["allocated_bytes"] is None
+    assert result["error"] == "allocated_probe_unavailable:ValueError"
+    unterminated = mock.Mock(returncode=0, stdout=f"4096\t{spool}",
+                              stderr="")
+    result = step9._spool_allocated_usage(
+        str(spool), identity,
+        run_command=lambda *args, **kwargs: unterminated,
+        identity_probe=lambda _path: identity)
+    assert result["allocated_bytes"] is None
+    assert result["error"] == "allocated_probe_unavailable:ValueError"
+
+
+def test_spool_allocated_run_bounded_command_hard_deadline() -> None:
+    import time
+    completed = step9._run_bounded_command(
+        [sys.executable, "-c", "print('hi')"], timeout=5,
+        max_output_bytes=4096)
+    assert completed.returncode == 0
+    assert completed.stdout == "hi\n" and completed.stderr == ""
+    with pytest.raises(ValueError):
+        step9._run_bounded_command(
+            [sys.executable, "-c", "import sys;sys.stdout.write('x'*5000)"],
+            timeout=5, max_output_bytes=4096)
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        step9._run_bounded_command(
+            [sys.executable, "-c", "import time;time.sleep(30)"],
+            timeout=1, max_output_bytes=4096)
+    elapsed = time.monotonic() - started
+    assert 0.6 <= elapsed < 2.0
+
+
+def test_spool_allocated_usage_rejects_probe_failures(tmp_path: Path) -> None:
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    identity = {"mount_point": "/", "source": "/dev/test", "mnt_id": 7,
+                "filesystem_type": "btrfs"}
+    good = f"4096\t{spool}\n"
+    for bad in (mock.Mock(returncode=1, stdout=good, stderr=""),
+                mock.Mock(returncode=0, stdout=good, stderr="du: warning\n"),
+                mock.Mock(returncode=0, stdout=good + good, stderr=""),
+                mock.Mock(returncode=0, stdout="-1\t" + str(spool) + "\n",
+                           stderr="")):
+        result = step9._spool_allocated_usage(
+            str(spool), identity,
+            run_command=lambda *args, _bad=bad, **kwargs: _bad,
+            identity_probe=lambda _path: identity)
+        assert result["allocated_bytes"] is None
+        assert result["error"].startswith("allocated_probe_unavailable")
+    link = tmp_path / "link"
+    link.symlink_to(spool, target_is_directory=True)
+    result = step9._spool_allocated_usage(
+        str(link), identity,
+        run_command=lambda *a, **k: mock.Mock(
+            returncode=0, stdout=f"4096\t{link}\n", stderr=""),
+        identity_probe=lambda _path: identity)
+    assert result["allocated_bytes"] is None
+    # Success records configured/resolved paths and before/after mounts.
+    result = step9._spool_allocated_usage(
+        str(spool), identity,
+        run_command=lambda *a, **k: mock.Mock(
+            returncode=0, stdout=good, stderr=""),
+        identity_probe=lambda _path: identity)
+    assert result["error"] is None and result["allocated_bytes"] == 4096
+    assert result["configured_path"] == str(spool)
+    assert result["resolved_path"] == str(spool)
+    assert result["mount_before"] == identity
+    assert result["mount_after"] == identity
+
+
+def test_spool_allocated_probe_failure_is_unknown_never_zero(
+        tmp_path: Path) -> None:
+    base_kwargs = {
+        "spool_path": str(tmp_path), "postgres_path": str(tmp_path),
+        "db": None,
+        "btrfs_probe": lambda _path: {"metadata_pct": None,
+                                       "unallocated_bytes": None,
+                                       "error": None, "stderr": None},
+        "device_probe": lambda _path: {"errors": {}, "error": None}}
+    failed = step9.collect_resource_facts(
+        metrics=None,
+        spool_probe=lambda _p, _i: {"schema": step9.RESOURCE_EVIDENCE_SCHEMA,
+                                    "allocated_bytes": None,
+                                    "error": "allocated_probe_timeout"},
+        **base_kwargs)["archive"]
+    assert failed["physical_bytes"] is None
+    assert failed["allocated_probe"]["error"] == "allocated_probe_timeout"
+    _f, unknown, _s = step9.evaluate_resource_gates(
+        _quiet_facts(), {**_quiet_facts(), "archive": failed}, 0)
+    assert "archive_physical_unknown" in unknown
+    breached = {**_quiet_facts(), "archive": {
+        "logical_bytes": 100, "objects": 2,
+        "physical_bytes": step9.RES_ARCHIVE_PHYSICAL_MAX + 1,
+        "error": None}}
+    failures, _u, _s = step9.evaluate_resource_gates(
+        _quiet_facts(), breached, 0)
+    assert "archive_physical_breach" in failures
+
+
+def test_resource_facts_separate_allocated_and_runtime_ledger_bytes(
+        tmp_path: Path) -> None:
+    kwargs = {
+        "spool_path": str(tmp_path), "postgres_path": str(tmp_path),
+        "db": None,
+        "btrfs_probe": lambda _path: {"metadata_pct": None,
+                                       "unallocated_bytes": None,
+                                       "error": None, "stderr": None},
+        "device_probe": lambda _path: {"errors": {}, "error": None},
+        "spool_probe": lambda _path, _identity: {
+            "schema": step9.RESOURCE_EVIDENCE_SCHEMA,
+            "allocated_bytes": 4096, "error": None}}
+    no_metrics = step9.collect_resource_facts(metrics=None, **kwargs)["archive"]
+    assert no_metrics["physical_bytes"] == 4096
+    facts = step9.collect_resource_facts(
+        metrics={"counters": {"clashlens_spool_final_bytes": 999}}, **kwargs)
+    archive = facts["archive"]
+    assert archive["physical_bytes"] == 4096
+    assert archive["runtime_ledger_final_bytes"] == 999
+
+
+def test_spool_allocated_close_pipes_then_sleep_times_out() -> None:
+    import time
+    # Pipe-close race: drains see EOF immediately, but the process still
+    # sleeps past the deadline; the total wall clock (wait+kill+reap) must
+    # stay bounded instead of hanging on wait after drained pipes.
+    started = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        step9._run_bounded_command(
+            [sys.executable, "-c",
+             ("import sys,time;sys.stdout.close();sys.stderr.close();"
+              "time.sleep(30)")],
+            timeout=1, max_output_bytes=4096)
+    elapsed = time.monotonic() - started
+    assert 0.6 <= elapsed < 2.0
+
+
+def test_sample_resources_retains_allocated_probe_after_stop(
+        tmp_path: Path) -> None:
+    # After a proven collector stop metrics=None must not lose the host du
+    # evidence: success and gate-failure samples both keep the bounded probe.
+    probe = {"schema": step9.RESOURCE_EVIDENCE_SCHEMA,
+             "definition": "gnu-du-allocated-bytes-one-filesystem",
+             "allocated_bytes": 4096, "error": None}
+
+    def _facts_with_probe(metrics):
+        base = _quiet_facts()
+        base["archive"] = {"logical_bytes": 100, "objects": 2,
+                             "physical_bytes": 4096, "error": None,
+                             "allocated_probe": dict(probe)}
+        return base
+
+    def no_metrics(url):
+        raise step9.Step9Error("metrics_unavailable", "collector stopped")
+
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db, run_dir_name="retain")
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    hooks = _sample_hooks(db, fetch_metrics=no_metrics, max_slots=1,
+                          single_pass=True)
+    seen: dict = {}
+
+    def fake_facts(run, db, metrics):
+        seen["metrics"] = metrics
+        return _facts_with_probe(metrics)
+
+    hooks["resource_facts"] = fake_facts
+    assert step9.cmd_sample(arguments, hooks) == 0
+    assert seen["metrics"] is None
+    sample = json.loads((run_dir / "samples" / "minute-0000.json"
+                         ).read_text())
+    assert sample["metrics"] is None
+    assert sample["metrics_error"] == "metrics_unavailable"
+    kept = sample["resources"]["allocated_probe"]
+    assert kept["allocated_bytes"] == 4096
+    assert kept["schema"] == step9.RESOURCE_EVIDENCE_SCHEMA
+    assert kept["definition"] == "gnu-du-allocated-bytes-one-filesystem"
+    assert sample["resources"]["failures"] == []
+    # Gate failure still retains the same bounded probe (never zeroed).
+    db2 = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir2, _h2 = _started_run(tmp_path, db2, run_dir_name="retainbad")
+    arguments2 = mock.Mock(run_dir=str(run_dir2), podman_bin="podman")
+    hooks2 = _sample_hooks(db2, fetch_metrics=no_metrics, max_slots=1,
+                           single_pass=True)
+
+    def fake_breach(run, db, metrics):
+        facts = _facts_with_probe(metrics)
+        facts["filesystems"]["pool"]["use_pct"] = 95.0
+        return facts
+
+    hooks2["resource_facts"] = fake_breach
+    assert step9.cmd_sample(arguments2, hooks2) == 1
+    bad = json.loads((run_dir2 / "samples" / "minute-0000.json"
+                      ).read_text())
+    assert bad["resources"]["allocated_probe"]["allocated_bytes"] == 4096
+    assert bad["resources"]["failures"] == ["filesystem_use_breach"]
+
+
+def test_validate_v2_requires_allocated_probe_and_v1_readable(
+        tmp_path: Path) -> None:
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_run(tmp_path, "v2probe", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    assert step9.cmd_validate(arguments) == 0
+    # v2 without the new probe schema/source is not valid, even with a clean
+    # manifest (missing probe must fail closed, never silently gain v1 meaning).
+    victim = run_dir / "samples" / "minute-0007.json"
+    sample = json.loads(victim.read_text())
+    sample["resources"] = {"failures": [], "unknown": []}
+    victim.write_text(json.dumps(sample))
+    (run_dir / "manifest.json").unlink()
+    step9._write_manifest(run_dir)
+    assert step9.cmd_validate(arguments) == 1
+    sample["resources"] = {
+        "failures": [], "unknown": [],
+        "allocated_probe": {"schema": step9.SCHEMA_LIVE_V1,
+                              "definition": "ledger", "allocated_bytes": 1,
+                              "error": None}}
+    victim.write_text(json.dumps(sample))
+    (run_dir / "manifest.json").unlink()
+    step9._write_manifest(run_dir)
+    assert step9.cmd_validate(arguments) == 1
+    # v1 historical evidence stays readable but never mixes with v2 samples.
+    run_path = run_dir / "run.json"
+    payload = json.loads(run_path.read_text())
+    payload["schema"] = step9.SCHEMA_LIVE_V1
+    run_path.write_text(json.dumps(payload))
+    for path in (run_dir / "samples").glob("minute-*.json"):
+        current = json.loads(path.read_text())
+        current["schema"] = step9.SCHEMA_LIVE_V1
+        current.pop("resources", None)
+        path.write_text(json.dumps(current))
+    samples = step9._read_samples(run_dir)
+    assert len(samples) == 1440
+    assert all(entry["schema"] == step9.SCHEMA_LIVE_V1 for entry in samples)
+    mixed = run_dir / "samples" / "minute-0000.json"
+    entry = json.loads(mixed.read_text())
+    entry["schema"] = step9.SCHEMA_LIVE
+    mixed.write_text(json.dumps(entry))
+    with pytest.raises(step9.Step9Error) as error:
+        step9._read_samples(run_dir)
+    assert error.value.code == "sample_mismatch"
+
+
+def test_sample_v1_run_refuses_v2_minute(tmp_path: Path) -> None:
+    # A v1 run stays readable, but the v2 sampler must refuse before
+    # writing any v2 minute sample into it.
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _header = _started_run(tmp_path, db)
+    run_path = run_dir / "run.json"
+    payload = json.loads(run_path.read_text())
+    payload["schema"] = step9.SCHEMA_LIVE_V1
+    run_path.write_text(json.dumps(payload))
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    with pytest.raises(step9.Step9Error) as error:
+        step9.cmd_sample(arguments, _sample_hooks(db))
+    assert error.value.code == "sample_mismatch"
+    assert list(run_dir.glob("samples/minute-*.json")) == []
+
+
+def test_spool_allocated_bounded_command_survives_inherited_pipes() -> None:
+    import threading
+    import time
+    # Wrapper exits at once but leaves a 30s grandchild holding the pipes:
+    # the selectors drain must not block on inherited open write ends.
+    outcome: dict = {}
+
+    def _target() -> None:
+        try:
+            step9._run_bounded_command(
+                [sys.executable, "-c",
+                 ("import subprocess,sys;subprocess.Popen("
+                  "[sys.executable,'-c','import time;time.sleep(30)']);")],
+                timeout=1, max_output_bytes=4096)
+        except BaseException as error:  # noqa: BLE001 - record any outcome
+            outcome["error"] = error
+        else:
+            outcome["error"] = None
+
+    worker = threading.Thread(target=_target, daemon=True)
+    started = time.monotonic()
+    worker.start()
+    worker.join(timeout=15)
+    elapsed = time.monotonic() - started
+    assert not worker.is_alive(), "bounded runner hung on inherited pipes"
+    assert isinstance(outcome.get("error"), subprocess.TimeoutExpired)
+    assert 0.6 <= elapsed < 5
+
+
+def test_spool_allocated_bounded_command_reaps_direct_child() -> None:
+    import time
+    # Timeout must leave no zombie: the child PID has to be reaped by the
+    # reserved in-budget wait, not merely abandoned when the caller returns.
+    captured: dict = {}
+    real_popen = subprocess.Popen
+
+    def _spy(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        captured["proc"] = proc
+        return proc
+
+    started = time.monotonic()
+    with mock.patch.object(subprocess, "Popen", side_effect=_spy):
+        with pytest.raises(subprocess.TimeoutExpired):
+            step9._run_bounded_command(
+                [sys.executable, "-c", "import time;time.sleep(30)"],
+                timeout=1, max_output_bytes=4096)
+    elapsed = time.monotonic() - started
+    assert captured["proc"].returncode is not None
+    assert 0.6 <= elapsed < 2.0
+
+
+def test_spool_allocated_bounded_command_read_error_reaps_child() -> None:
+    import time
+    # An unexpected read failure must still kill and reap the live child
+    # via centralized cleanup, not leak it through stream-closing only.
+    # Only the narrow runner seam is patched (never global os.read), and
+    # the real child is captured by a Popen spy before fault injection.
+    real_popen = subprocess.Popen
+    captured: dict = {}
+
+    def _spy(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        captured["proc"] = proc
+        return proc
+
+    started = time.monotonic()
+    with mock.patch.object(subprocess, "Popen", side_effect=_spy), \
+            mock.patch.object(step9, "_read_pipe",
+                              side_effect=OSError("injected read fault")):
+        with pytest.raises(OSError, match="injected read fault"):
+            step9._run_bounded_command(
+                [sys.executable, "-c",
+                 "print('hi', flush=True);import time;time.sleep(30)"],
+                timeout=5, max_output_bytes=4096)
+    assert time.monotonic() - started < 5
+    assert captured["proc"].returncode is not None
+
+
+def test_spool_allocated_bounded_command_streams_and_errors() -> None:
+    completed = step9._run_bounded_command(
+        [sys.executable, "-c",
+         "import sys;sys.stdout.write('out');sys.stderr.write('err')"],
+        timeout=5, max_output_bytes=4096)
+    assert (completed.returncode, completed.stdout,
+            completed.stderr) == (0, "out", "err")
+    nonzero = step9._run_bounded_command(
+        [sys.executable, "-c", "import sys;sys.exit(3)"],
+        timeout=5, max_output_bytes=4096)
+    assert (nonzero.returncode, nonzero.stdout,
+            nonzero.stderr) == (3, "", "")
+    with pytest.raises(ValueError):
+        step9._run_bounded_command(
+            [sys.executable, "-c",
+             "import sys;sys.stderr.write('x'*5000)"],
+            timeout=5, max_output_bytes=4096)
+
+
+def test_validate_v2_probe_tampering_fails_closed(tmp_path: Path) -> None:
+    db = FakeDB(rows=[_eligible_row(1, TAGS[0])])
+    run_dir, _run = _sealed_preflight(tmp_path, "pftamper", db)
+    arguments = mock.Mock(run_dir=str(run_dir), podman_bin="podman")
+    assert step9.cmd_finalize(arguments, {"db": db}) == 0
+    assert step9.cmd_validate(arguments) == 0
+    victim = run_dir / "samples" / "minute-0007.json"
+    pristine = json.loads(victim.read_text())
+
+    def _break(mutate) -> None:
+        sample = json.loads(json.dumps(pristine))
+        mutate(sample["resources"]["allocated_probe"])
+        victim.write_text(json.dumps(sample))
+        (run_dir / "manifest.json").unlink()
+        step9._write_manifest(run_dir)
+        assert step9.cmd_validate(arguments) == 1
+
+    _break(lambda probe: probe.update(error="allocated_probe_timeout"))
+    _break(lambda probe: probe.pop("allocated_bytes"))
+    _break(lambda probe: probe.update(allocated_bytes=-5))
+    _break(lambda probe: probe.update(allocated_bytes=True))
+    _break(lambda probe: probe.update(allocated_bytes="100"))
+    _break(lambda probe: probe.pop("configured_path"))
+    _break(lambda probe: probe.update(configured_path="/other/spool"))
+    _break(lambda probe: probe.update(path="/other/spool"))
+    _break(lambda probe: probe.update(resolved_path="/other/spool"))
+    _break(lambda probe: probe.__setitem__(
+        "command", [part for part in probe["command"] if part != "--"]))
+    _break(lambda probe: probe.__setitem__(
+        "command", probe["command"][:-1] + ["/other/spool"]))
+    _break(lambda probe: probe["mount_after"].update(mnt_id=-1))
+    _break(lambda probe: probe["mount_before"].update(source="unknown"))
+    _break(lambda probe: probe.pop("mount_after"))
+    _break(lambda probe: probe.pop("mount_identity"))
+    _break(lambda probe: probe["mount_identity"].update(source="/dev/other"))
+    _break(lambda probe: probe.pop("started_at"))
+    _break(lambda probe: probe.update(started_at=probe["finished_at"],
+                                       finished_at=probe["started_at"]))
+    _break(lambda probe: probe.update(started_at="2026-10-04T05:00:00"))
+    _break(lambda probe: probe.update(started_at="2026-10-04T10:00:00+05:00",
+                                       finished_at="2026-10-04T10:00:01+05:00"))
+    _break(lambda probe: probe.update(timeout_seconds=6))
+    _break(lambda probe: probe.update(timeout_seconds="5"))
+    _break(lambda probe: probe.update(started_at="2026-10-04T05:00:00+00:00",
+                                       finished_at="2026-10-04T05:00:06+00:00"))
+    # A legitimate relative configured path still validates.
+    sample = json.loads(json.dumps(pristine))
+    sample["resources"]["allocated_probe"]["configured_path"] = (
+        os.path.relpath("/tmp"))
+    victim.write_text(json.dumps(sample))
+    (run_dir / "manifest.json").unlink()
+    step9._write_manifest(run_dir)
+    assert step9.cmd_validate(arguments) == 0
+
+
 def test_resource_gates_all_thresholds() -> None:
     base = _quiet_facts()
     failures, unknown, strikes = step9.evaluate_resource_gates(base, base, 0)
@@ -2699,7 +3211,8 @@ def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
              "container_probe": container_probe,
              "watchdog_check": lambda run: True, "clock": clock,
              "now_utc": now_utc, "no_sleep": True, "max_slots": 75,
-             "resource_facts": lambda run, db, metrics: _quiet_facts(),
+             "resource_facts": lambda run, db,
+             metrics: _quiet_facts_with_probe(run),
              "wire_facts": lambda run: quiet_wire,
              "worker_probe": lambda run: benign_s3,
              "pgdata_probe": lambda run: benign_pgdata}
@@ -2754,7 +3267,8 @@ def test_preflight_drain_authorized_stop(tmp_path: Path) -> None:
               "watchdog_check": lambda run: True,
               "clock": clock2, "now_utc": now_utc2,
               "no_sleep": True, "max_slots": 75,
-              "resource_facts": lambda run, db, metrics: _quiet_facts(),
+              "resource_facts": lambda run, db,
+              metrics: _quiet_facts_with_probe(run),
               "wire_facts": lambda run: {
                   "status": "captured", "failure_code": None,
                   "boot_id": run.get("boot_id"),

@@ -44,9 +44,17 @@ try:
 except ImportError:  # pragma: no cover - production always has the module
     _OPERATING_RELATIONS = ()
 
-SCHEMA_LIVE = "step9-live-day-v1"
-SCHEMA_PREFLIGHT = "step9-preflight-v1"
+SCHEMA_LIVE = "step9-live-day-v2"
+SCHEMA_PREFLIGHT = "step9-preflight-v2"
+# Immutable v1 evidence stays readable but never gains v2 meaning: v1
+# physical_bytes came from the collector ledger, v2 comes only from the
+# independent du allocated probe.
+SCHEMA_LIVE_V1 = "step9-live-day-v1"
+SCHEMA_PREFLIGHT_V1 = "step9-preflight-v1"
+_SUPPORTED_SCHEMAS = (SCHEMA_LIVE, SCHEMA_PREFLIGHT, SCHEMA_LIVE_V1,
+                       SCHEMA_PREFLIGHT_V1)
 SCHEMA = SCHEMA_LIVE  # default mode; run.json pins the actual schema
+RESOURCE_EVIDENCE_SCHEMA = "step9-resource-v2"
 ADMISSION_SCHEMA_VERSION = "0022-final"
 ADMISSION_RUN_STATES = ("active", "capacity_exceeded", "capture_out_of_range")
 ADMISSION_FAILURE_CODES = ("admission_evidence_capacity_exceeded",
@@ -252,7 +260,7 @@ def _load_run(run_dir: Path) -> dict:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise Step9Error("run_malformed", "run.json is unreadable") from error
-    if not isinstance(payload, dict) or payload.get("schema") not in (SCHEMA_LIVE, SCHEMA_PREFLIGHT):
+    if not isinstance(payload, dict) or payload.get("schema") not in _SUPPORTED_SCHEMAS:
         raise Step9Error("run_malformed", "run.json schema mismatch")
     return payload
 
@@ -1506,6 +1514,12 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
     watchdog_check = hooks.get("watchdog_check", _systemd_watchdog_check)
     clock = hooks.get("clock", time.monotonic_ns)
     mode = MODES.get(run.get("mode", "live-day"), MODES["live-day"])
+    if run.get("schema") != mode["schema"]:
+        # Immutable versions: a v1 run stays readable, but this sampler only
+        # writes v2 minute samples, so refuse before writing anything.
+        raise Step9Error("sample_mismatch",
+                         "run schema predates sampler; v1 runs take no v2 samples",
+                         gate=True)
     max_slots = hooks.get("max_slots", mode["slots"])
     core_start = _parse_utc(run["core_start"])
     samples_dir = run_dir / "samples"
@@ -1671,8 +1685,22 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
             pgdata_bad = (sample.get("pgdata") or {}).get("failure_code")
             res_failures, res_unknown, mem_over = evaluate_resource_gates(
                 resource_baseline, resources, mem_over)
+            probe = (resources.get("archive") or {}).get("allocated_probe")
+            # Bounded per-minute retention: host du evidence survives in the
+            # sample on success as well as failure/unknown, independent of
+            # collector metrics (metrics=None after a proven stop stays known
+            # when this probe succeeds). Only the small v2 probe dict is kept.
+            kept = None
+            if isinstance(probe, dict):
+                allowed = ("schema", "definition", "configured_path",
+                           "path", "resolved_path", "command",
+                           "mount_identity", "mount_before", "mount_after",
+                           "allocated_bytes", "started_at", "finished_at",
+                           "timeout_seconds", "error", "btrfs_limitation")
+                kept = {key: probe[key] for key in allowed if key in probe}
             sample["resources"] = {"failures": res_failures,
-                                     "unknown": res_unknown}
+                                     "unknown": res_unknown,
+                                     "allocated_probe": kept}
             if res_failures:
                 sample["failure_code"] = res_failures[0]
                 sample["outcome"] = "resource_gate"
@@ -1746,8 +1774,18 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
 
 def _read_samples(run_dir: Path) -> list[dict]:
     run = _load_run(run_dir)
-    mode = MODES.get(run.get("mode", "live-day"), MODES["live-day"])
+    mode_name = run.get("mode", "live-day")
+    mode = MODES.get(mode_name, MODES["live-day"])
     slots = mode["slots"]
+    run_schema = run.get("schema")
+    # Immutable versions: v1 stays readable, v2 is current. Samples must
+    # match their own run schema exactly; v1 and v2 are never mixed and new
+    # samples are always written as v2 via build_sample/mode["schema"].
+    v1_schema = (SCHEMA_LIVE_V1 if mode_name == "live-day"
+                 else SCHEMA_PREFLIGHT_V1)
+    if run_schema not in (mode["schema"], v1_schema):
+        raise Step9Error("sample_mismatch", "run schema/mode mismatch",
+                         gate=True)
     samples_dir = run_dir / "samples"
     if not samples_dir.is_dir():
         raise Step9Error("samples_missing", "no samples directory")
@@ -1762,7 +1800,7 @@ def _read_samples(run_dir: Path) -> list[dict]:
         except (OSError, json.JSONDecodeError) as error:
             raise Step9Error("sample_malformed",
                              f"unreadable minute sample {index}") from error
-        if payload.get("slot") != index or payload.get("schema") != mode["schema"]:
+        if payload.get("slot") != index or payload.get("schema") != run_schema:
             raise Step9Error("sample_mismatch", f"sample {index} identity mismatch",
                              gate=True)
         samples.append(payload)
@@ -2189,6 +2227,91 @@ def _write_manifest(run_dir: Path) -> dict:
     return manifest
 
 
+def _check_allocated_probe(probe: object, run: dict, slot: object) -> None:
+    """Fail closed unless a v2 sample carries a fully proven du probe."""
+    label = f"slot {slot} allocated probe"
+
+    def _fail(reason: str) -> None:
+        raise Step9Error("resource_evidence_failed", f"{label} {reason}",
+                         gate=True)
+
+    if not isinstance(probe, dict):
+        _fail("missing")
+    assert isinstance(probe, dict)
+    if (probe.get("schema") != RESOURCE_EVIDENCE_SCHEMA
+            or probe.get("definition")
+            != "gnu-du-allocated-bytes-one-filesystem"):
+        _fail("missing")
+    if probe.get("error") is not None:
+        _fail("failed")
+    if (type(probe.get("allocated_bytes")) is not int
+            or probe["allocated_bytes"] < 0):
+        _fail("malformed")
+    configured = probe.get("configured_path")
+    path = probe.get("path")
+    resolved = probe.get("resolved_path")
+    if not all(isinstance(value, str) and value
+                for value in (configured, path, resolved)):
+        _fail("malformed")
+    assert isinstance(configured, str)
+    assert isinstance(path, str) and isinstance(resolved, str)
+    if not os.path.isabs(path):
+        _fail("malformed")
+    if os.path.normpath(resolved) != os.path.normpath(path):
+        _fail("malformed")
+    if os.path.normpath(os.path.abspath(configured)) != os.path.normpath(path):
+        _fail("malformed")
+    pinned_spool = run.get("spool_path")
+    if not isinstance(pinned_spool, str) or not pinned_spool:
+        _fail("malformed")
+    if os.path.normpath(path) != os.path.normpath(
+            os.path.abspath(pinned_spool)):
+        _fail("malformed")
+    if probe.get("command") != ["du", "--block-size=1", "--summarize",
+                                  "--one-file-system", "--no-dereference",
+                                  "--", resolved]:
+        _fail("malformed")
+    mount_keys = ("mount_point", "source", "mnt_id", "filesystem_type")
+    before, after = probe.get("mount_before"), probe.get("mount_after")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        _fail("malformed")
+    assert isinstance(before, dict) and isinstance(after, dict)
+    for key in mount_keys:
+        old, new = before.get(key), after.get(key)
+        if old in (None, "unknown") or new in (None, "unknown"):
+            _fail("malformed")
+        if old != new:
+            _fail("malformed")
+    pinned_mount = ((run.get("filesystem") or {}).get("spool") or {})
+    for key in mount_keys:
+        pinned = pinned_mount.get(key)
+        if pinned not in (None, "unknown") and before.get(key) != pinned:
+            _fail("malformed")
+    if probe.get("mount_identity") != before:
+        _fail("malformed")
+    if type(probe.get("timeout_seconds")) is not int \
+            or probe["timeout_seconds"] != DU_TIMEOUT_SECONDS:
+        _fail("malformed")
+    started_raw, finished_raw = (probe.get("started_at"),
+                                 probe.get("finished_at"))
+    if not all(isinstance(value, str) and value
+                for value in (started_raw, finished_raw)):
+        _fail("malformed")
+    assert isinstance(started_raw, str) and isinstance(finished_raw, str)
+    if not all(value.endswith(("Z", "+00:00"))
+                for value in (started_raw, finished_raw)):
+        _fail("malformed")
+    try:
+        started = _parse_utc(started_raw)
+        finished = _parse_utc(finished_raw)
+    except Step9Error:
+        _fail("malformed")
+    if finished < started:
+        _fail("malformed")
+    if (finished - started).total_seconds() > probe["timeout_seconds"]:
+        _fail("malformed")
+
+
 def cmd_validate(arguments: argparse.Namespace) -> int:
     run_dir = _resolve_run_dir(arguments.run_dir)
     try:
@@ -2274,6 +2397,13 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
                 raise Step9Error("resource_evidence_failed",
                                  f"slot {sample.get('slot')} resource "
                                  "failures or unknowns", gate=True)
+            # v2 requires the independent du allocated probe in full;
+            # v1 ledger-based physical_bytes stays readable without it and the
+            # two versions are never mixed (enforced in _read_samples).
+            if run.get("schema") in (SCHEMA_LIVE, SCHEMA_PREFLIGHT):
+                probe_v2 = (resources or {}).get("allocated_probe") \
+                    if isinstance(resources, dict) else None
+                _check_allocated_probe(probe_v2, run, sample.get("slot"))
             operating = sample.get("operating")
             if operating is not None and operating.get("status") != "complete":
                 raise Step9Error("operating_failed",
@@ -3574,6 +3704,8 @@ RES_MEM_AVAIL_MIN = 4 * 1024**3
 RES_ARCHIVE_LOGICAL_MAX = 16 * 1024**3
 RES_ARCHIVE_PHYSICAL_MAX = 64 * 1024**3
 RES_ARCHIVE_OBJECTS_MAX = 100_000
+DU_OUTPUT_MAX_BYTES = 4096
+DU_TIMEOUT_SECONDS = 5
 
 
 def _parse_btrfs_usage(stdout: str) -> dict:
@@ -3615,6 +3747,192 @@ def _btrfs_probe_numbers(target: str) -> dict:
     result.update(parsed)
     if parsed["metadata_pct"] is None and parsed["unallocated_bytes"] is None:
         result["error"] = result["error"] or "allocation_evidence_missing"
+    return result
+
+
+def _read_pipe(fd: int, nbytes: int) -> bytes:
+    """Narrow seam: one nonblocking pipe read for the bounded runner."""
+    import os
+
+    return os.read(fd, nbytes)
+
+
+def _run_bounded_command(command: list[str], *, timeout: int,
+                         max_output_bytes: int):
+    """Run one probe with a hard total deadline and per-stream output caps."""
+    import os
+    import selectors
+    import subprocess
+    import time
+
+    # Single-threaded selectors + nonblocking os.read: stdout/stderr are
+    # capped independently, select/drain stop at deadline minus a small
+    # cleanup reserve, and kill then gets a bounded wait from the reserve
+    # so the direct child is actually reaped inside the total timeout.
+    _CLEANUP_RESERVE = 0.2
+    deadline = time.monotonic() + timeout
+    wait_end = deadline - _CLEANUP_RESERVE
+    proc = subprocess.Popen(command, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE)
+    for stream in (proc.stdout, proc.stderr):
+        os.set_blocking(stream.fileno(), False)
+    sel = selectors.DefaultSelector()
+    sel.register(proc.stdout, selectors.EVENT_READ, "out")
+    sel.register(proc.stderr, selectors.EVENT_READ, "err")
+    bufs = {"out": bytearray(), "err": bytearray()}
+    pending = {"out", "err"}
+    overflow = False
+    try:
+        while pending:
+            remaining = wait_end - time.monotonic()
+            if remaining <= 0:
+                break
+            for key, _mask in sel.select(timeout=min(remaining, 0.05)):
+                try:
+                    chunk = _read_pipe(key.fileobj.fileno(), 65536)
+                except BlockingIOError:
+                    continue
+                if not chunk:
+                    sel.unregister(key.fileobj)
+                    pending.discard(key.data)
+                    continue
+                buf = bufs[key.data]
+                if len(buf) + len(chunk) > max_output_bytes:
+                    overflow = True
+                    break
+                buf += chunk
+            if overflow:
+                break
+        if not pending and not overflow:
+            remaining = wait_end - time.monotonic()
+            if remaining > 0:
+                try:
+                    returncode = proc.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    pass
+                else:
+                    return subprocess.CompletedProcess(
+                        command, returncode,
+                        stdout=bytes(bufs["out"]).decode("utf-8"),
+                        stderr=bytes(bufs["err"]).decode("utf-8"))
+        if overflow:
+            raise ValueError("probe output exceeds bound")
+        raise subprocess.TimeoutExpired(command, timeout)
+    finally:
+        # Centralized cleanup: ANY exceptional exit while the child is live
+        # kills and bounded-reaps inside the total deadline; the successful
+        # return already reaped, so poll() skips it (no double-kill).
+        try:
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:  # kill race is not evidence
+                    pass
+                try:
+                    proc.wait(timeout=max(
+                        0.0, deadline - time.monotonic()))
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+        finally:
+            sel.close()
+            for stream in (proc.stdout, proc.stderr):
+                try:
+                    stream.close()
+                except OSError:  # close race is not evidence
+                    pass
+
+
+def _spool_path_identity(path: Path) -> tuple[int, int]:
+    import stat
+
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise ValueError("spool path must be a real directory")
+    return info.st_dev, info.st_ino
+
+
+def _spool_allocated_usage(target: str, expected_identity: dict,
+                           *, run_command=None, identity_probe=None) -> dict:
+    """Measure allocated bytes beneath one real spool tree with GNU du.
+
+    On Btrfs this is the sum reported for directory entries, not exclusive
+    ownership of shared pool extents; filesystem allocation remains separate.
+    """
+    import subprocess
+
+    started = _utc_now()
+    absolute = Path(target).absolute()
+    required = ("mount_point", "source", "mnt_id", "filesystem_type")
+    mount_before = {key: expected_identity.get(key) for key in required}
+    command = ["du", "--block-size=1", "--summarize",
+               "--one-file-system", "--no-dereference", "--",
+               str(absolute)]
+    result = {
+        "schema": RESOURCE_EVIDENCE_SCHEMA,
+        "definition": "gnu-du-allocated-bytes-one-filesystem",
+        "configured_path": str(target),
+        "path": str(absolute),
+        "resolved_path": None,
+        "command": command,
+        "mount_identity": dict(mount_before),
+        "mount_before": dict(mount_before),
+        "mount_after": None,
+        "allocated_bytes": None,
+        "started_at": started.isoformat(),
+        "finished_at": None,
+        "timeout_seconds": DU_TIMEOUT_SECONDS,
+        "error": None,
+        "btrfs_limitation": ("summed allocated blocks are not exclusive "
+                              "shared-pool ownership"),
+    }
+    try:
+        resolved = absolute.resolve(strict=True)
+        if "\n" in str(absolute) or resolved != absolute:
+            raise ValueError("spool path must be a real directory")
+        result["resolved_path"] = str(resolved)
+        before_path = _spool_path_identity(absolute)
+        if (expected_identity.get("error")
+                or any(expected_identity.get(key) in (None, "unknown")
+                       for key in required)):
+            raise ValueError("spool mount identity unavailable")
+        if run_command is None:
+            completed = _run_bounded_command(
+                command, timeout=DU_TIMEOUT_SECONDS,
+                max_output_bytes=DU_OUTPUT_MAX_BYTES)
+        else:
+            completed = run_command(command, timeout=DU_TIMEOUT_SECONDS,
+                                    max_output_bytes=DU_OUTPUT_MAX_BYTES)
+        stdout = completed.stdout
+        stderr = completed.stderr
+        if (not isinstance(stdout, str) or not isinstance(stderr, str)
+                or len(stdout.encode()) > DU_OUTPUT_MAX_BYTES
+                or len(stderr.encode()) > DU_OUTPUT_MAX_BYTES):
+            raise ValueError("du output exceeds bound")
+        if completed.returncode != 0 or stderr:
+            raise RuntimeError("du failed or traversal was incomplete")
+        if not stdout.endswith("\n"):
+            # GNU du --summarize always terminates its line; a missing
+            # terminator means truncated/incomplete output, never a result.
+            raise ValueError("du output malformed")
+        lines = stdout.splitlines()
+        if len(lines) != 1:
+            raise ValueError("du output malformed")
+        bytes_text, reported_path = lines[0].split("\t", 1)
+        if not bytes_text.isdigit() or reported_path != str(absolute):
+            raise ValueError("du output malformed")
+        probe = identity_probe or (
+            lambda path: filesystem_facts(path, path)["spool"])
+        after = probe(str(absolute))
+        result["mount_after"] = {key: after.get(key) for key in required}
+        if any(after.get(key) != expected_identity.get(key)
+               for key in required) or _spool_path_identity(absolute) != before_path:
+            raise ValueError("spool mount or path identity changed")
+        result["allocated_bytes"] = int(bytes_text)
+    except subprocess.TimeoutExpired:
+        result["error"] = "allocated_probe_timeout"
+    except Exception as error:  # noqa: BLE001 - probe miss stays unknown
+        result["error"] = "allocated_probe_unavailable:" + type(error).__name__
+    result["finished_at"] = _utc_now().isoformat()
     return result
 
 
@@ -3724,7 +4042,8 @@ def evaluate_resource_gates(baseline: dict, current: dict,
 
 def collect_resource_facts(*, spool_path: str, postgres_path: str,
                            db: object | None, metrics: dict | None,
-                           btrfs_probe=None, device_probe=None) -> dict:
+                           btrfs_probe=None, device_probe=None,
+                           spool_probe=None) -> dict:
     probe = btrfs_probe or _btrfs_probe_numbers
     dev_probe = device_probe or _btrfs_device_stats
     filesystems: dict[str, dict] = {}
@@ -3776,7 +4095,7 @@ def collect_resource_facts(*, spool_path: str, postgres_path: str,
     swap_total = memory.get("swap_total_bytes")
     swap_free = memory.get("swap_free_bytes")
     archive: dict = {"logical_bytes": None, "objects": None,
-                     "physical_bytes": None,
+                     "physical_bytes": None, "runtime_ledger_final_bytes": None,
                      "error": None}
     if db is not None:
         try:
@@ -3794,7 +4113,16 @@ def collect_resource_facts(*, spool_path: str, postgres_path: str,
                 spool_bytes = value
                 break
     if isinstance(spool_bytes, (int, float)):
-        archive["physical_bytes"] = int(spool_bytes)
+        archive["runtime_ledger_final_bytes"] = int(spool_bytes)
+    spool_fs = next((entry for entry in filesystems.values()
+                     if "spool" in entry.get("labels", [])), {})
+    allocated = (spool_probe or _spool_allocated_usage)(spool_path, spool_fs)
+    archive["allocated_probe"] = allocated
+    if (allocated.get("schema") == RESOURCE_EVIDENCE_SCHEMA
+            and allocated.get("error") is None
+            and isinstance(allocated.get("allocated_bytes"), int)
+            and allocated["allocated_bytes"] >= 0):
+        archive["physical_bytes"] = allocated["allocated_bytes"]
     return {"filesystems": filesystems,
             "memory": {"used_bytes": (total_b - avail_b
                                           if total_b is not None
