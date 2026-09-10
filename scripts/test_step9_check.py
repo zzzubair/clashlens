@@ -265,6 +265,7 @@ def _started_run(tmp_path: Path, db: FakeDB, **overrides):
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
                            return_value=None):
         header = step9.cmd_start(arguments, db)
+    _pin_resources(run_dir)
     return run_dir, header
 
 
@@ -2193,6 +2194,54 @@ def test_resource_gates_all_thresholds() -> None:
         "archive_physical_unknown"}
 
 
+def test_resource_gates_compare_matching_counter_sources() -> None:
+    baseline = _quiet_facts()
+    baseline["cgroup"] = {"oom_kills": None, "swap_current_bytes": None}
+    current = _quiet_facts()
+    current["cgroup"] = {"oom_kills": None, "swap_current_bytes": None}
+    current["memory"]["oom_kills"] = 1
+    failures, unknown, _ = step9.evaluate_resource_gates(baseline, current, 0)
+    assert "oom_kill_observed" in failures
+    assert "oom_unknown" not in unknown
+
+    current["memory"]["oom_kills"] = 0
+    failures, unknown, _ = step9.evaluate_resource_gates(baseline, current, 0)
+    assert "oom_kill_observed" not in failures
+    assert "oom_unknown" not in unknown
+
+    current["memory"]["oom_kills"] = None
+    failures, unknown, _ = step9.evaluate_resource_gates(baseline, current, 0)
+    assert "oom_kill_observed" not in failures
+    assert "oom_unknown" in unknown
+
+    for baseline_cgroup, current_cgroup in (
+        ({"oom_kills": 4, "swap_current_bytes": 4},
+         {"oom_kills": None, "swap_current_bytes": None}),
+        ({"oom_kills": None, "swap_current_bytes": None},
+         {"oom_kills": 4, "swap_current_bytes": 4}),
+    ):
+        baseline = _quiet_facts()
+        baseline["cgroup"] = baseline_cgroup
+        current = _quiet_facts()
+        current["cgroup"] = current_cgroup
+        current["memory"]["oom_kills"] = 1
+        current["memory"]["swap_used_bytes"] = 1
+        failures, unknown, _ = step9.evaluate_resource_gates(
+            baseline, current, 0)
+        assert {"oom_kill_observed", "swap_growth"} <= set(failures)
+        assert "oom_unknown" not in unknown
+        assert "swap_unknown" not in unknown
+
+    baseline = _quiet_facts()
+    baseline["cgroup"] = {"oom_kills": 2, "swap_current_bytes": 3}
+    current = _quiet_facts()
+    current["cgroup"] = {"oom_kills": 1, "swap_current_bytes": 2}
+    failures, _, _ = step9.evaluate_resource_gates(baseline, current, 0)
+    assert "oom_counter_reset" in failures
+    assert "swap_growth" not in failures
+    assert not any("swap" in code and "reset" in code for code in failures)
+
+
 def _write_url_file(path: Path, data: bytes, mode: int = 0o600) -> str:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
     try:
@@ -2251,6 +2300,7 @@ def test_no_credential_in_artifacts(tmp_path: Path) -> None:
     with mock.patch.object(step9.deployment_receipt, "validate_receipt",
                            return_value=None):
         step9.cmd_start(arguments, db)
+    _pin_resources(run_dir)
     sample_args = mock.Mock(run_dir=str(run_dir), podman_bin="podman",
                             database_url=None, database_url_file=None)
     assert step9.cmd_sample(sample_args, _sample_hooks(db)) == 0

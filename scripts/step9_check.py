@@ -3679,24 +3679,26 @@ def evaluate_resource_gates(baseline: dict, current: dict,
     old_mem = baseline.get("memory") or {}
     cgroup = current.get("cgroup") or {}
     old_cgroup = baseline.get("cgroup") or {}
-    oom_now = cgroup.get("oom_kills", mem.get("oom_kills"))
-    oom_old = old_cgroup.get("oom_kills", old_mem.get("oom_kills"))
-    if oom_now is not None and oom_old is not None:
-        if oom_now > oom_old:
-            failures.append("oom_kill_observed")
-    else:
+    oom_now = cgroup.get("oom_kills")
+    oom_old = old_cgroup.get("oom_kills")
+    if oom_now is None or oom_old is None:
+        oom_now = mem.get("oom_kills")
+        oom_old = old_mem.get("oom_kills")
+    if oom_now is None or oom_old is None:
         unknown.append("oom_unknown")
-    cgroup_swap = cgroup.get("swap_current_bytes")
-    old_cgroup_swap = old_cgroup.get("swap_current_bytes")
-    if cgroup_swap is not None and old_cgroup_swap is not None:
-        if cgroup_swap > old_cgroup_swap:
-            failures.append("swap_growth")
-    elif mem.get("swap_used_bytes") is not None \
-            and old_mem.get("swap_used_bytes") is not None:
-        if mem["swap_used_bytes"] > old_mem["swap_used_bytes"]:
-            failures.append("swap_growth")
-    else:
+    elif oom_now < oom_old:
+        failures.append("oom_counter_reset")
+    elif oom_now > oom_old:
+        failures.append("oom_kill_observed")
+    swap_now = cgroup.get("swap_current_bytes")
+    swap_old = old_cgroup.get("swap_current_bytes")
+    if swap_now is None or swap_old is None:
+        swap_now = mem.get("swap_used_bytes")
+        swap_old = old_mem.get("swap_used_bytes")
+    if swap_now is None or swap_old is None:
         unknown.append("swap_unknown")
+    elif swap_now > swap_old:
+        failures.append("swap_growth")
     if mem.get("available_bytes") is None:
         unknown.append("memory_unknown")
     elif mem["available_bytes"] < RES_MEM_AVAIL_MIN:
