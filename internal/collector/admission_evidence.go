@@ -206,7 +206,7 @@ func (s *store) scheduleDueRegularWithEvidence(ctx context.Context, now time.Tim
 	schedulerAt := databaseNow.UTC()
 	cycleAt := schedulerAt.Truncate(cycle).UTC()
 	boundary := boundaryAdmissionBoundary(schedulerAt)
-	nextCycleStart := cycleAt.Add(cycle)
+	nextCycleStart := schedulerAt.Add(cycle)
 	cycleSeconds := int64(cycle / time.Second)
 	invocationID, err := newAdmissionInvocationID()
 	if err != nil {
@@ -295,6 +295,12 @@ const admissionEvidenceSchedulerSQL = `
 		SELECT player.id, player.next_due_at
 		FROM players AS player
 		WHERE player.active AND player.next_due_at <= $1::timestamptz
+		  AND NOT EXISTS (
+			SELECT 1 FROM collector_jobs AS active_job
+			WHERE active_job.player_id = player.id
+			  AND active_job.work_type = 'regular_poll'
+			  AND active_job.status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
+		  )
 	), due AS MATERIALIZED (
 		SELECT player.id, player.normalized_tag, player.next_due_at,
 		       player.current_profile_version_id, player.eligibility_state
@@ -302,6 +308,12 @@ const admissionEvidenceSchedulerSQL = `
 		CROSS JOIN gate
 		WHERE gate.allowed
 		  AND player.active AND player.next_due_at <= $1::timestamptz
+		  AND NOT EXISTS (
+			SELECT 1 FROM collector_jobs AS active_job
+			WHERE active_job.player_id = player.id
+			  AND active_job.work_type = 'regular_poll'
+			  AND active_job.status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
+		  )
 		ORDER BY player.next_due_at, player.id
 		FOR NO KEY UPDATE OF player SKIP LOCKED
 		LIMIT $2
@@ -379,9 +391,7 @@ const admissionEvidenceSchedulerSQL = `
 		RETURNING id, player_id
 	), advanced AS (
 		UPDATE players AS player
-		SET next_due_at = $4::timestamptz + CASE
-			WHEN $5::bigint < 1 THEN interval '0 seconds'
-			ELSE ((player.id - 1) % $5::bigint) * interval '1 second' END
+		SET next_due_at = $4::timestamptz
 		FROM due CROSS JOIN reservation
 		WHERE reservation.admitted AND player.id = due.id
 		RETURNING player.id

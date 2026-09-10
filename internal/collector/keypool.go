@@ -33,7 +33,8 @@ type APIKey struct {
 type keyState struct {
 	APIKey
 	quarantined bool
-	requests    []time.Time
+	requests    []time.Time // completed requests; retained for one second after completion
+	inFlight    int
 }
 
 type keyPool struct {
@@ -103,12 +104,15 @@ func (p *keyPool) tryAcquire(now time.Time, requestedPool capacityPool) (APIKey,
 		}
 		hasHealthyCandidate = true
 		state.requests = trimRequestWindow(state.requests, now)
-		if len(state.requests) < p.requestsPerSecond {
-			state.requests = append(state.requests, now)
+		if len(state.requests)+state.inFlight < p.requestsPerSecond {
+			state.inFlight++
 			p.next = (index + 1) % len(p.keys)
 			return state.APIKey, 0, nil
 		}
-		wait := time.Second - now.Sub(state.requests[0])
+		wait := time.Second
+		if len(state.requests) > 0 {
+			wait -= now.Sub(state.requests[0])
+		}
 		if wait < minimumWait {
 			minimumWait = wait
 		}
@@ -118,6 +122,21 @@ func (p *keyPool) tryAcquire(now time.Time, requestedPool capacityPool) (APIKey,
 		return APIKey{}, 0, errNoHealthyKey
 	}
 	return APIKey{}, minimumWait, errRateLimited
+}
+
+// finishRequest retains the slot for a second after completion, not admission.
+// A paused worker or delayed HTTP dispatch cannot turn expired permits into a
+// burst. In-flight requests never expire; response arrival bounds server arrival.
+func (p *keyPool) finishRequest(key APIKey, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, state := range p.keys {
+		if state.Label == key.Label && state.inFlight > 0 {
+			state.inFlight--
+			state.requests = append(state.requests, now)
+			return
+		}
+	}
 }
 
 // sharedInteractiveKey selects the configured shared key without applying the
@@ -153,16 +172,21 @@ func (p *keyPool) statuses(now time.Time) []APIKeyStatus {
 
 	statuses := make([]APIKeyStatus, 0, len(p.keys))
 	for _, state := range p.keys {
-		state.requests = trimRequestWindow(state.requests, now)
+		// Observability must not expire permits using a wall-clock timestamp;
+		// dispatch uses time.Now's monotonic clock for rate enforcement.
+		requests := trimRequestWindow(state.requests, now)
 		cooldown := time.Duration(0)
-		if len(state.requests) >= p.requestsPerSecond {
-			cooldown = time.Second - now.Sub(state.requests[0])
+		if len(requests)+state.inFlight >= p.requestsPerSecond {
+			cooldown = time.Second
+			if len(requests) > 0 {
+				cooldown -= now.Sub(requests[0])
+			}
 		}
 		statuses = append(statuses, APIKeyStatus{
 			Label:                state.Label,
 			Pool:                 state.Pool,
 			Quarantined:          state.quarantined,
-			RequestsInLastSecond: len(state.requests),
+			RequestsInLastSecond: len(requests) + state.inFlight,
 			Cooldown:             cooldown,
 		})
 	}

@@ -63,7 +63,8 @@ export async function loader({
   }
   const canonicalPath = canonicalPlayerPath(normalizedTag);
   const url = new URL(request.url);
-  if (url.pathname !== canonicalPath) {
+  // React Router keeps its single-fetch suffix in loader request URLs.
+  if (url.pathname.replace(/\.data$/, "") !== canonicalPath) {
     throw redirect(`${canonicalPath}${url.search}`, {
       status: 301,
       headers: { "Cache-Control": "no-store" },
@@ -143,6 +144,10 @@ export function headers() {
   return { "Cache-Control": "no-store" };
 }
 
+// Effects never run during SSR. This client-document guard also prevents a
+// later SPA visit/back navigation from replaying the original reload event.
+let documentReloadHandled = false;
+
 export default function PlayerRoute() {
   const data = useLoaderData<typeof loader>();
   const refreshFetcher = useFetcher<RefreshWork | RefreshError>();
@@ -180,6 +185,26 @@ export default function PlayerRoute() {
   const refreshResourcePath = player
     ? `/resources/players/${encodeURIComponent(player.tag)}/refresh`
     : null;
+
+  useEffect(() => {
+    if (documentReloadHandled) return;
+    documentReloadHandled = true;
+    const navigation = performance.getEntriesByType?.("navigation")[0] as
+      PerformanceNavigationTiming | undefined;
+    if (
+      navigation?.type !== "reload" ||
+      new URL(navigation.name).pathname !== window.location.pathname ||
+      data.player === null
+    )
+      return;
+    refreshFetcher.submit(
+      { idempotencyKey: data.noJsIdempotencyKey },
+      {
+        method: "post",
+        action: `/resources/players/${encodeURIComponent(data.player.tag)}/refresh`,
+      },
+    );
+  }, [data.player, data.noJsIdempotencyKey, refreshFetcher]);
 
   useEffect(() => {
     if (!workId || terminalState || refreshResourcePath === null) return;

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -3183,6 +3184,11 @@ def _failed_capacity_sample() -> dict:
 
 
 class NormalCapacityTest(unittest.TestCase):
+    def test_retired_fixed_window_runner_cannot_start_traffic(self) -> None:
+        with mock.patch.object(runner, "run") as execute, mock.patch("sys.stderr"):
+            self.assertEqual(runner.main(["normal-capacity", "--database-url", "postgresql://unused"]), 2)
+        execute.assert_not_called()
+
     def setUp(self) -> None:
         source_patch = mock.patch.object(
             runner, "_clean_source", return_value=SOURCE_SHA
@@ -3902,12 +3908,13 @@ class NormalCapacityTest(unittest.TestCase):
                 runner,
                 "_drain_downstream",
                 return_value=(summary, stats, 5.0, str(downstream_root)),
-            ),
+            ) as drain,
         ):
             workload, owned, identity, active = runner._run_normal_capacity(
                 "postgresql://stub", archive, 4333, 600.0
             )
         self.assertFalse(active)
+        self.assertEqual(drain.call_args.args[-1], owned)
         self.assertEqual(set(workload), set(runner._CAPACITY_WORKLOAD_KEYS))
         self.assertTrue(Path(owned).exists())
         self.assertEqual(identity, (owned.lstat().st_dev, owned.lstat().st_ino))
@@ -3992,8 +3999,34 @@ class NormalCapacityTest(unittest.TestCase):
             "descendant survived the process-group kill",
         )
 
-    def test_downstream_drain_removes_owned_spool(self) -> None:
-        downstream_root = Path(tempfile.mkdtemp(prefix="clashlens-perf-spool-"))
+    def test_capacity_processor_reads_warm_spool_without_remote_repair(self) -> None:
+        from clashlens.spool import Spool
+
+        with tempfile.TemporaryDirectory(prefix="capacity-spool-") as directory:
+            root = Path(directory)
+            body = b'{"items":[]}'
+            digest = hashlib.sha256(body).hexdigest()
+            seeded = Spool(directory, max_body_bytes=1 << 20, max_bytes=runner.CAPACITY_SPOOL_BYTES, max_objects=30000)
+            seeded.publish(body, digest)
+            seeded.close()
+            with runner.archive_server() as archive, mock.patch("clashlens.db.Database"):
+                database, _processor, _metrics, reader = runner._processor(
+                    "postgresql://stub", archive, capacity_spool=root
+                )
+                try:
+                    result = reader.read_verified(f"s3://evidence/sha256/{digest[:2]}/{digest}", digest)
+                    self.assertEqual(result.body, body)
+                    self.assertEqual(archive[3].gets, 0)
+                    self.assertEqual(reader.spool.max_bytes, runner.CAPACITY_SPOOL_BYTES)
+                    self.assertEqual(reader.spool.max_body_bytes, 1 << 20)
+                finally:
+                    database.close()
+                    reader.spool.close()
+            self.assertEqual((root / "sha256" / digest[:2] / digest).read_bytes(), body)
+
+    def test_downstream_drain_preserves_shared_collector_spool(self) -> None:
+        downstream_root = Path(tempfile.mkdtemp(prefix="capacity-spool-"))
+        self.addCleanup(shutil.rmtree, downstream_root, True)
         (downstream_root / "body").write_bytes(b"x" * 3000)
 
         def immediate(job_id: int, *, owner: str, lease_seconds: int):
@@ -4014,12 +4047,13 @@ class NormalCapacityTest(unittest.TestCase):
             runner, "_processor", return_value=(database, processor, None, spool)
         ), mock.patch.dict(sys.modules, {"psycopg": psycopg}):
             summary, stats, _elapsed, root = runner._drain_downstream(
-                "postgresql://stub", mock.Mock(), 2, 60.0
+                "postgresql://stub", mock.Mock(), 2, 60.0, downstream_root
             )
         self.assertEqual(summary["count"], 2)
         self.assertEqual(stats["allocated_peak_bytes"], 4096)
         self.assertEqual(root, str(downstream_root))
-        self.assertFalse(downstream_root.exists())
+        self.assertEqual((downstream_root / "body").read_bytes(), b"x" * 3000)
+        spool.spool.close.assert_called_once()
 
     def test_downstream_drain_cancels_hung_futures(self) -> None:
         import threading
@@ -4046,7 +4080,7 @@ class NormalCapacityTest(unittest.TestCase):
         ), self.assertRaises(
             runner._CapacityProbeFailure
         ) as raised:
-            runner._drain_downstream("postgresql://stub", mock.Mock(), 2, 1.0)
+            runner._drain_downstream("postgresql://stub", mock.Mock(), 2, 1.0, Path("unused"))
         self.assertEqual(raised.exception.reason, "probe_timeout")
         self.assertTrue(raised.exception.active)
         stop.set()
@@ -4133,7 +4167,7 @@ class NormalCapacityTest(unittest.TestCase):
             ), self.assertRaises(
                 runner._CapacityProbeFailure
             ):
-                runner._drain_downstream("postgresql://stub", mock.Mock(), 1, 1.0)
+                runner._drain_downstream("postgresql://stub", mock.Mock(), 1, 1.0, downstream_root)
             database.close.assert_not_called()
             self.assertTrue(downstream_root.exists())
         finally:

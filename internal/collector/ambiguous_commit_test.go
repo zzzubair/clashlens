@@ -263,42 +263,57 @@ func TestVersionTwoStorageFailureReconcilesCommittedCommitErrorAndIsIdempotent(t
 	}
 }
 
-func TestVersionTwoRetryResolutionReconcilesCommittedCommitErrorAndIsIdempotent(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	store := startVersionTwoStore(t, ctx)
+func TestVersionTwoResolutionReconcilesRegularFailuresAndStorageRetries(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, attempt, outcome string
+		storage                        bool
+		retries                        int
+	}{
+		{"ordinary failure waits for next pass", "failed", "failed", "failed", false, 0},
+		{"storage failure retains retry", "waiting_retry", "incomplete", "retrying", true, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			store := startVersionTwoStore(t, ctx)
 
-	job, attemptID, _, response := prepareAmbiguousObservationFixture(t, ctx, store)
-	if _, err := store.pool.Exec(ctx, `
+			job, attemptID, _, response := prepareAmbiguousObservationFixture(t, ctx, store)
+			if _, err := store.pool.Exec(ctx, `
 		UPDATE collector_endpoint_results
 		SET outcome = 'observed', response_completed_at = $2
 		WHERE attempt_id = $1 AND endpoint = 'battle_log'
 	`, attemptID, response.responseCompletedAt); err != nil {
-		t.Fatalf("mark sibling endpoint observed: %v", err)
-	}
-	if err := store.recordTransportFailure(ctx, job, attemptID, profileEndpoint,
-		response.requestStartedAt, response.responseCompletedAt,
-		response.responseCompletedAt.Add(time.Minute), "timeout", "normal"); err != nil {
-		t.Fatalf("seed retry endpoint failure: %v", err)
-	}
+				t.Fatalf("mark sibling endpoint observed: %v", err)
+			}
+			var seedErr error
+			if tc.storage {
+				seedErr = store.recordStorageFailure(ctx, job, attemptID, profileEndpoint, response, "archive_write_failed", "normal")
+			} else {
+				seedErr = store.recordTransportFailure(ctx, job, attemptID, profileEndpoint,
+					response.requestStartedAt, response.responseCompletedAt,
+					response.responseCompletedAt.Add(time.Minute), "timeout", "normal")
+			}
+			if seedErr != nil {
+				t.Fatalf("seed endpoint failure: %v", seedErr)
+			}
 
-	commitErr := errors.New("injected ambiguous retry resolution commit")
-	store.commitTx = func(ctx context.Context, tx pgx.Tx) error {
-		if err := tx.Commit(ctx); err != nil {
-			return err
-		}
-		return commitErr
-	}
-	now := time.Now().UTC()
-	if err := store.resolveAttempt(ctx, job, attemptID, now, 3); err != nil {
-		t.Fatalf("reconciled retry resolution returned an error: %v", err)
-	}
-	if err := store.resolveAttempt(ctx, job, attemptID, now, 3); err != nil {
-		t.Fatalf("repeated reconciled retry resolution returned an error: %v", err)
-	}
+			commitErr := errors.New("injected ambiguous retry resolution commit")
+			store.commitTx = func(ctx context.Context, tx pgx.Tx) error {
+				if err := tx.Commit(ctx); err != nil {
+					return err
+				}
+				return commitErr
+			}
+			now := time.Now().UTC()
+			if err := store.resolveAttempt(ctx, job, attemptID, now, 3); err != nil {
+				t.Fatalf("reconciled retry resolution returned an error: %v", err)
+			}
+			if err := store.resolveAttempt(ctx, job, attemptID, now, 3); err != nil {
+				t.Fatalf("repeated reconciled retry resolution returned an error: %v", err)
+			}
 
-	var rootStatus, attemptStatus, retryingEndpoint string
-	if err := store.pool.QueryRow(ctx, `
+			var rootStatus, attemptStatus, retryingEndpoint string
+			if err := store.pool.QueryRow(ctx, `
 		SELECT job.status, attempt.status, endpoint_result.outcome
 		FROM collector_jobs AS job
 		JOIN collector_attempts AS attempt ON attempt.id = $2
@@ -306,18 +321,20 @@ func TestVersionTwoRetryResolutionReconcilesCommittedCommitErrorAndIsIdempotent(
 		  ON endpoint_result.attempt_id = attempt.id AND endpoint_result.endpoint = 'profile'
 		WHERE job.id = $1
 	`, job.id, attemptID).Scan(&rootStatus, &attemptStatus, &retryingEndpoint); err != nil {
-		t.Fatalf("read reconciled retry state: %v", err)
-	}
-	var retryJobs int
-	if err := store.pool.QueryRow(ctx, `
+				t.Fatalf("read reconciled retry state: %v", err)
+			}
+			var retryJobs int
+			if err := store.pool.QueryRow(ctx, `
 		SELECT count(*) FROM collector_jobs
 		WHERE parent_attempt_id = $1 AND work_type = 'endpoint_retry'
 	`, attemptID).Scan(&retryJobs); err != nil {
-		t.Fatalf("count retry jobs: %v", err)
-	}
-	if rootStatus != "waiting_retry" || attemptStatus != "incomplete" || retryingEndpoint != "retrying" || retryJobs != 1 {
-		t.Fatalf("reconciled retry state = job %q, attempt %q, endpoint %q, retry jobs %d; want waiting_retry, incomplete, retrying, 1",
-			rootStatus, attemptStatus, retryingEndpoint, retryJobs)
+				t.Fatalf("count retry jobs: %v", err)
+			}
+			if rootStatus != tc.status || attemptStatus != tc.attempt || retryingEndpoint != tc.outcome || retryJobs != tc.retries {
+				t.Fatalf("reconciled state = job %q, attempt %q, endpoint %q, retry jobs %d; want %s, %s, %s, %d",
+					rootStatus, attemptStatus, retryingEndpoint, retryJobs, tc.status, tc.attempt, tc.outcome, tc.retries)
+			}
+		})
 	}
 }
 

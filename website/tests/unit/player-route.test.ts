@@ -94,20 +94,25 @@ describe("player route historical independence", () => {
     expect(data.historicalError).not.toBeNull();
   });
 
-  it("preserves the current page exactly when no season is selected", async () => {
-    const getPlayerSeason = vi.fn();
-    mocks.createPythonClient.mockReturnValue({
-      getPlayer: vi.fn().mockRejectedValue(new PythonApiError(404, { error: "missing" })),
-      getPlayerSeasons: vi.fn().mockResolvedValue([]),
-      getPlayerSeason,
-    });
-    const data = await playerLoader({
-      request: requestFor(null),
-      params: { tag: "#2PP" },
-    } as never);
-    expect(data.selectedSeason).toBeNull();
-    expect(data.historical).toBeNull();
-    expect(data.historicalError).toBeNull();
-    expect(getPlayerSeason).not.toHaveBeenCalled();
-  });
+  it.each(["", ".data"])(
+    "reads the canonical page without a redirect loop (suffix %s)",
+    async (suffix) => {
+      const getPlayerSeason = vi.fn();
+      mocks.createPythonClient.mockReturnValue({
+        getPlayer: vi
+          .fn()
+          .mockRejectedValue(new PythonApiError(404, { error: "missing" })),
+        getPlayerSeasons: vi.fn().mockResolvedValue([]),
+        getPlayerSeason,
+      });
+      const data = await playerLoader({
+        request: new Request(requestFor(null).url + suffix),
+        params: { tag: "#2PP" },
+      } as never);
+      expect(data.selectedSeason).toBeNull();
+      expect(data.historical).toBeNull();
+      expect(data.historicalError).toBeNull();
+      expect(getPlayerSeason).not.toHaveBeenCalled();
+    },
+  );
 });

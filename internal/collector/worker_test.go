@@ -172,7 +172,7 @@ func TestWorkerCollectsProfileAndBattleLogConcurrentlyAndCommitsEvidence(t *test
 	}
 }
 
-func TestWorkerRetainsSuccessfulProfileAndRetriesOnlyFailedBattleLog(t *testing.T) {
+func TestWorkerRegularFailureIsRetainedAndRecoveredOnNextPass(t *testing.T) {
 	databaseURL := startContractDatabase(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
@@ -289,24 +289,31 @@ func TestWorkerRetainsSuccessfulProfileAndRetriesOnlyFailedBattleLog(t *testing.
 	if err := store.pool.QueryRow(ctx, `SELECT status FROM collector_attempts LIMIT 1`).Scan(&attemptStatus); err != nil {
 		t.Fatalf("read incomplete attempt: %v", err)
 	}
-	if attemptStatus != "incomplete" {
-		t.Fatalf("attempt status after transport failure = %q, want incomplete", attemptStatus)
+	if attemptStatus != "failed" {
+		t.Fatalf("attempt status after transport failure = %q, want failed", attemptStatus)
 	}
-
+	if claimed, err := worker.runOnce(ctx, normalPool); err != nil || claimed {
+		t.Fatalf("regular failure created immediate retry work: claimed=%v err=%v", claimed, err)
+	}
+	// Advance only the fixture's due time to model the next regular pass,
+	// without waiting five wall-clock minutes in a regression test.
+	if _, err := store.pool.Exec(ctx, `UPDATE players SET next_due_at=clock_timestamp()-interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := store.scheduleDueRegular(ctx, time.Now().UTC(), 5*time.Minute, 100); err != nil || count != 1 {
+		t.Fatalf("next pass admission: count=%d err=%v", count, err)
+	}
 	claimed, err = worker.runOnce(ctx, normalPool)
-	if err != nil {
-		t.Fatalf("retry worker run returned an error: %v", err)
-	}
-	if !claimed {
-		t.Fatal("retry worker run did not claim endpoint retry")
+	if err != nil || !claimed {
+		t.Fatalf("next pass: claimed=%v err=%v", claimed, err)
 	}
 
 	requestMu.Lock()
 	profileRequests := requestCounts["/v1/players/#2PP"]
 	battleLogRequests := requestCounts["/v1/players/#2PP/battlelog"]
 	requestMu.Unlock()
-	if profileRequests != 1 || battleLogRequests != 2 {
-		t.Fatalf("request counts = profile %d, battle log %d; want 1 and 2", profileRequests, battleLogRequests)
+	if profileRequests != 2 || battleLogRequests != 2 {
+		t.Fatalf("request counts = profile %d, battle log %d; want 2 and 2", profileRequests, battleLogRequests)
 	}
 
 	metrics.mu.Lock()
@@ -320,8 +327,8 @@ func TestWorkerRetainsSuccessfulProfileAndRetriesOnlyFailedBattleLog(t *testing.
 		}
 	}
 	metrics.mu.Unlock()
-	if profileMetricRequests != 1 || battleLogMetricRequests != 2 || battleLogRetries != 1 || battleLogOutcomes != 2 {
-		t.Fatalf("failed endpoint metrics = profile requests %d, battle log requests %d, retries %d, outcomes %d; want 1, 2, 1, 2",
+	if profileMetricRequests != 2 || battleLogMetricRequests != 2 || battleLogRetries != 1 || battleLogOutcomes != 2 {
+		t.Fatalf("failed endpoint metrics = profile requests %d, battle log requests %d, retries %d, outcomes %d; want 2, 2, 1, 2",
 			profileMetricRequests, battleLogMetricRequests, battleLogRetries, battleLogOutcomes)
 	}
 	for _, endpoint := range []string{"profile", "battle_log"} {
@@ -330,10 +337,14 @@ func TestWorkerRetainsSuccessfulProfileAndRetriesOnlyFailedBattleLog(t *testing.
 		}
 	}
 
-	if err := store.pool.QueryRow(ctx, `SELECT status FROM collector_attempts LIMIT 1`).Scan(&attemptStatus); err != nil {
-		t.Fatalf("read completed attempt: %v", err)
+	if err := store.pool.QueryRow(ctx, `SELECT status FROM collector_attempts ORDER BY id DESC LIMIT 1`).Scan(&attemptStatus); err != nil {
+		t.Fatalf("read next pass attempt: %v", err)
 	}
 	if attemptStatus != "complete" {
-		t.Fatalf("attempt status after retry = %q, want complete", attemptStatus)
+		t.Fatalf("next pass attempt = %q, want complete", attemptStatus)
+	}
+	var failedAttempts int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM collector_attempts WHERE status='failed'`).Scan(&failedAttempts); err != nil || failedAttempts != 1 {
+		t.Fatalf("original failed pass was lost: count=%d err=%v", failedAttempts, err)
 	}
 }

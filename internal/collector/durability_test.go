@@ -470,8 +470,11 @@ func TestVersionTwoRetryLifecycleFencesAttemptAndJobTerminalWrites(t *testing.T)
 	`, now.Add(-time.Hour)); err != nil {
 		t.Fatalf("insert retry player: %v", err)
 	}
-	if _, err := store.scheduleDueRegular(ctx, now, 5*time.Minute, 1); err != nil {
-		t.Fatalf("schedule retry work: %v", err)
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO collector_jobs (work_type, player_id, normalized_tag, capacity_pool, priority, due_at, coalescing_key, status)
+		SELECT 'initial_collection', id, normalized_tag, 'normal', 100, $1, 'initial-retry-test', 'pending' FROM players
+	`, now); err != nil {
+		t.Fatalf("schedule initial collection retry work: %v", err)
 	}
 	rootJob, err := store.claimNext(ctx, "retry-root", normalPool, now, time.Minute, "retry-root-token")
 	if err != nil {

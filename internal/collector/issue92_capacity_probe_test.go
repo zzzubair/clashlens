@@ -319,6 +319,11 @@ func TestIssue92CapacityUnknownSecretRejected(t *testing.T) {
 }
 
 func TestIssue92CapacityProbe(t *testing.T) {
+	// This historical probe assumes immediate regular retries and a fixed
+	// 300-second batch. Neither is the current rolling-poll contract.
+	if os.Getenv("CLASHLENS_CAPACITY_DATABASE_URL") != "" || os.Getenv("CLASHLENS_CAPACITY_EMBEDDED") == "1" {
+		t.Fatal("fixed-window capacity probe retired; see docs/collector-polling.md")
+	}
 	databaseURL := os.Getenv("CLASHLENS_CAPACITY_DATABASE_URL")
 	if databaseURL == "" {
 		if os.Getenv("CLASHLENS_CAPACITY_EMBEDDED") != "1" {

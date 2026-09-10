@@ -149,12 +149,40 @@ func TestKeyPoolStatusReportsRateLimitCooldown(t *testing.T) {
 		t.Fatalf("newKeyPool returned an error: %v", err)
 	}
 	now := time.Unix(1_700_000_000, 0).UTC()
-	if _, _, err := pool.tryAcquire(now, normalPool); err != nil {
+	key, _, err := pool.tryAcquire(now, normalPool)
+	if err != nil {
 		t.Fatalf("tryAcquire returned an error: %v", err)
 	}
+	pool.finishRequest(key, now)
 	statuses := pool.statuses(now.Add(250 * time.Millisecond))
 	if len(statuses) != 1 || statuses[0].Cooldown != 750*time.Millisecond {
 		t.Fatalf("key statuses = %#v, want 750ms cooldown", statuses)
+	}
+}
+
+func TestKeyPoolDelayedDispatchCannotAccumulateExpiredPermits(t *testing.T) {
+	pool, err := newKeyPool([]APIKey{{Label: "normal", Secret: "secret", Pool: normalPool}}, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1700000000, 0)
+	key, _, err := pool.tryAcquire(now, normalPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A stalled request still holds its slot even several windows later.
+	completed := now.Add(10 * time.Second)
+	if _, _, err := pool.tryAcquire(completed, normalPool); !errors.Is(err, errRateLimited) {
+		t.Fatalf("in-flight permit expired before dispatch: %v", err)
+	}
+	pool.finishRequest(key, completed)
+	// A reporting clock jump must not expire the dispatch limiter's slots.
+	pool.statuses(completed.Add(time.Hour))
+	if _, _, err := pool.tryAcquire(completed.Add(time.Second-time.Nanosecond), normalPool); !errors.Is(err, errRateLimited) {
+		t.Fatalf("permit reused within a second of response arrival: %v", err)
+	}
+	if _, _, err := pool.tryAcquire(completed.Add(time.Second), normalPool); err != nil {
+		t.Fatalf("completed permit was not reclaimed: %v", err)
 	}
 }
 

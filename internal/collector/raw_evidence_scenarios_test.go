@@ -111,6 +111,71 @@ func TestRawEvidenceRetiredLocationIsNeverReused(t *testing.T) {
 	}
 }
 
+func TestRawEvidenceDuplicateReleasesStripeBeforeCapacityBarrier(t *testing.T) {
+	scenario := newScenarioArchive(t, filepath.Join(t.TempDir(), "spool"))
+	ctx := context.Background()
+	body, hash := bodyAndHash(t, `{"items":[]}`)
+	reservation, err := scenario.reserve(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scenario.spool.write(reservation, bytes.NewReader(body)); err != nil {
+		t.Fatal(err)
+	}
+	scenario.verified[hash] = true
+	reservation, err = scenario.reserve(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	committed := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- scenario.secureAndCommit(ctx, reservation, body, func(context.Context, string, string, int64) error {
+			// Hold the capacity barrier after the cache-hit commit. Other
+			// operations on these bytes must still be able to take the stripe.
+			if err := scenario.spool.lockCapacity(); err != nil {
+				return err
+			}
+			close(committed)
+			return nil
+		}, nil)
+	}()
+	select {
+	case <-committed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cache-hit commit did not complete")
+	}
+	capacityLocked := true
+	defer func() {
+		if capacityLocked {
+			scenario.spool.unlockCapacity()
+		}
+	}()
+	stripe, _ := scenario.spool.stripeIndex(hash)
+	unlocked := make(chan struct{})
+	go func() {
+		if err := scenario.spool.lockStripe(stripe, true); err == nil {
+			scenario.spool.unlockStripe(stripe)
+			close(unlocked)
+		}
+	}()
+	select {
+	case <-unlocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("capacity barrier held the duplicate's stripe")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("returned before the capacity barrier: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	scenario.spool.unlockCapacity()
+	capacityLocked = false
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRawEvidenceVerifiedDuplicateUsesZeroBucketRequests(t *testing.T) {
 	scenario := newScenarioArchive(t, filepath.Join(t.TempDir(), "spool"))
 	ctx := context.Background()

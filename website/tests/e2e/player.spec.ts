@@ -114,6 +114,43 @@ test("refresh shows progress and publishes newer saved player data", async ({ pa
   expect(pythonRequests).toEqual([]);
 });
 
+test("browser reload refreshes once without turning ordinary visits into polls", async ({
+  page,
+}) => {
+  const submissions: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().includes("/resources/players/")) {
+      submissions.push(request.url());
+    }
+  });
+  await page.goto("/players/%232PQ");
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
+  expect(submissions).toHaveLength(0);
+  const savedTrophies = await page.locator(".player-trophy-card strong").innerText();
+
+  await page.reload();
+  await expect(page.getByText("Updated.", { exact: true })).toBeVisible({
+    timeout: 5_000,
+  });
+  await expect(page.locator(".player-trophy-card strong")).not.toHaveText(savedTrophies);
+  expect(submissions).toHaveLength(1);
+
+  // Returning through SPA history must not replay the document's reload.
+  await page.getByRole("link", { name: "Log in", exact: true }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(submissions).toHaveLength(1);
+
+  await page.reload();
+  await expect(page.getByText("Updated.", { exact: true })).toBeVisible({
+    timeout: 5_000,
+  });
+  expect(submissions).toHaveLength(2);
+});
+
 test("concurrent refreshes reuse one work identity", async ({ browser }) => {
   const context = await browser.newContext({
     extraHTTPHeaders: { "x-forwarded-for": "playwright-concurrent-refresh" },
