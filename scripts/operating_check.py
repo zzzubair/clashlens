@@ -836,6 +836,9 @@ def collect_snapshot(arguments: argparse.Namespace) -> dict[str, Any]:
             ]
         )
     )
+    # Per-replica persistent live snapshots matching deploy and Step 9:
+    # every replica serves its own /spool/.control/live/worker-<i>.json.
+    # The retired shared container-only singleton is never read.
     workers = [
         _json_source(
             _run(
@@ -844,7 +847,7 @@ def collect_snapshot(arguments: argparse.Namespace) -> dict[str, Any]:
                     "exec",
                     f"{arguments.python_worker_container}-{replica}",
                     "cat",
-                    "/tmp/clashlens-worker-operating.json",
+                    f"/spool/.control/live/worker-{replica}.json",
                 ]
             )
         )

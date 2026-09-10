@@ -3,9 +3,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from copy import deepcopy
 from datetime import timedelta
@@ -2660,7 +2663,7 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
 
     def test_all_modes_execute_isolated_real_workloads(self) -> None:
         for mode in runner.MODES:
-            if mode == runner.STEP5_MODE:
+            if mode in {runner.STEP5_MODE, runner.NORMAL_CAPACITY_MODE}:
                 continue
             command = [
                 sys.executable,
@@ -2891,6 +2894,1533 @@ class PerformanceRunnerPostgresTest(unittest.TestCase):
                 extra["hard_failures"] = ["reset_generation_count_mismatch"]
                 extra["artifact_digest"] = runner._artifact_digest(extra)
                 runner.validate_artifact(extra)
+
+
+def _capacity_marker(**overrides: object) -> dict:
+    marker = {
+        "players": 12833,
+        "lanes": 32,
+        "profile_attempts": 12833,
+        "battlelog_attempts": 12833,
+        "ranking_attempts": 1,
+        "ordinary_attempts": 25667,
+        "retry_injected": 402,
+        "retry_parents": 402,
+        "retry_missing": 0,
+        "retry_duplicate": 0,
+        "retries_executed": 402,
+        "retry_budget": 4333,
+        "worker_errors": 0,
+        "keys": 4,
+        "per_key_rps": 25,
+        "aggregate_rps": 100,
+        "per_key_max": 25,
+        "aggregate_max": 100,
+        "official_requests": 26069,
+        "official_bytes": 100000,
+        "s3_ordinary_put": 12800,
+        "s3_ordinary_head": 100,
+        "s3_ordinary_get": 13000,
+        "s3_retry_put": 36,
+        "s3_retry_head": 0,
+        "s3_retry_get": 402,
+        "budget_cap_profile": 12833,
+        "budget_cap_battlelog": 13235,
+        "budget_cap_rankings": 1,
+        "budget_used_profile": 12833,
+        "budget_used_battlelog": 13235,
+        "budget_used_rankings": 1,
+        "http_profile": 12833,
+        "http_battlelog": 13235,
+        "http_rankings": 1,
+        "spool_peak_bytes": 100000,
+        "spool_final_bytes": 90000,
+        "spool_temp_bytes": 0,
+        "spool_reserved_bytes": 0,
+        "spool_final_objects": 12800,
+        "spool_temp_objects": 0,
+        "spool_reserved_objects": 0,
+        "spool_alloc_bytes": 110000,
+        "pg_growth_bytes": 1000000,
+        "pg_peak_bytes": 1200000,
+        "wal_bytes": 2000000,
+        "wal_retained_bytes": 2100000,
+        "wal_retained_peak_bytes": 2200000,
+        "seed_ms": 5000,
+        "ordinary_ms": 200000,
+        "drain_ms": 210000,
+        "wall_ms": 220000,
+        "sweep_delta": 0,
+        "regular_scheduled_dry": 0,
+        "reset_members": 2,
+        "regular_allowed_during_reset": False,
+        "reset_gate_dry": True,
+        "host_id": "workstation|cpu8|mem16384MB",
+    }
+    marker.update(overrides)
+    return marker
+def _valid_capacity_workload() -> dict:
+    ordinary = runner.CAPACITY_ORDINARY_ATTEMPTS
+    return {
+        "observations": ordinary,
+        "official_responses": ordinary + 402,
+        "executed_observations": ordinary + 402,
+        "ordinary_attempts": ordinary,
+        "players": 12833,
+        "retry_tranche_attempted": 402,
+        "retry_tranche_processed": 402,
+        "total_attempts": ordinary + 402,
+        "endpoint_mix": dict(runner.CAPACITY_ENDPOINT_MIX),
+        "response_counts_by_endpoint": dict(runner.CAPACITY_ENDPOINT_MIX),
+        "occurrence_counts_by_endpoint": dict(runner.CAPACITY_ENDPOINT_MIX),
+        "official_loopback_requests": ordinary + 402,
+        "official_remote_requests": 0,
+        "official_bytes": 100000,
+        "s3_ordinary": {"put": 12800, "head": 100, "get": 13000},
+        "s3_retry": {"put": 36, "head": 0, "get": 402},
+        "aggregation_method": "exact integrated collector run",
+        "lanes": 32,
+        "normal_keys": 4,
+        "per_key_rps": 25,
+        "aggregate_rps": 100,
+        "rate_maxima": {"per_key": 25, "aggregate": 100},
+        "interactive_attempts": 0,
+        "archive_origin_host": "127.0.0.1",
+        "archive_operations": {
+            "get": 40000,
+            "get_bytes": 90000,
+            "head": 100,
+            "conditional_put": 12836,
+            "put": 12836,
+            "put_bytes": 50000,
+            "conflicts": 0,
+        },
+        "archive_objects": 12836,
+        "archive_stored_bytes": 50000,
+        "processing_summary": {"count": ordinary, "expected_count": ordinary},
+        "retry_summary": {"count": 402, "expected_count": 402},
+        "downstream_summary": runner._result_summary(
+            [{"outcome": "processed"}] * ordinary
+            + [{"outcome": "classified"}] * 402,
+            expected=ordinary + 402,
+        ),
+        "retry_lineage": {
+            "attempted": 402,
+            "processed": 402,
+            "missing": 0,
+            "duplicates": 0,
+        },
+        "reset_exclusion": {
+            "regular_allowed": False,
+            "regular_scheduled_dry": 0,
+            "sweep_delta": 0,
+            "reset_members": 2,
+        },
+        "capacity_probe": {"executed": True},
+        "seed_seconds": 5.0,
+        "drain_seconds": 200.0,
+        "retry_seconds": 10.0,
+        "downstream_seconds": 20.0,
+        "wall_seconds": 220.0,
+        "probe_wall_seconds": 220.0,
+        "pg_growth_bytes": 1000000,
+        "pg_peak_bytes": 1200000,
+        "wal_bytes": 2000000,
+        "wal_retained_bytes": 2100000,
+        "wal_retained_peak_bytes": 2200000,
+        "spool_peak_bytes": 100000,
+        "spool_final_bytes": 90000,
+        "spool_temp_bytes": 0,
+        "spool_reserved_bytes": 0,
+        "spool_final_objects": 12800,
+        "spool_temp_objects": 0,
+        "spool_reserved_objects": 0,
+        "spool_alloc_bytes": 110000,
+        "spool_fs": {
+            "filesystem_type": "ext4",
+            "inode_model": "finite",
+            "free_inodes": 100,
+        },
+        "spool_dir": "/tmp/capacity-spool-test",
+        "downstream_spool": {"final_bytes": 50, "high_water_bytes": 60},
+        "budget_caps": {
+            "profile": 12833,
+            "battle_log": 13235,
+            "global_player_rankings": 1,
+        },
+        "budget_consumed": {
+            "profile": 12833,
+            "battle_log": 13235,
+            "global_player_rankings": 1,
+        },
+        "http_attempts": {
+            "profile": 12833,
+            "battle_log": 13235,
+            "global_player_rankings": 1,
+        },
+        "go_output_bytes": 100,
+        "worker_errors": 0,
+        "status": "complete",
+        "failure": None,
+        "host_id": "workstation|cpu8|mem16384MB",
+        "hard_failures": [],
+    }
+
+
+def _valid_capacity_sample() -> dict:
+    workload = _valid_capacity_workload()
+    combined = workload["endpoint_mix"]
+    required = (
+        "collector_observations",
+        "parsed_source_payloads",
+        "archive_catalogue",
+        "python_processing_jobs",
+    )
+    return {
+        "workload": workload,
+        "database": {
+            "wal_bytes": 2000000,
+            "wal_retained_bytes": 20,
+            "wal_retained_growth_bytes": 5,
+            "sql_statement_calls": 7,
+            "application_sql_calls": 9,
+            "pending_remote_verification": 0,
+            "response_counts_by_endpoint": dict(combined),
+            "occurrence_counts_by_endpoint": dict(combined),
+            "relations": {name: 100 for name in required},
+            "relation_sizes": {
+                name: {
+                    "table_bytes": 1,
+                    "index_bytes": 1,
+                    "toast_bytes": 1,
+                    "total_bytes": 100,
+                }
+                for name in required
+            },
+            "relation_stats": {name: {} for name in required},
+            "affected_relations": list(required),
+            "queues": {},
+            "queue_age_seconds": {},
+            "queue_residue": [],
+        },
+        "archive_operations": {
+            "get": 40000,
+            "get_bytes": 90000,
+            "head": 100,
+            "conditional_put": 12836,
+            "put": 12836,
+            "put_bytes": 50000,
+            "conflicts": 0,
+        },
+        "storage_runway": {
+            "measured_local_growth_bytes": 1,
+            "days_to_80_percent": 2,
+            "checks": [],
+            "filesystem_type": "ext4",
+            "inode_model": "finite",
+        },
+        "evidence": {
+            "response_count": workload["official_responses"],
+            "executed_responses": workload["executed_observations"],
+            "exact_bytes": workload["official_bytes"],
+            "execution_method": workload["aggregation_method"],
+            "archived_bytes": workload["archive_stored_bytes"],
+            "retries": 402,
+            "downstream_processed": workload["official_responses"],
+            "downstream_seconds": 20.0,
+            "retry_seconds": 10.0,
+            "concurrency_lanes": 32,
+            "archive_objects": 12836,
+        },
+        "spool": {
+            "final_bytes": 90000,
+            "temporary_bytes": 0,
+            "high_water_bytes": 100000,
+            "final_object_count": 12800,
+            "temporary_object_count": 0,
+            "live_reservations": 0,
+            "allocated_blocks": 195,
+            "free_inodes": 100,
+            "filesystem_type": "ext4",
+            "inode_model": "finite",
+        },
+        "elapsed_seconds": 220.0,
+        "cpu_seconds": 1.0,
+        "peak_rss_kib": 10,
+    }
+
+
+def _failed_capacity_sample() -> dict:
+    sample = _valid_capacity_sample()
+    incomplete = runner._failed_capacity_workload("probe_timeout")
+    incomplete["archive_operations"] = dict(sample["archive_operations"])
+    sample["workload"] = incomplete
+    sample["evidence"] = {
+        "response_count": 0,
+        "executed_responses": 0,
+        "exact_bytes": 0,
+        "execution_method": "exact integrated collector run",
+        "retries": 0,
+        "downstream_processed": 0,
+        "downstream_seconds": 0.0,
+        "retry_seconds": 0.0,
+        "concurrency_lanes": 32,
+        "archive_objects": 0,
+    }
+    sample["spool"] = {
+        "final_bytes": 0,
+        "temporary_bytes": 0,
+        "high_water_bytes": 0,
+        "final_object_count": 0,
+        "temporary_object_count": 0,
+        "live_reservations": 0,
+        "allocated_blocks": 0,
+        "free_inodes": None,
+        "filesystem_type": "unknown",
+        "inode_model": "unknown",
+    }
+    return sample
+
+
+class NormalCapacityTest(unittest.TestCase):
+    def setUp(self) -> None:
+        source_patch = mock.patch.object(
+            runner, "_clean_source", return_value=SOURCE_SHA
+        )
+        source_patch.start()
+        self.addCleanup(source_patch.stop)
+
+    def test_fixed_workload_constants_are_exact(self) -> None:
+        self.assertEqual(
+            runner.CAPACITY_ENDPOINT_MIX,
+            {"profile": 12_833, "battle_log": 12_833, "global_player_rankings": 1},
+        )
+        self.assertEqual(runner.CAPACITY_ORDINARY_ATTEMPTS, 25_667)
+        self.assertEqual(runner.CAPACITY_PLAYERS, 12_833)
+        self.assertEqual(runner.CAPACITY_RETRY_BUDGET, 4_333)
+        self.assertEqual(runner.CAPACITY_RETRY_MINIMUM, 402)
+        self.assertEqual(runner.CAPACITY_TOTAL_CAP, 30_000)
+        self.assertEqual(
+            runner.CAPACITY_ORDINARY_ATTEMPTS + runner.CAPACITY_RETRY_BUDGET,
+            runner.CAPACITY_TOTAL_CAP,
+        )
+        self.assertEqual((runner.CAPACITY_LANES, runner.CAPACITY_KEYS), (32, 4))
+        self.assertEqual(
+            (runner.CAPACITY_PER_KEY_RPS, runner.CAPACITY_AGGREGATE_RPS),
+            (25, 100),
+        )
+        self.assertIn(runner.NORMAL_CAPACITY_MODE, runner.MODES)
+
+    def test_duplicate_execution_plan_covers_both_modes(self) -> None:
+        executed, mix = runner._duplicate_execution_plan(
+            runner.DUPLICATE_EXECUTION_CAP
+        )
+        self.assertEqual(executed, runner.DUPLICATE_EXECUTION_CAP)
+        self.assertEqual(mix, dict(runner.DUPLICATE_ENDPOINT_MIX))
+        executed, mix = runner._duplicate_execution_plan(6)
+        self.assertEqual(executed, 6)
+        self.assertEqual(
+            mix, {"profile": 2, "battle_log": 2, "global_player_rankings": 2}
+        )
+        executed, mix = runner._duplicate_execution_plan(
+            runner.CAPACITY_ORDINARY_ATTEMPTS, dict(runner.CAPACITY_ENDPOINT_MIX)
+        )
+        self.assertEqual(executed, runner.CAPACITY_ORDINARY_ATTEMPTS)
+        self.assertEqual(mix, dict(runner.CAPACITY_ENDPOINT_MIX))
+
+    def test_tags_are_reversible_and_parser_valid(self) -> None:
+        from clashlens.profile import normalize_player_tag, parse_profile
+
+        self.assertEqual(runner._tag(0), "#P00000")
+        self.assertEqual(runner._tag(1), "#P00002")
+        self.assertEqual(runner._tag(13), "#P0000V")
+        self.assertEqual(runner._tag(14), "#P00020")
+        for index in (0, 1, 2, 12, 13, 14, 100, 12832, 12833):
+            tag = runner._tag(index)
+            self.assertEqual(normalize_player_tag(tag), tag)
+            self.assertEqual(runner._capacity_tag_index(tag), index)
+        with self.assertRaises(ValueError):
+            runner._capacity_tag_index("#C00001")
+        with self.assertRaises(ValueError):
+            runner._capacity_tag_index("not-a-tag")
+        body = runner._profile_body(runner._tag(7), 0)
+        profile = parse_profile(
+            body,
+            expected_tag=runner._tag(7),
+            observed_at=runner.DAY_START,
+            endpoint_version="profile-v1",
+        )
+        self.assertEqual(profile.normalized_tag, runner._tag(7))
+
+    def test_integrated_marker_shape_is_exact_and_bounded(self) -> None:
+        marker = json.dumps(_capacity_marker())
+        output = "noise\n" + runner._CAPACITY_PROBE_MARKER + marker + "\n"
+        with mock.patch.object(
+            runner,
+            "_run_bounded_process",
+            return_value=(0, output, len(output), False, False),
+        ):
+            evidence = runner._capacity_probe(
+                "postgresql://SECRET", 4333, Path("/tmp/spool"), "127.0.0.1:9", 60.0
+            )
+        self.assertEqual(evidence["ordinary_attempts"], 25667)
+        self.assertEqual(evidence["per_key_max"], 25)
+        self.assertEqual(evidence["budget_used_battlelog"], 13235)
+        self.assertEqual(evidence["lanes"], 32)
+        self.assertIn("elapsed_seconds", evidence)
+        for bad in (
+            "",
+            runner._CAPACITY_PROBE_MARKER + "not-json\n",
+            runner._CAPACITY_PROBE_MARKER + "x" * 4097 + "\n",
+            runner._CAPACITY_PROBE_MARKER
+            + json.dumps({"keys": 4, "per_key_max": 25})
+            + "\n",
+        ):
+            with self.assertRaises(RuntimeError):
+                runner._parse_capacity_probe_marker(bad)
+        doubled = (
+            "x\n"
+            + runner._CAPACITY_PROBE_MARKER
+            + marker
+            + "\n"
+            + runner._CAPACITY_PROBE_MARKER
+            + marker
+            + "\n"
+        )
+        with self.assertRaises(RuntimeError):
+            runner._parse_capacity_probe_marker(doubled)
+
+    def test_vacuous_evidence_is_rejected(self) -> None:
+        for overrides, _label in (
+            ({"retry_parents": 0, "retries_executed": 0}, "zero parents"),
+            ({"per_key_max": 0, "aggregate_max": 0}, "vacuous rates"),
+            ({"regular_allowed_during_reset": True}, "admitted reset"),
+            (
+                {
+                    "ordinary_attempts": 0,
+                    "profile_attempts": 0,
+                    "battlelog_attempts": 0,
+                    "ranking_attempts": 0,
+                },
+                "empty ordinary",
+            ),
+            ({"worker_errors": 1}, "unexplained worker error"),
+            ({"s3_ordinary_put": 0, "s3_retry_put": 0}, "vacuous S3 counts"),
+            ({"budget_used_battlelog": 0}, "budget mismatch"),
+            ({"http_battlelog": 13236}, "over-cap loopback total"),
+        ):
+            wrong = dict(_capacity_marker(**overrides))
+            with (
+                mock.patch.object(
+                    runner,
+                    "_run_bounded_process",
+                    return_value=(
+                        0,
+                        runner._CAPACITY_PROBE_MARKER + json.dumps(wrong) + "\n",
+                        100,
+                        False,
+                        False,
+                    ),
+                ),
+                self.assertRaises(runner._CapacityProbeFailure, msg=_label),
+            ):
+                runner._capacity_probe(
+                    "postgresql://SECRET", 4333, Path("/tmp/spool"), "127.0.0.1:9", 60.0
+                )
+
+    def test_bounded_process_enforces_timeout_and_size(self) -> None:
+        _code, _text, _size, timed_out, size_exceeded = runner._run_bounded_process(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            env=dict(os.environ),
+            timeout_seconds=1.0,
+            output_cap_bytes=1 << 20,
+        )
+        self.assertTrue(timed_out)
+        self.assertFalse(size_exceeded)
+        _code, _text, size, timed_out, size_exceeded = runner._run_bounded_process(
+            [sys.executable, "-c", "import sys,time\nfor _ in range(400): sys.stdout.write('x' * 100); time.sleep(0.005)"],
+            env=dict(os.environ),
+            timeout_seconds=30.0,
+            output_cap_bytes=10_000,
+        )
+        self.assertFalse(timed_out)
+        self.assertTrue(size_exceeded)
+        self.assertLess(size, 1_000_000)
+
+    def test_overlong_host_identity_is_rejected(self) -> None:
+        with self.assertRaises(RuntimeError):
+            runner._parse_capacity_probe_marker(
+                runner._CAPACITY_PROBE_MARKER
+                + json.dumps(_capacity_marker(host_id="h" * 257))
+                + "\n"
+            )
+
+    def test_capacity_probe_timeout_returns_nonzero(self) -> None:
+        def run_with_capacity_probe(_arguments: object) -> dict[str, object]:
+            runner._capacity_probe(
+                "postgresql://fixture.invalid/clashlens",
+                4333,
+                Path("/tmp/spool"),
+                "127.0.0.1:9",
+                60.0,
+            )
+            raise AssertionError("timed-out capacity probe unexpectedly returned")
+
+        psycopg = mock.Mock(Error=RuntimeError)
+        with (
+            mock.patch.dict(sys.modules, {"psycopg": psycopg}),
+            mock.patch.object(
+                runner, "_run_bounded_process", return_value=(-1, "", 0, True, False)
+            ),
+            mock.patch.object(runner, "run", side_effect=run_with_capacity_probe),
+            mock.patch("sys.stderr"),
+        ):
+            result = runner.main(
+                [
+                    "normal-capacity",
+                    "--database-url",
+                    "postgresql://fixture.invalid/clashlens",
+                ]
+            )
+        self.assertEqual(result, 2)
+
+    def test_clean_workload_maps_to_no_failure_codes(self) -> None:
+        self.assertEqual(runner._capacity_hard_failure_codes(_valid_capacity_workload()), [])
+        self.assertEqual(
+            runner._capacity_hard_failure_codes(_valid_capacity_workload(), {"queue_residue": []}),
+            [],
+        )
+
+    def test_count_off_by_one_is_rejected(self) -> None:
+        full = _valid_capacity_workload()
+        self.assertEqual(full["total_attempts"], 26069)
+        self.assertLessEqual(full["total_attempts"], runner.CAPACITY_TOTAL_CAP)
+        over = _valid_capacity_workload()
+        over["total_attempts"] = runner.CAPACITY_TOTAL_CAP + 1
+        self.assertIn(
+            "capacity_count_exceeded",
+            runner._capacity_hard_failure_codes(over),
+        )
+        short = _valid_capacity_workload()
+        short["total_attempts"] -= 1
+        self.assertIn(
+            "capacity_count_exceeded",
+            runner._capacity_hard_failure_codes(short),
+        )
+        zero_parents = _valid_capacity_workload()
+        zero_parents["retry_summary"] = {"count": 0, "expected_count": 0}
+        zero_parents["retry_lineage"] = {
+            "attempted": 0,
+            "processed": 0,
+            "missing": 0,
+            "duplicates": 0,
+        }
+        self.assertIn(
+            "capacity_count_exceeded",
+            runner._capacity_hard_failure_codes(zero_parents),
+        )
+
+    def test_ordinary_over_300s_is_a_deadline_failure(self) -> None:
+        slow = _valid_capacity_workload()
+        slow["drain_seconds"] = 522.0
+        self.assertIn(
+            "capacity_deadline_exceeded",
+            runner._capacity_hard_failure_codes(slow),
+        )
+        runner._validate_capacity_protocol(
+            slow, {"capacity_retry_budget": 4333}, "label"
+        )
+
+    def test_combined_footprint_over_384mib_is_rejected(self) -> None:
+        fitting = _valid_capacity_workload()
+        fitting["spool_peak_bytes"] = 64 << 20
+        fitting["pg_peak_bytes"] = 320 << 20
+        fitting["go_output_bytes"] = 0
+        self.assertNotIn(
+            "capacity_total_exceeded",
+            runner._capacity_hard_failure_codes(fitting),
+        )
+        bloated = _valid_capacity_workload()
+        bloated["spool_peak_bytes"] = 64 << 20
+        bloated["pg_peak_bytes"] = 320 << 20
+        bloated["go_output_bytes"] = 17 << 20
+        self.assertIn(
+            "capacity_total_exceeded",
+            runner._capacity_hard_failure_codes(bloated),
+        )
+
+    def test_lane_rate_mix_lineage_interactive_reset_and_spool_codes(self) -> None:
+        cases = (
+            ("lanes", 31, "capacity_lane_mismatch"),
+            ("interactive_attempts", 1, "capacity_interactive_use"),
+        )
+        for field, value, code in cases:
+            with self.subTest(field=field):
+                workload = _valid_capacity_workload()
+                workload[field] = value
+                self.assertIn(code, runner._capacity_hard_failure_codes(workload))
+        workload = _valid_capacity_workload()
+        workload["rate_maxima"] = {"per_key": 26, "aggregate": 100}
+        self.assertIn(
+            "capacity_rate_exceeded",
+            runner._capacity_hard_failure_codes(workload),
+        )
+        workload = _valid_capacity_workload()
+        workload["endpoint_mix"] = dict(runner.CAPACITY_ENDPOINT_MIX)
+        workload["endpoint_mix"]["profile"] -= 1
+        self.assertIn(
+            "capacity_mix_mismatch",
+            runner._capacity_hard_failure_codes(workload),
+        )
+        workload = _valid_capacity_workload()
+        workload["retry_lineage"] = {
+            "attempted": 402,
+            "processed": 401,
+            "missing": 1,
+            "duplicates": 0,
+        }
+        self.assertIn(
+            "capacity_lineage_mismatch",
+            runner._capacity_hard_failure_codes(workload),
+        )
+        workload = _valid_capacity_workload()
+        workload["reset_exclusion"] = {
+            "regular_allowed": True,
+            "regular_scheduled_dry": 0,
+            "sweep_delta": 0,
+            "reset_members": 2,
+        }
+        self.assertIn(
+            "capacity_reset_admitted",
+            runner._capacity_hard_failure_codes(workload),
+        )
+        workload = _valid_capacity_workload()
+        workload["spool_peak_bytes"] = runner.CAPACITY_SPOOL_BYTES + 1
+        self.assertIn(
+            "capacity_spool_exceeded",
+            runner._capacity_hard_failure_codes(workload),
+        )
+        # Relation growth alone is reported evidence; only the peak is
+        # enforced, so a projected 105MB growth under a 110MB peak passes.
+        workload = _valid_capacity_workload()
+        workload["pg_growth_bytes"] = 105_000_000
+        workload["pg_peak_bytes"] = 110_000_000
+        workload["wal_bytes"] = 5_000_000
+        self.assertNotIn(
+            "capacity_pg_exceeded",
+            runner._capacity_hard_failure_codes(workload),
+        )
+        over = _valid_capacity_workload()
+        over["pg_peak_bytes"] = runner.CAPACITY_PG_PEAK_BYTES + 1
+        self.assertIn(
+            "capacity_pg_exceeded",
+            runner._capacity_hard_failure_codes(over),
+        )
+        workload = _valid_capacity_workload()
+        workload["archive_operations"] = dict(workload["archive_operations"])
+        workload["archive_operations"]["conflicts"] = 1
+        self.assertIn(
+            "capacity_evidence_incomplete",
+            runner._capacity_hard_failure_codes(workload),
+        )
+        workload = _valid_capacity_workload()
+        workload["processing_summary"] = {"count": 1, "expected_count": 2}
+        self.assertIn(
+            "fixed_acceptance_failure",
+            runner._capacity_hard_failure_codes(workload),
+        )
+        workload = _valid_capacity_workload()
+        workload["downstream_summary"] = {"count": 1, "expected_count": 2}
+        self.assertIn(
+            "fixed_acceptance_failure",
+            runner._capacity_hard_failure_codes(workload),
+        )
+        self.assertIn(
+            "queue_residue",
+            runner._capacity_hard_failure_codes(
+                _valid_capacity_workload(), {"queue_residue": [{"count": 1}]}
+            ),
+        )
+
+    def test_capacity_protocol_rejects_contradictions(self) -> None:
+        config = {"capacity_retry_budget": 4333}
+        runner._validate_capacity_protocol(_valid_capacity_workload(), config, "label")
+        bad_remote = _valid_capacity_workload()
+        bad_remote["official_remote_requests"] = 1
+        with self.assertRaisesRegex(ValueError, "remote official"):
+            runner._validate_capacity_protocol(bad_remote, config, "label")
+        bad_budget = _valid_capacity_workload()
+        bad_budget["budget_consumed"] = dict(bad_budget["budget_consumed"])
+        bad_budget["budget_consumed"]["battle_log"] = 0
+        with self.assertRaisesRegex(ValueError, "budget"):
+            runner._validate_capacity_protocol(bad_budget, config, "label")
+        bad_origin = _valid_capacity_workload()
+        bad_origin["archive_origin_host"] = "archive.example"
+        sample = _valid_capacity_sample()
+        sample["workload"] = bad_origin
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            runner._validate_capacity_sample_semantics(sample, config, [], "label")
+
+    def test_capacity_sample_semantics_require_exact_evidence_and_failures(self) -> None:
+        config = {"capacity_retry_budget": 4333}
+        sample = _valid_capacity_sample()
+        runner._validate_capacity_sample_semantics(sample, config, [], "sample 0")
+        bloated = deepcopy(sample)
+        bloated["spool"]["high_water_bytes"] = 100001
+        with self.assertRaisesRegex(ValueError, "disagrees"):
+            runner._validate_capacity_sample_semantics(bloated, config, [], "sample 0")
+        residue = deepcopy(sample)
+        residue["database"]["queue_residue"] = [{"count": 1}]
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            runner._validate_capacity_sample_semantics(residue, config, [], "sample 0")
+        runner._validate_capacity_sample_semantics(
+            residue, config, ["queue_residue"], "sample 0"
+        )
+
+    def test_failed_probe_artifact_is_retained_and_valid(self) -> None:
+        for reason, primary in (
+            ("probe_timeout", "capacity_deadline_exceeded"),
+            ("probe_error", "capacity_evidence_incomplete"),
+            ("probe_output_exceeded", "capacity_evidence_incomplete"),
+            ("downstream_error", "capacity_evidence_incomplete"),
+        ):
+            workload = runner._failed_capacity_workload(reason)
+            self.assertEqual(workload["status"], "incomplete")
+            self.assertIn(primary, workload["hard_failures"])
+            runner._validate_capacity_protocol(
+                workload, {"capacity_retry_budget": 4333}, "label"
+            )
+        sample = _failed_capacity_sample()
+        runner._validate_capacity_sample_semantics(
+            sample, {"capacity_retry_budget": 4333}, sample["workload"]["hard_failures"], "sample 0"
+        )
+        with self.assertRaises(ValueError):
+            runner._failed_capacity_workload("bogus_reason")
+
+    def test_capacity_assembly_wires_real_measurements(self) -> None:
+        workload = _valid_capacity_workload()
+        measurements = deepcopy(_valid_capacity_sample()["database"])
+        spool_dir = Path(tempfile.mkdtemp(prefix="capacity-assembly-test-"))
+        workload["spool_dir"] = str(spool_dir)
+        handler = mock.Mock()
+        handler.gets = 1
+        handler.get_bytes = 2
+        handler.heads = 3
+        handler.conditional_puts = 4
+        handler.puts = 12836
+        handler.put_bytes = 50000
+        handler.conflicts = 0
+        handler.objects = {f"key{i}": b"b" for i in range(12836)}
+        archive = ("127.0.0.1:9", "", "", handler)
+        workload["archive_operations"] = {
+            "get": 40000,
+            "get_bytes": 90000,
+            "head": 100,
+            "conditional_put": 12836,
+            "put": 12836,
+            "put_bytes": 50000,
+            "conflicts": 0,
+        }
+        with (
+            mock.patch.object(
+                runner, "_orphan_metrics", return_value={"count": 7, "bytes": 8}
+            ),
+            mock.patch.object(runner, "_pending_age_seconds", return_value=1.5),
+        ):
+            sample = runner._capacity_sample(
+                workload,
+                measurements,
+                "postgresql://stub",
+                {},
+                {
+                    "path": "/",
+                    "usable_capacity_bytes": 10**9,
+                    "raw_capacity_bytes": 10**9,
+                    "used_bytes": 10**6,
+                    "filesystem_type": "ext4",
+                    "inode_model": "finite",
+                },
+                0.0,
+                0.0,
+                archive,
+                spool_dir,
+            )
+        self.assertTrue(spool_dir.exists())
+        shutil.rmtree(spool_dir, ignore_errors=True)
+        self.assertIn("spool_dir", workload)
+        workload["endpoint_mix"] = dict(workload["endpoint_mix"])
+        self.assertEqual(sample["evidence"]["orphan_count"], 7)
+        self.assertEqual(sample["evidence"]["archive_objects"], 12836)
+        self.assertEqual(sample["evidence"]["retries"], 402)
+        self.assertEqual(sample["archive_operations"]["conflicts"], 0)
+        self.assertEqual(
+            sample["spool"]["allocated_blocks"], 110000 // 512
+        )
+        runner._validate_capacity_sample_semantics(
+            sample, {"capacity_retry_budget": 4333}, [], "sample 0"
+        )
+
+    def test_spool_cleanup_refuses_untrusted_paths(self) -> None:
+        victim = Path(tempfile.mkdtemp(prefix="capacity-cleanup-victim-"))
+        (victim / "sentinel").write_text("keep")
+        self.addCleanup(shutil.rmtree, victim, True)
+        home = Path.home()
+        cases = [
+            "",
+            ".",
+            "/",
+            "~",
+            str(runner.ROOT),
+            str(home),
+            str(Path.cwd()),
+            "/tmp/capacity-spool-not-ours",
+            "/tmp/capacity-spool-missing-0123456789abcdef",
+            victim / "capacity-spool-planted",
+            None,
+            123,
+        ]
+        for case in cases:
+            with self.subTest(case=str(case)):
+                self.assertFalse(runner._remove_owned_spool_dir(case))
+        self.assertTrue((victim / "sentinel").exists())
+        owned = Path(tempfile.mkdtemp(prefix="capacity-spool-"))
+        (owned / "sentinel").write_text("owned")
+        self.assertTrue(runner._remove_owned_spool_dir(owned))
+        self.assertFalse(owned.exists())
+        self.assertFalse(runner._remove_owned_spool_dir(owned))
+
+    def test_incomplete_assembly_preserves_cwd_and_sentinel(self) -> None:
+        previous = Path.cwd()
+        workdir = Path(tempfile.mkdtemp(prefix="capacity-cwd-"))
+        self.addCleanup(shutil.rmtree, workdir, True)
+        (workdir / "sentinel").write_text("keep")
+        owned = Path(tempfile.mkdtemp(prefix="capacity-spool-"))
+        (owned / "owned-sentinel").write_text("owned")
+        os.chdir(workdir)
+        self.addCleanup(os.chdir, previous)
+        workload = runner._failed_capacity_workload("probe_timeout")
+        self.assertEqual(workload["spool_dir"], "")
+        handler = mock.Mock()
+        handler.gets = 0
+        handler.get_bytes = 0
+        handler.heads = 0
+        handler.conditional_puts = 0
+        handler.puts = 0
+        handler.put_bytes = 0
+        handler.conflicts = 0
+        handler.objects = {}
+        archive = ("127.0.0.1:9", "", "", handler)
+        with (
+            mock.patch.object(
+                runner, "_orphan_metrics", return_value={"count": 0, "bytes": 0}
+            ),
+            mock.patch.object(runner, "_pending_age_seconds", return_value=None),
+        ):
+            sample = runner._capacity_sample(
+                workload,
+                _valid_capacity_sample()["database"],
+                "postgresql://stub",
+                {},
+                {
+                    "path": "/",
+                    "usable_capacity_bytes": 10**9,
+                    "raw_capacity_bytes": 10**9,
+                    "used_bytes": 10**6,
+                    "filesystem_type": "ext4",
+                    "inode_model": "finite",
+                },
+                0.0,
+                0.0,
+                archive,
+                owned,
+            )
+        # Assembly removes nothing: the CWD sentinel and the owned dir both
+        # survive; only the run-level guarded cleanup removes owned paths.
+        self.assertTrue((workdir / "sentinel").exists())
+        self.assertEqual(Path.cwd(), workdir)
+        self.assertTrue((owned / "owned-sentinel").exists())
+        self.assertEqual(sample["workload"]["status"], "incomplete")
+        self.assertTrue(runner._remove_owned_spool_dir(owned))
+        self.assertFalse(owned.exists())
+
+    def test_capacity_sample_call_matches_run_mode(self) -> None:
+        import inspect
+
+        self.assertEqual(
+            list(inspect.signature(runner._capacity_sample).parameters),
+            [
+                "workload",
+                "measurements",
+                "connection_info",
+                "relation_start",
+                "filesystem_before",
+                "cpu_start",
+                "elapsed_start",
+                "archive",
+                "spool_dir",
+            ],
+        )
+
+    def test_capacity_artifact_validates_end_to_end(self) -> None:
+        artifact = _valid_artifact("normal-capacity")
+        workload = _valid_capacity_workload()
+        measurements = deepcopy(_valid_capacity_sample()["database"])
+        owned = Path(tempfile.mkdtemp(prefix="capacity-spool-"))
+        self.addCleanup(shutil.rmtree, owned, True)
+        handler = mock.Mock()
+        handler.gets = 40000
+        handler.get_bytes = 90000
+        handler.heads = 100
+        handler.conditional_puts = 12836
+        handler.puts = 12836
+        handler.put_bytes = 50000
+        handler.conflicts = 0
+        handler.objects = {f"key{i}": b"b" for i in range(12836)}
+        archive = ("127.0.0.1:9", "", "", handler)
+        workload["archive_operations"] = {
+            "get": 40000,
+            "get_bytes": 90000,
+            "head": 100,
+            "conditional_put": 12836,
+            "put": 12836,
+            "put_bytes": 50000,
+            "conflicts": 0,
+        }
+        with (
+            mock.patch.object(
+                runner, "_orphan_metrics", return_value={"count": 0, "bytes": 0}
+            ),
+            mock.patch.object(runner, "_pending_age_seconds", return_value=1.5),
+        ):
+            assembled = runner._capacity_sample(
+                workload,
+                measurements,
+                "postgresql://stub",
+                {},
+                {
+                    "path": "/",
+                    "usable_capacity_bytes": 10**9,
+                    "raw_capacity_bytes": 10**9,
+                    "used_bytes": 10**6,
+                    "filesystem_type": "ext4",
+                    "inode_model": "finite",
+                },
+                0.0,
+                0.0,
+                archive,
+                owned,
+            )
+        artifact["samples"] = [assembled]
+        artifact["hard_failures"] = []
+        configuration = artifact["provenance"]["configuration"]
+        configuration["capacity_retry_budget"] = 4333
+        artifact["provenance"]["configuration_fingerprint"] = runner._sha(
+            json.dumps(configuration, sort_keys=True, separators=(",", ":")).encode()
+        )
+        artifact["artifact_digest"] = runner._artifact_digest(artifact)
+        runner.validate_artifact(artifact)
+        incomplete = _valid_artifact("normal-capacity")
+        incomplete["samples"] = [_failed_capacity_sample()]
+        incomplete["hard_failures"] = list(
+            _failed_capacity_sample()["workload"]["hard_failures"]
+        )
+        incomplete["artifact_digest"] = runner._artifact_digest(incomplete)
+        runner.validate_artifact(incomplete)
+        mixed = deepcopy(artifact)
+        mixed["samples"][0]["workload"]["endpoint_mix"] = dict(
+            runner.CAPACITY_ENDPOINT_MIX
+        )
+        mixed["samples"][0]["workload"]["endpoint_mix"]["profile"] -= 1
+        mixed["artifact_digest"] = runner._artifact_digest(mixed)
+        with self.assertRaises(ValueError):
+            runner.validate_artifact(mixed)
+
+    def test_capacity_arguments_require_32_lanes_and_bounded_tranche(self) -> None:
+        arguments = runner.parse_arguments(["normal-capacity"])
+        self.assertEqual(arguments.lanes, 32)
+        self.assertEqual(arguments.capacity_retries, runner.CAPACITY_RETRY_BUDGET)
+        with self.assertRaises(SystemExit):
+            runner.parse_arguments(["normal-capacity", "--lanes", "31"])
+        with self.assertRaises(SystemExit):
+            runner.parse_arguments(
+                ["normal-capacity", "--capacity-retries", str(runner.CAPACITY_RETRY_BUDGET + 1)]
+            )
+        with self.assertRaises(SystemExit):
+            runner.parse_arguments(["normal-capacity", "--capacity-retries", "401"])
+        arguments = runner.parse_arguments(
+            ["normal-capacity", "--capacity-retries", str(runner.CAPACITY_RETRY_MINIMUM)]
+        )
+        self.assertEqual(arguments.capacity_retries, runner.CAPACITY_RETRY_MINIMUM)
+
+    def test_owned_cleanup_accepts_explicit_prefixes(self) -> None:
+        first = Path(tempfile.mkdtemp(prefix="capacity-spool-"))
+        (first / "sentinel").write_text("owned")
+        second = Path(tempfile.mkdtemp(prefix="clashlens-perf-spool-"))
+        (second / "sentinel").write_text("owned")
+        try:
+            self.assertTrue(
+                runner._remove_owned_spool_dir(
+                    first, prefixes=("capacity-spool-", "clashlens-perf-spool-")
+                )
+            )
+            self.assertFalse(first.exists())
+            self.assertTrue(
+                runner._remove_owned_spool_dir(
+                    second, prefixes=("capacity-spool-", "clashlens-perf-spool-")
+                )
+            )
+            self.assertFalse(second.exists())
+        finally:
+            shutil.rmtree(first, ignore_errors=True)
+            shutil.rmtree(second, ignore_errors=True)
+        third = Path(tempfile.mkdtemp(prefix="clashlens-perf-spool-"))
+        try:
+            self.assertFalse(runner._remove_owned_spool_dir(third))
+            self.assertTrue(third.exists())
+        finally:
+            shutil.rmtree(third, ignore_errors=True)
+
+    def test_run_normal_capacity_returns_owned_triple_and_exact_schema(self) -> None:
+        marker = _capacity_marker()
+        evidence = dict(
+            marker, elapsed_seconds=1.0, go_output_bytes=100, spool_peak_bytes=100
+        )
+        downstream_root = Path(tempfile.mkdtemp(prefix="clashlens-perf-spool-"))
+        (downstream_root / "body").write_bytes(b"x" * 3000)
+        summary = runner._result_summary(
+            [{"outcome": "processed", "elapsed_ms": 1.0}] * 26069, expected=26069
+        )
+        stats = {
+            "final_bytes": 50,
+            "high_water_bytes": 60,
+            "allocated_peak_bytes": 4096,
+        }
+        archive = ("127.0.0.1:9", "", "", mock.Mock())
+        with (
+            mock.patch.object(runner, "_capacity_probe", return_value=evidence),
+            mock.patch.object(
+                runner,
+                "_drain_downstream",
+                return_value=(summary, stats, 5.0, str(downstream_root)),
+            ),
+        ):
+            workload, owned, identity, active = runner._run_normal_capacity(
+                "postgresql://stub", archive, 4333, 600.0
+            )
+        self.assertFalse(active)
+        self.assertEqual(set(workload), set(runner._CAPACITY_WORKLOAD_KEYS))
+        self.assertTrue(Path(owned).exists())
+        self.assertEqual(identity, (owned.lstat().st_dev, owned.lstat().st_ino))
+        # Downstream allocated peak (4096 for the 3000-byte file) merges
+        # into the retained spool peak evidence.
+        self.assertEqual(workload["spool_peak_bytes"], 4096)
+        shutil.rmtree(owned, ignore_errors=True)
+        shutil.rmtree(downstream_root, ignore_errors=True)
+
+    def test_expired_deadline_fails_fast_without_drain(self) -> None:
+        # A 60s budget is already exhausted by the 60s downstream reserve,
+        # so the drain must not launch (the old max(60, remaining) floor
+        # would have launched it anyway).
+        marker = _capacity_marker()
+        evidence = dict(marker, elapsed_seconds=0.0, go_output_bytes=100)
+        archive = ("127.0.0.1:9", "", "", mock.Mock())
+        drain = mock.Mock(side_effect=AssertionError("drain must not launch"))
+        with (
+            mock.patch.object(runner, "_capacity_probe", return_value=evidence),
+            mock.patch.object(runner, "_drain_downstream", drain),
+        ):
+            workload, _owned, _identity, active = runner._run_normal_capacity(
+                "postgresql://stub", archive, 4333, 60.0
+            )
+        self.assertFalse(active)
+        drain.assert_not_called()
+        self.assertEqual(workload["status"], "incomplete")
+        self.assertEqual(workload["failure"], "probe_timeout")
+        self.assertIn(
+            "capacity_deadline_exceeded", workload["hard_failures"]
+        )
+
+    def test_pg_growth_projection_governed_by_peak_caps(self) -> None:
+        workload = _valid_capacity_workload()
+        workload["pg_growth_bytes"] = 105_000_000
+        workload["pg_peak_bytes"] = 110_000_000
+        workload["wal_bytes"] = 5_000_000
+        codes = runner._capacity_hard_failure_codes(workload)
+        self.assertNotIn("capacity_pg_exceeded", codes)
+        over = _valid_capacity_workload()
+        over["pg_peak_bytes"] = runner.CAPACITY_PG_PEAK_BYTES + 1
+        self.assertIn(
+            "capacity_pg_exceeded", runner._capacity_hard_failure_codes(over)
+        )
+
+    def test_bounded_process_reaps_descendant_group(self) -> None:
+        probe_file = Path(tempfile.mkdtemp(prefix="capacity-descendant-"))
+        self.addCleanup(shutil.rmtree, probe_file, True)
+        witness = probe_file / "witness.log"
+        grandchild = (
+            "import sys,time\n"
+            "while True:\n"
+            '    open(sys.argv[1],"a").write("z")\n'
+            "    time.sleep(0.02)\n"
+        )
+        leader = (
+            "import subprocess,sys\n"
+            "subprocess.Popen([sys.executable,\"-c\"," + repr(grandchild) + ",sys.argv[1]])\n"
+        )
+        command = [sys.executable, "-c", leader, str(witness)]
+        results: dict[str, object] = {}
+
+        def target() -> None:
+            results["out"] = runner._run_bounded_process(
+                command, dict(os.environ), 5.0, 1 << 20
+            )
+
+        worker = threading.Thread(target=target, daemon=True)
+        worker.start()
+        worker.join(60)
+        self.assertFalse(worker.is_alive(), "bounded process hung on live descendants")
+        _code, _text, total, _timed, _sized = results["out"]
+        self.assertLessEqual(total, (1 << 20) + 65536)
+        # The grandchild demonstrably ran, then the group kill stopped it.
+        self.assertTrue(witness.exists())
+        first_size = witness.stat().st_size
+        self.assertGreater(first_size, 0)
+        time.sleep(1.0)
+        self.assertEqual(
+            witness.stat().st_size,
+            first_size,
+            "descendant survived the process-group kill",
+        )
+
+    def test_downstream_drain_removes_owned_spool(self) -> None:
+        downstream_root = Path(tempfile.mkdtemp(prefix="clashlens-perf-spool-"))
+        (downstream_root / "body").write_bytes(b"x" * 3000)
+
+        def immediate(job_id: int, *, owner: str, lease_seconds: int):
+            return mock.Mock(job_id=job_id, outcome="processed", category=None)
+
+        processor = mock.Mock()
+        processor.process_job = immediate
+        processor.process_once.return_value = None
+        database = mock.Mock()
+        spool = mock.Mock()
+        spool.stats.return_value = {"final_bytes": 50, "high_water_bytes": 60}
+        spool.spool.root = str(downstream_root)
+        connected = mock.MagicMock()
+        connected.execute.return_value.fetchall.return_value = [(1,), (2,)]
+        psycopg = mock.MagicMock()
+        psycopg.connect.return_value.__enter__.return_value = connected
+        with mock.patch.object(
+            runner, "_processor", return_value=(database, processor, None, spool)
+        ), mock.patch.dict(sys.modules, {"psycopg": psycopg}):
+            summary, stats, _elapsed, root = runner._drain_downstream(
+                "postgresql://stub", mock.Mock(), 2, 60.0
+            )
+        self.assertEqual(summary["count"], 2)
+        self.assertEqual(stats["allocated_peak_bytes"], 4096)
+        self.assertEqual(root, str(downstream_root))
+        self.assertFalse(downstream_root.exists())
+
+    def test_downstream_drain_cancels_hung_futures(self) -> None:
+        import threading
+
+        stop = threading.Event()
+
+        def stuck(job_id: int, *, owner: str, lease_seconds: int):
+            stop.wait(5)
+            return mock.Mock(job_id=job_id, outcome="processed", category=None)
+
+        processor = mock.Mock()
+        processor.process_job = stuck
+        database = mock.Mock()
+        spool = mock.Mock()
+        spool.stats.return_value = {"final_bytes": 1, "high_water_bytes": 2}
+        connected = mock.MagicMock()
+        connected.execute.return_value.fetchall.return_value = [(1,), (2,)]
+        psycopg = mock.MagicMock()
+        psycopg.connect.return_value.__enter__.return_value = connected
+        with mock.patch.object(
+            runner, "_processor", return_value=(database, processor, None, spool)
+        ), mock.patch.dict(
+            sys.modules, {"psycopg": psycopg}
+        ), self.assertRaises(
+            runner._CapacityProbeFailure
+        ) as raised:
+            runner._drain_downstream("postgresql://stub", mock.Mock(), 2, 1.0)
+        self.assertEqual(raised.exception.reason, "probe_timeout")
+        self.assertTrue(raised.exception.active)
+        stop.set()
+
+    def test_run_normal_capacity_tuple_annotation(self) -> None:
+        import inspect
+
+        annotation = inspect.signature(runner._run_normal_capacity).return_annotation
+        self.assertIn("tuple", str(annotation))
+
+    def test_protocol_rejects_total_contradictions(self) -> None:
+        config = {"capacity_retry_budget": 4333}
+        base = _valid_capacity_workload()
+        bad = dict(base, observations=0)
+        with self.assertRaisesRegex(ValueError, "observations"):
+            runner._validate_capacity_protocol(bad, config, "label")
+        bad = dict(base, official_responses=base["official_responses"] + 1)
+        with self.assertRaisesRegex(ValueError, "response"):
+            runner._validate_capacity_protocol(bad, config, "label")
+        bad = dict(base, executed_observations=0)
+        with self.assertRaisesRegex(ValueError, "response"):
+            runner._validate_capacity_protocol(bad, config, "label")
+
+    def test_protocol_rejects_top_retry_identity_mismatch(self) -> None:
+        config = {"capacity_retry_budget": 4333}
+        bad = _valid_capacity_workload()
+        bad["retry_tranche_attempted"] = 1
+        with self.assertRaisesRegex(ValueError, "top retry"):
+            runner._validate_capacity_protocol(bad, config, "label")
+        bad = _valid_capacity_workload()
+        bad["retry_tranche_processed"] = 1
+        with self.assertRaisesRegex(ValueError, "top retry"):
+            runner._validate_capacity_protocol(bad, config, "label")
+
+    def test_protocol_rejects_empty_host_identity(self) -> None:
+        config = {"capacity_retry_budget": 4333}
+        for bad_host in ("", None):
+            bad = _valid_capacity_workload()
+            bad["host_id"] = bad_host
+            with self.assertRaisesRegex(ValueError, "host"):
+                runner._validate_capacity_protocol(bad, config, "label")
+
+    def test_protocol_rejects_downstream_distribution_shortfall(self) -> None:
+        config = {"capacity_retry_budget": 4333}
+        short = _valid_capacity_workload()
+        summary = dict(short["downstream_summary"])
+        outcomes = dict(summary["outcomes"])
+        outcomes["processed"] -= 1
+        outcomes["other"] += 1
+        summary["outcomes"] = outcomes
+        short["downstream_summary"] = summary
+        with self.assertRaisesRegex(ValueError, "downstream"):
+            runner._validate_capacity_protocol(short, config, "label")
+        failed = _valid_capacity_workload()
+        summary = dict(failed["downstream_summary"])
+        summary["failed_count"] = 1
+        failed["downstream_summary"] = summary
+        with self.assertRaisesRegex(ValueError, "downstream"):
+            runner._validate_capacity_protocol(failed, config, "label")
+
+    def test_drain_timeout_leaves_db_and_spool_untouched(self) -> None:
+        stop = threading.Event()
+
+        def stuck(job_id: int, *, owner: str, lease_seconds: int):
+            stop.wait(30)
+            return mock.Mock(job_id=job_id, outcome="processed", category=None)
+
+        processor = mock.Mock()
+        processor.process_job = stuck
+        database = mock.Mock()
+        downstream_root = Path(tempfile.mkdtemp(prefix="clashlens-perf-spool-"))
+        spool = mock.Mock()
+        spool.stats.return_value = {"final_bytes": 1, "high_water_bytes": 2}
+        spool.spool.root = str(downstream_root)
+        connected = mock.MagicMock()
+        connected.execute.return_value.fetchall.return_value = [(1,)]
+        psycopg = mock.MagicMock()
+        psycopg.connect.return_value.__enter__.return_value = connected
+        try:
+            with mock.patch.object(
+                runner, "_processor", return_value=(database, processor, None, spool)
+            ), mock.patch.dict(
+                sys.modules, {"psycopg": psycopg}
+            ), self.assertRaises(
+                runner._CapacityProbeFailure
+            ):
+                runner._drain_downstream("postgresql://stub", mock.Mock(), 1, 1.0)
+            database.close.assert_not_called()
+            self.assertTrue(downstream_root.exists())
+        finally:
+            stop.set()
+            shutil.rmtree(downstream_root, ignore_errors=True)
+
+    def test_expired_setup_assembly_without_spool_dir(self) -> None:
+        previous = Path.cwd()
+        workdir = Path(tempfile.mkdtemp(prefix="capacity-cwd-"))
+        self.addCleanup(shutil.rmtree, workdir, True)
+        (workdir / "sentinel").write_text("keep")
+        os.chdir(workdir)
+        self.addCleanup(os.chdir, previous)
+        workload = runner._failed_capacity_workload("probe_timeout")
+        workload["spool_dir"] = ""
+        handler = mock.Mock()
+        handler.gets = 0
+        handler.get_bytes = 0
+        handler.heads = 0
+        handler.conditional_puts = 0
+        handler.puts = 0
+        handler.put_bytes = 0
+        handler.conflicts = 0
+        handler.objects = {}
+        archive = ("127.0.0.1:9", "", "", handler)
+        with (
+            mock.patch.object(
+                runner, "_orphan_metrics", return_value={"count": 0, "bytes": 0}
+            ),
+            mock.patch.object(runner, "_pending_age_seconds", return_value=None),
+        ):
+            sample = runner._incomplete_capacity_sample(
+                workload,
+                _valid_capacity_sample()["database"],
+                archive,
+                {
+                    "path": "/",
+                    "usable_capacity_bytes": 10**9,
+                    "raw_capacity_bytes": 10**9,
+                    "used_bytes": 10**6,
+                    "filesystem_type": "ext4",
+                    "inode_model": "finite",
+                },
+                {},
+            )
+        runner._validate_capacity_sample_semantics(
+            sample, {"capacity_retry_budget": 4333}, sample["workload"]["hard_failures"], "sample 0"
+        )
+        self.assertTrue((workdir / "sentinel").exists())
+        self.assertEqual(Path.cwd(), workdir)
+
+    def test_capacity_sample_rejects_none_spool_dir(self) -> None:
+        with self.assertRaises(ValueError):
+            runner._capacity_sample(
+                _valid_capacity_workload(),
+                _valid_capacity_sample()["database"],
+                "postgresql://stub",
+                {},
+                {
+                    "path": "/",
+                    "usable_capacity_bytes": 10**9,
+                    "raw_capacity_bytes": 10**9,
+                    "used_bytes": 10**6,
+                    "filesystem_type": "ext4",
+                    "inode_model": "finite",
+                },
+                0.0,
+                0.0,
+                ("127.0.0.1:9", "", "", mock.Mock()),
+                None,
+            )
+
+    def test_direct_script_discovers_slice_d_tests(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "scripts" / "test_performance_runner.py"),
+                "NormalCapacityTest.test_fixed_workload_constants_are_exact",
+            ],
+            check=False,
+            cwd=str(ROOT),
+            text=True,
+            capture_output=True,
+            timeout=120,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
+        self.assertIn("OK", completed.stderr)
+
+    def test_workload_archive_binding_matches_evidence(self) -> None:
+        workload = _valid_capacity_workload()
+        workload["archive_objects"] = 0
+        sample = _valid_capacity_sample()
+        sample["workload"] = workload
+        with self.assertRaisesRegex(ValueError, "archive"):
+            runner._validate_capacity_sample_semantics(
+                sample, {"capacity_retry_budget": 4333}, [], "sample 0"
+            )
+
+
+    def test_expired_setup_keeps_valid_incomplete_artifact(self) -> None:
+        import contextlib
+
+        handler = mock.Mock()
+        handler.gets = 0
+        handler.get_bytes = 0
+        handler.heads = 0
+        handler.conditional_puts = 0
+        handler.puts = 0
+        handler.put_bytes = 0
+        handler.conflicts = 0
+        handler.objects = {}
+
+        @contextlib.contextmanager
+        def fake_database(url: str, **kwargs: object):
+            del url, kwargs
+            yield "postgresql://stub-info"
+
+        @contextlib.contextmanager
+        def fake_archive():
+            yield ("127.0.0.1:9", "", "", handler)
+
+        domain_support = mock.Mock()
+        domain_support.domain_database = fake_database
+        database = deepcopy(_valid_capacity_sample()["database"])
+        filesystem = {
+            "path": "/",
+            "usable_capacity_bytes": 10**9,
+            "raw_capacity_bytes": 10**9,
+            "used_bytes": 10**6,
+            "filesystem_type": "ext4",
+            "inode_model": "finite",
+        }
+        arguments = runner.parse_arguments(
+            ["normal-capacity", "--database-url", "postgresql://stub"]
+        )
+        with (
+            mock.patch.dict(sys.modules, {"domain_test_support": domain_support}),
+            mock.patch.object(runner, "archive_server", fake_archive),
+            mock.patch.object(
+                runner, "_collector_probe", return_value={"executed": False, "reason": "test"}
+            ),
+            mock.patch.object(runner, "_start_metrics", return_value=("0/0", None, 0)),
+            mock.patch.object(runner, "_relation_snapshot", return_value={}),
+            mock.patch.object(runner, "_filesystem_usage", return_value=filesystem),
+            mock.patch.object(runner, "_postgres_provenance", return_value=_test_postgres()),
+            mock.patch.object(runner, "_db_snapshot", return_value=database),
+            mock.patch.object(runner, "_pending_age_seconds", return_value=None),
+            mock.patch.object(
+                runner,
+                "_capacity_sample",
+                side_effect=AssertionError("full assembly must not run without a spool"),
+            ),
+            mock.patch.object(runner, "CAPACITY_WALL_SECONDS", 100),
+        ):
+            artifact = runner.run(arguments)
+        self.assertEqual(artifact["samples"][0]["workload"]["status"], "incomplete")
+        self.assertTrue(artifact["hard_failures"])
+
+    def test_unquiesced_drain_holds_before_any_evidence_work(self) -> None:
+        import contextlib
+
+        db_context = mock.MagicMock()
+        db_context.__enter__.return_value = "postgresql://stub-info"
+        archive_context = mock.MagicMock()
+        archive_context.__enter__.return_value = ("127.0.0.1:9", "", "", mock.Mock())
+        domain_support = mock.Mock()
+        domain_support.domain_database = mock.Mock(return_value=db_context)
+        failed = runner._failed_capacity_workload("probe_timeout")
+        arguments = runner.parse_arguments(
+            ["normal-capacity", "--database-url", "postgresql://stub"]
+        )
+        forbidden = mock.Mock(side_effect=AssertionError("evidence work must not run"))
+        patches = (
+            mock.patch.dict(sys.modules, {"domain_test_support": domain_support}),
+            mock.patch.object(runner, "archive_server", return_value=archive_context),
+            mock.patch.object(
+                runner, "_collector_probe", return_value={"executed": False, "reason": "test"}
+            ),
+            mock.patch.object(runner, "_start_metrics", return_value=("0/0", None, 0)),
+            mock.patch.object(runner, "_relation_snapshot", return_value={}),
+            mock.patch.object(
+                runner,
+                "_filesystem_usage",
+                return_value={
+                    "path": "/",
+                    "usable_capacity_bytes": 10**9,
+                    "raw_capacity_bytes": 10**9,
+                    "used_bytes": 10**6,
+                    "filesystem_type": "ext4",
+                    "inode_model": "finite",
+                },
+            ),
+            mock.patch.object(runner, "_postgres_provenance", return_value=_test_postgres()),
+            mock.patch.object(
+                runner, "_run_normal_capacity", return_value=(failed, None, None, True)
+            ),
+            mock.patch.object(runner, "_db_snapshot", forbidden),
+            mock.patch.object(runner, "_capacity_sample", forbidden),
+            mock.patch.object(runner, "_incomplete_capacity_sample", forbidden),
+            mock.patch.object(runner, "_pending_age_seconds", forbidden),
+            mock.patch.object(runner, "_remove_owned_spool_dir", forbidden),
+        )
+        errors: list[BaseException] = []
+        with contextlib.ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+
+            def target() -> None:
+                try:
+                    runner.run(arguments)
+                except BaseException as error:  # noqa: BLE001 - record the hang outcome
+                    errors.append(error)
+
+            holder = threading.Thread(target=target, daemon=True)
+            holder.start()
+            holder.join(timeout=5)
+            # The hold never returns on its own: the thread stays alive,
+            # no evidence work ran, and no context exits ran either.
+            self.assertTrue(holder.is_alive(), "run() did not hold for the wrapper kill")
+            self.assertFalse(errors, f"hold raised instead of waiting: {errors!r}")
+            db_context.__exit__.assert_not_called()
+            archive_context.__exit__.assert_not_called()
+
+    def test_broken_stderr_still_holds_for_wrapper_kill(self) -> None:
+        import contextlib
+
+        db_context = mock.MagicMock()
+        db_context.__enter__.return_value = "postgresql://stub-info"
+        archive_context = mock.MagicMock()
+        archive_context.__enter__.return_value = ("127.0.0.1:9", "", "", mock.Mock())
+        domain_support = mock.Mock()
+        domain_support.domain_database = mock.Mock(return_value=db_context)
+        failed = runner._failed_capacity_workload("probe_timeout")
+        arguments = runner.parse_arguments(
+            ["normal-capacity", "--database-url", "postgresql://stub"]
+        )
+        broken = mock.Mock()
+        broken.write.side_effect = OSError("broken pipe")
+        forbidden = mock.Mock(side_effect=AssertionError("evidence work must not run"))
+        patches = (
+            mock.patch.dict(sys.modules, {"domain_test_support": domain_support}),
+            mock.patch.object(runner, "archive_server", return_value=archive_context),
+            mock.patch.object(
+                runner, "_collector_probe", return_value={"executed": False, "reason": "test"}
+            ),
+            mock.patch.object(runner, "_start_metrics", return_value=("0/0", None, 0)),
+            mock.patch.object(runner, "_relation_snapshot", return_value={}),
+            mock.patch.object(
+                runner,
+                "_filesystem_usage",
+                return_value={
+                    "path": "/",
+                    "usable_capacity_bytes": 10**9,
+                    "raw_capacity_bytes": 10**9,
+                    "used_bytes": 10**6,
+                    "filesystem_type": "ext4",
+                    "inode_model": "finite",
+                },
+            ),
+            mock.patch.object(runner, "_postgres_provenance", return_value=_test_postgres()),
+            mock.patch.object(
+                runner, "_run_normal_capacity", return_value=(failed, None, None, True)
+            ),
+            mock.patch.object(runner.sys, "stderr", broken),
+            mock.patch.object(runner, "_db_snapshot", forbidden),
+            mock.patch.object(runner, "_remove_owned_spool_dir", forbidden),
+        )
+        errors: list[BaseException] = []
+        with contextlib.ExitStack() as stack:
+            for patcher in patches:
+                stack.enter_context(patcher)
+
+            def target() -> None:
+                try:
+                    runner.run(arguments)
+                except BaseException as error:  # noqa: BLE001 - record the hang outcome
+                    errors.append(error)
+
+            holder = threading.Thread(target=target, daemon=True)
+            holder.start()
+            holder.join(timeout=5)
+            # A broken diagnostic stream must not prevent the guaranteed
+            # hold: the thread stays alive and no teardown hooks run.
+            self.assertTrue(holder.is_alive(), "run() did not hold for the wrapper kill")
+            self.assertFalse(errors, f"hold raised instead of waiting: {errors!r}")
+            db_context.__exit__.assert_not_called()
+            archive_context.__exit__.assert_not_called()
 
 
 if __name__ == "__main__":

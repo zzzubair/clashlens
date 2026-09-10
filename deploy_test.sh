@@ -1513,7 +1513,7 @@ done
   fail 'worker read-only archive secret secret was not mounted'
 [[ "$worker_normalized" == *'--env CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key'* ]] || \
   fail 'worker archive access key file setting is missing'
-[[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
+[[ "$worker_normalized" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /spool/.control/live/worker-1.json --terminal-snapshot-file /spool/.control/terminal/worker-1.json --run-forever'* ]] || \
   fail 'worker did not receive the configured lease, concurrency, and pool bounds'
 [[ "$worker_normalized" != *'--disable-player-discovery'* ]] || \
   fail 'default worker unexpectedly disabled player discovery'
@@ -2274,11 +2274,11 @@ run_1=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worke
 run_2=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-2 ')
 run_3=$(grep '^run ' <<<"$REPLICA_NORM" | grep -- '--name clashlens-python-worker-3 ')
 [[ -n "$run_1" && -n "$run_2" && -n "$run_3" ]] || fail 'not every configured worker replica was started'
-[[ "$run_1" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
+[[ "$run_1" == *'worker --owner production-python-1 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /spool/.control/live/worker-1.json --terminal-snapshot-file /spool/.control/terminal/worker-1.json --run-forever'* ]] || \
   fail 'replica 1 did not receive its unique owner'
-[[ "$run_2" == *'worker --owner production-python-2 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
+[[ "$run_2" == *'worker --owner production-python-2 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /spool/.control/live/worker-2.json --terminal-snapshot-file /spool/.control/terminal/worker-2.json --run-forever'* ]] || \
   fail 'replica 2 did not receive its unique owner'
-[[ "$run_3" == *'worker --owner production-python-3 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever'* ]] || \
+[[ "$run_3" == *'worker --owner production-python-3 --max-jobs 100 --lease-seconds 60 --concurrency 20 --database-pool-size 5 --archive-pool-size 20 --operating-snapshot-file /spool/.control/live/worker-3.json --terminal-snapshot-file /spool/.control/terminal/worker-3.json --run-forever'* ]] || \
   fail 'replica 3 did not receive its unique owner'
 for run in "$run_1" "$run_2" "$run_3"; do
   [[ "$run" == *'ready --expected-contract-version 5'* ]] || fail 'a replica health check lost the ready seam'

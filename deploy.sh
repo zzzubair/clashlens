@@ -1564,7 +1564,7 @@ start_python_workers() {
       --restart unless-stopped \
       --label org.clashlens.component=python-worker \
       "${secrets[@]}" \
-      "$PYTHON_IMAGE" worker --owner "production-python-${i}" --max-jobs 100 --lease-seconds "$CLASHLENS_WORKER_LEASE_SECONDS" --concurrency "$CLASHLENS_WORKER_CONCURRENCY" --database-pool-size "$CLASHLENS_WORKER_DATABASE_POOL_SIZE" --archive-pool-size "$CLASHLENS_WORKER_ARCHIVE_POOL_SIZE" --operating-snapshot-file /tmp/clashlens-worker-operating.json --run-forever "${discovery_args[@]}" >/dev/null
+      "$PYTHON_IMAGE" worker --owner "production-python-${i}" --max-jobs 100 --lease-seconds "$CLASHLENS_WORKER_LEASE_SECONDS" --concurrency "$CLASHLENS_WORKER_CONCURRENCY" --database-pool-size "$CLASHLENS_WORKER_DATABASE_POOL_SIZE" --archive-pool-size "$CLASHLENS_WORKER_ARCHIVE_POOL_SIZE" --operating-snapshot-file "/spool/.control/live/worker-${i}.json" --terminal-snapshot-file "/spool/.control/terminal/worker-${i}.json" --run-forever "${discovery_args[@]}" >/dev/null
   done
 }
 

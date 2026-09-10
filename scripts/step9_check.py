@@ -89,6 +89,9 @@ WRITE_STATEMENTS = re.compile(
     re.IGNORECASE,
 )
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+# Collector budget-run contract allows 128 characters; observer run IDs stay
+# capped at 64 above.
+_BUDGET_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _CONTAINER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 _ACTIVE_STATUSES = ("pending", "leased", "waiting_retry", "waiting_dependency")
@@ -499,13 +502,6 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
     )
     if not _RUN_ID.fullmatch(run_id):
         raise Step9Error("bad_run_id", "invalid run ID")
-    try:
-        run_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
-    except FileExistsError as error:
-        raise Step9Error("artifact_occupied", "run directory already exists") from error
-    except OSError as error:
-        raise Step9Error("run_unwritable", "run directory cannot be created") from error
-    os.chmod(run_dir, 0o700)
     if db is None:
         raise Step9Error("database_required",
                          "start requires a database connection")
@@ -517,10 +513,17 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
     try:
         running, pinned = Podman(None, podman_bin).inspect_running(
             arguments.collector_container)
-        if running:
-            collector_image, collector_image_error = pinned, None
-        else:
-            collector_image_error = "collector_not_running_at_start"
+        # Podman reports the image whether the container runs or not: pin
+        # it in both states so a run started while stopped still binds the
+        # identity the watchdog verifies after start. A failed inspection
+        # or an empty image fails closed here, before any admission.
+        image = (pinned or "").strip()
+        if running is None or not image:
+            raise Step9Error("collector_inspect_invalid",
+                             "collector identity is not inspectable")
+        collector_image, collector_image_error = image, None
+    except Step9Error:
+        raise
     except Exception as error:  # noqa: BLE001 - unpinnable image is unknown
         collector_image_error = f"image_inspect_unavailable: {type(error).__name__}"
     try:
@@ -540,6 +543,17 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
     except Exception as error:
         raise Step9Error("database_unavailable",
                          f"initial snapshot failed: {error}") from error
+    tariff_payload, tariff_digest = _read_tariff_file(
+        getattr(arguments, "archive_tariff_file", None) or "")
+    # Live-day binds the canonical prospective tariff refresh (admission
+    # evidence only; run_authorized stays false). Every other mode keeps
+    # the exact preparation envelope; the old prep schema can never bind
+    # a live-day run.
+    if mode_name == "live-day":
+        tariff_block = _tariff_block_live(
+            tariff_payload, tariff_digest, core_start)
+    else:
+        tariff_block = _tariff_block(tariff_payload, core_start)
     header = {
         "schema": mode["schema"], "mode": mode_name, "run_id": run_id,
         "core_start": core_start.isoformat(), "core_end": core_end.isoformat(),
@@ -580,13 +594,11 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
                 "argv" if getattr(arguments, "database_url", None)
                 else "none")),
         "bootstrap_run_id": getattr(arguments, "bootstrap_run_id", None),
+        "budget_run_id": getattr(arguments, "budget_run_id", None),
         "budget_receipt": budget_receipt,
         "cost_basis": {
             "note": "tariff estimate only, never actual billed cost",
-            "tariff": _tariff_block(
-                _read_tariff_file(getattr(arguments, "archive_tariff_file",
-                                          None) or ""),
-                core_start),
+            "tariff": tariff_block,
         },
         "archive_interfaces": list(getattr(arguments, "archive_interfaces",
                                             None) or []),
@@ -627,6 +639,67 @@ def cmd_start(arguments: argparse.Namespace, db: object | None = None) -> dict:
     header["wire_baseline"] = collect_wire_facts(
         interfaces=header["archive_interfaces"],
         route_host=header["archive_route_host"])
+    controls = _parse_archive_controls(arguments, mode_name)
+    if controls is not None:
+        header.update(controls)
+        if header["transfer_prior_bytes"] > controls["transfer_cap_bytes"] \
+                or header["s3_prior"]["attempts"] > controls["s3_cap_attempts"]:
+            raise Step9Error("archive_controls_invalid",
+                             "prior consumption already exceeds live-day cap")
+    prior_transfer = header["transfer_prior_bytes"]
+    if isinstance(prior_transfer, bool) \
+            or not isinstance(prior_transfer, int) or prior_transfer < 0:
+        raise Step9Error("transfer_prior_invalid",
+                         "transfer prior bytes must be a nonnegative integer")
+    if controls is not None:
+        base_archive = (header["resource_baseline"].get("archive") or {})
+        for key in ("logical_bytes", "objects"):
+            value = base_archive.get(key)
+            if type(value) is not int or value < 0:
+                raise Step9Error("archive_baseline_invalid",
+                                 "live-day archive baseline is missing")
+        spool_baseline = base_archive.get("physical_bytes")
+        if type(spool_baseline) is not int or spool_baseline < 0:
+            raise Step9Error("archive_baseline_invalid",
+                             "live-day spool baseline is missing")
+        if spool_baseline > controls["spool_allocated_cap_bytes"]:
+            raise Step9Error("archive_baseline_invalid",
+                             "live-day spool baseline exceeds pinned cap")
+        wire_base = header["wire_baseline"] or {}
+        interfaces = wire_base.get("interfaces")
+        if wire_base.get("status") != "captured" \
+                or not isinstance(interfaces, dict) or not interfaces:
+            raise Step9Error("wire_baseline_invalid",
+                             "live-day wire baseline is missing")
+        for name, entry in interfaces.items():
+            if not isinstance(entry, dict) \
+                    or entry.get("present") is not True:
+                raise Step9Error("wire_baseline_invalid",
+                                 f"live-day wire interface {name} is down")
+            if type(entry.get("rx_bytes")) is not int \
+                    or type(entry.get("tx_bytes")) is not int \
+                    or entry["rx_bytes"] < 0 or entry["tx_bytes"] < 0:
+                raise Step9Error("wire_baseline_invalid",
+                                 "live-day wire baseline is malformed")
+            if entry.get("route_error"):
+                raise Step9Error("wire_baseline_invalid",
+                                 "live-day wire route is in error")
+    _bind_budget_before_admission(
+        db=db, receipt=budget_receipt,
+        bootstrap_selector=getattr(arguments, "bootstrap_run_id", None),
+        budget_selector=getattr(arguments, "budget_run_id", None),
+        cohort={"raw_sha256": raw_sha, "canonical_sha256": canonical_sha,
+                "input_count": len(tags)},
+        boundary_end=core_end + timedelta(
+            seconds=getattr(arguments, "tail_seconds", 0) or 0),
+        now=_utc_now())
+    try:
+        run_dir.mkdir(mode=0o700, parents=False, exist_ok=False)
+    except FileExistsError as error:
+        raise Step9Error("artifact_occupied", "run directory already exists") from error
+    except OSError as error:
+        raise Step9Error("run_unwritable", "run directory cannot be created") from error
+    os.chmod(run_dir, 0o700)
     digest = _exclusive_json(run_dir / "run.json", header)
     try:
         os.chmod(run_dir / "run.json", 0o600)
@@ -690,36 +763,228 @@ def _admission_receipt_block(receipt: dict, mode_name: str, run_id: str,
             "max_selected_entries": quotas[1]}
 
 
-def _budget_receipt_block(receipt: dict, mode_name: str) -> dict | None:
-    """Preflight pins the deployed budget envelope; live-day ignores it."""
-    if mode_name != "preflight":
-        return None
+def _budget_receipt_block(receipt: dict, mode_name: str) -> dict:
+    """Pin the deployed endpoint-budget selector for both modes.
+
+    The fixed small preparation envelope ceiling applies to preflight only
+    and is never imposed on live-day runs.
+    """
     fields = receipt.get("configuration", {}).get("fields", {})
     if fields.get("endpoint_budget_enabled") != "true":
         raise Step9Error("budget_not_enabled",
-                         "preflight requires endpoint_budget_enabled=true")
+                         f"{mode_name} requires endpoint_budget_enabled=true")
     try:
         caps = {key: int(fields[key]) for key in (
             "endpoint_budget_profile", "endpoint_budget_global_rankings",
             "endpoint_budget_battle_log")}
     except (KeyError, TypeError, ValueError) as error:
         raise Step9Error("budget_malformed",
-                         "preflight budget caps are invalid") from error
-    envelope = {"endpoint_budget_profile": PREFLIGHT_ENVELOPE["profile"],
-                "endpoint_budget_global_rankings":
-                    PREFLIGHT_ENVELOPE["global_rankings_intents"],
-                "endpoint_budget_battle_log": PREFLIGHT_ENVELOPE["battle_log"]}
-    for key, ceiling in envelope.items():
-        if caps[key] > ceiling:
-            raise Step9Error("budget_exceeds_envelope",
-                             f"preflight {key} exceeds the fixed envelope")
+                         f"{mode_name} budget caps are invalid") from error
+    if mode_name == "preflight":
+        envelope = {
+            "endpoint_budget_profile": PREFLIGHT_ENVELOPE["profile"],
+            "endpoint_budget_global_rankings":
+                PREFLIGHT_ENVELOPE["global_rankings_intents"],
+            "endpoint_budget_battle_log": PREFLIGHT_ENVELOPE["battle_log"]}
+        for key, ceiling in envelope.items():
+            if caps[key] > ceiling:
+                raise Step9Error("budget_exceeds_envelope",
+                                 f"preflight {key} exceeds the fixed envelope")
     if not fields.get("endpoint_budget_run_id") \
             or not fields.get("endpoint_budget_deadline_at"):
         raise Step9Error("budget_unbound",
-                         "preflight budget run ID and deadline are required")
+                         f"{mode_name} budget run ID and deadline are required")
     return {"caps": caps,
             "run_id": fields["endpoint_budget_run_id"],
             "deadline_at": fields["endpoint_budget_deadline_at"]}
+
+
+_BUDGET_ENDPOINTS = ("profile", "global_player_rankings", "battle_log")
+_BUDGET_CAP_KEYS = {"profile": "endpoint_budget_profile",
+                    "global_player_rankings":
+                        "endpoint_budget_global_rankings",
+                    "battle_log": "endpoint_budget_battle_log"}
+
+
+def _compare_bootstrap_provenance(*, selector: str | None, run_row: object,
+                                  cohort: dict) -> None:
+    """Bootstrap identity stays immutable cohort provenance only.
+
+    It is never compared to the receipt budget run. Raises Step9Error.
+    """
+    if not isinstance(selector, str) or not selector:
+        raise Step9Error("budget_bootstrap_missing",
+                         "an explicit --bootstrap-run-id selector is required")
+    if not isinstance(run_row, dict):
+        raise Step9Error("budget_run_missing",
+                         "durable bootstrap run is absent")
+    if run_row.get("status") != "complete":
+        raise Step9Error("budget_run_incomplete",
+                         "durable bootstrap run is not complete")
+    if run_row.get("manifest_sha256") != cohort.get("raw_sha256") \
+            or run_row.get("manifest_count") != cohort.get("input_count") \
+            or run_row.get("normalized_set_sha256") != cohort.get(
+                "canonical_sha256"):
+        raise Step9Error("budget_manifest_mismatch",
+                         "durable bootstrap differs from protected cohort")
+
+
+def _compare_budget_binding(*, selector: str | None, receipt: dict,
+                            budgets: list) -> dict:
+    """Single interpretation of receipt-to-durable budget binding.
+
+    Shared by start (before run creation) and finalize. Raises Step9Error
+    on any mismatch; returns the bound summary on agreement.
+    """
+    if not isinstance(selector, str) or not selector:
+        raise Step9Error("budget_selector_missing",
+                         "an explicit --budget-run-id selector is required")
+    if selector != receipt.get("run_id"):
+        raise Step9Error("budget_binding_mismatch",
+                         "budget selector differs from receipt budget run")
+    if {b.get("endpoint") for b in budgets} != set(_BUDGET_ENDPOINTS):
+        raise Step9Error("budget_binding_mismatch",
+                         "durable endpoint set differs from budget contract")
+    try:
+        receipt_deadline = _parse_utc(str(receipt["deadline_at"]))
+    except (Step9Error, KeyError, TypeError, ValueError) as error:
+        raise Step9Error("budget_deadline_malformed",
+                         "receipt budget deadline is invalid") from error
+    caps: dict = {}
+    consumed: dict = {}
+    deadlines: set = set()
+    for entry in budgets:
+        endpoint = entry.get("endpoint")
+        cap, used = entry.get("cap"), entry.get("consumed")
+        if type(cap) is not int or type(used) is not int \
+                or cap < 0 or used < 0:
+            raise Step9Error("budget_malformed",
+                             "durable budget cap/consumed is invalid")
+        if cap != receipt.get("caps", {}).get(
+                _BUDGET_CAP_KEYS[endpoint]):
+            raise Step9Error("budget_binding_mismatch",
+                             "durable cap differs from receipt cap")
+        if used > cap:
+            raise Step9Error("budget_evidence_mismatch",
+                             "durable consumption exceeds cap")
+        try:
+            deadlines.add(_parse_utc(str(entry["deadline_at"])))
+        except (Step9Error, KeyError, TypeError, ValueError) as error:
+            raise Step9Error("budget_deadline_malformed",
+                             "durable budget deadline is invalid") from error
+        caps[endpoint] = cap
+        consumed[endpoint] = used
+    if deadlines != {receipt_deadline}:
+        raise Step9Error("budget_binding_mismatch",
+                         "durable deadlines differ from receipt deadline")
+    return {"run_id": selector,
+            "deadline_at": receipt["deadline_at"],
+            "caps": caps, "consumed": consumed}
+
+
+def _check_budget_deadline(*, deadline_at: str, boundary_end: datetime,
+                           now: datetime) -> datetime:
+    """Temporal budget gate for start: parsed, unexpired, covers the drain."""
+    try:
+        deadline = _parse_utc(str(deadline_at))
+    except Step9Error as error:
+        raise Step9Error("budget_deadline_malformed",
+                         "receipt budget deadline is invalid") from error
+    if deadline <= now:
+        raise Step9Error("budget_deadline_expired",
+                         "receipt budget deadline already passed")
+    if deadline < boundary_end:
+        raise Step9Error("budget_deadline_short",
+                         "receipt budget deadline misses the drain boundary")
+    return deadline
+
+
+def _fetch_budget_data(db: object, run_id: str) -> dict:
+    """Read one durable budget dataset; store/grant misses fail closed."""
+    try:
+        present = db.budgets_present()
+    except Step9Error:
+        raise
+    except Exception as error:
+        raise Step9Error("database_unavailable",
+                         f"budget store probe failed: {error}") from error
+    if not present:
+        raise Step9Error("budget_store_missing",
+                         "durable budget tables are absent")
+    try:
+        return db.bootstrap_budgets(run_id)
+    except Step9Error:
+        raise
+    except Exception as error:
+        if getattr(error, "sqlstate", "") == "42501":
+            raise Step9Error("budget_grant_denied",
+                             "durable budget read is not granted") from error
+        raise Step9Error("database_unavailable",
+                         f"durable budget read failed: {error}") from error
+
+
+def _bind_budget_before_admission(*, db: object, receipt: dict,
+                                  bootstrap_selector: str | None,
+                                  budget_selector: str | None, cohort: dict,
+                                  boundary_end: datetime,
+                                  now: datetime) -> dict:
+    """Bind bootstrap provenance and budget rows before run creation.
+
+    The bootstrap selector pins immutable cohort provenance only and is
+    never compared to the receipt budget run; the separate budget selector
+    binds the receipt to freshly seeded durable endpoint-budget rows.
+    """
+    if not isinstance(bootstrap_selector, str) or not bootstrap_selector:
+        raise Step9Error("budget_bootstrap_missing",
+                         "an explicit --bootstrap-run-id selector is required")
+    if not isinstance(budget_selector, str) or not budget_selector:
+        raise Step9Error("budget_selector_missing",
+                         "an explicit --budget-run-id selector is required")
+    boot_data = _fetch_budget_data(db, bootstrap_selector)
+    _compare_bootstrap_provenance(
+        selector=bootstrap_selector, run_row=boot_data.get("run"),
+        cohort=cohort)
+    budget_data = _fetch_budget_data(db, budget_selector)
+    bound = _compare_budget_binding(
+        selector=budget_selector, receipt=receipt,
+        budgets=budget_data.get("budgets") or [])
+    _check_budget_deadline(deadline_at=bound["deadline_at"],
+                           boundary_end=boundary_end, now=now)
+    return bound
+
+
+_ARCHIVE_CONTROL_ARGS = ("archive_retained_cap_bytes", "transfer_cap_bytes",
+                         "s3_cap_attempts", "spool_allocated_cap_bytes")
+
+
+def _parse_archive_controls(arguments, mode_name: str) -> dict | None:
+    """Pinned live-day v2 attempt/byte caps; preflight keeps constants."""
+    raw = {name: getattr(arguments, name, None)
+           for name in _ARCHIVE_CONTROL_ARGS}
+    if mode_name != "live-day":
+        if any(value is not None for value in raw.values()):
+            raise Step9Error("archive_controls_mixed",
+                             "v2 archive controls do not apply to preflight")
+        return None
+    for name, value in raw.items():
+        if isinstance(value, bool) or not isinstance(value, int) \
+                or value < 0:
+            raise Step9Error("archive_controls_invalid",
+                             f"live-day {name} must be a nonnegative integer")
+    return raw
+
+
+def _live_day_controls(run: dict) -> dict | None:
+    """Pinned live-day v2 caps, or None when legacy constants apply."""
+    if run.get("mode") != "live-day" or run.get("schema") != SCHEMA_LIVE:
+        return None
+    caps = {name: run.get(name) for name in _ARCHIVE_CONTROL_ARGS}
+    if any(isinstance(value, bool) or not isinstance(value, int)
+           or value < 0 for value in caps.values()):
+        raise Step9Error("archive_controls_invalid",
+                         "live-day run archive controls are missing",
+                         gate=True)
+    return caps
 
 
 def _require_gap_seconds(arguments: argparse.Namespace) -> int:
@@ -1009,22 +1274,47 @@ class Database:
             raise
 
     def bootstrap_budgets(self, run_id: str) -> dict:
+        # Endpoint rows are queried independently of the bootstrap row: a
+        # fresh budget ID intentionally has budget rows but no bootstrap row.
         def work(cursor):
             cursor.execute(SQL_BOOTSTRAP_RUN, (run_id,))
             row = cursor.fetchone()
-            if row is None:
-                return {"run": None, "budgets": []}
-            keys = ("run_id", "manifest_sha256", "manifest_count",
-                    "normalized_set_sha256", "status", "batch_size",
-                    "players_registered", "discovery_jobs_created",
-                    "created_at", "completed_at")
-            run_row = dict(zip(keys, row))
+            run_row = None
+            if row is not None:
+                keys = ("run_id", "manifest_sha256", "manifest_count",
+                        "normalized_set_sha256", "status", "batch_size",
+                        "players_registered", "discovery_jobs_created",
+                        "created_at", "completed_at")
+                run_row = dict(zip(keys, row))
             cursor.execute(SQL_ENDPOINT_BUDGETS, (run_id,))
             budgets = [dict(zip(("endpoint", "cap", "consumed",
                                       "deadline_at", "updated_at"), r))
                          for r in cursor.fetchall()]
             return {"run": run_row, "budgets": budgets}
         return self._one_txn(work)
+
+    def seed_endpoint_budgets(self, run_id: str, budgets: list) -> dict:
+        """Insert-once budget rows, then read back; existing rows untouched.
+
+        Each entry is {"endpoint", "cap", "deadline_at"}; consumed always
+        starts at 0 and is never written here. Small bounded statements on a
+        fresh autocommit connection; reruns complete idempotently.
+        """
+        with self._connect() as connection:
+            connection.autocommit = True
+            with connection.cursor() as cursor:
+                inserted = []
+                for entry in budgets:
+                    cursor.execute(SQL_SEED_BUDGET,
+                                   (run_id, entry["endpoint"], entry["cap"],
+                                    entry["deadline_at"]))
+                    if cursor.fetchone() is not None:
+                        inserted.append(entry["endpoint"])
+                cursor.execute(SQL_ENDPOINT_BUDGETS, (run_id,))
+                rows = [dict(zip(("endpoint", "cap", "consumed",
+                                   "deadline_at", "updated_at"), row))
+                        for row in cursor.fetchall()]
+        return {"inserted": inserted, "budgets": rows}
 
     def archive_usage(self) -> tuple:
         def work(cursor):
@@ -1520,6 +1810,7 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
         raise Step9Error("sample_mismatch",
                          "run schema predates sampler; v1 runs take no v2 samples",
                          gate=True)
+    controls = _live_day_controls(run)
     max_slots = hooks.get("max_slots", mode["slots"])
     core_start = _parse_utc(run["core_start"])
     samples_dir = run_dir / "samples"
@@ -1540,10 +1831,14 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
     previous_wall: datetime | None = None
     previous_s3: dict | None = None
     previous_liveness: dict | None = None
+    previous_wire_total: int | None = None
     outcome_strikes = 0
     unavailable_strikes = 0
+    s3_strikes = 0
     container_probe = hooks.get("container_probe")
     resource_baseline = run.get("resource_baseline") or {}
+    prev_retained = (resource_baseline.get("archive") or {}).get(
+        "logical_bytes")
     mem_over = 0
     for index in range(max_slots):
         expected_utc = slot_expected_utc(core_start, index)
@@ -1625,7 +1920,9 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                     route_host=run.get("archive_route_host"))
             wire_failures, wire_unknown, wire_total = evaluate_wire(
                 run.get("wire_baseline") or {}, wire,
-                run.get("transfer_prior_bytes", TRANSFER_PRIOR_BYTES))
+                run.get("transfer_prior_bytes", TRANSFER_PRIOR_BYTES),
+                controls["transfer_cap_bytes"] if controls is not None
+                else TRANSFER_CUMULATIVE_MAX)
             sample["wire"] = {"failures": wire_failures,
                                 "unknown": wire_unknown,
                                 "conservative_host_wire_bytes": wire_total}
@@ -1637,18 +1934,65 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                 _record_failure(run_dir, sample["failure_code"],
                                     sample["outcome"])
                 return 1
+            if controls is not None:
+                # Live-day v2 required cost counters stop at once on
+                # unknown or between-sample decrease; missing counters
+                # must never run until final validation.
+                if wire_unknown:
+                    sample["failure_code"] = "wire_unknown"
+                    sample["outcome"] = "transfer_gate"
+                    _exclusive_json(samples_dir / name, sample,
+                                    max_bytes=SAMPLE_MAX_BYTES)
+                    _record_failure(run_dir, sample["failure_code"],
+                                    sample["outcome"])
+                    return 1
+                if type(wire_total) is int \
+                        and type(previous_wire_total) is int \
+                        and wire_total < previous_wire_total:
+                    sample["failure_code"] = "wire_counter_reset"
+                    sample["outcome"] = "transfer_gate"
+                    _exclusive_json(samples_dir / name, sample,
+                                    max_bytes=SAMPLE_MAX_BYTES)
+                    _record_failure(run_dir, sample["failure_code"],
+                                    sample["outcome"])
+                    return 1
+            if type(wire_total) is int:
+                previous_wire_total = wire_total
+            worker_probe = hooks.get("worker_probe")
+            try:
+                worker_files = (worker_probe or _podman_worker_files)(run)
+                worker_files_error = None
+            except Exception as error:  # noqa: BLE001 - probe miss unknown
+                worker_files, worker_files_error = \
+                    None, "s3_worker_unavailable:" + type(error).__name__
             s3_py, s3_error = _worker_snapshots(
-                run, hooks.get("worker_probe"))
+                run, worker_probe, files=worker_files,
+                probe_error=worker_files_error)
             s3 = _s3_snapshot(metrics, s3_py)
             s3["error"] = s3_error
+            s3["producers"] = _sample_s3_producers(
+                run, metrics, worker_files)
             sample["s3"] = s3
             if s3_error is not None:
-                unavailable_strikes += 1
-                if unavailable_strikes >= 2:
+                # S3 archive misses keep their own strikes: a healthy DB
+                # sample below must not clear them, or repeated S3 misses
+                # continue forever behind DB health. Only a healthy valid
+                # S3 observation clears S3 strikes. Every miss is retained
+                # failed evidence at once (including the stopping strike),
+                # never a silent skip.
+                s3_strikes += 1
+                sample["failure_code"] = "s3_unavailable"
+                sample["outcome"] = "s3_unavailable"
+                _record_failure(run_dir, "s3_unavailable",
+                                s3_error or "s3 snapshot unavailable")
+                if s3_strikes >= 2:
+                    _exclusive_json(samples_dir / name, sample,
+                                    max_bytes=SAMPLE_MAX_BYTES)
                     _record_failure(run_dir, "two_consecutive_unavailable",
                                     "two consecutive unavailable samples")
                     return 1
             else:
+                s3_strikes = 0
                 if _s3_decreased(previous_s3, s3):
                     sample["failure_code"] = "s3_counter_reset"
                     sample["outcome"] = "s3_counter_reset"
@@ -1661,7 +2005,9 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                 prior = _s3_prior(run)
                 cumulative = prior["attempts"] + s3["total"]
                 sample["s3_attempts_cumulative"] = cumulative
-                if cumulative > S3_ATTEMPTS_MAX:
+                s3_cap = controls["s3_cap_attempts"] \
+                    if controls is not None else S3_ATTEMPTS_MAX
+                if cumulative > s3_cap:
                     sample["failure_code"] = "s3_attempts_breach"
                     sample["outcome"] = "s3_attempts_breach"
                     _exclusive_json(samples_dir / name, sample,
@@ -1684,7 +2030,12 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
             sample["pgdata"] = pgdata
             pgdata_bad = (sample.get("pgdata") or {}).get("failure_code")
             res_failures, res_unknown, mem_over = evaluate_resource_gates(
-                resource_baseline, resources, mem_over)
+                resource_baseline, resources, mem_over,
+                retained_cap=controls["archive_retained_cap_bytes"]
+                if controls is not None else None,
+                prev_retained=prev_retained,
+                spool_cap=controls["spool_allocated_cap_bytes"]
+                if controls is not None else None)
             probe = (resources.get("archive") or {}).get("allocated_probe")
             # Bounded per-minute retention: host du evidence survives in the
             # sample on success as well as failure/unknown, independent of
@@ -1698,14 +2049,44 @@ def cmd_sample(arguments: argparse.Namespace, hooks=None) -> int:
                            "allocated_bytes", "started_at", "finished_at",
                            "timeout_seconds", "error", "btrfs_limitation")
                 kept = {key: probe[key] for key in allowed if key in probe}
+            retained_facts = None
+            if controls is not None:
+                base_b = (resource_baseline.get("archive") or {}).get(
+                    "logical_bytes")
+                cur_b = (resources.get("archive") or {}).get(
+                    "logical_bytes")
+                base_b = base_b if type(base_b) is int and base_b >= 0 \
+                    else None
+                cur_b = cur_b if type(cur_b) is int and cur_b >= 0 else None
+                retained_facts = {
+                    "baseline_bytes": base_b, "current_bytes": cur_b,
+                    "newly_retained_bytes": (
+                        cur_b - base_b
+                        if base_b is not None and cur_b is not None
+                        and cur_b >= base_b else None),
+                    "cap_bytes": controls["archive_retained_cap_bytes"],
+                }
             sample["resources"] = {"failures": res_failures,
                                      "unknown": res_unknown,
-                                     "allocated_probe": kept}
+                                     "allocated_probe": kept,
+                                     "archive_retained": retained_facts}
             if res_failures:
                 sample["failure_code"] = res_failures[0]
                 sample["outcome"] = "resource_gate"
+            elif controls is not None and res_unknown:
+                # Live-day v2 required resource facts stop at once on
+                # unknown; missing counters must never run silently.
+                sample["failure_code"] = res_unknown[0]
+                sample["outcome"] = "resource_gate"
+                _exclusive_json(samples_dir / name, sample,
+                                max_bytes=SAMPLE_MAX_BYTES)
+                _record_failure(run_dir, sample["failure_code"],
+                                sample["outcome"])
+                return 1
             if metrics is not None:
                 previous_metrics = metrics
+            prev_retained = (resources.get("archive") or {}).get(
+                "logical_bytes")
             if (samples_dir / name).exists():
                 raise Step9Error("duplicate_sample", f"slot {index} already written",
                                  gate=True)
@@ -1881,20 +2262,83 @@ def _finalize_operating(run: dict, db: object | None,
     return result
 
 
-def _finalize_transfer(samples: list[dict], run: dict) -> dict:
+def _verify_wire_chain(samples: list, transfer_cap: int) -> str | None:
+    """Recompute per-sample wire totals; failure code or None.
+
+    Totals are authoritative host counters: each must be a known integer
+    within the pinned cap and monotonic across samples. Never trusts the
+    sample failure strings.
+    """
+    previous = None
+    for sample in samples:
+        total = (sample.get("wire") or {}).get(
+            "conservative_host_wire_bytes")
+        if type(total) is not int or total < 0:
+            return "transfer_unknown"
+        if total > transfer_cap:
+            return "transfer_breach"
+        if previous is not None and total < previous:
+            return "wire_counter_reset"
+        previous = total
+    return None
+
+
+def _verify_retained_chain(samples: list, retained_cap: int,
+                           baseline_bytes: object) -> str | None:
+    """Recompute per-sample retained deltas; failure code or None.
+
+    Each sample's recorded delta must equal current minus the pinned
+    baseline, stay within the pinned cap, and never decrease across
+    samples. Never trusts the sample failure strings.
+    """
+    if type(baseline_bytes) is not int or baseline_bytes < 0:
+        return "transfer_unknown"
+    previous = baseline_bytes
+    for sample in samples:
+        resources = sample.get("resources")
+        facts = (resources or {}).get("archive_retained") \
+            if isinstance(resources, dict) else None
+        if not isinstance(facts, dict):
+            return "transfer_unknown"
+        base = facts.get("baseline_bytes")
+        current = facts.get("current_bytes")
+        delta = facts.get("newly_retained_bytes")
+        if facts.get("cap_bytes") != retained_cap:
+            return "transfer_unknown"
+        if base != baseline_bytes:
+            return "transfer_unknown"
+        if type(current) is not int or current < 0:
+            return "transfer_unknown"
+        if delta != current - base:
+            return "transfer_unknown"
+        if current - base > retained_cap:
+            return "archive_retained_breach"
+        if current < previous:
+            return "archive_retained_reset"
+        previous = current
+    return None
+
+
+def _finalize_transfer(samples: list[dict], run: dict, run_dir=None,
+                      hooks=None) -> dict:
     """Retained transfer totals: wire bound plus S3 attempt accounting."""
     wire_last = next((s.get("wire") for s in reversed(samples)
                       if isinstance(s.get("wire"), dict)), None)
     s3_seen = [s.get("s3") for s in samples
                if isinstance(s.get("s3"), dict)
                and s["s3"].get("error") is None]
+    controls = _live_day_controls(run)
+    cap_bytes = controls["transfer_cap_bytes"] \
+        if controls is not None else TRANSFER_CUMULATIVE_MAX
+    attempts_cap = controls["s3_cap_attempts"] \
+        if controls is not None else S3_ATTEMPTS_MAX
     result: dict = {
         "prior_bytes": run.get("transfer_prior_bytes", TRANSFER_PRIOR_BYTES),
         "prior_provenance": run.get("transfer_prior_provenance",
                                       TRANSFER_PRIOR_PROVENANCE),
         "prior_attempts": TRANSFER_PRIOR_ATTEMPTS,
-        "cap_bytes": TRANSFER_CUMULATIVE_MAX,
-        "attempts_cap": S3_ATTEMPTS_MAX,
+        "cap_bytes": cap_bytes,
+        "attempts_cap": attempts_cap,
         "wire_bytes": (wire_last or {}).get("conservative_host_wire_bytes"),
         "status": "unknown", "failure": None,
     }
@@ -1916,12 +2360,193 @@ def _finalize_transfer(samples: list[dict], run: dict) -> dict:
     result["s3_attempts"] = _s3_prior(run).get("attempts",
                                                  TRANSFER_PRIOR_ATTEMPTS) \
         + last["total"]
-    if result["s3_attempts"] > S3_ATTEMPTS_MAX:
+    if result["s3_attempts"] > attempts_cap:
         result["status"] = "failed"
         result["failure"] = "s3_attempts_breach"
         return result
+    if controls is not None:
+        chain_failure = _verify_wire_chain(samples, cap_bytes) \
+            or _verify_retained_chain(
+                samples, controls["archive_retained_cap_bytes"],
+                (run.get("resource_baseline") or {}).get(
+                    "archive", {}).get("logical_bytes"))
+        if chain_failure is not None:
+            if chain_failure == "transfer_unknown":
+                result["failure"] = chain_failure
+                return result
+            result["status"] = "failed"
+            result["failure"] = chain_failure
+            return result
+        # Live-day v2 terminal chain: prior (once) -> core samples ->
+        # drain observations -> post-producer-stop terminal capture, all
+        # under identical pins. Final totals bind the post-stop capture,
+        # never the last core sample alone. run_dir is always present via
+        # cmd_finalize; direct unit calls without one cover core math only.
+        if run_dir is None:
+            result["status"] = "complete"
+            return result
+        chain = _finalize_terminal_chain(samples, run, run_dir, hooks,
+                                         controls, cap_bytes, attempts_cap)
+        if chain["failure"] is not None:
+            if chain["failure"] in ("transfer_unknown",
+                                      "drain_unobserved",
+                                      "terminal_capture_missing"):
+                result["failure"] = chain["failure"]
+                return result
+            result["status"] = "failed"
+            result["failure"] = chain["failure"]
+            return result
+        result.update(chain["values"])
     result["status"] = "complete"
     return result
+
+
+def _post_stop_host_facts(run: dict, hooks: dict,
+                          controls: dict) -> tuple[dict, str | None]:
+    """Post-producer-stop wire/retained capture: facts or failure code.
+
+    Sources in order: injected observation hooks, then the live host
+    collectors with the read-only database supplied through CLI, secure
+    URL file, or driver hooks, so catalogue logical/retained facts are
+    captured for real. Missing or malformed capture is unknown evidence,
+    never zero. Post-stop wire failures, unknowns, route/interface
+    changes, and resets propagate as failure, never discarded.
+    """
+    wire_hook = hooks.get("wire_facts")
+    res_hook = hooks.get("resource_facts")
+    db = hooks.get("db")
+    try:
+        wire = wire_hook(run=run) if wire_hook is not None \
+            else collect_wire_facts(
+                interfaces=run.get("archive_interfaces") or [],
+                route_host=run.get("archive_route_host"))
+        if wire.get("status") != "captured":
+            return {}, "transfer_unknown"
+        failures, unknown, wire_total = evaluate_wire(
+            run.get("wire_baseline") or {}, wire,
+            run.get("transfer_prior_bytes", TRANSFER_PRIOR_BYTES),
+            controls["transfer_cap_bytes"])
+        if failures:
+            return {}, failures[0]
+        if unknown:
+            return {}, unknown[0]
+        if type(wire_total) is not int or wire_total < 0:
+            return {}, "transfer_unknown"
+        resources = res_hook(run=run, db=db, metrics=None) \
+            if res_hook is not None else collect_resource_facts(
+                spool_path=run["spool_path"],
+                postgres_path=run["postgres_path"],
+                db=db, metrics=None)
+        archive = resources.get("archive") \
+            if isinstance(resources, dict) else None
+        retained = archive.get("logical_bytes") \
+            if isinstance(archive, dict) else None
+        if type(retained) is not int or retained < 0:
+            return {}, "transfer_unknown"
+    except Step9Error as error:
+        return {}, error.code
+    except Exception:  # noqa: BLE001 - blind post-stop is unknown
+        return {}, "transfer_unknown"
+    return {"wire_total": wire_total, "retained_bytes": retained}, None
+
+
+def _finalize_terminal_chain(samples: list[dict], run: dict,
+                             run_dir: Path, hooks: dict, controls: dict,
+                             cap_bytes: int, attempts_cap: int
+                             ) -> dict:
+    """Bind prior/core/drain/terminal stages into final sealed totals."""
+    hooks = hooks or {}
+    prior = _s3_prior(run)
+    last = samples[-1]
+    last_wire = (last.get("wire") or {}).get(
+        "conservative_host_wire_bytes")
+    last_cumulative = last.get("s3_attempts_cumulative")
+    last_retained = ((last.get("resources") or {}).get(
+        "archive_retained") or {}).get("current_bytes")
+    baseline = (run.get("resource_baseline") or {}).get("archive", {}) \
+        .get("logical_bytes")
+    if type(last_wire) is not int \
+            or type(last_cumulative) is not int \
+            or type(last_retained) is not int \
+            or type(baseline) is not int:
+        return {"failure": "transfer_unknown", "values": {}}
+    try:
+        drain = json.loads((run_dir / "drain-monitor.json").read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"failure": "drain_unobserved", "values": {}}
+    if not isinstance(drain, dict) or drain.get("outcome") != "drained":
+        return {"failure": "drain_incomplete", "values": {}}
+    observed = drain.get("observations") or {}
+    if not isinstance(observed, dict):
+        return {"failure": "transfer_unknown", "values": {}}
+    drain_wire = observed.get("wire_total")
+    drain_s3 = observed.get("s3_total")
+    drain_retained = observed.get("retained_bytes")
+    # Every drain counter must be present, an integer, and nonnegative:
+    # missing, malformed, or negative retained/S3/wire facts are unknown
+    # evidence, and the current drain facts below are quantitatively
+    # included in the sealed totals (never a high-water maximum).
+    if type(drain_wire) is not int or drain_wire < 0 \
+            or type(drain_s3) is not int or drain_s3 < 0 \
+            or type(drain_retained) is not int or drain_retained < 0:
+        return {"failure": "transfer_unknown", "values": {}}
+    # Drain stages continue the core run subtotal (prior added exactly
+    # once upstream): a reset at drain fails even if terminal totals
+    # later rise again.
+    if drain_s3 < last_cumulative - prior["attempts"]:
+        return {"failure": "s3_counter_reset", "values": {}}
+    if drain_retained < last_retained:
+        return {"failure": "archive_retained_reset", "values": {}}
+    if drain_wire < last_wire:
+        return {"failure": "wire_counter_reset", "values": {}}
+    if drain_wire > cap_bytes:
+        return {"failure": "transfer_breach", "values": {}}
+    post, error = _post_stop_host_facts(run, hooks, controls)
+    if error is not None:
+        return {"failure": error, "values": {}}
+    if post["wire_total"] < drain_wire:
+        return {"failure": "wire_counter_reset", "values": {}}
+    if post["wire_total"] > cap_bytes:
+        return {"failure": "transfer_breach", "values": {}}
+    if post["retained_bytes"] < baseline:
+        return {"failure": "archive_retained_reset", "values": {}}
+    if post["retained_bytes"] - baseline > \
+            controls["archive_retained_cap_bytes"]:
+        return {"failure": "archive_retained_breach", "values": {}}
+    if post["retained_bytes"] < drain_retained:
+        return {"failure": "archive_retained_reset", "values": {}}
+    producers, error = _read_terminal_producers(run)
+    if error is not None:
+        return {"failure": error, "values": {}}
+    expected = (last.get("s3") or {}).get("producers") \
+        if isinstance(last.get("s3"), dict) else None
+    identity_error = _check_terminal_identities(
+        expected, producers, last.get("captured_utc"),
+        strict_identities=True)
+    if identity_error is not None:
+        return {"failure": identity_error, "values": {}}
+    terminal_total = sum(entry["total"] for entry in producers)
+    if terminal_total < last_cumulative - prior["attempts"]:
+        return {"failure": "terminal_s3_reset", "values": {}}
+    if terminal_total < drain_s3:
+        return {"failure": "terminal_s3_reset", "values": {}}
+    s3_attempts = prior["attempts"] + terminal_total
+    if s3_attempts > attempts_cap:
+        return {"failure": "s3_attempts_breach", "values": {}}
+    return {"failure": None, "values": {
+        "wire_bytes": post["wire_total"],
+        "drain_wire_bytes": drain_wire,
+        "s3_attempts": s3_attempts,
+        "terminal_s3_total": terminal_total,
+        "terminal_producers": producers,
+        "retained_post_stop": {
+            "current_bytes": post["retained_bytes"],
+            "newly_retained_bytes": post["retained_bytes"] - baseline,
+            "baseline_bytes": baseline,
+            "cap_bytes": controls["archive_retained_cap_bytes"],
+        },
+    }}
 
 
 def _finalize_admission(run: dict, db: object | None) -> dict:
@@ -1960,14 +2585,16 @@ def _finalize_admission(run: dict, db: object | None) -> dict:
 
 
 def _finalize_budget(run: dict, db: object, endpoints: dict) -> dict:
-    """Provisional 0023 durable-budget cross-check; unknown until merged."""
+    """Durable-budget cross-check reusing the start-time comparisons."""
     bootstrap_id = run.get("bootstrap_run_id")
-    if not bootstrap_id:
+    budget_id = run.get("budget_run_id")
+    if not bootstrap_id or not budget_id:
         return {"status": "unknown_pending_0023", "failure": None}
     try:
         if not db.budgets_present():
             return {"status": "unknown_pending_0023", "failure": None}
-        data = db.bootstrap_budgets(bootstrap_id)
+        boot_data = db.bootstrap_budgets(bootstrap_id)
+        budget_data = db.bootstrap_budgets(budget_id)
     except Step9Error as error:
         return {"status": "unknown", "failure": None,
                 "failure_code": error.code}
@@ -1976,7 +2603,7 @@ def _finalize_budget(run: dict, db: object, endpoints: dict) -> dict:
             return {"status": "unknown_pending_grant", "failure": None}
         return {"status": "unknown", "failure": None,
                 "failure_code": f"database_unavailable: {error}"}
-    brow = data["run"]
+    brow = boot_data["run"]
     if brow is None:
         return {"status": "unknown", "failure": None,
                 "failure_code": "budget_run_missing"}
@@ -1985,37 +2612,27 @@ def _finalize_budget(run: dict, db: object, endpoints: dict) -> dict:
                      "bootstrap_status": brow["status"],
                      "budgets": {b["endpoint"]: {"cap": b["cap"],
                                                      "consumed": b["consumed"]}
-                                 for b in data["budgets"]}}
+                                 for b in budget_data["budgets"]}}
     pinned = run.get("budget_receipt") or {}
     if pinned:
         try:
-            receipt_deadline = _parse_utc(pinned["deadline_at"])
-        except Step9Error:
+            _compare_bootstrap_provenance(
+                selector=bootstrap_id, run_row=brow, cohort=cohort)
+            _compare_budget_binding(
+                selector=budget_id, receipt=pinned,
+                budgets=budget_data["budgets"])
+        except Step9Error as error:
             result["status"] = "failed"
-            result["failure"] = "budget_deadline_malformed"
+            result["failure"] = error.code
             return result
-        db_caps = {b["endpoint"]: b["cap"] for b in data["budgets"]}
-        db_deadlines = {str(b["deadline_at"]) for b in data["budgets"]}
-        envelope_map = {"profile": pinned["caps"].get(
-            "endpoint_budget_profile"),
-            "global_player_rankings": pinned["caps"].get(
-                "endpoint_budget_global_rankings"),
-            "battle_log": pinned["caps"].get("endpoint_budget_battle_log")}
-        if pinned.get("run_id") != brow.get("run_id") \
-                or db_caps != envelope_map \
-                or not db_deadlines \
-                or any(_parse_utc(str(d)) != receipt_deadline
-                       for d in db_deadlines):
-            result["status"] = "failed"
-            result["failure"] = "budget_binding_mismatch"
-            return result
-    if brow["manifest_sha256"] != cohort.get("raw_sha256") \
+    elif brow["manifest_sha256"] != cohort.get("raw_sha256") \
             or brow["manifest_count"] != cohort.get("input_count") \
             or brow["normalized_set_sha256"] != cohort.get("canonical_sha256"):
         result["status"] = "failed"
         result["failure"] = "budget_manifest_mismatch"
         return result
-    consumed = {b["endpoint"]: b["consumed"] for b in data["budgets"]}
+    consumed = {b["endpoint"]: b["consumed"]
+                for b in budget_data["budgets"]}
     if endpoints.get("profile", 0) > consumed.get("profile", -1):
         result["status"] = "failed"
         result["failure"] = "budget_evidence_mismatch"
@@ -2164,7 +2781,7 @@ def cmd_finalize(arguments: argparse.Namespace, hooks=None) -> int:
             "core_windows": len(windows),
             "non_on_time_slots": missing,
             "reset": resets,
-            "transfer": _finalize_transfer(samples, run),
+            "transfer": _finalize_transfer(samples, run, run_dir, hooks),
             "operating": _finalize_operating(run, db, run_dir),
             "reset_deep": (_finalize_reset_deep(run, db, reset_rows)
                             if db is not None and mode["admission"]
@@ -2312,6 +2929,77 @@ def _check_allocated_probe(probe: object, run: dict, slot: object) -> None:
         _fail("malformed")
 
 
+def cmd_seed_budget(arguments: argparse.Namespace, db: object | None) -> int:
+    """Seed exact durable endpoint-budget rows without any traffic.
+
+    Pre-admission mechanism: insert-once rows for one budget run, then
+    verify the stored cap/deadline per endpoint. Pre-existing rows are never
+    modified; any immutable-dimension conflict fails closed.
+    """
+    run_id = getattr(arguments, "budget_run_id", None)
+    if not isinstance(run_id, str) or not _BUDGET_RUN_ID.fullmatch(run_id):
+        raise Step9Error("budget_malformed",
+                         "seed budget run ID is invalid")
+    caps = {}
+    for endpoint, name in (("profile", "budget_cap_profile"),
+                           ("global_player_rankings",
+                            "budget_cap_global_rankings"),
+                           ("battle_log", "budget_cap_battle_log")):
+        value = getattr(arguments, name, None)
+        if isinstance(value, bool) or not isinstance(value, int) \
+                or value < 0:
+            raise Step9Error("budget_malformed",
+                             "seed budget caps must be nonnegative integers")
+        caps[endpoint] = value
+    deadline_raw = getattr(arguments, "budget_deadline_at", None)
+    try:
+        deadline = _parse_utc(str(deadline_raw))
+    except Step9Error as error:
+        raise Step9Error("budget_deadline_malformed",
+                         "seed budget deadline is invalid") from error
+    if db is None:
+        raise Step9Error("database_required",
+                         "seed-budget requires a database connection")
+    requested = [{"endpoint": endpoint, "cap": caps[endpoint],
+                  "deadline_at": deadline.isoformat()}
+                 for endpoint in _BUDGET_ENDPOINTS]
+    try:
+        seeded = db.seed_endpoint_budgets(run_id, requested)
+    except Step9Error:
+        raise
+    except Exception as error:
+        if Database._missing_table(error):
+            raise Step9Error("budget_store_missing",
+                             "durable budget tables are absent") from error
+        if getattr(error, "sqlstate", "") == "42501":
+            raise Step9Error("budget_grant_denied",
+                             "budget seeding is not granted") from error
+        raise Step9Error("database_unavailable",
+                         f"budget seeding failed: {error}") from error
+    stored = {row["endpoint"]: row for row in seeded.get("budgets") or []}
+    if set(stored) != set(_BUDGET_ENDPOINTS):
+        raise Step9Error("budget_binding_mismatch",
+                         "seeded budget endpoint set is incomplete",
+                         gate=True)
+    for endpoint in _BUDGET_ENDPOINTS:
+        row = stored[endpoint]
+        try:
+            stored_deadline = _parse_utc(str(row["deadline_at"]))
+        except (Step9Error, KeyError, TypeError, ValueError) as error:
+            raise Step9Error("budget_binding_mismatch",
+                             "seeded budget deadline is invalid",
+                             gate=True) from error
+        if row.get("cap") != caps[endpoint] or stored_deadline != deadline:
+            raise Step9Error("budget_binding_mismatch",
+                             "seed conflicts with durable budget state",
+                             gate=True)
+    print(json.dumps({"run_id": run_id,
+                      "inserted": seeded.get("inserted", []),
+                      "budgets": seeded.get("budgets", []),
+                      "verdict": "seeded"}, indent=1, default=str))
+    return 0
+
+
 def cmd_validate(arguments: argparse.Namespace) -> int:
     run_dir = _resolve_run_dir(arguments.run_dir)
     try:
@@ -2343,6 +3031,9 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
             raise Step9Error("digest_mismatch", "manifest digest mismatch")
         samples = _read_samples(run_dir)
         mode = MODES.get(run.get("mode", "live-day"), MODES["live-day"])
+        # Pinned live-day v2 caps, once: corrupt pins fail closed here
+        # before any per-sample check, and every check below reuses them.
+        live_controls = _live_day_controls(run)
         windows = [s for s in samples if "window" in s]
         if len(windows) != mode["windows"]:
             raise Step9Error("window_count",
@@ -2404,11 +3095,41 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
                 probe_v2 = (resources or {}).get("allocated_probe") \
                     if isinstance(resources, dict) else None
                 _check_allocated_probe(probe_v2, run, sample.get("slot"))
+                if live_controls is not None:
+                    assert isinstance(probe_v2, dict)
+                    if probe_v2["allocated_bytes"] > \
+                            live_controls["spool_allocated_cap_bytes"]:
+                        raise Step9Error(
+                            "resource_evidence_failed",
+                            f"slot {sample.get('slot')} spool bytes exceed "
+                            "pinned cap", gate=True)
             operating = sample.get("operating")
             if operating is not None and operating.get("status") != "complete":
                 raise Step9Error("operating_failed",
                                  f"slot {sample.get('slot')} operating "
                                  "capture incomplete", gate=True)
+        if live_controls is not None:
+            # Strict recompute: wire totals and retained deltas are verified
+            # numerically against the run pins, never trusted from the
+            # sample failure strings or final cap labels.
+            wire_failure = _verify_wire_chain(
+                samples, live_controls["transfer_cap_bytes"])
+            if wire_failure is not None:
+                raise Step9Error("sample_evidence_failed",
+                                 "sample wire chain does not recompute",
+                                 gate=True)
+            retained_failure = _verify_retained_chain(
+                samples, live_controls["archive_retained_cap_bytes"],
+                (run.get("resource_baseline") or {}).get(
+                    "archive", {}).get("logical_bytes"))
+            if retained_failure == "transfer_unknown":
+                raise Step9Error("resource_evidence_failed",
+                                 "sample retained facts are missing",
+                                 gate=True)
+            if retained_failure is not None:
+                raise Step9Error("resource_evidence_failed",
+                                 "sample retained chain does not recompute",
+                                 gate=True)
         admission = run.get("admission", {})
         if mode["admission"] and admission.get("status") != "integrated":
             raise Step9Error("admission_unproven",
@@ -2450,6 +3171,205 @@ def cmd_validate(arguments: argparse.Namespace) -> int:
                              "final.json lacks complete transfer accounting",
                              gate=transfer.get("failure") not in (
                                  "transfer_unknown", None))
+        if run.get("mode") == "live-day" \
+                and run.get("schema") == SCHEMA_LIVE:
+            controls = _live_day_controls(run)
+            assert controls is not None
+            if transfer.get("cap_bytes") != controls["transfer_cap_bytes"] \
+                    or transfer.get("attempts_cap") != controls["s3_cap_attempts"]:
+                raise Step9Error("transfer_unproven",
+                                 "final transfer caps differ from run pins",
+                                 gate=True)
+            # Terminal chain agreement: sealed final totals must equal the
+            # recomputed prior -> core samples -> drain observations ->
+            # post-stop terminal capture chain under identical pins. Final
+            # totals bind the post-stop capture, never the last core sample
+            # alone; high-water maxima, missing stages, decreases, and
+            # cap+1 tampering all fail here.
+            try:
+                drain = json.loads((run_dir / "drain-monitor.json")
+                                   .read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                raise Step9Error("transfer_unproven",
+                                 "sealed drain record is missing",
+                                 gate=True)
+            if not isinstance(drain, dict) \
+                    or drain.get("outcome") != "drained":
+                raise Step9Error("transfer_unproven",
+                                 "sealed drain did not complete", gate=True)
+            observed = drain.get("observations") or {}
+            if not isinstance(observed, dict):
+                raise Step9Error("transfer_unproven",
+                                 "sealed drain observations missing",
+                                 gate=True)
+            last_wire = samples[-1]["wire"][
+                "conservative_host_wire_bytes"]
+            last_cumulative = samples[-1].get("s3_attempts_cumulative")
+            retained_facts = (samples[-1].get("resources") or {}).get(
+                "archive_retained")
+            last_retained = retained_facts.get("current_bytes") \
+                if isinstance(retained_facts, dict) else None
+            prior = _s3_prior(run)
+            drain_wire = observed.get("wire_total")
+            drain_s3_obs = observed.get("s3_total")
+            drain_retained_obs = observed.get("retained_bytes")
+            if transfer.get("drain_wire_bytes") != drain_wire \
+                    or type(drain_wire) is not int or drain_wire < 0 \
+                    or type(drain_s3_obs) is not int or drain_s3_obs < 0 \
+                    or type(drain_retained_obs) is not int \
+                    or drain_retained_obs < 0:
+                raise Step9Error("transfer_unproven",
+                                 "final drain counters differ from sealed "
+                                 "drain record or are invalid", gate=True)
+            # Reset at drain fails even if terminal totals later rise:
+            # drain stages continue the core run subtotal (prior once).
+            if type(last_cumulative) is int \
+                    and drain_s3_obs < last_cumulative - prior["attempts"]:
+                raise Step9Error("transfer_unproven",
+                                 "sealed drain S3 reset below the core "
+                                 "chain", gate=True)
+            if type(last_retained) is int \
+                    and drain_retained_obs < last_retained:
+                raise Step9Error("transfer_unproven",
+                                 "sealed drain retained reset below the "
+                                 "core chain", gate=True)
+            terminal_total = transfer.get("terminal_s3_total")
+            retained_post = transfer.get("retained_post_stop")
+            post_current = retained_post.get("current_bytes") \
+                if isinstance(retained_post, dict) else None
+            if type(terminal_total) is not int \
+                    or type(post_current) is not int \
+                    or terminal_total < drain_s3_obs \
+                    or post_current < drain_retained_obs:
+                raise Step9Error("transfer_unproven",
+                                 "final totals omit sealed drain facts",
+                                 gate=True)
+            sealed_wire = transfer.get("wire_bytes")
+            if type(sealed_wire) is not int \
+                    or sealed_wire < drain_wire \
+                    or sealed_wire > controls["transfer_cap_bytes"]:
+                raise Step9Error("transfer_unproven",
+                                 "final wire breaks the sealed monotonic "
+                                 "chain or exceeds the pinned cap",
+                                 gate=True)
+            if drain_wire < last_wire:
+                raise Step9Error("transfer_unproven",
+                                 "sealed drain wire decreased below the "
+                                 "core chain", gate=True)
+            terminal_total = transfer.get("terminal_s3_total")
+            sealed_attempts = transfer.get("s3_attempts")
+            if type(terminal_total) is not int \
+                    or type(sealed_attempts) is not int \
+                    or sealed_attempts != \
+                    prior["attempts"] + terminal_total:
+                raise Step9Error("transfer_unproven",
+                                 "final S3 total disagrees with sealed "
+                                 "terminal attribution", gate=True)
+            if type(last_cumulative) is not int \
+                    or terminal_total < last_cumulative - prior["attempts"]:
+                raise Step9Error("transfer_unproven",
+                                 "final S3 decreased below the sealed "
+                                 "core chain", gate=True)
+            if sealed_attempts > controls["s3_cap_attempts"]:
+                raise Step9Error("transfer_unproven",
+                                 "final S3 exceeds the pinned cap",
+                                 gate=True)
+            producers = transfer.get("terminal_producers")
+            try:
+                replicas = int((run.get("containers", {}) or {}).get(
+                    "worker_replicas", 0) or 0)
+            except (TypeError, ValueError):
+                replicas = -1
+            if not isinstance(producers, list) \
+                    or len(producers) != replicas + 1 or replicas < 1:
+                raise Step9Error("transfer_unproven",
+                                 "final terminal producers are incomplete",
+                                 gate=True)
+            seen_keys: set[str] = set()
+            producer_sum = 0
+            for entry in producers:
+                if not isinstance(entry, dict) \
+                        or entry.get("terminal") is not True \
+                        or not isinstance(entry.get("producer"), str) \
+                        or not isinstance(entry.get("process_id"), str) \
+                        or not entry["process_id"] \
+                        or not isinstance(
+                            entry.get("process_started_at"), str) \
+                        or not entry["process_started_at"] \
+                        or not isinstance(entry.get("captured_at"), str) \
+                        or not entry["captured_at"] \
+                        or type(entry.get("total")) is not int \
+                        or entry["total"] < 0:
+                    raise Step9Error("transfer_unproven",
+                                     "final terminal producer malformed",
+                                     gate=True)
+                key = (entry["producer"], entry.get("replica"))
+                if key in seen_keys:
+                    raise Step9Error("transfer_unproven",
+                                     "final terminal producer duplicated",
+                                     gate=True)
+                seen_keys.add(key)
+                producer_sum += entry["total"]
+            if producer_sum != terminal_total:
+                raise Step9Error("transfer_unproven",
+                                 "final terminal total double-counts or "
+                                 "omits producers", gate=True)
+            if {key[0] for key in seen_keys} != {"collector", "worker"}:
+                raise Step9Error("transfer_unproven",
+                                 "final terminal producers misattributed",
+                                 gate=True)
+            worker_ids = sorted(
+                key[1] for key in seen_keys if key[0] == "worker")
+            collector_ids = [key[1] for key in seen_keys
+                             if key[0] == "collector"]
+            if collector_ids != [None] \
+                    or worker_ids != list(range(1, replicas + 1)):
+                raise Step9Error("transfer_unproven",
+                                 "final terminal replica set is not "
+                                 "exactly collector plus workers 1..N",
+                                 gate=True)
+            # Sealed exact identity agreement with the core chain, reusing
+            # the single helper: collector replica None, workers 1..N,
+            # exact process/incarnation match, parsed UTC captures with
+            # terminal capture ordered at or after the core chain. No
+            # unobserved-producer bypass exists for live-day v2.
+            core_s3 = samples[-1].get("s3")
+            expected_producers = core_s3.get("producers") \
+                if isinstance(core_s3, dict) else None
+            identity_error = _check_terminal_identities(
+                expected_producers, producers,
+                samples[-1].get("captured_utc"), strict_identities=True)
+            if identity_error is not None:
+                raise Step9Error(
+                    "transfer_unproven",
+                    "sealed terminal identities disagree with the core "
+                    f"chain: {identity_error}", gate=True)
+            retained_post = transfer.get("retained_post_stop")
+            baseline_bytes = (run.get("resource_baseline") or {}).get(
+                "archive", {}).get("logical_bytes")
+            if not isinstance(retained_post, dict) \
+                    or retained_post.get("baseline_bytes") \
+                    != baseline_bytes \
+                    or retained_post.get("cap_bytes") != \
+                    controls["archive_retained_cap_bytes"]:
+                raise Step9Error("transfer_unproven",
+                                 "final retained pins disagree with the "
+                                 "run", gate=True)
+            post_current = retained_post.get("current_bytes")
+            if type(post_current) is not int \
+                    or type(baseline_bytes) is not int \
+                    or type(last_retained) is not int \
+                    or post_current < last_retained:
+                raise Step9Error("transfer_unproven",
+                                 "final retained decreased below the "
+                                 "sealed chain", gate=True)
+            if retained_post.get("newly_retained_bytes") != \
+                    post_current - baseline_bytes \
+                    or retained_post["newly_retained_bytes"] > \
+                    controls["archive_retained_cap_bytes"]:
+                raise Step9Error("transfer_unproven",
+                                 "final retained miscomputes or exceeds "
+                                 "the pin", gate=True)
         operating = final.get("operating", {})
         if operating.get("status") != "complete":
             raise Step9Error("operating_unproven",
@@ -2546,9 +3466,10 @@ class Podman:
             return f"restart_disable_failed: {error}"
         return None
 
-    def stop(self, container: str) -> str | None:
+    def stop(self, container: str, grace_seconds: int = 30) -> str | None:
         try:
-            self._run([self._bin, "stop", "--ignore", "--time", "30", container])
+            self._run([self._bin, "stop", "--ignore", "--time",
+                       str(grace_seconds), container])
         except Exception as error:  # noqa: BLE001 - stop adapter reports only
             return f"stop_failed: {error}"
         running, _ = self.inspect_running(container)
@@ -2587,6 +3508,16 @@ def cmd_watchdog(arguments: argparse.Namespace, hooks=None) -> int:
         _record_failure(run_dir, "container_image_changed",
                         "collector image differs from start pin")
         return 1
+    poll_seconds = getattr(arguments, "poll_seconds", 30)
+    if isinstance(poll_seconds, bool) or not isinstance(poll_seconds, int) \
+            or poll_seconds <= 0:
+        raise Step9Error("bad_poll_seconds",
+                         "watchdog poll seconds must be a positive integer")
+    stop_grace = getattr(arguments, "stop_grace_seconds", 30)
+    if isinstance(stop_grace, bool) or not isinstance(stop_grace, int) \
+            or stop_grace < 0:
+        raise Step9Error("bad_stop_grace",
+                         "watchdog stop grace must be a nonnegative integer")
     verified, prior = _verified_restart_disabled(
         podman, collector,
         tries=1 if hooks.get("no_sleep") else 6)
@@ -2602,6 +3533,8 @@ def cmd_watchdog(arguments: argparse.Namespace, hooks=None) -> int:
         "deadline": deadline.isoformat(),
         "max_sample_age_seconds": arguments.max_sample_age_seconds,
         "systemd_unit": arguments.systemd_unit,
+        "poll_seconds": poll_seconds,
+        "stop_grace_seconds": stop_grace,
     })
     now_utc = hooks.get("now_utc", _utc_now)
     max_iterations = hooks.get("max_iterations", 2**31)
@@ -2613,20 +3546,41 @@ def cmd_watchdog(arguments: argparse.Namespace, hooks=None) -> int:
                                  arguments.max_sample_age_seconds, now_utc,
                                  sampler_check)
         if outcome is not None:
+            # Planned core-end stop is success: the driver proceeds to the
+            # bounded downstream drain. Any safety trigger returns at once
+            # without a collector-only stop grace or inspect round trip;
+            # the parent group-stop hook owns the immediate whole-group
+            # TERM and the durable failure record below is the evidence.
+            if outcome == "deadline_reached":
+                stop_error = podman.stop(collector, stop_grace)
+                result = {"schema": run.get("schema", SCHEMA),
+                          "run_id": run["run_id"],
+                          "stopped_at": now_utc().isoformat(),
+                          "trigger": outcome,
+                          "poll_seconds": poll_seconds,
+                          "stop_grace_seconds": stop_grace,
+                          "stop_error": stop_error}
+                try:
+                    _exclusive_json(run_dir / "watchdog-outcome.json",
+                                    result)
+                except Step9Error:
+                    pass
+                return 0 if stop_error is None else 2
             _record_failure(run_dir, outcome, f"watchdog stop: {outcome}")
-            stop_error = podman.stop(collector)
             result = {"schema": run.get("schema", SCHEMA),
                       "run_id": run["run_id"],
-                      "stopped_at": now_utc().isoformat(), "trigger": outcome,
-                      "stop_error": stop_error}
+                      "detected_at": now_utc().isoformat(),
+                      "trigger": outcome,
+                      "poll_seconds": poll_seconds,
+                      "stop": "delegated_to_group_stop"}
             try:
                 _exclusive_json(run_dir / "watchdog-outcome.json", result)
             except Step9Error:
                 pass
-            return 1 if stop_error is None else 2
+            return 1
         if hooks.get("single_pass"):
             return 0
-        time.sleep(WATCHDOG_POLL_SECONDS)
+        time.sleep(poll_seconds)
     return 0
 
 
@@ -2678,6 +3632,402 @@ def _watchdog_once(run_dir: Path, run: dict, podman: Podman, collector: str,
     return None
 
 
+def _drain_child_gone(pid: int) -> bool:
+    """True once the drain child has exited, zombies included.
+
+    The driver reaps the drain child only after the monitor returns, so
+    an unreaped zombie must read as done: otherwise every fast drain
+    would look like a stall until the observation budget expires.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            state = handle.read().rsplit(b")", 1)[-1].split()
+    except OSError:
+        return False
+    return bool(state) and state[0:1] == [b"Z"]
+
+
+def _read_last_sample(run_dir: Path) -> dict | None:
+    """Latest sealed sample facts for drain-chain seeding; None if absent.
+
+    Only the fields the drain chain continues are kept: wire total, S3
+    cumulative, retained current, producer identities, capture time.
+    """
+    samples_dir = run_dir / "samples"
+    try:
+        samples = sorted(samples_dir.glob("minute-*.json")) \
+            if samples_dir.is_dir() else []
+        if not samples:
+            return None
+        sample = json.loads(samples[-1].read_bytes().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(sample, dict):
+        return None
+    wire = sample.get("wire")
+    resources = sample.get("resources")
+    s3 = sample.get("s3")
+    seed = {
+        "wire_total": wire.get("conservative_host_wire_bytes")
+        if isinstance(wire, dict) else None,
+        "s3_cumulative": sample.get("s3_attempts_cumulative"),
+        "retained_bytes": (resources or {}).get("archive_retained", {})
+        .get("current_bytes")
+        if isinstance(resources, dict) else None,
+        "producers": s3.get("producers")
+        if isinstance(s3, dict) else None,
+        "captured_utc": sample.get("captured_utc"),
+    }
+    if type(seed["wire_total"]) is not int \
+            or type(seed["s3_cumulative"]) is not int \
+            or type(seed["retained_bytes"]) is not int \
+            or not isinstance(seed["producers"], list) \
+            or not isinstance(seed["captured_utc"], str):
+        return None
+    return seed
+
+
+def _live_worker_totals(live_files) -> tuple[dict | None, str | None]:
+    """Validated live per-operation totals; (None, code) when unusable."""
+    if not isinstance(live_files, list):
+        return None, "s3_worker_unavailable"
+    totals: dict[str, int] = {}
+    for payload in live_files:
+        try:
+            attempts = payload["archive"]["remote_attempts"]
+            if not isinstance(attempts, dict) or not attempts:
+                raise ValueError("remote attempts unusable")
+            for operation, count in attempts.items():
+                if not isinstance(operation, str) or not operation \
+                        or type(count) is not int or count < 0:
+                    raise ValueError("remote attempt unusable")
+                totals[operation] = totals.get(operation, 0) + count
+        except (KeyError, TypeError, ValueError):
+            return None, "s3_worker_malformed"
+    return totals, None
+
+
+def _monitor_producer_totals(run: dict, controls, live_files, seed,
+                             prior_attempts: int, s3_cap: int
+                             ) -> tuple[list | None, int | None, str | None]:
+    """Drain S3 aggregation: (producers, total, wait-or-failure).
+
+    Live-day v2 binds every expected producer every poll: the stopped
+    collector counts exactly via its terminal snapshot (identity-bound to
+    the core chain), each worker counts live-first with terminal fallback
+    (identity-bound the same way), and the prior is added exactly once by
+    the caller. A missing producer is incomplete at once; totals never
+    default to zero. Legacy modes keep best-effort live totals.
+    """
+    if controls is None:
+        totals, error = _worker_snapshots(
+            run, None, files=live_files,
+            probe_error=None if isinstance(live_files, list)
+            else "s3_worker_unavailable:monitor")
+        if error is not None:
+            return None, None, "wait"
+        total = _s3_snapshot(None, totals)["total"]
+        return [], total, None
+    try:
+        replicas = int((run.get("containers", {}) or {}).get(
+            "worker_replicas", 0) or 0)
+    except (TypeError, ValueError):
+        return None, None, "terminal_capture_malformed"
+    if replicas < 1:
+        return None, None, "terminal_capture_missing"
+    spool = run.get("spool_path")
+    if not isinstance(spool, str) or not spool:
+        return None, None, "terminal_capture_missing"
+    terminal_dir = Path(spool) / ".control" / "terminal"
+    seed_producers = (seed or {}).get("producers")
+    seed_captured = (seed or {}).get("captured_utc")
+    if not isinstance(seed_producers, list) \
+            or len(seed_producers) != replicas + 1:
+        return None, None, "terminal_identity_mismatch"
+    go_payload, error = _read_terminal_file(
+        terminal_dir / "collector.json")
+    if error is not None:
+        return None, None, error
+    if go_payload.get("schema") != TERMINAL_GO_SCHEMA \
+            or go_payload.get("producer") != "collector":
+        return None, None, "terminal_capture_malformed"
+    go_total, error = _terminal_operation_total(go_payload, "collector")
+    if error is not None:
+        return None, None, error
+    go_entry = {
+        "producer": "collector", "replica": None,
+        "process_id": go_payload.get("process_id"),
+        "process_started_at": go_payload.get("process_started_at"),
+        "captured_at": go_payload.get("captured_at"),
+        "terminal": True, "total": go_total,
+    }
+    identity_error = _check_terminal_identities(
+        [seed_producers[0]], [go_entry], seed_captured)
+    if identity_error is not None:
+        return None, None, identity_error
+    live_by_index = {}
+    if isinstance(live_files, list):
+        for position, payload in enumerate(live_files):
+            live_by_index[position + 1] = payload
+    def _identity_matches(seed_entry, process_id, started_at) -> bool:
+        """Live incarnation equals the core-observed one (or unobserved)."""
+        if seed_entry is None:
+            return True
+        if not isinstance(seed_entry, dict):
+            return False
+        if process_id != seed_entry.get("process_id"):
+            return False
+        want = _normalize_instant(seed_entry.get("process_started_at"))
+        got = _normalize_instant(started_at)
+        return want is not None and got == want
+    producers = [go_entry]
+    py_total = 0
+    for replica in range(1, replicas + 1):
+        chosen = None
+        live = live_by_index.get(replica)
+        if isinstance(live, dict):
+            live_totals, live_error = _live_worker_totals([live])
+            live_identity = _worker_file_identities([live], 1)[0]
+            if live_error is None and _identity_matches(
+                    seed_producers[replica],
+                    (live_identity or {}).get("process_id"),
+                    (live_identity or {}).get("process_started_at")):
+                chosen = {
+                    "producer": "worker", "replica": replica,
+                    "process_id": (live_identity or {}).get("process_id"),
+                    "process_started_at": (live_identity or {}).get(
+                        "process_started_at"),
+                    "captured_at": seed_captured, "terminal": False,
+                    "total": sum(live_totals.values()),
+                }
+        if chosen is None:
+            payload, error = _read_terminal_file(
+                terminal_dir / f"worker-{replica}.json")
+            if error is not None:
+                return None, None, error
+            if payload.get("schema") != TERMINAL_WORKER_SCHEMA \
+                    or payload.get("producer") != "worker":
+                return None, None, "terminal_capture_malformed"
+            worker_total, error = _terminal_operation_total(
+                payload, "worker")
+            if error is not None:
+                return None, None, error
+            identity = payload.get("process") or {}
+            candidate = {
+                "producer": "worker", "replica": replica,
+                "process_id": identity.get("id"),
+                "process_started_at": identity.get("started_at"),
+                "captured_at": payload.get("captured_at"),
+                "terminal": True, "total": worker_total,
+            }
+            identity_error = _check_terminal_identities(
+                [seed_producers[replica]], [candidate], seed_captured)
+            if identity_error is not None:
+                return None, None, identity_error
+            chosen = candidate
+        producers.append(chosen)
+        py_total += chosen["total"]
+    return producers, go_total + py_total, None
+
+
+def cmd_drain_monitor(arguments: argparse.Namespace, hooks=None) -> int:
+    """Bounded cap/stall watch over the downstream drain child.
+
+    Returns 0 once the drain child exits, 1 on any cap breach, stall
+    (timeout), or unobservable required envelope. No evidence slots are
+    written; one bounded drain-monitor.json record keeps timestamps. The
+    same pinned cost/resource caps as the sample loop bind every poll
+    (wire totals, retained catalogue bytes, allocated spool bytes, S3
+    attempts), so archive activity stays observed until the Python
+    producer stops; fleet-health thresholds (disk free, memory, btrfs)
+    stay per-sample concerns and are not re-gated here. A missing worker
+    snapshot only waits: exiting workers have nothing left to count, and
+    the bounded timeout backstops the wait.
+    """
+    hooks = hooks or {}
+    run_dir = _resolve_run_dir(arguments.run_dir)
+    run = _load_run(run_dir)
+    poll = arguments.poll_seconds
+    budget = arguments.timeout_seconds
+    for name, value in (("poll_seconds", poll),
+                        ("timeout_seconds", budget)):
+        if isinstance(value, bool) or not isinstance(value, int) \
+                or value <= 0:
+            raise Step9Error("bad_monitor_bound",
+                             f"drain monitor {name} must be positive")
+    pid = arguments.drain_pid
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        raise Step9Error("bad_drain_pid",
+                         "drain monitor needs the drain child PID")
+    controls = _live_day_controls(run)
+    wire_cap = controls["transfer_cap_bytes"] \
+        if controls is not None else TRANSFER_CUMULATIVE_MAX
+    s3_cap = controls["s3_cap_attempts"] \
+        if controls is not None else S3_ATTEMPTS_MAX
+    baseline = run.get("wire_baseline") or {}
+    resource_baseline = run.get("resource_baseline") or {}
+    prior_attempts = _s3_prior(run).get("attempts",
+                                        TRANSFER_PRIOR_ATTEMPTS)
+    clock = hooks.get("monotonic", time.monotonic)
+    sleep = hooks.get("sleep", time.sleep)
+    started = clock()
+    record = {"schema": run.get("schema", SCHEMA),
+              "run_id": run["run_id"], "drain_pid": pid,
+              "started_at": _utc_now().isoformat(),
+              "poll_seconds": poll, "timeout_seconds": budget,
+              "polls": 0, "outcome": None, "detail": None,
+              # Last observed cumulative totals feeding the finalize
+              # chain: prior -> core samples -> drain observations ->
+              # post-stop terminal capture. Totals only ever advance;
+              # finalize re-verifies monotonicity and pins from this
+              # sealed record, never from drumbeat maxima.
+              "observations": {
+                  "wire_total": None,
+                  "s3_total": None,
+                  "s3_prior_attempts": prior_attempts,
+                  "retained_bytes": None,
+                  "spool_allocated_bytes": None,
+              }}
+
+    def finish(code: int, outcome: str, detail: str | None = None) -> int:
+        record["outcome"] = outcome
+        record["detail"] = detail
+        record["finished_at"] = _utc_now().isoformat()
+        try:
+            _exclusive_json(run_dir / "drain-monitor.json", record)
+        except Step9Error:
+            pass
+        return code
+    # The drain chain initializes from the final core sample; every poll
+    # carries previous values forward and the post-stop stage continues
+    # them. Live-day v2 refuses an unseeded chain outright.
+    seed = _read_last_sample(run_dir)
+    if seed is None and controls is not None:
+        return finish(1, "transfer_unknown",
+                       "drain chain has no core sample seed")
+    prev_wire = (seed or {}).get("wire_total")
+    if type(prev_wire) is not int:
+        prev_wire = None
+    prev_s3 = None
+    seed_cumulative = (seed or {}).get("s3_cumulative")
+    if type(seed_cumulative) is int:
+        prev_s3 = seed_cumulative - prior_attempts
+    prev_retained = (seed or {}).get("retained_bytes")
+    if type(prev_retained) is not int:
+        prev_retained = None
+    db = hooks.get("db")
+    mem_over = 0
+    while True:
+        try:
+            wire_hook = hooks.get("wire_facts")
+            wire = wire_hook(run=run) if wire_hook is not None \
+                else collect_wire_facts(
+                    interfaces=run.get("archive_interfaces") or [],
+                    route_host=run.get("archive_route_host"))
+            failures, unknown, total = evaluate_wire(
+                baseline, wire,
+                run.get("transfer_prior_bytes", TRANSFER_PRIOR_BYTES),
+                wire_cap)
+        except Exception as error:  # noqa: BLE001 - blind drain is failure
+            return finish(1, "wire_observe_failed", type(error).__name__)
+        if failures:
+            return finish(1, failures[0])
+        if controls is not None and unknown:
+            return finish(1, "wire_unknown")
+        if type(total) is int and type(prev_wire) is int \
+                and total < prev_wire:
+            return finish(1, "wire_counter_reset")
+        if type(total) is int:
+            prev_wire = total
+            record["observations"]["wire_total"] = total
+        # Producer completeness is verified on every poll before resource
+        # caps, even when the drain child already exited: a missing
+        # producer is incomplete at once, never an omission slot or a zero.
+        worker_probe = hooks.get("worker_probe")
+        try:
+            live_files = (worker_probe or _podman_worker_files)(run)
+        except Exception:  # noqa: BLE001 - liveness is per-replica below
+            live_files = None
+        _producers, poll_total, producer_status = _monitor_producer_totals(
+            run, controls, live_files, seed, prior_attempts, s3_cap)
+        if producer_status == "wait":
+            pass
+        elif producer_status is not None:
+            return finish(1, producer_status)
+        else:
+            if type(prev_s3) is int and poll_total < prev_s3:
+                return finish(1, "s3_counter_reset")
+            prev_s3 = poll_total
+            record["observations"]["s3_total"] = poll_total
+            if prior_attempts + poll_total > s3_cap:
+                return finish(1, "s3_attempts_breach")
+        try:
+            res_hook = hooks.get("resource_facts")
+            resources = res_hook(run=run, db=db, metrics=None) \
+                if res_hook is not None else collect_resource_facts(
+                    spool_path=run["spool_path"],
+                    postgres_path=run["postgres_path"],
+                    db=db, metrics=None)
+            res_failures, res_unknown, mem_over = evaluate_resource_gates(
+                resource_baseline, resources, mem_over,
+                retained_cap=controls["archive_retained_cap_bytes"]
+                if controls is not None else None,
+                prev_retained=_NO_PREVIOUS_RETAINED,
+                spool_cap=controls["spool_allocated_cap_bytes"]
+                if controls is not None else None)
+        except Exception as error:  # noqa: BLE001 - blind drain is failure
+            return finish(1, "resource_observe_failed",
+                           type(error).__name__)
+        # Cost/resource caps only: fleet-health thresholds stay with the
+        # per-minute samples; the drain watch stops runaway archive
+        # activity (retained reset/breach, spool over cap) and unknown
+        # required cost facts on live-day v2.
+        cap_failures = [code for code in res_failures if code in (
+            "archive_retained_reset", "archive_retained_breach",
+            "archive_physical_breach")]
+        if cap_failures:
+            return finish(1, cap_failures[0])
+        if controls is not None and any(
+                code in ("archive_unknown", "archive_retained_unknown",
+                         "archive_physical_unknown")
+                for code in res_unknown):
+            return finish(1, next(
+                code for code in res_unknown if code in (
+                    "archive_unknown", "archive_retained_unknown",
+                    "archive_physical_unknown")))
+        observed_archive = resources.get("archive") \
+            if isinstance(resources, dict) else None
+        if isinstance(observed_archive, dict):
+            current = observed_archive.get("logical_bytes")
+            if type(current) is int and current >= 0:
+                if type(prev_retained) is int \
+                        and current < prev_retained:
+                    return finish(1, "archive_retained_reset")
+                prev_retained = current
+                record["observations"]["retained_bytes"] = current
+            probe = observed_archive.get("allocated_probe")
+            allocated = probe.get("allocated_bytes") \
+                if isinstance(probe, dict) else None
+            if type(allocated) is int and allocated >= 0:
+                record["observations"]["spool_allocated_bytes"] = allocated
+        if _drain_child_gone(pid):
+            return finish(0, "drained")
+        if clock() - started > budget:
+            return finish(1, "drain_timeout",
+                           f"drain child {pid} outlived {budget}s")
+        record["polls"] += 1
+        # Wake at the budget edge even when the poll interval overshoots
+        # it, so the timeout record is always written before any outer
+        # hook timeout can SIGKILL an overdue monitor.
+        sleep(min(poll, max(budget - (clock() - started), 0)))
+
+
 # --- CLI -----------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2715,6 +4065,11 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--prior-transfer-bytes", type=int, default=None)
     start.add_argument("--prior-transfer-provenance", default=None)
     start.add_argument("--bootstrap-run-id", default=None)
+    start.add_argument("--budget-run-id", default=None)
+    start.add_argument("--archive-retained-cap-bytes", type=int, default=None)
+    start.add_argument("--transfer-cap-bytes", type=int, default=None)
+    start.add_argument("--s3-cap-attempts", type=int, default=None)
+    start.add_argument("--spool-allocated-cap-bytes", type=int, default=None)
     start.add_argument("--mode", choices=sorted(MODES), default="live-day")
     start.add_argument("--max-invocation-gap-seconds", type=int, default=None,
                        help="required: scheduler invocation cadence evidence bound")
@@ -2729,6 +4084,17 @@ def build_parser() -> argparse.ArgumentParser:
     finalize.add_argument("--database-url", default=None)
     finalize.add_argument("--database-url-file", default=None)
 
+    seed = sub.add_parser("seed-budget",
+                          help="seed exact durable endpoint-budget rows"
+                               " without traffic")
+    seed.add_argument("--budget-run-id", required=True)
+    seed.add_argument("--budget-cap-profile", type=int, required=True)
+    seed.add_argument("--budget-cap-global-rankings", type=int, required=True)
+    seed.add_argument("--budget-cap-battle-log", type=int, required=True)
+    seed.add_argument("--budget-deadline-at", required=True)
+    seed.add_argument("--database-url", default=None)
+    seed.add_argument("--database-url-file", default=None)
+
     validate = sub.add_parser("validate",
                               help="validate a sealed run without traffic or DB")
     _add_common(validate)
@@ -2739,6 +4105,25 @@ def build_parser() -> argparse.ArgumentParser:
     watchdog.add_argument("--deadline", required=True)
     watchdog.add_argument("--max-sample-age-seconds", type=int, default=125)
     watchdog.add_argument("--systemd-unit", required=True)
+    watchdog.add_argument("--poll-seconds", type=int, default=30,
+                          help="expiry poll interval; production passes <=5 "
+                          "so detection through group TERM stays within "
+                          "the 5s contract")
+    watchdog.add_argument("--stop-grace-seconds", type=int, default=30,
+                          help="podman stop grace for the planned core-end "
+                          "stop only; safety triggers never wait for it")
+    monitor = sub.add_parser("drain-monitor",
+                             help="watch caps/stall during the bounded "
+                             "downstream drain; stop the group on breach")
+    _add_common(monitor)
+    monitor.add_argument("--drain-pid", type=int, required=True,
+                         help="PID of the running downstream-drain child")
+    monitor.add_argument("--poll-seconds", type=int, default=5)
+    monitor.add_argument("--timeout-seconds", type=int, default=300,
+                         help="whole drain observation budget; expiry "
+                         "stops the group")
+    monitor.add_argument("--database-url", default=None)
+    monitor.add_argument("--database-url-file", default=None)
     return parser
 
 
@@ -2790,7 +4175,8 @@ def _cli_hooks(arguments: argparse.Namespace) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
-    run_dir = _resolve_run_dir(arguments.run_dir) if arguments.run_dir else None
+    run_dir = _resolve_run_dir(arguments.run_dir) \
+        if getattr(arguments, "run_dir", None) else None
     try:
         if arguments.command == "start":
             db = None
@@ -2803,6 +4189,15 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"run_id": header["run_id"],
                               "header_sha256": header["header_sha256"]}))
             return 0
+        if arguments.command == "seed-budget":
+            url = _resolve_database_url(arguments)
+            if not url:
+                raise Step9Error("database_required",
+                                 "seed-budget requires a database URL")
+            import psycopg
+
+            return cmd_seed_budget(
+                arguments, Database(lambda: psycopg.connect(url)))
         if arguments.command == "sample":
             return cmd_sample(arguments, _cli_hooks(arguments))
         if arguments.command == "finalize":
@@ -2811,6 +4206,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_validate(arguments)
         if arguments.command == "watchdog":
             return cmd_watchdog(arguments)
+        if arguments.command == "drain-monitor":
+            return cmd_drain_monitor(arguments, _cli_hooks(arguments))
     except Step9Error as error:
         _record_failure(run_dir, error.code, str(error))
         print(f"step9 {arguments.command}: {error.code}: {error}", file=sys.stderr)
@@ -2931,6 +4328,14 @@ FROM population_bootstrap_runs WHERE run_id = %s
 SQL_ENDPOINT_BUDGETS = """
 SELECT endpoint, cap, consumed, deadline_at, updated_at
 FROM collector_endpoint_budgets WHERE run_id = %s ORDER BY endpoint
+"""
+
+SQL_SEED_BUDGET = """
+INSERT INTO collector_endpoint_budgets
+       (run_id, endpoint, cap, consumed, deadline_at)
+VALUES (%s, %s, %s, 0, %s)
+ON CONFLICT (run_id, endpoint) DO NOTHING
+RETURNING endpoint
 """
 
 for _statement in (SQL_0023_TABLES, SQL_BOOTSTRAP_RUN, SQL_ENDPOINT_BUDGETS):
@@ -3187,8 +4592,9 @@ def collect_wire_facts(*, interfaces: list[str], route_host: str | None,
             "boot_id": _boot_id(), "interfaces": facts}
 
 
-def evaluate_wire(baseline: dict, current: dict,
-                  prior_bytes: int) -> tuple[list[str], list[str], int | None]:
+def evaluate_wire(baseline: dict, current: dict, prior_bytes: int,
+                  cap_bytes: int = TRANSFER_CUMULATIVE_MAX
+                  ) -> tuple[list[str], list[str], int | None]:
     """Conservative host-wire bound; all path traffic counts."""
     failures: list[str] = []
     unknown: list[str] = []
@@ -3224,18 +4630,175 @@ def evaluate_wire(baseline: dict, current: dict,
             failures.append("wire_route_unavailable")
         total += (facts["rx_bytes"] - old["rx_bytes"]) + \
                  (facts["tx_bytes"] - old["tx_bytes"])
-    if not failures and total > TRANSFER_CUMULATIVE_MAX:
+    if not failures and total > cap_bytes:
         failures.append("transfer_breach")
     return sorted(set(failures)), sorted(set(unknown)), total
 
 
-def _worker_snapshots(run: dict, worker_probe=None) -> tuple[dict, str | None]:
-    """Sum Python worker remote attempts across replicas; (totals, error)."""
-    probe = worker_probe or _podman_worker_files
+TERMINAL_SNAPSHOT_MAX_BYTES = 65536
+TERMINAL_GO_SCHEMA = "clashlens-collector-terminal-v1"
+TERMINAL_WORKER_SCHEMA = "clashlens-worker-terminal-v1"
+
+
+def _read_terminal_file(path: Path) -> tuple[dict | None, str | None]:
+    """Strict bounded terminal snapshot read: payload or failure code.
+
+    Missing, oversized, malformed, unmarked, or escaped files are never
+    read as zero; the caller fails the chain instead.
+    """
     try:
-        files = probe(run)
-    except Exception as error:  # noqa: BLE001 - probe miss is unknown
-        return {}, "s3_worker_unavailable:" + type(error).__name__
+        if path.is_symlink() or not path.is_file():
+            return None, "terminal_capture_missing"
+        if path.stat().st_size > TERMINAL_SNAPSHOT_MAX_BYTES:
+            return None, "terminal_capture_malformed"
+        payload = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, ValueError):
+        return None, "terminal_capture_malformed"
+    if not isinstance(payload, dict):
+        return None, "terminal_capture_malformed"
+    return payload, None
+
+
+def _terminal_operation_total(payload: dict, producer: str) -> tuple[int | None, str | None]:
+    """Validated per-producer attempt total from a terminal payload."""
+    if payload.get("terminal") is not True:
+        return None, "terminal_capture_malformed"
+    identity = payload.get("process") \
+        if producer == "worker" else {
+            "id": payload.get("process_id"),
+            "started_at": payload.get("process_started_at"),
+        }
+    if not isinstance(identity, dict) \
+            or not isinstance(identity.get("id"), str) \
+            or not identity["id"] \
+            or not isinstance(identity.get("started_at"), str) \
+            or not identity["started_at"]:
+        return None, "terminal_capture_malformed"
+    attempts = (payload.get("archive") or {}).get("remote_attempts") \
+        if producer == "worker" else payload.get("operations")
+    if not isinstance(attempts, dict):
+        return None, "terminal_capture_malformed"
+    total = 0
+    for operation, count in attempts.items():
+        if not isinstance(operation, str) or not operation \
+                or type(count) is not int or count < 0:
+            return None, "terminal_capture_malformed"
+        total += count
+    for key in ("captured_at",):
+        if not isinstance(payload.get(key), str) or not payload[key]:
+            return None, "terminal_capture_malformed"
+    return total, None
+
+
+def _read_terminal_producers(run: dict) -> tuple[list[dict], str | None]:
+    """Post-stop producer totals from shared-spool terminal snapshots.
+
+    Returns (producers, failure-code-or-None). Every expected producer
+    appears exactly once with a marked terminal snapshot whose capture
+    postdates core start; anything missing, duplicated, malformed, stale,
+    or unmarked fails the chain instead of counting as zero.
+    """
+    try:
+        core_start = _parse_utc(run["core_start"])
+    except (KeyError, Step9Error):
+        return [], "terminal_capture_malformed"
+    spool = run.get("spool_path")
+    if not isinstance(spool, str) or not spool:
+        return [], "terminal_capture_missing"
+    terminal_dir = Path(spool) / ".control" / "terminal"
+    containers = run.get("containers", {}) or {}
+    try:
+        replicas = int(containers.get("worker_replicas", 0) or 0)
+    except (TypeError, ValueError):
+        return [], "terminal_capture_malformed"
+    if replicas < 1:
+        return [], "terminal_capture_missing"
+    producers: list[dict] = []
+    seen: set[str] = set()
+    expected = [("collector", None)] + [
+        ("worker", index) for index in range(1, replicas + 1)]
+    for producer, replica in expected:
+        name = "collector.json" if replica is None \
+            else f"worker-{replica}.json"
+        key = f"{producer}:{replica}" if replica is not None \
+            else producer
+        if key in seen:
+            return [], "terminal_capture_duplicate"
+        seen.add(key)
+        payload, error = _read_terminal_file(terminal_dir / name)
+        if error is not None:
+            return [], error
+        want_schema = TERMINAL_GO_SCHEMA if producer == "collector" \
+            else TERMINAL_WORKER_SCHEMA
+        if payload.get("schema") != want_schema \
+                or payload.get("producer") != producer:
+            return [], "terminal_capture_malformed"
+        try:
+            captured = _parse_utc(payload["captured_at"]) \
+                if isinstance(payload.get("captured_at"), str) else None
+        except Step9Error:
+            return [], "terminal_capture_malformed"
+        if captured is None or captured < core_start:
+            return [], "terminal_capture_stale"
+        total, error = _terminal_operation_total(payload, producer)
+        if error is not None:
+            return [], error
+        identity = payload.get("process") \
+            if producer == "worker" else {
+                "id": payload.get("process_id"),
+                "started_at": payload.get("process_started_at"),
+            }
+        producers.append({
+            "producer": producer, "replica": replica,
+            "process_id": identity["id"],
+            "process_started_at": identity["started_at"],
+            "captured_at": payload["captured_at"],
+            "terminal": True, "total": total,
+        })
+    return producers, None
+
+
+def _worker_file_identities(files: list | None, replicas: int) -> list:
+    """Per-replica identity detail in replica order; None when absent.
+
+    Live operating snapshots carry process {id, started_at} incarnation
+    evidence; files without it record None (terminal binding can only
+    verify replicas the core actually observed).
+    """
+    identities: list = []
+    for index in range(1, replicas + 1):
+        payload = files[index - 1] \
+            if files and len(files) >= index else None
+        process = (payload or {}).get("process") \
+            if isinstance(payload, dict) else None
+        if isinstance(process, dict) and process.get("id") \
+                and process.get("started_at"):
+            identities.append({
+                "producer": "worker", "replica": index,
+                "process_id": process["id"],
+                "process_started_at": process["started_at"],
+                "terminal": False,
+            })
+        else:
+            identities.append(None)
+    return identities
+
+
+def _worker_snapshots(run: dict, worker_probe=None, files=None,
+                      probe_error=None) -> tuple[dict, str | None]:
+    """Sum Python worker remote attempts across replicas; (totals, error).
+
+    Accepts pre-read files (single podman exec per slot shared with
+    identity capture); otherwise probes once here.
+    """
+    if files is None and probe_error is None:
+        probe = worker_probe or _podman_worker_files
+        try:
+            files = probe(run)
+        except Exception as error:  # noqa: BLE001 - probe miss is unknown
+            return {}, "s3_worker_unavailable:" + type(error).__name__
+    if probe_error is not None:
+        return {}, probe_error
     totals: dict[str, int] = {}
     for payload in files:
         try:
@@ -3255,8 +4818,17 @@ def _worker_snapshots(run: dict, worker_probe=None) -> tuple[dict, str | None]:
     return totals, None
 
 
-def _podman_worker_files(run: dict) -> list[dict]:
-    """Read worker operating snapshots via podman exec cat."""
+def _podman_worker_files(run: dict, files=None) -> list[dict]:
+    """Read worker operating snapshots via podman exec cat.
+
+    Each configured replica serves its own persistent live snapshot at
+    the deployed per-replica path /spool/.control/live/worker-<i>.json
+    (never the old shared container-only singleton). Container names and
+    replica indices are fixed by the run header; paths are never built
+    from untrusted input. Accepts pre-read files (single exec per slot).
+    """
+    if files is not None:
+        return files
     import subprocess
 
     containers = run.get("containers", {}) or {}
@@ -3265,17 +4837,105 @@ def _podman_worker_files(run: dict) -> list[dict]:
     podman_bin = run.get("podman_bin", "podman") or "podman"
     if not base or replicas < 1:
         raise RuntimeError("worker replicas unconfigured")
+    if not _CONTAINER.fullmatch(base):
+        raise RuntimeError("worker container base name invalid")
     snapshots = []
     for replica in range(1, replicas + 1):
+        container = f"{base}-{replica}"
+        if not _CONTAINER.fullmatch(container):
+            raise RuntimeError("worker container name invalid")
         completed = subprocess.run(
-            [podman_bin, "exec", f"{base}-{replica}", "cat",
-             "/tmp/clashlens-worker-operating.json"],
+            [podman_bin, "exec", container, "cat",
+             f"/spool/.control/live/worker-{replica}.json"],
             check=False, capture_output=True, text=True, timeout=30)
         if completed.returncode != 0 \
                 or len(completed.stdout.encode()) > 65536:
             raise RuntimeError(f"worker {replica} snapshot unavailable")
         snapshots.append(json.loads(completed.stdout))
     return snapshots
+
+
+def _normalize_instant(value) -> str | None:
+    """Process/incarnation timestamps to one comparable UTC form."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value, tz=UTC).isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str) and value:
+        try:
+            return _parse_utc(value).isoformat()
+        except Step9Error:
+            return None
+    return None
+
+
+def _sample_s3_producers(run: dict, metrics, worker_files) -> list:
+    """Sealed per-producer identity detail for the terminal binding.
+
+    The collector entry comes from live metrics identity when observed
+    (None once stopped); worker entries follow replica order. Terminal
+    snapshots later match exactly these identities.
+    """
+    try:
+        replicas = int((run.get("containers", {}) or {}).get(
+            "worker_replicas", 0) or 0)
+    except (TypeError, ValueError):
+        replicas = 0
+    if isinstance(metrics, dict) and metrics.get("process_id") \
+            and metrics.get("started_at") is not None:
+        producers: list = [{
+            "producer": "collector", "replica": None,
+            "process_id": metrics["process_id"],
+            "process_started_at": metrics["started_at"],
+            "terminal": False,
+        }]
+    else:
+        producers = [None]
+    producers.extend(_worker_file_identities(worker_files, replicas))
+    return producers
+
+
+def _check_terminal_identities(expected, terminal, last_captured,
+                               strict_identities=False) -> str | None:
+    """Match terminal producers to core-observed identities; error or None.
+
+    A higher total under the wrong incarnation still fails; terminal
+    capture must not predate the core chain it closes. With
+    strict_identities (live-day v2 sealed verification), an absent or
+    malformed core-observed identity is itself a mismatch: there is no
+    unobserved-producer bypass. The lenient default serves live
+    monitoring, where totals, pins, and capture ordering still gate.
+    """
+    if not isinstance(expected, list) or not isinstance(terminal, list) \
+            or len(expected) != len(terminal) or not terminal:
+        return "terminal_identity_mismatch"
+    baseline_captured = _normalize_instant(last_captured)
+    for want, got in zip(expected, terminal):
+        if not isinstance(got, dict) or got.get("terminal") is not True:
+            return "terminal_capture_malformed"
+        if want is None:
+            if strict_identities:
+                return "terminal_identity_mismatch"
+            continue
+        if not isinstance(want, dict) \
+                or got.get("producer") != want.get("producer") \
+                or got.get("replica") != want.get("replica") \
+                or got.get("process_id") != want.get("process_id"):
+            return "terminal_identity_mismatch"
+        want_started = _normalize_instant(want.get("process_started_at"))
+        got_started = _normalize_instant(got.get("process_started_at"))
+        if want_started is None or got_started != want_started:
+            return "terminal_identity_mismatch"
+        got_captured = _normalize_instant(got.get("captured_at"))
+        if got_captured is None:
+            return "terminal_capture_malformed"
+        if baseline_captured is not None \
+                and got_captured < baseline_captured:
+            return "terminal_capture_stale"
+    return None
 
 
 def _s3_decreased(previous: dict | None, current: dict) -> bool:
@@ -3313,8 +4973,13 @@ TARIFF_EXPECTED = {
 }
 
 
-def _read_tariff_file(path_str: str) -> dict:
-    """Read the protected verified tariff JSON; fail closed, never estimate."""
+def _read_tariff_file(path_str: str) -> tuple[dict, str]:
+    """Read the protected verified tariff JSON; fail closed, never estimate.
+
+    Returns (payload, digest): the digest is the SHA-256 hex of the exact
+    raw bytes read here, bound as provenance. No payload-embedded digest
+    is ever trusted, and no competing digest format exists.
+    """
     if not path_str or not os.path.isabs(path_str):
         raise Step9Error("tariff_unavailable",
                          "tariff file path must be absolute")
@@ -3340,7 +5005,7 @@ def _read_tariff_file(path_str: str) -> dict:
                          "tariff file is not valid JSON") from error
     if not isinstance(payload, dict):
         raise Step9Error("tariff_malformed", "tariff file is not an object")
-    return payload
+    return payload, _sha256(raw)
 
 
 def _tariff_decimal(value, label: str) -> Decimal:
@@ -3456,6 +5121,164 @@ def _verify_tariff_math(payload: dict, rate_hour: Decimal,
     if expected["with_uncertainty_eur"] > Decimal("4.5"):
         raise Step9Error("tariff_envelope_exceeded",
                          "tariff uncertainty-adjusted envelope exceeds EUR 4.50")
+
+
+TARIFF_LIVE_SCHEMA = "issue92-phase5-tariff-refresh-v1"
+TARIFF_LIVE_SOURCE_URL = "https://www.scaleway.com/en/pricing/storage/"
+TARIFF_LIVE_HORIZON_DAYS = 186
+TARIFF_LIVE_FACTOR = Decimal("1.5")
+TARIFF_LIVE_STORAGE_RATE = Decimal("0.000022")
+TARIFF_LIVE_EGRESS_RATE = Decimal("0.01")
+TARIFF_LIVE_COST_SCOPE = ("run transfer and first186days of newly "
+                           "retained storage; not lifetime retention")
+TARIFF_LIVE_VERIFICATION_METHOD = (
+    "official pricing page content returned by web search; full-page "
+    "web open exceeded size limit and direct urllib fetch returned403")
+TARIFF_LIVE_ENVELOPES = {
+    "operational": {"new_retained_bytes": 275000000000,
+                      "aggregate_transfer_bytes": 570000000000,
+                      "ceiling_eur": Decimal(50)},
+    "absolute": {"new_retained_bytes": 300000000000,
+                   "aggregate_transfer_bytes": 600000000000,
+                   "ceiling_eur": Decimal(55)},
+}
+
+
+def _tariff_block_live(payload: dict, digest: str,
+                       core_start: datetime) -> dict:
+    """Bind the canonical prospective tariff refresh (admission only).
+
+    Accepts exactly the parent-owned schema issue92-phase5-tariff-refresh-v1
+    with byte-exact economics: storage 0.000022 EUR per decimal GB-hour,
+    egress 0.01 EUR per decimal GB, rounded started GB-hours over 186 days,
+    requests and ingress included, free allowance unused, tax-exclusive
+    prices with a 1.5 uncertainty factor (not invoice tax). Cost scope is
+    run transfer plus first-186-day new retention only. The old
+    preparation envelope (EUR 4.50/5) and prior 280/580 GB drafts are
+    rejected for live-day v2. run_authorized must stay false: this is
+    admission evidence, never start authority.
+    """
+    def _mismatch(label: str) -> Step9Error:
+        return Step9Error("tariff_mismatch",
+                          f"live tariff {label} differs from canonical")
+    if payload.get("schema") != TARIFF_LIVE_SCHEMA:
+        raise _mismatch("schema")
+    for key, expected in (
+            ("currency", "EUR"), ("provider", "Scaleway"),
+            ("region", "Paris"),
+            ("storage_class", "Standard Multi-AZ"),
+            ("cost_scope", TARIFF_LIVE_COST_SCOPE),
+            ("source_url", TARIFF_LIVE_SOURCE_URL),
+            ("verification_method", TARIFF_LIVE_VERIFICATION_METHOD)):
+        if payload.get(key) != expected:
+            raise _mismatch(key)
+    if payload.get("run_authorized") is not False:
+        raise _mismatch("run_authorized must stay false")
+    if type(payload.get("storage_horizon_days")) is not int \
+            or payload["storage_horizon_days"] != TARIFF_LIVE_HORIZON_DAYS:
+        raise _mismatch("storage_horizon_days")
+    for key, expected in (("billable_units_round_up", True),
+                          ("requests_included", True),
+                          ("ingress_included", True),
+                          ("free_egress_allowance_used", False),
+                          ("listed_prices_exclude_tax", True)):
+        if payload.get(key) is not expected:
+            raise _mismatch(key)
+    if payload.get("tax_rate_claimed") is not None:
+        raise _mismatch("tax_rate_claimed must stay null")
+    if _tariff_decimal(payload.get("storage_eur_per_decimal_gb_hour"),
+                       "storage rate") != TARIFF_LIVE_STORAGE_RATE:
+        raise _mismatch("storage_eur_per_decimal_gb_hour")
+    if _tariff_decimal(payload.get("egress_eur_per_decimal_gb"),
+                       "egress rate") != TARIFF_LIVE_EGRESS_RATE:
+        raise _mismatch("egress_eur_per_decimal_gb")
+    if _tariff_decimal(payload.get("combined_tax_and_uncertainty_factor"),
+                       "factor") != TARIFF_LIVE_FACTOR:
+        raise _mismatch("combined_tax_and_uncertainty_factor")
+    try:
+        retrieved = datetime.fromisoformat(payload["retrieved_at"])
+    except (KeyError, ValueError, TypeError) as error:
+        raise Step9Error("tariff_malformed",
+                         "live tariff retrieved_at is invalid") from error
+    if retrieved.tzinfo is None:
+        raise Step9Error("tariff_malformed",
+                         "live tariff retrieved_at needs an offset")
+    age_days = (core_start - retrieved).total_seconds() / 86400
+    if age_days < 0 or age_days > TARIFF_STALE_DAYS:
+        raise Step9Error("tariff_stale",
+                         "live tariff verification is stale or future")
+    envelopes = payload.get("envelopes")
+    if not isinstance(envelopes, dict) \
+            or set(envelopes) != set(TARIFF_LIVE_ENVELOPES):
+        raise _mismatch("envelopes")
+    bound: dict = {}
+    for name, pins in TARIFF_LIVE_ENVELOPES.items():
+        entry = envelopes[name]
+        if not isinstance(entry, dict):
+            raise _mismatch(f"envelopes.{name}")
+        for key in ("new_retained_bytes", "aggregate_transfer_bytes"):
+            value = entry.get(key)
+            if type(value) is not int or value != pins[key]:
+                raise _mismatch(f"envelopes.{name}.{key}")
+        storage_gb = (pins["new_retained_bytes"] + 10**9 - 1) // 10**9
+        transfer_gb = (pins["aggregate_transfer_bytes"] + 10**9 - 1) // 10**9
+        storage_eur = Decimal(storage_gb) * TARIFF_LIVE_HORIZON_DAYS * 24 \
+            * TARIFF_LIVE_STORAGE_RATE
+        egress_eur = Decimal(transfer_gb) * TARIFF_LIVE_EGRESS_RATE
+        before = storage_eur + egress_eur
+        factored = before * TARIFF_LIVE_FACTOR
+        for key, value in (("storage_projection_eur", storage_eur),
+                           ("egress_projection_eur", egress_eur),
+                           ("before_factor_eur", before),
+                           ("with_factor_eur", factored)):
+            try:
+                stated = Decimal(str(entry[key]))
+            except (KeyError, TypeError, ValueError,
+                    ArithmeticError) as error:
+                raise Step9Error("tariff_malformed",
+                                 f"live tariff {name} {key} invalid") \
+                    from error
+            if stated != value:
+                raise _mismatch(f"envelopes.{name}.{key}")
+        try:
+            ceiling = Decimal(str(entry["ceiling_eur"]))
+        except (KeyError, TypeError, ValueError,
+                ArithmeticError) as error:
+            raise Step9Error("tariff_malformed",
+                             f"live tariff {name} ceiling invalid") \
+                from error
+        if ceiling != pins["ceiling_eur"]:
+            raise _mismatch(f"envelopes.{name}.ceiling_eur")
+        if bool(entry.get("fits")) is not (factored <= ceiling):
+            raise _mismatch(f"envelopes.{name}.fits")
+        bound[name] = {
+            "new_retained_bytes": pins["new_retained_bytes"],
+            "aggregate_transfer_bytes": pins["aggregate_transfer_bytes"],
+            "storage_projection_eur": str(storage_eur),
+            "egress_projection_eur": str(egress_eur),
+            "before_factor_eur": str(before),
+            "with_factor_eur": str(factored),
+            "ceiling_eur": str(ceiling),
+            "fits": factored <= ceiling,
+        }
+    if not _HEX64.fullmatch(digest or ""):
+        raise Step9Error("tariff_malformed",
+                         "live tariff digest is not hex sha256")
+    return {
+        "schema": TARIFF_LIVE_SCHEMA,
+        "digest": digest,
+        "source_url": TARIFF_LIVE_SOURCE_URL,
+        "retrieved_at": payload["retrieved_at"],
+        "verification_method": TARIFF_LIVE_VERIFICATION_METHOD,
+        "storage_eur_per_decimal_gb_hour": str(TARIFF_LIVE_STORAGE_RATE),
+        "egress_eur_per_decimal_gb": str(TARIFF_LIVE_EGRESS_RATE),
+        "storage_horizon_days": TARIFF_LIVE_HORIZON_DAYS,
+        "combined_tax_and_uncertainty_factor": str(TARIFF_LIVE_FACTOR),
+        "cost_scope": TARIFF_LIVE_COST_SCOPE,
+        "run_authorized": False,
+        "envelopes": bound,
+        "note": "tariff estimate only, never actual billed cost",
+    }
 
 
 def _s3_prior_block(arguments: argparse.Namespace) -> dict:
@@ -3936,12 +5759,24 @@ def _spool_allocated_usage(target: str, expected_identity: dict,
     return result
 
 
-def evaluate_resource_gates(baseline: dict, current: dict,
-                            mem_over: int) -> tuple[list[str], list[str], int]:
+_NO_PREVIOUS_RETAINED: object = object()
+
+
+def evaluate_resource_gates(baseline: dict, current: dict, mem_over: int,
+                            retained_cap: int | None = None,
+                            prev_retained: object = _NO_PREVIOUS_RETAINED,
+                            spool_cap: int | None = None
+                            ) -> tuple[list[str], list[str], int]:
     """Compare real probe fields against Phase 4 thresholds.
 
     Returns (failures, unknowns, mem_over): null stays unknown/failure,
     never zero. mem_over counts consecutive memory-over samples.
+    A live-day v2 retained cap binds newly retained remote catalogue bytes
+    (current minus baseline); None keeps the legacy absolute envelope.
+    prev_retained carries the previous sample's retained bytes so the
+    series itself must be monotonic; omit it only when no previous sample
+    exists. The preparation-only object-count envelope never applies to
+    live-day v2 retained accounting.
     """
     failures: list[str] = []
     unknown: list[str] = []
@@ -4026,17 +5861,47 @@ def evaluate_resource_gates(baseline: dict, current: dict,
     else:
         mem_over = 0
     archive = current.get("archive") or {}
+    base_archive = (baseline.get("archive") or {}) \
+        if retained_cap is not None else {}
     if archive.get("logical_bytes") is None or archive.get("objects") is None:
         unknown.append("archive_unknown")
-    else:
+    elif retained_cap is None:
         if archive["logical_bytes"] > RES_ARCHIVE_LOGICAL_MAX:
             failures.append("archive_logical_breach")
         if archive["objects"] > RES_ARCHIVE_OBJECTS_MAX:
             failures.append("archive_objects_breach")
+    else:
+        # Live-day v2: the cap binds newly retained remote bytes only;
+        # local allocated spool never substitutes for the catalogue count,
+        # and the preparation object-count envelope does not apply.
+        cur = archive["logical_bytes"]
+        base_logical = base_archive.get("logical_bytes")
+        if type(cur) is not int or cur < 0:
+            unknown.append("archive_unknown")
+        elif type(base_logical) is not int or base_logical < 0:
+            unknown.append("archive_retained_unknown")
+        elif cur < base_logical:
+            failures.append("archive_retained_reset")
+        elif cur - base_logical > retained_cap:
+            failures.append("archive_retained_breach")
+        elif prev_retained is not _NO_PREVIOUS_RETAINED:
+            if type(prev_retained) is not int or prev_retained < 0:
+                unknown.append("archive_retained_unknown")
+            elif cur < prev_retained:
+                failures.append("archive_retained_reset")
     if archive.get("physical_bytes") is None:
         unknown.append("archive_physical_unknown")
-    elif archive["physical_bytes"] > RES_ARCHIVE_PHYSICAL_MAX:
-        failures.append("archive_physical_breach")
+    elif spool_cap is None:
+        if archive["physical_bytes"] > RES_ARCHIVE_PHYSICAL_MAX:
+            failures.append("archive_physical_breach")
+    else:
+        # Live-day v2: independently probed spool bytes bind the pinned
+        # spool cap, never the shared-pool constants.
+        physical = archive["physical_bytes"]
+        if type(physical) is not int or physical < 0:
+            unknown.append("archive_unknown")
+        elif physical > spool_cap:
+            failures.append("archive_physical_breach")
     return sorted(set(failures)), sorted(set(unknown)), mem_over
 
 

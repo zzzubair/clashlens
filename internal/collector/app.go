@@ -459,7 +459,11 @@ func (a *application) run(ctx context.Context, role string) error {
 		close(waitComplete)
 	}()
 
-	shutdown := func() {
+	// shutdown quiesces worker loops, then persists the terminal archive
+	// snapshot so the observer never reads an absent producer as zero. A
+	// failed terminal write is a shutdown failure: silent completeness
+	// would corrupt Phase 4 accounting.
+	shutdown := func() error {
 		cancelRun()
 		if server != nil {
 			shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -467,21 +471,27 @@ func (a *application) run(ctx context.Context, role string) error {
 			cancel()
 		}
 		<-waitComplete
+		if err := writeTerminalSnapshotUnlessLegacy(a.config.spoolRoot, a.metrics.terminalArchiveSnapshot()); err != nil {
+			return err
+		}
+		return nil
 	}
 
 	select {
 	case <-ctx.Done():
-		shutdown()
-		return nil
+		return shutdown()
 	case err := <-errorsByLoop:
-		shutdown()
+		if terminalErr := shutdown(); terminalErr != nil {
+			return errors.Join(err, terminalErr)
+		}
 		return err
 	case err := <-serverErrors:
-		shutdown()
+		if terminalErr := shutdown(); terminalErr != nil {
+			return errors.Join(err, terminalErr)
+		}
 		return err
 	case <-waitComplete:
-		cancelRun()
-		return nil
+		return shutdown()
 	}
 }
 

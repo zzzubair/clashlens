@@ -36,6 +36,7 @@ MODES = (
     "mixed-backfill",
     "coordinator-12500",
     "army-analytics",
+    "normal-capacity",
 )
 DUPLICATE_ENDPOINT_MIX = {
     "profile": 12_500,
@@ -43,6 +44,31 @@ DUPLICATE_ENDPOINT_MIX = {
     "global_player_rankings": 24,
 }
 DUPLICATE_EXECUTION_CAP = sum(DUPLICATE_ENDPOINT_MIX.values())
+NORMAL_CAPACITY_MODE = "normal-capacity"
+CAPACITY_ENDPOINT_MIX = {
+    "profile": 12_833,
+    "battle_log": 12_833,
+    "global_player_rankings": 1,
+}
+CAPACITY_ORDINARY_ATTEMPTS = sum(CAPACITY_ENDPOINT_MIX.values())
+CAPACITY_PLAYERS = 12_833
+CAPACITY_RETRY_BUDGET = 4_333
+# Deterministic 503 injection hits every 32nd player: indices 0..12832.
+CAPACITY_RETRY_MINIMUM = 402
+CAPACITY_TOTAL_CAP = 30_000
+CAPACITY_LANES = 32
+CAPACITY_KEYS = 4
+CAPACITY_PER_KEY_RPS = 25
+CAPACITY_AGGREGATE_RPS = 100
+CAPACITY_WALL_SECONDS = 600.0
+CAPACITY_DRAIN_SECONDS = 300.0
+CAPACITY_SPOOL_BYTES = 64 << 20
+# Authorized disposable-qualification storage bounds (root storage decision):
+# PostgreSQL peak footprint (relation high-water growth + WAL) and the
+# combined isolated total. The Go probe enforces the same spool/PG/total
+# caps in-run; these constants are the retained-artifact side of that pair.
+CAPACITY_PG_PEAK_BYTES = 320 << 20
+CAPACITY_TOTAL_BYTES = 384 << 20
 ARTIFACT_SCHEMA_VERSION = 10
 CANDIDATE_RECEIPT_SCHEMA_VERSION = 2
 # Migrations 0022 (admission evidence) and 0023 (population bootstrap) are
@@ -64,6 +90,8 @@ CONFIGURATION_KEYS = {
     "analytics_lanes",
     "duplicate_cycles",
     "duplicate_endpoint_mix",
+    "capacity_endpoint_mix",
+    "capacity_retry_budget",
     "skip_collector_probe",
 }
 # Hard failures are an artifact contract, not a log channel.  Keep this
@@ -95,6 +123,19 @@ HARD_FAILURE_CODES = frozenset(
         "memory_pressure_unavailable",
         "memory_pressure_increased",
         "queue_residue",
+        "capacity_count_exceeded",
+        "capacity_rate_exceeded",
+        "capacity_lane_mismatch",
+        "capacity_mix_mismatch",
+        "capacity_lineage_mismatch",
+        "capacity_interactive_use",
+        "capacity_reset_admitted",
+        "capacity_evidence_incomplete",
+        "capacity_deadline_exceeded",
+        "capacity_spool_exceeded",
+        "capacity_pg_exceeded",
+        "capacity_total_exceeded",
+        "capacity_worker_errors",
     }
 )
 ALLOWED_HARD_FAILURE_CODES = HARD_FAILURE_CODES
@@ -322,6 +363,13 @@ def validate_reset(populations: list[int], post_fix: bool) -> None:
             )
 
 
+def _http_date() -> str:
+    """RFC 1123 GMT timestamp for S3 response headers."""
+    from email.utils import formatdate
+
+    return formatdate(time.time(), usegmt=True)
+
+
 class _ArchiveHandler(BaseHTTPRequestHandler):
     objects: ClassVar[dict[str, bytes]] = {}
     gets = 0
@@ -335,6 +383,7 @@ class _ArchiveHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *arguments: object) -> None:
         del format, arguments
+
 
     def do_GET(self) -> None:
         key = self.path.split("?", 1)[0].removeprefix("/evidence/")
@@ -350,13 +399,29 @@ class _ArchiveHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Amz-Meta-Sha256", _sha(body))
+        # The Go collector archive client requires S3 response headers.
+        self.send_header("ETag", '"prototype"')
+        self.send_header("Last-Modified", _http_date())
         self.end_headers()
         self.wfile.write(body)
 
     def do_HEAD(self) -> None:
+        # S3 object semantics for the Go collector client: missing keys
+        # are 404 (the empty bucket path stays 200 for bucket checks).
+        key = self.path.split("?", 1)[0].removeprefix("/evidence/")
         with type(self).counter_lock:
+            body = type(self).objects.get(key)
             type(self).heads += 1
+        if body is None and key != "":
+            self.send_response(404)
+            self.end_headers()
+            return
         self.send_response(200)
+        if body is not None:
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Amz-Meta-Sha256", _sha(body))
+            self.send_header("ETag", '"prototype"')
+            self.send_header("Last-Modified", _http_date())
         self.end_headers()
 
     def do_PUT(self) -> None:
@@ -377,6 +442,8 @@ class _ArchiveHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         self.send_response(200)
+        self.send_header("ETag", '"prototype"')
+        self.send_header("Last-Modified", _http_date())
         self.end_headers()
 
 
@@ -462,6 +529,20 @@ def _tag(index: int) -> str:
         encoded = alphabet[index % len(alphabet)] + encoded
         index //= len(alphabet)
     return "#P" + encoded.rjust(5, "0")
+
+
+def _capacity_tag_index(tag: str) -> int:
+    """Invert _tag(): "#P" + base-14 over 0289PYLQGRJCUV, zero-padded."""
+    alphabet = "0289PYLQGRJCUV"
+    if not isinstance(tag, str) or len(tag) < 3 or not tag.startswith("#P"):
+        raise ValueError("capacity tag is invalid")
+    index = 0
+    for char in tag[2:]:
+        value = alphabet.find(char)
+        if value < 0:
+            raise ValueError("capacity tag is invalid")
+        index = index * len(alphabet) + value
+    return index
 
 
 def _processor(connection_info: str, archive: tuple[str, str, str, Any]):
@@ -1397,6 +1478,74 @@ _DUPLICATE_WORKLOAD_KEYS = frozenset(
         "collector_archive_operations",
     }
 )
+_CAPACITY_WORKLOAD_KEYS = frozenset(
+    {
+        "observations",
+        "official_responses",
+        "executed_observations",
+        "ordinary_attempts",
+        "players",
+        "retry_tranche_attempted",
+        "retry_tranche_processed",
+        "total_attempts",
+        "endpoint_mix",
+        "response_counts_by_endpoint",
+        "occurrence_counts_by_endpoint",
+        "official_loopback_requests",
+        "official_remote_requests",
+        "official_bytes",
+        "aggregation_method",
+        "lanes",
+        "normal_keys",
+        "per_key_rps",
+        "aggregate_rps",
+        "rate_maxima",
+        "interactive_attempts",
+        "archive_origin_host",
+        "host_id",
+        "s3_ordinary",
+        "s3_retry",
+        "archive_operations",
+        "archive_objects",
+        "archive_stored_bytes",
+        "processing_summary",
+        "retry_summary",
+        "retry_lineage",
+        "reset_exclusion",
+        "capacity_probe",
+        "seed_seconds",
+        "drain_seconds",
+        "retry_seconds",
+        "wall_seconds",
+        "probe_wall_seconds",
+        "pg_growth_bytes",
+        "pg_peak_bytes",
+        "wal_bytes",
+        "wal_retained_bytes",
+        "wal_retained_peak_bytes",
+        "spool_peak_bytes",
+        "spool_final_bytes",
+        "spool_temp_bytes",
+        "spool_reserved_bytes",
+        "spool_final_objects",
+        "spool_temp_objects",
+        "spool_reserved_objects",
+        "spool_alloc_bytes",
+        "spool_fs",
+        "spool_dir",
+        "downstream_summary",
+        "downstream_spool",
+        "downstream_seconds",
+        "budget_caps",
+        "budget_consumed",
+        "http_attempts",
+        "go_output_bytes",
+        "worker_errors",
+        "status",
+        "failure",
+        "hard_failures",
+    }
+)
 _MIXED_WORKLOAD_KEYS = frozenset(
     {
         "completion_order",
@@ -1473,6 +1622,14 @@ _ARMY_PLAN_KEYS = frozenset(
 _ARMY_PARAMETER_KEYS = frozenset({"arity", "types"})
 _ARMY_RELATION_SUBSETS = {
     "duplicate-heavy": frozenset(
+        {
+            "collector_observations",
+            "parsed_source_payloads",
+            "archive_catalogue",
+            "python_processing_jobs",
+        }
+    ),
+    NORMAL_CAPACITY_MODE: frozenset(
         {
             "collector_observations",
             "parsed_source_payloads",
@@ -2150,6 +2307,225 @@ def _validate_duplicate_sample_semantics(
             or sample["database"].get("queue_residue")
         ):
             raise ValueError(f"{label} passing residue is non-zero")
+
+
+def _validate_capacity_protocol(workload: Any, config: dict[str, Any], label: str) -> None:
+    """Check fixed-identity facts; bounds are failure codes, not rejections.
+
+    A breaching run must still validate so the bounded failure manifest
+    reaches the parent; only shape/identity contradictions raise here.
+    drain_seconds is the ordinary-only drain (retries excluded) so the
+    <=300s ordinary acceptance cannot be masked by retry work. An
+    explicitly incomplete run only proves its failure reason.
+    """
+    if not isinstance(workload, dict):
+        raise TypeError(f"{label} workload is invalid")
+    if workload.get("status") == "incomplete":
+        if workload.get("failure") not in _CAPACITY_FAILURE_REASONS:
+            raise ValueError(f"{label} failure reason is invalid")
+        return
+    if workload.get("status") != "complete":
+        raise ValueError(f"{label} status is invalid")
+    if workload.get("observations") != CAPACITY_ORDINARY_ATTEMPTS:
+        raise ValueError(f"{label}.observations contradicts the fixed workload")
+    if workload.get("ordinary_attempts") != CAPACITY_ORDINARY_ATTEMPTS:
+        raise ValueError(f"{label}.ordinary_attempts contradicts the fixed workload")
+    total_hint = workload.get("total_attempts")
+    if workload.get("official_responses") != total_hint or workload.get("executed_observations") != total_hint:
+        raise ValueError(f"{label} response counts contradict total attempts")
+    if workload.get("players") != CAPACITY_PLAYERS:
+        raise ValueError(f"{label}.players contradicts the fixed workload")
+    budget = _bounded_int(config.get("capacity_retry_budget"), f"{label}.capacity_retry_budget")
+    if budget > CAPACITY_RETRY_BUDGET:
+        raise ValueError(f"{label} retry budget exceeds the tranche bound")
+    retry_summary = workload.get("retry_summary")
+    if not isinstance(retry_summary, dict):
+        raise TypeError(f"{label} retry summary is invalid")
+    attempted = _bounded_int(retry_summary.get("expected_count"), f"{label}.retry_tranche_attempted")
+    if not 0 < attempted <= budget:
+        raise ValueError(f"{label} retry tranche contradicts configuration")
+    if retry_summary.get("count") != attempted:
+        raise ValueError(f"{label} retry tranche did not drain")
+    if workload.get("retry_tranche_attempted") != attempted:
+        raise ValueError(f"{label} top retry attempted contradicts retry summary")
+    if workload.get("retry_tranche_processed") != retry_summary.get("count"):
+        raise ValueError(f"{label} top retry processed contradicts retry summary")
+    if workload.get("retry_tranche_attempted") != attempted:
+        raise ValueError(f"{label} top retry attempted contradicts retry summary")
+    if workload.get("retry_tranche_processed") != retry_summary.get("count"):
+        raise ValueError(f"{label} top retry processed contradicts retry summary")
+    host_id = workload.get("host_id")
+    if not isinstance(host_id, str) or not host_id:
+        raise ValueError(f"{label} host identity is missing")
+    total = CAPACITY_ORDINARY_ATTEMPTS + attempted
+    if workload.get("total_attempts") != total or total > CAPACITY_TOTAL_CAP:
+        raise ValueError(f"{label} total attempts exceed the bound")
+    for key in ("endpoint_mix", "response_counts_by_endpoint", "occurrence_counts_by_endpoint"):
+        if workload.get(key) != dict(CAPACITY_ENDPOINT_MIX):
+            raise ValueError(f"{label}.{key} contradicts the fixed workload")
+    if (
+        workload.get("lanes") != CAPACITY_LANES
+        or workload.get("normal_keys") != CAPACITY_KEYS
+        or workload.get("per_key_rps") != CAPACITY_PER_KEY_RPS
+        or workload.get("aggregate_rps") != CAPACITY_AGGREGATE_RPS
+    ):
+        raise ValueError(f"{label} lane/key/rate identity is invalid")
+    maxima = workload.get("rate_maxima")
+    if (
+        not isinstance(maxima, dict)
+        or set(maxima) != {"per_key", "aggregate"}
+        or _bounded_int(maxima["per_key"], f"{label}.rate_maxima.per_key") > CAPACITY_PER_KEY_RPS
+        or _bounded_int(maxima["aggregate"], f"{label}.rate_maxima.aggregate") > CAPACITY_AGGREGATE_RPS
+    ):
+        raise ValueError(f"{label} rate maxima exceed the per-key/aggregate caps")
+    if workload.get("interactive_attempts") != 0:
+        raise ValueError(f"{label} interactive fallback is not permitted")
+    if workload.get("official_remote_requests") != 0:
+        raise ValueError(f"{label} remote official traffic is not permitted")
+    if workload.get("archive_origin_host") != "127.0.0.1":
+        raise ValueError(f"{label} archive origin is not the loopback fixture")
+    if workload.get("official_loopback_requests") != total:
+        raise ValueError(f"{label} loopback request count contradicts total attempts")
+    if workload.get("archive_objects") != 12_836:
+        raise ValueError(f"{label} archived object count contradicts deterministic dedup")
+    _bounded_int(workload.get("archive_stored_bytes"), f"{label}.archive_stored_bytes")
+    for phase in ("s3_ordinary", "s3_retry"):
+        operations = workload.get(phase)
+        if (
+            not isinstance(operations, dict)
+            or set(operations) != {"put", "head", "get"}
+            or any(
+                not isinstance(operations[operation], int)
+                or isinstance(operations[operation], bool)
+                or operations[operation] < 0
+                for operation in ("put", "head", "get")
+            )
+        ):
+            raise ValueError(f"{label} S3 {phase} counts are invalid")
+    s3_puts = workload["s3_ordinary"]["put"] + workload["s3_retry"]["put"]
+    s3_gets = workload["s3_ordinary"]["get"] + workload["s3_retry"]["get"]
+    if s3_puts <= 0 or s3_gets <= 0 or s3_puts > total or s3_gets > 3 * total:
+        raise ValueError(f"{label} S3 operation counts contradict fetch counts")
+    caps = workload.get("budget_caps")
+    consumed = workload.get("budget_consumed")
+    http_attempts = workload.get("http_attempts")
+    expected_caps = {"profile": 12_833, "battle_log": 13_235, "global_player_rankings": 1}
+    if (
+        caps != expected_caps
+        or sum(caps.values()) > CAPACITY_TOTAL_CAP
+        or consumed != http_attempts
+        or http_attempts
+        != {"profile": 12_833, "battle_log": 13_235, "global_player_rankings": 1}
+    ):
+        raise ValueError(f"{label} budget caps/consumption contradict loopback attempts")
+    summary = workload.get("processing_summary")
+    retry_summary = workload.get("retry_summary")
+    if (
+        not isinstance(summary, dict)
+        or summary.get("expected_count") != CAPACITY_ORDINARY_ATTEMPTS
+        or summary.get("count") != CAPACITY_ORDINARY_ATTEMPTS
+    ):
+        raise ValueError(f"{label} processing count is invalid")
+    downstream = workload.get("downstream_summary")
+    if not isinstance(downstream, dict):
+        raise TypeError(f"{label} downstream summary is invalid")
+    if downstream.get("expected_count") != total or downstream.get("count") != total:
+        raise ValueError(f"{label} downstream count is invalid")
+    # The 402 deterministic 503 responses classify as non-success through
+    # the real Python parser, and _result_summary buckets "classified" as
+    # "other"; terminal success therefore means processed(+gaps) covering
+    # the ordinary attempts, other covering exactly the retry tranche, and
+    # zero failed/lease-lost/retrying outcomes.
+    outcomes = downstream.get("outcomes")
+    if not isinstance(outcomes, dict):
+        raise TypeError(f"{label} downstream outcomes are invalid")
+    if (
+        outcomes.get("processed", -1) + outcomes.get("processed_with_gaps", -1)
+        != CAPACITY_ORDINARY_ATTEMPTS
+    ):
+        raise ValueError(f"{label} downstream processed outcomes contradict ordinary attempts")
+    if outcomes.get("other", -1) != attempted:
+        raise ValueError(f"{label} downstream classified outcomes contradict retry tranche")
+    for outcome in ("retrying", "failed", "lease_lost", "published", "skipped"):
+        if outcomes.get(outcome, 0) != 0:
+            raise ValueError(f"{label} downstream has unexpected {outcome} outcomes")
+    if downstream.get("failed_count", 1) != 0:
+        raise ValueError(f"{label} downstream recorded failures")
+    lineage = workload.get("retry_lineage")
+    if (
+        not isinstance(lineage, dict)
+        or set(lineage) != {"attempted", "processed", "missing", "duplicates"}
+        or lineage["attempted"] != attempted
+        or lineage["processed"] != attempted
+        or lineage["missing"] != 0
+        or lineage["duplicates"] != 0
+    ):
+        raise ValueError(f"{label} retry lineage is incomplete")
+    exclusion = workload.get("reset_exclusion")
+    if (
+        not isinstance(exclusion, dict)
+        or set(exclusion) != {"regular_allowed", "regular_scheduled_dry", "sweep_delta", "reset_members"}
+        or exclusion["regular_allowed"] is not False
+        or exclusion["regular_scheduled_dry"] != 0
+        or exclusion["sweep_delta"] != 0
+        or exclusion["reset_members"] != 2
+    ):
+        raise ValueError(f"{label} reset exclusion was not preserved")
+    _bounded_number(workload.get("drain_seconds"), f"{label}.drain_seconds")
+    _bounded_number(workload.get("retry_seconds"), f"{label}.retry_seconds")
+    _bounded_number(workload.get("downstream_seconds"), f"{label}.downstream_seconds")
+    _bounded_number(workload.get("wall_seconds"), f"{label}.wall_seconds")
+    _bounded_int(workload.get("pg_growth_bytes"), f"{label}.pg_growth_bytes")
+    _bounded_int(workload.get("spool_peak_bytes"), f"{label}.spool_peak_bytes")
+    _bounded_int(workload.get("official_bytes"), f"{label}.official_bytes")
+
+
+def _validate_capacity_sample_semantics(
+    sample: dict[str, Any], config: dict[str, Any], artifact_failures: list[str], label: str
+) -> None:
+    workload = sample.get("workload")
+    database = sample.get("database")
+    derived = _capacity_hard_failure_codes(workload, database)
+    _validate_capacity_protocol(workload, config, label)
+    if isinstance(workload, dict) and workload.get("status") == "incomplete":
+        if not set(derived).issubset(artifact_failures):
+            raise ValueError(f"{label} capacity hard failures are incomplete")
+        return
+    _validate_relation_subset(database, NORMAL_CAPACITY_MODE, label)
+    evidence = sample.get("evidence")
+    spool = sample.get("spool")
+    archive = sample.get("archive_operations")
+    if not isinstance(evidence, dict) or not isinstance(spool, dict) or not isinstance(archive, dict):
+        raise TypeError(f"{label} evidence is invalid")
+    if (
+        evidence.get("response_count") != workload["official_responses"]
+        or evidence.get("executed_responses") != workload["executed_observations"]
+        or evidence.get("exact_bytes") != workload["official_bytes"]
+        or evidence.get("execution_method") != workload["aggregation_method"]
+    ):
+        raise ValueError(f"{label} workload and evidence counters disagree")
+    if evidence.get("retries") != workload["retry_lineage"]["attempted"]:
+        raise ValueError(f"{label}.retries disagrees with the retry tranche")
+    if evidence.get("downstream_processed") != workload["downstream_summary"]["count"]:
+        raise ValueError(f"{label}.downstream disagrees with the downstream drain")
+    if evidence.get("concurrency_lanes") != CAPACITY_LANES:
+        raise ValueError(f"{label} lane evidence is invalid")
+    if evidence.get("archive_objects") != 12_836:
+        raise ValueError(f"{label} archived object count contradicts deterministic dedup")
+    if evidence.get("archive_objects") != workload["archive_objects"]:
+        raise ValueError(f"{label} evidence and workload archive counts disagree")
+    if evidence.get("archived_bytes") != workload["archive_stored_bytes"]:
+        raise ValueError(f"{label} evidence and workload archive bytes disagree")
+    if archive.get("conflicts") != 0:
+        raise ValueError(f"{label} archive conflicts contradict immutable dedup")
+    if archive.get("conditional_put") != archive.get("put"):
+        raise ValueError(f"{label} archive PUTs contradict conditional totals")
+    if archive.get("put") != 12_836:
+        raise ValueError(f"{label} archive PUT count contradicts deterministic dedup")
+    if _bounded_int(spool.get("high_water_bytes"), f"{label}.spool.high_water_bytes") != workload["spool_peak_bytes"]:
+        raise ValueError(f"{label} spool peak disagrees with integrated evidence")
+    if not set(derived).issubset(artifact_failures):
+        raise ValueError(f"{label} capacity hard failures are incomplete")
 
 
 def _validate_resources(value: dict[str, Any], label: str) -> None:
@@ -3106,7 +3482,7 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
         require_exact(collector_probe, expected_probe_keys, "collector probe")
     require_failure_codes(artifact["hard_failures"], "artifact")
 
-    if mode == "duplicate-heavy":
+    if mode in {"duplicate-heavy", NORMAL_CAPACITY_MODE}:
         require(artifact["provenance"], ("postgres",), "provenance")
         require(
             artifact["provenance"]["postgres"],
@@ -3163,7 +3539,13 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             _validate_capacity_facts(spool_facts, f"{label} spool")
         if isinstance(sample.get("workload"), dict) and "hard_failures" in sample["workload"]:
             require_failure_codes(sample["workload"]["hard_failures"], f"{label} workload")
-        if isinstance(sample.get("workload"), dict) and "processing_summary" in sample["workload"]:
+        # Capacity carries the Go-native count shape; its protocol
+        # validates it, so the Python distribution shape is skipped.
+        if (
+            mode != NORMAL_CAPACITY_MODE
+            and isinstance(sample.get("workload"), dict)
+            and "processing_summary" in sample["workload"]
+        ):
             summary = sample["workload"]["processing_summary"]
             if isinstance(summary, dict) and "total" in summary:
                 for name in ("official", "dependent", "correction", "total"):
@@ -3212,6 +3594,30 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
             if not set(required_failures).issubset(artifact["hard_failures"]):
                 raise ValueError(
                     f"{label} duplicate hard failures are incomplete"
+                )
+        if mode == NORMAL_CAPACITY_MODE:
+            require(
+                sample.get("workload"),
+                (
+                    "response_counts_by_endpoint",
+                    "occurrence_counts_by_endpoint",
+                    "official_bytes",
+                    "processing_summary",
+                    "retry_summary",
+                ),
+                f"{label} capacity workload",
+            )
+            require_exact(
+                sample["workload"],
+                _CAPACITY_WORKLOAD_KEYS,
+                f"{label} capacity workload",
+            )
+            required_failures = _capacity_hard_failure_codes(
+                sample["workload"], sample["database"]
+            )
+            if not set(required_failures).issubset(artifact["hard_failures"]):
+                raise ValueError(
+                    f"{label} capacity hard failures are incomplete"
                 )
         if mode == "coordinator-12500":
             require_exact(sample, _COORDINATOR_SAMPLE_KEYS, label)
@@ -3494,6 +3900,14 @@ def validate_artifact(artifact: dict[str, Any]) -> None:
     if mode == "duplicate-heavy":
         for index, sample in enumerate(samples):
             _validate_duplicate_sample_semantics(
+                sample,
+                configuration,
+                artifact["hard_failures"],
+                f"sample {index}",
+            )
+    elif mode == NORMAL_CAPACITY_MODE:
+        for index, sample in enumerate(samples):
+            _validate_capacity_sample_semantics(
                 sample,
                 configuration,
                 artifact["hard_failures"],
@@ -5254,6 +5668,7 @@ def _run_duplicate(
     observation_start: datetime = DAY_START,
     battle_fixture: bytes | None = None,
     processing_started: Event | None = None,
+    endpoint_mix: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     import psycopg
     from domain_test_support import store_observation
@@ -5266,8 +5681,7 @@ def _run_duplicate(
         fixture_discoveries = _seed_fixture_discoveries(
             connection_info, selected_battle_fixture, RANKING_FIXTURE
         )
-        executed_count = min(count, DUPLICATE_EXECUTION_CAP)
-        endpoint_mix = _duplicate_endpoint_mix(count)
+        executed_count, endpoint_mix = _duplicate_execution_plan(count, endpoint_mix)
         results: list[dict[str, Any]] = []
         cycle_elapsed: list[float] = []
         profile_bodies: dict[tuple[str, int], bytes] = {}
@@ -5419,6 +5833,832 @@ def _run_duplicate(
         }
     finally:
         database.close()
+
+
+def _duplicate_execution_plan(
+    count: int, endpoint_mix: dict[str, int] | None = None
+) -> tuple[int, dict[str, int]]:
+    """Return the executable count and endpoint mix for a duplicate run."""
+    mix = dict(endpoint_mix) if endpoint_mix is not None else _duplicate_endpoint_mix(count)
+    return min(count, sum(mix.values())), mix
+
+
+def _remove_owned_spool_dir(
+    path: Any, identity: Any = None, prefixes: tuple[str, ...] = ("capacity-spool-",)
+) -> bool:
+    """Remove exactly the owned mkdtemp spool directory, nothing else.
+
+    Only a nonempty path that resolves directly inside the system temp
+    directory with the owned prefix is removed. Refused: empty/missing
+    values (including "" and ".", which resolve to the current directory),
+    the temp directory itself or anything at/above it, the CWD or anything
+    containing it, the repository or anything containing it or inside it,
+    home, and the filesystem root. Cleanup callers must pass the exact
+    path captured at allocation; artifact/workload values are never trusted.
+    """
+    import shutil
+
+    if not isinstance(path, (str, Path)) or not str(path):
+        return False
+    try:
+        import stat
+
+        info = Path(path).lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            return False
+        if identity is not None and (info.st_dev, info.st_ino) != identity:
+            return False
+        resolved = Path(path).resolve()
+        cwd = Path.cwd().resolve()
+        tmpdir = Path(tempfile.gettempdir()).resolve()
+        home = Path.home().resolve()
+    except OSError:
+        return False
+    if not resolved.is_absolute():
+        return False
+    if resolved == tmpdir or resolved in tmpdir.parents:
+        # The temp directory itself or anything above it.
+        return False
+    if resolved.parent != tmpdir or not resolved.name.startswith(prefixes):
+        # Only the exact owned allocation shape: directly inside temp dir.
+        return False
+    if resolved == cwd or cwd in resolved.parents or resolved in cwd.parents:
+        return False
+    if resolved == ROOT or ROOT in resolved.parents or resolved in ROOT.parents:
+        return False
+    if resolved == home or home in resolved.parents:
+        return False
+    if resolved == Path(resolved.anchor):
+        return False
+    try:
+        if not resolved.is_dir():
+            return False
+        shutil.rmtree(resolved)
+    except OSError:
+        return False
+    return True
+
+
+def _failed_capacity_workload(reason: str) -> dict[str, Any]:
+    """Bounded incomplete workload retained when the probe cannot complete.
+
+    Every schema key is present but unmeasured (status declares it); only
+    the failure reason and derived failure codes carry meaning.
+    """
+    if reason not in _CAPACITY_FAILURE_REASONS:
+        raise ValueError("capacity failure reason is invalid")
+    workload: dict[str, Any] = {
+        "observations": 0,
+        "official_responses": 0,
+        "executed_observations": 0,
+        "ordinary_attempts": 0,
+        "players": 0,
+        "retry_tranche_attempted": 0,
+        "retry_tranche_processed": 0,
+        "total_attempts": 0,
+        "endpoint_mix": {},
+        "response_counts_by_endpoint": {},
+        "occurrence_counts_by_endpoint": {},
+        "official_loopback_requests": 0,
+        "official_remote_requests": 0,
+        "official_bytes": 0,
+        "s3_ordinary": {"put": 0, "head": 0, "get": 0},
+        "s3_retry": {"put": 0, "head": 0, "get": 0},
+        "aggregation_method": "exact integrated collector run",
+        "lanes": CAPACITY_LANES,
+        "normal_keys": CAPACITY_KEYS,
+        "per_key_rps": CAPACITY_PER_KEY_RPS,
+        "aggregate_rps": CAPACITY_AGGREGATE_RPS,
+        "rate_maxima": {"per_key": 0, "aggregate": 0},
+        "interactive_attempts": 0,
+        "archive_origin_host": "",
+        "archive_operations": {
+            "get": 0,
+            "get_bytes": 0,
+            "head": 0,
+            "conditional_put": 0,
+            "put": 0,
+            "put_bytes": 0,
+            "conflicts": 0,
+        },
+        "archive_objects": 0,
+        "archive_stored_bytes": 0,
+        "processing_summary": {"count": 0, "expected_count": 0},
+        "retry_summary": {"count": 0, "expected_count": 0},
+        "downstream_summary": {"count": 0, "expected_count": 0},
+        "retry_lineage": {"attempted": 0, "processed": 0, "missing": 0, "duplicates": 0},
+        "reset_exclusion": {
+            "regular_allowed": False,
+            "regular_scheduled_dry": 0,
+            "sweep_delta": 0,
+            "reset_members": 0,
+        },
+        "capacity_probe": {"executed": False},
+        "seed_seconds": 0.0,
+        "drain_seconds": 0.0,
+        "retry_seconds": 0.0,
+        "downstream_seconds": 0.0,
+        "wall_seconds": 0.0,
+        "probe_wall_seconds": 0.0,
+        "pg_growth_bytes": 0,
+        "pg_peak_bytes": 0,
+        "wal_bytes": 0,
+        "wal_retained_bytes": 0,
+        "wal_retained_peak_bytes": 0,
+        "spool_peak_bytes": 0,
+        "spool_final_bytes": 0,
+        "spool_temp_bytes": 0,
+        "spool_reserved_bytes": 0,
+        "spool_final_objects": 0,
+        "spool_temp_objects": 0,
+        "spool_reserved_objects": 0,
+        "spool_alloc_bytes": 0,
+        "spool_fs": {"filesystem_type": "unknown", "inode_model": "unknown", "free_inodes": None},
+        "spool_dir": "",
+        "downstream_spool": {},
+        "go_output_bytes": 0,
+        "worker_errors": 0,
+        "status": "incomplete",
+        "failure": reason,
+        "host_id": "",
+        "budget_caps": {},
+        "budget_consumed": {},
+        "http_attempts": {},
+    }
+    primary = {
+        "probe_timeout": "capacity_deadline_exceeded",
+        "probe_error": "capacity_evidence_incomplete",
+        "probe_output_exceeded": "capacity_evidence_incomplete",
+        "downstream_error": "capacity_evidence_incomplete",
+    }[reason]
+    workload["hard_failures"] = _failure_codes(
+        [primary, *_capacity_hard_failure_codes(workload)]
+    )
+    return workload
+
+
+def _walk_spool_usage(path: Any) -> tuple[int, int, int]:
+    """Measure spool directory logical bytes, allocated bytes, file count."""
+    logical = allocated = objects = 0
+    try:
+        root = Path(path)
+    except (OSError, TypeError):
+        return 0, 0, 0
+    if not root.is_dir():
+        return 0, 0, 0
+    for entry in root.rglob("*"):
+        try:
+            if not entry.is_file() or entry.is_symlink():
+                continue
+            info = entry.stat()
+        except OSError:
+            continue
+        logical += info.st_size
+        allocated += info.st_blocks * 512
+        objects += 1
+    return logical, allocated, objects
+
+
+def _process_one_downstream(
+    processor: Any, prefix: str, index: int, job: int
+) -> tuple[int, dict[str, Any]]:
+    """Claim and process one downstream job; mirrors _process_jobs semantics."""
+    started = time.perf_counter()
+    result = processor.process_job(
+        job, owner=f"perf-{prefix}-{index}", lease_seconds=300
+    )
+    if result is None:
+        raise RuntimeError(f"job {job} was not claimable")
+    return index, {
+        "job_id": job,
+        "outcome": result.outcome,
+        "category": result.category,
+        "elapsed_ms": (time.perf_counter() - started) * 1000,
+    }
+
+
+def _drain_downstream(
+    connection_info: str,
+    archive: Any,
+    expected: int,
+    deadline_seconds: float,
+) -> tuple[dict[str, Any], dict[str, Any], float, str]:
+    """Drain python_processing_jobs through the production processor.
+
+    Uses the shared loopback archive server (the Go run PUT every body
+    there, so reads are local loopback hits) with 32 lanes. Every future
+    is reaped with a deadline slice and the pool is shut down without
+    waiting, so a hung task can time out the drain but never hold pool
+    shutdown forever. The deadline here is cooperative: worker threads are
+    never hard-cancelled, so on timeout or error with threads still active
+    this function marks the drain incomplete and deliberately leaves the
+    database connection and the owned spool directory alone for the
+    external wrapper to clean up. Returns (summary, spool_stats,
+    elapsed_seconds, downstream_spool_root).
+    """
+    import concurrent.futures
+
+    import psycopg
+
+    database, processor, _metrics, spool = _processor(connection_info, archive)
+    started = time.perf_counter()
+    deadline = started + deadline_seconds
+    leaked = False
+    pending: dict[Any, int] = {}
+    try:
+        with psycopg.connect(connection_info) as connection:
+            ids = [
+                int(row[0])
+                for row in connection.execute(
+                    """SELECT id FROM python_processing_jobs
+                       WHERE status IN ('pending', 'leased', 'waiting_retry', 'waiting_dependency')
+                       ORDER BY id"""
+                ).fetchall()
+            ]
+            connection.commit()
+        indexed: list[tuple[int, dict[str, Any]]] = []
+        executor = ThreadPoolExecutor(
+            max_workers=_LANES, thread_name_prefix="clashlens-capacity-downstream"
+        )
+        try:
+            position = 0
+            while position < len(ids) or pending:
+                while position < len(ids) and len(pending) < _LANES:
+                    job = ids[position]
+                    lane = position
+                    position += 1
+                    pending[
+                        executor.submit(
+                            _process_one_downstream,
+                            processor,
+                            "capacity-downstream",
+                            lane,
+                            job,
+                        )
+                    ] = lane
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0:
+                    raise _CapacityProbeFailure("probe_timeout", active=bool(pending))
+                done, _ = concurrent.futures.wait(
+                    set(pending), timeout=min(5.0, remaining),
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                for future in done:
+                    indexed.append(future.result())
+                    del pending[future]
+                _check_downstream_peaks(spool)
+        except BaseException as error:
+            leaked = bool(pending)
+            for future in pending:
+                future.cancel()
+            if isinstance(error, _CapacityProbeFailure):
+                error.active = error.active or leaked
+                raise
+            if leaked:
+                raise _CapacityProbeFailure(
+                    "downstream_error",
+                    f"{type(error).__name__}: {error}"[:256],
+                    active=True,
+                ) from error
+            raise
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        tail = 0
+        while tail < len(ids) + 1000:
+            if time.perf_counter() > deadline:
+                raise _CapacityProbeFailure("probe_timeout")
+            result = processor.process_once(
+                owner=f"perf-capacity-tail-{tail}", lease_seconds=30
+            )
+            if result is None:
+                break
+            tick = time.perf_counter()
+            indexed.append(
+                (
+                    len(ids) + tail,
+                    {
+                        "job_id": result.job_id,
+                        "outcome": result.outcome,
+                        "category": result.category,
+                        "elapsed_ms": (time.perf_counter() - tick) * 1000,
+                    },
+                )
+            )
+            tail += 1
+        results = [result for _, result in sorted(indexed)]
+        summary = _result_summary(results, expected=expected)
+        stats = dict(spool.stats())
+        _logical, allocated, _objects = _walk_spool_usage(spool.spool.root)
+        stats["allocated_peak_bytes"] = allocated
+        return summary, stats, float(time.perf_counter() - started), str(spool.spool.root)
+    finally:
+        # Cooperative deadline: when worker threads may still be active
+        # (timeout or error with pending futures), the database connection
+        # and spool directory are deliberately left alone. The failed
+        # artifact records the incomplete drain and the external wrapper
+        # owns cleanup; closing or deleting under live threads would
+        # corrupt their in-flight work and hang pool shutdown.
+        if not leaked:
+            database.close()
+            pls_root = getattr(getattr(spool, "spool", None), "root", "")
+            _remove_owned_spool_dir(
+                pls_root,
+                prefixes=("capacity-spool-", "clashlens-perf-spool-"),
+            )
+
+
+def _check_downstream_peaks(spool: Any) -> None:
+    """Fail a downstream drain whose spool already breaches its cap."""
+    try:
+        stats = spool.stats()
+        peak = int(stats.get("high_water_bytes", 0))
+    except (OSError, ValueError, TypeError, AttributeError):
+        raise _CapacityProbeFailure("downstream_error", "spool unreadable")
+    if peak > CAPACITY_SPOOL_BYTES:
+        raise _CapacityProbeFailure("downstream_error", "spool cap breached")
+
+
+def _run_normal_capacity(
+    connection_info: str,
+    archive: Any,
+    retry_budget: int,
+    timeout_seconds: float,
+) -> tuple[dict[str, Any], Path, Any, bool]:
+    """Execute the integrated Go collector workload plus downstream drain.
+
+    All 25,667 ordinary attempts run inside the Go probe through the
+    production scheduler, key pool, loopback official/archive fixtures, and
+    this disposable database; python_processing_jobs then drain through the
+    production Python processor on the shared archive server. Python only
+    assembles the bounded evidence.
+    """
+    wall_start = time.monotonic()
+    spool_dir = Path(tempfile.mkdtemp(prefix="capacity-spool-"))
+    try:
+        identity = (spool_dir.lstat().st_dev, spool_dir.lstat().st_ino)
+    except OSError:
+        identity = None
+    try:
+        probe = _capacity_probe(
+            connection_info, retry_budget, spool_dir, archive[0], timeout_seconds
+        )
+        spool_fs = _capacity_facts(spool_dir)
+    except _CapacityProbeFailure as failure:
+        _remove_owned_spool_dir(spool_dir, identity)
+        failed = _failed_capacity_workload(failure.reason)
+        failed["wall_seconds"] = float(time.monotonic() - wall_start)
+        return failed, spool_dir, identity, False
+    ordinary = int(probe["ordinary_attempts"])
+    total = int(probe["official_requests"])
+    remaining = timeout_seconds - (time.monotonic() - wall_start) - 60.0
+    if remaining <= 0:
+        _remove_owned_spool_dir(spool_dir, identity)
+        failed = _failed_capacity_workload("probe_timeout")
+        failed["wall_seconds"] = float(time.monotonic() - wall_start)
+        return failed, spool_dir, identity, False
+    try:
+        downstream_summary, downstream_spool, downstream_seconds, _downstream_root = (
+            _drain_downstream(connection_info, archive, total, remaining)
+        )
+        downstream_alloc = int(downstream_spool.get("allocated_peak_bytes", 0))
+    except _CapacityProbeFailure as failure:
+        _remove_owned_spool_dir(spool_dir, identity)
+        failed = _failed_capacity_workload(failure.reason)
+        failed["wall_seconds"] = float(time.monotonic() - wall_start)
+        return failed, spool_dir, identity, bool(getattr(failure, "active", False))
+    except Exception:  # noqa: BLE001 - downstream faults become bounded evidence.
+        _remove_owned_spool_dir(spool_dir, identity)
+        failed = _failed_capacity_workload("downstream_error")
+        failed["wall_seconds"] = float(time.monotonic() - wall_start)
+        return failed, spool_dir, identity, False
+    wall_seconds = time.monotonic() - wall_start
+    workload = {
+        "observations": ordinary,
+        "official_responses": total,
+        "executed_observations": total,
+        "ordinary_attempts": ordinary,
+        "players": int(probe["players"]),
+        "retry_tranche_attempted": int(probe["retry_parents"]),
+        "retry_tranche_processed": int(probe["retries_executed"]),
+        "total_attempts": total,
+        "endpoint_mix": dict(CAPACITY_ENDPOINT_MIX),
+        "response_counts_by_endpoint": dict(CAPACITY_ENDPOINT_MIX),
+        "occurrence_counts_by_endpoint": dict(CAPACITY_ENDPOINT_MIX),
+        "official_loopback_requests": total,
+        "official_remote_requests": 0,
+        "official_bytes": int(probe["official_bytes"]),
+        "aggregation_method": "exact integrated collector run",
+        "lanes": _LANES,
+        "normal_keys": CAPACITY_KEYS,
+        "per_key_rps": CAPACITY_PER_KEY_RPS,
+        "aggregate_rps": CAPACITY_AGGREGATE_RPS,
+        "rate_maxima": {
+            "per_key": int(probe["per_key_max"]),
+            "aggregate": int(probe["aggregate_max"]),
+        },
+        "interactive_attempts": 0,
+        "archive_origin_host": archive[0].split(":", 1)[0],
+        "host_id": probe["host_id"],
+        "s3_ordinary": {
+            "put": int(probe["s3_ordinary_put"]),
+            "head": int(probe["s3_ordinary_head"]),
+            "get": int(probe["s3_ordinary_get"]),
+        },
+        "s3_retry": {
+            "put": int(probe["s3_retry_put"]),
+            "head": int(probe["s3_retry_head"]),
+            "get": int(probe["s3_retry_get"]),
+        },
+        "archive_operations": {},
+        "archive_objects": 0,
+        "archive_stored_bytes": 0,
+        "processing_summary": {
+            "count": ordinary,
+            "expected_count": CAPACITY_ORDINARY_ATTEMPTS,
+        },
+        "retry_summary": {
+            "count": int(probe["retries_executed"]),
+            "expected_count": int(probe["retry_parents"]),
+        },
+        "downstream_summary": {
+            "count": int(downstream_summary["count"]),
+            "expected_count": total,
+        },
+        "retry_lineage": {
+            "attempted": int(probe["retry_parents"]),
+            "processed": int(probe["retries_executed"]),
+            "missing": int(probe["retry_missing"]),
+            "duplicates": int(probe["retry_duplicate"]),
+        },
+        "reset_exclusion": {
+            "regular_allowed": bool(probe["regular_allowed_during_reset"]),
+            "regular_scheduled_dry": int(probe["regular_scheduled_dry"]),
+            "sweep_delta": int(probe["sweep_delta"]),
+            "reset_members": int(probe["reset_members"]),
+        },
+        "capacity_probe": {
+            "executed": True,
+            "test": "TestIssue92CapacityProbe",
+            "elapsed_seconds": float(probe["elapsed_seconds"]),
+        },
+        "seed_seconds": float(probe["seed_ms"]) / 1000,
+        "drain_seconds": float(probe["ordinary_ms"]) / 1000,
+        "retry_seconds": max(0.0, float(probe["drain_ms"] - probe["ordinary_ms"]) / 1000),
+        "downstream_seconds": float(downstream_seconds),
+        "wall_seconds": float(wall_seconds),
+        "probe_wall_seconds": float(probe["wall_ms"]) / 1000,
+        "pg_growth_bytes": int(probe["pg_growth_bytes"]),
+        "pg_peak_bytes": int(probe["pg_peak_bytes"]),
+        "wal_bytes": int(probe["wal_bytes"]),
+        "wal_retained_bytes": int(probe["wal_retained_bytes"]),
+        "wal_retained_peak_bytes": int(probe["wal_retained_peak_bytes"]),
+        "spool_peak_bytes": max(
+            int(probe["spool_peak_bytes"]), int(downstream_alloc)
+        ),
+        "spool_final_bytes": int(probe["spool_final_bytes"]),
+        "spool_temp_bytes": int(probe["spool_temp_bytes"]),
+        "spool_reserved_bytes": int(probe["spool_reserved_bytes"]),
+        "spool_final_objects": int(probe["spool_final_objects"]),
+        "spool_temp_objects": int(probe["spool_temp_objects"]),
+        "spool_reserved_objects": int(probe["spool_reserved_objects"]),
+        "spool_alloc_bytes": int(probe["spool_alloc_bytes"]),
+        "spool_fs": dict(spool_fs),
+        "spool_dir": str(spool_dir),
+        "downstream_spool": {
+            **dict(downstream_spool),
+            "allocated_peak_bytes": int(downstream_alloc),
+        },
+        "budget_caps": {
+            "profile": int(probe["budget_cap_profile"]),
+            "battle_log": int(probe["budget_cap_battlelog"]),
+            "global_player_rankings": int(probe["budget_cap_rankings"]),
+        },
+        "budget_consumed": {
+            "profile": int(probe["budget_used_profile"]),
+            "battle_log": int(probe["budget_used_battlelog"]),
+            "global_player_rankings": int(probe["budget_used_rankings"]),
+        },
+        "http_attempts": {
+            "profile": int(probe["http_profile"]),
+            "battle_log": int(probe["http_battlelog"]),
+            "global_player_rankings": int(probe["http_rankings"]),
+        },
+        "go_output_bytes": int(probe["go_output_bytes"]),
+        "worker_errors": int(probe["worker_errors"]),
+        "status": "complete",
+        "failure": None,
+    }
+    workload["hard_failures"] = _capacity_hard_failure_codes(workload)
+    return workload, spool_dir, identity, False
+
+
+def _capacity_sample(
+    workload: dict[str, Any],
+    measurements: dict[str, Any],
+    connection_info: str,
+    relation_start: dict[str, dict[str, Any]],
+    filesystem_before: dict[str, Any],
+    cpu_start: float,
+    elapsed_start: float,
+    archive: Any,
+    spool_dir: Path,
+) -> dict[str, Any]:
+    """Assemble the standard sample from integrated-run evidence.
+
+    Runs before the disposable schema is dropped, so peak/terminal facts
+    are captured, not reconstructed. The spool directory is an explicit
+    caller-owned read-only input used only for orphan metrics; this
+    function never removes anything and never reads paths from the
+    workload mapping. The workload mapping is never mutated.
+    """
+    if spool_dir is None:
+        raise ValueError("capacity assembly requires an owned spool directory")
+    handler = archive[3]
+    # Archive tallies were recorded on the workload before failure-code
+    # derivation; the mapping is read-only here so validation sees them.
+    archive_operations = dict(workload.get("archive_operations") or {})
+    incomplete = workload.get("status") == "incomplete"
+    orphans = (
+        _orphan_metrics(connection_info, spool_dir)
+        if spool_dir.is_dir() and not incomplete
+        else {"count": 0, "bytes": 0}
+    )
+    pending_age = _pending_age_seconds(connection_info)
+    fs = workload.get("spool_fs") or {}
+    spool_sample = {
+        "final_bytes": int(workload.get("spool_final_bytes", 0)),
+        "temporary_bytes": int(workload.get("spool_temp_bytes", 0)),
+        "high_water_bytes": int(workload.get("spool_peak_bytes", 0)),
+        "final_object_count": int(workload.get("spool_final_objects", 0)),
+        "temporary_object_count": int(workload.get("spool_temp_objects", 0)),
+        "live_reservations": int(workload.get("spool_reserved_objects", 0)),
+        "allocated_blocks": int(workload.get("spool_alloc_bytes", 0)) // 512,
+        "free_inodes": fs.get("free_inodes"),
+        "filesystem_type": fs.get("filesystem_type"),
+        "inode_model": fs.get("inode_model"),
+    }
+    filesystem_after = _filesystem_usage(ROOT)
+    storage_runway = _runway_inputs(
+        filesystem_before,
+        filesystem_after,
+        measurements,
+        relation_start,
+        {
+            "final_bytes": spool_sample["final_bytes"],
+            "temporary_bytes": spool_sample["temporary_bytes"],
+        },
+        int(workload.get("archive_stored_bytes", 0)),
+    )
+    lineage = workload.get("retry_lineage") or {}
+    return {
+        "workload": workload,
+        "database": measurements,
+        "archive_operations": dict(archive_operations),
+        "storage_runway": storage_runway,
+        "evidence": {
+            "response_count": int(workload.get("official_responses", 0)),
+            "executed_responses": int(workload.get("executed_observations", 0)),
+            "projected_responses": 0,
+            "execution_method": workload.get("aggregation_method"),
+            "exact_bytes": int(workload.get("official_bytes", 0)),
+            "archived_bytes": int(workload.get("archive_stored_bytes", 0)),
+            "pending_verification_count": measurements.get(
+                "pending_remote_verification"
+            ),
+            "pending_verification_age_seconds": pending_age,
+            "orphan_count": int(orphans.get("count", 0)),
+            "orphan_bytes": int(orphans.get("bytes", 0)),
+            "official_loopback_requests": int(
+                workload.get("official_loopback_requests", 0)
+            ),
+            "s3_ordinary": dict(workload.get("s3_ordinary", {})),
+            "s3_retry": dict(workload.get("s3_retry", {})),
+            "official_remote_requests": int(
+                workload.get("official_remote_requests", 0)
+            ),
+            "archive_objects": len(handler.objects),
+            "retries": int(lineage.get("attempted", 0)),
+            "downstream_processed": int(
+                (workload.get("downstream_summary") or {}).get("count", 0)
+            ),
+            "downstream_seconds": float(workload.get("downstream_seconds", 0.0)),
+            "retry_seconds": float(workload.get("retry_seconds", 0.0)),
+            "concurrency_lanes": CAPACITY_LANES,
+        },
+        "spool": spool_sample,
+        "elapsed_seconds": time.perf_counter() - elapsed_start,
+        "cpu_seconds": time.process_time() - cpu_start,
+        "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+    }
+
+
+def _incomplete_capacity_sample(
+    workload: dict[str, Any],
+    measurements: dict[str, Any],
+    archive: Any,
+    filesystem_before: dict[str, Any],
+    relation_start: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Assemble a retained sample for a probe that never allocated a spool.
+
+    Used only for the setup-expired path, where no Go spool directory
+    exists and therefore no path value may flow into cleanup. Archive
+    tallies, database measurements, and filesystem facts are still the
+    real shared loopback server and disposable schema; only the
+    never-measured Go evidence stays zero under the incomplete status.
+    """
+    handler = archive[3]
+    archive_operations = {
+        "get": int(handler.gets),
+        "get_bytes": int(handler.get_bytes),
+        "head": int(handler.heads),
+        "conditional_put": int(handler.conditional_puts),
+        "put": int(handler.puts),
+        "put_bytes": int(handler.put_bytes),
+        "conflicts": int(handler.conflicts),
+    }
+    workload["archive_operations"] = archive_operations
+    filesystem_after = _filesystem_usage(ROOT)
+    storage_runway = _runway_inputs(
+        filesystem_before,
+        filesystem_after,
+        measurements,
+        relation_start,
+        {"final_bytes": 0, "temporary_bytes": 0},
+        0,
+    )
+    return {
+        "workload": workload,
+        "database": measurements,
+        "archive_operations": dict(archive_operations),
+        "storage_runway": storage_runway,
+        "evidence": {
+            "response_count": 0,
+            "executed_responses": 0,
+            "exact_bytes": 0,
+            "execution_method": workload.get("aggregation_method"),
+            "retries": 0,
+            "downstream_processed": 0,
+            "downstream_seconds": 0.0,
+            "retry_seconds": 0.0,
+            "concurrency_lanes": CAPACITY_LANES,
+            "archive_objects": len(handler.objects),
+        },
+        "spool": {
+            "final_bytes": 0,
+            "temporary_bytes": 0,
+            "high_water_bytes": 0,
+            "final_object_count": 0,
+            "temporary_object_count": 0,
+            "live_reservations": 0,
+            "allocated_blocks": 0,
+            "free_inodes": None,
+            "filesystem_type": "unknown",
+            "inode_model": "unknown",
+        },
+        "elapsed_seconds": 0.0,
+        "cpu_seconds": 0.0,
+        "peak_rss_kib": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+    }
+
+
+def _capacity_hard_failure_codes(workload: Any, database: Any = None) -> list[str]:
+    """Map capacity acceptance facts to the bounded artifact failure codes.
+
+    Derived during execution from integrated-run measurements, so a bound
+    breach fails the run itself rather than only tripping validation later.
+    """
+    failures: list[str] = []
+    if not isinstance(workload, dict):
+        return _failure_codes(["capacity_evidence_incomplete"])
+    if isinstance(workload, dict) and workload.get("status") == "incomplete":
+        primary = {
+            "probe_timeout": "capacity_deadline_exceeded",
+            "probe_error": "capacity_evidence_incomplete",
+            "probe_output_exceeded": "capacity_evidence_incomplete",
+            "downstream_error": "capacity_evidence_incomplete",
+        }.get(workload.get("failure"), "capacity_evidence_incomplete")
+        failures.append(primary)
+    summary = workload.get("processing_summary")
+    retry_summary = workload.get("retry_summary")
+    attempted = retry_summary.get("expected_count") if isinstance(retry_summary, dict) else None
+    processed = retry_summary.get("count") if isinstance(retry_summary, dict) else None
+    total = workload.get("total_attempts")
+    count_ok = (
+        workload.get("ordinary_attempts") == CAPACITY_ORDINARY_ATTEMPTS
+        and workload.get("players") == CAPACITY_PLAYERS
+        and isinstance(attempted, int)
+        and not isinstance(attempted, bool)
+        and 0 < attempted <= CAPACITY_RETRY_BUDGET
+        and processed == attempted
+        and isinstance(total, int)
+        and not isinstance(total, bool)
+        and total == CAPACITY_ORDINARY_ATTEMPTS + attempted
+        and total <= CAPACITY_TOTAL_CAP
+    )
+    if not count_ok:
+        failures.append("capacity_count_exceeded")
+    mix_ok = (
+        workload.get("endpoint_mix") == dict(CAPACITY_ENDPOINT_MIX)
+        and workload.get("response_counts_by_endpoint") == dict(CAPACITY_ENDPOINT_MIX)
+        and workload.get("occurrence_counts_by_endpoint") == dict(CAPACITY_ENDPOINT_MIX)
+    )
+    if not mix_ok:
+        failures.append("capacity_mix_mismatch")
+    expected_caps = {"profile": 12_833, "battle_log": 13_235, "global_player_rankings": 1}
+    budget_ok = (
+        workload.get("budget_caps") == expected_caps
+        and workload.get("budget_consumed") == workload.get("http_attempts")
+    )
+    if not budget_ok and workload.get("status") != "incomplete":
+        failures.append("capacity_mix_mismatch")
+    if (
+        workload.get("lanes") != CAPACITY_LANES
+        or workload.get("normal_keys") != CAPACITY_KEYS
+        or workload.get("per_key_rps") != CAPACITY_PER_KEY_RPS
+        or workload.get("aggregate_rps") != CAPACITY_AGGREGATE_RPS
+    ):
+        failures.append("capacity_lane_mismatch")
+    maxima = workload.get("rate_maxima")
+    rate_ok = (
+        isinstance(maxima, dict)
+        and isinstance(maxima.get("per_key"), int)
+        and isinstance(maxima.get("aggregate"), int)
+        and 0 < maxima["per_key"] <= CAPACITY_PER_KEY_RPS
+        and 0 < maxima["aggregate"] <= CAPACITY_AGGREGATE_RPS
+    )
+    if not rate_ok:
+        failures.append("capacity_rate_exceeded")
+    if workload.get("interactive_attempts") != 0:
+        failures.append("capacity_interactive_use")
+    worker_errors = workload.get("worker_errors", 0)
+    if not isinstance(worker_errors, int) or isinstance(worker_errors, bool) or worker_errors != 0:
+        failures.append("capacity_worker_errors")
+    lineage = workload.get("retry_lineage")
+    lineage_ok = (
+        isinstance(lineage, dict)
+        and lineage.get("attempted") == attempted
+        and lineage.get("processed") == processed
+        and lineage.get("missing") == 0
+        and lineage.get("duplicates") == 0
+    )
+    if not lineage_ok:
+        failures.append("capacity_lineage_mismatch")
+    exclusion = workload.get("reset_exclusion")
+    exclusion_ok = (
+        isinstance(exclusion, dict)
+        and exclusion.get("regular_allowed") is False
+        and exclusion.get("regular_scheduled_dry") == 0
+        and exclusion.get("sweep_delta") == 0
+    )
+    if not exclusion_ok:
+        failures.append("capacity_reset_admitted")
+    try:
+        drain = float(workload.get("drain_seconds", math.inf))
+        wall = float(workload.get("wall_seconds", math.inf))
+    except (TypeError, ValueError):
+        drain = wall = math.inf
+    if not 0 <= drain <= CAPACITY_DRAIN_SECONDS or not 0 <= wall <= CAPACITY_WALL_SECONDS:
+        failures.append("capacity_deadline_exceeded")
+    try:
+        spool_peak = int(workload.get("spool_peak_bytes", -1))
+    except (TypeError, ValueError):
+        spool_peak = -1
+    if not 0 <= spool_peak <= CAPACITY_SPOOL_BYTES:
+        failures.append("capacity_spool_exceeded")
+    # Relation growth is reported evidence; the enforced PostgreSQL bound
+    # is the peak footprint (relation high-water growth + WAL) against the
+    # central authorized peak. A projected 105MB growth is therefore governed
+    # by the 320MiB peak, not by the retired 32MiB growth figure.
+    try:
+        pg_peak = int(workload.get("pg_peak_bytes", -1))
+    except (TypeError, ValueError):
+        pg_peak = -1
+    if not 0 <= pg_peak <= CAPACITY_PG_PEAK_BYTES:
+        failures.append("capacity_pg_exceeded")
+    downstream = workload.get("downstream_summary")
+    for entry in (summary, retry_summary, downstream):
+        if isinstance(entry, dict) and entry.get("count") != entry.get("expected_count"):
+            failures.append("fixed_acceptance_failure")
+            break
+    archive_operations = workload.get("archive_operations")
+    if isinstance(archive_operations, dict) and archive_operations.get("conflicts"):
+        failures.append("capacity_evidence_incomplete")
+    # The retained spool peak already merges the downstream allocated
+    # peak, so the combined footprint adds each term once.
+    try:
+        footprint = (
+            int(workload.get("spool_peak_bytes", -1))
+            + int(workload.get("pg_peak_bytes", -1))
+            + int(workload.get("go_output_bytes", -1))
+        )
+    except (TypeError, ValueError):
+        footprint = -1
+    if footprint < 0 or footprint > CAPACITY_TOTAL_BYTES:
+        failures.append("capacity_total_exceeded")
+    if isinstance(database, dict) and database.get("queue_residue"):
+        failures.append("queue_residue")
+    return _failure_codes(failures)
 
 
 def _run_mixed(
@@ -5828,6 +7068,373 @@ def _collector_archive_probe(count: int) -> dict[str, Any]:
         **totals,
         "elapsed_seconds": time.perf_counter() - started,
     }
+
+
+_CAPACITY_PROBE_MARKER = "CLASHLENS_CAPACITY_PROBE="
+_CAPACITY_PROBE_INT_KEYS = frozenset(
+    {
+        "players",
+        "lanes",
+        "profile_attempts",
+        "battlelog_attempts",
+        "ranking_attempts",
+        "ordinary_attempts",
+        "retry_injected",
+        "retry_parents",
+        "retry_missing",
+        "retry_duplicate",
+        "retries_executed",
+        "retry_budget",
+        "worker_errors",
+        "keys",
+        "per_key_rps",
+        "aggregate_rps",
+        "per_key_max",
+        "aggregate_max",
+        "official_requests",
+        "official_bytes",
+        "s3_ordinary_put",
+        "s3_ordinary_head",
+        "s3_ordinary_get",
+        "s3_retry_put",
+        "s3_retry_head",
+        "s3_retry_get",
+        "budget_cap_profile",
+        "budget_cap_battlelog",
+        "budget_cap_rankings",
+        "budget_used_profile",
+        "budget_used_battlelog",
+        "budget_used_rankings",
+        "http_profile",
+        "http_battlelog",
+        "http_rankings",
+        "spool_peak_bytes",
+        "spool_final_bytes",
+        "spool_temp_bytes",
+        "spool_reserved_bytes",
+        "spool_final_objects",
+        "spool_temp_objects",
+        "spool_reserved_objects",
+        "spool_alloc_bytes",
+        "pg_growth_bytes",
+        "pg_peak_bytes",
+        "wal_bytes",
+        "wal_retained_bytes",
+        "wal_retained_peak_bytes",
+        "seed_ms",
+        "ordinary_ms",
+        "drain_ms",
+        "wall_ms",
+        "sweep_delta",
+        "regular_scheduled_dry",
+        "reset_members",
+    }
+)
+_CAPACITY_PROBE_BOOL_KEYS = frozenset(
+    {
+        "regular_allowed_during_reset",
+        "reset_gate_dry",
+    }
+)
+_CAPACITY_PROBE_STR_KEYS = frozenset({"host_id"})
+
+
+def _parse_capacity_probe_marker(output: str) -> dict[str, Any]:
+    markers = [
+        line.removeprefix(_CAPACITY_PROBE_MARKER)
+        for line in output.splitlines()
+        if line.startswith(_CAPACITY_PROBE_MARKER)
+    ]
+    if len(markers) != 1:
+        raise RuntimeError(
+            f"capacity probe emitted {len(markers)} markers, want exactly 1"
+        )
+    if len(markers[0]) > 4096:
+        raise RuntimeError("capacity probe evidence exceeds 4096 bytes")
+    try:
+        parsed = json.loads(markers[0])
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"malformed capacity probe marker: {error}") from error
+    if (
+        not isinstance(parsed, dict)
+        or set(parsed) != _CAPACITY_PROBE_INT_KEYS | _CAPACITY_PROBE_BOOL_KEYS | _CAPACITY_PROBE_STR_KEYS
+        or any(
+            not isinstance(parsed.get(key), int) or isinstance(parsed.get(key), bool)
+            for key in _CAPACITY_PROBE_INT_KEYS
+        )
+        or any(not isinstance(parsed.get(key), bool) for key in _CAPACITY_PROBE_BOOL_KEYS)
+        or any(not isinstance(parsed.get(key), str) for key in _CAPACITY_PROBE_STR_KEYS)
+        or not 0 < len(parsed.get("host_id", "")) <= 256
+    ):
+        raise RuntimeError("capacity probe marker has invalid evidence shape")
+    return parsed
+
+
+class _CapacityProbeFailure(RuntimeError):
+    """Bounded probe failure carrying a fixed reason for the manifest."""
+
+    def __init__(self, reason: str, detail: str = "", active: bool = False) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail[:256]
+        # active marks failures raised while downstream worker threads may
+        # still be alive. Callers must not tear down shared dependencies
+        # (and the run must not return through context exits) in that case.
+        self.active = active
+
+
+_CAPACITY_FAILURE_REASONS = frozenset(
+    {"probe_timeout", "probe_error", "probe_output_exceeded", "downstream_error"}
+)
+
+
+def _run_bounded_process(
+    command: list[str],
+    env: dict[str, str],
+    timeout_seconds: float,
+    output_cap_bytes: int,
+) -> tuple[int, str, int, bool, bool]:
+    """Run one subprocess with a single deadline and bounded streaming output.
+
+    Single-threaded selectors with nonblocking reads cap each stream;
+    select/drain stop at the deadline minus a small cleanup reserve, and
+    every timeout/output/error exit kills the whole process group and
+    reaps inside the reserve. The child never outlives the call and output
+    never exceeds the cap plus one read chunk. Returns (returncode, text,
+    output_bytes, timed_out, size_exceeded).
+    """
+    import selectors
+    import signal
+
+    _CLEANUP_RESERVE = 1.0
+    deadline = time.monotonic() + timeout_seconds
+    wait_end = deadline - _CLEANUP_RESERVE
+    process = subprocess.Popen(
+        command,
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        start_new_session=True,
+    )
+    for stream in (process.stdout,):
+        os.set_blocking(stream.fileno(), False)
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, "out")
+    buffer = bytearray()
+    total = 0
+    exit_reason: str | None = None
+    try:
+        while True:
+            if process.poll() is not None:
+                break
+            remaining = wait_end - time.monotonic()
+            if remaining <= 0:
+                exit_reason = "timeout"
+                break
+            for key, _mask in selector.select(timeout=min(remaining, 0.05)):
+                try:
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                except BlockingIOError:
+                    continue
+                except OSError:
+                    break
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > output_cap_bytes:
+                    exit_reason = "size"
+                    break
+                buffer += chunk
+            if exit_reason is not None:
+                break
+        if exit_reason is None and process.poll() is None:
+            exit_reason = "timeout"
+        eof_observed = False
+        if exit_reason is None:
+            # Leader exited: keep draining descendants under the same
+            # deadline and cap so a chatty orphan can neither hang nor
+            # flood us. Only an empty read ends the drain, which happens
+            # once every writer (leader and descendants) is gone; idle
+            # ticks simply wait out the deadline.
+            while True:
+                remaining = wait_end - time.monotonic()
+                if remaining <= 0:
+                    exit_reason = "timeout"
+                    break
+                for key, _mask in selector.select(timeout=min(remaining, 0.05)):
+                    try:
+                        chunk = os.read(key.fileobj.fileno(), 65536)
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        break
+                    if not chunk:
+                        eof_observed = True
+                        break
+                    total += len(chunk)
+                    if total > output_cap_bytes:
+                        exit_reason = "size"
+                        break
+                    buffer += chunk
+                if exit_reason is not None or eof_observed:
+                    break
+        if exit_reason is not None:
+            raise subprocess.TimeoutExpired(command, timeout_seconds)
+        text = bytes(buffer).decode("utf-8", "replace")
+        return process.returncode, text, total, False, False
+    except subprocess.TimeoutExpired:
+        size = exit_reason == "size"
+        return -1, "", total, not size, size
+    finally:
+        # Centralized cleanup: the process group is killed even when the
+        # leader already exited (descendants may still hold the pipes);
+        # the kill is skipped only after a clean EOF drained every writer,
+        # which keeps the pid-reuse window negligible. The group is then
+        # reaped inside the reserve.
+        if not eof_observed:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+        try:
+            process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        finally:
+            selector.close()
+            try:
+                process.stdout.close()
+            except OSError:
+                pass
+
+
+def _capacity_probe(
+    connection_info: str,
+    retry_budget: int,
+    spool_dir: Path,
+    archive_endpoint: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Run the integrated Go collector workload against the disposable schema."""
+    started = time.perf_counter()
+    returncode, tail, output_bytes, timed_out, size_exceeded = _run_bounded_process(
+        [
+            "go",
+            "test",
+            "./internal/collector",
+            "-run",
+            "^TestIssue92CapacityProbe$",
+            "-count=1",
+            "-timeout=600s",
+            "-v",
+        ],
+        env={
+            **os.environ,
+            "CLASHLENS_CAPACITY_DATABASE_URL": connection_info,
+            "CLASHLENS_CAPACITY_RETRY_BUDGET": str(retry_budget),
+            "CLASHLENS_CAPACITY_SPOOL_DIR": str(spool_dir),
+            "CLASHLENS_CAPACITY_ARCHIVE_ENDPOINT": archive_endpoint,
+        },
+        timeout_seconds=timeout_seconds,
+        output_cap_bytes=16 << 20,
+    )
+    if timed_out:
+        raise _CapacityProbeFailure("probe_timeout")
+    if size_exceeded:
+        raise _CapacityProbeFailure("probe_output_exceeded")
+    if returncode:
+        raise _CapacityProbeFailure("probe_error", tail)
+    try:
+        evidence = _parse_capacity_probe_marker(tail)
+    except RuntimeError as error:
+        raise _CapacityProbeFailure("probe_error", str(error)) from error
+    # Fixed-workload identity: anything else is a contradiction, not evidence.
+    # (Bounds such as wall/spool/pg become failure codes via the workload.)
+    contradictions = []
+    if evidence["players"] != CAPACITY_PLAYERS or evidence["lanes"] != CAPACITY_LANES:
+        contradictions.append("fixed workload identity")
+    if (
+        evidence["profile_attempts"] != CAPACITY_ENDPOINT_MIX["profile"]
+        or evidence["battlelog_attempts"] != CAPACITY_ENDPOINT_MIX["battle_log"]
+        or evidence["ranking_attempts"] != CAPACITY_ENDPOINT_MIX["global_player_rankings"]
+        or evidence["ordinary_attempts"] != CAPACITY_ORDINARY_ATTEMPTS
+    ):
+        contradictions.append("ordinary endpoint mix")
+    if (
+        evidence["retry_parents"] <= 0
+        or evidence["retry_parents"] != evidence["retry_injected"]
+        or evidence["retry_parents"] != evidence["retries_executed"]
+        or evidence["retry_missing"] != 0
+        or evidence["retry_duplicate"] != 0
+        or evidence["retry_parents"] > retry_budget
+        or evidence["retry_budget"] != retry_budget
+    ):
+        contradictions.append("retry lineage")
+    if (
+        evidence["keys"] != CAPACITY_KEYS
+        or evidence["per_key_rps"] != CAPACITY_PER_KEY_RPS
+        or evidence["aggregate_rps"] != CAPACITY_AGGREGATE_RPS
+        or not 0 < evidence["per_key_max"] <= CAPACITY_PER_KEY_RPS
+        or not 0 < evidence["aggregate_max"] <= CAPACITY_AGGREGATE_RPS
+    ):
+        contradictions.append("rate evidence")
+    if evidence["official_requests"] != (
+        evidence["ordinary_attempts"] + evidence["retries_executed"]
+    ):
+        contradictions.append("loopback request accounting")
+    s3_puts = evidence["s3_ordinary_put"] + evidence["s3_retry_put"]
+    s3_gets = evidence["s3_ordinary_get"] + evidence["s3_retry_get"]
+    if (
+        s3_puts <= 0
+        or s3_gets <= 0
+        or s3_puts > evidence["official_requests"]
+        or s3_gets > 3 * evidence["official_requests"]
+    ):
+        contradictions.append("S3 operation counts")
+    if (
+        evidence["regular_allowed_during_reset"] is not False
+        or evidence["reset_gate_dry"] is not True
+        or evidence["regular_scheduled_dry"] != 0
+        or evidence["sweep_delta"] != 0
+        or evidence["reset_members"] != 2
+    ):
+        contradictions.append("reset exclusion")
+    expected_caps = {"profile": 12_833, "battle_log": 13_235, "global_player_rankings": 1}
+    if (
+        evidence["budget_cap_profile"] != expected_caps["profile"]
+        or evidence["budget_cap_battlelog"] != expected_caps["battle_log"]
+        or evidence["budget_cap_rankings"] != expected_caps["global_player_rankings"]
+        or sum(expected_caps.values()) > CAPACITY_TOTAL_CAP
+    ):
+        contradictions.append("budget caps")
+    # Deterministic scale-exact HTTP totals: every player fetches profile
+    # once; battle_log adds one retry fetch per 32nd player; ranking is one.
+    players = evidence["players"]
+    expected_http = {
+        "profile": players,
+        "battle_log": players + (players + 31) // 32,
+        "global_player_rankings": 1,
+    }
+    if (
+        evidence["budget_used_profile"] != evidence["http_profile"]
+        or evidence["budget_used_battlelog"] != evidence["http_battlelog"]
+        or evidence["budget_used_rankings"] != evidence["http_rankings"]
+        or evidence["http_profile"] != expected_http["profile"]
+        or evidence["http_battlelog"] != expected_http["battle_log"]
+        or evidence["http_rankings"] != expected_http["global_player_rankings"]
+    ):
+        contradictions.append("budget consumption")
+    if evidence["ordinary_ms"] <= 0 or evidence["drain_ms"] < evidence["ordinary_ms"]:
+        contradictions.append("timing split")
+    if evidence["worker_errors"] != 0:
+        contradictions.append("worker errors")
+    if contradictions:
+        raise _CapacityProbeFailure(
+            "probe_error",
+            "contradicts the workload: " + "; ".join(contradictions),
+        )
+    return {**evidence, "elapsed_seconds": time.perf_counter() - started, "go_output_bytes": output_bytes}
 
 
 def _run_army_read_sample(database_url: str, fact_count: int) -> dict[str, Any]:
@@ -6432,6 +8039,8 @@ def _provenance(
         "analytics_lanes": getattr(arguments, "analytics_lanes", STEP5_ANALYTICS_LANES),
         "duplicate_cycles": arguments.duplicate_cycles,
         "duplicate_endpoint_mix": dict(DUPLICATE_ENDPOINT_MIX),
+        "capacity_endpoint_mix": dict(CAPACITY_ENDPOINT_MIX),
+        "capacity_retry_budget": arguments.capacity_retries,
         "skip_collector_probe": arguments.skip_collector_probe,
     }
     configuration_fingerprint = _sha(
@@ -6535,6 +8144,10 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
         else [0]
     )
     for population in populations:
+        # The whole-run deadline for normal-capacity starts before schema
+        # creation so setup, probe, downstream, snapshots, cleanup, and the
+        # failure receipt all fit inside 600 seconds.
+        mode_start = time.monotonic()
         with (
             domain_database(
                 arguments.database_url, include_coordinator=True
@@ -6567,6 +8180,29 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         cycles=arguments.duplicate_cycles,
                     )
                     workload["collector_archive_operations"] = duplicate_archive_probe
+                elif arguments.mode == NORMAL_CAPACITY_MODE:
+                    # One whole-run deadline covers schema/setup/probe/
+                    # downstream/cleanup; the probe gets what remains minus
+                    # a downstream/cleanup reserve, or fails fast.
+                    mode_remaining = CAPACITY_WALL_SECONDS - (
+                        time.monotonic() - mode_start
+                    )
+                    if mode_remaining < 180:
+                        workload = _failed_capacity_workload("probe_timeout")
+                        workload["wall_seconds"] = (
+                            CAPACITY_WALL_SECONDS - mode_remaining
+                        )
+                        owned_spool_dir, owned_identity = None, None
+                        awaiting_kill = False
+                    else:
+                        workload, owned_spool_dir, owned_identity, awaiting_kill = (
+                            _run_normal_capacity(
+                                connection_info,
+                                archive,
+                                arguments.capacity_retries,
+                                max(120.0, mode_remaining - 120.0),
+                            )
+                        )
                 else:
                     workload = _run_mixed(
                         connection_info,
@@ -6574,6 +8210,27 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                         arguments.live_jobs,
                         arguments.backfill_jobs,
                     )
+                if arguments.mode == NORMAL_CAPACITY_MODE and awaiting_kill:
+                    # Downstream worker threads may still be alive: no
+                    # snapshot, tally, assembly, validation, output, or
+                    # cleanup may run first, and no exception may unwind
+                    # the live schema/server/spool contexts. The wrapper v5
+                    # emergency receipt is the retained record; hold here
+                    # until its SIGTERM/KILL boundary. Only the wrapper's
+                    # termination ends this wait; anything else keeps holding.
+                    try:
+                        print(
+                            "capacity drain unquiesced: awaiting external "
+                            "wrapper kill",
+                            file=sys.stderr,
+                        )
+                    except OSError:
+                        pass
+                    while True:
+                        try:
+                            Event().wait()
+                        except BaseException:  # noqa: BLE001, S112 - any interruption must keep holding live contexts; the wrapper boundary is the only exit.
+                            continue
                 hard_failures.extend(workload.get("hard_failures", []))
             if arguments.mode == "coordinator-12500":
                 measurements = _db_snapshot(
@@ -6627,6 +8284,76 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
                 hard_failures.extend(
                     _duplicate_hard_failure_codes(workload, measurements)
                 )
+            if arguments.mode == NORMAL_CAPACITY_MODE:
+                if not archive[0].startswith("127.0.0.1:"):
+                    raise RuntimeError("capacity archive origin is not loopback")
+                try:
+                    handler = archive[3]
+                    workload["archive_operations"] = {
+                        "get": int(handler.gets),
+                        "get_bytes": int(handler.get_bytes),
+                        "head": int(handler.heads),
+                        "conditional_put": int(handler.conditional_puts),
+                        "put": int(handler.puts),
+                        "put_bytes": int(handler.put_bytes),
+                        "conflicts": int(handler.conflicts),
+                    }
+                    # The shared handler owns the object store: bind its
+                    # actual object count and stored bytes so workload and
+                    # evidence agree on one measured source of truth.
+                    workload["archive_objects"] = len(handler.objects)
+                    workload["archive_stored_bytes"] = sum(
+                        len(body) for body in handler.objects.values()
+                    )
+                    # Final growth includes downstream writes; the peak is
+                    # the larger of the in-run probe peak and this terminal
+                    # value plus WAL.
+                    relation_end = _relation_snapshot(connection_info)
+                    growth_end = sum(
+                        int(relation_end[name]["total_bytes"])
+                        - int(relation_start[name]["total_bytes"])
+                        for name in relation_end
+                        if name in relation_start
+                    )
+                    workload["pg_growth_bytes"] = max(
+                        int(workload.get("pg_growth_bytes", 0)), growth_end
+                    )
+                    workload["pg_peak_bytes"] = max(
+                        int(workload.get("pg_peak_bytes", 0)),
+                        growth_end + int(measurements.get("wal_bytes", 0)),
+                    )
+                    hard_failures.extend(
+                        _capacity_hard_failure_codes(workload, measurements)
+                    )
+                    if owned_spool_dir is None:
+                        # Setup-expired: no spool was ever allocated, so no
+                        # path value may flow into assembly or cleanup.
+                        samples.append(
+                            _incomplete_capacity_sample(
+                                workload,
+                                measurements,
+                                archive,
+                                filesystem_before,
+                                relation_start,
+                            )
+                        )
+                    else:
+                        samples.append(
+                            _capacity_sample(
+                                workload,
+                                measurements,
+                                connection_info,
+                                relation_start,
+                                filesystem_before,
+                                cpu_start,
+                                elapsed_start,
+                                archive,
+                                owned_spool_dir,
+                            )
+                        )
+                finally:
+                    _remove_owned_spool_dir(owned_spool_dir, owned_identity)
+                continue
             if "official_responses" not in workload:
                 raise RuntimeError(
                     "workload did not report its exact official response count"
@@ -6803,6 +8530,9 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--army-facts", type=int, default=1_000)
     parser.add_argument("--lanes", type=int, default=32)
     parser.add_argument("--duplicate-cycles", type=int, default=1)
+    parser.add_argument(
+        "--capacity-retries", type=int, default=CAPACITY_RETRY_BUDGET
+    )
     parser.add_argument("--army-warmups", type=int, default=STEP5_WARMUPS)
     parser.add_argument("--army-requests", type=int, default=STEP5_REQUESTS)
     parser.add_argument("--analytics-lanes", type=int, default=STEP5_ANALYTICS_LANES)
@@ -6849,6 +8579,14 @@ def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--lanes must be between 1 and 64")
     if arguments.duplicate_cycles < 1 or arguments.duplicate_cycles > 4:
         parser.error("--duplicate-cycles must be between 1 and 4")
+    if not CAPACITY_RETRY_MINIMUM <= arguments.capacity_retries <= CAPACITY_RETRY_BUDGET:
+        parser.error(
+            f"--capacity-retries must be between {CAPACITY_RETRY_MINIMUM} and {CAPACITY_RETRY_BUDGET}"
+        )
+    if arguments.mode == NORMAL_CAPACITY_MODE and arguments.lanes != CAPACITY_LANES:
+        parser.error(
+            f"normal-capacity requires exactly {CAPACITY_LANES} lanes"
+        )
     if arguments.mode == STEP5_MODE and (
         arguments.army_warmups != STEP5_WARMUPS
         or arguments.army_requests != STEP5_REQUESTS

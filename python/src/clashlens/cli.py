@@ -111,6 +111,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     worker.add_argument("--operating-snapshot-file", default="")
     worker.add_argument(
+        "--terminal-snapshot-file",
+        default="",
+        help=("distinct persistent per-replica terminal snapshot, written "
+              "once after the heartbeat joins and archive work quiesces; "
+              "a write failure is a worker failure, never silent "
+              "completeness"),
+    )
+    worker.add_argument(
         "--disable-player-discovery",
         action="store_true",
         help="retain discovery evidence without enqueueing discovered player profiles",
@@ -707,22 +715,57 @@ def _run_worker(arguments: argparse.Namespace) -> int:
         finally:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=5)
+            # A terminal claim requires proven quiescence: if the
+            # heartbeat is still inside readiness/health/archive calls,
+            # nothing terminal may be marked and no snapshot may follow.
+            heartbeat_stuck = heartbeat_thread.is_alive()
+        # The terminal snapshot goes to a DISTINCT per-replica path that
+        # the heartbeat never writes, after the batch loop has exited and
+        # the heartbeat has joined: no late heartbeat write can overwrite
+        # terminal evidence, and capture provably follows quiescence.
+        terminal_file = getattr(arguments, "terminal_snapshot_file", "")
+        if terminal_file and heartbeat_stuck:
+            stopped = {
+                "status": "stopped",
+                "processed_count": processed_count,
+                "results": [asdict(result) for result in recent_results],
+                "terminal_snapshot": "heartbeat_unfinished",
+            }
+            print(json.dumps(stopped))
+            return 1
         final_snapshot = operating_snapshot()
-        print(
-            json.dumps(
-                {
-                    "status": "stopped",
-                    "processed_count": processed_count,
-                    "results": [asdict(result) for result in recent_results],
-                    "database_pool": final_snapshot["database_pool"],
-                    "stages": final_snapshot["stages"],
-                    "archive": {
-                        "spool": final_snapshot["spool"],
-                        **final_snapshot["archive"],
-                    },
-                }
-            )
-        )
+        terminal_status = "disabled"
+        if terminal_file:
+            terminal_payload = dict(final_snapshot)
+            terminal_payload["schema"] = "clashlens-worker-terminal-v1"
+            terminal_payload["producer"] = "worker"
+            terminal_payload["terminal"] = True
+            terminal_payload["captured_at"] = datetime.now(tz=UTC).isoformat()
+            try:
+                write_private_snapshot(
+                    Path(terminal_file), terminal_payload)
+            except OSError:
+                terminal_status = "unavailable"
+            else:
+                terminal_status = "written"
+        stopped = {
+            "status": "stopped",
+            "processed_count": processed_count,
+            "results": [asdict(result) for result in recent_results],
+            "database_pool": final_snapshot["database_pool"],
+            "stages": final_snapshot["stages"],
+            "archive": {
+                "spool": final_snapshot["spool"],
+                **final_snapshot["archive"],
+            },
+        }
+        if terminal_file:
+            stopped["terminal_snapshot"] = terminal_status
+        print(json.dumps(stopped))
+        # A terminal persistence failure stays incomplete: the observer
+        # must never read this replica as cleanly accounted.
+        if terminal_status == "unavailable":
+            return 1
         return 0
     finally:
         database.close()
