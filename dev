@@ -431,6 +431,7 @@ run_checks() {
     --tag "$IMAGE_PREFIX-website-check" "$ROOT/website"
 
   "$PODMAN_BIN" run --rm --user 10001:10001 --env GOCACHE=/tmp/go-cache \
+    --tmpfs /src/.embedded-postgres-go:rw,mode=1777 \
     "$IMAGE_PREFIX-go-check" sh -c \
     'go build ./... && go vet ./... && go test -short -count=1 -timeout=1200s ./...' || result=$?
   if [[ "$result" == 0 ]]; then
