@@ -135,7 +135,13 @@ wait_for_postgres() {
   local attempt
   for attempt in $(seq 1 90); do
     if "$PODMAN_BIN" exec "$POSTGRES" pg_isready -q -U clashlens -d clashlens; then
-      return
+      # The image briefly accepts connections while its entrypoint creates the
+      # database, then restarts PostgreSQL. Require readiness after that window.
+      sleep 1
+      if "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+        -c 'SELECT 1' | grep -qx 1; then
+        return
+      fi
     fi
     sleep 1
   done
