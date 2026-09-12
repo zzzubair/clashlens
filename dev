@@ -560,6 +560,7 @@ run_checks() {
   fi
   if [[ "$result" == 0 ]]; then
     "$PODMAN_BIN" run --rm --pod "$POD" \
+      --volume "$ROOT/testdata:/testdata:ro,Z" \
       --env CLASHLENS_E2E_EXTERNAL_STACK=1 \
       "$IMAGE_PREFIX-website-check" || result=$?
   fi

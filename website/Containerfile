@@ -12,6 +12,9 @@ CMD ["node", "./tests/fixtures/login-provider.ts"]
 
 FROM build AS check
 
+WORKDIR /
+RUN mv /app /website
+WORKDIR /website
 RUN npx playwright install --with-deps chromium
 ENV CLASHLENS_E2E_EXTERNAL_STACK=1
 CMD ["sh", "-c", "npm test && npm run build:verify && npx playwright test"]
