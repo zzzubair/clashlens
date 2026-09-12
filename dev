@@ -9,7 +9,7 @@ OIDC_PORT=8011
 DISCORD_PORT=8012
 HMAC_KEY_B64=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
 LOGIN_KEY_B64=QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8
-OFFICIAL_KEY=dev-official-key
+OFFICIAL_KEY=dev-interactive-key
 ARCHIVE_MARKER_HASH=16d586e6c52a90aed1fed855fd03e9ce7257319cfcb5b824cb52015989b52192
 REPO_KEY=$(printf '%s' "$ROOT" | sha256sum | cut -c1-10)
 IMAGE_PREFIX="localhost/clashlens-dev-$REPO_KEY"
@@ -57,10 +57,20 @@ parse_players() {
 
 select_project() {
   local scope=${1:-dev}
+  PUBLISHED_WEBSITE_PORT=$WEBSITE_PORT
+  PUBLISHED_OIDC_PORT=$OIDC_PORT
+  PUBLISHED_DISCORD_PORT=$DISCORD_PORT
   if [[ "$scope" == dev ]]; then
     PROJECT="clashlens-dev-$REPO_KEY-$PLAYERS"
   else
     PROJECT="clashlens-dev-$REPO_KEY-$scope"
+  fi
+  if [[ "$scope" == check ]]; then
+    # The acceptance stack stays reachable from its test container on the
+    # normal pod ports while avoiding a developer's already-running stack.
+    PUBLISHED_WEBSITE_PORT=15173
+    PUBLISHED_OIDC_PORT=18011
+    PUBLISHED_DISCORD_PORT=18012
   fi
   POD="$PROJECT"
   POSTGRES="$PROJECT-postgres"
@@ -129,7 +139,8 @@ wait_for_postgres() {
     fi
     sleep 1
   done
-  die "PostgreSQL did not become ready; run ./dev logs postgres"
+  printf 'dev: PostgreSQL did not become ready; run ./dev logs postgres\n' >&2
+  return 1
 }
 
 apply_migrations() {
@@ -203,9 +214,9 @@ initialize_spool() {
 
 start_dependencies() {
   "$PODMAN_BIN" pod create --name "$POD" --share net,ipc \
-    --publish "$WEBSITE_HOST:$WEBSITE_PORT:5173" \
-    --publish "127.0.0.1:$OIDC_PORT:$OIDC_PORT" \
-    --publish "127.0.0.1:$DISCORD_PORT:$DISCORD_PORT" >/dev/null
+    --publish "$WEBSITE_HOST:$PUBLISHED_WEBSITE_PORT:5173" \
+    --publish "127.0.0.1:$PUBLISHED_OIDC_PORT:$OIDC_PORT" \
+    --publish "127.0.0.1:$PUBLISHED_DISCORD_PORT:$DISCORD_PORT" >/dev/null
 
   "$PODMAN_BIN" run --detach --pod "$POD" --name "$POSTGRES" \
     --env POSTGRES_DB=clashlens --env POSTGRES_USER=clashlens \
@@ -275,8 +286,8 @@ start_application() {
     --env CLASHLENS_OFFICIAL_API_ORIGIN=http://127.0.0.1:8080 \
     --env CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=true \
     --env CLASHLENS_ALLOW_REDUCED_KEY_POOLS=true \
-    --env CLASHLENS_NORMAL_API_KEYS=normal-1=dev-official-key \
-    --env CLASHLENS_INTERACTIVE_API_KEYS=interactive-1=dev-official-key \
+    --env CLASHLENS_NORMAL_API_KEYS=normal-1=dev-normal-key \
+    --env CLASHLENS_INTERACTIVE_API_KEYS=interactive-1=dev-interactive-key \
     --env CLASHLENS_ENABLE_GLOBAL_RANKINGS=true \
     --env CLASHLENS_POLL_CYCLE=1h \
     --env CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=30 \
@@ -324,7 +335,8 @@ wait_for_application() {
     fi
     sleep 1
   done
-  die "the first player page did not become ready; run ./dev logs"
+  printf 'dev: the first player page did not become ready; run ./dev logs\n' >&2
+  return 1
 }
 
 up_stack() {
@@ -343,7 +355,7 @@ up_stack() {
   wait_for_application
   elapsed=$(( $(date +%s) - started_at ))
   printf 'Clash Lens is ready at http://%s:%s (%ss, %s synthetic players).\n' \
-    "$WEBSITE_HOST" "$WEBSITE_PORT" "$elapsed" "$PLAYERS"
+    "$WEBSITE_HOST" "$PUBLISHED_WEBSITE_PORT" "$elapsed" "$PLAYERS"
 }
 
 show_status() {
@@ -377,7 +389,9 @@ run_checks() {
   PLAYERS=200
   select_project check
   trap 'remove_stack true' EXIT
+  trap 'status=$?; trap - ERR; show_logs; exit "$status"' ERR
   up_stack true
+  trap - ERR
 
   "$PODMAN_BIN" build --target build --file "$ROOT/Containerfile" \
     --tag "$IMAGE_PREFIX-go-check" "$ROOT"

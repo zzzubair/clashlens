@@ -46,6 +46,13 @@ export async function signIn(page: Page): Promise<void> {
   await expect(page).toHaveURL(/\/account(\/setup)?$/);
 }
 
+/** Complete the local Discord sign-in flow against the loopback provider. */
+export async function signInDiscord(page: Page): Promise<void> {
+  await page.goto("/login");
+  await page.getByRole("link", { name: "Continue with Discord" }).click();
+  await expect(page).toHaveURL(/\/account(\/setup)?$/);
+}
+
 /** Create the account only when this identity has not already been used. */
 export async function ensureAccount(
   page: Page,
