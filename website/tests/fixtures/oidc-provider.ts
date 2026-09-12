@@ -29,7 +29,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import type { CryptoKey } from "jose";
 
-const HOST = "127.0.0.1";
+const BIND_HOST = envOr("CLASHLENS_FIXTURE_BIND_HOST", "127.0.0.1");
+const PUBLIC_HOST = envOr("CLASHLENS_FIXTURE_OIDC_PUBLIC_HOST", "127.0.0.1");
 const DEFAULT_PORT = 8011;
 const KEY_ID = "fixture-rs256-1";
 const AUTH_CODE_TTL_SECONDS = 60;
@@ -56,7 +57,7 @@ const REDIRECT_URI = envOr(
 const PORT = Number(process.env.CLASHLENS_FIXTURE_OIDC_PORT ?? DEFAULT_PORT);
 
 /** Exact issuer string; the website compares it with trailing slash. */
-const ISSUER = `http://${HOST}:${PORT}/`;
+const ISSUER = `http://${PUBLIC_HOST}:${PORT}/`;
 
 const CLIENT_ID_PATTERN = /^[A-Za-z0-9._~-]{1,256}$/;
 const STATE_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
@@ -175,7 +176,7 @@ function handleAuthorize(response: ServerResponse, rawUrl: string): void {
     errorPage(response, "request too large");
     return;
   }
-  const url = new URL(rawUrl, `http://${HOST}:${PORT}`);
+  const url = new URL(rawUrl, ISSUER);
   const parameters = url.searchParams;
 
   const clientId = parameters.get("client_id") ?? "";
@@ -356,7 +357,7 @@ async function main(): Promise<void> {
     { maxHeaderSize: MAX_HEADER_BYTES },
     (request, response) => {
       const rawUrl = request.url ?? "/";
-      const pathname = new URL(rawUrl, `http://${HOST}:${PORT}`).pathname;
+      const pathname = new URL(rawUrl, ISSUER).pathname;
       if (request.method === "GET" && pathname === "/healthz") {
         jsonResponse(response, 200, { ok: true, fixture: "oidc-provider-v1" });
         return;
@@ -396,7 +397,7 @@ async function main(): Promise<void> {
   server.maxHeadersCount = 64;
   server.headersTimeout = 5_000;
   server.requestTimeout = 5_000;
-  server.listen(PORT, HOST, () => {
+  server.listen(PORT, BIND_HOST, () => {
     console.log(`OIDC fixture listening on ${ISSUER}`);
   });
 }

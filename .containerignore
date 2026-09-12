@@ -4,3 +4,9 @@ app.env*
 secrets/
 deploy/secrets/
 bin/
+.clashlens-dev/
+website/node_modules/
+website/build/
+website/.react-router/
+website/playwright-report/
+website/test-results/

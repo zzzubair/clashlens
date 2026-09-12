@@ -14,7 +14,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-const HOST = "127.0.0.1";
+const BIND_HOST = envOr("CLASHLENS_FIXTURE_BIND_HOST", "127.0.0.1");
 const DEFAULT_PORT = 8012;
 const AUTH_CODE_TTL_SECONDS = 60;
 const MAX_CODE_ENTRIES = 5_000;
@@ -111,7 +111,7 @@ function handleAuthorize(response: ServerResponse, rawUrl: string): void {
     jsonResponse(response, 400, { error: "invalid_request" });
     return;
   }
-  const url = new URL(rawUrl, `http://${HOST}:${PORT}`);
+  const url = new URL(rawUrl, `http://127.0.0.1:${PORT}`);
   const parameters = url.searchParams;
   if (parameters.get("client_id") !== CLIENT_ID) {
     jsonResponse(response, 400, { error: "unknown client" });
@@ -239,7 +239,7 @@ function main(): void {
   }
   const server = createServer((request, response) => {
     const rawUrl = request.url ?? "/";
-    const pathname = new URL(rawUrl, `http://${HOST}:${PORT}`).pathname;
+    const pathname = new URL(rawUrl, `http://127.0.0.1:${PORT}`).pathname;
     if (request.method === "GET" && pathname === "/healthz") {
       jsonResponse(response, 200, { ok: true, fixture: "discord-provider-v1" });
       return;
@@ -273,8 +273,8 @@ function main(): void {
     }
     jsonResponse(response, 404, { error: "not_found" });
   });
-  server.listen(PORT, HOST, () => {
-    console.log(`Discord fixture listening on http://${HOST}:${PORT}`);
+  server.listen(PORT, BIND_HOST, () => {
+    console.log(`Discord fixture listening on http://127.0.0.1:${PORT}`);
   });
 }
 

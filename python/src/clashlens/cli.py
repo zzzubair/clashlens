@@ -270,6 +270,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--official-proxy-url",
         default=os.environ.get("CLASHLENS_OFFICIAL_PROXY_URL", ""),
     )
+    serve.add_argument(
+        "--official-origin",
+        default=os.environ.get(
+            "CLASHLENS_OFFICIAL_API_ORIGIN", "https://api.clashofclans.com"
+        ),
+    )
+    serve.add_argument("--allow-insecure-official-origin", action="store_true")
     serve.add_argument("--log-level", default="warning")
 
     probe = subparsers.add_parser(
@@ -1047,7 +1054,10 @@ def _serve_app(arguments: argparse.Namespace) -> tuple[Any, ApiDatabase]:
     if not arguments.official_key_file:
         raise ValueError("official API key file is required")
     official_key = load_official_api_key_file(arguments.official_key_file)
-    if not arguments.official_proxy_url:
+    if (
+        not arguments.official_proxy_url
+        and arguments.official_origin == "https://api.clashofclans.com"
+    ):
         raise ValueError("fixed-egress proxy URL is required")
     api_database = ApiDatabase(_database_url(arguments))
     try:
@@ -1056,6 +1066,8 @@ def _serve_app(arguments: argparse.Namespace) -> tuple[Any, ApiDatabase]:
         verification_client = OfficialVerificationClient(
             api_key=official_key,
             proxy_url=arguments.official_proxy_url,
+            api_origin=arguments.official_origin,
+            allow_insecure_test_origin=arguments.allow_insecure_official_origin,
         )
         app = create_app(
             database=api_database,

@@ -5,6 +5,5 @@ playwright-report
 test-results
 .env*
 !.env.example
-fixture_server.py
 secrets/
 *.secret

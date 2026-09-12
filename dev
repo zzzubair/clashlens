@@ -1,0 +1,512 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PODMAN_BIN=${PODMAN_BIN:-podman}
+WEBSITE_HOST=${CLASHLENS_DEV_HOST:-127.0.0.1}
+WEBSITE_PORT=${CLASHLENS_DEV_PORT:-5173}
+OIDC_PORT=8011
+DISCORD_PORT=8012
+HMAC_KEY_B64=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
+LOGIN_KEY_B64=QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8
+OFFICIAL_KEY=dev-interactive-key
+ARCHIVE_MARKER_HASH=16d586e6c52a90aed1fed855fd03e9ce7257319cfcb5b824cb52015989b52192
+REPO_KEY=$(printf '%s' "$ROOT" | sha256sum | cut -c1-10)
+IMAGE_PREFIX="localhost/clashlens-dev-$REPO_KEY"
+
+usage() {
+  cat <<'EOF'
+Usage: ./dev up [--players 200|12500]
+       ./dev down [--players 200|12500]
+       ./dev status [--players 200|12500]
+       ./dev logs [service] [--players 200|12500]
+       ./dev check
+
+Services: postgres, archive, clash-api, login, collector, api, worker, website
+EOF
+}
+
+die() {
+  printf 'dev: %s\n' "$*" >&2
+  exit 1
+}
+
+require_podman() {
+  command -v "$PODMAN_BIN" >/dev/null 2>&1 || die "Podman is required"
+  "$PODMAN_BIN" info >/dev/null 2>&1 || die "rootless Podman is not available"
+  local rootless
+  rootless=$("$PODMAN_BIN" info --format '{{.Host.Security.Rootless}}')
+  [[ "$rootless" == true ]] || die "./dev only runs with rootless Podman"
+}
+
+parse_players() {
+  PLAYERS=${CLASHLENS_DEV_PLAYERS:-200}
+  while (($#)); do
+    case "$1" in
+      --players)
+        (($# >= 2)) || die "--players needs 200 or 12500"
+        PLAYERS=$2
+        shift 2
+        ;;
+      *) die "unknown argument: $1" ;;
+    esac
+  done
+  [[ "$PLAYERS" == 200 || "$PLAYERS" == 12500 ]] || \
+    die "the synthetic population must be 200 or 12500 players"
+}
+
+select_project() {
+  local scope=${1:-dev}
+  PUBLISHED_WEBSITE_PORT=$WEBSITE_PORT
+  PUBLISHED_OIDC_PORT=$OIDC_PORT
+  PUBLISHED_DISCORD_PORT=$DISCORD_PORT
+  if [[ "$scope" == dev ]]; then
+    PROJECT="clashlens-dev-$REPO_KEY-$PLAYERS"
+  else
+    PROJECT="clashlens-dev-$REPO_KEY-$scope"
+  fi
+  if [[ "$scope" == check ]]; then
+    # The acceptance stack stays reachable from its test container on the
+    # normal pod ports while avoiding a developer's already-running stack.
+    PUBLISHED_WEBSITE_PORT=15173
+    PUBLISHED_OIDC_PORT=18011
+    PUBLISHED_DISCORD_PORT=18012
+  fi
+  POD="$PROJECT"
+  POSTGRES="$PROJECT-postgres"
+  ARCHIVE="$PROJECT-archive"
+  CLASH_API="$PROJECT-clash-api"
+  LOGIN="$PROJECT-login"
+  COLLECTOR="$PROJECT-collector"
+  API="$PROJECT-api"
+  WORKER="$PROJECT-worker"
+  WEBSITE="$PROJECT-website"
+  POSTGRES_VOLUME="$PROJECT-postgres-data"
+  ARCHIVE_VOLUME="$PROJECT-archive-data"
+  SPOOL_VOLUME="$PROJECT-spool"
+  STATE_DIR="$ROOT/.clashlens-dev/$PROJECT"
+  DATABASE_URL="postgresql://clashlens:clashlens-dev@127.0.0.1:5432/clashlens?sslmode=disable"
+}
+
+container_name() {
+  case "$1" in
+    postgres) printf '%s' "$POSTGRES" ;;
+    archive) printf '%s' "$ARCHIVE" ;;
+    clash-api) printf '%s' "$CLASH_API" ;;
+    login) printf '%s' "$LOGIN" ;;
+    collector) printf '%s' "$COLLECTOR" ;;
+    api) printf '%s' "$API" ;;
+    worker) printf '%s' "$WORKER" ;;
+    website) printf '%s' "$WEBSITE" ;;
+    *) die "unknown service: $1" ;;
+  esac
+}
+
+build_runtime_images() {
+  printf 'Building development images...\n'
+  "$PODMAN_BIN" build --file "$ROOT/development/Containerfile" \
+    --tag "$IMAGE_PREFIX-fixtures" "$ROOT"
+  "$PODMAN_BIN" build --file "$ROOT/Containerfile" \
+    --tag "$IMAGE_PREFIX-collector" "$ROOT"
+  "$PODMAN_BIN" build --file "$ROOT/python/Containerfile" \
+    --tag "$IMAGE_PREFIX-python" "$ROOT/python"
+  "$PODMAN_BIN" build --file "$ROOT/website/Containerfile" \
+    --tag "$IMAGE_PREFIX-website" "$ROOT/website"
+  "$PODMAN_BIN" build --target fixtures --file "$ROOT/website/Containerfile" \
+    --tag "$IMAGE_PREFIX-login" "$ROOT/website"
+}
+
+remove_stack() {
+  local remove_volumes=${1:-false}
+  if "$PODMAN_BIN" pod exists "$POD"; then
+    "$PODMAN_BIN" pod stop --time 30 "$POD" >/dev/null || true
+    "$PODMAN_BIN" pod rm --force "$POD" >/dev/null
+  fi
+  if [[ "$remove_volumes" == true ]]; then
+    for volume in "$POSTGRES_VOLUME" "$ARCHIVE_VOLUME" "$SPOOL_VOLUME"; do
+      if "$PODMAN_BIN" volume exists "$volume"; then
+        "$PODMAN_BIN" volume rm "$volume" >/dev/null
+      fi
+    done
+  fi
+}
+
+wait_for_postgres() {
+  local attempt
+  for attempt in $(seq 1 90); do
+    if "$PODMAN_BIN" exec "$POSTGRES" pg_isready -q -U clashlens -d clashlens; then
+      # The image briefly accepts connections while its entrypoint creates the
+      # database, then restarts PostgreSQL. Require readiness after that window.
+      sleep 1
+      if "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+        -c 'SELECT 1' | grep -qx 1; then
+        return
+      fi
+    fi
+    sleep 1
+  done
+  printf 'dev: PostgreSQL did not become ready; run ./dev logs postgres\n' >&2
+  return 1
+}
+
+apply_migrations() {
+  local migration prefix version applied
+  "$PODMAN_BIN" exec -i "$POSTGRES" psql -v ON_ERROR_STOP=1 \
+    -U clashlens -d clashlens < "$ROOT/deploy/migrations/0001_collector.sql" >/dev/null
+  for migration in "$ROOT"/deploy/migrations/*.sql; do
+    [[ "$(basename "$migration")" == 0001_collector.sql ]] && continue
+    prefix=$(basename "$migration" | cut -d_ -f1)
+    version=$((10#$prefix))
+    applied=$("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+      -c "SELECT count(*) FROM clash_lens_schema_migrations WHERE version=$version")
+    if [[ "$applied" == 0 ]]; then
+      printf 'Applying %s...\n' "$(basename "$migration")"
+      "$PODMAN_BIN" exec -i "$POSTGRES" psql -v ON_ERROR_STOP=1 \
+        -U clashlens -d clashlens < "$migration" >/dev/null
+    fi
+  done
+}
+
+configure_archive_contract() {
+  "$PODMAN_BIN" exec -i "$POSTGRES" psql -v ON_ERROR_STOP=1 \
+    -U clashlens -d clashlens >/dev/null <<SQL
+INSERT INTO archive_instances (
+  instance_id, endpoint, region, bucket, marker_key, marker_hash,
+  marker_payload_version
+) VALUES (
+  'development', '127.0.0.1:9000', 'us-east-1', 'evidence',
+  'clashlens/archive-instance.json', '$ARCHIVE_MARKER_HASH', 'v1'
+) ON CONFLICT (instance_id) DO NOTHING;
+SQL
+}
+
+prepare_local_files() {
+  mkdir -p "$STATE_DIR"
+  printf '%s\n' "$HMAC_KEY_B64" > "$STATE_DIR/hmac-key"
+  printf '%s\n' "$OFFICIAL_KEY" > "$STATE_DIR/official-key"
+  printf '%s\n' "$DATABASE_URL" > "$STATE_DIR/database-url"
+  chmod 0644 "$STATE_DIR/hmac-key" "$STATE_DIR/official-key" "$STATE_DIR/database-url"
+}
+
+bootstrap_population() {
+  local registered manifest digest result_file
+  registered=$("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+    -c 'SELECT count(*) FROM players')
+  if [[ "$registered" != 0 ]]; then
+    [[ "$registered" == "$PLAYERS" ]] || \
+      die "this stack already contains $registered players; use the matching --players value"
+    return
+  fi
+  manifest="/state/cohort-$PLAYERS.txt"
+  "$PODMAN_BIN" run --rm --pod "$POD" --user 0 \
+    --volume "$STATE_DIR:/state:Z" "$IMAGE_PREFIX-fixtures" \
+    manifest --players "$PLAYERS" --output "$manifest"
+  digest=$(sha256sum "$STATE_DIR/cohort-$PLAYERS.txt" | cut -d' ' -f1)
+  result_file="/state/bootstrap-result-$PLAYERS-$(date +%s).json"
+  "$PODMAN_BIN" run --rm --pod "$POD" --user 0 \
+    --volume "$STATE_DIR:/state:Z" \
+    --env CLASHLENS_DATABASE_URL_FILE=/state/database-url \
+    "$IMAGE_PREFIX-python" bootstrap-population \
+    --cohort-file "$manifest" --expected-sha256 "$digest" \
+    --expected-count "$PLAYERS" --run-id "dev-$REPO_KEY-$PLAYERS" \
+    --result-file "$result_file" >/dev/null
+}
+
+initialize_spool() {
+  "$PODMAN_BIN" run --rm --user 0 --entrypoint /bin/sh \
+    --volume "$SPOOL_VOLUME:/spool:z" "$IMAGE_PREFIX-python" \
+    -c 'chown 10001:10001 /spool'
+}
+
+start_dependencies() {
+  "$PODMAN_BIN" pod create --name "$POD" --share net,ipc \
+    --publish "$WEBSITE_HOST:$PUBLISHED_WEBSITE_PORT:5173" \
+    --publish "127.0.0.1:$PUBLISHED_OIDC_PORT:$OIDC_PORT" \
+    --publish "127.0.0.1:$PUBLISHED_DISCORD_PORT:$DISCORD_PORT" >/dev/null
+
+  "$PODMAN_BIN" run --detach --pod "$POD" --name "$POSTGRES" \
+    --env POSTGRES_DB=clashlens --env POSTGRES_USER=clashlens \
+    --env POSTGRES_PASSWORD=clashlens-dev \
+    --env PGDATA=/var/lib/postgresql/data/pgdata \
+    --volume "$POSTGRES_VOLUME:/var/lib/postgresql/data:Z" \
+    docker.io/library/postgres:18-alpine >/dev/null
+  "$PODMAN_BIN" run --detach --pod "$POD" --name "$ARCHIVE" \
+    --volume "$ARCHIVE_VOLUME:/data:Z" "$IMAGE_PREFIX-fixtures" \
+    archive --host 0.0.0.0 --port 9000 --root /data >/dev/null
+  "$PODMAN_BIN" run --detach --pod "$POD" --name "$CLASH_API" \
+    "$IMAGE_PREFIX-fixtures" clash --host 0.0.0.0 --port 8080 \
+    --players "$PLAYERS" >/dev/null
+  "$PODMAN_BIN" run --detach --pod "$POD" --name "$LOGIN" \
+    --env CLASHLENS_FIXTURE_BIND_HOST=0.0.0.0 \
+    --env CLASHLENS_FIXTURE_OIDC_PUBLIC_HOST=127.0.0.1 \
+    --env CLASHLENS_FIXTURE_OIDC_PORT="$OIDC_PORT" \
+    --env CLASHLENS_FIXTURE_OIDC_REDIRECT_URI="http://127.0.0.1:$WEBSITE_PORT/auth/google/callback" \
+    --env CLASHLENS_FIXTURE_DISCORD_PORT="$DISCORD_PORT" \
+    --env CLASHLENS_FIXTURE_DISCORD_REDIRECT_URI="http://127.0.0.1:$WEBSITE_PORT/auth/discord/callback" \
+    "$IMAGE_PREFIX-login" >/dev/null
+}
+
+archive_environment() {
+  cat <<EOF
+CLASHLENS_ARCHIVE_ENDPOINT=127.0.0.1:9000
+CLASHLENS_ARCHIVE_BUCKET=evidence
+CLASHLENS_ARCHIVE_REGION=us-east-1
+CLASHLENS_ARCHIVE_SECURE=false
+CLASHLENS_ARCHIVE_ACCESS_KEY=development
+CLASHLENS_ARCHIVE_SECRET_KEY=development
+CLASHLENS_ARCHIVE_INSTANCE_ID=development
+CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
+CLASHLENS_ARCHIVE_MARKER_HASH=$ARCHIVE_MARKER_HASH
+CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
+CLASHLENS_SPOOL_ROOT=/spool
+CLASHLENS_SPOOL_MAX_BYTES=1073741824
+CLASHLENS_SPOOL_MAX_OBJECTS=100000
+EOF
+}
+
+start_application() {
+  local env_file="$STATE_DIR/archive.env"
+  archive_environment > "$env_file"
+  chmod 0644 "$env_file"
+
+  "$PODMAN_BIN" run --detach --pod "$POD" --name "$API" \
+    --volume "$STATE_DIR:/run/clashlens-dev:ro,Z" \
+    --env CLASHLENS_DATABASE_URL="$DATABASE_URL" \
+    "$IMAGE_PREFIX-python" serve --host 0.0.0.0 --port 8000 \
+    --secret-file /run/clashlens-dev/hmac-key \
+    --official-key-file /run/clashlens-dev/official-key \
+    --official-origin http://127.0.0.1:8080 \
+    --allow-insecure-official-origin >/dev/null
+
+  "$PODMAN_BIN" run --detach --pod "$POD" --name "$WORKER" \
+    --env-file "$env_file" --env CLASHLENS_DATABASE_URL="$DATABASE_URL" \
+    --volume "$SPOOL_VOLUME:/spool:z" \
+    "$IMAGE_PREFIX-python" worker --run-forever --max-jobs 20 \
+    --concurrency 4 --archive-insecure-test-only >/dev/null
+
+  "$PODMAN_BIN" run --detach --pod "$POD" --name "$COLLECTOR" \
+    --env-file "$env_file" --env CLASHLENS_DATABASE_URL="$DATABASE_URL" \
+    --env CLASHLENS_SCHEMA_VERSION=5 \
+    --env CLASHLENS_OFFICIAL_API_ORIGIN=http://127.0.0.1:8080 \
+    --env CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=true \
+    --env CLASHLENS_ALLOW_REDUCED_KEY_POOLS=true \
+    --env CLASHLENS_NORMAL_API_KEYS=normal-1=dev-normal-key \
+    --env CLASHLENS_INTERACTIVE_API_KEYS=interactive-1=dev-interactive-key \
+    --env CLASHLENS_ENABLE_GLOBAL_RANKINGS=true \
+    --env CLASHLENS_POLL_CYCLE=1h \
+    --env CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=30 \
+    --env CLASHLENS_WORKERS_PER_KEY=8 \
+    --env CLASHLENS_SPOOL_SAFETY_AGE_SECONDS=60 \
+    --env CLASHLENS_SPOOL_ORPHAN_SAFETY_AGE_SECONDS=300 \
+    --env CLASHLENS_SPOOL_STALE_TEMP_AGE_SECONDS=60 \
+    --env CLASHLENS_HEALTH_LISTEN=127.0.0.1:8081 \
+    --volume "$SPOOL_VOLUME:/spool:z" \
+    "$IMAGE_PREFIX-collector" run >/dev/null
+
+  "$PODMAN_BIN" run --detach --pod "$POD" --name "$WEBSITE" \
+    --volume "$STATE_DIR:/run/clashlens-dev:ro,Z" \
+    --env NODE_ENV=test --env PORT=5173 \
+    --env CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
+    --env CLASHLENS_PYTHON_HMAC_CALLER=typescript-website \
+    --env CLASHLENS_PYTHON_HMAC_KEY_ID=current \
+    --env CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/clashlens-dev/hmac-key \
+    --env CLASHLENS_TRUST_PROXY=true --env CLASHLENS_LOGIN_ENABLED=true \
+    --env CLASHLENS_PUBLIC_ORIGIN="http://127.0.0.1:$WEBSITE_PORT" \
+    --env CLASHLENS_GOOGLE_ISSUER_URL="http://127.0.0.1:$OIDC_PORT" \
+    --env CLASHLENS_GOOGLE_CLIENT_ID=clashlens-browser-test \
+    --env CLASHLENS_GOOGLE_CLIENT_SECRET=clashlens-browser-test-secret \
+    --env CLASHLENS_LOGIN_SECRET_B64="$LOGIN_KEY_B64" \
+    --env CLASHLENS_DISCORD_API_BASE_URL="http://127.0.0.1:$DISCORD_PORT" \
+    --env CLASHLENS_DISCORD_CLIENT_ID=1234567890123456789 \
+    --env CLASHLENS_DISCORD_CLIENT_SECRET=discord-browser-test-secret \
+    "$IMAGE_PREFIX-website" >/dev/null
+}
+
+show_readiness_diagnostics() {
+  printf '\n[readiness database]\n'
+  "$PODMAN_BIN" exec "$POSTGRES" psql -At -U clashlens -d clashlens -c \
+    "SELECT player.normalized_tag, profile.name, profile.source_contract_state,
+            profile.season_anchor_state
+       FROM players AS player
+       LEFT JOIN player_profile_versions AS profile
+         ON profile.id = player.current_profile_version_id
+      WHERE player.normalized_tag = '#2PP'" 2>&1 || true
+  printf '\n[readiness private API]\n'
+  "$PODMAN_BIN" exec "$API" python -m clashlens.cli probe \
+    --url 'http://127.0.0.1:8000/v1/players/%232PP' \
+    --secret-file /run/clashlens-dev/hmac-key 2>&1 || true
+  printf '\n[readiness player page]\n'
+  "$PODMAN_BIN" exec "$WEBSITE" node -e \
+    "fetch('http://127.0.0.1:5173/players/%232PP').then(async response => {
+      const body = await response.text();
+      console.log(JSON.stringify({status: response.status,
+        hasPlayer: body.includes('Synthetic Clasher 001'),
+        malformed: body.includes('returned malformed data'),
+        unavailable: body.includes('live service is unavailable')}));
+    }).catch(error => { console.error(error.name); process.exit(1) })" 2>&1 || true
+}
+
+wait_for_application() {
+  local attempt profiles
+  for attempt in $(seq 1 120); do
+    profiles=$("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+      -c "SELECT count(*) FROM players WHERE normalized_tag='#2PP' AND current_profile_version_id IS NOT NULL")
+    if [[ "$profiles" == 1 ]] && "$PODMAN_BIN" exec "$WEBSITE" node -e \
+      "Promise.all([
+        fetch('http://127.0.0.1:5173/players/%232PP'),
+        fetch('http://127.0.0.1:8011/healthz'),
+        fetch('http://127.0.0.1:8012/healthz')
+      ]).then(async ([page, google, discord]) => {
+        if (!page.ok || !google.ok || !discord.ok ||
+            !(await page.text()).includes('Synthetic Clasher 001')) process.exit(1)
+      }).catch(() => process.exit(1))"; then
+      return
+    fi
+    sleep 1
+  done
+  show_readiness_diagnostics
+  printf 'dev: the first player page did not become ready; run ./dev logs\n' >&2
+  return 1
+}
+
+up_stack() {
+  local fresh=${1:-false} started_at elapsed
+  started_at=$(date +%s)
+  build_runtime_images
+  remove_stack "$fresh"
+  prepare_local_files
+  initialize_spool
+  start_dependencies
+  wait_for_postgres
+  apply_migrations
+  configure_archive_contract
+  bootstrap_population
+  start_application
+  wait_for_application
+  elapsed=$(( $(date +%s) - started_at ))
+  printf 'Clash Lens is ready at http://%s:%s (%ss, %s synthetic players).\n' \
+    "$WEBSITE_HOST" "$PUBLISHED_WEBSITE_PORT" "$elapsed" "$PLAYERS"
+}
+
+show_status() {
+  local service name state
+  if ! "$PODMAN_BIN" pod exists "$POD"; then
+    printf 'Clash Lens is down (%s).\n' "$PROJECT"
+    return 1
+  fi
+  for service in postgres archive clash-api login collector api worker website; do
+    name=$(container_name "$service")
+    state=$("$PODMAN_BIN" inspect --format '{{.State.Status}}' "$name" 2>/dev/null || printf missing)
+    printf '%-10s %s\n' "$service" "$state"
+  done
+}
+
+show_logs() {
+  local service=${1:-}
+  if [[ -n "$service" ]]; then
+    "$PODMAN_BIN" logs --tail 200 "$(container_name "$service")"
+    return
+  fi
+  local current
+  for current in postgres archive clash-api login collector api worker website; do
+    printf '\n[%s]\n' "$current"
+    "$PODMAN_BIN" logs --tail 80 "$(container_name "$current")" 2>&1 || true
+  done
+}
+
+run_checks() {
+  local result=0
+  PLAYERS=200
+  select_project check
+  trap 'remove_stack true' EXIT
+  trap 'status=$?; trap - ERR; show_logs; exit "$status"' ERR
+  up_stack true
+  trap - ERR
+
+  "$PODMAN_BIN" build --target build --file "$ROOT/Containerfile" \
+    --tag "$IMAGE_PREFIX-go-check" "$ROOT"
+  "$PODMAN_BIN" build --file "$ROOT/development/PythonCheck.Containerfile" \
+    --tag "$IMAGE_PREFIX-python-check" "$ROOT"
+  "$PODMAN_BIN" build --target check --file "$ROOT/website/Containerfile" \
+    --tag "$IMAGE_PREFIX-website-check" "$ROOT/website"
+
+  "$PODMAN_BIN" run --rm --user 10001:10001 --env GOCACHE=/tmp/go-cache \
+    --tmpfs /src/.embedded-postgres-go:rw,mode=1777 \
+    "$IMAGE_PREFIX-go-check" sh -c \
+    'go build ./... && go vet ./... && go test -short -count=1 -timeout=1200s ./...' || result=$?
+  if [[ "$result" == 0 ]]; then
+    "$PODMAN_BIN" run --rm --pod "$POD" \
+      --env CLASHLENS_TEST_DATABASE_URL="$DATABASE_URL" \
+      "$IMAGE_PREFIX-python-check" || result=$?
+  fi
+  if [[ "$result" == 0 ]]; then
+    "$PODMAN_BIN" run --rm --pod "$POD" \
+      --env CLASHLENS_E2E_EXTERNAL_STACK=1 \
+      "$IMAGE_PREFIX-website-check" || result=$?
+  fi
+  if [[ "$result" != 0 ]]; then
+    show_logs
+    return "$result"
+  fi
+  printf 'All Go, Python, TypeScript, and browser checks passed.\n'
+}
+
+e2e_server() {
+  PLAYERS=200
+  select_project e2e
+  trap 'remove_stack true' EXIT INT TERM
+  up_stack true
+  while "$PODMAN_BIN" pod exists "$POD"; do
+    sleep 1
+  done
+}
+
+main() {
+  (($#)) || { usage; exit 2; }
+  local command=$1
+  shift
+  if [[ "$command" == help || "$command" == -h || "$command" == --help ]]; then
+    usage
+    return
+  fi
+  require_podman
+  case "$command" in
+    up)
+      parse_players "$@"
+      select_project dev
+      up_stack false
+      ;;
+    down)
+      parse_players "$@"
+      select_project dev
+      remove_stack false
+      printf 'Clash Lens is down; local database, archive, and spool data were kept.\n'
+      ;;
+    status)
+      parse_players "$@"
+      select_project dev
+      show_status
+      ;;
+    logs)
+      local service=""
+      if (($#)) && [[ "$1" != --players ]]; then
+        service=$1
+        shift
+      fi
+      parse_players "$@"
+      select_project dev
+      show_logs "$service"
+      ;;
+    check)
+      (($# == 0)) || die "check takes no arguments"
+      run_checks
+      ;;
+    e2e-server)
+      (($# == 0)) || die "e2e-server takes no arguments"
+      e2e_server
+      ;;
+    *) usage; die "unknown command: $command" ;;
+  esac
+}
+
+main "$@"

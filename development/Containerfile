@@ -1,0 +1,6 @@
+FROM docker.io/library/python:3.12-slim
+
+WORKDIR /opt/clashlens-development
+COPY development/fixtures.py ./fixtures.py
+
+ENTRYPOINT ["python", "/opt/clashlens-development/fixtures.py"]
