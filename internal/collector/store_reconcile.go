@@ -1175,7 +1175,6 @@ type attemptCommitIntent struct {
 	rootJobID         int64
 	now               time.Time
 	maximumRetries    int
-	completionOnly    bool
 	preCommitSnapshot *attemptResolutionSnapshot
 }
 
@@ -1184,22 +1183,13 @@ func (s *store) proveAttemptResolutionCommit(
 	connection *pgx.Conn,
 	intent attemptCommitIntent,
 ) (commitProofOutcome, error) {
-	return s.proveAttemptCommit(ctx, connection, intent, false)
-}
-
-func (s *store) proveTerminalCompletionCommit(
-	ctx context.Context,
-	connection *pgx.Conn,
-	intent attemptCommitIntent,
-) (commitProofOutcome, error) {
-	return s.proveAttemptCommit(ctx, connection, intent, true)
+	return s.proveAttemptCommit(ctx, connection, intent)
 }
 
 func (s *store) proveAttemptCommit(
 	ctx context.Context,
 	connection *pgx.Conn,
 	intent attemptCommitIntent,
-	completionOnly bool,
 ) (commitProofOutcome, error) {
 	attempt, attemptPresent, err := readCollectorAttemptState(ctx, connection, intent.attemptID)
 	if err != nil {
@@ -1222,7 +1212,7 @@ func (s *store) proveAttemptCommit(
 		return commitProofUnknown, errors.New("collection commit state is missing")
 	}
 
-	committed, reason := validateAttemptCommitTarget(ctx, connection, intent, actual, completionOnly)
+	committed, reason := validateAttemptCommitTarget(ctx, connection, intent, actual)
 	if committed {
 		return commitProofCommitted, nil
 	}
@@ -1240,7 +1230,6 @@ func validateAttemptCommitTarget(
 	connection *pgx.Conn,
 	intent attemptCommitIntent,
 	snapshot attemptResolutionSnapshot,
-	completionOnly bool,
 ) (bool, string) {
 	if !jobStateMatchesCollectionJob(snapshot.current, intent.job) {
 		return false, "current collection job identity does not match commit intent"
@@ -1264,12 +1253,12 @@ func validateAttemptCommitTarget(
 		snapshot.root.status == "complete" &&
 		snapshot.current.status == "complete":
 		kind = "complete"
-	case !completionOnly && snapshot.attempt.status == "incomplete" &&
+	case snapshot.attempt.status == "incomplete" &&
 		snapshot.root.status == "waiting_retry" &&
 		(snapshot.current.status == "complete" ||
 			(snapshot.current.id == snapshot.root.id && snapshot.current.status == "waiting_retry")):
 		kind = "retry"
-	case !completionOnly && snapshot.attempt.status == "failed" &&
+	case snapshot.attempt.status == "failed" &&
 		snapshot.root.status == "failed" &&
 		snapshot.current.status == "failed":
 		kind = "failed"

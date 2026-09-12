@@ -74,8 +74,7 @@ resource budget.
 `true` or `false`. Set it to `false` only for fixed-population validation:
 every worker replica then starts with `--disable-player-discovery`, so
 ranking and battle evidence is retained without enqueueing `discovery_profile`
-work for outside players. Global Top-200 collection stays enabled, and the
-choice is fingerprinted in the deployment receipt (`step12-v1`).
+work for outside players. Global Top-200 collection stays enabled.
 
 `CLASHLENS_ENDPOINT_BUDGET_ENABLED` defaults to `false`. Enable it only for
 a fixed-population bootstrap run, with `CLASHLENS_ENDPOINT_BUDGET_RUN_ID`,
@@ -86,10 +85,8 @@ per-endpoint caps (`CLASHLENS_ENDPOINT_BUDGET_PROFILE`,
 dispatch reserves one durable budget unit before the request, reservations
 survive restarts and are never refunded, and official redirects are refused.
 The enabled flag, the three caps, and the exact run identity and deadline
-are fingerprinted in the deployment receipt, so provenance proves which
-durable budget row the executing collector consumes. The exact official
-proxy URL is fingerprinted alongside them, so provenance proves the
-collector's egress route.
+identify the durable budget row the executing collector consumes. The exact
+official proxy URL is retained alongside them as the collector's egress route.
 
 Admit a protected manifest with the Python worker role (validates the whole
 manifest before the first write; replays idempotently under one run-id):
@@ -114,14 +111,14 @@ collector enqueue-global-rankings --cycle-at 2026-09-08T05:00:00Z
 are all-or-none. Leave all five unset for production (evidence disabled,
 scheduler SQL unchanged). When set, they pin one bounded run: UTC capture
 interval at most 30 hours, at most 108000 events and 5000000 selected
-entries, exact equality with the run header and receipt fingerprint.
+entries. At collector startup, those five values create the run header or
+must exactly match the existing header for that run ID.
 The scheduler writes one evidence row per invocation inside an explicit
 transaction (advisory lock, locked header, fresh snapshot), commits the
 durable stop before returning `admission_evidence_capacity_exceeded` or
 `admission_evidence_capture_out_of_range`, and records nullable observed
 profile state without changing active-only selection. Scheduler defaults
-stay one second, batch 1000, five-minute cycle. Disabled receipt fields use
-`disabled`/`0` sentinels under the same `step9-v1` allowlist.
+stay one second, batch 1000, five-minute cycle.
 
 ### Fixed-egress proxy
 
@@ -214,32 +211,26 @@ container does not match `app.env`, `up` stops before migration and instructs
 the operator to run `stack-down`, then `up`. The named database volume is
 preserved.
 
-## Source labels and deployment receipts
+## Source labels
 
 Every collector, Python, and website image built by `deploy.sh` receives the
 canonical repository URL in `org.opencontainers.image.source` and the exact
 clean commit in `org.opencontainers.image.revision`. A build refuses a dirty
 checkout or an unverifiable `HEAD` before invoking Podman. A mutable
-`:deployment` tag is never sufficient evidence; receipts record the local
-image ID and record a registry digest only when Podman actually provides one.
+`:deployment` tag is never sufficient evidence.
 
-Prepare Step 8 candidate evidence with dedicated non-default network, volume,
-PostgreSQL, collector, API, worker, and website names in `app.env`. The network,
-volume, and PostgreSQL container must not already exist. Configure the immutable
-archive-instance fields required by migration 0009. The results directory must
-already exist, be writable, contain no symlink component, and be outside the
-checkout. This sequence starts PostgreSQL only; it does not start an application
+Prepare a disposable candidate database with dedicated non-default network,
+volume, PostgreSQL, collector, API, worker, and website names in `app.env`. The
+network, volume, and PostgreSQL container must not already exist. Configure the
+immutable archive-instance fields required by migration 0009. This sequence
+starts PostgreSQL only; it does not start an application
 container or make an official API request:
 
 ```bash
-RESULTS_DIR=/home/clashlens/results/step8-$(git rev-parse HEAD)
-install -d -m 0700 "$RESULTS_DIR"
 ./deploy.sh build-collector
 ./deploy.sh build-python
 ./deploy.sh build-website
 ./deploy.sh candidate-prepare
-./deploy.sh deployment-receipt candidate-preparation \
-  fedora-validation "$RESULTS_DIR"
 ```
 
 `candidate-prepare` refuses default or existing candidate resources and any
@@ -249,94 +240,7 @@ configured PostgreSQL container, and verifies every migration from 0001 through
 `org.clashlens.scope=candidate` label; the preparation path verifies those
 labels and exact names after creation before applying migrations. Scope/label
 overrides in `app.env` are rejected before resource mutation. Never aim it at
-a deployed volume or reuse deployed container names. The
-`candidate-preparation` receipt retains the exact PostgreSQL/network/volume
-names and labels plus the configured application and worker-replica absence
-proof. It records `production_deployment_status: not_asserted` and an
-official-request count of zero. It is candidate evidence, not proof that
-production was deployed.
-
-After #31 deploys the real stack, its separate evidence path may inspect the
-running application containers and database:
-
-```bash
-./deploy.sh deployment-receipt deployed-stack \
-  production-fedora /home/clashlens/results/release-candidate
-```
-
-Both scopes record schema version, UTC creation time, exact clean source,
-migration file hashes and applied state, an explicit safe-configuration
-allowlist and fingerprint, truthful image identities, PostgreSQL identity,
-bounded runtime versions, and a canonical SHA-256 receipt digest. The command
-also verifies that every configured deployed worker replica is running the
-same exact Python image as the API. The command
-selects individual Podman fields and never serializes raw inspection output,
-`app.env`, credentials, database URLs, request or account identifiers, player
-tags, user selections, raw bodies, archive references, or arbitrary errors.
-
-Receipt publication creates a unique timestamped mode-0600 file exclusively,
-flushes it before publication, refuses an occupied name, verifies the stored
-digest, and never overwrites a retained receipt. This is write-once command
-behavior, not a claim that the destination filesystem is immutable. Retain the
-printed path and digest with the release evidence outside the checkout.
-
-## Private operating snapshot and objective check
-
-With the collector, private API, worker replicas, and PostgreSQL running, one
-command reads their existing private seams and prints one versioned JSON
-snapshot:
-
-```bash
-RESULTS_DIR=/home/clashlens/results/step8-$(git rev-parse HEAD)
-./deploy.sh operating-check >"$RESULTS_DIR/operating-initial.json"
-./deploy.sh operating-check \
-  --previous-snapshot "$RESULTS_DIR/operating-initial.json" \
-  >"$RESULTS_DIR/operating-later.json"
-```
-
-The command reads collector Prometheus facts through its loopback listener,
-the API process snapshot with an authenticated caller proof, worker process
-snapshots inside their private containers, and all
-related PostgreSQL facts in one read-only `REPEATABLE READ` transaction. The
-worker snapshots refresh on an independent 60-second heartbeat. A missing,
-future, or more than 120-second-old worker snapshot makes the check
-indeterminate instead of allowing stale process facts to report healthy. The
-contract reports process identity/start time, fixed worker and API latency and
-outcome categories, response bytes, pool pressure, processed observation/fact/
-result counts, queue/retry/dependency/lease state, active-boundary progress and
-publication state (including bounded published/superseded history), historical
-failures separately from active blockers,
-migrations, current relation table/index/TOAST sizes, retained WAL, and current
-spool state against its configured hard bounds. It does not add a public
-metrics route or a service.
-
-Exit codes are objective and fixed:
-
-- `0` means healthy or legally progressing, including expected pending work,
-  a due retry/dependency, a valid or recoverable lease, or a legal coordinator
-  transition;
-- `1` means a configured hard spool bound is violated or a persisted active
-  population-wide artifact has a blocking failure and no legal progress path;
-- `2` means a required process, database, metric, prior snapshot, or consistency
-  fact is absent, malformed, forbidden, or unreadable.
-
-Queue age and a passed `target_at` are facts, not failure thresholds. Historical
-parse/data-quality failures remain visible but do not make the stack red unless
-they demonstrably block an active artifact. Optional PostgreSQL timing is
-`null` with a fixed reason when unavailable. Growth deltas and spool runway are
-also `null` without a validated earlier snapshot from the same PostgreSQL
-system/database identity, configuration, and relation set; an identity change
-has the fixed `database_identity_mismatch` reason. With a comparable snapshot,
-the command records its digest, the exact interval and signed deltas, and the
-estimate without applying an invented threshold.
-
-The snapshot uses only fixed categories and safe internal generation identity.
-It excludes credentials, database URLs, raw bodies/configuration, player tags,
-user selections, account/request identifiers, archive references, arbitrary
-URLs, and arbitrary exception text. Retain redirected output outside the
-checkout and record its file digest. This Step 8 check is release evidence; it
-does not replace #31 alert policy, deployment, restart/persistence, backup,
-provider, or public-smoke gates.
+a deployed volume or reuse deployed container names.
 
 ## User services
 
@@ -529,26 +433,14 @@ reservations, atomic handling, cleanup, and backpressure are unchanged.
 - `df` free bytes alone do not prove Btrfs metadata headroom. Host
   qualification requires `btrfs filesystem usage` data/metadata evidence;
   missing metadata blocks acceptance, not code merge.
-- Collector/worker/tooling must be rebuilt together: collector facts and
-  operating snapshots are now version 2, performance artifacts version 10.
-  Mixed-version evidence is rejected; capture a fresh operating baseline
-  after rebuilding. Raw-evidence spool contract v3, its ledger/migration
+- Collector and worker must be rebuilt together because their private metrics
+  share versioned fields. Raw-evidence spool contract v3, its ledger/migration
   meaning, bucket retention, verification, schema, and recovery policy are
   unchanged.
-
-Capture host evidence (stdlib only, no container dependency):
-
-```bash
-python3 scripts/spool_filesystem_check.py \
-  --spool-path /var/lib/clashlens/spool \
-  --postgres-path /var/lib/clashlens/postgres \
-  --output /retained/spool-filesystem.json \
-  --candidate-receipt /retained/clashlens-candidate-preparation.json
-```
 
 Post-merge `rogue` qualification remains separate: confirm persistent
 spool/`PGDATA` paths, mount sources, and the shared Btrfs pool; retain
 byte/data/metadata evidence; verify in-container classification, ownership,
 SELinux, `flock`, `fsync`, cleanup, and restart persistence; schedule an
-authorized reboot/remount check; and retain revision, digests, fingerprint,
-mount evidence, and a fresh snapshot together.
+authorized reboot/remount check; and retain revision, image digests, and mount
+evidence together.

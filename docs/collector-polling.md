@@ -65,11 +65,10 @@ real-API run, measure per-player gaps between successful profile/battle-log
 collections, coverage, failure categories, queue age, resource use and recovery.
 Use only the authorized tracked cohort, refreshing its eligibility first.
 
-The historical fixed-window `normal-capacity` qualification and Step 9
-five-minute deadline checks describe the previous policy. Their historical
-artifacts must not be relabelled as proof of this rolling policy or reused as a
-live-run acceptance gate. The `normal-capacity` CLI and its opt-in Go probe
-refuse execution under this new policy rather than produce misleading results.
+The retired fixed-window `normal-capacity` qualification and five-minute
+deadline checks describe the previous policy. Do not relabel their historical
+artifacts as proof of this rolling policy or reuse them as a live-run acceptance
+gate.
 The pre-change Fedora fixture collector drained
 25,667 ordinary requests plus 402 immediate retries in approximately 262 seconds
 at at most 25 requests/second per key and 100 total, without worker errors. That

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 from argparse import Namespace
 from pathlib import Path
@@ -9,8 +8,6 @@ from threading import Event
 import pytest
 
 from clashlens import cli
-from clashlens import spool as spool_module
-from clashlens.archive import S3ArchiveReader, SpoolFirstReader
 from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
 from clashlens.domain import DomainRuleError
 from clashlens.worker import ObservationProcessor, ProcessResult, StageMetrics
@@ -369,102 +366,6 @@ def test_operating_snapshot_refreshes_while_a_batch_is_blocked(
     assert snapshots[0]["captured_at"] != snapshots[1]["captured_at"]
     assert database.closed is True
 
-
-def test_observer_reads_produced_operating_file_at_start_periodic_and_terminal(
-    monkeypatch, tmp_path: Path, archive_server
-) -> None:
-    root = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location(
-        "step9_check_worker_snapshot_test", root / "scripts" / "step9_check.py"
-    )
-    assert spec and spec.loader
-    observer = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(observer)
-    endpoint, reference, digest, _handler = archive_server
-    monkeypatch.setattr(spool_module, "STRIPE_COUNT", 64)
-    inner = S3ArchiveReader(
-        endpoint=endpoint,
-        bucket="evidence",
-        access_key="test",
-        secret_key="test",
-        secure=False,
-        allow_insecure_test_origin=True,
-        max_retries=0,
-    )
-    reader = SpoolFirstReader(inner, spool_root=str(tmp_path / "spool"))
-    stripe = f"{int(digest[:3], 16) & 0xFFF:04x}"
-    (reader.spool.root / ".locks" / stripe).touch()
-    reader.read_verified(reference, digest)
-    health_calls = 0
-
-    def health() -> str:
-        nonlocal health_calls
-        health_calls += 1
-        return "ready"
-
-    inner.check_marker_health = health  # type: ignore[method-assign]
-
-    class FakeDatabase:
-        closed = False
-
-        def close(self) -> None:
-            self.closed = True
-
-        def maintain_queue(self, *, max_jobs: int) -> int:
-            assert max_jobs == 100
-            return 0
-
-    database = FakeDatabase()
-    refreshed = Event()
-    observed: list[tuple[dict[str, object], dict[str, object], str | None]] = []
-    snapshot_path = tmp_path / "worker-operating.json"
-    original_write = cli.write_private_snapshot
-
-    class BlockingProcessor:
-        def __init__(self, _database: object, _archive: object) -> None:
-            return
-
-        def process_until_idle(self, **kwargs: object) -> list[ProcessResult]:
-            assert refreshed.wait(1)
-            stop_requested = kwargs["stop_requested"]
-            assert isinstance(stop_requested, Event)
-            stop_requested.set()
-            return []
-
-    def capture(path: Path, snapshot: dict[str, object]) -> None:
-        original_write(path, snapshot)
-        produced = json.loads(snapshot_path.read_text())
-        totals, error = observer._worker_snapshots({}, lambda _run: [produced])
-        observed.append((produced, totals, error))
-        if len(observed) == 2:
-            refreshed.set()
-
-    monkeypatch.setattr(cli, "Database", lambda _url, **_kwargs: database)
-    monkeypatch.setattr(cli, "_archive", lambda _arguments, **_kwargs: reader)
-    monkeypatch.setattr(cli, "ObservationProcessor", BlockingProcessor)
-    monkeypatch.setattr(cli, "write_private_snapshot", capture)
-    monkeypatch.setattr(cli, "WORKER_SNAPSHOT_INTERVAL_SECONDS", 0.01)
-
-    result = cli._run_worker(
-        _worker_namespace(
-            run_forever=True,
-            operating_snapshot_file=str(snapshot_path),
-        )
-    )
-
-    assert result == 0
-    assert len(observed) >= 3
-    assert all(error is None for _payload, _totals, error in observed[:3])
-    expected = {"get": 1, "bucket": 0, "marker": 0}
-    assert all(totals == expected for _payload, totals, _error in observed[:3])
-    assert all(
-        payload["archive"]["remote_attempts"] == expected
-        for payload, _totals, _error in observed[:3]
-    )
-    assert len({payload["process"]["id"] for payload, _totals, _error in observed[:3]}) == 1
-    assert health_calls == len(observed)
-    assert reader.remote_attempts == expected
-    assert database.closed is True
 
 
 def test_initial_operating_snapshot_failure_does_not_stop_work(

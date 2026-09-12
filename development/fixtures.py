@@ -36,8 +36,8 @@ def tag_for(index: int) -> str:
 
 
 def tags_for(count: int) -> tuple[str, ...]:
-    if count not in {200, 12_500}:
-        raise ValueError("synthetic population must be 200 or 12500 players")
+    if count < 1 or count > 12_500:
+        raise ValueError("synthetic population must be between 1 and 12500 players")
     return tuple(tag_for(index) for index in range(count))
 
 

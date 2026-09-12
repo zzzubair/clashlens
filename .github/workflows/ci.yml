@@ -68,7 +68,7 @@ jobs:
         run: uv sync --locked
       - name: Ruff
         working-directory: python
-        run: uv run ruff check . ../scripts/*.py ../development/*.py
+        run: uv run ruff check . ../development/*.py
       - name: Compile
         working-directory: python
         run: uv run python -m compileall -q src
@@ -76,19 +76,7 @@ jobs:
         working-directory: python
         run: |
           uv run pytest -q
-          uv run pytest -q ../scripts/test_operating_check.py
-          uv run pytest -q ../scripts/test_step9_check.py
-          uv run pytest -q ../scripts/test_issue82_storage_slice.py
-          uv run pytest -q ../scripts/test_spool_filesystem_check.py
-          PYTHONPATH=.. uv run pytest -q ../scripts/test_deployment_receipt.py
           PYTHONPATH=.. uv run pytest -q ../development/test_fixtures.py
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-          cache: true
-      - name: Performance runner tests
-        working-directory: python
-        run: $UV_PROJECT_ENVIRONMENT/bin/python ../scripts/test_performance_runner.py -v
 
   postgres:
     name: Go collector suite on embedded PostgreSQL (includes focused Go→Python seam)
@@ -109,14 +97,6 @@ jobs:
           key: embedded-postgres-go-${{ runner.os }}
       - name: Go collector suite with embedded PostgreSQL
         run: go test ./internal/collector -count=1 -v -timeout=1200s
-
-  deploy-shell:
-    name: Deployment shell seam
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Deployment command seam
-        run: bash deploy_test.sh
 
   website:
     name: Website Node 24 checks and Chromium E2E

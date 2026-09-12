@@ -367,12 +367,6 @@ func TestVersionTwoReclaimExpiresOldAttemptAndStartsBoundedFencedAttempt(t *test
 				return store.resolveAttempt(ctx, firstJob, secondAttemptID, time.Now().UTC(), 3)
 			},
 		},
-		{
-			name: "finish new attempt with stale lease",
-			call: func() error {
-				return store.finishAttempt(ctx, firstJob, secondAttemptID, time.Now().UTC())
-			},
-		},
 	}
 	for _, staleCall := range staleCalls {
 		t.Run(staleCall.name, func(t *testing.T) {
