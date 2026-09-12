@@ -304,11 +304,12 @@ start_application() {
     "$IMAGE_PREFIX-collector" run >/dev/null
 
   "$PODMAN_BIN" run --detach --pod "$POD" --name "$WEBSITE" \
+    --volume "$STATE_DIR:/run/clashlens-dev:ro,Z" \
     --env NODE_ENV=test --env PORT=5173 \
     --env CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
     --env CLASHLENS_PYTHON_HMAC_CALLER=typescript-website \
     --env CLASHLENS_PYTHON_HMAC_KEY_ID=current \
-    --env CLASHLENS_PYTHON_HMAC_SECRET_B64="$HMAC_KEY_B64" \
+    --env CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/clashlens-dev/hmac-key \
     --env CLASHLENS_TRUST_PROXY=true --env CLASHLENS_LOGIN_ENABLED=true \
     --env CLASHLENS_PUBLIC_ORIGIN="http://127.0.0.1:$WEBSITE_PORT" \
     --env CLASHLENS_GOOGLE_ISSUER_URL="http://127.0.0.1:$OIDC_PORT" \
