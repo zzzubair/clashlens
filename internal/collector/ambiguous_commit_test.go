@@ -338,47 +338,6 @@ func TestVersionTwoResolutionReconcilesRegularFailuresAndStorageRetries(t *testi
 	}
 }
 
-func TestVersionTwoTerminalCompletionReconcilesCommittedCommitErrorAndIsIdempotent(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	store := startVersionTwoStore(t, ctx)
-
-	job, attemptID, _, response := prepareAmbiguousObservationFixture(t, ctx, store)
-	if _, err := store.pool.Exec(ctx, `
-		UPDATE collector_endpoint_results
-		SET outcome = 'observed', response_completed_at = $2
-		WHERE attempt_id = $1
-	`, attemptID, response.responseCompletedAt); err != nil {
-		t.Fatalf("mark completion endpoints observed: %v", err)
-	}
-
-	commitErr := errors.New("injected ambiguous terminal completion commit")
-	store.commitTx = func(ctx context.Context, tx pgx.Tx) error {
-		if err := tx.Commit(ctx); err != nil {
-			return err
-		}
-		return commitErr
-	}
-	now := time.Now().UTC()
-	if err := store.finishAttempt(ctx, job, attemptID, now); err != nil {
-		t.Fatalf("reconciled terminal completion returned an error: %v", err)
-	}
-	if err := store.finishAttempt(ctx, job, attemptID, now); err != nil {
-		t.Fatalf("repeated reconciled terminal completion returned an error: %v", err)
-	}
-
-	var jobStatus, attemptStatus string
-	if err := store.pool.QueryRow(ctx, `SELECT status FROM collector_jobs WHERE id = $1`, job.id).Scan(&jobStatus); err != nil {
-		t.Fatalf("read completed job status: %v", err)
-	}
-	if err := store.pool.QueryRow(ctx, `SELECT status FROM collector_attempts WHERE id = $1`, attemptID).Scan(&attemptStatus); err != nil {
-		t.Fatalf("read completed attempt status: %v", err)
-	}
-	if jobStatus != "complete" || attemptStatus != "complete" {
-		t.Fatalf("reconciled terminal completion state = job %q, attempt %q; want complete, complete", jobStatus, attemptStatus)
-	}
-}
-
 func TestVersionTwoObservationPartialCommitStateIsUnknown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

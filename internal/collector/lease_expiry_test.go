@@ -129,7 +129,7 @@ func TestExpiredLeaseRejectsProtectedMutations(t *testing.T) {
 			},
 		},
 		{
-			name: "attempt completion",
+			name: "attempt resolution",
 			setup: func(t *testing.T, fixture expiredLeaseFixture) {
 				t.Helper()
 				prepareEndpoint(t, fixture)
@@ -140,7 +140,7 @@ func TestExpiredLeaseRejectsProtectedMutations(t *testing.T) {
 				}
 			},
 			invoke: func(fixture expiredLeaseFixture) error {
-				return store.finishAttempt(ctx, fixture.job, fixture.attemptID, time.Now().UTC())
+				return store.resolveAttempt(ctx, fixture.job, fixture.attemptID, time.Now().UTC(), 3)
 			},
 		},
 	}

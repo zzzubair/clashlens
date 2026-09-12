@@ -35,7 +35,6 @@ MIGRATION_FILES=(
 ENV_FILE=${DEPLOY_ENV_FILE:-"$ROOT_DIR/app.env"}
 PODMAN_BIN=${PODMAN_BIN:-podman}
 CURL_BIN=${CURL_BIN:-curl}
-PYTHON_BIN=${PYTHON_BIN:-python3}
 
 # These values are deployment metadata, not application credentials.
 NETWORK_NAME=clashlens-private
@@ -106,12 +105,6 @@ Commands:
   build-website                Build the immutable website image only.
   candidate-prepare            Prepare only the configured disposable
                                PostgreSQL database through migration 0023.
-  deployment-receipt <scope> <environment> <results-dir>
-                               Write a candidate-preparation or deployed-stack
-                               evidence receipt outside the checkout.
-  operating-check [--previous-snapshot <path>]
-                               Print one bounded private operating snapshot and
-                               exit 0 healthy, 1 objective failure, or 2 unknown.
   python-up                    Build the Python image, then start the private
                                API and the worker replicas.
   python-start                 Start-only path for the private API and worker
@@ -279,24 +272,6 @@ validate_admission_evidence_settings() {
     die "CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS must be between 1 and 108000"
   [[ "$max_selected" =~ ^[0-9]+$ ]] && (( max_selected >= 1 && max_selected <= 5000000 )) || \
     die "CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES must be between 1 and 5000000"
-}
-
-admission_evidence_receipt_args() {
-  if [[ -n "${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID:-}" ]]; then
-    printf '%s\n' \
-      "admission_evidence_run_id=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID}" \
-      "admission_evidence_start=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_START}" \
-      "admission_evidence_end=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_END}" \
-      "admission_evidence_max_events=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_EVENTS}" \
-      "admission_evidence_max_selected_entries=${CLASHLENS_REGULAR_ADMISSION_EVIDENCE_MAX_SELECTED_ENTRIES}"
-  else
-    printf '%s\n' \
-      "admission_evidence_run_id=disabled" \
-      "admission_evidence_start=disabled" \
-      "admission_evidence_end=disabled" \
-      "admission_evidence_max_events=0" \
-      "admission_evidence_max_selected_entries=0"
-  fi
 }
 
 validate_key_specs() {
@@ -923,52 +898,6 @@ build_website_image() {
     "$ROOT_DIR/website"
 }
 
-write_deployment_receipt() {
-  local scope=$1 environment=$2 results_dir=$3
-  local admission_arg admission_args=()
-  while IFS= read -r admission_arg; do
-    admission_args+=(--safe-config "$admission_arg")
-  done < <(admission_evidence_receipt_args)
-  "$PYTHON_BIN" "$ROOT_DIR/scripts/deployment_receipt.py" \
-    --root "$ROOT_DIR" \
-    --scope "$scope" \
-    --environment "$environment" \
-    --results-dir "$results_dir" \
-    --podman-bin "$PODMAN_BIN" \
-    --git-bin "$GIT_BIN" \
-    --postgres-container "$POSTGRES_CONTAINER" \
-    --podman-network "$NETWORK_NAME" \
-    --podman-volume "$POSTGRES_VOLUME" \
-    --postgres-user "$POSTGRES_USER" \
-    --postgres-database "$POSTGRES_DB" \
-    --collector-image "$COLLECTOR_IMAGE" \
-    --python-image "$PYTHON_IMAGE" \
-    --website-image "$WEBSITE_IMAGE" \
-    --collector-container "$COLLECTOR_CONTAINER" \
-    --python-container "$PYTHON_API_CONTAINER" \
-    --worker-container "$PYTHON_WORKER_CONTAINER" \
-    --website-container "$WEBSITE_CONTAINER" \
-    --safe-config "collector_database_pool_size=$CLASHLENS_COLLECTOR_DATABASE_POOL_SIZE" \
-    --safe-config "endpoint_budget_battle_log=$CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG" \
-    --safe-config "endpoint_budget_deadline_at=$CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT" \
-    --safe-config "endpoint_budget_enabled=$CLASHLENS_ENDPOINT_BUDGET_ENABLED" \
-    --safe-config "endpoint_budget_global_rankings=$CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS" \
-    --safe-config "endpoint_budget_profile=$CLASHLENS_ENDPOINT_BUDGET_PROFILE" \
-    --safe-config "endpoint_budget_run_id=$CLASHLENS_ENDPOINT_BUDGET_RUN_ID" \
-    --safe-config "official_api_proxy_url=$CLASHLENS_OFFICIAL_API_PROXY_URL" \
-    --safe-config "player_discovery_enabled=$CLASHLENS_PLAYER_DISCOVERY_ENABLED" \
-    --safe-config "spool_free_inode_floor=$CLASHLENS_SPOOL_FREE_INODE_FLOOR" \
-    --safe-config "spool_free_space_floor=$CLASHLENS_SPOOL_FREE_SPACE_FLOOR" \
-    --safe-config "spool_max_body_bytes=$CLASHLENS_MAX_BODY_BYTES" \
-    --safe-config "spool_max_bytes=$CLASHLENS_SPOOL_MAX_BYTES" \
-    --safe-config "spool_max_objects=$CLASHLENS_SPOOL_MAX_OBJECTS" \
-    --safe-config "worker_archive_pool_size=$CLASHLENS_WORKER_ARCHIVE_POOL_SIZE" \
-    --safe-config "worker_concurrency=$CLASHLENS_WORKER_CONCURRENCY" \
-    --safe-config "worker_database_pool_size=$CLASHLENS_WORKER_DATABASE_POOL_SIZE" \
-    --safe-config "worker_lease_seconds=$CLASHLENS_WORKER_LEASE_SECONDS" \
-    --safe-config "worker_replicas=$CLASHLENS_WORKER_REPLICAS" \
-    "${admission_args[@]}"
-}
 
 prepare_candidate_database() {
   local i name postgres_password_secret secret_status version
@@ -1677,34 +1606,6 @@ run_collector_command() {
   "$PODMAN_BIN" exec "$COLLECTOR_CONTAINER" /usr/local/bin/collector "$@"
 }
 
-run_operating_check() {
-  local -a previous_args=()
-  if [[ $# == 2 && "$1" == "--previous-snapshot" && -n "$2" ]]; then
-    previous_args=(--previous-snapshot "$2")
-  elif [[ $# != 0 ]]; then
-    die "operating-check accepts only --previous-snapshot <path>"
-  fi
-  env "PYTHONPATH=$ROOT_DIR/python/src" "$PYTHON_BIN" \
-    "$ROOT_DIR/scripts/operating_check.py" \
-    --podman-bin "$PODMAN_BIN" \
-    --curl-bin "$CURL_BIN" \
-    --postgres-container "$POSTGRES_CONTAINER" \
-    --postgres-user "$POSTGRES_USER" \
-    --postgres-database "$POSTGRES_DB" \
-    --collector-metrics-url "http://$HEALTH_HOST:$HEALTH_PORT/metrics" \
-    --python-api-container "$PYTHON_API_CONTAINER" \
-    --api-hmac-caller "$CLASHLENS_HMAC_CALLER" \
-    --api-hmac-key-id "$CLASHLENS_HMAC_KEY_ID" \
-    --api-hmac-secret-file "$CLASHLENS_HMAC_SECRET_FILE" \
-    --python-worker-container "$PYTHON_WORKER_CONTAINER" \
-    --worker-replicas "$CLASHLENS_WORKER_REPLICAS" \
-    --spool-max-body-bytes "$CLASHLENS_MAX_BODY_BYTES" \
-    --spool-max-bytes "$CLASHLENS_SPOOL_MAX_BYTES" \
-    --spool-max-objects "$CLASHLENS_SPOOL_MAX_OBJECTS" \
-    --spool-free-space-floor "$CLASHLENS_SPOOL_FREE_SPACE_FLOOR" \
-    --spool-free-inode-floor "$CLASHLENS_SPOOL_FREE_INODE_FLOOR" \
-    "${previous_args[@]}"
-}
 
 command=${1:-}
 if [[ -z "$command" ]]; then
@@ -1715,7 +1616,7 @@ shift
 
 full_configuration=false
 case "$command" in
-  init|up|restart|build-collector|build-python|build-website|candidate-prepare|deployment-receipt|operating-check|python-up|python-start|api-start|worker-start|website-up|website-start)
+  init|up|restart|build-collector|build-python|build-website|candidate-prepare|python-up|python-start|api-start|worker-start|website-up|website-start)
     load_env_file
     full_configuration=true
     ;;
@@ -1898,15 +1799,6 @@ case "$command" in
     require_podman
     require_rootless_podman
     prepare_candidate_database
-    ;;
-  deployment-receipt)
-    [[ $# == 3 ]] || die "deployment-receipt requires <scope> <environment> <results-dir>"
-    require_podman
-    require_rootless_podman
-    write_deployment_receipt "$1" "$2" "$3"
-    ;;
-  operating-check)
-    run_operating_check "$@"
     ;;
   python-up)
     [[ $# == 0 ]] || die "python-up accepts no arguments"

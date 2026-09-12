@@ -425,7 +425,7 @@ class SpoolFirstReader:
             free_inode_floor=free_inode_floor,
         )
         self.stage_metrics = stage_metrics
-        # Measured evidence counters for the performance runner (#64).
+        # Measured evidence counters for bounded capacity measurements.
         self._counters = {
             "local_hits": 0, "local_misses": 0, "repairs": 0, "provider_errors": 0,
         }

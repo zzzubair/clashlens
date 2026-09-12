@@ -7,7 +7,7 @@ import yaml
 CI_WORKFLOW = Path(__file__).parents[2] / ".github" / "workflows" / "ci.yml"
 LOCKED_ENVIRONMENT = "/tmp/clashlens-ci-venv"
 TEST_DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432/clashlens"
-EXPECTED_JOBS = {"go", "python", "postgres", "deploy-shell", "website"}
+EXPECTED_JOBS = {"go", "python", "postgres", "website"}
 
 
 def _workflow() -> dict:
@@ -70,11 +70,6 @@ def test_python_job_runs_the_complete_suite_against_postgresql() -> None:
     assert test_step["working-directory"] == "python"
     assert test_step["run"] == (
         "uv run pytest -q\n"
-        "uv run pytest -q ../scripts/test_operating_check.py\n"
-        "uv run pytest -q ../scripts/test_step9_check.py\n"
-        "uv run pytest -q ../scripts/test_issue82_storage_slice.py\n"
-        "uv run pytest -q ../scripts/test_spool_filesystem_check.py\n"
-        "PYTHONPATH=.. uv run pytest -q ../scripts/test_deployment_receipt.py\n"
         "PYTHONPATH=.. uv run pytest -q ../development/test_fixtures.py\n"
     )
 

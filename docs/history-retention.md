@@ -278,26 +278,9 @@ DELETE and egress cost still require representative raw novelty/body sizes and
 the selected Scaleway tariff. Neither fixture byte totals nor a creation-age
 lifecycle establish that cost.
 
-Reproduce the storage probes from `python/` with the disposable database URL:
-
-```sh
-python ../scripts/performance_runner.py duplicate-heavy \
-  --duplicate-observations 100 --duplicate-cycles 2 --lanes 4 --output /retained/duplicates.json
-python ../scripts/performance_runner.py mixed-backfill \
-  --live-jobs 20 --backfill-jobs 100 --lanes 4 --output /retained/mixed.json
-```
-
-Artifacts remain on Fedora under `/home/zubair/clashlens-issue82-tools/`:
-`duplicates-807be87.json` (artifact digest
-`753ce30eca14b36d5624a4ba8c873c0ae26ae758d90de284bebc6e1d070062f4`) and
-`mixed-807be87.json` (artifact digest
-`f91611779b7d542086fcb3b41a46afc0a7712037729904b77cfb6643170e23da`).
-The reproducible cleanup probe is retained there as `prune-probe.py`.
-
 ## All-component storage slice (issue #82 preflight, 2026-09-08)
 
-`scripts/issue82_storage_slice.py` (stdlib only; unit checks in
-`scripts/test_issue82_storage_slice.py`) ran the closing measurement slice:
+A closing measurement slice ran:
 a 12,500-player x 28-day synthetic rehearsal in disposable PostgreSQL 18
 (production materialization, finalization, bounded retirement to `retired`,
 ordinary vacuum, canonical-string-identical historical reads), an exact
@@ -330,8 +313,9 @@ pages), and `issue82-storage-report.json` with the six-month report
 
 A six-month capacity guarantee requires measured novelty, relation/index/TOAST
 and WAL growth, spool occupancy, backups and operating headroom on Fedora. Small
-fixture tests demonstrate correctness, not production capacity. Issue #60 Step 9
-still requires 12,500 real players and 288 production-cadence cycles. No synthetic
-run replaces that gate. Scaleway permissions, immutable creation, restore and
-final-host acceptance remain launch checks in #31. Do not enable production
-cleanup or close those gates based on unit-test results alone.
+fixture tests demonstrate correctness, not production capacity. A synthetic run
+cannot establish the official API key rate or prove behavior through a real
+Legend day. Those checks require separate authorization before real traffic.
+Scaleway permissions, immutable object creation, a proven backup restore, and
+final-host acceptance remain launch checks. Do not enable production cleanup or
+close those gates based on unit-test results alone.
