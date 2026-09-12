@@ -321,6 +321,30 @@ start_application() {
     "$IMAGE_PREFIX-website" >/dev/null
 }
 
+show_readiness_diagnostics() {
+  printf '\n[readiness database]\n'
+  "$PODMAN_BIN" exec "$POSTGRES" psql -At -U clashlens -d clashlens -c \
+    "SELECT player.normalized_tag, profile.name, profile.source_contract_state,
+            profile.season_anchor_state
+       FROM players AS player
+       LEFT JOIN player_profile_versions AS profile
+         ON profile.id = player.current_profile_version_id
+      WHERE player.normalized_tag = '#2PP'" 2>&1 || true
+  printf '\n[readiness private API]\n'
+  "$PODMAN_BIN" exec "$API" python -m clashlens.cli probe \
+    --url 'http://127.0.0.1:8000/v1/players/%232PP' \
+    --secret-file /run/clashlens-dev/hmac-key 2>&1 || true
+  printf '\n[readiness player page]\n'
+  "$PODMAN_BIN" exec "$WEBSITE" node -e \
+    "fetch('http://127.0.0.1:5173/players/%232PP').then(async response => {
+      const body = await response.text();
+      console.log(JSON.stringify({status: response.status,
+        hasPlayer: body.includes('Synthetic Clasher 001'),
+        malformed: body.includes('returned malformed data'),
+        unavailable: body.includes('live service is unavailable')}));
+    }).catch(error => { console.error(error.name); process.exit(1) })" 2>&1 || true
+}
+
 wait_for_application() {
   local attempt profiles
   for attempt in $(seq 1 120); do
@@ -339,6 +363,7 @@ wait_for_application() {
     fi
     sleep 1
   done
+  show_readiness_diagnostics
   printf 'dev: the first player page did not become ready; run ./dev logs\n' >&2
   return 1
 }
