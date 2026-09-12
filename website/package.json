@@ -19,7 +19,6 @@
     "test:e2e": "npm run build:verify && playwright test",
     "test": "npm run typecheck && npm run lint && npm run format && npm run test:unit",
     "check:browser-assets": "node ./scripts/check-browser-assets.mjs",
-    "fixture": "python3 ./fixture_server.py",
     "podman:build": "podman build --file Containerfile --tag clashlens-website:prototype ."
   },
   "dependencies": {

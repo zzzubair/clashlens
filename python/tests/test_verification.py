@@ -137,6 +137,49 @@ def test_official_client_calls_only_verifytoken_through_the_fixed_proxy() -> Non
     assert request.authorization == "Bearer safe-synthetic-api-key"  # type: ignore[attr-defined]
 
 
+def test_official_client_can_use_the_loopback_development_fixture() -> None:
+    captured: list[object] = []
+
+    def transport(request: object) -> OfficialVerificationResponse:
+        captured.append(request)
+        return OfficialVerificationResponse(http_status=200, body=b'{"status":"ok"}')
+
+    client = OfficialVerificationClient(
+        api_key=b"safe-synthetic-api-key",
+        proxy_url="",
+        api_origin="http://127.0.0.1:8080",
+        allow_insecure_test_origin=True,
+        transport=transport,
+    )
+
+    client.verify("#2PP", "VERIFY-2PP")
+
+    request = captured[0]
+    assert request.url == (  # type: ignore[attr-defined]
+        "http://127.0.0.1:8080/v1/players/%232PP/verifytoken"
+    )
+    assert request.proxy_url == ""  # type: ignore[attr-defined]
+
+
+def test_official_client_rejects_insecure_origin_without_test_opt_in() -> None:
+    with pytest.raises(ValueError, match="requires test opt-in"):
+        OfficialVerificationClient(
+            api_key=b"safe-synthetic-api-key",
+            proxy_url="",
+            api_origin="http://127.0.0.1:8080",
+        )
+
+
+def test_official_client_rejects_non_loopback_insecure_test_origin() -> None:
+    with pytest.raises(ValueError, match="must be loopback"):
+        OfficialVerificationClient(
+            api_key=b"safe-synthetic-api-key",
+            proxy_url="http://fixed-egress.internal:3128",
+            api_origin="http://example.test",
+            allow_insecure_test_origin=True,
+        )
+
+
 @pytest.mark.parametrize(
     "proxy_url",
     ["", "fixed-egress.internal:3128", "http://user:password@fixed-egress:3128"],

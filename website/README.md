@@ -1,40 +1,22 @@
 # Clash Lens website
 
 This directory contains the self-hosted TypeScript SSR website. It talks to
-the private Python API through one server-only client boundary. The fixture in
-`fixture_server.py` is deterministic test infrastructure; it is not the
-production API and must not run in production.
+the private Python API through one server-only client boundary.
 
 ## Requirements and setup
 
-- Node.js 24 LTS and npm with the committed `package-lock.json`;
-- Python 3.9 or newer for the test fixture; and
-- Playwright Chromium for browser tests.
+- Node.js 24 LTS and npm with the committed `package-lock.json`; and
+- rootless Podman for the full local stack and browser tests.
 
 ```sh
 cd website
 npm ci
-npx playwright install chromium
 ```
 
-For local fixture-backed development, run the fixture in one terminal:
+Start the product from the repository root:
 
 ```sh
-export CLASHLENS_FIXTURE_HMAC_SECRET_B64="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
-export CLASHLENS_FIXTURE_HMAC_CALLER="typescript-website"
-export CLASHLENS_FIXTURE_HMAC_KEY_ID="2026-08-a"
-python3 fixture_server.py --host 127.0.0.1 --port 8010
-```
-
-In a second terminal, point the website at that fixture and run the dev
-server:
-
-```sh
-export CLASHLENS_PYTHON_API_URL="http://127.0.0.1:8010"
-export CLASHLENS_PYTHON_HMAC_CALLER="typescript-website"
-export CLASHLENS_PYTHON_HMAC_KEY_ID="2026-08-a"
-export CLASHLENS_PYTHON_HMAC_SECRET_B64="AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
-npm run dev
+./dev up
 ```
 
 Production mounts `CLASHLENS_PYTHON_HMAC_SECRET_FILE` instead of using an
@@ -53,9 +35,10 @@ npm run test:e2e
 ```
 
 `check:browser-assets` fails if server-only client or secret markers enter the
-browser bundle. End-to-end tests use loopback-only deterministic API and OIDC
-fixtures and never call Google, Supercell, production data, or the real
-Python application.
+browser bundle. End-to-end tests start the root development stack and exercise
+the real Python application against loopback-only Clash, archive, Google, and
+Discord fixtures. They never call Google, Discord, Supercell, production data,
+or cloud storage.
 
 ## Runtime interface
 

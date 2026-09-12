@@ -75,6 +75,7 @@ def test_python_job_runs_the_complete_suite_against_postgresql() -> None:
         "uv run pytest -q ../scripts/test_issue82_storage_slice.py\n"
         "uv run pytest -q ../scripts/test_spool_filesystem_check.py\n"
         "PYTHONPATH=.. uv run pytest -q ../scripts/test_deployment_receipt.py\n"
+        "PYTHONPATH=.. uv run pytest -q ../development/test_fixtures.py\n"
     )
 
 
@@ -98,8 +99,8 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate() -> None
         "npm audit",
         "npm test",
         "npm run build:verify",
-        "npx playwright install --with-deps chromium",
-        "npm run test:e2e",
+        "sudo apt-get update && sudo apt-get install -y podman",
+        "../dev check",
     ]
     full_audit = next(step for step in job["steps"] if step.get("run") == "npm audit")
     assert full_audit["continue-on-error"] is True

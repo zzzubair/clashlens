@@ -6,5 +6,6 @@
 /deploy/secrets/
 *.secret
 /results/
+/.clashlens-dev/
 **/__pycache__/
 .tmp-test-private/

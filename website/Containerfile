@@ -6,6 +6,16 @@ RUN npm ci --ignore-scripts
 COPY . .
 RUN npm run build:verify
 
+FROM build AS fixtures
+
+CMD ["node", "./tests/fixtures/login-provider.ts"]
+
+FROM build AS check
+
+RUN npx playwright install --with-deps chromium
+ENV CLASHLENS_E2E_EXTERNAL_STACK=1
+CMD ["sh", "-c", "npm test && npm run build:verify && npx playwright test"]
+
 FROM docker.io/library/node:24.19.0-bookworm-slim AS runtime
 
 ENV NODE_ENV=production \

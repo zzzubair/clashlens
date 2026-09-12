@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import quote, urlsplit
 
+OFFICIAL_API_ORIGIN: Final = "https://api.clashofclans.com"
+
 
 class VerificationOutcome(StrEnum):
     VERIFIED = "verified"
@@ -55,17 +57,41 @@ class OfficialVerificationClient:
         *,
         api_key: bytes,
         proxy_url: str,
+        api_origin: str = OFFICIAL_API_ORIGIN,
+        allow_insecure_test_origin: bool = False,
         timeout_seconds: float = 10.0,
         transport: Callable[[OfficialVerificationRequest], OfficialVerificationResponse]
         | None = None,
     ) -> None:
-        parsed_proxy = urlsplit(proxy_url)
+        parsed_origin = urlsplit(api_origin)
         if (
-            parsed_proxy.scheme not in {"http", "https"}
-            or not parsed_proxy.hostname
-            or parsed_proxy.username is not None
-            or parsed_proxy.password is not None
+            parsed_origin.scheme not in {"http", "https"}
+            or not parsed_origin.hostname
+            or parsed_origin.username is not None
+            or parsed_origin.password is not None
+            or parsed_origin.path not in {"", "/"}
+            or parsed_origin.query
+            or parsed_origin.fragment
         ):
+            raise ValueError("official API origin must be an absolute origin")
+        normalized_origin = api_origin.rstrip("/")
+        if normalized_origin != OFFICIAL_API_ORIGIN:
+            if not allow_insecure_test_origin:
+                raise ValueError("official API origin override requires test opt-in")
+            if parsed_origin.hostname not in {"127.0.0.1", "localhost", "::1"}:
+                raise ValueError("test official API origin must be loopback")
+        if proxy_url:
+            parsed_proxy = urlsplit(proxy_url)
+            if (
+                parsed_proxy.scheme not in {"http", "https"}
+                or not parsed_proxy.hostname
+                or parsed_proxy.username is not None
+                or parsed_proxy.password is not None
+            ):
+                raise ValueError(
+                    "a non-credentialed fixed-egress proxy URL is required"
+                )
+        elif parsed_origin.hostname not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("a non-credentialed fixed-egress proxy URL is required")
         if not 0 < timeout_seconds <= 30:
             raise ValueError(
@@ -76,6 +102,7 @@ class OfficialVerificationClient:
         except UnicodeDecodeError as error:
             raise ValueError("official API key must contain ASCII") from error
         self._proxy_url = proxy_url
+        self._api_origin = normalized_origin
         self._authorization = authorization
         self._timeout_seconds = timeout_seconds
         self._transport = transport or _urllib_transport
@@ -86,7 +113,7 @@ class OfficialVerificationClient:
         request = OfficialVerificationRequest(
             method="POST",
             url=(
-                "https://api.clashofclans.com/v1/players/"
+                f"{self._api_origin}/v1/players/"
                 f"{quote(normalized_tag, safe='')}/verifytoken"
             ),
             proxy_url=self._proxy_url,
@@ -163,9 +190,12 @@ def load_official_api_key_file(path: str | Path) -> bytes:
 def _urllib_transport(
     request: OfficialVerificationRequest,
 ) -> OfficialVerificationResponse:
-    proxy = urllib.request.ProxyHandler(
+    proxies = (
         {"http": request.proxy_url, "https": request.proxy_url}
+        if request.proxy_url
+        else {}
     )
+    proxy = urllib.request.ProxyHandler(proxies)
     opener = urllib.request.build_opener(proxy)
     http_request = urllib.request.Request(
         request.url,

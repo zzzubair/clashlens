@@ -68,7 +68,7 @@ jobs:
         run: uv sync --locked
       - name: Ruff
         working-directory: python
-        run: uv run ruff check . ../scripts/*.py
+        run: uv run ruff check . ../scripts/*.py ../development/*.py
       - name: Compile
         working-directory: python
         run: uv run python -m compileall -q src
@@ -81,6 +81,7 @@ jobs:
           uv run pytest -q ../scripts/test_issue82_storage_slice.py
           uv run pytest -q ../scripts/test_spool_filesystem_check.py
           PYTHONPATH=.. uv run pytest -q ../scripts/test_deployment_receipt.py
+          PYTHONPATH=.. uv run pytest -q ../development/test_fixtures.py
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26"
@@ -143,9 +144,9 @@ jobs:
       - name: Verify production build
         working-directory: website
         run: npm run build:verify
-      - name: Install Playwright Chromium
+      - name: Install rootless Podman
         working-directory: website
-        run: npx playwright install --with-deps chromium
-      - name: End-to-end tests
+        run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Development stack acceptance
         working-directory: website
-        run: npm run test:e2e
+        run: ../dev check
