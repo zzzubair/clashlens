@@ -22,11 +22,16 @@ test("a Clasher can sign in and use account features against the real backend", 
   await expect(
     page.getByRole("heading", { name: "Saved players", exact: true }),
   ).toBeVisible();
-  if (await page.getByRole("heading", { name: "No saved players yet" }).isVisible()) {
+  const emptySavedPlayers = page.getByRole("heading", {
+    name: "No saved players yet",
+  });
+  const savedPlayer = page.getByText("#2PP", { exact: true }).first();
+  await expect(emptySavedPlayers.or(savedPlayer)).toBeVisible();
+  if (await emptySavedPlayers.isVisible()) {
     await page.getByLabel("Player tag").fill("#2PP");
     await page.getByRole("button", { name: "Save player" }).click();
   }
-  await expect(page.getByText("#2PP", { exact: true }).first()).toBeVisible();
+  await expect(savedPlayer).toBeVisible();
 
   await page.goto("/account/groups");
   if (await page.getByRole("heading", { name: "No private groups yet" }).isVisible()) {
