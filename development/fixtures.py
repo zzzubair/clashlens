@@ -9,6 +9,7 @@ import json
 import os
 import tempfile
 from datetime import UTC, datetime, timedelta
+from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
@@ -236,6 +237,9 @@ class ArchiveHandler(QuietHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("ETag", f'"{hashlib.md5(body).hexdigest()}"')
         self.send_header("X-Amz-Meta-Sha256", hashlib.sha256(body).hexdigest())
+        self.send_header(
+            "Last-Modified", formatdate(target.stat().st_mtime, usegmt=True)
+        )
         self.end_headers()
         if include_body:
             self.wfile.write(body)

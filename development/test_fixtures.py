@@ -5,6 +5,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from email.utils import parsedate_to_datetime
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -108,6 +109,7 @@ def test_disk_archive_persists_bytes_and_refuses_an_overwrite(tmp_path: Path) ->
         with urllib.request.urlopen(url) as response:
             assert response.read() == body
             assert response.headers["X-Amz-Meta-Sha256"] == digest
+            assert parsedate_to_datetime(response.headers["Last-Modified"])
         with pytest.raises(urllib.error.HTTPError) as error:
             urllib.request.urlopen(request)
         assert error.value.code == 412
