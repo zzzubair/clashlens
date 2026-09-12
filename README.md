@@ -44,9 +44,12 @@ The website is available at <http://127.0.0.1:5173>. `down` keeps the local
 database, raw-response archive, and spool; the isolated `check` stack removes
 its data when the checks finish. The local collector repeats once per hour:
 that is at most 401 official fixture requests per hour with 200 Clashers, or
-25,001 with the optional capacity population. Run `down` when you are finished
-to stop local data growth; use the matching `./dev down --players 12500` after
-a capacity run.
+25,001 with the optional capacity population. Using Issue #82's production
+projection as a conservative ceiling, persistent data can grow by about 2 MB
+per day at 200 Clashers or 90 MB per day at 12,500 (about 16 GB over six
+months); the database and archive volumes are not size-capped. Run `down` when
+you are finished to stop local data growth; use the matching
+`./dev down --players 12500` after a capacity run.
 
 Clash Lens provides data and analysis. Users make the decisions.
 
