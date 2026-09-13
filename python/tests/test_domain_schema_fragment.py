@@ -48,27 +48,6 @@ def test_python_production_migration_supports_global_observations_without_fake_p
 ) -> None:
     with domain_database(database_url) as connection_info:
         with psycopg.connect(connection_info) as connection:
-            collector_job_id = connection.execute(
-                """
-                INSERT INTO collector_jobs (
-                    work_type, player_id, normalized_tag, capacity_pool, priority,
-                    due_at, coalescing_key, status, scope, required_endpoint
-                ) VALUES (
-                    'global_player_rankings', NULL, NULL, 'normal', 500,
-                    clock_timestamp(), 'global-ranking-test', 'complete', 'global',
-                    'global_player_rankings'
-                )
-                RETURNING id
-                """
-            ).fetchone()[0]
-            attempt_id = connection.execute(
-                """
-                INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
-                VALUES (%s, 'complete', clock_timestamp(), clock_timestamp())
-                RETURNING id
-                """,
-                (collector_job_id,),
-            ).fetchone()[0]
             connection.execute(
                 """
                 INSERT INTO archive_instances (
@@ -91,19 +70,18 @@ def test_python_production_migration_supports_global_observations_without_fake_p
             observation_id = connection.execute(
                 """
                 INSERT INTO collector_observations (
-                    occurrence_key, collection_job_id, attempt_id, player_id,
-                    scope, normalized_tag, endpoint, request_started_at, response_completed_at,
+                    occurrence_key, player_id, scope, normalized_tag, endpoint,
+                    request_started_at, response_completed_at,
                     http_status, response_hash, archive_reference, archive_catalogue_hash,
                     collector_version, key_label, evidence_headers
                 ) VALUES (
-                    'global-ranking-test', %s, %s, NULL, 'global', NULL,
+                    'global-ranking-test', NULL, 'global', NULL,
                     'global_player_rankings', clock_timestamp(), clock_timestamp(),
                     200, repeat('a', 64), 's3://evidence/test', repeat('a', 64),
                     'collector-v2', 'normal-a', '{}'::jsonb
                 )
                 RETURNING id
                 """,
-                (collector_job_id, attempt_id),
             ).fetchone()[0]
             job = connection.execute(
                 """

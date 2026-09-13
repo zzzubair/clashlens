@@ -32,6 +32,7 @@ def _confirm_anchor(connection_info, archive_server, *, current_start=BOUNDARY):
         observed_at=current_start,
         normalized_tag="#ANCHOR",
     )
+    _attach_complete_work(connection_info, observation_id)
     with psycopg.connect(connection_info) as connection:
         player_id = connection.execute(
             "SELECT id FROM players WHERE normalized_tag = '#ANCHOR'"
@@ -72,13 +73,70 @@ def _confirm_anchor(connection_info, archive_server, *, current_start=BOUNDARY):
         connection.commit()
 
 
-def _age_jobs(connection_info):
+def _age_work(connection_info):
     with psycopg.connect(connection_info) as connection:
-        connection.execute("UPDATE collector_jobs SET updated_at = %s", (OLD,))
+        connection.execute(
+            "UPDATE collector_work SET updated_at = %s WHERE status = 'complete'",
+            (OLD,),
+        )
         connection.execute(
             "UPDATE python_processing_jobs SET updated_at = %s", (OLD,)
         )
         connection.commit()
+
+
+def _attach_complete_work(connection_info, observation_id: int) -> int:
+    with psycopg.connect(connection_info) as connection:
+        endpoint, player_id, normalized_tag, scope = connection.execute(
+            """
+            SELECT endpoint, player_id, normalized_tag, scope
+            FROM collector_observations
+            WHERE id = %s
+            """,
+            (observation_id,),
+        ).fetchone()
+        if endpoint == "global_player_rankings":
+            kind, lane = "global_player_rankings", "ordinary"
+            profile_status, battle_log_status = "observed", "not_applicable"
+        elif endpoint == "profile":
+            kind, lane = "initial_collection", "interactive"
+            profile_status, battle_log_status = "observed", "pending"
+        else:
+            kind, lane = "initial_collection", "interactive"
+            profile_status, battle_log_status = "pending", "observed"
+        work_id = connection.execute(
+            """
+            INSERT INTO collector_work (
+                kind, lane, scope, player_id, normalized_tag, due_at,
+                coalescing_key, status, profile_status, battle_log_status,
+                profile_observation_id, battle_log_observation_id, completed_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, 'complete', %s, %s,
+                CASE WHEN %s <> 'battle_log' THEN %s END,
+                CASE WHEN %s = 'battle_log' THEN %s END,
+                %s
+            )
+            RETURNING id
+            """,
+            (
+                kind,
+                lane,
+                scope,
+                player_id,
+                normalized_tag,
+                OLD,
+                f"history:{observation_id}",
+                profile_status,
+                battle_log_status,
+                endpoint,
+                observation_id,
+                endpoint,
+                observation_id,
+                OLD,
+            ),
+        ).fetchone()[0]
+        connection.commit()
+    return int(work_id)
 
 
 def _seed_discovery(connection, observation_id, tag, *, kind="battle_opponent", index=0):
@@ -119,6 +177,7 @@ def _process(connection_info, archive_server, occurrence_key, *, tag="#2PP"):
         assert result is not None and result.outcome == "processed"
     finally:
         database.close()
+    _attach_complete_work(connection_info, observation_id)
     return observation_id
 
 
@@ -133,7 +192,7 @@ def test_discovery_prune_preview_apply_and_rerun(database_url: str, archive_serv
             observed_at=OLD,
             normalized_tag="#2PP",
         )
-        store_observation(
+        ranking_observation, ranking_job = store_observation(
             connection_info,
             archive_server,
             occurrence_key="prune-rankings",
@@ -145,16 +204,18 @@ def test_discovery_prune_preview_apply_and_rerun(database_url: str, archive_serv
         database, processor = _processor(connection_info, archive_server)
         try:
             assert processor.process_job(battle_job, owner="prune-battle") is not None
-            assert processor.process_once(owner="prune-rankings") is not None
+            assert processor.process_job(ranking_job, owner="prune-rankings") is not None
         finally:
             database.close()
+        _attach_complete_work(connection_info, battle_observation)
+        _attach_complete_work(connection_info, ranking_observation)
         _confirm_anchor(connection_info, archive_server)
-        _age_jobs(connection_info)
+        _age_work(connection_info)
         with psycopg.connect(connection_info) as connection:
             before = connection.execute(
                 """
                 SELECT (SELECT count(*) FROM known_player_discoveries),
-                       (SELECT count(*) FROM collector_jobs),
+                       (SELECT count(*) FROM collector_work),
                        (SELECT count(*) FROM legend_battles),
                        (SELECT count(*) FROM battle_evidence),
                        (SELECT count(*) FROM official_top200_versions)
@@ -186,7 +247,7 @@ def test_discovery_prune_preview_apply_and_rerun(database_url: str, archive_serv
             # Retained roots and semantic detail survive discovery cleanup.
             assert connection.execute(
                 """
-                SELECT (SELECT count(*) FROM collector_jobs),
+                SELECT (SELECT count(*) FROM collector_work),
                        (SELECT count(*) FROM legend_battles),
                        (SELECT count(*) FROM battle_evidence),
                        (SELECT count(*) FROM official_top200_versions)
@@ -207,7 +268,7 @@ def test_discovery_prune_unknown_boundary_live_season_and_recent(
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         old_observation = _process(connection_info, archive_server, "boundary-old")
-        _age_jobs(connection_info)
+        _age_work(connection_info)
         with psycopg.connect(connection_info) as connection:
             # Unknown season boundary fails closed.
             assert prune_completed_history(connection)[
@@ -220,17 +281,25 @@ def test_discovery_prune_unknown_boundary_live_season_and_recent(
             ] == 1
             # Recent roots are retained even when pre-season.
             connection.execute(
-                "UPDATE collector_jobs SET updated_at = clock_timestamp()"
-                " WHERE id = (SELECT collection_job_id FROM collector_observations WHERE id = %s)",
-                (old_observation,),
+                """
+                UPDATE collector_work
+                SET updated_at = clock_timestamp()
+                WHERE profile_observation_id = %s
+                   OR battle_log_observation_id = %s
+                """,
+                (old_observation, old_observation),
             )
             assert prune_completed_history(connection, apply=True)[
                 "eligible_known_player_discoveries"
             ] == 0
             connection.execute(
-                "UPDATE collector_jobs SET updated_at = %s"
-                " WHERE id = (SELECT collection_job_id FROM collector_observations WHERE id = %s)",
-                (OLD, old_observation),
+                """
+                UPDATE collector_work
+                SET updated_at = %s
+                WHERE profile_observation_id = %s
+                   OR battle_log_observation_id = %s
+                """,
+                (OLD, old_observation, old_observation),
             )
             connection.commit()
         live_body = json.loads(BATTLE_FIXTURE.read_bytes())
@@ -251,9 +320,7 @@ def test_discovery_prune_unknown_boundary_live_season_and_recent(
         finally:
             database.close()
         with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                "UPDATE collector_jobs SET updated_at = %s", (OLD,)
-            )
+            connection.execute("UPDATE collector_work SET updated_at = %s", (OLD,))
             connection.execute(
                 "UPDATE python_processing_jobs SET updated_at = %s", (OLD,)
             )
@@ -297,9 +364,8 @@ def test_discovery_prune_preserves_unfinished_and_protected_work(
             normalized_tag="#9PP",
             http_status=500,
         )
-        child = _process(connection_info, archive_server, "protect-child", tag="#QPP")
-        transport = _process(
-            connection_info, archive_server, "protect-transport", tag="#CPP"
+        unfinished = _process(
+            connection_info, archive_server, "protect-unfinished", tag="#QPP"
         )
         baseline = _process(
             connection_info, archive_server, "protect-baseline", tag="#VPP"
@@ -316,58 +382,59 @@ def test_discovery_prune_preserves_unfinished_and_protected_work(
         finally:
             database.close()
         with psycopg.connect(connection_info) as connection:
-            attempt_id = connection.execute(
-                "SELECT attempt_id FROM collector_observations WHERE id = %s",
-                (child,),
-            ).fetchone()[0]
-            player_id = connection.execute(
-                "SELECT player_id FROM collector_observations WHERE id = %s",
-                (child,),
+            unfinished_work_id = connection.execute(
+                """
+                SELECT id FROM collector_work
+                WHERE profile_observation_id = %s
+                   OR battle_log_observation_id = %s
+                """,
+                (unfinished, unfinished),
             ).fetchone()[0]
             connection.execute(
                 """
-                INSERT INTO collector_jobs (
-                    work_type, player_id, normalized_tag, scope, capacity_pool,
-                    priority, due_at, coalescing_key, status, required_endpoint,
-                    parent_attempt_id
-                ) VALUES (
-                    'initial_collection', %s, '#QPP', 'player', 'normal',
-                    300, %s, 'protect-child-retry', 'pending', 'battle_log', %s
-                )
+                UPDATE collector_work
+                SET status = 'waiting_retry', due_at = %s,
+                    failure_category = 'retrying', completed_at = NULL
+                WHERE id = %s
                 """,
-                (player_id, OLD, attempt_id),
-            )
-            transport_attempt = connection.execute(
-                "SELECT attempt_id, player_id FROM collector_observations WHERE id = %s",
-                (transport,),
-            ).fetchone()
-            transport_player = transport_attempt[1]
-            transport_attempt = transport_attempt[0]
-            connection.execute(
-                """
-                INSERT INTO collector_transport_failures (
-                    collection_job_id, attempt_id, player_id, normalized_tag,
-                    endpoint, request_started_at, failed_at, failure_category,
-                    retry_state, key_label, evidence_key
-                ) VALUES (
-                    (SELECT collection_job_id FROM collector_observations WHERE id = %s),
-                    %s, %s, '#CPP', 'battle_log', %s, %s,
-                    'timeout', 'retrying', 'normal-a', 'protect-transport:1'
-                )
-                """,
-                (transport, transport_attempt, transport_player, OLD, OLD),
+                (OLD, unfinished_work_id),
             )
             baseline_player = connection.execute(
                 "SELECT player_id FROM collector_observations WHERE id = %s",
                 (baseline,),
             ).fetchone()[0]
+            sweep_id = connection.execute(
+                """
+                INSERT INTO collector_reset_sweeps (
+                    boundary_at, member_ids, membership_captured_at
+                ) VALUES (%s, %s, %s)
+                RETURNING id
+                """,
+                (OLD, [baseline_player], OLD),
+            ).fetchone()[0]
+            reset_work_id = connection.execute(
+                """
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, sweep_id,
+                    due_at, coalescing_key, status, profile_status,
+                    battle_log_status, battle_log_observation_id, completed_at
+                ) VALUES (
+                    'reset_baseline', 'reset', 'player', %s, '#VPP', %s,
+                    %s, 'protect-baseline-work', 'complete', 'pending',
+                    'observed', %s, %s
+                )
+                RETURNING id
+                """,
+                (baseline_player, sweep_id, OLD, baseline, OLD),
+            ).fetchone()[0]
             connection.execute(
                 """
                 INSERT INTO reset_baseline_evidence (
-                    player_id, boundary_at, battle_log_observation_id
-                ) VALUES (%s, %s, %s)
+                    sweep_id, player_id, boundary_at, collector_work_id,
+                    battle_log_observation_id, evidence_key
+                ) VALUES (%s, %s, %s, %s, %s, %s)
                 """,
-                (baseline_player, OLD, baseline),
+                (sweep_id, baseline_player, OLD, reset_work_id, baseline, "protect-baseline"),
             )
             connection.execute(
                 """
@@ -382,8 +449,7 @@ def test_discovery_prune_preserves_unfinished_and_protected_work(
             for observation_id, tag in [
                 (pending_observation, "#P200"),
                 (failed_observation, "#P201"),
-                (child, "#P202"),
-                (transport, "#P203"),
+                (unfinished, "#P202"),
                 (baseline, "#P204"),
                 (replay, "#P205"),
                 (recent, "#P206"),
@@ -392,12 +458,21 @@ def test_discovery_prune_preserves_unfinished_and_protected_work(
                 _seed_discovery(connection, observation_id, tag, index=0)
             connection.commit()
         _confirm_anchor(connection_info, archive_server)
-        _age_jobs(connection_info)
+        _age_work(connection_info)
         with psycopg.connect(connection_info) as connection:
             connection.execute(
-                "UPDATE collector_jobs SET updated_at = clock_timestamp()"
-                " WHERE id = (SELECT collection_job_id FROM collector_observations"
-                " WHERE occurrence_key = 'protect-recent')"
+                """
+                UPDATE collector_work
+                SET updated_at = clock_timestamp()
+                WHERE profile_observation_id = (
+                    SELECT id FROM collector_observations
+                    WHERE occurrence_key = 'protect-recent'
+                )
+                   OR battle_log_observation_id = (
+                    SELECT id FROM collector_observations
+                    WHERE occurrence_key = 'protect-recent'
+                )
+                """
             )
             connection.execute(
                 "UPDATE python_processing_jobs SET updated_at = clock_timestamp()"
@@ -419,8 +494,7 @@ def test_discovery_prune_preserves_unfinished_and_protected_work(
             assert survivors == {
                 "protect-pending",
                 "protect-failed",
-                "protect-child",
-                "protect-transport",
+                "protect-unfinished",
                 "protect-baseline",
                 "protect-replay",
                 "protect-recent",
@@ -457,7 +531,7 @@ def test_discovery_events_keep_sourceless_history(
             )
             connection.commit()
         _confirm_anchor(connection_info, archive_server)
-        _age_jobs(connection_info)
+        _age_work(connection_info)
         with psycopg.connect(connection_info) as connection:
             preview = prune_completed_history(connection)
             assert preview["eligible_player_discovery_events"] == 1
@@ -481,7 +555,7 @@ def test_discovery_scheduling_and_replay_survive_cleanup(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         observation = _process(connection_info, archive_server, "survive-first")
         _confirm_anchor(connection_info, archive_server)
-        _age_jobs(connection_info)
+        _age_work(connection_info)
         with psycopg.connect(connection_info) as connection:
             assert prune_completed_history(connection, apply=True)[
                 "deleted_known_player_discoveries"
@@ -506,7 +580,7 @@ def test_discovery_scheduling_and_replay_survive_cleanup(
                     (fresh_observation,),
                 ).fetchone()[0] == 1
                 assert connection.execute(
-                    "SELECT count(*) FROM collector_jobs WHERE work_type = 'discovery_profile'"
+                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
                 ).fetchone()[0] > 0
         finally:
             database.close()
@@ -584,7 +658,7 @@ def test_discovery_prune_replay_committed_before_recheck_preserves_rows(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         observation = _process(connection_info, archive_server, "replay-race")
         _confirm_anchor(connection_info, archive_server)
-        _age_jobs(connection_info)
+        _age_work(connection_info)
         with psycopg.connect(connection_info) as connection:
             # Baseline: the row is an eligible candidate with no replay pending.
             # Commit to release the preview's row locks before the raced call.
@@ -627,7 +701,7 @@ def test_prune_preview_returns_idle_and_apply_visible_externally(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         observation = _process(connection_info, archive_server, "boundaries-idle")
         _confirm_anchor(connection_info, archive_server)
-        _age_jobs(connection_info)
+        _age_work(connection_info)
         with psycopg.connect(connection_info) as connection:
             assert connection.autocommit is False
             preview = prune_completed_history(connection)
@@ -668,7 +742,7 @@ def test_prune_autocommit_connection(database_url: str, archive_server) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         observation = _process(connection_info, archive_server, "boundaries-autocommit")
         _confirm_anchor(connection_info, archive_server)
-        _age_jobs(connection_info)
+        _age_work(connection_info)
         with psycopg.connect(connection_info, autocommit=True) as connection:
             assert prune_completed_history(connection)[
                 "eligible_known_player_discoveries"
@@ -689,7 +763,7 @@ def test_prune_caller_transaction_not_committed_and_rollback_restores(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         observation = _process(connection_info, archive_server, "boundaries-caller")
         _confirm_anchor(connection_info, archive_server)
-        _age_jobs(connection_info)
+        _age_work(connection_info)
         with psycopg.connect(connection_info) as connection:
             connection.execute(
                 "INSERT INTO players (normalized_tag, active, next_due_at)"
@@ -724,7 +798,7 @@ def test_prune_non_read_committed_rejects_before_changes(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         observation = _process(connection_info, archive_server, "boundaries-isolation")
         _confirm_anchor(connection_info, archive_server)
-        _age_jobs(connection_info)
+        _age_work(connection_info)
         with psycopg.connect(connection_info) as connection:
             connection.execute("SET default_transaction_isolation = 'serializable'")
             connection.commit()

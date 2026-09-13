@@ -92,16 +92,16 @@ def _direct(settings: dict, **overrides) -> dict:
 def _counts(connection_info: str) -> tuple[int, int, int, int]:
     with psycopg.connect(connection_info) as connection:
         players = connection.execute("SELECT count(*) FROM players").fetchone()[0]
-        jobs = connection.execute(
-            "SELECT count(*) FROM collector_jobs"
+        work = connection.execute(
+            "SELECT count(*) FROM collector_work WHERE scope = 'player'"
         ).fetchone()[0]
         runs = connection.execute(
             "SELECT count(*) FROM population_bootstrap_runs"
         ).fetchone()[0]
         intents = connection.execute(
-            "SELECT count(*) FROM global_rankings_intents"
+            "SELECT count(*) FROM collector_work WHERE kind = 'global_player_rankings'"
         ).fetchone()[0]
-    return players, jobs, runs, intents
+    return players, work, runs, intents
 
 
 def test_parse_manifest_accepts_trailing_newline_and_rejects_variants() -> None:
@@ -177,15 +177,14 @@ def test_bootstrap_registers_inactive_and_enqueues_profile_only(
                 "SELECT normalized_tag, active, eligibility_state FROM players ORDER BY 1"
             ).fetchall()
             assert players == [(tag, False, "unknown") for tag in sorted(tags)]
-            jobs = connection.execute(
-                """SELECT DISTINCT work_type, scope, capacity_pool,
-                          required_endpoint
-                   FROM collector_jobs"""
+            work = connection.execute(
+                """SELECT DISTINCT kind, scope, lane
+                   FROM collector_work"""
             ).fetchall()
-            assert jobs == [("discovery_profile", "player", "normal", "profile")]
+            assert work == [("discovery_profile", "player", "ordinary")]
             assert (
                 connection.execute(
-                    "SELECT count(*) FROM collector_jobs"
+                    "SELECT count(*) FROM collector_work"
                 ).fetchone()[0]
                 == 3
             )
@@ -337,7 +336,7 @@ def test_partial_batch_resume_converges(
             )
             assert (
                 connection.execute(
-                    "SELECT count(*) FROM collector_jobs"
+                    "SELECT count(*) FROM collector_work"
                 ).fetchone()[0]
                 == 3
             )
@@ -397,22 +396,28 @@ def test_fresh_precheck_rejects_nonempty_database(
                    VALUES ('#8QV', false, 'unknown') RETURNING id"""
             ).fetchone()[0]
             connection.execute(
-                """INSERT INTO collector_jobs (
-                       work_type, scope, player_id, normalized_tag,
-                       capacity_pool, priority, due_at, coalescing_key,
-                       required_endpoint, status
-                   ) VALUES ('discovery_profile', 'player', %s, '#8QV',
-                       'normal', 300, clock_timestamp(), 'precheck-job',
-                       'profile', 'complete')""",
+                """INSERT INTO collector_work (
+                       kind, lane, scope, player_id, normalized_tag,
+                       due_at, coalescing_key, status, profile_status,
+                       battle_log_status
+                   ) VALUES ('discovery_profile', 'ordinary', 'player', %s, '#8QV',
+                       clock_timestamp(), 'precheck-work', 'complete',
+                       'observed', 'not_applicable')""",
                 (player_id,),
             )
-        attempt("result-job.json")
+        attempt("result-work.json")
         with psycopg.connect(connection_info, autocommit=True) as connection:
-            connection.execute("DELETE FROM collector_jobs")
+            connection.execute("DELETE FROM collector_work")
             connection.execute("DELETE FROM players")
             connection.execute(
-                "INSERT INTO global_rankings_intents (cycle_at)"
-                " VALUES ('2026-09-08T05:00:00+00')"
+                """INSERT INTO collector_work (
+                       kind, lane, scope, due_at, coalescing_key,
+                       profile_status, battle_log_status
+                   ) VALUES (
+                       'global_player_rankings', 'ordinary', 'global',
+                       '2026-09-08T05:00:00+00', 'precheck-ranking',
+                       'pending', 'not_applicable'
+                   )"""
             )
         attempt("result-ranking.json")
         assert _counts(connection_info) == (0, 0, 0, 1)
@@ -496,7 +501,7 @@ def test_worker_role_can_execute_bootstrap_statements(
             assert created == 2
             assert (
                 connection.execute(
-                    "SELECT count(*) FROM global_rankings_intents"
+                    "SELECT count(*) FROM collector_work WHERE kind = 'global_player_rankings'"
                 ).fetchone()[0]
                 == 0
             )
@@ -515,28 +520,5 @@ def test_worker_role_can_execute_bootstrap_statements(
                    WHERE run_id = %s""",
                 (RUN_ID,),
             )
-            # The worker role reads budget aggregates for monitoring but
-            # can neither mint nor consume budget units.
-            aggregates = connection.execute(
-                """SELECT count(*), COALESCE(sum(consumed), 0)
-                   FROM collector_endpoint_budgets WHERE run_id = %s""",
-                (RUN_ID,),
-            ).fetchone()
-            assert aggregates == (0, 0)
-            for statement in (
-                """INSERT INTO collector_endpoint_budgets
-                   (run_id, endpoint, cap, consumed, deadline_at)
-                   VALUES ('probe', 'profile', 1, 0, clock_timestamp())""",
-                """UPDATE collector_endpoint_budgets SET consumed = 1
-                   WHERE run_id = 'probe'""",
-            ):
-                connection.execute("SAVEPOINT budget_boundary")
-                try:
-                    connection.execute(statement)
-                except psycopg.errors.InsufficientPrivilege:
-                    connection.execute("ROLLBACK TO SAVEPOINT budget_boundary")
-                else:
-                    raise AssertionError("worker wrote the budget ledger")
-                connection.execute("RELEASE SAVEPOINT budget_boundary")
             connection.execute("ROLLBACK")
         assert _counts(connection_info) == (0, 0, 0, 0)

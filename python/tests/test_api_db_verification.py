@@ -10,6 +10,7 @@ import pytest
 from test_api_migration import migrated_production_database
 
 from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.collector_db import CollectorDatabase
 from clashlens.verification import KeyAction, VerificationOutcome
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
@@ -97,52 +98,56 @@ def verification_binding(account_id: int, subject: str, tag: str) -> RequestBind
     )
 
 
-def test_shared_traffic_gate_enforces_non_borrowing_and_combined_budgets(
+def test_collector_and_verification_share_the_interactive_limit(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info, max_size=16)
+        collector_database = CollectorDatabase(connection_info, max_size=16)
         fingerprint = sha256(b"safe-synthetic-key").hexdigest()
         try:
             database.register_official_credential(fingerprint)
 
-            def acquire_go(index: int):
-                return database.acquire_official_permit(
-                    fingerprint,
-                    caller="go",
-                    request_id=str(uuid4()),
-                )
+            def acquire_collector(_index: int):
+                return collector_database.acquire_collector_permit(fingerprint)
 
             with ThreadPoolExecutor(max_workers=12) as executor:
-                go_results = list(executor.map(acquire_go, range(30)))
+                collector_results = list(executor.map(acquire_collector, range(30)))
 
             python_first = database.acquire_official_permit(
                 fingerprint,
-                caller="python",
                 request_id=str(uuid4()),
             )
             python_second = database.acquire_official_permit(
                 fingerprint,
-                caller="python",
                 request_id=str(uuid4()),
             )
 
-            assert sum(result.granted for result in go_results) == 28
-            assert sum(
-                result.reason == "go_budget_exhausted" for result in go_results
-            ) == 2
+            assert sum(result.granted for result in collector_results) == 29
+            assert (
+                sum(
+                    result.reason == "collector_budget_exhausted"
+                    for result in collector_results
+                )
+                == 1
+            )
             assert python_first.granted is True
             assert python_second.granted is False
             assert python_second.reason == "python_budget_exhausted"
-            assert database.scalar("SELECT count(*) FROM shared_api_permits") == 29
+            assert database.scalar("SELECT count(*) FROM shared_api_permits") == 30
         finally:
+            collector_database.close()
             database.close()
 
 
 def test_gate_cooldown_and_quarantine_persist_and_fail_closed(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         fingerprint = sha256(b"safe-synthetic-key-two").hexdigest()
         try:
@@ -153,7 +158,7 @@ def test_gate_cooldown_and_quarantine_persist_and_fail_closed(
                 cooldown_seconds=30,
             )
             cooldown = database.acquire_official_permit(
-                fingerprint, caller="python", request_id=str(uuid4())
+                fingerprint, request_id=str(uuid4())
             )
             database.apply_official_key_action(
                 fingerprint,
@@ -161,7 +166,7 @@ def test_gate_cooldown_and_quarantine_persist_and_fail_closed(
                 cooldown_seconds=30,
             )
             quarantined = database.acquire_official_permit(
-                fingerprint, caller="python", request_id=str(uuid4())
+                fingerprint, request_id=str(uuid4())
             )
 
             assert cooldown.granted is False
@@ -451,7 +456,9 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
 def test_verification_request_replay_never_binds_or_persists_a_new_token(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_id = create_account(database, "google-replay", "replayowner")

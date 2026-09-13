@@ -12,14 +12,25 @@ from clashlens.cli import (
     _archive,
     _file_value,
     _load_hmac_keys,
+    _parse_api_keys,
     _run_ready,
     build_parser,
     main,
 )
+from clashlens.collector_http import ApiKey
 
 
 def _secret_text(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def test_collector_api_keys_require_non_secret_labels() -> None:
+    assert _parse_api_keys("regular-1=first,regular-2=second") == [
+        ApiKey("regular-1", "first"),
+        ApiKey("regular-2", "second"),
+    ]
+    with pytest.raises(ValueError, match="label=secret"):
+        _parse_api_keys("unlabelled-secret")
 
 
 def test_cli_loads_current_and_previous_hmac_keys_from_files(tmp_path: Path) -> None:

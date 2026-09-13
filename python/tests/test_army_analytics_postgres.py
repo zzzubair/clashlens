@@ -5,7 +5,11 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import (
+    domain_database,
+    enable_direct_army_fixture,
+    store_observation,
+)
 from psycopg.types.json import Jsonb
 
 from clashlens.archive import S3ArchiveReader
@@ -19,6 +23,8 @@ FIXTURE_CODE = "h0p9e14_32d1x53u2x58-1x97s2x2"
 
 def _processor(connection_info: str, archive_server):
     database = Database(connection_info)
+    database._supports_army_season_summaries = False
+    enable_direct_army_fixture(database)
     processor = ObservationProcessor(
         database,
         S3ArchiveReader(
@@ -275,6 +281,7 @@ def _build_fact_population(
             monkeypatch.setattr(psycopg.Cursor, "execute", counted_execute)
             before_pg = _fact_insert_calls(connection_info)
             before_app = calls[0]
+            database._suppress_fixture_enqueue = True
             with database.pool.connection() as connection:
                 database._build_army_facts(connection, DAY_START.isoformat())
                 connection.commit()
@@ -630,6 +637,9 @@ def test_active_or_incomplete_day_is_withheld_and_retried(
                             {
                                 "ranked_day_start": future_day.isoformat(),
                                 "official_season_id": SEASON_ID,
+                                "generation": 1,
+                                "manifest_id": 1,
+                                "manifest_digest": "a" * 64,
                             }
                         ),
                     ),

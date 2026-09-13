@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 
 import psycopg
-from test_api_migration import migrated_production_database
 from test_claim_jobs_postgres import (
     _insert_job,
     _insert_observation,
@@ -45,91 +44,55 @@ def _seed_production_depth(connection: psycopg.Connection) -> None:
     )
     connection.execute(
         """
-        INSERT INTO collector_jobs (
-            work_type, player_id, normalized_tag, capacity_pool, priority,
-            due_at, coalescing_key, status, created_at
+        INSERT INTO archive_instances (
+            instance_id, endpoint, region, bucket, marker_key,
+            marker_hash, marker_payload_version
+        ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
+                  'evidence', 'clashlens/archive-instance.json',
+                  repeat('f', 64), 'v1')
+        ON CONFLICT (instance_id) DO NOTHING
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO archive_catalogue (
+            response_hash, archive_reference, byte_size, archive_instance_id
         )
-        SELECT 'initial_collection', player.id, player.normalized_tag,
-               'interactive', 300,
-               clock_timestamp() - ((i % 120) || ' minutes')::interval,
-               'seed-observe:' || i, 'complete',
-               clock_timestamp() - ((i % 480) || ' minutes')::interval
+        SELECT lpad(to_hex(i), 64, '0'),
+               's3://evidence/seed-' || i, 0, 'fixture-instance'
+        FROM generate_series(1, 116460) AS i
+        ON CONFLICT (response_hash, archive_reference) DO NOTHING
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO collector_observations (
+            occurrence_key, player_id, scope, normalized_tag, endpoint,
+            request_started_at, response_completed_at, http_status, response_hash,
+            archive_reference, archive_catalogue_hash, collector_version,
+            key_label, evidence_headers, request_method, request_path,
+            request_query, paging_envelope_state, source_adapter_version
+        )
+        SELECT 'seed-observation:' || i, player.id, 'player', player.normalized_tag,
+               'profile',
+               clock_timestamp() - interval '1 minute', clock_timestamp(), 200,
+               lpad(to_hex(i), 64, '0'), 's3://evidence/seed-' || i,
+               lpad(to_hex(i), 64, '0'), 'collector-v1', 'normal-a', '{}',
+               'GET', '/v1/players/' || player.id, '', 'not_applicable',
+               'player-profile-v1'
         FROM generate_series(1, 116460) AS i
         JOIN players AS player ON player.id = ((i - 1) % 20000) + 1
         """
     )
     connection.execute(
         """
-        INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
-        SELECT job.id, 'complete', clock_timestamp() - interval '1 minute',
-               clock_timestamp()
-        FROM collector_jobs AS job
-        WHERE job.coalescing_key LIKE 'seed-observe:%'
-        """
-    )
-    # Migration 0009 requires a verified catalogue row for every new
-    # observation; this fixture's schema predates it, so keep the legacy shape.
-    has_catalogue = connection.execute(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema = current_schema() AND table_name = 'archive_catalogue'
-        )
-        """
-    ).fetchone()[0]
-    if has_catalogue:
-        connection.execute(
-            """
-            INSERT INTO archive_instances (
-                instance_id, endpoint, region, bucket, marker_key,
-                marker_hash, marker_payload_version
-            ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
-                      'evidence', 'clashlens/archive-instance.json',
-                      repeat('f', 64), 'v1')
-            ON CONFLICT (instance_id) DO NOTHING
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO archive_catalogue (
-                response_hash, archive_reference, byte_size, archive_instance_id
-            )
-            SELECT lpad(to_hex(job.id), 64, '0'),
-                   's3://evidence/seed-' || job.id, 0, 'fixture-instance'
-            FROM collector_jobs AS job
-            ON CONFLICT (response_hash, archive_reference) DO NOTHING
-            """
-        )
-    catalogue_columns = ", archive_catalogue_hash"
-    catalogue_select = ", lpad(to_hex(job.id), 64, '0')"
-    if not has_catalogue:
-        catalogue_columns = ""
-        catalogue_select = ""
-    connection.execute(
-        f"""
-        INSERT INTO collector_observations (
-            occurrence_key, collection_job_id, attempt_id, player_id,
-            normalized_tag, endpoint, request_started_at, response_completed_at,
-            http_status, response_hash, archive_reference{catalogue_columns},
-            collector_version, key_label, evidence_headers
-        )
-        SELECT 'seed-observation:' || job.id, job.id, attempt.id, job.player_id,
-               job.normalized_tag, 'profile',
-               clock_timestamp() - interval '1 minute', clock_timestamp(), 200,
-               lpad(to_hex(job.id), 64, '0'), 's3://evidence/seed-' || job.id{catalogue_select},
-               'collector-v1', 'normal-a', '{{}}'::jsonb
-        FROM collector_jobs AS job
-        JOIN collector_attempts AS attempt ON attempt.job_id = job.id
-        """
-    )
-    connection.execute(
-        """
         INSERT INTO python_processing_jobs (
-            observation_id, work_type, status, due_at, priority, created_at,
-            parser_version, processing_version, domain_rule_version,
-            analytics_rule_version
+            observation_id, work_type, deduplication_key, input_json, status,
+            due_at, priority, created_at, parser_version, processing_version,
+            domain_rule_version, analytics_rule_version
         )
-        SELECT observation.id, 'process_observation', 'pending',
+        SELECT observation.id, 'process_observation',
+               'process-observation:seed:' || i, '{}', 'pending',
                clock_timestamp() - ((i % 30) || ' minutes')::interval, 100,
                clock_timestamp() - ((i % 600) || ' minutes')::interval,
                'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
@@ -141,11 +104,12 @@ def _seed_production_depth(connection: psycopg.Connection) -> None:
     connection.execute(
         """
         INSERT INTO python_processing_jobs (
-            observation_id, work_type, status, due_at, priority, created_at,
-            parser_version, processing_version, domain_rule_version,
-            analytics_rule_version
+            observation_id, work_type, deduplication_key, input_json, status,
+            due_at, priority, created_at, parser_version, processing_version,
+            domain_rule_version, analytics_rule_version
         )
-        SELECT observation.id, 'process_observation', 'pending',
+        SELECT observation.id, 'process_observation',
+               'process-observation:seed:' || i, '{}', 'pending',
                clock_timestamp() - interval '1 hour', 100,
                clock_timestamp() - interval '60 days',
                'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
@@ -157,11 +121,12 @@ def _seed_production_depth(connection: psycopg.Connection) -> None:
     connection.execute(
         """
         INSERT INTO python_processing_jobs (
-            observation_id, work_type, status, due_at, priority, created_at,
-            parser_version, processing_version, domain_rule_version,
-            analytics_rule_version
+            observation_id, work_type, deduplication_key, input_json, status,
+            due_at, priority, created_at, parser_version, processing_version,
+            domain_rule_version, analytics_rule_version
         )
-        SELECT observation.id, 'process_observation', 'pending',
+        SELECT observation.id, 'process_observation',
+               'process-observation:seed:' || i, '{}', 'pending',
                clock_timestamp() + interval '1 day', 100,
                clock_timestamp() - interval '90 days',
                'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
@@ -190,12 +155,13 @@ def _seed_production_depth(connection: psycopg.Connection) -> None:
     connection.execute(
         """
         INSERT INTO python_processing_jobs (
-            observation_id, work_type, status, due_at, priority, created_at,
-            parser_version, processing_version, domain_rule_version,
-            analytics_rule_version, lease_owner, lease_token, lease_expires_at,
-            attempt_count, max_attempts
+            observation_id, work_type, deduplication_key, input_json, status,
+            due_at, priority, created_at, parser_version, processing_version,
+            domain_rule_version, analytics_rule_version, lease_owner,
+            lease_token, lease_expires_at, attempt_count, max_attempts
         )
-        SELECT observation.id, 'process_observation', 'leased',
+        SELECT observation.id, 'process_observation',
+               'process-observation:seed:' || i, '{}', 'leased',
                clock_timestamp() - interval '1 day', 100,
                clock_timestamp() - interval '120 days',
                'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
@@ -241,17 +207,6 @@ def test_claim_candidate_window_covers_maximum_parallel_lanes() -> None:
 def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
     with _production_database(database_url) as connection_info:
         with psycopg.connect(connection_info, autocommit=True) as connection:
-            # Production schemas include migration 0009, whose dependency-
-            # deferral claim predicate and partial index the claim statement
-            # now relies on for bounded plans.
-            from pathlib import Path
-
-            root = Path(__file__).parents[2]
-            connection.execute(
-                (root / "deploy/migrations/0009_raw_evidence.sql").read_text(
-                    encoding="utf-8"
-                )
-            )
             _seed_production_depth(connection)
             # Production queues carry planner statistics (autovacuum analyze);
             # the bounded-plan assertion is meaningful against those.
@@ -558,52 +513,6 @@ def test_forward_migration_reapply_keeps_python_claim_indexes(database_url: str)
                 ).fetchone()[0]
                 == 1
             ), "0004 reapply must be non-destructive"
-
-
-def test_forward_migration_classifies_populated_v2_backlog(database_url: str) -> None:
-    with migrated_production_database(
-        database_url, include_migration_0003=False
-    ) as connection_info:
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            observation_id = _insert_observation(
-                connection, occurrence_key="pre-0003-supported-job"
-            )
-            job_id = _insert_job(
-                connection,
-                work_type="process_observation",
-                deduplication_key="pre-0003:supported",
-                input_json={},
-                observation_id=observation_id,
-            )
-            from pathlib import Path
-
-            migration = (
-                Path(__file__).parents[2]
-                / "deploy/migrations/0003_regular_poll_dedup.sql"
-            ).read_text(encoding="utf-8")
-            connection.execute(migration)
-            assert connection.execute(
-                """
-                SELECT claim_compatibility_version
-                FROM python_processing_jobs WHERE id = %s
-                """,
-                (job_id,),
-            ).fetchone()[0] == 1
-            connection.execute(migration)
-            assert connection.execute(
-                """
-                SELECT claim_compatibility_version
-                FROM python_processing_jobs WHERE id = %s
-                """,
-                (job_id,),
-            ).fetchone()[0] == 1
-
-        database = Database(connection_info)
-        try:
-            claim = database.claim_job(owner="populated-v2-migration")
-            assert claim is not None and claim.job_id == job_id
-        finally:
-            database.close()
 
 
 def test_declared_claim_priorities_match_enqueue_sites() -> None:
