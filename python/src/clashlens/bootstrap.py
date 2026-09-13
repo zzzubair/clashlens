@@ -263,13 +263,13 @@ def bootstrap_population(
                     raise BootstrapError("database_already_has_active_players")
                 if (
                     connection.execute(
-                        "SELECT count(*) FROM collector_jobs WHERE scope = 'player'"
+                        "SELECT count(*) FROM collector_work WHERE scope = 'player'"
                     ).fetchone()[0]
                 ):
                     raise BootstrapError("database_already_has_player_work")
                 if (
                     connection.execute(
-                        "SELECT count(*) FROM global_rankings_intents"
+                        "SELECT count(*) FROM collector_work WHERE kind = 'global_player_rankings'"
                     ).fetchone()[0]
                 ):
                     raise BootstrapError("database_already_has_ranking_intent")
@@ -311,9 +311,9 @@ def bootstrap_population(
                     (player_ids,),
                 )
 
-        # Recompute the durable aggregates from the cohort's actual roots
-        # after convergence. A replayed batch reuses existing jobs (which
-        # report zero created), so only a post-pass count is exact. These
+        # Recompute the durable aggregates from the cohort's actual work rows
+        # after convergence. A replayed batch reuses existing work (which
+        # reports zero created), so only a post-pass count is exact. These
         # are counts over the cohort set; no tags or IDs leave the database.
         players_registered = connection.execute(
             """SELECT count(*) FROM players
@@ -321,8 +321,8 @@ def bootstrap_population(
             (tags,),
         ).fetchone()[0]
         discovery_jobs_created = connection.execute(
-            """SELECT count(*) FROM collector_jobs
-               WHERE work_type = 'discovery_profile'
+            """SELECT count(*) FROM collector_work
+               WHERE kind = 'discovery_profile'
                  AND player_id IN (
                      SELECT id FROM players
                      WHERE normalized_tag = ANY(%s::text[])

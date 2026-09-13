@@ -181,9 +181,7 @@ def _selected_source_hash(
         digest.update(_text(chunk).encode())
         separator = b","
     digest.update(b'],"selection":')
-    digest.update(
-        json.dumps(requested, sort_keys=True, separators=(",", ":")).encode()
-    )
+    digest.update(json.dumps(requested, sort_keys=True, separators=(",", ":")).encode())
     digest.update(b',"snapshots":')
     digest.update(json.dumps(snapshot_ids, separators=(",", ":")).encode())
     digest.update(b"}")
@@ -536,16 +534,15 @@ class ApiDatabase:
             with connection.transaction():
                 connection.execute(
                     """
-                    INSERT INTO shared_api_credentials (
-                        credential_fingerprint, go_budget, python_budget, total_budget
-                    ) VALUES (%s, 29, 1, 30)
+                    INSERT INTO shared_api_credentials (credential_fingerprint)
+                    VALUES (%s)
                     ON CONFLICT (credential_fingerprint) DO NOTHING
                     """,
                     (fingerprint,),
                 )
                 row = connection.execute(
                     """
-                    SELECT go_budget, python_budget, total_budget
+                    SELECT collector_budget, python_budget, total_budget
                     FROM shared_api_credentials
                     WHERE credential_fingerprint = %s
                     FOR UPDATE
@@ -559,12 +556,9 @@ class ApiDatabase:
         self,
         fingerprint: str,
         *,
-        caller: str,
         request_id: str,
     ) -> PermitResult:
         del request_id  # The shared PostgreSQL gate owns the permit identity.
-        if caller not in {"go", "python"}:
-            raise ValueError("official traffic caller is invalid")
         with self.pool.connection() as connection:
             with connection.transaction():
                 registered = connection.execute(
@@ -580,9 +574,9 @@ class ApiDatabase:
                 decision = connection.execute(
                     """
                     SELECT granted, credential_state
-                    FROM clashlens_acquire_shared_api_permit(%s, %s)
+                    FROM clashlens_acquire_shared_api_permit(%s, 'python')
                     """,
-                    (fingerprint, caller),
+                    (fingerprint,),
                 ).fetchone()
                 assert decision is not None
                 if bool(decision[0]):
@@ -601,26 +595,20 @@ class ApiDatabase:
                     WHERE credential_fingerprint = %s
                       AND permitted_at > clock_timestamp() - interval '1 second'
                     """,
-                    (caller, fingerprint),
+                    ("python", fingerprint),
                 ).fetchone()
                 budgets = connection.execute(
                     """
-                    SELECT credential.python_budget,
-                           COALESCE(
-                               (to_jsonb(credential)->>'go_interactive_budget')::integer,
-                               credential.go_budget
-                           ),
-                           credential.total_budget
+                    SELECT credential.python_budget, credential.total_budget
                     FROM shared_api_credentials AS credential
                     WHERE credential.credential_fingerprint = %s
                     """,
                     (fingerprint,),
                 ).fetchone()
                 assert counts is not None and budgets is not None
-                caller_budget = int(budgets[0] if caller == "python" else budgets[1])
-                if int(counts[0]) >= caller_budget:
-                    return PermitResult(False, f"{caller}_budget_exhausted")
-                if int(counts[1]) >= int(budgets[2]):
+                if int(counts[0]) >= int(budgets[0]):
+                    return PermitResult(False, "python_budget_exhausted")
+                if int(counts[1]) >= int(budgets[1]):
                     return PermitResult(False, "combined_budget_exhausted")
                 return PermitResult(False, "credential_inactive")
 
@@ -1722,16 +1710,13 @@ class ApiDatabase:
                     "three_star_rate": float(item["three_star_rate"]),
                     "average_stars": float(item["average_stars"]),
                     "average_destruction": float(item["average_destruction"]),
-                    "unknown_excluded_attacks": int(
-                        item["unknown_excluded_attacks"]
-                    ),
+                    "unknown_excluded_attacks": int(item["unknown_excluded_attacks"]),
                 }
                 for item in stored_rows
             ]
             rows.sort(key=lambda item: (-float(item[sort_field]), item["key"]))
             army_states = {
-                _text(state): int(count)
-                for state, count in dict(row[6] or {}).items()
+                _text(state): int(count) for state, count in dict(row[6] or {}).items()
             }
             total_attacks = int(row[4])
             requested = {
@@ -1752,8 +1737,7 @@ class ApiDatabase:
                 "total_attacks": total_attacks,
                 "usable_army_sample": int(row[5]),
                 "army_states": army_states,
-                "army_states_sum_confirmed": sum(army_states.values())
-                == total_attacks,
+                "army_states_sum_confirmed": sum(army_states.values()) == total_attacks,
                 "unknown_affected_attacks": int(row[7]),
                 "unknown_component_occurrences": int(row[8]),
                 "perspective_disagreement_count": int(row[9]),
@@ -2340,16 +2324,12 @@ class ApiDatabase:
             }
 
     @contextmanager
-    def _army_troop_admission(
-        self, selection: ArmyAnalyticsSelection, deadline: float
-    ):
+    def _army_troop_admission(self, selection: ArmyAnalyticsSelection, deadline: float):
         if selection.category != "troops":
             yield
             return
         if not self._army_troop_slots.acquire(
-            timeout=_army_timeout(
-                deadline, ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS
-            )
+            timeout=_army_timeout(deadline, ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS)
         ):
             raise PoolTimeout("troop analytics capacity is busy")
         try:
@@ -2363,13 +2343,14 @@ class ApiDatabase:
         deadline = monotonic() + self._army_request_timeout_seconds
         # A bounded pre-checkout gate leaves one paired pool slot per admitted
         # troop request. Other categories never need the second connection.
-        with self._army_troop_admission(
-            selection, deadline
-        ), self.pool.connection(
-            timeout=_army_timeout(
-                deadline, ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS
-            )
-        ) as connection:
+        with (
+            self._army_troop_admission(selection, deadline),
+            self.pool.connection(
+                timeout=_army_timeout(
+                    deadline, ARMY_ANALYTICS_PRIMARY_POOL_TIMEOUT_SECONDS
+                )
+            ) as connection,
+        ):
             with connection.transaction():
                 connection.execute(
                     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
@@ -2777,8 +2758,7 @@ class ApiDatabase:
                             {
                                 "selection": requested,
                                 "facts": [
-                                    (fact["id"], fact["input_hash"])
-                                    for fact in facts
+                                    (fact["id"], fact["input_hash"]) for fact in facts
                                 ],
                                 "snapshots": snapshot_ids,
                             },
@@ -2903,30 +2883,30 @@ class ApiDatabase:
                     return existing
                 row = connection.execute(
                     """
-                    SELECT job_id, outcome
+                    SELECT *
                     FROM clashlens_enqueue_interactive('live_refresh', %s, %s)
                     """,
                     (normalized_tag, cooldown_seconds),
                 ).fetchone()
                 assert row is not None
-                collector_job_id = int(row[0])
+                collector_work_id = int(row[0])
                 public_id = uuid4()
                 connection.execute(
                     """
                     INSERT INTO api_refresh_requests (
-                        public_id, collector_job_id, normalized_tag, initial_outcome
+                        public_id, collector_work_id, normalized_tag, initial_outcome
                     ) VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (collector_job_id) DO NOTHING
+                    ON CONFLICT (collector_work_id) DO NOTHING
                     """,
-                    (public_id, collector_job_id, normalized_tag, _text(row[1])),
+                    (public_id, collector_work_id, normalized_tag, _text(row[1])),
                 )
                 refresh = connection.execute(
                     """
                     SELECT public_id, initial_outcome
                     FROM api_refresh_requests
-                    WHERE collector_job_id = %s
+                    WHERE collector_work_id = %s
                     """,
-                    (collector_job_id,),
+                    (collector_work_id,),
                 ).fetchone()
                 assert refresh is not None
                 result = OperationResult(
@@ -2946,9 +2926,9 @@ class ApiDatabase:
             row = connection.execute(
                 """
                 SELECT refresh.public_id, refresh.normalized_tag,
-                       job.status, refresh.initial_outcome
+                       work.status, refresh.initial_outcome
                 FROM api_refresh_requests AS refresh
-                JOIN collector_jobs AS job ON job.id = refresh.collector_job_id
+                JOIN collector_work AS work ON work.id = refresh.collector_work_id
                 WHERE refresh.public_id = %s
                 """,
                 (refresh_id,),
@@ -3810,14 +3790,10 @@ def _historical_season_summary(record: dict[str, Any]) -> dict[str, Any]:
         "final_rank": _optional_int(record["final_rank"]),
         "attack_count": _optional_int(record["attack_count"]),
         "attack_gain": _optional_int(record["attack_gain"]),
-        "attack_three_star_count": _optional_int(
-            record["attack_three_star_count"]
-        ),
+        "attack_three_star_count": _optional_int(record["attack_three_star_count"]),
         "defense_count": _optional_int(record["defense_count"]),
         "defense_loss": _optional_int(record["defense_loss"]),
-        "defense_three_star_count": _optional_int(
-            record["defense_three_star_count"]
-        ),
+        "defense_three_star_count": _optional_int(record["defense_three_star_count"]),
         "net_trophy_change": _optional_int(record["net_trophy_change"]),
         "attack_stars": {
             str(star): int(record[f"attack_star_{star}"]) for star in range(4)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 import getpass
 import hashlib
@@ -12,6 +13,7 @@ import sys
 import urllib.request
 from collections import deque
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +28,9 @@ import uvicorn
 from .api import create_app
 from .api_db import ApiDatabase
 from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
+from .collector import Collector
+from .collector_db import CollectorDatabase
+from .collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
 from .db import CONTRACT_VERSION, MAX_POOL_SIZE, Database
 from .hmac_proof import SigningInput, load_secret_file, sign
 from .operating import (
@@ -75,6 +80,55 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Clash Lens Python services CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    collector = subparsers.add_parser(
+        "collector", help="collect official responses into the local spool"
+    )
+    _database_argument(collector)
+    _archive_arguments(collector)
+    collector.add_argument(
+        "--official-origin",
+        default=os.environ.get(
+            "CLASHLENS_OFFICIAL_API_ORIGIN", "https://api.clashofclans.com"
+        ),
+    )
+    collector.add_argument(
+        "--allow-insecure-official-origin",
+        action="store_true",
+        default=os.environ.get("CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN") == "true",
+    )
+    collector.add_argument(
+        "--regular-api-keys",
+        default=os.environ.get("CLASHLENS_NORMAL_API_KEYS", ""),
+    )
+    collector.add_argument(
+        "--interactive-api-keys",
+        default=os.environ.get("CLASHLENS_INTERACTIVE_API_KEYS", ""),
+    )
+    collector.add_argument(
+        "--allow-reduced-key-pools",
+        action="store_true",
+        default=os.environ.get("CLASHLENS_ALLOW_REDUCED_KEY_POOLS") == "true",
+    )
+    collector.add_argument(
+        "--starts-per-second-per-key",
+        type=_bounded_int("request starts per second per key", 1, 30),
+        default=int(os.environ.get("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", "30")),
+    )
+    collector.add_argument(
+        "--concurrency-per-key",
+        type=_bounded_int("concurrency per key", 1, 32),
+        default=int(os.environ.get("CLASHLENS_CONCURRENCY_PER_KEY", "6")),
+    )
+    collector.add_argument(
+        "--health-listen",
+        default=os.environ.get("CLASHLENS_HEALTH_LISTEN", "127.0.0.1:8081"),
+    )
+    collector.add_argument(
+        "--disable-global-rankings",
+        action="store_true",
+        default=os.environ.get("CLASHLENS_ENABLE_GLOBAL_RANKINGS", "true") != "true",
+    )
+
     worker = subparsers.add_parser(
         "worker", help="claim and process production observations"
     )
@@ -113,10 +167,12 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument(
         "--terminal-snapshot-file",
         default="",
-        help=("distinct persistent per-replica terminal snapshot, written "
-              "once after the heartbeat joins and archive work quiesces; "
-              "a write failure is a worker failure, never silent "
-              "completeness"),
+        help=(
+            "distinct persistent per-replica terminal snapshot, written "
+            "once after the heartbeat joins and archive work quiesces; "
+            "a write failure is a worker failure, never silent "
+            "completeness"
+        ),
     )
     worker.add_argument(
         "--disable-player-discovery",
@@ -137,20 +193,34 @@ def build_parser() -> argparse.ArgumentParser:
     _database_argument(queue_status)
 
     prune_history = subparsers.add_parser(
-        "prune-history", help="preview or prune redundant completed history (operator database role)"
+        "prune-history",
+        help="preview or prune redundant completed history (operator database role)",
     )
     _database_argument(prune_history)
-    prune_history.add_argument("--retention-hours", type=_bounded_int("retention hours", 48, 672), default=48)
-    prune_history.add_argument("--max-jobs", type=_bounded_int("cleanup batch size", 1, 1000), default=1000)
-    prune_history.add_argument("--max-discoveries", type=_bounded_int("discovery batch size", 1, 1000), default=1000)
+    prune_history.add_argument(
+        "--retention-hours", type=_bounded_int("retention hours", 48, 672), default=48
+    )
+    prune_history.add_argument(
+        "--max-jobs", type=_bounded_int("cleanup batch size", 1, 1000), default=1000
+    )
+    prune_history.add_argument(
+        "--max-discoveries",
+        type=_bounded_int("discovery batch size", 1, 1000),
+        default=1000,
+    )
     prune_history.add_argument("--apply", action="store_true")
 
     prune_archive = subparsers.add_parser(
-        "prune-archive", help="preview or retire six-month inactive raw objects (operator credentials)"
+        "prune-archive",
+        help="preview or retire six-month inactive raw objects (operator credentials)",
     )
     _database_argument(prune_archive)
     _archive_arguments(prune_archive)
-    prune_archive.add_argument("--max-objects", type=_bounded_int("archive cleanup batch", 1, 1000), default=100)
+    prune_archive.add_argument(
+        "--max-objects",
+        type=_bounded_int("archive cleanup batch", 1, 1000),
+        default=100,
+    )
     prune_archive.add_argument("--apply", action="store_true")
 
     bootstrap_population = subparsers.add_parser(
@@ -216,7 +286,9 @@ def build_parser() -> argparse.ArgumentParser:
     _database_argument(retire_season)
     retire_season.add_argument("--season-id", required=True)
     retire_season.add_argument(
-        "--max-rows", type=_bounded_int("retirement batch size", 1, 1000), default=500,
+        "--max-rows",
+        type=_bounded_int("retirement batch size", 1, 1000),
+        default=500,
     )
     retire_season.add_argument("--apply", action="store_true")
 
@@ -226,8 +298,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _database_argument(measure_storage)
     measure_storage.add_argument("--season-id", default="")
-    measure_storage.add_argument("--players", type=_bounded_int("projection players", 1, 1000000), default=12500)
-    measure_storage.add_argument("--headroom-percent", type=_bounded_int("headroom percent", 0, 90), default=20)
+    measure_storage.add_argument(
+        "--players", type=_bounded_int("projection players", 1, 1000000), default=12500
+    )
+    measure_storage.add_argument(
+        "--headroom-percent", type=_bounded_int("headroom percent", 0, 90), default=20
+    )
 
     serve = subparsers.add_parser(
         "serve", help="run the signed saved-data FastAPI route"
@@ -315,6 +391,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
+        if arguments.command == "collector":
+            return _run_collector(arguments)
         if arguments.command == "worker":
             return _run_worker(arguments)
         if arguments.command == "ready":
@@ -336,12 +414,20 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 archive = _archive(arguments, database=database)
                 if not isinstance(archive, SpoolFirstReader):
-                    raise TypeError("archive retirement requires the collector's exact shared spool")
-                with psycopg.connect(_database_url(arguments), autocommit=True) as connection:
+                    raise TypeError(
+                        "archive retirement requires the collector's exact shared spool"
+                    )
+                with psycopg.connect(
+                    _database_url(arguments), autocommit=True
+                ) as connection:
                     report = retire_archive_objects(
-                        connection, archive.spool, archive.archive.client,
-                        bucket=arguments.archive_bucket, instance_id=arguments.archive_instance_id,
-                        max_objects=arguments.max_objects, apply=arguments.apply,
+                        connection,
+                        archive.spool,
+                        archive.archive.client,
+                        bucket=arguments.archive_bucket,
+                        instance_id=arguments.archive_instance_id,
+                        max_objects=arguments.max_objects,
+                        apply=arguments.apply,
                     )
                 print(json.dumps(report, sort_keys=True))
             finally:
@@ -356,8 +442,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             with psycopg.connect(_database_url(arguments)) as connection:
                 report = prune_completed_history(
-                    connection, retention_hours=arguments.retention_hours,
-                    max_jobs=arguments.max_jobs, max_discoveries=arguments.max_discoveries,
+                    connection,
+                    retention_hours=arguments.retention_hours,
+                    max_jobs=arguments.max_jobs,
+                    max_discoveries=arguments.max_discoveries,
                     apply=arguments.apply,
                 )
             print(json.dumps(report, sort_keys=True))
@@ -486,12 +574,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             season_rows = measurement["summaries"].get("player_season", {})
             player_bytes = (
                 float(season_rows["total_bytes"]) / float(season_rows["rows"])
-                if season_rows.get("rows") else None
+                if season_rows.get("rows")
+                else None
             )
             army_rows = measurement["summaries"].get("army_season", {})
             army_bytes = (
-                float(army_rows["total_bytes"])
-                if army_rows.get("rows") else None
+                float(army_rows["total_bytes"]) if army_rows.get("rows") else None
             )
             projection = project_six_months(
                 player_season_bytes=player_bytes,
@@ -501,10 +589,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 players=arguments.players,
                 headroom_fraction=float(arguments.headroom_percent) / 100.0,
             )
-            print(json.dumps(
-                {"measurement": measurement, "projection": projection},
-                sort_keys=True, default=str,
-            ))
+            print(
+                json.dumps(
+                    {"measurement": measurement, "projection": projection},
+                    sort_keys=True,
+                    default=str,
+                )
+            )
             return 0
         if arguments.command == "serve":
             app, _database = _serve_app(arguments)
@@ -529,6 +620,123 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("service command failed: internal_error", file=sys.stderr)
         return 1
     raise AssertionError("unreachable command")
+
+
+def _parse_api_keys(value: str) -> list[ApiKey]:
+    keys: list[ApiKey] = []
+    for item in value.split(",") if value else ():
+        label, separator, secret = item.partition("=")
+        if (
+            separator != "="
+            or not label
+            or not secret
+            or label != label.strip()
+            or secret != secret.strip()
+            or any(character.isspace() for character in label + secret)
+        ):
+            raise ValueError("API keys must use comma-separated label=secret entries")
+        keys.append(ApiKey(label, secret))
+    return keys
+
+
+def _run_collector(arguments: argparse.Namespace) -> int:
+    regular_keys = _parse_api_keys(arguments.regular_api_keys)
+    interactive_keys = _parse_api_keys(arguments.interactive_api_keys)
+    if not arguments.allow_reduced_key_pools and (
+        len(regular_keys) != 4 or len(interactive_keys) != 1
+    ):
+        raise ValueError("collector requires four regular keys and one interactive key")
+    if not regular_keys or len(interactive_keys) != 1:
+        raise ValueError("collector requires regular keys and one interactive key")
+    host, separator, port_text = arguments.health_listen.rpartition(":")
+    if separator != ":" or not host:
+        raise ValueError("collector health listen must be host:port")
+    port = int(port_text)
+    if not 1 <= port <= 65535:
+        raise ValueError("collector health port must be between 1 and 65535")
+
+    database = CollectorDatabase(_database_url(arguments))
+    try:
+        interactive_secret = interactive_keys[0].value.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise ValueError("interactive API key must contain ASCII") from error
+    interactive_fingerprint = hashlib.sha256(interactive_secret).hexdigest()
+    database.register_interactive_key(interactive_fingerprint)
+
+    async def acquire_interactive_permit() -> None:
+        while True:
+            permit = await asyncio.to_thread(
+                database.wait_for_collector_permit,
+                interactive_fingerprint,
+                timeout_seconds=1.0,
+            )
+            if permit.granted:
+                return
+            if permit.reason in {
+                "credential_unknown",
+                "credential_quarantined",
+                "credential_inactive",
+            }:
+                raise ProviderFailure(permit.reason, retryable=False)
+            await asyncio.sleep(0.01)
+
+    archive_reader = _archive(
+        arguments,
+        pool_size=32,
+        database=database,
+        validate_archive_instance=False,
+    )
+    if not isinstance(archive_reader, SpoolFirstReader):
+        raise TypeError("collector requires a local spool root")
+    concurrency = arguments.concurrency_per_key
+    collector = Collector(
+        database=database,
+        spool=archive_reader.spool,
+        archive=archive_reader.archive,
+        client=OfficialApiClient(
+            arguments.official_origin,
+            allow_insecure_test_origin=arguments.allow_insecure_official_origin,
+            max_body_bytes=arguments.archive_max_body_bytes,
+            max_connections=len(regular_keys) * concurrency + concurrency,
+        ),
+        regular_keys=KeyPool(
+            regular_keys,
+            starts_per_second=arguments.starts_per_second_per_key,
+            concurrency_per_key=concurrency,
+        ),
+        interactive_keys=KeyPool(
+            interactive_keys,
+            starts_per_second=30,
+            concurrency_per_key=concurrency,
+            before_start=acquire_interactive_permit,
+        ),
+        archive_instance_id=arguments.archive_instance_id,
+        collector_version="clashlens-python-collector-v1",
+        max_body_bytes=arguments.archive_max_body_bytes,
+        interactive_fingerprint=interactive_fingerprint,
+    )
+
+    async def serve() -> None:
+        stop_requested = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(
+            ThreadPoolExecutor(max_workers=96, thread_name_prefix="collector-io")
+        )
+        for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(shutdown_signal, stop_requested.set)
+        await collector.run(
+            stop_requested,
+            health_host=host,
+            health_port=port,
+            rankings_enabled=not arguments.disable_global_rankings,
+        )
+
+    try:
+        asyncio.run(serve())
+    finally:
+        archive_reader.spool.close()
+        database.close()
+    return 0
 
 
 def _run_worker(arguments: argparse.Namespace) -> int:
@@ -648,9 +856,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 )()
             archive_snapshot = {
                 "remote_health": remote_health,
-                "remote_attempts": dict(
-                    getattr(archive, "remote_attempts", {}) or {}
-                ),
+                "remote_attempts": dict(getattr(archive, "remote_attempts", {}) or {}),
             }
             snapshot = worker_metrics.snapshot(
                 stages=stage_metrics.snapshot(),
@@ -749,8 +955,7 @@ def _run_worker(arguments: argparse.Namespace) -> int:
             terminal_payload["terminal"] = True
             terminal_payload["captured_at"] = datetime.now(tz=UTC).isoformat()
             try:
-                write_private_snapshot(
-                    Path(terminal_file), terminal_payload)
+                write_private_snapshot(Path(terminal_file), terminal_payload)
             except OSError:
                 terminal_status = "unavailable"
             else:
@@ -884,12 +1089,12 @@ def _archive_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--spool-free-space-floor",
         type=int,
-        default=int(os.environ.get("CLASHLENS_SPOOL_FREE_SPACE_FLOOR", "0")),
+        default=int(os.environ.get("CLASHLENS_SPOOL_FREE_SPACE_FLOOR", str(1 << 30))),
     )
     parser.add_argument(
         "--spool-free-inode-floor",
         type=int,
-        default=int(os.environ.get("CLASHLENS_SPOOL_FREE_INODE_FLOOR", "0")),
+        default=int(os.environ.get("CLASHLENS_SPOOL_FREE_INODE_FLOOR", "10000")),
     )
     parser.add_argument(
         "--archive-instance-id",
@@ -943,7 +1148,8 @@ def _archive(
     arguments: argparse.Namespace,
     *,
     pool_size: int = 4,
-    database: Database | None = None,
+    database: Any | None = None,
+    validate_archive_instance: bool = True,
 ) -> S3ArchiveReader | SpoolFirstReader:
     if not arguments.archive_endpoint:
         raise ValueError("archive endpoint is required")
@@ -988,6 +1194,7 @@ def _archive(
             free_space_floor=arguments.spool_free_space_floor,
             free_inode_floor=arguments.spool_free_inode_floor,
             database=database,
+            validate_database=validate_archive_instance,
         )
     return archive
 

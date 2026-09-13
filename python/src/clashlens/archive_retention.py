@@ -58,8 +58,8 @@ def retire_archive_objects(
                 ).fetchall()
                 pending = connection.execute(
                     """
-                    SELECT EXISTS (SELECT 1 FROM collector_endpoint_results
-                        WHERE archive_reference = %s AND outcome = 'pending_remote_verification')
+                    SELECT EXISTS (SELECT 1 FROM collector_response_uploads
+                        WHERE archive_reference = %s AND state <> 'complete')
                     """, (reference,),
                 ).fetchone()[0]
                 if pending or any(row[0] not in ("complete", b"complete", "cancelled", b"cancelled") for row in jobs):
