@@ -6,9 +6,8 @@ can make evidence-led decisions.
 
 ## Repository map
 
-- `cmd/collector` and `internal/collector` — the Go collector and durable
-  source-evidence handoff.
-- `python/` — domain processing, the private API, and their tests.
+- `python/` — the single Python asyncio collector, domain processing, the
+  private API, workers, and their tests.
 - `website/` — the public TypeScript website and browser tests.
 - `deploy/` — migrations, service definitions, and deployment scripts.
 - [`docs/domain.md`](docs/domain.md) — durable Legend I game and evidence rules.
@@ -41,14 +40,13 @@ the measured startup time.
 
 The website is available at <http://127.0.0.1:5173>. `down` keeps the local
 database, raw-response archive, and spool; the isolated `check` stack removes
-its data when the checks finish. The local collector repeats once per hour:
-that is at most 401 official fixture requests per hour with 200 Clashers, or
-25,001 with the optional capacity population. Using Issue #82's production
-projection as a conservative ceiling, persistent data can grow by about 2 MB
-per day at 200 Clashers or 90 MB per day at 12,500 (about 16 GB over six
-months); the database and archive volumes are not size-capped. Run `down` when
-you are finished to stop local data growth; use the matching
-`./dev down --players 12500` after a capacity run.
+its data when the checks finish. The single Python asyncio collector revisits
+player profiles and battle logs on a five-minute cadence, writes exact raw
+responses to the bounded local spool, uploads them to the immutable archive,
+and hands durable observations to the Python worker. Use
+`./dev trial --players 12500 --minutes 30` to measure capacity and storage
+growth against the local fixtures; run the matching `./dev down --players 12500`
+after a capacity run.
 
 Clash Lens provides data and analysis. Users make the decisions.
 
