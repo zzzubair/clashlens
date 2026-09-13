@@ -38,6 +38,7 @@ _GLOBAL_ARCHIVE_FAILURES = {
     "archive_unsupported",
 }
 _UPLOAD_CONCURRENCY = 32
+_REGULAR_PARALLELISM = 36
 
 
 class Collector:
@@ -97,11 +98,10 @@ class Collector:
     ) -> list[str]:
         pool = self.interactive_keys if lane == "interactive" else self.regular_keys
         try:
-            with ExitStack() as stack:
-                reservations = [
-                    stack.enter_context(self.spool.reserve(self.max_body_bytes))
-                    for _endpoint in endpoints
-                ]
+            stack, reservations = await asyncio.to_thread(
+                self._reserve_endpoints, endpoints
+            )
+            try:
                 return list(
                     await asyncio.gather(
                         *(
@@ -118,9 +118,25 @@ class Collector:
                         )
                     )
                 )
+            finally:
+                await asyncio.to_thread(stack.close)
         except (OSError, SpoolError):
             self._count("degraded_capacity")
             return ["capacity_paused"] * len(endpoints)
+
+    def _reserve_endpoints(
+        self, endpoints: tuple[str, ...]
+    ) -> tuple[ExitStack, list[Any]]:
+        stack = ExitStack()
+        try:
+            reservations = [
+                stack.enter_context(self.spool.reserve(self.max_body_bytes))
+                for _endpoint in endpoints
+            ]
+        except BaseException:
+            stack.close()
+            raise
+        return stack, reservations
 
     async def collect_rankings(self) -> str:
         return await self._collect_endpoint(
@@ -498,33 +514,73 @@ class Collector:
     async def _regular_loop(
         self, stop_requested: asyncio.Event, idle_seconds: float
     ) -> None:
+        pending: dict[asyncio.Task[list[str]], CollectorWork] = {}
+        paused_tasks: set[asyncio.Task[list[str]]] = set()
         retry_work: list[CollectorWork] = []
-        while not stop_requested.is_set():
-            if retry_work:
-                work = retry_work
-            else:
-                async with self._regular_admission_lock:
-                    work = await self._database_call(
-                        self.database.claim_due_players,
-                        limit=12,
-                        now=datetime.now(UTC),
+        stop_wait = asyncio.create_task(stop_requested.wait())
+        try:
+            while not stop_requested.is_set():
+                for task in [task for task in pending if task.done()]:
+                    item = pending.pop(task)
+                    paused_tasks.discard(task)
+                    if "capacity_paused" in task.result():
+                        retry_work.append(item)
+                    else:
+                        self.regular_inflight -= 1
+                if retry_work:
+                    await _wait_or_stop(
+                        stop_requested, max(1.0, idle_seconds)
                     )
-                    self.regular_inflight += len(work)
-            if not work:
-                await _wait_or_stop(stop_requested, idle_seconds)
-                continue
-            results = await asyncio.gather(
-                *(self.collect_player(item, lane="ordinary") for item in work)
-            )
-            retry_work = [
-                item
-                for item, outcomes in zip(work, results, strict=True)
-                if "capacity_paused" in outcomes
-            ]
-            async with self._regular_admission_lock:
-                self.regular_inflight -= len(work) - len(retry_work)
-            if retry_work:
-                await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
+                    if stop_requested.is_set():
+                        break
+                    for item in retry_work:
+                        task = asyncio.create_task(
+                            self.collect_player(item, lane="ordinary")
+                        )
+                        pending[task] = item
+                        paused_tasks.add(task)
+                    retry_work.clear()
+                    continue
+                if paused_tasks:
+                    await asyncio.wait(
+                        {*paused_tasks, stop_wait},
+                        timeout=idle_seconds,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    continue
+                work: list[CollectorWork] = []
+                async with self._regular_admission_lock:
+                    available = _REGULAR_PARALLELISM - len(pending)
+                    if available > 0:
+                        work = await self._database_call(
+                            self.database.claim_due_players,
+                            limit=available,
+                            now=datetime.now(UTC),
+                        )
+                        self.regular_inflight += len(work)
+                for item in work:
+                    pending[
+                        asyncio.create_task(
+                            self.collect_player(item, lane="ordinary")
+                        )
+                    ] = item
+                if work:
+                    continue
+                if pending:
+                    await asyncio.wait(
+                        {*pending, stop_wait},
+                        timeout=idle_seconds,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                else:
+                    await _wait_or_stop(stop_requested, idle_seconds)
+        finally:
+            stop_wait.cancel()
+            if pending:
+                results = await asyncio.gather(*pending)
+                self.regular_inflight -= sum(
+                    "capacity_paused" not in outcomes for outcomes in results
+                )
 
     async def _intent_loop(
         self,
@@ -582,20 +638,36 @@ class Collector:
         owners = [
             f"python-collector-{uuid4()}" for _index in range(_UPLOAD_CONCURRENCY)
         ]
-        while not stop_requested.is_set():
-            uploaded = await self.upload_once(owner=owners[0])
-            if uploaded:
-                uploaded = (
-                    any(
-                        await asyncio.gather(
-                            *(self.upload_once(owner=owner) for owner in owners[1:])
+        owner_tasks = {
+            owner: asyncio.create_task(
+                self._upload_owner_loop(owner, stop_requested, idle_seconds)
+            )
+            for owner in owners
+        }
+        try:
+            while not stop_requested.is_set():
+                for owner, task in list(owner_tasks.items()):
+                    if task.done():
+                        await task
+                        owner_tasks[owner] = asyncio.create_task(
+                            self._upload_owner_loop(
+                                owner, stop_requested, idle_seconds
+                            )
                         )
-                    )
-                    or uploaded
+                await asyncio.to_thread(self.cleanup_uploaded, limit=128)
+                await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
+        finally:
+            if owner_tasks:
+                await asyncio.gather(
+                    *owner_tasks.values(), return_exceptions=True
                 )
-            await asyncio.to_thread(self.cleanup_uploaded, limit=128)
-            if not uploaded:
-                await _wait_or_stop(stop_requested, idle_seconds)
+
+    async def _upload_owner_loop(
+        self, owner: str, stop_requested: asyncio.Event, idle_seconds: float
+    ) -> None:
+        while not stop_requested.is_set():
+            if not await self.upload_once(owner=owner):
+                await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
 
     async def _handle_health(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
