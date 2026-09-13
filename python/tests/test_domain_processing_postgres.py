@@ -159,7 +159,6 @@ def _prepare_reset_baseline_pair(
     *,
     boundary: datetime,
     battle_body: bytes | None = None,
-    wrong_battle_attempt: bool = False,
 ) -> tuple[int, int, int, int]:
     profile_observation_id, profile_job_id = store_observation(
         connection_info,
@@ -187,109 +186,46 @@ def _prepare_reset_baseline_pair(
         ).fetchone()[0]
         sweep_id = connection.execute(
             """
-            INSERT INTO collector_reset_sweeps (boundary_at)
-            VALUES (%s)
+            INSERT INTO collector_reset_sweeps (
+                boundary_at, member_ids, membership_captured_at
+            ) VALUES (%s, %s, %s)
             RETURNING id
             """,
-            (boundary,),
+            (boundary, [player_id], boundary),
         ).fetchone()[0]
-        baseline_sweep_id = connection.execute(
+        connection.execute(
             """
-            INSERT INTO collector_reset_baseline_sweeps (
-                reset_sweep_id, player_id, boundary_at, evidence_kind, state
-            ) VALUES (%s, %s, %s, 'paired_v2', 'pending')
-            RETURNING id
-            """,
-            (sweep_id, player_id, boundary),
-        ).fetchone()[0]
-        root_job_id = connection.execute(
-            """
-            INSERT INTO collector_jobs (
-                work_type, scope, player_id, normalized_tag, capacity_pool,
-                priority, due_at, coalescing_key, sweep_id,
-                reset_baseline_sweep_id, status
+            INSERT INTO collector_work (
+                kind, lane, scope, player_id, normalized_tag, sweep_id,
+                due_at, coalescing_key, status, profile_status,
+                battle_log_status, profile_observation_id,
+                battle_log_observation_id, completed_at
             ) VALUES (
-                'reset_baseline', 'player', %s, '#2PP', 'normal', 400, %s,
-                'reset-baseline-test', %s, %s, 'complete'
+                'reset_baseline', 'reset', 'player', %s, '#2PP', %s,
+                %s, 'reset-baseline-test', 'complete', 'observed',
+                'observed', %s, %s, %s
             )
             RETURNING id
             """,
-            (player_id, boundary, sweep_id, baseline_sweep_id),
-        ).fetchone()[0]
-        attempt_id = connection.execute(
-            """
-            INSERT INTO collector_attempts (
-                job_id, status, started_at, completed_at
-            ) VALUES (%s, 'complete', %s, %s)
-            RETURNING id
-            """,
-            (root_job_id, boundary, boundary),
-        ).fetchone()[0]
-        battle_attempt_id = attempt_id
-        if wrong_battle_attempt:
-            battle_attempt_id = connection.execute(
-                """
-                INSERT INTO collector_attempts (
-                    job_id, attempt_number, status, started_at, completed_at
-                ) VALUES (%s, 2, 'complete', %s, %s)
-                RETURNING id
-                """,
-                (root_job_id, boundary, boundary),
-            ).fetchone()[0]
-        connection.execute(
-            "UPDATE collector_jobs SET result_attempt_id = %s WHERE id = %s",
-            (attempt_id, root_job_id),
-        )
-        connection.execute(
-            """
-            UPDATE collector_observations
-            SET collection_job_id = %s, attempt_id = %s
-            WHERE id = %s
-            """,
-            (root_job_id, attempt_id, profile_observation_id),
-        )
-        connection.execute(
-            """
-            UPDATE collector_observations
-            SET collection_job_id = %s, attempt_id = %s
-            WHERE id = %s
-            """,
-            (root_job_id, battle_attempt_id, battle_observation_id),
-        )
-        for endpoint, observation_id in (
-            ("profile", profile_observation_id),
-            ("battle_log", battle_observation_id),
-        ):
-            source = connection.execute(
-                """
-                SELECT request_started_at, response_completed_at, http_status,
-                       response_hash, archive_reference
-                FROM collector_observations
-                WHERE id = %s
-                """,
-                (observation_id,),
-            ).fetchone()
-            connection.execute(
-                """
-                INSERT INTO collector_endpoint_results (
-                    attempt_id, endpoint, outcome, request_started_at,
-                    response_completed_at, http_status, response_hash,
-                    archive_reference, observation_id, request_count,
-                    key_label
-                ) VALUES (%s, %s, 'observed', %s, %s, %s, %s, %s, %s, 1, 'normal-a')
-                """,
-                (attempt_id, endpoint, *source, observation_id),
-            )
+            (
+                player_id,
+                sweep_id,
+                boundary,
+                profile_observation_id,
+                battle_observation_id,
+                boundary,
+            ),
+        ).fetchone()
         connection.commit()
     return profile_observation_id, battle_observation_id, profile_job_id, battle_job_id
 
 
-def test_reset_baseline_evidence_is_created_from_one_go_attempt_and_is_versioned(
+def test_reset_baseline_evidence_is_created_from_one_compact_work_and_is_versioned(
     database_url: str,
     archive_server,
 ) -> None:
     boundary = datetime(2026, 8, 4, 5, tzinfo=UTC)
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         profile_observation_id, battle_observation_id, profile_job_id, battle_job_id = (
             _prepare_reset_baseline_pair(
                 connection_info,
@@ -308,13 +244,13 @@ def test_reset_baseline_evidence_is_created_from_one_go_attempt_and_is_versioned
                 partial_rows = connection.execute(
                     """
                     SELECT profile_observation_id, battle_log_observation_id,
-                           profile_valid, battle_log_valid, legacy_profile_only
+                           profile_valid, battle_log_valid
                     FROM reset_baseline_evidence
                     ORDER BY id
                     """
                 ).fetchall()
             assert partial_rows == [
-                (profile_observation_id, battle_observation_id, True, False, False)
+                (profile_observation_id, battle_observation_id, True, False)
             ]
             with database.pool.connection() as connection:
                 assert (
@@ -337,7 +273,7 @@ def test_reset_baseline_evidence_is_created_from_one_go_attempt_and_is_versioned
                 rows = connection.execute(
                     """
                     SELECT profile_observation_id, battle_log_observation_id,
-                           profile_valid, battle_log_valid, legacy_profile_only
+                           profile_valid, battle_log_valid
                     FROM reset_baseline_evidence
                     ORDER BY id
                     """
@@ -350,8 +286,8 @@ def test_reset_baseline_evidence_is_created_from_one_go_attempt_and_is_versioned
                     """
                 ).fetchone()[0]
             assert rows == [
-                (profile_observation_id, battle_observation_id, True, False, False),
-                (profile_observation_id, battle_observation_id, True, True, False),
+                (profile_observation_id, battle_observation_id, True, False),
+                (profile_observation_id, battle_observation_id, True, True),
             ]
             assert reconciliation_count == 1
 
@@ -385,7 +321,7 @@ def test_malformed_reset_evidence_is_failed_without_reconciliation_enqueue(
     archive_server,
 ) -> None:
     boundary = datetime(2026, 8, 4, 5, tzinfo=UTC)
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         _profile_observation, _battle_observation, profile_job, battle_job = (
             _prepare_reset_baseline_pair(
                 connection_info,
@@ -421,55 +357,12 @@ def test_malformed_reset_evidence_is_failed_without_reconciliation_enqueue(
         finally:
             database.close()
 
-
-def test_wrong_attempt_reset_evidence_is_failed_without_reconciliation_enqueue(
-    database_url: str,
-    archive_server,
-) -> None:
-    boundary = datetime(2026, 8, 4, 5, tzinfo=UTC)
-    with domain_database(database_url) as connection_info:
-        _profile_observation, _battle_observation, profile_job, battle_job = (
-            _prepare_reset_baseline_pair(
-                connection_info,
-                archive_server,
-                boundary=boundary,
-                wrong_battle_attempt=True,
-            )
-        )
-        database, processor = _processor(connection_info, archive_server)
-        try:
-            profile_result = processor.process_job(
-                profile_job, owner="wrong-attempt-profile"
-            )
-            assert profile_result is not None and profile_result.outcome == "processed"
-            battle_result = processor.process_job(
-                battle_job, owner="wrong-attempt-battle"
-            )
-            assert battle_result is not None and battle_result.outcome == "processed"
-            with database.pool.connection() as connection:
-                state, reasons = connection.execute(
-                    "SELECT state, failure_reasons FROM reset_baseline_evidence ORDER BY version DESC LIMIT 1"
-                ).fetchone()
-                reconciliation_count = connection.execute(
-                    """
-                    SELECT count(*)
-                    FROM python_processing_jobs
-                    WHERE work_type = 'reconcile_ranked_day'
-                    """
-                ).fetchone()[0]
-            assert text(state) == "failed"
-            assert "battle_log_wrong_attempt" in [text(reason) for reason in reasons]
-            assert reconciliation_count == 0
-        finally:
-            database.close()
-
-
 def test_profile_and_battle_observations_process_independently_into_canonical_evidence(
     database_url: str,
     archive_server,
 ) -> None:
     observed_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         profile_observation_id, profile_job_id = store_observation(
             connection_info,
             archive_server,
@@ -592,7 +485,7 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
                 ).fetchone()
                 first_rows = connection.execute(
                     """
-                    SELECT count(*) FROM battle_source_rows AS r
+                        SELECT count(*) FROM battle_log_observation_source_rows AS r
                     JOIN battle_log_observations AS l
                       ON l.id = r.battle_log_observation_id
                     WHERE l.observation_id = %s
@@ -600,7 +493,7 @@ def test_profile_and_battle_observations_process_independently_into_canonical_ev
                     (first_observation_id,),
                 ).fetchone()[0]
 
-            assert counts == (1, 3, 2, 3)
+            assert counts == (1, 2, 2, 3)
             assert tuple(text(value) for value in battle) == (
                 "agreed",
                 "u1x0-2x1",
@@ -628,7 +521,7 @@ def test_concurrent_battle_batches_lock_shared_rows_in_one_order(
     forward = json.dumps({"items": [first, second]}).encode()
     reverse = json.dumps({"items": [second, first]}).encode()
 
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         _seed_battle_anchor(connection_info, datetime(2026, 8, 1, 5, tzinfo=UTC))
         _first_observation, first_job = store_observation(
             connection_info,
@@ -690,7 +583,7 @@ def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
     database_url: str,
     archive_server,
 ) -> None:
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         with psycopg.connect(connection_info) as connection:
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         ranked_day = ranked_day_for(now)
@@ -895,7 +788,7 @@ def test_live_shaped_battle_rows_publish_one_player_battle_without_duplicate_con
 ) -> None:
     """Flat live rows share one battle identity through reconciliation and the API read model."""
 
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         with psycopg.connect(connection_info) as connection:
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
         ranked_day = ranked_day_for(now)
@@ -960,7 +853,7 @@ def test_live_shaped_battle_rows_publish_one_player_battle_without_duplicate_con
                 source_rows = connection.execute(
                     """
                     SELECT source_row.outcome, source_row.source_json
-                    FROM battle_source_rows AS source_row
+                    FROM battle_log_observation_source_rows AS source_row
                     JOIN battle_log_observations AS battle_log
                       ON battle_log.id = source_row.battle_log_observation_id
                     WHERE battle_log.observation_id IN (%s, %s)
@@ -1095,7 +988,7 @@ def test_concurrent_initial_season_anchors_use_the_single_confirmed_seam(
     new_payload["currentLeagueSeasonId"] = 1786338000
     new_payload["previousLeagueSeasonId"] = 1783918800
 
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         _old_observation, old_job = store_observation(
             connection_info,
             archive_server,
@@ -1153,7 +1046,7 @@ def test_conflicting_or_older_profiles_never_replace_last_accepted_current_profi
     archive_server,
 ) -> None:
     accepted_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         _accepted_observation_id, accepted_job_id = store_observation(
             connection_info,
             archive_server,
@@ -1374,7 +1267,7 @@ def test_recognized_legend_tier_classifies_player_despite_season_anchor_conflict
     archive_server,
 ) -> None:
     observed_at = datetime(2026, 8, 9, 12, 5, tzinfo=UTC)
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         _anchor_observation_id, anchor_job_id = store_observation(
             connection_info,
             archive_server,
@@ -1521,7 +1414,7 @@ def test_canonical_battle_keeps_detail_disagreement_for_both_perspectives(
     archive_server,
 ) -> None:
     observed_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         _seed_battle_anchor(connection_info, datetime(2026, 8, 1, 5, tzinfo=UTC))
         attacker_body = BATTLE_FIXTURE.read_bytes()
         _attacker_observation_id, attacker_job_id = store_observation(
@@ -1589,7 +1482,7 @@ def test_official_top_200_publishes_only_complete_atomic_versions(
     archive_server,
 ) -> None:
     observed_at = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         complete_observation_id, _complete_job = store_observation(
             connection_info,
             archive_server,
@@ -1643,7 +1536,7 @@ def test_official_top_200_publishes_only_complete_atomic_versions(
                 published = connection.execute(
                     """
                     SELECT v.observation_id,
-                           (SELECT count(*) FROM official_top200_entries AS e
+                           (SELECT count(*) FROM official_top200_version_entries AS e
                             WHERE e.version_id = v.id)
                     FROM official_top200_versions AS v
                     """
@@ -1667,11 +1560,9 @@ def test_reset_baseline_evidence_worker_role_contract(
     database_url: str,
     archive_server,
 ) -> None:
-    """The reset-baseline evidence path runs end to end as the worker role:
-    the job-lineage helper and the sweep-lock seam are worker-only, and the
-    worker still cannot reach the collector-owned sweep table directly."""
+    """The worker processes paired compact Reset work but cannot mutate it."""
     boundary = datetime(2026, 8, 6, 5, tzinfo=UTC)
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         profile_observation_id, battle_observation_id, profile_job_id, battle_job_id = (
             _prepare_reset_baseline_pair(
                 connection_info,
@@ -1681,16 +1572,25 @@ def test_reset_baseline_evidence_worker_role_contract(
         )
         with psycopg.connect(connection_info) as connection:
             schema = text(connection.execute("SELECT current_schema()").fetchone()[0])
-            baseline_id, root_job_id = connection.execute(
+            work_before = connection.execute(
                 """
-                SELECT baseline.id, root.id
-                FROM collector_reset_baseline_sweeps AS baseline
-                JOIN collector_jobs AS root
-                  ON root.reset_baseline_sweep_id = baseline.id
-                WHERE baseline.boundary_at = %s
+                SELECT work.id, work.profile_observation_id,
+                       work.battle_log_observation_id, work.status
+                FROM collector_work AS work
+                JOIN collector_reset_sweeps AS sweep
+                  ON sweep.id = work.sweep_id
+                WHERE work.kind = 'reset_baseline'
+                  AND sweep.boundary_at = %s
                 """,
                 (boundary,),
             ).fetchone()
+        assert work_before == (
+            work_before[0],
+            profile_observation_id,
+            battle_observation_id,
+            "complete",
+        )
+        work_id = int(work_before[0])
 
         worker_connection_info = make_conninfo(
             database_url,
@@ -1732,50 +1632,44 @@ def test_reset_baseline_evidence_worker_role_contract(
                     WHERE work_type = 'reconcile_ranked_day'
                     """
                 ).fetchone()[0]
-                locked = connection.execute(
-                    "SELECT clashlens_lock_reset_baseline_v2(%s)",
-                    (baseline_id,),
-                ).fetchone()[0]
-                missing = connection.execute(
-                    "SELECT clashlens_lock_reset_baseline_v2(999999999)"
-                ).fetchone()[0]
+                work_after_processing = connection.execute(
+                    """
+                    SELECT profile_observation_id, battle_log_observation_id, status
+                    FROM collector_work
+                    WHERE id = %s
+                    """,
+                    (work_id,),
+                ).fetchone()
             assert rows == [
                 (profile_observation_id, battle_observation_id, True, False),
                 (profile_observation_id, battle_observation_id, True, True),
             ]
             assert reconciliation_count == 1
-            assert locked is True
-            assert missing is False
+            assert work_after_processing == work_before[1:]
 
-            # The worker cannot reach the collector-owned sweep table directly.
+            # Reset work is collector-owned admission state; the worker only
+            # reads it while deriving evidence.
             with _role_connection(
                 worker_connection_info, "clashlens_python_worker"
             ) as connection:
                 with pytest.raises(psycopg.errors.InsufficientPrivilege):
                     connection.execute(
                         """
-                        UPDATE collector_reset_baseline_sweeps
-                        SET state = 'complete'
+                        UPDATE collector_work
+                        SET status = 'failed'
                         WHERE id = %s
                         """,
-                        (baseline_id,),
+                        (work_id,),
                     )
                 connection.rollback()
-
-            # The collector and the API cannot execute either worker seam.
-            for role in ("clashlens_collector", "clashlens_python_api"):
-                with _role_connection(worker_connection_info, role) as connection:
-                    with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                        connection.execute(
-                            "SELECT clashlens_lock_reset_baseline_v2(%s)",
-                            (baseline_id,),
-                        )
-                    connection.rollback()
-                    with pytest.raises(psycopg.errors.InsufficientPrivilege):
-                        connection.execute(
-                            "SELECT clashlens_reset_job_lineage_v2(%s, %s)",
-                            (root_job_id, root_job_id),
-                        )
-                    connection.rollback()
+                work_after_rejected_update = connection.execute(
+                    """
+                    SELECT profile_observation_id, battle_log_observation_id, status
+                    FROM collector_work
+                    WHERE id = %s
+                    """,
+                    (work_id,),
+                ).fetchone()
+            assert work_after_rejected_update == work_before[1:]
         finally:
             database.close()

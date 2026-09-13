@@ -11,13 +11,15 @@ behavior, report the conflict and follow the executable contract.
 
 ## Runtime ownership
 
-### Go collector
+### Python collector
 
-Go owns official API transport: scheduling, key-rate limiting, retries, and
-request/response handling. It hashes and writes each exact response to the raw
-archive, then appends the observation metadata and durable processing handoff.
-Go must not interpret battle meaning, reconcile ranked days, infer shields or
-automatic defenses, decode armies, or calculate product analytics.
+The single Python asyncio collector owns official API transport: scheduling,
+key-rate limiting, retries, and request/response handling. It hashes and writes
+each exact response to the bounded local spool, records the observation metadata
+and durable processing handoff, and uploads the raw body to the immutable
+archive. The collector must not interpret battle meaning, reconcile ranked
+days, infer shields or automatic defenses, decode armies, or calculate product
+analytics; the Python worker owns that interpretation.
 
 ### Python application
 
@@ -46,11 +48,11 @@ or resource use requires isolation.
 
 ## Durable seams
 
-Go and Python coordinate through PostgreSQL observation metadata and durable
-queues, not through in-process calls. A response is not eligible for Python
-processing until its untouched bytes and observation metadata are durable. The
-handoff is idempotent: retries and process restarts must not create duplicate
-observations or derived records.
+The collector and worker coordinate through PostgreSQL observation metadata and
+durable queues, not through in-process calls. A response is not eligible for
+worker processing until its untouched bytes and observation metadata are
+durable. The handoff is idempotent: retries and process restarts must not create
+duplicate observations or derived records.
 
 Python is the single owner of domain interpretation. Other runtimes may pass
 validated inputs and format returned values, but they must not create a second

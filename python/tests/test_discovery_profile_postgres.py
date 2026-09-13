@@ -19,7 +19,7 @@ OBSERVED_AT = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
 def test_live_discovery_sources_enqueue_once_and_replay_does_not(
     database_url: str, archive_server
 ) -> None:
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         store_observation(
             connection_info,
             archive_server,
@@ -44,7 +44,7 @@ def test_live_discovery_sources_enqueue_once_and_replay_does_not(
             assert processor.process_once(owner="discovery-ranking") is not None
             with database.pool.connection() as connection:
                 before = connection.execute(
-                    "SELECT count(*) FROM collector_jobs WHERE work_type = 'discovery_profile'"
+                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
                 ).fetchone()[0]
                 ranking_discoveries = connection.execute(
                     """SELECT count(*), count(DISTINCT player_id),
@@ -82,7 +82,7 @@ def test_live_discovery_sources_enqueue_once_and_replay_does_not(
             assert processor.process_once(owner="discovery-replay") is not None
             with database.pool.connection() as connection:
                 after = connection.execute(
-                    "SELECT count(*) FROM collector_jobs WHERE work_type = 'discovery_profile'"
+                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
                 ).fetchone()[0]
             assert after == before
         finally:
@@ -159,9 +159,9 @@ def test_contract_changed_rankings_enqueue_more_than_500_valid_discoveries(
                     == 501
                 )
                 assert (
-                    connection.execute(
-                        "SELECT count(*) FROM collector_jobs WHERE work_type = 'discovery_profile'"
-                    ).fetchone()[0]
+                        connection.execute(
+                            "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
+                        ).fetchone()[0]
                     == 501
                 )
                 assert text(
@@ -176,7 +176,7 @@ def test_contract_changed_rankings_enqueue_more_than_500_valid_discoveries(
 def test_enqueue_cycle_coalescing_terminal_rediscovery_inputs_and_privileges(
     database_url: str,
 ) -> None:
-    with domain_database(database_url) as connection_info:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
         with psycopg.connect(connection_info) as connection:
             ids = connection.execute(
                 """
@@ -201,26 +201,22 @@ def test_enqueue_cycle_coalescing_terminal_rediscovery_inputs_and_privileges(
             assert sorted(executor.map(lambda _index: enqueue(), range(2))) == [0, 1]
 
         with psycopg.connect(connection_info) as connection:
-            first_job = connection.execute(
-                "SELECT id FROM collector_jobs WHERE player_id = %s", (unknown,)
+            first_work = connection.execute(
+                "SELECT id FROM collector_work WHERE player_id = %s", (unknown,)
             ).fetchone()[0]
             connection.execute(
-                "UPDATE collector_jobs SET status = 'complete' WHERE id = %s", (first_job,)
+                "UPDATE collector_work SET status = 'complete', completed_at = clock_timestamp() WHERE id = %s",
+                (first_work,),
             )
             connection.execute(
-                """INSERT INTO discovery_profile_intents (player_id, cycle_at)
-                   VALUES (%s, date_bin(interval '5 minutes', clock_timestamp(),
-                                       timestamptz '2000-01-01') - interval '5 minutes')
-                   ON CONFLICT DO NOTHING""",
-                (terminal,),
-            )
-            connection.execute(
-                """INSERT INTO collector_jobs (
-                       work_type, scope, player_id, normalized_tag, capacity_pool,
-                       priority, due_at, coalescing_key, required_endpoint, status)
-                   SELECT 'discovery_profile', 'player', id, normalized_tag, 'normal',
-                          300, clock_timestamp(), 'discovery-profile:' || id,
-                          'profile', 'complete' FROM players WHERE id = %s""",
+                """INSERT INTO collector_work (
+                       kind, lane, scope, player_id, normalized_tag, due_at,
+                       coalescing_key, status, profile_status, battle_log_status,
+                       completed_at)
+                   SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag,
+                          clock_timestamp(), 'discovery-profile:' || id,
+                          'complete', 'observed', 'not_applicable', clock_timestamp()
+                   FROM players WHERE id = %s""",
                 (terminal,),
             )
             assert connection.execute(
@@ -228,7 +224,7 @@ def test_enqueue_cycle_coalescing_terminal_rediscovery_inputs_and_privileges(
                 ([terminal],),
             ).fetchone()[0] == 1
             assert connection.execute(
-                "SELECT count(*) FROM collector_jobs WHERE player_id = %s", (terminal,)
+                "SELECT count(*) FROM collector_work WHERE player_id = %s", (terminal,)
             ).fetchone()[0] == 2
             connection.commit()
             for invalid in (None, [0], [999999999], list(range(1, 502))):
@@ -255,7 +251,7 @@ def test_enqueue_cycle_coalescing_terminal_rediscovery_inputs_and_privileges(
             ).fetchone()[0] == 1
             connection.execute("RESET ROLE")
             assert connection.execute(
-                "SELECT count(*) FROM collector_jobs WHERE player_id = %s",
+                "SELECT count(*) FROM collector_work WHERE player_id = %s",
                 (shadow_player,),
             ).fetchone()[0] == 1
 
@@ -267,7 +263,7 @@ def test_enqueue_cycle_coalescing_terminal_rediscovery_inputs_and_privileges(
                       'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
                     has_function_privilege('clashlens_collector',
                       'clashlens_enqueue_discovery_profiles(bigint[])', 'EXECUTE'),
-                    has_table_privilege('clashlens_python_worker', 'collector_jobs', 'INSERT')"""
+                    has_table_privilege('clashlens_python_worker', 'collector_work', 'INSERT')"""
             ).fetchone()
             assert privileges == (True, False, False, False)
 

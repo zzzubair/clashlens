@@ -24,6 +24,9 @@ CURRENT_ANALYTICS_INPUT = {
     "snapshot_version": 1,
     "snapshot_input_hash": "a" * 64,
     "source_ranked_day_version_id": 1,
+    "generation": 1,
+    "manifest_id": 1,
+    "manifest_digest": "a" * 64,
 }
 
 
@@ -40,38 +43,8 @@ def _production_database(
             from pathlib import Path
 
             root = Path(__file__).parents[2]
-            connection.execute(
-                (root / "deploy/migrations/0001_collector.sql").read_text(
-                    encoding="utf-8"
-                )
-            )
-            connection.execute(
-                (root / "deploy/migrations/0002_python_layer.sql").read_text(
-                    encoding="utf-8"
-                )
-            )
-            connection.execute(
-                (root / "deploy/migrations/0003_regular_poll_dedup.sql").read_text(
-                    encoding="utf-8"
-                )
-            )
-            connection.execute(
-                (root / "deploy/migrations/0004_source_parser_v2.sql").read_text(
-                    encoding="utf-8"
-                )
-            )
-            connection.execute(
-                (root / "deploy/migrations/0005_army_decoding.sql").read_text(
-                    encoding="utf-8"
-                )
-            )
-            if include_army_migrations:
-                for version in ("0006_provider_identities.sql", "0007_player_discovery.sql", "0008_public_army_analytics.sql"):
-                    connection.execute(
-                        (root / "deploy/migrations" / version).read_text(
-                            encoding="utf-8"
-                        )
-                    )
+            for migration in sorted((root / "deploy/migrations").glob("*.sql")):
+                connection.execute(migration.read_text(encoding="utf-8"))
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -89,85 +62,49 @@ def _insert_observation(connection: psycopg.Connection, *, occurrence_key: str) 
         RETURNING id
         """
     ).fetchone()[0]
-    collector_job_id = connection.execute(
+    connection.execute(
         """
-        INSERT INTO collector_jobs (
-            work_type, player_id, normalized_tag, capacity_pool,
-            priority, due_at, coalescing_key, status
-        ) VALUES (
-            'initial_collection', %s, '#2PP', 'interactive',
-            300, %s, %s, 'complete'
-        )
-        RETURNING id
-        """,
-        (player_id, observed_at, occurrence_key),
-    ).fetchone()[0]
-    attempt_id = connection.execute(
+        INSERT INTO archive_instances (
+            instance_id, endpoint, region, bucket, marker_key,
+            marker_hash, marker_payload_version
+        ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
+                  'evidence', 'clashlens/archive-instance.json',
+                  repeat('f', 64), 'v1')
+        ON CONFLICT (instance_id) DO NOTHING
         """
-        INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
-        VALUES (%s, 'complete', %s, %s)
-        RETURNING id
-        """,
-        (collector_job_id, observed_at, observed_at),
-    ).fetchone()[0]
-    # Migration 0009 requires a verified catalogue row for every new
-    # observation; fixtures on pre-0009 schemas keep the legacy shape.
-    has_catalogue = connection.execute(
-        """
-        SELECT EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema = current_schema() AND table_name = 'archive_catalogue'
-        )
-        """
-    ).fetchone()[0]
-    if has_catalogue:
-        connection.execute(
-            """
-            INSERT INTO archive_instances (
-                instance_id, endpoint, region, bucket, marker_key,
-                marker_hash, marker_payload_version
-            ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
-                      'evidence', 'clashlens/archive-instance.json',
-                      repeat('f', 64), 'v1')
-            ON CONFLICT (instance_id) DO NOTHING
-            """
-        )
+    )
     digest = _hash(archive_reference := f"s3://evidence/{occurrence_key}")
-    catalogue_columns = ""
-    if has_catalogue:
-        connection.execute(
-            """
-            INSERT INTO archive_catalogue (
-                response_hash, archive_reference, byte_size, archive_instance_id
-            ) VALUES (%s, %s, %s, 'fixture-instance')
-            ON CONFLICT (response_hash, archive_reference) DO NOTHING
-            """,
-            (digest, archive_reference, 0),
-        )
-        catalogue_columns = ", archive_catalogue_hash"
+    connection.execute(
+        """
+        INSERT INTO archive_catalogue (
+            response_hash, archive_reference, byte_size, archive_instance_id
+        ) VALUES (%s, %s, %s, 'fixture-instance')
+        ON CONFLICT (response_hash, archive_reference) DO NOTHING
+        """,
+        (digest, archive_reference, 0),
+    )
     observation_id = connection.execute(
-        f"""
+        """
         INSERT INTO collector_observations (
-            occurrence_key, collection_job_id, attempt_id, player_id,
-            normalized_tag, endpoint, request_started_at, response_completed_at,
-            http_status, response_hash, archive_reference{catalogue_columns},
-            collector_version, key_label, evidence_headers
+            occurrence_key, player_id, scope, normalized_tag,
+            endpoint, request_started_at, response_completed_at,
+            http_status, response_hash, archive_reference, archive_catalogue_hash,
+            collector_version, key_label, evidence_headers, source_adapter_version
         ) VALUES (
-            %s, %s, %s, %s, '#2PP', 'profile', %s, %s, 200, %s, %s{", %s" if has_catalogue else ""},
-            'collector-v1', 'normal-a', '{{}}'::jsonb
+            %s, %s, 'player', '#2PP', 'profile', %s, %s, 200,
+            %s, %s, %s,
+            'collector-v1', 'normal-a', '{}'::jsonb, 'player-profile-v1'
         )
         RETURNING id
         """,
         (
             occurrence_key,
-            collector_job_id,
-            attempt_id,
             player_id,
             observed_at,
             observed_at,
             digest,
             archive_reference,
-            *([digest] if has_catalogue else []),
+            digest,
         ),
     ).fetchone()[0]
     return int(observation_id)
@@ -321,11 +258,26 @@ def test_replay_observation_claim_carries_source_metadata_and_processes(
             )
             connection.execute(
                 """
+                INSERT INTO archive_catalogue (
+                    response_hash, archive_reference, byte_size, archive_instance_id
+                ) VALUES (%s, %s, 0, 'fixture-instance')
+                ON CONFLICT (response_hash, archive_reference) DO NOTHING
+                """,
+                (archive_server[2], archive_server[1]),
+            )
+            connection.execute(
+                """
                 UPDATE collector_observations
-                SET response_hash = %s, archive_reference = %s
+                SET response_hash = %s, archive_reference = %s,
+                    archive_catalogue_hash = %s
                 WHERE id = %s
                 """,
-                (archive_server[2], archive_server[1], observation_id),
+                (
+                    archive_server[2],
+                    archive_server[1],
+                    archive_server[2],
+                    observation_id,
+                ),
             )
             connection.commit()
             job_id = _insert_job(
@@ -387,6 +339,10 @@ def test_unsupported_work_types_stay_pending_and_are_not_claimed(
             connection.execute(
                 "ALTER TABLE python_processing_jobs "
                 "DROP CONSTRAINT IF EXISTS python_processing_jobs_input_v2_check"
+            )
+            connection.execute(
+                "ALTER TABLE python_processing_jobs "
+                "DROP CONSTRAINT IF EXISTS python_processing_jobs_input_v5_check"
             )
             export_job_id = _insert_job(
                 connection,
@@ -611,7 +567,12 @@ def test_reconcile_snapshot_and_analytics_jobs_with_current_versions_are_claimab
                 connection,
                 work_type="build_snapshot",
                 deduplication_key="snapshot:claimable",
-                input_json={"boundary_at": "2026-08-03T05:00:00Z"},
+                input_json={
+                    "boundary_at": "2026-08-03T05:00:00Z",
+                    "generation": 1,
+                    "manifest_id": 1,
+                    "manifest_digest": "a" * 64,
+                },
                 due_at="2026-08-03T19:35:02+00:00",
             )
             _insert_job(
@@ -648,7 +609,12 @@ def test_legacy_analytics_job_with_relabeled_version_but_legacy_input_stays_pend
                 connection,
                 work_type="build_analytics",
                 deduplication_key="analytics:legacy-selection",
-                input_json={"selection": {"ranked_day_version_id": 1}},
+                input_json={
+                    "selection": {"ranked_day_version_id": 1},
+                    "generation": 1,
+                    "manifest_id": 1,
+                    "manifest_digest": "a" * 64,
+                },
                 analytics_rule_version=ANALYTICS_RULE_VERSION,
                 due_at="2026-08-03T19:35:01+00:00",
             )
@@ -656,7 +622,12 @@ def test_legacy_analytics_job_with_relabeled_version_but_legacy_input_stays_pend
                 connection,
                 work_type="build_analytics",
                 deduplication_key="analytics:legacy-v1",
-                input_json={"snapshot_id": 1},
+                input_json={
+                    "snapshot_id": 1,
+                    "generation": 1,
+                    "manifest_id": 1,
+                    "manifest_digest": "a" * 64,
+                },
                 analytics_rule_version=ANALYTICS_RULE_VERSION,
                 due_at="2026-08-03T19:35:02+00:00",
             )
@@ -725,10 +696,13 @@ def test_explicit_live_class_outranks_aged_army_backfill(
         try:
             live_claim = database.claim_job(owner="live-before-backfill")
             assert live_claim is not None and live_claim.job_id == live_job_id
-            assert database.scalar(
-                "SELECT status FROM python_processing_jobs WHERE id = %s",
-                (backfill_job_id,),
-            ) == "pending"
+            assert (
+                database.scalar(
+                    "SELECT status FROM python_processing_jobs WHERE id = %s",
+                    (backfill_job_id,),
+                )
+                == "pending"
+            )
         finally:
             database.close()
 

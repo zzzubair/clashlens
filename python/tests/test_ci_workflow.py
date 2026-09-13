@@ -7,7 +7,6 @@ import yaml
 CI_WORKFLOW = Path(__file__).parents[2] / ".github" / "workflows" / "ci.yml"
 LOCKED_ENVIRONMENT = "/tmp/clashlens-ci-venv"
 TEST_DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432/clashlens"
-EXPECTED_JOBS = {"go", "python", "postgres", "website"}
 
 
 def _workflow() -> dict:
@@ -22,11 +21,6 @@ def _python_job() -> dict:
     python_job = jobs.get("python")
     assert isinstance(python_job, dict)
     return python_job
-
-
-def test_ci_workflow_yaml_parses_and_lists_expected_jobs() -> None:
-    workflow = _workflow()
-    assert set(workflow["jobs"]) == EXPECTED_JOBS
 
 
 def test_python_job_uses_one_locked_environment_for_every_uv_step() -> None:

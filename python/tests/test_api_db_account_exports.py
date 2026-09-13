@@ -10,7 +10,9 @@ from clashlens.api_db import ApiDatabase
 def test_account_update_frozen_leaderboard_and_export_scaffold(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             account_id = create_owner(database)
@@ -106,8 +108,14 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                         repeat('2', 64), 42, %s, %s, 0, 'fresh', 'confirmed'
                     )
                     """,
-                    (leaderboard_id, player_id, profile_observation_id, NOW,
-                     profile_observation_id, NOW),
+                    (
+                        leaderboard_id,
+                        player_id,
+                        profile_observation_id,
+                        NOW,
+                        profile_observation_id,
+                        NOW,
+                    ),
                 )
                 older_day_id = connection.execute(
                     """
@@ -137,7 +145,9 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                     """,
                     (older_day_id,),
                 )
-                connection.execute("UPDATE players SET active = false WHERE id = %s", (player_id,))
+                connection.execute(
+                    "UPDATE players SET active = false WHERE id = %s", (player_id,)
+                )
                 connection.commit()
 
             frozen = database.get_frozen_leaderboard(limit=100, now=NOW)
@@ -243,7 +253,9 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
 def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             seed_profile(database, "#2PP", 6001)
@@ -256,8 +268,20 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
                     ).fetchall()
                 }
                 for tag, start, end, season, day in (
-                    ("#2PP", "2026-07-26T05:00:00Z", "2026-07-27T05:00:00Z", "2026-07", 28),
-                    ("#2PP", "2026-08-05T05:00:00Z", "2026-08-06T05:00:00Z", "2026-08", 21),
+                    (
+                        "#2PP",
+                        "2026-07-26T05:00:00Z",
+                        "2026-07-27T05:00:00Z",
+                        "2026-07",
+                        28,
+                    ),
+                    (
+                        "#2PP",
+                        "2026-08-05T05:00:00Z",
+                        "2026-08-06T05:00:00Z",
+                        "2026-08",
+                        21,
+                    ),
                 ):
                     connection.execute(
                         """
@@ -303,9 +327,15 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
                         (%s, 2, %s, 5999, %s, 'stale', 'uncertain', NULL)
                     """,
                     (
-                        older_id, players["#2PP"], NOW,
-                        latest_id, players["#2PP"], NOW,
-                        latest_id, players["#2PQ"], NOW,
+                        older_id,
+                        players["#2PP"],
+                        NOW,
+                        latest_id,
+                        players["#2PP"],
+                        NOW,
+                        latest_id,
+                        players["#2PQ"],
+                        NOW,
                     ),
                 )
                 connection.commit()
@@ -315,7 +345,8 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
             assert latest["official_season_id"] == "2026-08"
             assert latest["season_day_number"] == 21
             assert latest["previous_snapshot"] == {
-                "official_season_id": "2026-07", "season_day_number": 28
+                "official_season_id": "2026-07",
+                "season_day_number": 28,
             }
             assert latest["next_snapshot"] is None
             assert latest["total_entries"] == 2
@@ -330,7 +361,8 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
             )
             assert older is not None
             assert older["next_snapshot"] == {
-                "official_season_id": "2026-08", "season_day_number": 21
+                "official_season_id": "2026-08",
+                "season_day_number": 21,
             }
 
             with database.pool.connection() as connection:
@@ -377,8 +409,14 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
                     ) VALUES (%s, 1, %s, 6010, %s, %s, 0, 'fresh', 'confirmed',
                               repeat('6', 64), %s, %s, 0, 'fresh', 'confirmed')
                     """,
-                    (snapshot_id, players["#2PP"], profile_observation_id, NOW,
-                     profile_observation_id, NOW),
+                    (
+                        snapshot_id,
+                        players["#2PP"],
+                        profile_observation_id,
+                        NOW,
+                        profile_observation_id,
+                        NOW,
+                    ),
                 )
                 connection.commit()
 
@@ -388,18 +426,21 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
             assert newest["season_start_at"] == "2026-07-16T05:00:00+00:00"
             assert newest["season_end_at"] == "2026-08-13T05:00:00+00:00"
             assert newest["previous_snapshot"] == {
-                "official_season_id": "2026-08", "season_day_number": 21
+                "official_season_id": "2026-08",
+                "season_day_number": 21,
             }
             legacy_latest = database.get_frozen_leaderboard(
                 limit=10, official_season_id="2026-08", season_day_number=21
             )
             assert legacy_latest is not None
             assert legacy_latest["next_snapshot"] == {
-                "official_season_id": "2026-08", "season_day_number": 22
+                "official_season_id": "2026-08",
+                "season_day_number": 22,
             }
-            assert database.scalar(
-                "SELECT count(*) FROM api_frozen_leaderboard_entries"
-            ) == 3
+            assert (
+                database.scalar("SELECT count(*) FROM api_frozen_leaderboard_entries")
+                == 3
+            )
         finally:
             database.close()
 
@@ -407,7 +448,9 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
 def test_frozen_publication_prefers_v2_before_independent_legacy_version(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             seed_profile(database, "#2PP", 6001)
@@ -439,7 +482,11 @@ def test_frozen_publication_prefers_v2_before_independent_legacy_version(
                     )
                 for public_id, boundary, version in (
                     ("00000000-0000-0000-0000-000000000020", "2026-08-05T05:00:00Z", 1),
-                    ("00000000-0000-0000-0000-000000000021", "2026-08-06T05:00:00Z", 99),
+                    (
+                        "00000000-0000-0000-0000-000000000021",
+                        "2026-08-06T05:00:00Z",
+                        99,
+                    ),
                     ("00000000-0000-0000-0000-000000000022", "2026-08-07T05:00:00Z", 1),
                 ):
                     connection.execute(
@@ -475,10 +522,12 @@ def test_frozen_publication_prefers_v2_before_independent_legacy_version(
             assert selected["snapshot_id"] == str(snapshot_id)
             assert selected["version"] == 1
             assert selected["previous_snapshot"] == {
-                "official_season_id": "2026-08", "season_day_number": 20
+                "official_season_id": "2026-08",
+                "season_day_number": 20,
             }
             assert selected["next_snapshot"] == {
-                "official_season_id": "2026-08", "season_day_number": 22
+                "official_season_id": "2026-08",
+                "season_day_number": 22,
             }
 
             previous = database.get_frozen_leaderboard(
@@ -489,10 +538,12 @@ def test_frozen_publication_prefers_v2_before_independent_legacy_version(
             )
             assert previous is not None and following is not None
             assert previous["next_snapshot"] == {
-                "official_season_id": "2026-08", "season_day_number": 21
+                "official_season_id": "2026-08",
+                "season_day_number": 21,
             }
             assert following["previous_snapshot"] == {
-                "official_season_id": "2026-08", "season_day_number": 21
+                "official_season_id": "2026-08",
+                "season_day_number": 21,
             }
         finally:
             database.close()

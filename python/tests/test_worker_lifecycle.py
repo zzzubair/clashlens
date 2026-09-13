@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from argparse import Namespace
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
+from types import SimpleNamespace
 
 import pytest
 
@@ -66,6 +69,171 @@ def test_worker_terminalizes_race_to_retired_season() -> None:
 
     assert result == ProcessResult(17, "season_detail_retired", "season_detail_retired")
     assert database.finished == [(17, "season_detail_retired")]
+
+
+def test_new_observation_reads_only_the_local_spool() -> None:
+    from clashlens.archive import ArchiveReadResult
+
+    body = (Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json").read_bytes()
+    digest = hashlib.sha256(body).hexdigest()
+
+    class LocalSpool:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def verify(self, expected_hash: str, expected_size: int | None = None) -> bytes:
+            self.calls += 1
+            assert expected_hash == digest
+            assert expected_size is None
+            return body
+
+    class Archive:
+        def __init__(self, spool: LocalSpool) -> None:
+            self.spool = spool
+            self.remote_calls = 0
+
+        def read_verified(self, *_args: object, **_kwargs: object) -> ArchiveReadResult:
+            self.remote_calls += 1
+            raise AssertionError("new observations must not use archive fallback")
+
+    class Database:
+        def __init__(self) -> None:
+            self.profile = None
+
+        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+            assert lease_seconds == 30
+
+        def complete_profile(self, _claim: object, profile: object) -> None:
+            self.profile = profile
+
+    spool = LocalSpool()
+    archive = Archive(spool)
+    database = Database()
+    claim = SimpleNamespace(
+        job_id=41,
+        work_type="process_observation",
+        processing_version=PROCESSING_VERSION,
+        domain_rule_version=DOMAIN_RULE_VERSION,
+        endpoint="profile",
+        endpoint_version="profile-v1",
+        schema_version="profile-schema-v1",
+        parser_version="supercell-profile-parser-v3",
+        archive_reference=None,
+        response_hash=digest,
+        normalized_tag="#2PP",
+        http_status=200,
+        observed_at=datetime.now(UTC),
+    )
+
+    result = ObservationProcessor(database, archive)._process_claim(
+        claim, lease_seconds=30
+    )
+
+    assert result == ProcessResult(41, "processed")
+    assert spool.calls == 1
+    assert archive.remote_calls == 0
+    assert database.profile is not None
+
+
+def test_missing_new_observation_is_not_repaired_from_archive() -> None:
+    from clashlens.archive import ArchiveReadResult
+
+    class LocalSpool:
+        def verify(self, _expected_hash: str) -> None:
+            return None
+
+    class Archive:
+        spool = LocalSpool()
+        remote_calls = 0
+
+        def read_verified(self, *_args: object, **_kwargs: object) -> ArchiveReadResult:
+            self.remote_calls += 1
+            raise AssertionError("new observations must not use archive fallback")
+
+    class Database:
+        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+            assert lease_seconds == 30
+
+        def fail_claim(self, _claim: object, *, category: str, detail: str, retryable: bool) -> str:
+            assert category == "spool_missing"
+            assert detail.startswith("spool_missing:")
+            assert retryable is False
+            return "failed"
+
+    claim = SimpleNamespace(
+        job_id=42,
+        work_type="process_observation",
+        processing_version=PROCESSING_VERSION,
+        domain_rule_version=DOMAIN_RULE_VERSION,
+        endpoint="profile",
+        endpoint_version="profile-v1",
+        schema_version="profile-schema-v1",
+        parser_version="supercell-profile-parser-v3",
+        archive_reference="s3://evidence/sha256/00/" + "0" * 64,
+        response_hash="0" * 64,
+        normalized_tag="#2PP",
+        http_status=200,
+        observed_at=datetime.now(UTC),
+    )
+    archive = Archive()
+
+    result = ObservationProcessor(Database(), archive)._process_claim(
+        claim, lease_seconds=30
+    )
+
+    assert result == ProcessResult(42, "failed", "spool_missing")
+    assert archive.remote_calls == 0
+
+
+def test_replay_observation_can_use_archive_fallback() -> None:
+    from clashlens.archive import ArchiveReadResult
+
+    body = (Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json").read_bytes()
+    digest = hashlib.sha256(body).hexdigest()
+
+    class LocalSpool:
+        def verify(self, _expected_hash: str) -> None:
+            return None
+
+    class Archive:
+        def __init__(self) -> None:
+            self.spool = LocalSpool()
+            self.remote_calls = 0
+
+        def read_verified(self, *_args: object, **_kwargs: object) -> ArchiveReadResult:
+            self.remote_calls += 1
+            return ArchiveReadResult(body, "s3://evidence/source", digest)
+
+    class Database:
+        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+            assert lease_seconds == 30
+
+        def complete_profile(self, _claim: object, _profile: object) -> None:
+            return None
+
+    claim = SimpleNamespace(
+        job_id=43,
+        work_type="replay_observation",
+        processing_version=PROCESSING_VERSION,
+        domain_rule_version=DOMAIN_RULE_VERSION,
+        endpoint="profile",
+        endpoint_version="profile-v1",
+        schema_version="profile-schema-v1",
+        parser_version="supercell-profile-parser-v3",
+        archive_reference="s3://evidence/sha256/" + digest[:2] + "/" + digest,
+        response_hash=digest,
+        normalized_tag="#2PP",
+        http_status=200,
+        observed_at=datetime.now(UTC),
+    )
+    archive = Archive()
+
+    result = ObservationProcessor(Database(), archive)._process_claim(
+        claim, lease_seconds=30
+    )
+
+    assert result == ProcessResult(43, "processed")
+    assert archive.remote_calls == 1
 
 
 def test_worker_does_not_claim_after_shutdown_is_requested() -> None:

@@ -13,26 +13,18 @@ from .domain import SEASON_ANCHOR_RULE_VERSION
 # Keep source transitions and both ends of unchanged log runs. Removing an
 # interior repeat cannot change the overlap/quality result of the log chain.
 _ELIGIBLE = """
-SELECT job.id FROM collector_jobs AS job
-WHERE job.status = 'complete'
-  AND job.work_type IN ('regular_poll', 'initial_collection', 'global_player_rankings')
-  AND job.parent_attempt_id IS NULL
-  AND job.updated_at < clock_timestamp() - make_interval(hours => %s)
-  AND (%s::bigint[] IS NULL OR job.id = ANY(%s::bigint[]))
-  AND NOT EXISTS (
-      SELECT 1 FROM collector_attempts AS attempt
-      JOIN collector_jobs AS child ON child.parent_attempt_id = attempt.id
-      WHERE attempt.job_id = job.id
+SELECT work.id FROM collector_work AS work
+WHERE work.status = 'complete'
+  AND work.kind IN (
+      'initial_collection', 'live_refresh', 'global_player_rankings',
+      'discovery_profile'
   )
-  AND NOT EXISTS (
-      SELECT 1 FROM collector_transport_failures WHERE collection_job_id = job.id
-  )
-  AND NOT EXISTS (
-      SELECT 1 FROM reset_baseline_evidence WHERE collection_job_id = job.id
-  )
+  AND work.updated_at < clock_timestamp() - make_interval(hours => %s)
+  AND (%s::bigint[] IS NULL OR work.id = ANY(%s::bigint[]))
   AND NOT EXISTS (
       SELECT 1 FROM collector_observations AS o
-      WHERE o.collection_job_id = job.id AND (
+      WHERE o.id IN (work.profile_observation_id, work.battle_log_observation_id)
+        AND (
           NOT EXISTS (
               SELECT 1 FROM observation_processing_outcomes AS outcome
               WHERE outcome.observation_id = o.id AND outcome.outcome = 'processed'
@@ -93,23 +85,18 @@ WHERE job.status = 'complete'
                   )
               )
           )
-      )
+        )
   )
-ORDER BY job.updated_at, job.id
+ORDER BY work.updated_at, work.id
 LIMIT %s
-FOR UPDATE OF job SKIP LOCKED
+FOR UPDATE OF work SKIP LOCKED
 """
 
 
 _DISCOVERY_CANDIDATE = """
 SELECT target.id FROM {table} AS target
 JOIN collector_observations AS o ON o.id = target.{obs_column}
-JOIN collector_jobs AS job ON job.id = o.collection_job_id
-WHERE job.status = 'complete'
-  AND job.work_type IN ('regular_poll', 'initial_collection', 'global_player_rankings')
-  AND job.parent_attempt_id IS NULL
-  AND job.updated_at < clock_timestamp() - make_interval(hours => %s)
-  AND o.response_completed_at < (
+WHERE o.response_completed_at < (
       SELECT current_start FROM legend_season_anchors
       WHERE state = 'confirmed' AND anchor_rule_version = %s
   )
@@ -135,15 +122,12 @@ WHERE job.status = 'complete'
          OR baseline.battle_log_observation_id = o.id
   )
   AND NOT EXISTS (
-      SELECT 1 FROM collector_attempts AS attempt
-      JOIN collector_jobs AS child ON child.parent_attempt_id = attempt.id
-      WHERE attempt.job_id = job.id
-  )
-  AND NOT EXISTS (
-      SELECT 1 FROM collector_transport_failures WHERE collection_job_id = job.id
-  )
-  AND NOT EXISTS (
-      SELECT 1 FROM reset_baseline_evidence WHERE collection_job_id = job.id
+      SELECT 1 FROM collector_work AS work
+      WHERE o.id IN (work.profile_observation_id, work.battle_log_observation_id)
+        AND (
+            work.status IN ('pending', 'leased', 'waiting_retry')
+            OR work.updated_at >= clock_timestamp() - make_interval(hours => %s)
+        )
   )
   AND (%s::bigint[] IS NULL OR target.id = ANY(%s::bigint[]))
 ORDER BY target.id
@@ -190,8 +174,8 @@ def _prune_discovery_children(
                 for row in connection.execute(
                     query,
                     (
-                        hours,
                         SEASON_ANCHOR_RULE_VERSION,
+                        hours,
                         hours,
                         None,
                         None,
@@ -226,8 +210,8 @@ def _prune_discovery_children(
                     for row in connection.execute(
                         query,
                         (
-                            hours,
                             SEASON_ANCHOR_RULE_VERSION,
+                            hours,
                             hours,
                             candidates,
                             candidates,
@@ -266,6 +250,7 @@ def prune_completed_history(
     with connection.transaction():
         connection.execute("SET LOCAL lock_timeout = '1s'")
         connection.execute("SET LOCAL statement_timeout = '30s'")
+        observation_ids: list[int] = []
         candidates = [
             row[0]
             for row in connection.execute(
@@ -276,19 +261,33 @@ def prune_completed_history(
         if candidates:
             # Block new replay references, then fence existing processing jobs.
             # Recheck eligibility in a fresh READ COMMITTED statement after locks.
-            connection.execute(
-                """
-                SELECT id FROM collector_observations
-                WHERE collection_job_id = ANY(%s::bigint[]) ORDER BY id FOR UPDATE
+            observation_ids = [
+                int(row[0])
+                for row in connection.execute(
+                    """
+                SELECT observation.id
+                FROM collector_observations AS observation
+                JOIN collector_work AS work
+                  ON observation.id IN (
+                      work.profile_observation_id, work.battle_log_observation_id
+                  )
+                WHERE work.id = ANY(%s::bigint[])
+                ORDER BY observation.id
+                FOR UPDATE OF observation
                 """,
-                (candidates,),
-            ).fetchall()
+                    (candidates,),
+                ).fetchall()
+            ]
             connection.execute(
                 """
                 SELECT p.id FROM python_processing_jobs AS p
                 JOIN collector_observations AS o
                   ON o.id = COALESCE(p.observation_id, p.replay_observation_id)
-                WHERE o.collection_job_id = ANY(%s::bigint[])
+                JOIN collector_work AS work
+                  ON o.id IN (
+                      work.profile_observation_id, work.battle_log_observation_id
+                  )
+                WHERE work.id = ANY(%s::bigint[])
                 ORDER BY p.id FOR UPDATE OF p
                 """,
                 (candidates,),
@@ -302,8 +301,13 @@ def prune_completed_history(
             ]
         deleted = 0
         if apply and candidates:
+            if observation_ids:
+                connection.execute(
+                    "DELETE FROM collector_observations WHERE id = ANY(%s::bigint[])",
+                    (observation_ids,),
+                )
             deleted = connection.execute(
-                "DELETE FROM collector_jobs WHERE id = ANY(%s::bigint[])",
+                "DELETE FROM collector_work WHERE id = ANY(%s::bigint[])",
                 (candidates,),
             ).rowcount
     garbage = _prune_unused_content(connection, retention_hours, max_jobs, apply)
@@ -313,6 +317,8 @@ def prune_completed_history(
         "apply": apply,
         "retention_hours": retention_hours,
         "max_discoveries": max_discoveries,
+        # Keep the operator report keys stable while the stored admission
+        # identity moves from collector jobs to compact work rows.
         "eligible_collection_jobs": len(candidates),
         "deleted_collection_jobs": deleted,
     }

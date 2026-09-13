@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, store_observation, text
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
@@ -60,155 +61,78 @@ def _seed_reset_collection_identity(
     production_admission: bool = False,
 ) -> None:
     with psycopg.connect(connection_info) as connection:
-        player_id = connection.execute(
-            "SELECT id FROM players WHERE normalized_tag = %s", (normalized_tag,)
-        ).fetchone()[0]
-        baseline = connection.execute(
+        player_id = int(
+            connection.execute(
+                "SELECT id FROM players WHERE normalized_tag = %s",
+                (normalized_tag,),
+            ).fetchone()[0]
+        )
+        work = connection.execute(
             """
-            SELECT id, reset_sweep_id
-            FROM collector_reset_baseline_sweeps
-            WHERE player_id = %s AND boundary_at = %s
-            ORDER BY id DESC
+            SELECT work.id, work.sweep_id
+            FROM collector_work AS work
+            JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
+            WHERE work.kind = 'reset_baseline'
+              AND work.player_id = %s
+              AND sweep.boundary_at = %s
+            ORDER BY work.id DESC
             LIMIT 1
             """,
             (player_id, boundary),
         ).fetchone()
-        if baseline is None and production_admission:
-            raise RuntimeError("production reset admission did not create a baseline")
-        if baseline is None:
-            reset_sweep_id = connection.execute(
-                """
-                INSERT INTO collector_reset_sweeps (boundary_at)
-                VALUES (%s)
-                ON CONFLICT (boundary_at) DO UPDATE
-                    SET boundary_at = EXCLUDED.boundary_at
-                RETURNING id
-                """,
-                (boundary,),
-            ).fetchone()[0]
-            baseline_sweep_id = connection.execute(
-                """
-                INSERT INTO collector_reset_baseline_sweeps (
-                    reset_sweep_id, player_id, boundary_at, evidence_kind, state
-                ) VALUES (%s, %s, %s, 'paired_v2', 'pending')
-                RETURNING id
-                """,
-                (reset_sweep_id, player_id, boundary),
-            ).fetchone()[0]
-        else:
-            baseline_sweep_id, reset_sweep_id = int(baseline[0]), int(baseline[1])
-        if production_admission:
-            root = connection.execute(
-                """
-                SELECT id FROM collector_jobs
-                WHERE work_type = 'reset_baseline'
-                  AND sweep_id = %s
-                  AND reset_baseline_sweep_id = %s
-                  AND player_id = %s
-                  AND status = 'pending'
-                """,
-                (reset_sweep_id, baseline_sweep_id, player_id),
-            ).fetchall()
-            if len(root) != 1:
-                raise RuntimeError(
-                    "production reset admission did not create exactly one root"
-                )
-            root_job_id = root[0][0]
-        else:
-            connection.execute(
-                """
-                INSERT INTO collector_reset_sweep_members (sweep_id, player_id)
-                VALUES (%s, %s)
-                ON CONFLICT (sweep_id, player_id) DO NOTHING
-                """,
-                (reset_sweep_id, player_id),
+        if work is None and production_admission:
+            raise RuntimeError("production reset admission did not create compact work")
+        if work is None:
+            sweep_id = int(
+                connection.execute(
+                    """
+                    INSERT INTO collector_reset_sweeps (
+                        boundary_at, member_ids, membership_captured_at
+                    ) VALUES (%s, %s, clock_timestamp())
+                    ON CONFLICT (boundary_at) DO UPDATE
+                    SET member_ids = EXCLUDED.member_ids
+                    RETURNING id
+                    """,
+                    (boundary, [player_id]),
+                ).fetchone()[0]
             )
-            connection.execute(
-                """
-                INSERT INTO collector_boundary_admission (
-                    boundary_at, reset_sweep_id, regular_drain_complete,
-                    reset_drain_complete, safe_handoff, state
-                ) VALUES (%s, %s, true, true, true, 'safe_handoff')
-                ON CONFLICT (boundary_at) DO UPDATE
-                    SET reset_sweep_id = EXCLUDED.reset_sweep_id,
-                        safe_handoff = true, state = 'safe_handoff'
-                """,
-                (boundary, reset_sweep_id),
+            work_id = int(
+                connection.execute(
+                    """
+                    INSERT INTO collector_work (
+                        kind, lane, scope, player_id, normalized_tag, sweep_id,
+                        due_at, coalescing_key, status
+                    ) VALUES (
+                        'reset_baseline', 'reset', 'player', %s, %s, %s,
+                        %s, %s, 'pending'
+                    )
+                    RETURNING id
+                    """,
+                    (
+                        player_id,
+                        normalized_tag,
+                        sweep_id,
+                        boundary,
+                        f"reset-baseline-{key}",
+                    ),
+                ).fetchone()[0]
             )
-            root_job_id = connection.execute(
-                """
-                INSERT INTO collector_jobs (
-                    work_type, scope, player_id, normalized_tag, capacity_pool,
-                    priority, due_at, coalescing_key, sweep_id,
-                    reset_baseline_sweep_id, status
-                ) VALUES (
-                    'reset_baseline', 'player', %s, %s, 'normal', 400, %s,
-                    %s, %s, %s, 'complete'
-                )
-                RETURNING id
-                """,
-                (
-                    player_id,
-                    normalized_tag,
-                    boundary,
-                    f"reset-baseline-{key}",
-                    reset_sweep_id,
-                    baseline_sweep_id,
-                ),
-            ).fetchone()[0]
-        root_attempt_id = connection.execute(
-            """
-            INSERT INTO collector_attempts (
-                job_id, status, started_at, completed_at
-            ) VALUES (%s, 'complete', %s, %s)
-            RETURNING id
-            """,
-            (root_job_id, boundary, boundary),
-        ).fetchone()[0]
-        connection.execute(
-            """UPDATE collector_jobs
-               SET status = 'complete', result_attempt_id = %s,
-                   updated_at = clock_timestamp()
-               WHERE id = %s""",
-            (root_attempt_id, root_job_id),
-        )
+        else:
+            work_id = int(work[0])
         connection.execute(
             """
-            UPDATE collector_observations
-            SET collection_job_id = %s, attempt_id = %s
-            WHERE id IN (%s, %s)
+            UPDATE collector_work
+            SET profile_status = 'observed',
+                battle_log_status = 'observed',
+                profile_observation_id = %s,
+                battle_log_observation_id = %s,
+                status = 'complete',
+                completed_at = clock_timestamp(),
+                updated_at = clock_timestamp()
+            WHERE id = %s
             """,
-            (
-                root_job_id,
-                root_attempt_id,
-                profile_observation_id,
-                battle_observation_id,
-            ),
+            (profile_observation_id, battle_observation_id, work_id),
         )
-        for endpoint, observation_id in (
-            ("profile", profile_observation_id),
-            ("battle_log", battle_observation_id),
-        ):
-            source = connection.execute(
-                """
-                SELECT request_started_at, response_completed_at, http_status,
-                       response_hash, archive_reference
-                FROM collector_observations
-                WHERE id = %s
-                """,
-                (observation_id,),
-            ).fetchone()
-            connection.execute(
-                """
-                INSERT INTO collector_endpoint_results (
-                    attempt_id, endpoint, outcome, request_started_at,
-                    response_completed_at, http_status, response_hash,
-                    archive_reference, observation_id, request_count,
-                    key_label
-                ) VALUES (%s, %s, 'observed', %s, %s, %s, %s, %s, %s, 1, 'normal-a')
-                """,
-                (root_attempt_id, endpoint, *source, observation_id),
-            )
         connection.commit()
 
 
@@ -257,7 +181,7 @@ def _store_baseline_pair(
     return profile_observation, battle_observation, profile_job, battle_job
 
 
-def test_production_admission_fixture_requires_existing_collector_root(
+def test_production_admission_fixture_requires_existing_reset_work(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -272,14 +196,57 @@ def test_production_admission_fixture_requires_existing_collector_root(
                 production_admission=True,
             )
         except RuntimeError as error:
-            assert str(error) == "production reset admission did not create a baseline"
+            assert str(error) == "production reset admission did not create compact work"
         else:
-            raise AssertionError("production fixture accepted an absent collector root")
+            raise AssertionError("production fixture accepted absent reset work")
         with psycopg.connect(connection_info) as connection:
-            admission_count = connection.execute(
-                "SELECT count(*) FROM collector_boundary_admission"
+            work_count = connection.execute(
+                "SELECT count(*) FROM collector_work WHERE kind = 'reset_baseline'"
             ).fetchone()[0]
-        assert admission_count == 0
+        assert work_count == 0
+
+
+def test_reset_evidence_rejects_a_different_work_identity(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        profile_id, battle_id, _profile_job, _battle_job = _store_baseline_pair(
+            connection_info,
+            archive_server,
+            key="identity-guard",
+            boundary=DAY_END,
+            trophies=6040,
+            empty_battle_log=True,
+        )
+        with psycopg.connect(connection_info) as connection:
+            work_id, sweep_id = connection.execute(
+                """SELECT id, sweep_id FROM collector_work
+                   WHERE profile_observation_id = %s""",
+                (profile_id,),
+            ).fetchone()
+            other_player = connection.execute(
+                """INSERT INTO players (normalized_tag, active)
+                   VALUES ('#8QV', false) RETURNING id"""
+            ).fetchone()[0]
+            with pytest.raises(Exception, match="identity does not match"):
+                connection.execute(
+                    """
+                    INSERT INTO reset_baseline_evidence (
+                        sweep_id, player_id, boundary_at, collector_work_id,
+                        profile_observation_id, battle_log_observation_id,
+                        evidence_key
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        sweep_id,
+                        other_player,
+                        DAY_END,
+                        work_id,
+                        profile_id,
+                        battle_id,
+                        "f" * 64,
+                    ),
+                )
 
 
 def test_durable_reconciliation_versions_late_corrections_without_rewriting_history(

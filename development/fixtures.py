@@ -8,10 +8,14 @@ import hashlib
 import json
 import os
 import tempfile
+import threading
 from datetime import UTC, datetime, timedelta
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import pairwise
 from pathlib import Path
+from statistics import median
+from time import monotonic
 from typing import ClassVar
 from urllib.parse import unquote, urlsplit
 
@@ -133,6 +137,54 @@ class QuietHandler(BaseHTTPRequestHandler):
 class ClashHandler(QuietHandler):
     population: tuple[str, ...] = ()
     tag_indexes: ClassVar[dict[str, int]] = {}
+    trial_generation: ClassVar[int] = 0
+    trial_requests: ClassVar[dict[tuple[str, str], list[float]]] = {}
+    trial_lock: ClassVar[threading.Lock] = threading.Lock()
+    trial_started_at: ClassVar[float] = 0.0
+
+    @classmethod
+    def reset_trial_requests(cls) -> None:
+        with cls.trial_lock:
+            cls.trial_requests = {}
+            cls.trial_generation += 1
+            cls.trial_started_at = monotonic()
+
+    @classmethod
+    def record_trial_request(cls, endpoint: str, tag: str) -> None:
+        with cls.trial_lock:
+            history = cls.trial_requests.setdefault((endpoint, tag), [])
+            history.append(monotonic())
+            del history[:-32]
+
+    @classmethod
+    def trial_summary(cls) -> dict[str, object]:
+        summary: dict[str, object] = {"players": len(cls.population)}
+        with cls.trial_lock:
+            snapshot = {
+                key: tuple(history) for key, history in cls.trial_requests.items()
+            }
+            started_at = cls.trial_started_at
+        measured_at = monotonic()
+        for endpoint in ("profile", "battle_log"):
+            histories = [
+                history
+                for (seen_endpoint, _tag), history in snapshot.items()
+                if seen_endpoint == endpoint
+            ]
+            gaps = [history[0] - started_at for history in histories]
+            gaps.extend(
+                later - earlier
+                for history in histories
+                for earlier, later in pairwise(history)
+            )
+            gaps.extend(measured_at - history[-1] for history in histories)
+            summary[endpoint] = {
+                "requests": sum(map(len, histories)),
+                "revisited_players": sum(len(history) > 1 for history in histories),
+                "median_gap_seconds": median(gaps) if gaps else 0,
+                "worst_gap_seconds": max(gaps, default=0),
+            }
+        return summary
 
     def do_GET(self) -> None:
         path = unquote(urlsplit(self.path).path)
@@ -141,6 +193,9 @@ class ClashHandler(QuietHandler):
             return
         if self.headers.get("Authorization", "").startswith("Bearer ") is False:
             self.send_json(401, {"reason": "accessDenied"})
+            return
+        if path == "/_trial/stats":
+            self.send_json(200, type(self).trial_summary())
             return
         if path == "/v1/locations/global/rankings/players":
             self.send_json(200, ranking_payload(self.population))
@@ -156,14 +211,26 @@ class ClashHandler(QuietHandler):
         if index is None:
             self.send_json(404, {"reason": "notFound"})
         elif battle_log:
-            self.send_json(200, battle_log_payload(tag.upper(), index, self.population))
+            type(self).record_trial_request("battle_log", tag.upper())
+            payload = battle_log_payload(tag.upper(), index, self.population)
+            if type(self).trial_generation:
+                payload["_trialGeneration"] = type(self).trial_generation
+            self.send_json(200, payload)
         else:
-            self.send_json(200, profile_payload(tag.upper(), index))
+            type(self).record_trial_request("profile", tag.upper())
+            payload = profile_payload(tag.upper(), index)
+            if type(self).trial_generation:
+                payload["_trialGeneration"] = type(self).trial_generation
+            self.send_json(200, payload)
 
     def do_POST(self) -> None:
         path = unquote(urlsplit(self.path).path)
         if self.headers.get("Authorization", "").startswith("Bearer ") is False:
             self.send_json(401, {"reason": "accessDenied"})
+            return
+        if path == "/_trial/reset":
+            type(self).reset_trial_requests()
+            self.send_json(200, {"ok": True, "generation": type(self).trial_generation})
             return
         prefix = "/v1/players/"
         suffix = "/verifytoken"

@@ -1,11 +1,12 @@
 # Clash Lens Python application
 
-This package owns domain processing, canonical battles, ranked days,
-snapshots, analytics, replay, accounts, and the private signed API. The Go
-collector owns official API collection and the immutable raw archive. Runtime
-boundaries are in [`docs/architecture.md`](../docs/architecture.md); stable
-domain rules are in [`docs/domain.md`](../docs/domain.md); production Podman
-operations are in [`docs/deployment.md`](../docs/deployment.md).
+This package owns the single Python asyncio collector, official API collection,
+the bounded raw-response spool, the immutable raw archive, domain processing,
+canonical battles, ranked days, snapshots, analytics, replay, accounts, and the
+private signed API. Runtime boundaries are in
+[`docs/architecture.md`](../docs/architecture.md); stable domain rules are in
+[`docs/domain.md`](../docs/domain.md); production Podman operations are in
+[`docs/deployment.md`](../docs/deployment.md).
 
 ## Layout
 
@@ -15,7 +16,7 @@ operations are in [`docs/deployment.md`](../docs/deployment.md).
 - `testdata/` — synthetic fixtures only; no credentials or live player bodies.
 
 The production schema is owned by `deploy/migrations/0001_collector.sql`
-through `0021_season_detail_retirement.sql`.
+through `0026_python_collector_storage.sql`.
 See [history retention](../docs/history-retention.md) for compact storage,
 operator-only cleanup, and the limits on replay after expiry. Application startup does not create or
 alter tables; tests apply these migrations directly.
@@ -37,12 +38,9 @@ UV_PROJECT_ENVIRONMENT=/tmp/clashlens-python-venv \
 UV_LINK_MODE=copy uv run --locked --python 3.12 pytest -q
 ```
 
-The Go-to-Python handoff can be checked from the repository root:
-
-```sh
-go test ./internal/collector -run '^TestGoCollectorHandoffToPythonSignedPlayerPage$' \
-  -count=1 -v -timeout=120s
-```
+The collector and worker share the bounded local spool. The collector saves the
+exact raw response and durable observation metadata before the worker parses it;
+restarts can recover incomplete handoffs without calling the official API.
 
 `uv.lock` and `pyproject.toml` define the Python and dependency constraints.
 Record unavailable prerequisites when an integration test skips.

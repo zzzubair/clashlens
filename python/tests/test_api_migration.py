@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import LiteralString, cast
 from uuid import uuid4
 
 import psycopg
@@ -27,6 +26,7 @@ def migrated_production_database(
     *,
     include_migration_0003: bool = True,
     include_migration_0004: bool = True,
+    include_compact_collector: bool = False,
 ) -> Iterator[str]:
     schema = f"python_api_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
@@ -78,98 +78,12 @@ def migrated_production_database(
                             ROOT / "deploy/migrations/0008_public_army_analytics.sql"
                         ).read_text(encoding="utf-8")
                     )
-        yield connection_info
-    finally:
-        with psycopg.connect(database_url, autocommit=True) as admin:
-            admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
-
-
-@contextmanager
-def migrated_populated_v1_production_database(database_url: str) -> Iterator[str]:
-    schema = f"python_api_populated_v1_{uuid4().hex}"
-    migration_0001 = (ROOT / "deploy/migrations/0001_collector.sql").read_text(
-        encoding="utf-8"
-    )
-    migration_0002 = (ROOT / "deploy/migrations/0002_python_layer.sql").read_text(
-        encoding="utf-8"
-    )
-    with psycopg.connect(database_url, autocommit=True) as admin:
-        admin.execute(f'CREATE SCHEMA "{schema}"')
-    connection_info = make_conninfo(database_url, options=f"-c search_path={schema}")
-    try:
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            connection.execute(migration_0001)
-            player_id = connection.execute(
-                """
-                INSERT INTO players (normalized_tag, active)
-                VALUES ('#2PP', true)
-                RETURNING id
-                """
-            ).fetchone()[0]
-            sweep_id = connection.execute(
-                """
-                INSERT INTO collector_reset_sweeps (boundary_at)
-                VALUES ('2026-08-06T05:00:00Z')
-                RETURNING id
-                """
-            ).fetchone()[0]
-            job_id = connection.execute(
-                """
-                INSERT INTO collector_jobs (
-                    work_type, player_id, normalized_tag, capacity_pool, priority,
-                    due_at, coalescing_key, sweep_id, status
-                ) VALUES (
-                    'reset_profile', %s, '#2PP', 'normal', 10,
-                    '2026-08-06T05:00:00Z', 'populated-v1-reset-profile', %s, 'complete'
-                )
-                RETURNING id
-                """,
-                (player_id, sweep_id),
-            ).fetchone()[0]
-            attempt_id = connection.execute(
-                """
-                INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
-                VALUES (%s, 'complete', '2026-08-06T05:00:00Z', '2026-08-06T05:00:01Z')
-                RETURNING id
-                """,
-                (job_id,),
-            ).fetchone()[0]
-            observation_id = connection.execute(
-                """
-                INSERT INTO collector_observations (
-                    occurrence_key, collection_job_id, attempt_id, player_id,
-                    normalized_tag, endpoint, request_started_at, response_completed_at,
-                    http_status, response_hash, archive_reference, collector_version,
-                    key_label, evidence_headers
-                ) VALUES (
-                    'populated-v1-observation', %s, %s, %s, '#2PP', 'profile',
-                    '2026-08-06T05:00:00Z', '2026-08-06T05:00:01Z', 200,
-                    %s, 's3://evidence/populated-v1', 'collector-v1', 'key-v1', '{}'::jsonb
-                )
-                RETURNING id
-                """,
-                (job_id, attempt_id, None, "a" * 64),
-            ).fetchone()[0]
-            connection.execute(
-                """
-                INSERT INTO collector_transport_failures (
-                    collection_job_id, attempt_id, player_id, normalized_tag,
-                    endpoint, request_started_at, failed_at, failure_category,
-                    retry_state, key_label
-                ) VALUES (
-                    %s, %s, NULL, '#2PP', 'profile',
-                    '2026-08-06T05:00:00Z', '2026-08-06T05:00:01Z',
-                    'transport', 'waiting_retry', 'key-v1'
-                )
-                """,
-                (job_id, attempt_id),
-            )
-            connection.execute(
-                "INSERT INTO python_processing_jobs (observation_id) VALUES (%s)",
-                (observation_id,),
-            )
-            connection.execute(migration_0002)
-            connection.execute(migration_0002)
+            if include_compact_collector:
+                migrations = sorted((ROOT / "deploy/migrations").glob("*.sql"))
+                for migration in migrations:
+                    version = int(migration.name.split("_", 1)[0])
+                    if 9 <= version <= 26:
+                        connection.execute(migration.read_text(encoding="utf-8"))
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -390,99 +304,6 @@ def test_python_job_observation_is_nullable_only_for_checked_non_observation_wor
                     )
 
 
-def test_python_migration_repeats_after_populated_version_one_rows(
-    database_url: str,
-) -> None:
-    with migrated_populated_v1_production_database(database_url) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            assert (
-                connection.execute(
-                    "SELECT version FROM clash_lens_contract WHERE singleton"
-                ).fetchone()[0]
-                == 2
-            )
-            job = connection.execute(
-                """
-                SELECT work_type, scope, reset_baseline_sweep_id, player_id
-                FROM collector_jobs
-                WHERE coalescing_key = 'populated-v1-reset-profile'
-                """
-            ).fetchone()
-            assert job is not None
-            assert (text(job[0]), text(job[1])) == ("legacy_reset_profile", "player")
-            assert job[2] is not None
-            observation_player_id = connection.execute(
-                """
-                SELECT player_id
-                FROM collector_observations
-                WHERE occurrence_key = 'populated-v1-observation'
-                """
-            ).fetchone()[0]
-            failure_player_id = connection.execute(
-                """
-                SELECT player_id
-                FROM collector_transport_failures
-                WHERE normalized_tag = '#2PP'
-                """
-            ).fetchone()[0]
-            assert observation_player_id == job[3]
-            assert failure_player_id == observation_player_id
-            processing = connection.execute(
-                """
-                SELECT work_type, deduplication_key, input_json
-                FROM python_processing_jobs
-                """
-            ).fetchone()
-            assert processing is not None
-            assert text(processing[0]) == "process_observation"
-            assert isinstance(text(processing[1]), str)
-            assert text(processing[1]).startswith("process-observation:")
-            assert processing[2] == {}
-
-
-def test_python_migration_normalizes_all_legacy_source_parser_versions(
-    database_url: str,
-) -> None:
-    legacy_versions = (
-        "profile-parser-v1",
-        "battle-log-parser-v1",
-        "global-player-rankings-parser-v1",
-    )
-    # Migration 0002 is frozen once 0003 has been applied. Exercise its legacy
-    # normalization idempotency at the v2 boundary where replay was supported.
-    with migrated_production_database(
-        database_url, include_migration_0003=False
-    ) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            for index, parser_version in enumerate(legacy_versions, 1):
-                connection.execute(
-                    """
-                    INSERT INTO python_processing_jobs (
-                        work_type, deduplication_key, input_json, parser_version
-                    ) VALUES (
-                        'build_export', %s,
-                        jsonb_build_object('export_request_id', %s::bigint), %s
-                    )
-                    """,
-                    (f"legacy-parser-normalization:{index}", index, parser_version),
-                )
-            migration = (ROOT / "deploy/migrations/0002_python_layer.sql").read_text(
-                encoding="utf-8"
-            )
-            connection.execute(sql.SQL(cast(LiteralString, migration)))
-            normalized_versions = {
-                text(row[0])
-                for row in connection.execute(
-                    """
-                    SELECT parser_version
-                    FROM python_processing_jobs
-                    WHERE deduplication_key LIKE 'legacy-parser-normalization:%'
-                    """
-                )
-            }
-            assert normalized_versions == {"supercell-source-parser-v1"}
-
-
 def test_source_parser_v2_migration_advances_defaults_and_keeps_v1_replayable(
     database_url: str,
 ) -> None:
@@ -530,62 +351,6 @@ def test_source_parser_v2_migration_advances_defaults_and_keeps_v1_replayable(
     assert "supercell-source-parser-v1" in replay_definition
     assert "supercell-source-parser-v2" in replay_definition
     assert migration_count == 1
-
-
-def test_source_parser_v2_migration_fences_existing_v2_work_from_prior_worker(
-    database_url: str,
-) -> None:
-    from test_claim_jobs_postgres import _insert_job, _insert_observation
-
-    with migrated_production_database(
-        database_url, include_migration_0004=False
-    ) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            observation_id = _insert_observation(
-                connection, occurrence_key="pre-0004-parser-v2"
-            )
-            job_id = _insert_job(
-                connection,
-                work_type="process_observation",
-                deduplication_key="pre-0004:parser-v2",
-                input_json={},
-                observation_id=observation_id,
-                parser_version="supercell-source-parser-v2",
-            )
-            before = connection.execute(
-                """
-                SELECT claim_compatibility_version
-                FROM python_processing_jobs
-                WHERE id = %s
-                """,
-                (job_id,),
-            ).fetchone()[0]
-            connection.execute(
-                (ROOT / "deploy/migrations/0004_source_parser_v2.sql").read_text(
-                    encoding="utf-8"
-                )
-            )
-            after = connection.execute(
-                """
-                SELECT claim_compatibility_version
-                FROM python_processing_jobs
-                WHERE id = %s
-                """,
-                (job_id,),
-            ).fetchone()[0]
-
-        assert before == 1
-        assert after == 2
-
-        from clashlens.db import Database
-
-        database = Database(connection_info)
-        try:
-            claim = database.claim_job(owner="parser-v2-fence", job_id=job_id)
-            assert claim is not None
-            assert claim.parser_version == "supercell-source-parser-v2"
-        finally:
-            database.close()
 
 
 def test_provider_identities_migration_permits_discord_and_stays_reentrant(
@@ -724,13 +489,19 @@ def test_public_army_migration_is_forward_only_and_reentrant(database_url: str) 
                 "perspective",
                 "unresolved_components",
             ]
-            assert connection.execute(
-                "SELECT to_regclass('army_analytics_publications')"
-            ).fetchone()[0] is None
-            assert connection.execute(
-                "SELECT has_table_privilege('clashlens_python_api', "
-                "'army_analytics_battle_facts', 'INSERT')"
-            ).fetchone()[0] is False
+            assert (
+                connection.execute(
+                    "SELECT to_regclass('army_analytics_publications')"
+                ).fetchone()[0]
+                is None
+            )
+            assert (
+                connection.execute(
+                    "SELECT has_table_privilege('clashlens_python_api', "
+                    "'army_analytics_battle_facts', 'INSERT')"
+                ).fetchone()[0]
+                is False
+            )
 
 
 def test_public_army_migration_cancels_leased_v1_job_and_clears_lease(

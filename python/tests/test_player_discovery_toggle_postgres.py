@@ -45,7 +45,7 @@ def test_player_discovery_enabled_by_default_enqueues_outside_profiles(
             assert processor.process_once(owner="toggle-ranking") is not None
             with database.pool.connection() as connection:
                 jobs = connection.execute(
-                    "SELECT count(*) FROM collector_jobs WHERE work_type = 'discovery_profile'"
+                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
                 ).fetchone()[0]
                 entries = connection.execute(
                     "SELECT count(DISTINCT player_id) FROM official_top200_entries"
@@ -73,7 +73,7 @@ def test_player_discovery_disabled_retains_evidence_without_enqueue(
             assert processor.process_once(owner="toggle-ranking") is not None
             with database.pool.connection() as connection:
                 jobs = connection.execute(
-                    "SELECT count(*) FROM collector_jobs WHERE work_type = 'discovery_profile'"
+                    "SELECT count(*) FROM collector_work WHERE kind = 'discovery_profile'"
                 ).fetchone()[0]
                 discoveries = connection.execute(
                     "SELECT count(*) FROM known_player_discoveries"

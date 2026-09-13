@@ -65,7 +65,9 @@ def _signed_request_headers(
 def test_serve_app_uses_api_database_and_wires_official_verification(
     database_url: str, tmp_path: Path
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         secret_file = tmp_path / "hmac.key"
         secret_file.write_text(
             base64.urlsafe_b64encode(bytes(range(32))).rstrip(b"=").decode("ascii")
@@ -177,7 +179,9 @@ def test_serve_app_uses_api_database_and_wires_official_verification(
 def test_serve_app_closes_database_pool_when_startup_fails_after_registration(
     database_url: str, tmp_path: Path, monkeypatch, capsys
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         secret_file = tmp_path / "hmac.key"
         secret_file.write_text(
             base64.urlsafe_b64encode(bytes(range(32))).rstrip(b"=").decode("ascii")

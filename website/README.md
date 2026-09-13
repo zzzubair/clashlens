@@ -61,5 +61,5 @@ Build the separate website image with:
 podman build --file Containerfile --tag clashlens-website:prototype .
 ```
 
-The root repository `Containerfile` builds the Go collector; this
+The root repository `Containerfile` builds the Python asyncio collector; this
 `website/Containerfile` builds the Node application.

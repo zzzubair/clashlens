@@ -132,6 +132,7 @@ def test_last_seen_archive_retirement_fences_replay_and_unknown_delete(
 class _S3Handler(BaseHTTPRequestHandler):
     objects: ClassVar[dict[str, bytes]] = {}
     get_count = 0
+    put_count = 0
 
     def log_message(self, *_args: object) -> None:
         return
@@ -150,6 +151,20 @@ class _S3Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_PUT(self) -> None:
+        key = self.path.split("?", 1)[0].removeprefix("/evidence/")
+        if key in self.objects:
+            self.send_response(412)
+            self.end_headers()
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        type(self).put_count += 1
+        self.objects[key] = body
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
 
 @pytest.fixture()
 def archive_server():
@@ -157,7 +172,9 @@ def archive_server():
     digest = hashlib.sha256(body).hexdigest()
     key = f"sha256/{digest[:2]}/{digest}"
     handler = type(
-        "FixtureS3Handler", (_S3Handler,), {"objects": {key: body}, "get_count": 0}
+        "FixtureS3Handler",
+        (_S3Handler,),
+        {"objects": {key: body}, "get_count": 0, "put_count": 0},
     )
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -212,6 +229,29 @@ def test_s3_archive_reader_fetches_bytes_and_checks_sha256_before_json_parse(
     assert handler.get_count == 1
     assert len(pool_acquire_durations) == 1
     assert pool_acquire_durations[0] >= 0
+
+
+def test_archive_write_is_immutable_and_accepts_an_identical_conflict(
+    archive_server,
+) -> None:
+    endpoint, _reference, _digest, handler = archive_server
+    reader = S3ArchiveReader(
+        endpoint=endpoint,
+        bucket="evidence",
+        access_key="test",
+        secret_key="test",
+        secure=False,
+        allow_insecure_test_origin=True,
+    )
+    body = b"new raw response"
+    digest = hashlib.sha256(body).hexdigest()
+
+    first = reader.write_immutable(body, digest)
+    second = reader.write_immutable(body, digest)
+
+    assert first == second == f"s3://evidence/sha256/{digest[:2]}/{digest}"
+    assert handler.put_count == 1
+    assert handler.get_count == 1
 
 
 def test_s3_archive_reader_classifies_tampered_bytes(archive_server) -> None:

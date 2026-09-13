@@ -1,10 +1,9 @@
 # Fedora deployment
 
-This is the operator runbook for the rootless Podman deployment: the Go
-collector, PostgreSQL, the private Python API and workers, and the website on
-one Fedora host. It describes commands that exist in `deploy.sh`; it is not a
-product roadmap. Current release work is tracked in
-[Issue 31](https://github.com/zzzubair/clashlens/issues/31).
+This is the legacy `deploy.sh` runbook. That script cannot deploy the
+Python-only collector introduced in step 4 of
+[Issue 110](https://github.com/zzzubair/clashlens/issues/110); step 6 will
+replace both the script and this runbook. Use `./dev` for the local stack.
 
 The deployment uses direct rootless Podman commands, not Compose. Runtime
 boundaries and data ownership are documented in
@@ -76,18 +75,6 @@ every worker replica then starts with `--disable-player-discovery`, so
 ranking and battle evidence is retained without enqueueing `discovery_profile`
 work for outside players. Global Top-200 collection stays enabled.
 
-`CLASHLENS_ENDPOINT_BUDGET_ENABLED` defaults to `false`. Enable it only for
-a fixed-population bootstrap run, with `CLASHLENS_ENDPOINT_BUDGET_RUN_ID`,
-per-endpoint caps (`CLASHLENS_ENDPOINT_BUDGET_PROFILE`,
-`CLASHLENS_ENDPOINT_BUDGET_GLOBAL_RANKINGS`,
-`CLASHLENS_ENDPOINT_BUDGET_BATTLE_LOG`), and an RFC 3339
-`CLASHLENS_ENDPOINT_BUDGET_DEADLINE_AT`. While enabled, every official
-dispatch reserves one durable budget unit before the request, reservations
-survive restarts and are never refunded, and official redirects are refused.
-The enabled flag, the three caps, and the exact run identity and deadline
-identify the durable budget row the executing collector consumes. The exact
-official proxy URL is retained alongside them as the collector's egress route.
-
 Admit a protected manifest with the Python worker role (validates the whole
 manifest before the first write; replays idempotently under one run-id):
 
@@ -101,24 +88,8 @@ python -m clashlens.cli bootstrap-population \
   --result-file /path/to/result.json
 ```
 
-Enqueue the single aligned Global Top-200 cycle with the collector role:
-
-```bash
-collector enqueue-global-rankings --cycle-at 2026-09-08T05:00:00Z
-```
-
-`CLASHLENS_REGULAR_ADMISSION_EVIDENCE_RUN_ID/_START/_END/_MAX_EVENTS/_MAX_SELECTED_ENTRIES`
-are all-or-none. Leave all five unset for production (evidence disabled,
-scheduler SQL unchanged). When set, they pin one bounded run: UTC capture
-interval at most 30 hours, at most 108000 events and 5000000 selected
-entries. At collector startup, those five values create the run header or
-must exactly match the existing header for that run ID.
-The scheduler writes one evidence row per invocation inside an explicit
-transaction (advisory lock, locked header, fresh snapshot), commits the
-durable stop before returning `admission_evidence_capacity_exceeded` or
-`admission_evidence_capture_out_of_range`, and records nullable observed
-profile state without changing active-only selection. Scheduler defaults
-stay one second, batch 1000, five-minute cycle.
+The single Python asyncio collector schedules the aligned Global Top-200 cycle
+when rankings are enabled; no separate collector command is required.
 
 ### Fixed-egress proxy
 
@@ -147,11 +118,11 @@ volume, never as an upgrade of existing data.
 
 The collector contract version is separate from the schema migration number.
 The production contract is version 5. The current forward-migration set is
-0001 through 0023. Migration 0022 adds the optional bounded regular-admission
-evidence pair (run header plus per-invocation rows, at most 108000 events and
-5000000 selected entries, no automatic deletion, contract stays 5). Migration
-0023 adds the population-bootstrap run record and the durable run-scoped
-endpoint budget ledger (contract stays 5). Migrations 0016–0021 add [compact history and operator-only
+0001 through 0026. Migration 0023 adds the population-bootstrap run record;
+0024 adds observer evidence reads, 0025 installs the profile parser v3 replay
+contract, and 0026 adds compact Python collector storage and removes the old
+capacity-trial budget and admission-evidence ledgers while keeping contract
+version 5. Migrations 0016–0021 add [compact history and operator-only
 retention](history-retention.md); they do not delete existing evidence.
 Migrations 0009 through 0015 add the raw-evidence,
 boundary-publication, parsed-content deduplication, bounded backfill,
@@ -169,10 +140,10 @@ curl --fail http://127.0.0.1:8081/readyz
 
 - `init` starts PostgreSQL and applies migration 0001 only to an absent
   database. It refuses an initialized database.
-- `up` builds the collector image, advances the database through all missing
-  migrations (0001–0022 on a fresh database), configures runtime role
+- `up` builds the Python collector image, advances the database through all
+  missing migrations (0001–0026 on a fresh database), configures runtime role
   passwords, and stages the required collector with Global Top-200 disabled.
-  A contract-v1 upgrade uses the bridge collector while migrations 0002–0022
+  A contract-v1 upgrade uses the bridge collector while migrations 0002–0026
   are applied, then replaces it with the disabled required collector.
 - `build-collector`, `build-python`, and `build-website` build images only.
 - `restart` is the start-only recovery path for a contract-v5 stack. It does
@@ -236,7 +207,7 @@ container or make an official API request:
 `candidate-prepare` refuses default or existing candidate resources and any
 configured application-container name that already exists, starts only the
 configured PostgreSQL container, and verifies every migration from 0001 through
-0022. Candidate resources carry the fixed
+0026. Candidate resources carry the fixed
 `org.clashlens.scope=candidate` label; the preparation path verifies those
 labels and exact names after creation before applying migrations. Scope/label
 overrides in `app.env` are rejected before resource mutation. Never aim it at
