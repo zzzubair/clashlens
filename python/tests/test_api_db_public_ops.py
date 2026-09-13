@@ -36,50 +36,52 @@ def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
             """,
             (tag,),
         ).fetchone()[0]
-        job_id = connection.execute(
+        work_id = connection.execute(
             """
-            INSERT INTO collector_jobs (
-                work_type, player_id, normalized_tag, scope, capacity_pool, priority, due_at,
-                coalescing_key, status, required_endpoint
+            INSERT INTO collector_work (
+                kind, lane, scope, player_id, normalized_tag, due_at,
+                coalescing_key, status, profile_status, battle_log_status
             ) VALUES (
-                'initial_collection', %s, %s, 'player', 'interactive', 300, %s,
-                %s, 'complete', 'profile'
+                'initial_collection', 'interactive', 'player', %s, %s, %s,
+                %s, 'pending', 'pending', 'pending'
             ) RETURNING id
             """,
             (player_id, tag, NOW, f"seed:{tag}"),
         ).fetchone()[0]
-        attempt_id = connection.execute(
-            """
-            INSERT INTO collector_attempts (job_id, status, started_at, completed_at)
-            VALUES (%s, 'complete', %s, %s)
-            RETURNING id
-            """,
-            (job_id, NOW, NOW),
-        ).fetchone()[0]
         observation_id = connection.execute(
             """
             INSERT INTO collector_observations (
-                occurrence_key, collection_job_id, attempt_id, player_id,
-                normalized_tag, endpoint, request_started_at, response_completed_at,
-                http_status, response_hash, archive_reference, collector_version,
-                key_label, evidence_headers
+                occurrence_key, scope, player_id, normalized_tag, endpoint,
+                request_started_at, response_completed_at, http_status,
+                response_hash, collector_version, key_label, evidence_headers,
+                request_method, request_path, request_query,
+                paging_envelope_state, source_adapter_version
             ) VALUES (
-                %s, %s, %s, %s, %s, 'profile', %s, %s, 200,
-                %s, %s, 'test', 'normal-test', '{}'::jsonb
+                %s, 'player', %s, %s, 'profile', %s, %s, 200,
+                %s, 'test', 'normal-test', '{}'::jsonb,
+                'GET', %s, '', 'not_applicable', 'supercell-profile-parser-v3'
             ) RETURNING id
             """,
             (
                 f"seed:{tag}:profile",
-                job_id,
-                attempt_id,
                 player_id,
                 tag,
                 NOW,
                 NOW,
                 "a" * 64,
-                f"s3://fixture/{tag.removeprefix('#')}",
+                f"/v1/players/%23{tag.removeprefix('#')}",
             ),
         ).fetchone()[0]
+        connection.execute(
+            """
+            UPDATE collector_work
+            SET status = 'complete', profile_status = 'observed',
+                battle_log_status = 'observed', profile_observation_id = %s,
+                completed_at = %s, updated_at = %s
+            WHERE id = %s
+            """,
+            (observation_id, NOW, NOW, work_id),
+        )
         profile_id = connection.execute(
             """
             INSERT INTO player_profile_versions (
@@ -121,7 +123,9 @@ def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
 def test_public_saved_operations_are_bounded_and_screen_ready(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             seed_profile(database, "#2PP", 6000)
@@ -185,7 +189,9 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
 def test_known_player_name_search_uses_current_profiles_and_escapes_wildcards(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             seed_profile(database, "#8PY", 6100)
@@ -225,7 +231,9 @@ def test_known_player_name_search_uses_current_profiles_and_escapes_wildcards(
 def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             seed_profile(database, "#2PP", 6000)
@@ -395,7 +403,9 @@ def test_screen_events_are_ordered_signed_normalized_and_malformed_safe() -> Non
 def test_player_screen_ready_limits_season_days_to_current_official_season(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             seed_profile(database, "#2PP", 6000)
@@ -515,10 +525,12 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
             database.close()
 
 
-def test_concurrent_refreshes_share_one_collector_job_and_public_refresh_identity(
+def test_concurrent_refreshes_share_one_collector_work_and_public_refresh_identity(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info, max_size=12)
         try:
 
@@ -530,7 +542,7 @@ def test_concurrent_refreshes_share_one_collector_job_and_public_refresh_identit
                         "#2PP",
                     ),
                     normalized_tag="#2PP",
-                    cooldown_seconds=300,
+                    cooldown_seconds=30,
                 )
 
             with ThreadPoolExecutor(max_workers=10) as executor:
@@ -538,14 +550,8 @@ def test_concurrent_refreshes_share_one_collector_job_and_public_refresh_identit
 
             refresh_ids = {result.payload["refresh_id"] for result in results}
             assert len(refresh_ids) == 1
-            assert database.scalar("SELECT count(*) FROM collector_jobs") == 1
+            assert database.scalar("SELECT count(*) FROM collector_work") == 1
             assert database.scalar("SELECT count(*) FROM api_refresh_requests") == 1
-            assert (
-                database.scalar(
-                    "SELECT count(*) FROM collector_interactive_intent_events"
-                )
-                == 10
-            )
             status = database.get_refresh_status(next(iter(refresh_ids)))
             assert status == {
                 "refresh_id": next(iter(refresh_ids)),
@@ -562,10 +568,15 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
 ) -> None:
     alphabet = "0289PYLQGRJCUV"
     tags = [
-        "#" + alphabet[(index // 196) % 14] + alphabet[(index // 14) % 14] + alphabet[index % 14]
+        "#"
+        + alphabet[(index // 196) % 14]
+        + alphabet[(index // 14) % 14]
+        + alphabet[index % 14]
         for index in range(101)
     ]
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         try:
             for tag in tags:
@@ -596,17 +607,31 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
                 limit=100, offset=100, now=NOW, freshness_seconds=900
             )
             assert first is not None and second is not None
-            assert [entry["position"] for entry in first["entries"]] == list(range(1, 101))
+            assert [entry["position"] for entry in first["entries"]] == list(
+                range(1, 101)
+            )
             assert [entry["position"] for entry in second["entries"]] == [101]
-            assert len({entry["tag"] for entry in first["entries"] + second["entries"]}) == 101
+            assert (
+                len({entry["tag"] for entry in first["entries"] + second["entries"]})
+                == 101
+            )
             assert first["total_entries"] == second["total_entries"] == 101
             assert first["page_count"] == second["page_count"] == 2
             assert first["has_next"] is True and second["has_previous"] is True
             assert first["provenance"]["freshness"] == "stale"
             assert first["source_observations"]["stale_count"] == 1
-            assert first["source_observations"]["oldest_observed_at"] == "2026-08-06T11:44:59.500000+00:00"
-            assert first["source_observations"]["newest_observed_at"] == "2026-08-06T12:00:00+00:00"
-            assert first["provenance"]["observed_at"] == first["source_observations"]["newest_observed_at"]
+            assert (
+                first["source_observations"]["oldest_observed_at"]
+                == "2026-08-06T11:44:59.500000+00:00"
+            )
+            assert (
+                first["source_observations"]["newest_observed_at"]
+                == "2026-08-06T12:00:00+00:00"
+            )
+            assert (
+                first["provenance"]["observed_at"]
+                == first["source_observations"]["newest_observed_at"]
+            )
             stale_entry = next(
                 entry
                 for entry in first["entries"] + second["entries"]
@@ -614,8 +639,11 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
             )
             assert stale_entry["age_seconds"] == 900
             assert stale_entry["freshness"] == "stale"
-            assert database.get_live_leaderboard(
-                limit=100, offset=200, now=NOW, freshness_seconds=900
-            ) is None
+            assert (
+                database.get_live_leaderboard(
+                    limit=100, offset=200, now=NOW, freshness_seconds=900
+                )
+                is None
+            )
         finally:
             database.close()

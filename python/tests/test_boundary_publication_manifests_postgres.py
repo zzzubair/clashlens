@@ -36,6 +36,36 @@ def _seed_player(connection, tag: str, version: int) -> tuple[int, int]:
     return player, ranked
 
 
+def _sweep_with_members(connection, player_ids: list[int], boundary: datetime) -> int:
+    sweep = int(
+        connection.execute(
+            """
+            INSERT INTO collector_reset_sweeps
+                (boundary_at, member_ids, membership_captured_at)
+            VALUES (%s, %s, clock_timestamp())
+            RETURNING id
+            """,
+            (boundary, player_ids),
+        ).fetchone()[0]
+    )
+    connection.execute(
+        """
+        INSERT INTO collector_work (
+            kind, lane, scope, player_id, normalized_tag, sweep_id, due_at,
+            coalescing_key, profile_status, battle_log_status
+        )
+        SELECT 'reset_baseline', 'reset', 'player', player.id,
+               player.normalized_tag, %s, %s,
+               'reset:' || %s || ':' || player.id, 'pending', 'pending'
+        FROM players AS player
+        WHERE player.id = ANY(%s::bigint[])
+        ON CONFLICT DO NOTHING
+        """,
+        (sweep, boundary, sweep, player_ids),
+    )
+    return sweep
+
+
 def test_published_snapshot_coverage_columns_are_immutable(database_url: str) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         with psycopg.connect(connection_info) as connection:
@@ -76,25 +106,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
             with database.pool.connection() as connection:
                 first = _seed_player(connection, "#M1", 1)
                 second = _seed_player(connection, "#M2", 1)
-                sweep = int(
-                    connection.execute(
-                        "INSERT INTO collector_reset_sweeps (boundary_at) VALUES (%s) RETURNING id",
-                        (BOUNDARY,),
-                    ).fetchone()[0]
-                )
-                connection.execute(
-                    "INSERT INTO collector_reset_sweep_members (sweep_id, player_id) VALUES (%s, %s), (%s, %s)",
-                    (sweep, first[0], sweep, second[0]),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO collector_boundary_admission (
-                        boundary_at, reset_sweep_id, regular_drain_complete,
-                        reset_drain_complete, safe_handoff, state
-                    ) VALUES (%s, %s, true, true, true, 'safe_handoff')
-                    """,
-                    (BOUNDARY, sweep),
-                )
+                _sweep_with_members(connection, [first[0], second[0]], BOUNDARY)
                 for player, ranked in (first, second):
                     database._record_boundary_generation(
                         connection,
@@ -113,10 +125,10 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                         (generation,),
                     )
                 connection.execute("ROLLBACK TO SAVEPOINT capture_timestamp_guard")
-                connection.execute(
-                    "UPDATE collector_reset_sweeps SET membership_captured_at = clock_timestamp() WHERE boundary_at = %s",
+                assert connection.execute(
+                    "SELECT membership_captured_at FROM collector_reset_sweeps WHERE boundary_at = %s",
                     (BOUNDARY,),
-                )
+                ).fetchone()[0] is not None
                 connection.execute("SAVEPOINT sweep_capture_timestamp_guard")
                 with pytest.raises(Exception, match="immutable"):
                     connection.execute(
@@ -174,15 +186,8 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                     )
                 connection.execute("ROLLBACK TO SAVEPOINT source_identity_null_guard")
                 next_boundary = BOUNDARY + timedelta(days=1)
-                next_sweep = int(
-                    connection.execute(
-                        "INSERT INTO collector_reset_sweeps (boundary_at) VALUES (%s) RETURNING id",
-                        (next_boundary,),
-                    ).fetchone()[0]
-                )
-                connection.execute(
-                    "INSERT INTO collector_reset_sweep_members (sweep_id, player_id) VALUES (%s, %s)",
-                    (next_sweep, first[0]),
+                next_sweep = _sweep_with_members(
+                    connection, [first[0]], next_boundary
                 )
                 next_generation, _ = database._create_boundary_generation(
                     connection,

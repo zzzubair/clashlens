@@ -280,9 +280,7 @@ def create_app(
     @app.get("/readyz")
     def ready() -> JSONResponse:
         try:
-            is_ready = database.is_ready(
-                expected_contract_version=API_CONTRACT_VERSION
-            )
+            is_ready = database.is_ready(expected_contract_version=API_CONTRACT_VERSION)
         except Exception:  # noqa: BLE001 - readiness fails closed without disclosure.
             is_ready = False
         return JSONResponse(
@@ -345,9 +343,7 @@ def create_app(
             content=_json_safe(
                 {
                     "tag": normalized_tag,
-                    "seasons": production_database.list_player_seasons(
-                        normalized_tag
-                    ),
+                    "seasons": production_database.list_player_seasons(normalized_tag),
                 }
             ),
         )
@@ -380,7 +376,7 @@ def create_app(
         result = production_database.submit_refresh(
             binding,
             normalized_tag=normalized_tag,
-            cooldown_seconds=300,
+            cooldown_seconds=30,
         )
         return _operation_response(result)
 
@@ -403,19 +399,26 @@ def create_app(
         season_day_number: int | None = Query(default=None, ge=1, le=28),
     ) -> JSONResponse:
         _authorize(request, "leaderboards.read", production_database)
-        if offset % limit or (official_season_id is None) != (season_day_number is None):
+        if offset % limit or (official_season_id is None) != (
+            season_day_number is None
+        ):
             raise ApiError(422, "invalid_request")
         if kind == "live":
             if official_season_id is not None:
                 raise ApiError(422, "invalid_request")
             result = production_database.get_live_leaderboard(
-                limit=limit, offset=offset, now=current_time(),
+                limit=limit,
+                offset=offset,
+                now=current_time(),
                 freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
             )
         else:
             result = production_database.get_frozen_leaderboard(
-                limit=limit, offset=offset, official_season_id=official_season_id,
-                season_day_number=season_day_number, now=current_time(),
+                limit=limit,
+                offset=offset,
+                official_season_id=official_season_id,
+                season_day_number=season_day_number,
+                now=current_time(),
                 freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
             )
         if result is None:
@@ -436,8 +439,13 @@ def create_app(
         _authorize(request, "analytics.read", production_database)
         try:
             selection = ArmyAnalyticsSelection.parse(
-                lens=lens, season=season, start_day=start_day, end_day=end_day,
-                population=population, category=category, sort=sort,
+                lens=lens,
+                season=season,
+                start_day=start_day,
+                end_day=end_day,
+                population=population,
+                category=category,
+                sort=sort,
             )
         except ValueError as error:
             raise ApiError(422, "invalid_army_analytics_selection") from error
@@ -477,8 +485,13 @@ def create_app(
         # whole-season sample.
         try:
             selection = ArmyAnalyticsSelection.parse(
-                lens=lens, season=season_id, start_day=1, end_day=28,
-                population="top-100", category=category, sort=sort,
+                lens=lens,
+                season=season_id,
+                start_day=1,
+                end_day=28,
+                population="top-100",
+                category=category,
+                sort=sort,
             )
         except ValueError as error:
             raise ApiError(422, "invalid_army_analytics_selection") from error
@@ -529,7 +542,10 @@ def create_app(
     @app.post("/v1/account")
     def create_account(body: AccountCreateBody, request: Request) -> JSONResponse:
         context = _authorize(
-            request, "account.create", production_database, allow_unresolved_identity=True
+            request,
+            "account.create",
+            production_database,
+            allow_unresolved_identity=True,
         )
         assert production_database is not None
         if context.account is not None:
@@ -720,7 +736,9 @@ def create_app(
         return JSONResponse(status_code=200, content=result)
 
     @app.post("/v1/account/providers/{provider}")
-    def link_provider(provider: str, body: ProviderLinkBody, request: Request) -> JSONResponse:
+    def link_provider(
+        provider: str, body: ProviderLinkBody, request: Request
+    ) -> JSONResponse:
         context = _authorize(request, "providers.link", production_database)
         assert production_database is not None and context.account is not None
         if provider not in _ALLOWED_PROVIDERS:
@@ -742,7 +760,9 @@ def create_app(
         return _operation_response(result)
 
     @app.delete("/v1/account/providers/{provider}")
-    def unlink_provider(provider: str, body: ProviderLinkBody, request: Request) -> JSONResponse:
+    def unlink_provider(
+        provider: str, body: ProviderLinkBody, request: Request
+    ) -> JSONResponse:
         context = _authorize(request, "providers.unlink", production_database)
         assert production_database is not None and context.account is not None
         if provider not in _ALLOWED_PROVIDERS:
@@ -796,7 +816,6 @@ def create_app(
             return _operation_response(result)
         permit = production_database.acquire_official_permit(
             official_credential_fingerprint,
-            caller="python",
             request_id=binding.request_id,
         )
         if not permit.granted:
@@ -863,7 +882,9 @@ def _authorize(
     if operation in _PUBLIC_OPERATIONS:
         if proof.caller != "typescript-website":
             raise ApiError(403, "caller_operation_not_authorized")
-        if (proof.provider or proof.provider_subject) and proof.provider not in _ALLOWED_PROVIDERS:
+        if (
+            proof.provider or proof.provider_subject
+        ) and proof.provider not in _ALLOWED_PROVIDERS:
             raise ApiError(403, "caller_operation_not_authorized")
         account = (
             database.resolve_account(proof.provider, proof.provider_subject)

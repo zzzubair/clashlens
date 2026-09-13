@@ -2874,6 +2874,9 @@ class Database:
                             "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
                             (discovery_ids[offset : offset + 500],),
                         )
+                official_entries = [
+                    entry for entry in rankings.entries if 1 <= entry.rank <= 200
+                ]
                 canonical_entries = connection.execute(
                     """
                     INSERT INTO official_top200_entries (
@@ -2900,7 +2903,7 @@ class Database:
                                     "normalized_tag": entry.normalized_tag,
                                     "source_json": entry.source_json,
                                 }
-                                for entry in rankings.entries
+                                for entry in official_entries
                             ]
                         ),
                     ),
@@ -2942,7 +2945,7 @@ class Database:
                                     "player_id": player_ids[entry.normalized_tag],
                                     "normalized_tag": entry.normalized_tag,
                                 }
-                                for entry in rankings.entries
+                                for entry in official_entries
                             ]
                         ),
                         parsed_payload_id,
@@ -2994,7 +2997,7 @@ class Database:
                                         "player_id": player_ids[entry.normalized_tag],
                                         "normalized_tag": entry.normalized_tag,
                                     }
-                                    for entry in rankings.entries
+                                    for entry in official_entries
                                 ]
                             ),
                             parsed_payload_id,
@@ -3960,7 +3963,8 @@ class Database:
                     manifest_profiles = connection.execute(
                         """
                         SELECT player_id, input_identity->'profile_snapshot',
-                               input_identity->>'profile_version_id'
+                               input_identity->>'profile_version_id',
+                               input_identity->>'snapshot_quality'
                         FROM boundary_publication_manifest_rows
                         WHERE manifest_id = %s
                         """,
@@ -3985,6 +3989,7 @@ class Database:
                         for row in manifest_profiles
                         if isinstance(row[1], dict)
                         and _text_value(row[1].get("eligibility_state")) == "eligible"
+                        and _text_value(row[3]) == "eligible"
                     ]
 
                 official_rows = connection.execute(
@@ -4197,7 +4202,8 @@ class Database:
                 if generation_row is not None:
                     manifest_quality = connection.execute(
                         """
-                        SELECT player_id, classification
+                        SELECT player_id, classification,
+                               input_identity->>'snapshot_quality'
                         FROM boundary_publication_manifest_rows
                         WHERE manifest_id = %s
                         """,
@@ -4205,27 +4211,30 @@ class Database:
                     ).fetchall()
                     included_players = {int(entry["player_id"]) for entry in entries}
                     by_classification: dict[str, int] = {}
-                    excluded_classification: dict[str, int] = {}
-                    for player_id, classification in manifest_quality:
+                    by_quality: dict[str, int] = {}
+                    excluded_quality: dict[str, int] = {}
+                    for player_id, classification, snapshot_quality in manifest_quality:
                         name = _text_value(classification)
+                        quality_name = _text_value(snapshot_quality)
                         by_classification[name] = by_classification.get(name, 0) + 1
+                        by_quality[quality_name] = by_quality.get(quality_name, 0) + 1
                         if int(player_id) not in included_players:
-                            excluded_classification[name] = (
-                                excluded_classification.get(name, 0) + 1
+                            excluded_quality[quality_name] = (
+                                excluded_quality.get(quality_name, 0) + 1
                             )
                     if sum(by_classification.values()) != int(generation_row[2]):
                         raise ValueError(
                             "snapshot manifest coverage does not match expected population"
                         )
-                    if len(entries) + sum(excluded_classification.values()) != int(
+                    if len(entries) + sum(excluded_quality.values()) != int(
                         generation_row[2]
                     ):
                         raise ValueError("snapshot output coverage is not reconciled")
                     quality = {
                         "expected_population_count": int(generation_row[2]),
                         "classification_counts": by_classification,
-                        "excluded_classification_counts": excluded_classification,
-                        "eligible_population_count": int(generation_row[2]),
+                        "excluded_classification_counts": excluded_quality,
+                        "eligible_population_count": by_quality.get("eligible", 0),
                         "included_entry_count": len(entries),
                         "stale_entry_count": sum(
                             entry["freshness"] == "stale" for entry in entries
@@ -4233,23 +4242,18 @@ class Database:
                         "fresh_entry_count": sum(
                             entry["freshness"] == "fresh" for entry in entries
                         ),
-                        "excluded_missing_count": excluded_classification.get(
-                            "Missing", 0
+                        "excluded_missing_count": excluded_quality.get("missing", 0),
+                        "excluded_unavailable_count": excluded_quality.get(
+                            "unavailable", 0
                         ),
-                        "excluded_unavailable_count": excluded_classification.get(
-                            "Unavailable", 0
-                        )
-                        + excluded_classification.get("Failed", 0),
-                        "excluded_invalid_count": 0,
-                        "excluded_malformed_count": excluded_classification.get(
-                            "Malformed", 0
+                        "excluded_invalid_count": excluded_quality.get("invalid", 0),
+                        "excluded_malformed_count": excluded_quality.get("malformed", 0),
+                        "excluded_conflicting_count": excluded_quality.get(
+                            "conflicting", 0
                         ),
-                        "excluded_conflicting_count": 0,
-                        "excluded_partial_count": excluded_classification.get(
-                            "Partial", 0
-                        ),
-                        "excluded_inconsistent_count": excluded_classification.get(
-                            "Inconsistent", 0
+                        "excluded_partial_count": excluded_quality.get("partial", 0),
+                        "excluded_inconsistent_count": excluded_quality.get(
+                            "inconsistent", 0
                         ),
                     }
                 else:
@@ -5517,33 +5521,14 @@ class Database:
         context = self._load_reset_baseline_context(connection, claim.observation_id)
         if context is None:
             return
-
-        (
-            root_job_id,
-            root_work_type,
-            root_player_id,
-            root_tag,
-            reset_sweep_id,
-            baseline_id,
-            expected_attempt_id,
-            boundary_at,
-            evidence_kind,
-        ) = context
-        root_work_type = _text_value(root_work_type)
-        evidence_kind = _text_value(evidence_kind)
-        endpoint_details: dict[str, dict[str, Any]] = {}
-        for endpoint in ("profile", "battle_log"):
-            endpoint_details[endpoint] = self._load_reset_endpoint_evidence(
+        work_id, player_id, normalized_tag, sweep_id, boundary_at = context
+        endpoints = {
+            endpoint: self._load_reset_endpoint_evidence(
                 connection,
                 endpoint=endpoint,
-                root_job_id=int(root_job_id),
-                root_player_id=int(root_player_id),
-                root_tag=_text_value(root_tag),
-                expected_attempt_id=(
-                    int(expected_attempt_id)
-                    if expected_attempt_id is not None
-                    else None
-                ),
+                work_id=int(work_id),
+                player_id=int(player_id),
+                normalized_tag=_text_value(normalized_tag),
                 boundary_at=boundary_at,
                 parser_version=claim.parser_version,
                 processing_version=claim.processing_version,
@@ -5551,24 +5536,20 @@ class Database:
                 failure_category=failure_category,
                 failure_retryable=failure_retryable,
             )
-
-        reasons: list[str] = []
-        for endpoint in ("profile", "battle_log"):
-            reasons.extend(endpoint_details[endpoint]["reasons"])
-        if root_work_type != "reset_baseline" or evidence_kind != "paired_v2":
-            reasons.append("legacy_profile_only")
-        reasons = list(dict.fromkeys(reasons))
-
-        profile_valid = bool(endpoint_details["profile"]["valid"])
-        battle_log_valid = bool(endpoint_details["battle_log"]["valid"])
-        hard_failure = bool(
-            root_work_type != "reset_baseline"
-            or evidence_kind != "paired_v2"
-            or any(
-                endpoint_details[endpoint]["hard_failure"]
-                for endpoint in endpoint_details
+            for endpoint in ("profile", "battle_log")
+        }
+        reasons = list(
+            dict.fromkeys(
+                reason
+                for endpoint in endpoints.values()
+                for reason in endpoint["reasons"]
             )
         )
+        profile = endpoints["profile"]
+        battle_log = endpoints["battle_log"]
+        profile_valid = bool(profile["valid"])
+        battle_log_valid = bool(battle_log["valid"])
+        hard_failure = any(endpoint["hard_failure"] for endpoint in endpoints.values())
         if profile_valid and battle_log_valid and not hard_failure:
             state = "complete"
             reasons = []
@@ -5577,125 +5558,88 @@ class Database:
         else:
             state = "partial"
 
-        profile = endpoint_details["profile"]
-        battle_log = endpoint_details["battle_log"]
         evidence_json = {
-            "reset_baseline_sweep_id": int(baseline_id),
-            "reset_sweep_id": int(reset_sweep_id),
-            "collection_job_id": int(root_job_id),
-            "attempt_id": (
-                int(expected_attempt_id) if expected_attempt_id is not None else None
-            ),
+            "collector_work_id": int(work_id),
+            "reset_sweep_id": int(sweep_id),
             "profile": {
                 "observation_id": profile["observation_id"],
                 "processing_outcome_id": profile["processing_outcome_id"],
-                "collector_outcome": profile["collector_outcome"],
                 "processing_outcome": profile["processing_outcome"],
             },
             "battle_log": {
                 "observation_id": battle_log["observation_id"],
                 "processing_outcome_id": battle_log["processing_outcome_id"],
-                "collector_outcome": battle_log["collector_outcome"],
                 "processing_outcome": battle_log["processing_outcome"],
             },
             "failure_reasons": reasons,
         }
-        fingerprint_data = {
-            "baseline_id": int(baseline_id),
-            "root_job_id": int(root_job_id),
-            "attempt_id": (
-                int(expected_attempt_id) if expected_attempt_id is not None else None
-            ),
-            "profile_observation_id": profile["observation_id"],
-            "battle_log_observation_id": battle_log["observation_id"],
-            "profile_processing_outcome_id": profile["processing_outcome_id"],
-            "battle_log_processing_outcome_id": battle_log["processing_outcome_id"],
+        fingerprint = {
+            **evidence_json,
             "profile_valid": profile_valid,
             "battle_log_valid": battle_log_valid,
             "state": state,
-            "failure_reasons": reasons,
             "parser_version": claim.parser_version,
             "processing_version": claim.processing_version,
         }
         evidence_key = hashlib.sha256(
-            json.dumps(fingerprint_data, sort_keys=True, separators=(",", ":")).encode()
+            json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
-
-        if getattr(self, "_supports_coordinator_contract", False):
-            current_member = connection.execute(
-                """
-                SELECT 1
-                FROM collector_reset_sweep_members
-                WHERE sweep_id = %s AND player_id = %s
-                """,
-                (reset_sweep_id, root_player_id),
-            ).fetchone()
-            if current_member is None:
-                return
-        locked = connection.execute(
-            "SELECT clashlens_lock_reset_baseline_v2(%s)",
-            (baseline_id,),
-        ).fetchone()
-        if locked is None or not locked[0]:
-            raise RuntimeError("reset baseline sweep is unavailable")
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"reset-baseline:{work_id}",),
+        )
         existing = connection.execute(
             """
             SELECT id, version
             FROM reset_baseline_evidence
-            WHERE reset_baseline_sweep_id = %s AND evidence_key = %s
+            WHERE collector_work_id = %s AND evidence_key = %s
             """,
-            (baseline_id, evidence_key),
+            (work_id, evidence_key),
         ).fetchone()
         if existing is not None:
-            baseline_evidence_id = int(existing[0])
-            baseline_version = int(existing[1])
+            evidence_id, version = int(existing[0]), int(existing[1])
         else:
             prior = connection.execute(
                 """
                 SELECT id, version
                 FROM reset_baseline_evidence
-                WHERE reset_baseline_sweep_id = %s
+                WHERE collector_work_id = %s
                 ORDER BY version DESC, id DESC
                 LIMIT 1
                 FOR UPDATE
                 """,
-                (baseline_id,),
+                (work_id,),
             ).fetchone()
-            baseline_version = int(prior[1]) + 1 if prior is not None else 1
+            version = int(prior[1]) + 1 if prior is not None else 1
             inserted = connection.execute(
                 """
                 INSERT INTO reset_baseline_evidence (
-                    sweep_id, player_id, boundary_at,
+                    sweep_id, player_id, boundary_at, collector_work_id,
                     profile_observation_id, battle_log_observation_id,
-                    profile_valid, battle_log_valid, legacy_profile_only,
-                    reset_baseline_sweep_id, collection_job_id, attempt_id,
+                    profile_valid, battle_log_valid,
                     profile_processing_outcome_id, battle_log_processing_outcome_id,
                     parser_version, processing_version, version, supersedes_id,
                     state, failure_reasons, evidence_json, evidence_key
                 ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 RETURNING id
                 """,
                 (
-                    int(reset_sweep_id),
-                    int(root_player_id),
+                    sweep_id,
+                    player_id,
                     boundary_at,
+                    work_id,
                     profile["observation_id"],
                     battle_log["observation_id"],
                     profile_valid,
                     battle_log_valid,
-                    root_work_type != "reset_baseline" or evidence_kind != "paired_v2",
-                    int(baseline_id),
-                    int(root_job_id),
-                    expected_attempt_id,
                     profile["processing_outcome_id"],
                     battle_log["processing_outcome_id"],
                     claim.parser_version,
                     claim.processing_version,
-                    baseline_version,
+                    version,
                     prior[0] if prior is not None else None,
                     state,
                     Jsonb(reasons),
@@ -5704,26 +5648,22 @@ class Database:
                 ),
             ).fetchone()
             assert inserted is not None
-            baseline_evidence_id = int(inserted[0])
+            evidence_id = int(inserted[0])
 
-        if (
-            state in {"complete", "failed"}
-            and root_work_type == "reset_baseline"
-            and evidence_kind == "paired_v2"
-        ):
+        if state in {"complete", "failed"}:
             self._record_boundary_baseline(
                 connection,
                 boundary_at=boundary_at,
-                reset_sweep_id=int(reset_sweep_id),
-                player_id=int(root_player_id),
+                reset_sweep_id=int(sweep_id),
+                player_id=int(player_id),
                 state=state,
             )
         if state == "complete":
             self._enqueue_reset_reconciliation(
                 connection,
-                baseline_id=int(baseline_evidence_id),
-                baseline_version=baseline_version,
-                player_id=int(root_player_id),
+                baseline_id=evidence_id,
+                baseline_version=version,
+                player_id=int(player_id),
                 boundary_at=boundary_at,
             )
 
@@ -5744,7 +5684,7 @@ class Database:
         )
         sweep = connection.execute(
             """
-            SELECT id
+            SELECT id, member_ids
             FROM collector_reset_sweeps
             WHERE id = %s AND boundary_at = %s
             """,
@@ -5752,15 +5692,8 @@ class Database:
         ).fetchone()
         if sweep is None:
             return
-        member = connection.execute(
-            """
-            SELECT 1
-            FROM collector_reset_sweep_members
-            WHERE sweep_id = %s AND player_id = %s
-            """,
-            (reset_sweep_id, player_id),
-        ).fetchone()
-        if member is None:
+        member_ids = [int(value) for value in (sweep[1] or [])]
+        if player_id not in member_ids:
             return
         generation = connection.execute(
             """
@@ -5772,20 +5705,11 @@ class Database:
             (boundary_at,),
         ).fetchone()
         if generation is None:
-            population_rows = connection.execute(
-                """
-                SELECT player_id
-                FROM collector_reset_sweep_members
-                WHERE sweep_id = %s
-                ORDER BY player_id
-                """,
-                (reset_sweep_id,),
-            ).fetchall()
             generation_id, _generation = self._create_boundary_generation(
                 connection,
                 boundary_at=boundary_at,
                 sweep_id=reset_sweep_id,
-                player_ids=[int(row[0]) for row in population_rows],
+                player_ids=member_ids,
                 generation=1,
                 supersedes_id=None,
             )
@@ -5855,30 +5779,17 @@ class Database:
     ) -> tuple[Any, ...] | None:
         row = connection.execute(
             """
-            SELECT root.id, root.work_type, root.player_id, root.normalized_tag,
-                   root.sweep_id, root.reset_baseline_sweep_id,
-                   COALESCE(root.result_attempt_id, observed.attempt_id),
-                   baseline.boundary_at, baseline.evidence_kind
-            FROM collector_observations AS observed
-            LEFT JOIN collector_attempts AS source_attempt
-              ON source_attempt.id = observed.attempt_id
-            LEFT JOIN collector_jobs AS attempt_job
-              ON attempt_job.id = source_attempt.job_id
-            LEFT JOIN collector_jobs AS source_job
-              ON source_job.id = observed.collection_job_id
-            JOIN collector_jobs AS root
-              ON root.id = CASE
-                    WHEN attempt_job.work_type IN ('reset_baseline', 'legacy_reset_profile')
-                        THEN attempt_job.id
-                    WHEN source_job.work_type IN ('reset_baseline', 'legacy_reset_profile')
-                        THEN source_job.id
-                    ELSE NULL
-                 END
-            JOIN collector_reset_baseline_sweeps AS baseline
-              ON baseline.id = root.reset_baseline_sweep_id
-            WHERE observed.id = %s
+            SELECT work.id, work.player_id, work.normalized_tag,
+                   work.sweep_id, sweep.boundary_at
+            FROM collector_work AS work
+            JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
+            WHERE work.kind = 'reset_baseline'
+              AND (
+                  work.profile_observation_id = %s
+                  OR work.battle_log_observation_id = %s
+              )
             """,
-            (observation_id,),
+            (observation_id, observation_id),
         ).fetchone()
         return None if row is None else tuple(row)
 
@@ -5887,10 +5798,9 @@ class Database:
         connection: Any,
         *,
         endpoint: str,
-        root_job_id: int,
-        root_player_id: int,
-        root_tag: str,
-        expected_attempt_id: int | None,
+        work_id: int,
+        player_id: int,
+        normalized_tag: str,
         boundary_at: datetime,
         parser_version: str,
         processing_version: str,
@@ -5913,96 +5823,65 @@ class Database:
              AND profile.parser_version = %s
             """
         )
-        if expected_attempt_id is not None:
-            row = connection.execute(
-                f"""
-                SELECT result.outcome, result.observation_id,
-                       observed.attempt_id, observed.collection_job_id,
-                       observed.player_id, observed.normalized_tag,
-                       observed.response_completed_at, observed.http_status,
-                       processing.id, processing.outcome, processing.failure_category,
-                       profile.id, profile.source_contract_state,
-                       profile.eligibility_state, battle_log.id, battle_log.has_row_gap
-                FROM collector_endpoint_results AS result
-                LEFT JOIN collector_observations AS observed
-                  ON observed.id = result.observation_id
-                LEFT JOIN observation_processing_outcomes AS processing
-                  ON processing.observation_id = observed.id
-                 AND processing.parser_version = %s
-                 AND processing.processing_version = %s
-                {profile_join}
-                LEFT JOIN battle_log_observations AS battle_log
-                  ON battle_log.observation_id = observed.id
-                 AND battle_log.parser_version = %s
-                WHERE result.attempt_id = %s AND result.endpoint = %s
-                """,
-                (
-                    parser_version,
-                    processing_version,
-                    parser_version,
-                    parser_version,
-                    expected_attempt_id,
-                    endpoint,
-                ),
-            ).fetchone()
-
-        observation_id = int(row[1]) if row is not None and row[1] is not None else None
-        processing_id = int(row[8]) if row is not None and row[8] is not None else None
-        collector_outcome = _text_value(row[0]) if row is not None else None
-        processing_outcome = (
-            _text_value(row[9]) if row is not None and row[9] is not None else None
+        endpoint_column = (
+            "work.profile_observation_id"
+            if endpoint == "profile"
+            else "work.battle_log_observation_id"
         )
+        endpoint_status = (
+            "work.profile_status"
+            if endpoint == "profile"
+            else "work.battle_log_status"
+        )
+        row = connection.execute(
+            f"""
+            SELECT {endpoint_status}, observed.id, observed.player_id,
+                   observed.normalized_tag, observed.response_completed_at,
+                   observed.http_status, processing.id, processing.outcome,
+                   processing.failure_category, profile.id,
+                   profile.source_contract_state, profile.eligibility_state,
+                   battle_log.id, battle_log.has_row_gap, work.status,
+                   work.failure_category
+            FROM collector_work AS work
+            LEFT JOIN collector_observations AS observed
+              ON observed.id = {endpoint_column}
+            LEFT JOIN observation_processing_outcomes AS processing
+              ON processing.observation_id = observed.id
+             AND processing.parser_version = %s
+             AND processing.processing_version = %s
+            {profile_join}
+            LEFT JOIN battle_log_observations AS battle_log
+              ON battle_log.observation_id = observed.id
+             AND battle_log.parser_version = %s
+            WHERE work.id = %s
+            """,
+            (
+                parser_version,
+                processing_version,
+                parser_version,
+                parser_version,
+                work_id,
+            ),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("reset work disappeared while processing its evidence")
+
+        observation_id = int(row[1]) if row[1] is not None else None
+        processing_id = int(row[6]) if row[6] is not None else None
+        processing_outcome = _text_value(row[7]) if row[7] is not None else None
         reasons: list[str] = []
         hard_failure = False
-        missing = False
-
-        if row is None or observation_id is None:
-            observation_id = (
-                int(claim.observation_id)
-                if claim.endpoint == endpoint and claim.observation_id is not None
-                else None
-            )
-            if claim.endpoint == endpoint and claim.observation_id == observation_id:
-                processing = connection.execute(
-                    """
-                    SELECT id, outcome, failure_category
-                    FROM observation_processing_outcomes
-                    WHERE observation_id = %s
-                      AND parser_version = %s
-                      AND processing_version = %s
-                    """,
-                    (observation_id, parser_version, processing_version),
-                ).fetchone()
-                if processing is not None:
-                    processing_id = int(processing[0])
-                    processing_outcome = _text_value(processing[1])
-            missing = True
+        missing = observation_id is None
+        if missing:
             reasons.append(f"missing_{endpoint}_observation")
-            if collector_outcome in {"failed", "storage_failed"}:
-                hard_failure = True
-            elif collector_outcome is not None:
-                reasons.append(f"collector_{endpoint}_{collector_outcome}")
+            hard_failure = _text_value(row[14]) == "failed"
         else:
-            observed_attempt_id = int(row[2]) if row[2] is not None else None
-            observed_player_id = int(row[4]) if row[4] is not None else None
-            observed_tag = _text_value(row[5]) if row[5] is not None else None
-            if observed_attempt_id != expected_attempt_id:
-                reasons.append(f"{endpoint}_wrong_attempt")
-                hard_failure = True
-            if observed_player_id != root_player_id or observed_tag != root_tag:
+            if int(row[2]) != player_id or _text_value(row[3]) != normalized_tag:
                 reasons.append(f"{endpoint}_wrong_player")
                 hard_failure = True
-            in_lineage = connection.execute(
-                "SELECT clashlens_reset_job_lineage_v2(%s, %s)",
-                (row[3], root_job_id),
-            ).fetchone()[0]
-            if not in_lineage:
-                reasons.append(f"{endpoint}_outside_sweep")
-                hard_failure = True
-            if row[6] is None or row[6] < boundary_at:
+            if row[4] is None or row[4] < boundary_at:
                 reasons.append(f"{endpoint}_stale")
                 hard_failure = True
-
             if processing_outcome is None:
                 missing = True
                 if (
@@ -6022,15 +5901,15 @@ class Database:
                 hard_failure = True
             elif processing_outcome != "processed":
                 category = (
-                    _text_value(row[10]) if row[10] is not None else processing_outcome
+                    _text_value(row[8]) if row[8] is not None else processing_outcome
                 )
                 reasons.append(f"{endpoint}_{category}")
                 hard_failure = True
             elif endpoint == "profile":
                 if (
-                    row[11] is None
-                    or _text_value(row[12]) != "accepted"
-                    or _text_value(row[13]) != "eligible"
+                    row[9] is None
+                    or _text_value(row[10]) != "accepted"
+                    or _text_value(row[11]) != "eligible"
                 ):
                     reasons.append("profile_invalid")
                     hard_failure = True
@@ -6042,30 +5921,28 @@ class Database:
                         JOIN legend_battles AS battle
                           ON battle.id = evidence.battle_id
                         WHERE (
-                                battle.attacker_player_id = %s
-                                OR battle.defender_player_id = %s
-                            )
+                            battle.attacker_player_id = %s
+                            OR battle.defender_player_id = %s
+                        )
                           AND evidence.battle_timestamp >= %s
                           AND evidence.battle_timestamp < %s + interval '1 day'
                         """,
-                        (root_player_id, root_player_id, boundary_at, boundary_at),
+                        (player_id, player_id, boundary_at, boundary_at),
                     ).fetchone()[0]
-                    if first_event is not None and row[6] >= first_event:
+                    if first_event is not None and row[4] >= first_event:
                         reasons.append("profile_after_first_event")
                         hard_failure = True
-            elif row[14] is None or bool(row[15]):
+            elif row[12] is None or bool(row[13]):
                 reasons.append("battle_log_malformed")
                 hard_failure = True
 
-        valid = not reasons and not missing and not hard_failure
         return {
             "observation_id": observation_id,
             "processing_outcome_id": processing_id,
-            "collector_outcome": collector_outcome,
             "processing_outcome": processing_outcome,
             "reasons": reasons,
             "hard_failure": hard_failure,
-            "valid": valid,
+            "valid": not reasons and not missing and not hard_failure,
         }
 
     @staticmethod
@@ -6279,39 +6156,21 @@ class Database:
         )
         row = connection.execute(
             f"""
-            SELECT
-                evidence.id,
-                evidence.version,
-                evidence.state,
-                evidence.sweep_id,
-                evidence.reset_baseline_sweep_id,
-                evidence.collection_job_id,
-                evidence.attempt_id,
-                evidence.profile_observation_id,
-                evidence.battle_log_observation_id,
-                evidence.profile_processing_outcome_id,
-                evidence.battle_log_processing_outcome_id,
-                evidence.profile_valid,
-                evidence.battle_log_valid,
-                evidence.legacy_profile_only,
-                evidence.failure_reasons,
-                evidence.evidence_json,
-                evidence.evidence_key,
-                evidence.boundary_at,
-                baseline.evidence_kind,
-                profile.id,
-                profile.trophies,
-                profile.eligibility_state,
-                profile.source_contract_state,
-                {profile_observed},
-                battle_log.id,
-                battle_log.row_count,
-                battle_log.has_row_gap,
-                profile_observation.response_hash,
-                battle_observation.response_hash
+            SELECT evidence.id, evidence.version, evidence.state,
+                   evidence.sweep_id, evidence.collector_work_id,
+                   evidence.profile_observation_id,
+                   evidence.battle_log_observation_id,
+                   evidence.profile_processing_outcome_id,
+                   evidence.battle_log_processing_outcome_id,
+                   evidence.profile_valid, evidence.battle_log_valid,
+                   evidence.failure_reasons, evidence.evidence_json,
+                   evidence.evidence_key, evidence.boundary_at,
+                   profile.id, profile.trophies, profile.eligibility_state,
+                   profile.source_contract_state, {profile_observed},
+                   battle_log.id, battle_log.row_count, battle_log.has_row_gap,
+                   profile_observation.response_hash,
+                   battle_observation.response_hash
             FROM reset_baseline_evidence AS evidence
-            LEFT JOIN collector_reset_baseline_sweeps AS baseline
-              ON baseline.id = evidence.reset_baseline_sweep_id
             {profile_join}
             LEFT JOIN collector_observations AS profile_observation
               ON profile_observation.id = evidence.profile_observation_id
@@ -6335,84 +6194,72 @@ class Database:
             return None
 
         state = _text_value(row[2])
-        profile_valid = bool(row[11])
-        battle_log_valid = bool(row[12])
-        legacy_profile_only = bool(row[13])
-        profile_accepted = (
-            row[19] is not None
-            and _text_value(row[22]) == "accepted"
-            and _text_value(row[22]) is not None
-        )
-        profile_eligible = _text_value(row[21]) == "eligible"
-        battle_log_valid_evidence = row[24] is not None and not bool(row[26])
+        profile_valid = bool(row[9])
+        battle_log_valid = bool(row[10])
+        profile_accepted = row[15] is not None and _text_value(row[18]) == "accepted"
+        profile_eligible = _text_value(row[17]) == "eligible"
+        battle_log_valid_evidence = row[20] is not None and not bool(row[22])
         complete = bool(
             state == "complete"
+            and row[4] is not None
             and profile_valid
             and battle_log_valid
-            and not legacy_profile_only
             and profile_accepted
             and profile_eligible
             and battle_log_valid_evidence
-            and row[7] is not None
-            and row[8] is not None
-            and row[9] is not None
-            and row[10] is not None
+            and all(row[index] is not None for index in (5, 6, 7, 8))
         )
-        failure_reasons = row[14] if isinstance(row[14], list) else []
-        evidence_json = row[15] if isinstance(row[15], dict) else {}
+        failure_reasons = row[11] if isinstance(row[11], list) else []
+        stored_evidence = row[12] if isinstance(row[12], dict) else {}
         evidence = {
             "id": int(row[0]),
             "version": int(row[1]),
             "state": state,
             "sweep_id": int(row[3]) if row[3] is not None else None,
-            "reset_baseline_sweep_id": (int(row[4]) if row[4] is not None else None),
-            "collection_job_id": (int(row[5]) if row[5] is not None else None),
-            "attempt_id": int(row[6]) if row[6] is not None else None,
-            "profile_observation_id": (int(row[7]) if row[7] is not None else None),
-            "battle_log_observation_id": (int(row[8]) if row[8] is not None else None),
+            "collector_work_id": int(row[4]) if row[4] is not None else None,
+            "profile_observation_id": int(row[5]) if row[5] is not None else None,
+            "battle_log_observation_id": int(row[6]) if row[6] is not None else None,
             "profile_processing_outcome_id": (
-                int(row[9]) if row[9] is not None else None
+                int(row[7]) if row[7] is not None else None
             ),
             "battle_log_processing_outcome_id": (
-                int(row[10]) if row[10] is not None else None
+                int(row[8]) if row[8] is not None else None
             ),
             "profile_valid": profile_valid,
             "battle_log_valid": battle_log_valid,
-            "legacy_profile_only": legacy_profile_only,
             "failure_reasons": list(failure_reasons),
-            "evidence_key": _text_value(row[16]),
-            "boundary_at": row[17].astimezone(UTC).isoformat(),
-            "evidence_kind": (_text_value(row[18]) if row[18] is not None else None),
+            "evidence_key": _text_value(row[13]),
+            "boundary_at": row[14].astimezone(UTC).isoformat(),
             "profile": {
-                "id": int(row[19]) if row[19] is not None else None,
-                "trophies": int(row[20]) if row[20] is not None else None,
+                "id": int(row[15]) if row[15] is not None else None,
+                "trophies": int(row[16]) if row[16] is not None else None,
                 "eligibility_state": (
-                    _text_value(row[21]) if row[21] is not None else None
+                    _text_value(row[17]) if row[17] is not None else None
                 ),
                 "source_contract_state": (
-                    _text_value(row[22]) if row[22] is not None else None
+                    _text_value(row[18]) if row[18] is not None else None
                 ),
                 "observed_at": (
-                    row[23].astimezone(UTC).isoformat() if row[23] is not None else None
+                    row[19].astimezone(UTC).isoformat() if row[19] is not None else None
                 ),
-                "response_hash": _text_value(row[27]),
+                "response_hash": _text_value(row[23]),
             },
             "battle_log": {
-                "id": int(row[24]) if row[24] is not None else None,
-                "row_count": int(row[25]) if row[25] is not None else None,
-                "has_row_gap": bool(row[26]) if row[26] is not None else None,
-                "response_hash": _text_value(row[28]),
+                "id": int(row[20]) if row[20] is not None else None,
+                "row_count": int(row[21]) if row[21] is not None else None,
+                "has_row_gap": bool(row[22]) if row[22] is not None else None,
+                "response_hash": _text_value(row[24]),
             },
-            "stored_evidence": evidence_json,
+            "stored_evidence": stored_evidence,
         }
         return {
             "id": int(row[0]),
             "version": int(row[1]),
             "state": state,
             "complete": complete,
-            "trophies": int(row[20]) if row[20] is not None else None,
+            "trophies": int(row[16]) if row[16] is not None else None,
             "eligibility_state": (
-                _text_value(row[21]) if row[21] is not None else None
+                _text_value(row[17]) if row[17] is not None else None
             ),
             "evidence": evidence,
         }
@@ -7062,12 +6909,10 @@ class Database:
                 """
                 INSERT INTO boundary_publication_generation_members
                     (generation_id, player_id)
-                SELECT %s, player_id
-                FROM collector_reset_sweep_members
-                WHERE sweep_id = %s
+                SELECT %s, unnest(%s::bigint[])
                 ON CONFLICT DO NOTHING
                 """,
-                (generation_id, sweep_id),
+                (generation_id, player_ids),
             )
         else:
             connection.execute(
@@ -7308,9 +7153,61 @@ class Database:
                         "eligibility_state": _text_value(profile[7]),
                         "profile_json": profile[3],
                     }
+                    identity["snapshot_quality"] = (
+                        "eligible"
+                        if _text_value(profile[7]) == "eligible"
+                        else "invalid"
+                    )
                 else:
                     identity["profile_version_id"] = None
                     identity["profile_input_hash"] = None
+                    latest = connection.execute(
+                        """
+                        SELECT (
+                            SELECT profile.source_contract_state
+                            FROM player_profile_versions AS profile
+                            LEFT JOIN player_profile_effects AS effect
+                              ON effect.profile_version_id = profile.id
+                            WHERE profile.player_id = %s
+                              AND COALESCE(effect.observed_at, profile.observed_at) <= %s
+                            ORDER BY COALESCE(effect.observed_at, profile.observed_at) DESC,
+                                     COALESCE(effect.id, profile.id) DESC
+                            LIMIT 1
+                        ), (
+                            SELECT job.failure_category
+                            FROM collector_observations AS observation
+                            JOIN python_processing_jobs_worker AS job
+                              ON job.observation_id = observation.id
+                            WHERE observation.player_id = %s
+                              AND observation.endpoint = 'profile'
+                              AND observation.response_completed_at <= %s
+                            ORDER BY observation.response_completed_at DESC,
+                                     observation.id DESC
+                            LIMIT 1
+                        )
+                        """,
+                        (player_id, generation[0], player_id, generation[0]),
+                    ).fetchone()
+                    source_state = _text_value(latest[0]) if latest and latest[0] else None
+                    failure = _text_value(latest[1]) if latest and latest[1] else None
+                    if failure in {
+                        "malformed_json",
+                        "unsupported_profile_schema",
+                        "source_identity_mismatch",
+                        "invalid_player_tag",
+                    }:
+                        snapshot_quality = "malformed"
+                    elif source_state == "conflict":
+                        snapshot_quality = "conflicting"
+                    else:
+                        snapshot_quality = {
+                            "Unavailable": "unavailable",
+                            "Failed": "unavailable",
+                            "Partial": "partial",
+                            "Inconsistent": "inconsistent",
+                            "Malformed": "malformed",
+                        }.get(classification, "missing")
+                    identity["snapshot_quality"] = snapshot_quality
             if artifact_kind == "army" and version_id is not None:
                 ranked_identity = connection.execute(
                     """
@@ -7625,17 +7522,6 @@ class Database:
         if sweep_id is None:
             return
 
-        # The collector owns this handoff. Test fixtures that do not create a
-        # gate row retain the historical direct coordinator seam.
-        handoff = connection.execute(
-            "SELECT safe_handoff FROM collector_boundary_admission WHERE boundary_at = %s",
-            (boundary_at,),
-        ).fetchone()
-        if handoff is None:
-            if getattr(self, "_supports_coordinator_contract", False):
-                return
-        elif not bool(handoff[0]):
-            return
         classifications = connection.execute(
             """
             SELECT count(*) AS member_count,
@@ -7872,21 +7758,14 @@ class Database:
             (f"boundary-publication:{boundary_at.isoformat()}",),
         )
         sweep = connection.execute(
-            "SELECT id FROM collector_reset_sweeps WHERE boundary_at = %s",
+            "SELECT id, member_ids FROM collector_reset_sweeps WHERE boundary_at = %s",
             (boundary_at,),
         ).fetchone()
         if sweep is None:
             return False
         sweep_id = int(sweep[0])
-        member_exists = connection.execute(
-            """
-            SELECT 1
-            FROM collector_reset_sweep_members
-            WHERE sweep_id = %s AND player_id = %s
-            """,
-            (sweep_id, player_id),
-        ).fetchone()
-        if member_exists is None:
+        member_ids = [int(value) for value in (sweep[1] or [])]
+        if player_id not in member_ids:
             return True
         current = connection.execute(
             """
@@ -7904,20 +7783,11 @@ class Database:
             (boundary_at,),
         ).fetchone()
         if current is None:
-            population_rows = connection.execute(
-                """
-                SELECT player_id
-                FROM collector_reset_sweep_members
-                WHERE sweep_id = %s
-                ORDER BY player_id
-                """,
-                (sweep_id,),
-            ).fetchall()
             generation_id, generation = self._create_boundary_generation(
                 connection,
                 boundary_at=boundary_at,
                 sweep_id=sweep_id,
-                player_ids=[int(row[0]) for row in population_rows],
+                player_ids=member_ids,
                 generation=1,
                 supersedes_id=None,
             )

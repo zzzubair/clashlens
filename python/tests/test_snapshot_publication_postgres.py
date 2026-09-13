@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -77,6 +78,98 @@ def _seed_snapshot_job(
                 """,
                 (player_id, ranked_day_start, boundary_at),
             ).fetchone()[0]
+        known_players = [
+            int(row[0])
+            for row in connection.execute(
+                """
+                SELECT id FROM players WHERE active
+                UNION
+                SELECT DISTINCT player_id FROM player_profile_versions
+                UNION
+                SELECT DISTINCT player_id
+                FROM collector_observations
+                WHERE endpoint = 'profile' AND player_id IS NOT NULL
+                ORDER BY id
+                """
+            ).fetchall()
+        ]
+        population_hash = hashlib.sha256(
+            json.dumps(known_players, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        sweep_id = connection.execute(
+            """
+            INSERT INTO collector_reset_sweeps (boundary_at, member_ids)
+            VALUES (%s, %s)
+            RETURNING id
+            """,
+            (boundary_at, known_players),
+        ).fetchone()[0]
+        generation_id = connection.execute(
+            """
+            INSERT INTO boundary_publication_generations (
+                boundary_at, generation, sweep_id, ordering_rule_version,
+                freshness_rule_version, expected_population_count,
+                expected_population_hash, snapshot_state, army_state,
+                membership_rule_version, snapshot_rule_version, army_rule_version,
+                target_rule, target_at
+            ) VALUES (
+                %s, 1, %s, 'legend-snapshot-order-v1',
+                'legend-profile-freshness-v1', %s, %s, 'ready', 'pending',
+                'active-members-v1', 'legend-analytics-v1', 'army-analytics-v2',
+                'boundary-delay-v1', %s
+            )
+            RETURNING id
+            """,
+            (boundary_at, sweep_id, len(known_players), population_hash, boundary_at),
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO boundary_publication_generation_members (
+                generation_id, player_id, status, snapshot_status, army_status
+            )
+            SELECT %s, player_id, 'terminal', 'complete', 'complete'
+            FROM unnest(%s::bigint[]) AS members(player_id)
+            """,
+            (generation_id, known_players),
+        )
+        ranked_input_hash = connection.execute(
+            "SELECT input_hash FROM ranked_day_versions WHERE id = %s",
+            (ranked_day_version_id,),
+        ).fetchone()[0]
+        connection.execute(
+            """
+            UPDATE boundary_publication_generation_members
+            SET ranked_day_version_id = %s, ranked_day_input_hash = %s
+            WHERE generation_id = %s AND player_id = %s
+            """,
+            (ranked_day_version_id, ranked_input_hash, generation_id, player_id),
+        )
+        connection.execute(
+            """
+            UPDATE collector_reset_sweeps
+            SET membership_captured_at = clock_timestamp()
+            WHERE id = %s
+            """,
+            (sweep_id,),
+        )
+        connection.execute(
+            """
+            UPDATE boundary_publication_generations
+            SET membership_captured_at = clock_timestamp()
+            WHERE id = %s
+            """,
+            (generation_id,),
+        )
+        connection.commit()
+        fixture_database = Database(connection_info)
+        try:
+            manifest = fixture_database._freeze_boundary_manifest(
+                connection, generation_id=int(generation_id), artifact_kind="snapshot"
+            )
+        finally:
+            fixture_database.close()
+        assert manifest is not None
+        manifest_id, manifest_digest = manifest
         job_id = connection.execute(
             """
             INSERT INTO python_processing_jobs (
@@ -94,6 +187,9 @@ def _seed_snapshot_job(
                     {
                         "ranked_day_version_id": ranked_day_version_id,
                         "boundary_at": boundary_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "generation": 1,
+                        "manifest_id": manifest_id,
+                        "manifest_digest": manifest_digest,
                     }
                 ),
                 boundary_at,
@@ -111,6 +207,9 @@ def _process_snapshot_and_analytics(
     *,
     owner_prefix: str,
 ) -> tuple[int, int]:
+    _prepare_snapshot_correction(
+        connection_info, database, snapshot_job_id=snapshot_job_id
+    )
     snapshot_result = processor.process_job(
         snapshot_job_id,
         owner=f"{owner_prefix}-snapshot",
@@ -188,6 +287,109 @@ def _process_snapshot_and_analytics(
         ("offense", 1, 1),
     ]
     return int(snapshot[0]), int(analytics_job_id)
+
+
+def _prepare_snapshot_correction(
+    connection_info: str, database: Database, *, snapshot_job_id: int
+) -> None:
+    """Pin a requeued snapshot job to a fresh manifest after publication."""
+    with psycopg.connect(connection_info) as connection:
+        job = connection.execute(
+            """
+            SELECT input_json
+            FROM python_processing_jobs
+            WHERE id = %s AND status = 'pending'
+            FOR UPDATE
+            """,
+            (snapshot_job_id,),
+        ).fetchone()
+        if job is None or not isinstance(job[0], dict):
+            return
+        input_json = dict(job[0])
+        generation_number = input_json.get("generation")
+        boundary_text = input_json.get("boundary_at")
+        if generation_number is None or boundary_text is None:
+            return
+        boundary_at = datetime.fromisoformat(str(boundary_text)).astimezone(UTC)
+        generation = connection.execute(
+            """
+            SELECT id, generation, sweep_id, ordering_rule_version,
+                   freshness_rule_version, expected_population_count,
+                   expected_population_hash, snapshot_rule_version,
+                   army_rule_version, target_rule, target_at, snapshot_state
+            FROM boundary_publication_generations
+            WHERE boundary_at = %s AND generation = %s
+            FOR UPDATE
+            """,
+            (boundary_at, int(generation_number)),
+        ).fetchone()
+        if generation is None or text(generation[11]) != "published":
+            return
+        new_generation = connection.execute(
+            """
+            INSERT INTO boundary_publication_generations (
+                boundary_at, generation, sweep_id, ordering_rule_version,
+                freshness_rule_version, expected_population_count,
+                expected_population_hash, snapshot_state, army_state,
+                membership_rule_version, snapshot_rule_version, army_rule_version,
+                target_rule, target_at, supersedes_id, source_generation_id,
+                correction_state, affected_artifacts
+            )
+            SELECT boundary_at, generation + 1, sweep_id,
+                   ordering_rule_version, freshness_rule_version,
+                   expected_population_count, expected_population_hash,
+                   'ready', 'pending', membership_rule_version,
+                   snapshot_rule_version, army_rule_version, target_rule,
+                   target_at, id, id, 'active', ARRAY['snapshot']::text[]
+            FROM boundary_publication_generations
+            WHERE id = %s
+            RETURNING id, generation
+            """,
+            (generation[0],),
+        ).fetchone()
+        assert new_generation is not None
+        new_generation_id, new_generation_number = (
+            int(value) for value in new_generation
+        )
+        connection.execute(
+            """
+            INSERT INTO boundary_publication_generation_members (
+                generation_id, player_id, ranked_day_version_id,
+                ranked_day_input_hash, status, snapshot_status, army_status
+            )
+            SELECT %s, player_id, ranked_day_version_id,
+                   ranked_day_input_hash, status, snapshot_status, army_status
+            FROM boundary_publication_generation_members
+            WHERE generation_id = %s
+            """,
+            (new_generation_id, generation[0]),
+        )
+        manifest = database._freeze_boundary_manifest(
+            connection,
+            generation_id=new_generation_id,
+            artifact_kind="snapshot",
+        )
+        assert manifest is not None
+        manifest_id, manifest_digest = manifest
+        connection.execute(
+            """
+            UPDATE python_processing_jobs
+            SET input_json = input_json || %s::jsonb,
+                updated_at = clock_timestamp()
+            WHERE id = %s AND status = 'pending'
+            """,
+            (
+                Jsonb(
+                    {
+                        "generation": new_generation_number,
+                        "manifest_id": manifest_id,
+                        "manifest_digest": manifest_digest,
+                    }
+                ),
+                snapshot_job_id,
+            ),
+        )
+        connection.commit()
 
 
 def _process_profile(
@@ -850,6 +1052,11 @@ def test_snapshot_quality_counts_and_reader_ignore_building_candidate(
                 observed_at=boundary - timedelta(seconds=30),
             )
             database.requeue_completed_job(snapshot_job_id)
+            _prepare_snapshot_correction(
+                connection_info,
+                database,
+                snapshot_job_id=snapshot_job_id,
+            )
             correction = processor.process_job(
                 snapshot_job_id,
                 owner="snapshot-quality-correction",

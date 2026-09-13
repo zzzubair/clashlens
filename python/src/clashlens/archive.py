@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import math
 import re
@@ -332,6 +333,107 @@ class S3ArchiveReader:
                     heartbeat()
         raise AssertionError("unreachable archive retry loop")
 
+    def write_immutable(self, body: bytes, expected_hash: str) -> str:
+        """Create one content-addressed object without replacing prior evidence.
+
+        A successful conditional write is sufficient. A conflict or ambiguous
+        outcome is accepted only after reading and hashing the exact object.
+        """
+        if not _HASH_RE.fullmatch(expected_hash):
+            raise ArchiveReadError(
+                "invalid_observation_hash",
+                "archive hash must be a lowercase SHA-256 digest",
+                retryable=False,
+            )
+        if len(body) > self.max_body_bytes:
+            raise ArchiveReadError(
+                "archive_body_too_large",
+                "archive body exceeds the configured byte limit",
+                retryable=False,
+            )
+        if hashlib.sha256(body).hexdigest() != expected_hash:
+            raise ArchiveReadError(
+                "archive_checksum_mismatch",
+                "archive body does not match its supplied hash",
+                retryable=False,
+            )
+        object_key = f"sha256/{expected_hash[:2]}/{expected_hash}"
+        reference = f"s3://{self.bucket}/{object_key}"
+        try:
+            self._execute_immutable_put(object_key, body, expected_hash)
+            return reference
+        except Exception as error:
+            code = error.code if isinstance(error, S3Error) else ""
+            status = (
+                getattr(error.response, "status", None)
+                if isinstance(error, S3Error)
+                else None
+            )
+            conflict = (
+                code in {"PreconditionFailed", "Conflict"} or status in {409, 412}
+            )
+            terminal = (
+                status in {400, 401, 403, 405, 501}
+                or code
+                in {
+                    "AccessDenied",
+                    "InvalidAccessKeyId",
+                    "SignatureDoesNotMatch",
+                    "InvalidRequest",
+                    "NotImplemented",
+                    "MethodNotAllowed",
+                    "NoSuchBucket",
+                    "InvalidBucketName",
+                    "AuthorizationHeaderMalformed",
+                    "PermanentRedirect",
+                    "InvalidRegion",
+                }
+            )
+            if terminal and not conflict:
+                raise ArchiveReadError(
+                    "archive_configuration_error",
+                    "archive rejected immutable object creation",
+                    retryable=False,
+                ) from error
+            try:
+                verified = self.read_verified(reference, expected_hash)
+            except ArchiveReadError as verification_error:
+                if verification_error.category == "archive_checksum_mismatch":
+                    raise
+                raise ArchiveReadError(
+                    "archive_unavailable",
+                    "archive write outcome could not be verified",
+                    retryable=not terminal,
+                ) from error
+            if len(verified.body) != len(body):
+                raise ArchiveReadError(
+                    "archive_checksum_mismatch",
+                    "archive object size does not match local evidence",
+                    retryable=False,
+                ) from error
+            return reference
+
+    def _execute_immutable_put(
+        self, object_key: str, body: bytes, expected_hash: str
+    ) -> None:
+        self.remote_attempts.setdefault("put", 0)
+        self.remote_attempts["put"] += 1
+        self.client._execute(
+            "PUT",
+            self.bucket,
+            object_key,
+            body=body,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(len(body)),
+                "Content-MD5": base64.b64encode(hashlib.md5(body).digest()).decode(
+                    "ascii"
+                ),
+                "If-None-Match": "*",
+                "X-Amz-Meta-Sha256": expected_hash,
+            },
+        )
+
     def _read_once(
         self,
         reference: str,
@@ -410,11 +512,16 @@ class SpoolFirstReader:
         free_inode_floor: int = 0,
         database: Any | None = None,
         stage_metrics: Any | None = None,
+        validate_database: bool = True,
     ) -> None:
         self.archive = archive
-        if database is not None:
+        if database is not None and validate_database:
             self.archive.validate_instance(database)
-        if getattr(archive, "instance_config", None) is not None and database is None:
+        if (
+            getattr(archive, "instance_config", None) is not None
+            and database is None
+            and validate_database
+        ):
             raise ValueError("PostgreSQL archive instance validation is required")
         self.spool = Spool(
             spool_root,

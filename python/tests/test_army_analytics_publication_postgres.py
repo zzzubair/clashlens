@@ -11,7 +11,12 @@ from time import monotonic
 from unittest.mock import Mock
 
 import pytest
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import (
+    domain_database,
+    enable_direct_army_fixture,
+    store_observation,
+    text,
+)
 from psycopg_pool import PoolTimeout
 
 from clashlens import api_db
@@ -41,6 +46,7 @@ DEFENDER_CODE = "u1x51"
 
 def _processor(connection_info: str, archive_server):
     database = Database(connection_info)
+    enable_direct_army_fixture(database)
     processor = ObservationProcessor(
         database,
         S3ArchiveReader(

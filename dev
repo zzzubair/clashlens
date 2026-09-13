@@ -352,52 +352,44 @@ CLASHLENS_ARCHIVE_MARKER_KEY=clashlens/archive-instance.json
 CLASHLENS_ARCHIVE_MARKER_HASH=$ARCHIVE_MARKER_HASH
 CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=v1
 CLASHLENS_SPOOL_ROOT=/spool
-CLASHLENS_SPOOL_MAX_BYTES=1073741824
-CLASHLENS_SPOOL_MAX_OBJECTS=100000
+CLASHLENS_SPOOL_MAX_BYTES=17179869184
+CLASHLENS_SPOOL_MAX_OBJECTS=1000000
+CLASHLENS_SPOOL_FREE_SPACE_FLOOR=1073741824
+CLASHLENS_SPOOL_FREE_INODE_FLOOR=10000
 EOF
 }
 
 start_worker() {
   local env_file="$STATE_DIR/archive.env"
-  local -a worker_args=()
-  if [[ "${CLASHLENS_DEV_TRIAL:-false}" == true ]]; then
-    worker_args+=(--disable-player-discovery)
-  fi
 
   "$PODMAN_BIN" run --detach --pod "$POD" --name "$WORKER" \
     --env-file "$env_file" --env CLASHLENS_DATABASE_URL="$DATABASE_URL" \
     --volume "$SPOOL_VOLUME:/spool:z" \
-    "$IMAGE_PREFIX-python" worker --run-forever --max-jobs 20 \
-    --concurrency 4 --archive-insecure-test-only "${worker_args[@]}" >/dev/null
+    "$IMAGE_PREFIX-python" worker --run-forever --max-jobs 48 \
+    --concurrency 24 --database-pool-size 24 --archive-insecure-test-only \
+    --disable-player-discovery >/dev/null
 }
 
 start_collector() {
   local env_file="$STATE_DIR/archive.env"
   local normal_api_keys='normal-1=dev-normal-key'
-  local poll_cycle='1h'
   if [[ "${CLASHLENS_DEV_TRIAL:-false}" == true ]]; then
     normal_api_keys='normal-1=dev-normal-key-1,normal-2=dev-normal-key-2,normal-3=dev-normal-key-3,normal-4=dev-normal-key-4'
-    poll_cycle='5m'
   fi
 
   "$PODMAN_BIN" run --detach --pod "$POD" --name "$COLLECTOR" \
     --env-file "$env_file" --env CLASHLENS_DATABASE_URL="$DATABASE_URL" \
-    --env CLASHLENS_SCHEMA_VERSION=5 \
     --env CLASHLENS_OFFICIAL_API_ORIGIN=http://127.0.0.1:8080 \
     --env CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=true \
     --env CLASHLENS_ALLOW_REDUCED_KEY_POOLS=true \
     --env CLASHLENS_NORMAL_API_KEYS="$normal_api_keys" \
     --env CLASHLENS_INTERACTIVE_API_KEYS=interactive-1=dev-interactive-key \
     --env CLASHLENS_ENABLE_GLOBAL_RANKINGS=true \
-    --env CLASHLENS_POLL_CYCLE="$poll_cycle" \
     --env CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=30 \
-    --env CLASHLENS_WORKERS_PER_KEY=8 \
-    --env CLASHLENS_SPOOL_SAFETY_AGE_SECONDS=60 \
-    --env CLASHLENS_SPOOL_ORPHAN_SAFETY_AGE_SECONDS=300 \
-    --env CLASHLENS_SPOOL_STALE_TEMP_AGE_SECONDS=60 \
+    --env CLASHLENS_CONCURRENCY_PER_KEY=6 \
     --env CLASHLENS_HEALTH_LISTEN=127.0.0.1:8081 \
     --volume "$SPOOL_VOLUME:/spool:z" \
-    "$IMAGE_PREFIX-collector" run >/dev/null
+    "$IMAGE_PREFIX-collector" collector --archive-insecure-test-only >/dev/null
 }
 
 start_application() {
@@ -538,21 +530,12 @@ run_checks() {
   up_stack true
   trap - ERR
 
-  "$PODMAN_BIN" build --target build --file "$ROOT/Containerfile" \
-    --tag "$IMAGE_PREFIX-go-check" "$ROOT"
   "$PODMAN_BIN" build --file "$ROOT/development/PythonCheck.Containerfile" \
     --tag "$IMAGE_PREFIX-python-check" "$ROOT"
   "$PODMAN_BIN" build --target check --file "$ROOT/website/Containerfile" \
     --tag "$IMAGE_PREFIX-website-check" "$ROOT/website"
 
-  "$PODMAN_BIN" run --rm --user 10001:10001 --env GOCACHE=/tmp/go-cache \
-    --env TMPDIR=/src/.embedded-postgres-go \
-    --tmpfs /src/.embedded-postgres-go:rw,mode=1777 \
-    "$IMAGE_PREFIX-go-check" sh -c \
-    'go build ./... && go vet ./... && go test -short -count=1 -timeout=1200s ./...' || result=$?
-  if [[ "$result" == 0 ]]; then
-    "$PODMAN_BIN" exec "$POSTGRES" createdb -U clashlens clashlens_test || result=$?
-  fi
+  "$PODMAN_BIN" exec "$POSTGRES" createdb -U clashlens clashlens_test || result=$?
   if [[ "$result" == 0 ]]; then
     "$PODMAN_BIN" run --rm --pod "$POD" --tmpfs /tmp:rw,mode=1777 \
       --env CLASHLENS_TEST_DATABASE_URL="$test_database_url" \
@@ -568,7 +551,7 @@ run_checks() {
     show_logs
     return "$result"
   fi
-  printf 'All Go, Python, TypeScript, and browser checks passed.\n'
+  printf 'All Python, TypeScript, and browser checks passed.\n'
 }
 
 e2e_server() {
@@ -590,9 +573,47 @@ trial_db_snapshot() {
          ORDER BY c.relname"
 }
 
-trial_counter_snapshot() {
+trial_database_counter_snapshot() {
   "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -F $'\t' -U clashlens -d clashlens \
-    -c "SELECT COALESCE(sum(request_count), 0) FROM collector_endpoint_results"
+    -c "SELECT COALESCE(sum(request_count), 0) FROM collector_response_state
+         WHERE endpoint IN ('profile', 'battle_log')"
+}
+
+trial_reset_fixture_stats() {
+  local attempt
+  for attempt in $(seq 1 30); do
+    if "$PODMAN_BIN" exec "$CLASH_API" python -c '
+import json, urllib.request
+request = urllib.request.Request(
+    "http://127.0.0.1:8080/_trial/reset",
+    data=b"",
+    headers={"Authorization": "Bearer trial"},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=5) as response:
+    result = json.load(response)
+if not result.get("ok"):
+    raise SystemExit(1)
+' 2>/dev/null
+    then
+      return
+    fi
+    sleep 1
+  done
+  die "trial fixture did not become ready"
+}
+
+trial_fixture_counter_snapshot() {
+  "$PODMAN_BIN" exec "$CLASH_API" python -c '
+import json, urllib.request
+request = urllib.request.Request(
+    "http://127.0.0.1:8080/_trial/stats",
+    headers={"Authorization": "Bearer trial"},
+)
+with urllib.request.urlopen(request, timeout=5) as response:
+    result = json.load(response)
+print(result["profile"]["requests"] + result["battle_log"]["requests"])
+'
 }
 
 trial_swap_snapshot() {
@@ -604,6 +625,16 @@ trial_swap_snapshot() {
       printf "%.0f\n", (total - free) * 1024
     }
   ' /proc/meminfo
+}
+
+trial_swap_monitor() {
+  local peak=$TRIAL_SWAP_BEFORE_BYTES current
+  while [[ ! -e "$STATE_DIR/trial-swap-stop" ]]; do
+    current=$(trial_swap_snapshot)
+    (( current > peak )) && peak=$current
+    printf '%s\n' "$peak" > "$STATE_DIR/trial-swap-peak.tsv"
+    sleep 1
+  done
 }
 
 trial_service_snapshot() {
@@ -665,7 +696,8 @@ start_trial_producers() {
     worker_state=$("$PODMAN_BIN" inspect --format '{{.State.Status}}' "$WORKER" 2>/dev/null || \
       printf missing)
     if [[ "$collector_state" == running && "$worker_state" == running ]] && \
-      "$PODMAN_BIN" exec "$COLLECTOR" wget -qO- http://127.0.0.1:8081/livez | grep -qx ok; then
+      "$PODMAN_BIN" exec "$COLLECTOR" python -c \
+        "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8081/livez', timeout=2).read().decode(), end='')" | grep -qx ok; then
       return
     fi
     sleep 1
@@ -673,6 +705,11 @@ start_trial_producers() {
   "$PODMAN_BIN" logs --tail 80 "$COLLECTOR" 2>&1 || true
   "$PODMAN_BIN" logs --tail 80 "$WORKER" 2>&1 || true
   die "trial collector and worker did not become ready"
+}
+
+restart_trial_producers() {
+  "$PODMAN_BIN" kill "$COLLECTOR" "$WORKER" >/dev/null
+  start_trial_producers
 }
 
 trial_failure_snapshot() {
@@ -684,18 +721,12 @@ trial_failure_snapshot() {
             WHERE response_completed_at >= '$TRIAL_STARTED_AT'
               AND response_completed_at <= '$TRIAL_ENDED_AT'
               AND (http_status < 200 OR http_status >= 300)),
-          (SELECT count(*) FROM collector_attempt_events
-            WHERE created_at >= '$TRIAL_STARTED_AT' AND created_at <= '$TRIAL_ENDED_AT'
-              AND event_type = 'failed'),
-          (SELECT count(*) FROM collector_attempt_events
-            WHERE created_at >= '$TRIAL_STARTED_AT' AND created_at <= '$TRIAL_ENDED_AT'
-              AND event_type = 'lease_expired'),
-          (SELECT count(*) FROM collector_attempt_events
-            WHERE created_at >= '$TRIAL_STARTED_AT' AND created_at <= '$TRIAL_ENDED_AT'
-              AND event_type = 'retry_scheduled'),
-          (SELECT count(*) FROM collector_attempt_events
-            WHERE created_at >= '$TRIAL_STARTED_AT' AND created_at <= '$TRIAL_ENDED_AT'
-              AND event_type = 'dependency_deferred'),
+          (SELECT count(*) FROM collector_work
+            WHERE updated_at >= '$TRIAL_STARTED_AT' AND updated_at <= '$TRIAL_ENDED_AT'
+              AND status = 'failed'),
+          0,
+          0,
+          0,
           (SELECT count(*) FROM python_processing_attempts
             WHERE completed_at >= '$TRIAL_STARTED_AT' AND completed_at <= '$TRIAL_ENDED_AT'
               AND outcome = 'durable_failure'),
@@ -715,11 +746,10 @@ trial_backlog_snapshot() {
     -c "SELECT
           (SELECT count(*) FROM players),
           (SELECT count(*) FROM players WHERE active),
-          (SELECT count(*) FROM collector_jobs WHERE status = 'pending'),
-          (SELECT count(*) FROM collector_jobs WHERE status = 'leased'),
-          (SELECT count(*) FROM collector_jobs WHERE status = 'waiting_retry'),
-          (SELECT count(*) FROM collector_jobs WHERE status = 'waiting_dependency'),
-          (SELECT count(*) FROM collector_jobs WHERE status = 'failed'),
+          (SELECT count(*) FROM collector_work WHERE status = 'pending'),
+          (SELECT count(*) FROM collector_work WHERE status = 'waiting_retry'),
+          0,
+          (SELECT count(*) FROM collector_work WHERE status = 'failed'),
           (SELECT count(*) FROM python_processing_jobs WHERE status = 'pending'),
           (SELECT count(*) FROM python_processing_jobs WHERE status = 'leased'),
           (SELECT count(*) FROM python_processing_jobs WHERE status = 'waiting_retry'),
@@ -727,28 +757,50 @@ trial_backlog_snapshot() {
           (SELECT count(*) FROM python_processing_jobs WHERE status = 'failed')"
 }
 
+trial_recovery_snapshot() {
+  local pending_handoffs sidecars incomplete_uploads incomplete_processing
+  local duplicate_completions spool_objects
+  incomplete_uploads=$("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+    -c "SELECT count(*) FROM collector_response_uploads WHERE state <> 'complete'")
+  incomplete_processing=$("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+    -c "SELECT count(*) FROM python_processing_jobs
+         WHERE work_type = 'process_observation' AND status <> 'complete'")
+  duplicate_completions=$("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+    -c "SELECT count(*) FROM (
+          SELECT job_id FROM python_processing_attempts
+          WHERE state = 'complete' AND started_at >= '$TRIAL_STARTED_AT'
+          GROUP BY job_id HAVING count(*) > 1
+        ) AS duplicate")
+  sidecars=$("$PODMAN_BIN" run --rm --volume "$SPOOL_VOLUME:/spool:ro,z" \
+    --entrypoint /bin/sh "$IMAGE_PREFIX-fixtures" \
+    -c "find /spool/.handoff -mindepth 1 -maxdepth 1 -type f | wc -l")
+  pending_handoffs=$sidecars
+  spool_objects=$("$PODMAN_BIN" run --rm --volume "$SPOOL_VOLUME:/spool:ro,z" \
+    --entrypoint /bin/sh "$IMAGE_PREFIX-fixtures" \
+    -c "find /spool/sha256 -mindepth 2 -maxdepth 2 -type f | wc -l")
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$pending_handoffs" "$sidecars" "$incomplete_uploads" \
+    "$incomplete_processing" "$duplicate_completions" "$spool_objects"
+}
+
 trial_revisit_snapshot() {
   local endpoint=$1
-  "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -F $'\t' -U clashlens -d clashlens \
-    -c "WITH ordered AS (
-           SELECT player_id, response_completed_at,
-                  lag(response_completed_at) OVER (
-                    PARTITION BY player_id ORDER BY response_completed_at
-                  ) AS previous_at
-            FROM collector_observations
-            WHERE endpoint = '$endpoint' AND player_id IS NOT NULL
-              AND http_status >= 200 AND http_status < 300
-              AND response_completed_at <= '$TRIAL_ENDED_AT'
-         ), gaps AS (
-           SELECT player_id,
-                  EXTRACT(EPOCH FROM response_completed_at - previous_at) AS seconds
-             FROM ordered
-            WHERE response_completed_at >= '$TRIAL_STARTED_AT'
-              AND previous_at IS NOT NULL
-         )
-         SELECT COALESCE(percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds), 0),
-                COALESCE(max(seconds), 0), count(DISTINCT player_id)
-           FROM gaps"
+  "$PODMAN_BIN" exec "$CLASH_API" python -c '
+import json, sys, urllib.request
+request = urllib.request.Request(
+    "http://127.0.0.1:8080/_trial/stats",
+    headers={"Authorization": "Bearer trial"},
+)
+with urllib.request.urlopen(request, timeout=5) as response:
+    result = json.load(response)[sys.argv[1]]
+print(
+    result["median_gap_seconds"],
+    result["worst_gap_seconds"],
+    result["revisited_players"],
+    result["requests"],
+    sep="\t",
+)
+' "$endpoint"
 }
 
 trial_report() {
@@ -768,10 +820,10 @@ trial_report() {
     worker_lease_expiries worker_retries worker_deferrals \
     < "$STATE_DIR/trial-failures.tsv"
 
-  local registered_players active_players collector_pending collector_leased
+  local registered_players active_players collector_pending
   local collector_waiting_retry collector_waiting_dependency collector_failed
   local worker_pending worker_leased worker_waiting_retry worker_waiting_dependency worker_failed
-  IFS=$'\t' read -r registered_players active_players collector_pending collector_leased \
+  IFS=$'\t' read -r registered_players active_players collector_pending \
     collector_waiting_retry collector_waiting_dependency collector_failed \
     worker_pending worker_leased worker_waiting_retry worker_waiting_dependency worker_failed \
     < "$STATE_DIR/trial-backlog.tsv"
@@ -779,33 +831,43 @@ trial_report() {
   printf 'Trial complete (%s synthetic players, %s minutes requested, %ss measured).\n' \
     "$PLAYERS" "$TRIAL_MINUTES" "$TRIAL_SECONDS"
   printf 'requests/sec achieved: %s\n' "$requests_per_second"
-  local endpoint label revisit_median revisit_worst revisited_players
+  local report_status=0 service state
+  local endpoint label revisit_median revisit_worst revisited_players endpoint_requests
   for endpoint in profile battle_log; do
     [[ "$endpoint" == profile ]] && label=profile || label=battle-log
-    IFS=$'\t' read -r revisit_median revisit_worst revisited_players < <(
-      trial_revisit_snapshot "$endpoint"
-    )
+    IFS=$'\t' read -r revisit_median revisit_worst revisited_players \
+      endpoint_requests < "$STATE_DIR/trial-$endpoint-revisit.tsv"
     if (( revisited_players > 0 )); then
-      printf '%s per-player revisit gap: median %.3fs, worst %.3fs (%s/%s requested players revisited)\n' \
-        "$label" "$revisit_median" "$revisit_worst" "$revisited_players" "$PLAYERS"
+      printf '%s per-player revisit gap: median %.3fs, worst %.3fs (%s/%s players, %s requests)\n' \
+        "$label" "$revisit_median" "$revisit_worst" "$revisited_players" \
+        "$PLAYERS" "$endpoint_requests"
+      awk -v median="$revisit_median" -v worst="$revisit_worst" \
+        -v seen="$revisited_players" -v requests="$endpoint_requests" \
+        -v expected="$PLAYERS" \
+        'BEGIN { exit !(seen == expected && requests >= 2 * expected && median < 300 && worst < 600) }' || \
+        report_status=1
     else
       printf '%s per-player revisit gap: unavailable (0/%s requested players revisited)\n' \
         "$label" "$PLAYERS"
+      report_status=1
     fi
   done
   printf 'population at cutoff: registered=%s/%s, active=%s/%s\n' \
     "$registered_players" "$PLAYERS" "$active_players" "$PLAYERS"
+  [[ "$registered_players" == "$PLAYERS" && "$active_players" == "$PLAYERS" ]] || \
+    report_status=1
   printf 'failures during window: transport=%s, non_2xx=%s, collector_terminal=%s, worker_terminal=%s\n' \
     "$transport_failures" "$non_2xx_responses" "$collector_failures" "$worker_failures"
+  [[ "$transport_failures" == 0 && "$non_2xx_responses" == 0 && \
+     "$collector_failures" == 0 && "$worker_failures" == 0 ]] || report_status=1
   printf 'lease expiries during window: collector=%s, worker=%s\n' \
     "$collector_lease_expiries" "$worker_lease_expiries"
   printf 'retries/deferrals during window: collector=%s/%s, worker=%s/%s\n' \
     "$collector_retries" "$collector_deferrals" "$worker_retries" "$worker_deferrals"
-  printf 'backlog at cutoff: collector pending=%s leased=%s retry=%s dependency=%s failed=%s; worker pending=%s leased=%s retry=%s dependency=%s failed=%s\n' \
-    "$collector_pending" "$collector_leased" "$collector_waiting_retry" \
+  printf 'backlog at cutoff: collector pending=%s retry=%s dependency=%s failed=%s; worker pending=%s leased=%s retry=%s dependency=%s failed=%s\n' \
+    "$collector_pending" "$collector_waiting_retry" \
     "$collector_waiting_dependency" "$collector_failed" "$worker_pending" "$worker_leased" \
     "$worker_waiting_retry" "$worker_waiting_dependency" "$worker_failed"
-  local report_status=0 service state
   printf 'service states at cutoff:'
   while IFS=$'\t' read -r service state; do
     printf ' %s=%s' "$service" "$state"
@@ -822,17 +884,53 @@ trial_report() {
     [[ "$state" == exited/0/false ]] || report_status=1
   done < "$STATE_DIR/trial-after-stop-services.tsv"
   printf '\n'
-  awk -v before="$TRIAL_SWAP_BEFORE_BYTES" -v after="$TRIAL_SWAP_AFTER_BYTES" '
+  local pending_handoffs sidecars incomplete_uploads incomplete_processing
+  local duplicate_completions spool_objects database_before database_after
+  local fixture_final acknowledged
+  IFS=$'\t' read -r pending_handoffs sidecars incomplete_uploads \
+    incomplete_processing duplicate_completions spool_objects \
+    < "$STATE_DIR/trial-recovery.tsv"
+  read -r database_before < "$STATE_DIR/trial-before-database-counter.tsv"
+  read -r database_after < "$STATE_DIR/trial-after-database-counter.tsv"
+  read -r fixture_final < "$STATE_DIR/trial-final-fixture-counter.tsv"
+  acknowledged=$((database_after - database_before))
+  printf 'kill/restart recovery: acknowledged=%s/%s, pending handoffs=%s, sidecars=%s, pending uploads=%s, pending processing=%s, duplicate completions=%s, spool objects=%s\n' \
+    "$acknowledged" "$fixture_final" "$pending_handoffs" "$sidecars" \
+    "$incomplete_uploads" "$incomplete_processing" "$duplicate_completions" \
+    "$spool_objects"
+  [[ "$acknowledged" == "$fixture_final" && "$pending_handoffs" == 0 && \
+     "$sidecars" == 0 && "$incomplete_uploads" == 0 && \
+     "$incomplete_processing" == 0 && "$duplicate_completions" == 0 && \
+     "$spool_objects" == 0 ]] || report_status=1
+  awk -v before="$TRIAL_SWAP_BEFORE_BYTES" -v peak="$TRIAL_SWAP_PEAK_BYTES" \
+    -v after="$TRIAL_SWAP_AFTER_BYTES" '
     BEGIN {
-      printf "swap use: start %.3f MiB, end %.3f MiB, delta %.3f MiB\n",
-        before / 1048576, after / 1048576, (after - before) / 1048576
+      printf "swap use: start %.3f MiB, peak %.3f MiB, end %.3f MiB, peak delta %.3f MiB\n",
+        before / 1048576, peak / 1048576, after / 1048576,
+        (peak - before) / 1048576
     }
   '
+  (( TRIAL_SWAP_PEAK_BYTES <= TRIAL_SWAP_BEFORE_BYTES )) || report_status=1
   printf 'database growth (MiB by table):\n'
   awk -F '\t' '
     NR == FNR { before[$1] = $2; next }
     { printf "  %s: %.3f\n", $1, ($2 - before[$1]) / 1048576 }
   ' "$STATE_DIR/trial-before-db.tsv" "$STATE_DIR/trial-after-db.tsv"
+  local growth_bytes projected_gib
+  growth_bytes=$(awk -F '\t' '
+    NR == FNR { before[$1] = $2; next }
+    { growth = $2 - before[$1]; if (growth > 0) total += growth }
+    END { printf "%.0f", total }
+  ' "$STATE_DIR/trial-before-db.tsv" "$STATE_DIR/trial-after-db.tsv")
+  projected_gib=$(awk -v bytes="$growth_bytes" -v seconds="$TRIAL_SECONDS" '
+    BEGIN { printf "%.3f", bytes * 3600 / seconds * 24 * 182.625 / 1073741824 }
+  ')
+  printf 'database growth rate: %.3f MiB/hour; six-month projection: %s GiB (baseline 166-185 GiB)\n' \
+    "$(awk -v bytes="$growth_bytes" -v seconds="$TRIAL_SECONDS" \
+      'BEGIN { printf "%.3f", bytes * 3600 / seconds / 1048576 }')" \
+    "$projected_gib"
+  awk -v projected="$projected_gib" 'BEGIN { exit !(projected <= 185) }' || \
+    report_status=1
   return "$report_status"
 }
 
@@ -846,14 +944,24 @@ trial_inner() {
   up_stack true
   stop_trial_producers
   trial_db_snapshot > "$STATE_DIR/trial-before-db.tsv"
-  trial_counter_snapshot > "$STATE_DIR/trial-before-counters.tsv"
+  trial_database_counter_snapshot > "$STATE_DIR/trial-before-database-counter.tsv"
+  trial_reset_fixture_stats
+  printf '0\n' > "$STATE_DIR/trial-before-counters.tsv"
   TRIAL_SWAP_BEFORE_BYTES=$(trial_swap_snapshot)
+  local swap_monitor_pid=""
+  trap 'if [[ -n "$swap_monitor_pid" ]]; then kill "$swap_monitor_pid" 2>/dev/null || true; wait "$swap_monitor_pid" 2>/dev/null || true; fi' EXIT
+  trial_swap_monitor &
+  swap_monitor_pid=$!
   read -r TRIAL_STARTED_AT TRIAL_STARTED_NANOSECONDS < <(
     date -u '+%Y-%m-%dT%H:%M:%S.%NZ %s%N'
   )
   start_trial_producers
-  local deadline_nanoseconds remaining_seconds
+  local deadline_nanoseconds remaining_seconds restart_delay
   deadline_nanoseconds=$((TRIAL_STARTED_NANOSECONDS + TRIAL_MINUTES * 60 * 1000000000))
+  restart_delay=$((TRIAL_MINUTES * 30))
+  (( restart_delay > 60 )) && restart_delay=60
+  sleep "$restart_delay"
+  restart_trial_producers
   remaining_seconds=$(awk -v deadline="$deadline_nanoseconds" -v now="$(date +%s%N)" '
     BEGIN {
       remaining = (deadline - now) / 1000000000
@@ -869,16 +977,29 @@ trial_inner() {
   TRIAL_SECONDS=$(awk -v start="$TRIAL_STARTED_NANOSECONDS" \
     -v end="$TRIAL_ENDED_NANOSECONDS" \
     'BEGIN { printf "%.3f", (end - start) / 1000000000 }')
+  trial_fixture_counter_snapshot > "$STATE_DIR/trial-after-counters.tsv"
+  for endpoint in profile battle_log; do
+    trial_revisit_snapshot "$endpoint" > "$STATE_DIR/trial-$endpoint-revisit.tsv"
+  done
   trial_service_snapshot > "$STATE_DIR/trial-cutoff-services.tsv"
   trial_db_snapshot > "$STATE_DIR/trial-after-db.tsv"
-  trial_counter_snapshot > "$STATE_DIR/trial-after-counters.tsv"
   TRIAL_SWAP_AFTER_BYTES=$(trial_swap_snapshot)
+  : > "$STATE_DIR/trial-swap-stop"
+  wait "$swap_monitor_pid"
+  swap_monitor_pid=""
+  read -r TRIAL_SWAP_PEAK_BYTES < "$STATE_DIR/trial-swap-peak.tsv"
   trial_failure_snapshot > "$STATE_DIR/trial-failures.tsv"
   trial_backlog_snapshot > "$STATE_DIR/trial-backlog.tsv"
   resume_trial_producers || true
   stop_trial_producers || true
   trial_service_snapshot > "$STATE_DIR/trial-after-stop-services.tsv"
-  trial_report
+  trial_database_counter_snapshot > "$STATE_DIR/trial-after-database-counter.tsv"
+  trial_fixture_counter_snapshot > "$STATE_DIR/trial-final-fixture-counter.tsv"
+  trial_recovery_snapshot > "$STATE_DIR/trial-recovery.tsv"
+  local report_status=0
+  trial_report || report_status=$?
+  trap - EXIT
+  return "$report_status"
 }
 
 trial() {

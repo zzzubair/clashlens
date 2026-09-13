@@ -93,7 +93,9 @@ class FakeOfficialVerifier:
 def test_caller_operation_matrix_google_beta_and_complete_private_operations(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         seed_profile(database, "#2PP", 6000)
         verifier = FakeOfficialVerifier()
@@ -471,7 +473,9 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
 def test_linked_elsewhere_requires_one_bounded_support_candidate(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         seed_profile(database, "#2PP", 6000)
         verifier = FakeOfficialVerifier()
@@ -657,14 +661,18 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
                 )
                 assert invalid.status_code == 422
 
-            database.get_army_analytics = lambda _selection, now=None: (_ for _ in ()).throw(  # type: ignore[method-assign]
+            database.get_army_analytics = lambda _selection, now=None: (
+                _ for _ in ()
+            ).throw(  # type: ignore[method-assign]
                 ArmyAnalyticsUnavailable([2, 4])
             )
             unavailable = client.get(target, headers=signed_headers(target))
             assert unavailable.status_code == 404
             assert unavailable.json()["affected_days"] == [2, 4]
 
-            database.get_army_analytics = lambda _selection, now=None: (_ for _ in ()).throw(  # type: ignore[method-assign]
+            database.get_army_analytics = lambda _selection, now=None: (
+                _ for _ in ()
+            ).throw(  # type: ignore[method-assign]
                 CurrentSeasonEmpty("2026-07")
             )
             empty = client.get(
@@ -681,7 +689,9 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
 def test_public_player_read_p95_is_below_200_milliseconds(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         seed_profile(database, "#2PP", 6000)
         app = create_app(
@@ -719,8 +729,14 @@ def test_leaderboard_rejects_misaligned_selectors_and_missing_pages(
                     "/v1/leaderboards/live?limit=100&offset=1",
                     "/v1/leaderboards/frozen?official_season_id=2026-08",
                 ):
-                    assert client.get(target, headers=signed_headers(target)).status_code == 422
+                    assert (
+                        client.get(target, headers=signed_headers(target)).status_code
+                        == 422
+                    )
                 missing = "/v1/leaderboards/live?limit=100&offset=100"
-                assert client.get(missing, headers=signed_headers(missing)).status_code == 404
+                assert (
+                    client.get(missing, headers=signed_headers(missing)).status_code
+                    == 404
+                )
         finally:
             database.close()

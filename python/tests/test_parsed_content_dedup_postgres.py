@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
 
 import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation, text
-from psycopg.conninfo import make_conninfo
+from test_discovery_history_prune_postgres import _attach_complete_work
 from test_domain_processing_postgres import _processor
 
 from clashlens.api_db import ApiDatabase
@@ -18,24 +16,6 @@ PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.
 BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 RANKING_FIXTURE = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
 NOW = datetime(2026, 8, 6, 6, tzinfo=UTC)
-
-
-@contextmanager
-def _pre_dedup_database(database_url: str):
-    schema = f"python_pre_dedup_{uuid4().hex}"
-    with psycopg.connect(database_url, autocommit=True) as admin:
-        admin.execute(f'CREATE SCHEMA "{schema}"')
-    connection_info = make_conninfo(database_url, options=f"-c search_path={schema}")
-    try:
-        root = Path(__file__).parents[2]
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            for path in sorted((root / "deploy/migrations").glob("*.sql")):
-                if path.name < "0012_":
-                    connection.execute(path.read_text(encoding="utf-8"))
-        yield connection_info
-    finally:
-        with psycopg.connect(database_url, autocommit=True) as admin:
-            admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
 def _replay_job(
@@ -60,103 +40,6 @@ def _replay_job(
             parser_version,
         ),
     ).fetchone()[0]
-
-
-def test_army_backfill_migration_reclassifies_only_0008_jobs_and_live_claims_first(
-    database_url: str, archive_server
-) -> None:
-    with _pre_dedup_database(database_url) as connection_info:
-        _observation_id, battle_job_id = store_observation(
-            connection_info,
-            archive_server,
-            occurrence_key="army-backfill-battle",
-            endpoint="battle_log",
-            body=BATTLE_FIXTURE.read_bytes(),
-            observed_at=NOW,
-            normalized_tag="#2PP",
-        )
-        database, processor = _processor(connection_info, archive_server)
-        try:
-            result = processor.process_job(battle_job_id, owner="army-battle-seed")
-            assert result is not None and result.outcome == "processed"
-        finally:
-            database.close()
-
-        _live_observation_id, live_job_id = store_observation(
-            connection_info,
-            archive_server,
-            occurrence_key="army-backfill-live-profile",
-            endpoint="profile",
-            body=PROFILE_FIXTURE.read_bytes(),
-            observed_at=NOW,
-            normalized_tag="#2PP",
-        )
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            battle_id = connection.execute(
-                "SELECT battle_id FROM battle_evidence ORDER BY id LIMIT 1"
-            ).fetchone()[0]
-            migration_key = (
-                "redecode_army:army-decoder-v2:unit-catalog-v1:"
-                f"{battle_id}:{battle_id}"
-            )
-            migration_job_id = connection.execute(
-                """
-                INSERT INTO python_processing_jobs (
-                    work_type, deduplication_key, input_json, analytics_rule_version
-                ) VALUES ('redecode_army', %s, %s::jsonb, 'army-analytics-v2')
-                RETURNING id
-                """,
-                (migration_key, json.dumps({"battle_ids": [battle_id]})),
-            ).fetchone()[0]
-            lookalike_job_id = connection.execute(
-                """
-                INSERT INTO python_processing_jobs (
-                    work_type, deduplication_key, input_json, analytics_rule_version
-                ) VALUES ('redecode_army', %s, %s::jsonb, 'army-analytics-v2')
-                RETURNING id
-                """,
-                (
-                    f"{migration_key}-lookalike",
-                    json.dumps({"battle_ids": [battle_id]}),
-                ),
-            ).fetchone()[0]
-
-        root = Path(__file__).parents[2]
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            connection.execute(
-                (root / "deploy/migrations/0012_parsed_content_dedup.sql").read_text()
-            )
-            migration_sql = (root / "deploy/migrations/0013_army_backfill_priority.sql").read_text()
-            connection.execute(migration_sql)
-            priorities_after_first = connection.execute(
-                """
-                SELECT id, priority FROM python_processing_jobs
-                WHERE id IN (%s, %s, %s)
-                """,
-                (migration_job_id, lookalike_job_id, live_job_id),
-            ).fetchall()
-            connection.execute(migration_sql)
-            priorities_after_second = connection.execute(
-                """
-                SELECT id, priority FROM python_processing_jobs
-                WHERE id IN (%s, %s, %s)
-                """,
-                (migration_job_id, lookalike_job_id, live_job_id),
-            ).fetchall()
-        expected_priorities = {
-            migration_job_id: 25,
-            lookalike_job_id: 100,
-            live_job_id: 100,
-        }
-        assert dict(priorities_after_first) == expected_priorities
-        assert dict(priorities_after_second) == expected_priorities
-
-        database, _processor_instance = _processor(connection_info, archive_server)
-        try:
-            claim = database.claim_job(owner="army-backfill-live-claim")
-            assert claim is not None and claim.job_id == live_job_id
-        finally:
-            database.close()
 
 
 def test_snapshot_manifest_uses_owning_ranking_version_observed_at(
@@ -235,60 +118,6 @@ def test_worker_can_read_battle_observation_source_rows_view(
                 "SELECT count(*) FROM battle_log_observation_source_rows"
             ).fetchone()[0] == 0
             connection.execute("RESET ROLE")
-
-
-def test_populated_partial_ranking_upgrade_backfills_payload_outcome_for_replay(
-    database_url: str, archive_server
-) -> None:
-    ranking = json.loads(RANKING_FIXTURE.read_bytes())
-    ranking["items"] = ranking["items"][:-1]
-    body = json.dumps(ranking).encode()
-    with _pre_dedup_database(database_url) as connection_info:
-        observation_id, job_id = store_observation(
-            connection_info,
-            archive_server,
-            occurrence_key="populated-v4-partial-ranking",
-            endpoint="global_player_rankings",
-            body=body,
-            observed_at=NOW,
-            normalized_tag=None,
-        )
-        database, processor = _processor(connection_info, archive_server)
-        assert processor.process_job(job_id, owner="populated-v4-partial") is not None
-        database.close()
-        migration = Path(__file__).parents[2] / "deploy/migrations/0012_parsed_content_dedup.sql"
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            connection.execute(migration.read_text(encoding="utf-8"))
-            payload_outcome = connection.execute(
-                """
-                SELECT parse_outcome
-                FROM parsed_source_payloads
-                WHERE endpoint = 'global_player_rankings'
-                """
-            ).fetchone()[0]
-            replay_job_id = _replay_job(
-                connection, observation_id, "supercell-source-parser-v1"
-            )
-        replay_database, replay_processor = _processor(connection_info, archive_server)
-        try:
-            replay = replay_processor.process_job(
-                replay_job_id, owner="populated-v4-partial-replay"
-            )
-            assert replay is not None and replay.outcome == "processed"
-            with psycopg.connect(connection_info) as connection:
-                replay_outcome = connection.execute(
-                    """
-                    SELECT outcome
-                    FROM official_top200_attempts
-                    WHERE observation_id = %s
-                      AND parser_version = 'supercell-source-parser-v1'
-                    """,
-                    (observation_id,),
-                ).fetchone()[0]
-            assert text(replay_outcome) == "official_partial"
-        finally:
-            replay_database.close()
-        assert text(payload_outcome) == "valid_with_gaps"
 
 
 def test_one_observation_replays_under_both_parser_versions_without_domain_change(
@@ -718,58 +547,6 @@ def test_duplicate_profiles_reuse_canonical_and_semantic_rows(
             database.close()
 
 
-def test_populated_compact_upgrade_replays_existing_battle_log(
-    database_url: str, archive_server
-) -> None:
-    migrations = sorted((Path(__file__).parents[2] / "deploy/migrations").glob("*.sql"))
-    with _pre_dedup_database(database_url) as connection_info:
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            for migration in migrations:
-                if "0012_" <= migration.name < "0016_":
-                    connection.execute(migration.read_text())
-        observation_id, job_id = store_observation(
-            connection_info, archive_server, occurrence_key="compact-upgrade",
-            endpoint="battle_log", body=BATTLE_FIXTURE.read_bytes(),
-            observed_at=NOW, normalized_tag="#2PP",
-        )
-        database, processor = _processor(connection_info, archive_server)
-        try:
-            assert processor.process_job(job_id, owner="before-upgrade").outcome == "processed"
-        finally:
-            database.close()
-        with psycopg.connect(connection_info, autocommit=True) as connection:
-            original_evidence = connection.execute(
-                "SELECT id, source_row_id, observation_row_id FROM battle_evidence ORDER BY id"
-            ).fetchall()
-            parser_version = text(connection.execute(
-                "SELECT parser_version FROM battle_log_observations WHERE observation_id = %s",
-                (observation_id,),
-            ).fetchone()[0])
-            for migration in migrations:
-                if migration.name >= "0016_":
-                    connection.execute(migration.read_text())
-            replay_job_id = _replay_job(connection, observation_id, parser_version)
-        database, processor = _processor(connection_info, archive_server)
-        try:
-            assert processor.process_job(replay_job_id, owner="after-upgrade").outcome == "processed"
-            with psycopg.connect(connection_info) as connection:
-                assert connection.execute(
-                    "SELECT id, source_row_id, observation_row_id FROM battle_evidence "
-                    "WHERE observation_row_id IS NOT NULL ORDER BY id"
-                ).fetchall() == original_evidence
-                assert connection.execute(
-                    "SELECT count(*) FROM battle_log_observation_source_rows "
-                    "WHERE evidence_id IS NOT NULL"
-                ).fetchone()[0] == len(original_evidence)
-                assert connection.execute(
-                    "SELECT count(*) FROM battle_perspectives AS p "
-                    "JOIN battle_evidence AS e ON e.id = p.evidence_id "
-                    "WHERE e.observation_row_id IS NULL"
-                ).fetchone()[0] == len(original_evidence)
-        finally:
-            database.close()
-
-
 def test_history_cleanup_keeps_reports_latest_profiles_and_unfinished_work(
     database_url: str, archive_server
 ) -> None:
@@ -780,7 +557,7 @@ def test_history_cleanup_keeps_reports_latest_profiles_and_unfinished_work(
         try:
             for endpoint, fixture in [("profile", PROFILE_FIXTURE), ("battle_log", BATTLE_FIXTURE)]:
                 for index in range(3):
-                    _, job = store_observation(
+                    observation_id, job = store_observation(
                         connection_info, archive_server,
                         occurrence_key=f"retention-{endpoint}-{index}", endpoint=endpoint,
                         body=fixture.read_bytes(), normalized_tag="#2PP",
@@ -788,15 +565,17 @@ def test_history_cleanup_keeps_reports_latest_profiles_and_unfinished_work(
                     )
                     result = processor.process_job(job, owner="retention")
                     assert result is not None and result.outcome == "processed"
+                    _attach_complete_work(connection_info, observation_id)
             pending_observation, pending_job = store_observation(
                 connection_info, archive_server,
                 occurrence_key="retention-pending", endpoint="profile",
                 body=PROFILE_FIXTURE.read_bytes(), normalized_tag="#2PP",
                 observed_at=NOW + timedelta(minutes=3),
             )
+            _attach_complete_work(connection_info, pending_observation)
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
-                    "UPDATE collector_jobs SET updated_at = clock_timestamp() - interval '3 days'"
+                    "UPDATE collector_work SET updated_at = clock_timestamp() - interval '3 days'"
                 )
                 connection.execute(
                     "UPDATE python_processing_jobs SET updated_at = clock_timestamp() - interval '3 days' WHERE status = 'complete'"

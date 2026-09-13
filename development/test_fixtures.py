@@ -72,6 +72,25 @@ def test_clash_fixture_serves_rankings_profiles_and_verification() -> None:
             profile = json.load(response)
         assert profile["name"] == "Synthetic Clasher 001"
 
+        reset_request = urllib.request.Request(
+            f"{origin}/_trial/reset",
+            data=b"",
+            headers=authorization,
+            method="POST",
+        )
+        with urllib.request.urlopen(reset_request) as response:
+            assert json.load(response)["generation"] == 1
+        for _request in range(2):
+            with urllib.request.urlopen(profile_request) as response:
+                assert json.load(response)["_trialGeneration"] == 1
+        stats_request = urllib.request.Request(
+            f"{origin}/_trial/stats", headers=authorization
+        )
+        with urllib.request.urlopen(stats_request) as response:
+            stats = json.load(response)
+        assert stats["profile"]["requests"] == 2
+        assert stats["profile"]["revisited_players"] == 1
+
         verification_request = urllib.request.Request(
             f"{origin}/v1/players/%232PP/verifytoken",
             data=b'{"token":"VERIFY-2PP"}',

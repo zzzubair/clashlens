@@ -6,7 +6,7 @@ from threading import Event, Lock
 from time import monotonic
 from typing import Any
 
-from .archive import ArchiveReadError, S3ArchiveReader
+from .archive import ArchiveReadError, ArchiveReadResult, S3ArchiveReader
 from .battle import (
     BattleLogParseError,
     parse_battle_log,
@@ -371,7 +371,13 @@ class ObservationProcessor:
                 return self._fail(claim, category, retryable=False)
         assert claim.endpoint_version is not None
 
-        if claim.archive_reference is None or claim.response_hash is None:
+        uses_local_spool = (
+            claim.work_type == "process_observation"
+            and getattr(self.archive, "spool", None) is not None
+        )
+        if claim.response_hash is None or (
+            not uses_local_spool and claim.archive_reference is None
+        ):
             return self._fail(claim, "missing_archive_metadata", retryable=False)
 
         try:
@@ -382,17 +388,25 @@ class ObservationProcessor:
             self._record_stage("python_lease_renew", renewal_started_at)
             archive_started_at = monotonic()
             try:
-                def renew_lease() -> None:
-                    # Heartbeat from the reader: keeps the renewed lease window
-                    # ahead of the bounded remote retry wall time. Lease loss
-                    # raises and discards any partial fallback result.
-                    self.database.renew_claim(claim, lease_seconds=lease_seconds)
+                if uses_local_spool:
+                    archived = self._read_local(claim)
+                else:
+                    def renew_lease() -> None:
+                        # Heartbeat from the reader: keeps the renewed lease window
+                        # ahead of the bounded remote retry wall time. Lease loss
+                        # raises and discards any partial fallback result.
+                        self.database.renew_claim(claim, lease_seconds=lease_seconds)
 
-                archived = self.archive.read_verified(
-                    claim.archive_reference, claim.response_hash, heartbeat=renew_lease
-                )
+                    archived = self.archive.read_verified(
+                        claim.archive_reference, claim.response_hash, heartbeat=renew_lease
+                    )
             finally:
-                self._record_stage("python_archive_get_verify", archive_started_at)
+                self._record_stage(
+                    "python_archive_local_verify"
+                    if uses_local_spool
+                    else "python_archive_get_verify",
+                    archive_started_at,
+                )
             renewal_started_at = monotonic()
             self.database.renew_claim(claim, lease_seconds=lease_seconds)
             self._record_stage("python_lease_renew", renewal_started_at)
@@ -480,6 +494,28 @@ class ObservationProcessor:
         except LeaseLost:
             return ProcessResult(claim.job_id, "lease_lost")
         return ProcessResult(claim.job_id, outcome)
+
+    def _read_local(self, claim: Claim) -> ArchiveReadResult:
+        spool = getattr(self.archive, "spool", None)
+        verify = getattr(spool, "verify", None)
+        if not callable(verify):
+            raise ArchiveReadError(
+                "spool_missing",
+                "new observation has no local spool reader",
+                retryable=False,
+            )
+        body = verify(claim.response_hash)
+        if body is None:
+            raise ArchiveReadError(
+                "spool_missing",
+                "new observation is missing from the local spool",
+                retryable=False,
+            )
+        return ArchiveReadResult(
+            body=body,
+            reference=claim.archive_reference or "",
+            sha256=claim.response_hash or "",
+        )
 
     def _complete_retired(
         self, claim: Claim, error: DomainRuleError

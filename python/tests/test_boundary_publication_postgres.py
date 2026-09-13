@@ -44,23 +44,29 @@ def _player_and_version(
 def _sweep_with_members(connection, player_ids: list[int]) -> int:
     sweep_id = int(
         connection.execute(
-            "INSERT INTO collector_reset_sweeps (boundary_at) VALUES (%s) RETURNING id",
-            (BOUNDARY,),
+            """
+            INSERT INTO collector_reset_sweeps
+                (boundary_at, member_ids, membership_captured_at)
+            VALUES (%s, %s, clock_timestamp())
+            RETURNING id
+            """,
+            (BOUNDARY, player_ids),
         ).fetchone()[0]
     )
-    for player_id in player_ids:
-        connection.execute(
-            "INSERT INTO collector_reset_sweep_members (sweep_id, player_id) VALUES (%s, %s)",
-            (sweep_id, player_id),
-        )
     connection.execute(
         """
-        INSERT INTO collector_boundary_admission (
-            boundary_at, reset_sweep_id, regular_drain_complete,
-            reset_drain_complete, safe_handoff, state
-        ) VALUES (%s, %s, true, true, true, 'safe_handoff')
+        INSERT INTO collector_work (
+            kind, lane, scope, player_id, normalized_tag, sweep_id, due_at,
+            coalescing_key, profile_status, battle_log_status
+        )
+        SELECT 'reset_baseline', 'reset', 'player', player.id,
+               player.normalized_tag, %s, %s,
+               'reset:' || %s || ':' || player.id, 'pending', 'pending'
+        FROM players AS player
+        WHERE player.id = ANY(%s::bigint[])
+        ON CONFLICT DO NOTHING
         """,
-        (BOUNDARY, sweep_id),
+        (sweep_id, BOUNDARY, sweep_id, player_ids),
     )
     return sweep_id
 
@@ -321,23 +327,8 @@ def test_boundary_generation_coalesces_population_and_corrections(
                     _player_and_version(connection, tag, 1, f"{char}" * 64)
                     for tag, char in (("#A1", "a"), ("#A2", "b"), ("#A3", "c"))
                 ]
-                sweep_id = connection.execute(
-                    "INSERT INTO collector_reset_sweeps (boundary_at) VALUES (%s) RETURNING id",
-                    (BOUNDARY,),
-                ).fetchone()[0]
-                for player_id, _ in players:
-                    connection.execute(
-                        "INSERT INTO collector_reset_sweep_members (sweep_id, player_id) VALUES (%s, %s)",
-                        (sweep_id, player_id),
-                    )
-                connection.execute(
-                    """
-                    INSERT INTO collector_boundary_admission (
-                        boundary_at, reset_sweep_id, regular_drain_complete,
-                        reset_drain_complete, safe_handoff, state
-                    ) VALUES (%s, %s, true, true, true, 'safe_handoff')
-                    """,
-                    (BOUNDARY, sweep_id),
+                _sweep_with_members(
+                    connection, [player_id for player_id, _ in players]
                 )
                 connection.execute(
                     "UPDATE ranked_day_versions SET state = 'Live' WHERE id = %s",
