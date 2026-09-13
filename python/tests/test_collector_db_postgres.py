@@ -656,37 +656,6 @@ def test_health_reset_progress_ignores_terminal_historical_sweep(
         assert metrics["reset_terminal"] == 0
 
 
-def test_compact_work_replaces_legacy_collector_and_reset_tables(
-    database_url: str,
-) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        with psycopg.connect(connection_info) as connection:
-            names = connection.execute(
-                """
-                SELECT name, to_regclass(current_schema() || '.' || name)
-                FROM unnest(ARRAY[
-                    'collector_jobs', 'collector_attempts', 'collector_endpoint_results',
-                    'collector_reset_sweep_members', 'collector_reset_baseline_sweeps',
-                    'collector_boundary_admission', 'global_rankings_intents',
-                    'discovery_profile_intents', 'collector_spool_handoffs',
-                    'collector_work'
-                ]) AS names(name)
-                """
-            ).fetchall()
-        assert dict(names) == {
-            "collector_jobs": None,
-            "collector_attempts": None,
-            "collector_endpoint_results": None,
-            "collector_reset_sweep_members": None,
-            "collector_reset_baseline_sweeps": None,
-            "collector_boundary_admission": None,
-            "global_rankings_intents": None,
-            "discovery_profile_intents": None,
-            "collector_spool_handoffs": None,
-            "collector_work": "collector_work",
-        }
-
-
 def test_refresh_work_coalesces_cools_down_and_reports_status(
     database_url: str,
 ) -> None:

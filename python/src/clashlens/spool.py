@@ -270,8 +270,16 @@ class Spool:
         handoff_fd = self._sub_dir_fd(".handoff")
         try:
             records: list[tuple[str, bytes]] = []
+            removed_temporary = False
             for name in sorted(os.listdir(handoff_fd)):
                 self._handoff_name(name)
+                if name.startswith("handoff-") and name.endswith(".tmp"):
+                    try:
+                        os.unlink(name, dir_fd=handoff_fd)
+                        removed_temporary = True
+                    except FileNotFoundError:
+                        pass
+                    continue
                 try:
                     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=handoff_fd)
                 except FileNotFoundError:
@@ -284,6 +292,8 @@ class Spool:
                     records.append((name, payload))
                 finally:
                     os.close(fd)
+            if removed_temporary:
+                _fsync_dir(handoff_fd)
             return records
         finally:
             os.close(handoff_fd)

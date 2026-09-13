@@ -159,6 +159,17 @@ def test_handoff_records_are_private_atomic_and_recoverable(tmp_path: Path) -> N
     assert spool.iter_handoffs() == []
 
 
+def test_recovery_removes_crash_left_handoff_temporary_file(tmp_path: Path) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    temporary = root / ".handoff" / "handoff-crashed.tmp"
+    temporary.write_bytes(b'{"partial":')
+    os.chmod(temporary, 0o600)
+
+    assert spool.iter_handoffs() == []
+    assert not temporary.exists()
+
+
 def test_handoff_scan_tolerates_database_ack_removing_a_listed_sidecar(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
