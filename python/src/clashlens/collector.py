@@ -118,7 +118,7 @@ class Collector:
                         )
                     )
                 )
-        except SpoolError:
+        except (OSError, SpoolError):
             self._count("degraded_capacity")
             return ["capacity_paused"] * len(endpoints)
 
@@ -244,7 +244,7 @@ class Collector:
                                 if error.retryable and attempt + 1 < attempts
                                 else "next_pass"
                             ),
-                            key_label=getattr(error, "key_label", "unassigned"),
+                            key_label=getattr(error, "key_label", None) or "unassigned",
                         ),
                     )
                     self._count(error.category)
@@ -300,7 +300,7 @@ class Collector:
                         continue
                     return "failed"
                 return "recorded"
-            except SpoolError:
+            except (OSError, SpoolError):
                 self._count("degraded_capacity")
                 return "capacity_paused"
             finally:

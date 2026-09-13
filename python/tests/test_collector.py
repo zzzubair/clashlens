@@ -18,7 +18,7 @@ from clashlens.collector_db import (
     ResponseHandoff,
     UploadClaim,
 )
-from clashlens.collector_http import ApiKey, FetchedResponse, KeyPool
+from clashlens.collector_http import ApiKey, FetchedResponse, KeyPool, ProviderFailure
 from clashlens.spool import Spool
 
 
@@ -139,6 +139,7 @@ class _Store:
         self.deletable: list[str] = []
         self.marked: list[str] = []
         self.referenced: set[str] = set()
+        self.failures: list[Any] = []
 
     def record_response(self, handoff: Any) -> object:
         assert handoff.occurrence_key in self.spool.handoffs
@@ -154,6 +155,10 @@ class _Store:
     def fail_intent(self, work_id: int, **_kwargs: object) -> bool:
         self.spool.events.append(f"fail:{work_id}")
         return True
+
+    def record_transport_failure(self, failure: Any) -> int:
+        self.failures.append(failure)
+        return len(self.failures)
 
     def health_metrics(self) -> dict[str, int]:
         return {"pending_uploads": 3}
@@ -245,6 +250,62 @@ def test_player_pair_publishes_spool_handoffs_concurrently() -> None:
             CollectorWork(1, "#2PP", datetime.now(UTC)), lane="ordinary"
         )
     ) == ["recorded", "recorded"]
+
+
+def test_failure_without_a_healthy_key_records_a_non_null_label() -> None:
+    class FailedClient(_Client):
+        async def fetch_player(
+            self, _pool: KeyPool, _tag: str, _endpoint: str
+        ) -> FetchedResponse:
+            raise ProviderFailure("no_healthy_api_key", retryable=False)
+
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, FailedClient(spool))
+
+    outcome = asyncio.run(
+        collector.collect_player(
+            CollectorWork(1, "#2PP", datetime.now(UTC)),
+            lane="ordinary",
+            endpoints=("profile",),
+        )
+    )
+
+    assert outcome == ["failed"]
+    assert [failure.key_label for failure in store.failures] == ["unassigned"]
+
+
+@pytest.mark.parametrize("failure_point", ["reserve", "publish"])
+def test_raw_spool_os_error_pauses_collection(failure_point: str) -> None:
+    class FailedSpool(_Spool):
+        def reserve(self, limit: int) -> _Reservation:
+            if failure_point == "reserve":
+                raise OSError("spool unavailable")
+            return super().reserve(limit)
+
+        def publish_handoff(
+            self,
+            body: bytes,
+            digest: str,
+            name: str,
+            payload: bytes,
+            reservation: _Reservation,
+        ) -> None:
+            if failure_point == "publish":
+                raise OSError("spool unavailable")
+            super().publish_handoff(body, digest, name, payload, reservation)
+
+    spool = FailedSpool()
+    collector = _collector(spool, _Store(spool), _Client(spool))
+
+    outcome = asyncio.run(
+        collector.collect_player(
+            CollectorWork(1, "#2PP", datetime.now(UTC)), lane="ordinary"
+        )
+    )
+
+    assert outcome == ["capacity_paused", "capacity_paused"]
+    assert collector.outcomes["degraded_capacity"] >= 1
 
 
 def test_run_starts_one_background_uploader() -> None:

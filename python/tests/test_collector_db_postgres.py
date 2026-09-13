@@ -734,6 +734,33 @@ def test_refresh_default_cooldown_is_thirty_seconds(database_url: str) -> None:
         assert after_cooldown[0] != first[0]
 
 
+def test_refresh_enqueue_is_not_publicly_executable(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            privileges = connection.execute(
+                """
+                SELECT
+                    has_function_privilege(
+                        'clashlens_collector',
+                        'clashlens_enqueue_interactive(text,text,integer,boolean)',
+                        'EXECUTE'
+                    ),
+                    has_function_privilege(
+                        'clashlens_python_api',
+                        'clashlens_enqueue_interactive(text,text,integer,boolean)',
+                        'EXECUTE'
+                    ),
+                    has_function_privilege(
+                        'clashlens_python_worker',
+                        'clashlens_enqueue_interactive(text,text,integer,boolean)',
+                        'EXECUTE'
+                    )
+                """
+            ).fetchone()
+
+        assert privileges == (True, True, False)
+
+
 def test_reset_compact_work_freezes_membership_and_pairs_endpoints(
     database_url: str,
 ) -> None:

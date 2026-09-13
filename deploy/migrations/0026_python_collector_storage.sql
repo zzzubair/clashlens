@@ -652,6 +652,8 @@ $$;
 GRANT SELECT, INSERT, UPDATE, DELETE ON collector_work TO clashlens_collector;
 GRANT SELECT ON collector_work TO clashlens_python_worker, clashlens_python_api;
 GRANT USAGE, SELECT ON SEQUENCE collector_work_id_seq TO clashlens_collector;
+REVOKE ALL ON FUNCTION clashlens_enqueue_interactive(text, text, integer, boolean)
+    FROM PUBLIC, clashlens_python_worker;
 GRANT EXECUTE ON FUNCTION clashlens_enqueue_interactive(text, text, integer, boolean)
     TO clashlens_collector, clashlens_python_api;
 ALTER TABLE api_refresh_requests
