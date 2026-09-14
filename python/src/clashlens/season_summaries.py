@@ -430,13 +430,25 @@ def _digest(summary: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def acquire_player_season_lock(
+    connection: Any, player_id: int, season_id: str
+) -> None:
+    """Serialize writers for one player-season summary pair."""
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"player-season-summary:{int(player_id)}:{season_id}",),
+    )
+
+
 def materialize_player_season(
     connection: Any, player_id: int, season_id: str
 ) -> dict[str, Any]:
     """Project and atomically store one player-season summary.
 
     Competing projections for the same player-season serialize on a
-    transaction-scoped advisory lock. Unchanged input is a no-op that leaves
+    transaction-scoped advisory lock keyed to the pair; the shared season
+    lock only fences retirement, so projections for different players in
+    one season run concurrently. Unchanged input is a no-op that leaves
     the existing row (including published_at) untouched; a transaction
     failure preserves the prior summary.
     """
@@ -444,11 +456,11 @@ def materialize_player_season(
         raise ValueError("official season id is outside the supported range")
     from .season_retirement import (
         SEASON_DETAIL_RETIRED,
-        acquire_season_lock,
+        acquire_season_lock_shared,
         is_season_detail_retired,
     )
 
-    acquire_season_lock(connection, season_id)
+    acquire_season_lock_shared(connection, season_id)
     if is_season_detail_retired(connection, season_id):
         existing_digest = connection.execute(
             """
@@ -467,6 +479,10 @@ def materialize_player_season(
             if existing_digest is not None
             else None,
         }
+    # Two refreshes for one player-season must not interleave: the later
+    # one re-projects only after the first commits, so the stored summary
+    # always reflects every committed daily log.
+    acquire_player_season_lock(connection, int(player_id), season_id)
     projected = _project(int(player_id), season_id, connection)
     if projected is None:
         return {"status": "missing", "content_digest": None}
@@ -614,11 +630,11 @@ def materialize_completed_seasons(
         raise ValueError("backfill cursor is outside the supported range")
     from .season_retirement import (
         SEASON_DETAIL_RETIRED,
-        acquire_season_lock,
+        acquire_season_lock_shared,
         is_season_detail_retired,
     )
 
-    acquire_season_lock(connection, season_id)
+    acquire_season_lock_shared(connection, season_id)
     if is_season_detail_retired(connection, season_id):
         return {
             "season_id": season_id,

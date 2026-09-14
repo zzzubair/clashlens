@@ -60,7 +60,10 @@ from .reconciliation import (
     reconcile_ranked_day,
     serialize_ranked_day_battles,
 )
-from .season_summaries import materialize_player_season
+from .season_summaries import (
+    acquire_player_season_lock,
+    materialize_player_season,
+)
 from .source_observation_contract import SOURCE_OBSERVATION_CONTRACTS
 
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
@@ -1467,7 +1470,7 @@ class Database:
         finalization itself requires canonical bounds and takes the global gate.
         """
         from .season_retirement import (
-            acquire_season_lock,
+            acquire_season_lock_shared,
             filter_live_rows,
             retired_day_ranges,
         )
@@ -1536,7 +1539,7 @@ class Database:
                 ).fetchall()
                 seasons.update(_text_value(row[0]) for row in retired_rows)
         for season_id in sorted(seasons):
-            acquire_season_lock(connection, season_id)
+            acquire_season_lock_shared(connection, season_id)
         # The first read only discovers lock keys. Re-read after blocking on
         # those locks so a just-committed finalization is never stale here.
         retired_ranges = retired_day_ranges(connection)
@@ -3056,7 +3059,7 @@ class Database:
                 now = now_row[0]
                 from .season_retirement import (
                     SEASON_DETAIL_RETIRED,
-                    acquire_season_lock,
+                    acquire_season_lock_shared,
                     is_detail_retired_for_day,
                     is_season_detail_retired,
                 )
@@ -3088,7 +3091,7 @@ class Database:
                             else anchor_row[1]
                         )
                 if season_id is not None and season_id != "unknown":
-                    acquire_season_lock(connection, season_id)
+                    acquire_season_lock_shared(connection, season_id)
                 if is_detail_retired_for_day(connection, ranked_day.start) or (
                     season_id is not None and is_season_detail_retired(connection, season_id)
                 ):
@@ -6657,11 +6660,11 @@ class Database:
         if official_season_id != "unknown":
             from .season_retirement import (
                 SEASON_DETAIL_RETIRED,
-                acquire_season_lock,
+                acquire_season_lock_shared,
                 is_season_detail_retired,
             )
 
-            acquire_season_lock(connection, official_season_id)
+            acquire_season_lock_shared(connection, official_season_id)
             if is_season_detail_retired(connection, official_season_id):
                 raise DomainRuleError(
                     SEASON_DETAIL_RETIRED,
@@ -6816,6 +6819,13 @@ class Database:
         ) and official_season_id != "unknown":
             refresh = season_day_number == 28 and public_state == "Complete"
             if not refresh:
+                # Probe under the per-player-season lock so a racing first
+                # backfill commits or is fenced out before the check, the
+                # same serialization the retired exclusive season lock
+                # used to give this read for free.
+                acquire_player_season_lock(
+                    connection, player_id, official_season_id
+                )
                 refresh = (
                     connection.execute(
                         """
@@ -8689,7 +8699,7 @@ class Database:
             ).fetchall()
             from .season_retirement import (
                 SEASON_DETAIL_RETIRED,
-                acquire_season_lock,
+                acquire_season_lock_shared,
                 is_season_detail_retired,
             )
             seasons = [
@@ -8706,7 +8716,7 @@ class Database:
                 ).fetchall()
             ]
             for season_id in sorted(set(seasons)):
-                acquire_season_lock(connection, season_id)
+                acquire_season_lock_shared(connection, season_id)
                 if is_season_detail_retired(connection, season_id):
                     raise DomainRuleError(
                         SEASON_DETAIL_RETIRED,
@@ -8766,9 +8776,12 @@ class Database:
             return
         ranked_day_version_id = int(completed[0])
         season_id = _text_value(completed[1])
-        from .season_retirement import acquire_season_lock, is_season_detail_retired
+        from .season_retirement import (
+            acquire_season_lock_shared,
+            is_season_detail_retired,
+        )
 
-        acquire_season_lock(connection, season_id)
+        acquire_season_lock_shared(connection, season_id)
         if is_season_detail_retired(connection, season_id):
             return
         latest_decode = connection.execute(
@@ -8932,11 +8945,11 @@ class Database:
                     )
                 from .season_retirement import (
                     SEASON_DETAIL_RETIRED,
-                    acquire_season_lock,
+                    acquire_season_lock_shared,
                     is_season_detail_retired,
                 )
 
-                acquire_season_lock(connection, str(season_id))
+                acquire_season_lock_shared(connection, str(season_id))
                 if is_season_detail_retired(connection, str(season_id)):
                     raise DomainRuleError(
                         SEASON_DETAIL_RETIRED,
@@ -8999,6 +9012,15 @@ class Database:
                 ranked_day_start = datetime.fromisoformat(
                     str(ranked_day_str)
                 ).astimezone(UTC)
+                # Two builds for one ranked day must not interleave: fact
+                # versions are computed as latest+1 and the day sweep marks
+                # is_current, so a collision would surface as a unique
+                # violation instead of a clean retry. Different days build
+                # concurrently.
+                connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"army-facts:{ranked_day_start.isoformat()}",),
+                )
                 season_id = self._ensure_army_day_dependency(
                     connection,
                     ranked_day_start,
@@ -9523,25 +9545,36 @@ class Database:
         """Refresh whole-season army summaries without risking the caller.
 
         The caller is the enclosing day build: its facts and completion
-        marker are already written in the same transaction. The shared
-        season lock is acquired before the existence check so a first
-        backfill and a concurrent correction serialize: either the
+        marker are already written in the same transaction. Both lens
+        writer locks are held before the existence check so a first
+        backfill and a concurrent correction still serialize: either the
         backfill projects the committed correction, or the correction
         waits and then refreshes the newly published summary. Each lens
         refreshes in a savepoint, so a projection failure rolls back only
         that lens refresh, warns observably, and leaves the day build
         green; the other lens still refreshes. Seasons with no summaries
-        yet cost one lock plus one existence lookup.
+        yet cost three locks plus one existence lookup.
         """
         if not getattr(self, "_supports_army_season_summaries", False):
             return
-        from .season_retirement import is_season_detail_retired
+        from .season_retirement import (
+            acquire_season_lock_shared,
+            is_season_detail_retired,
+        )
 
         # Retired detail stays retired: a late day build must not replace
         # verified summaries from a reduced post-retirement sample.
-        acquire_army_season_lock(connection, season_id)
+        acquire_season_lock_shared(connection, season_id)
         if is_season_detail_retired(connection, season_id):
             return
+        # The shared season lock does not hold back a racing first
+        # materialization, so the existence probe below runs under both
+        # lens writer locks: an in-flight backfill either commits first
+        # (and the probe sees its summaries) or waits until this refresh
+        # decides, and the later materialization then sees the committed
+        # facts either way.
+        for summary_lens in ("offense", "defense"):
+            acquire_army_season_lock(connection, season_id, summary_lens)
         summarized = connection.execute(
             """
             SELECT 1 FROM army_season_summaries
@@ -9620,7 +9653,7 @@ class Database:
                     raise ValueError("redecode batch limited to 100")
                 from .season_retirement import (
                     SEASON_DETAIL_RETIRED,
-                    acquire_season_lock,
+                    acquire_season_lock_shared,
                     is_season_detail_retired,
                 )
 
@@ -9640,12 +9673,21 @@ class Database:
                 if not seasons:
                     raise ValueError("redecode season metadata is unavailable")
                 for season_id in sorted(set(seasons)):
-                    acquire_season_lock(connection, season_id)
+                    acquire_season_lock_shared(connection, season_id)
                     if is_season_detail_retired(connection, season_id):
                         raise DomainRuleError(
                             SEASON_DETAIL_RETIRED,
                             f"season {season_id} detail is retired",
                         )
+                # Two redecodes for one battle must not interleave: the
+                # deactivate-then-insert sequence would otherwise race the
+                # one-active-per-perspective unique index into a transaction
+                # abort. Different battles redecode concurrently.
+                for battle_id in sorted(set(battle_ids)):
+                    connection.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"army-redecode-battle:{battle_id}",),
+                    )
                 self._upsert_army_decodes(connection, battle_ids)
                 self._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"

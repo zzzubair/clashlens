@@ -1173,6 +1173,109 @@ def test_rolling_log_waits_for_finalization_when_ranked_day_is_missing(
             ).fetchone()[0] == 0
 
 
+def test_season_writers_share_the_lock_and_stay_fenced(
+    database_url: str,
+) -> None:
+    """Concurrent writers hold the shared season lock; retirement still fences.
+
+    Writer A holds the shared lock inside an open materialization while a
+    different player-season writer commits underneath it — impossible under
+    the previous exclusive form. Probes on the lock keys prove the shared
+    form coexists and the per-player-season writer lock is still held.
+    Finalization then waits for A and fences later writers.
+    """
+    from clashlens.season_summaries import materialize_player_season
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            player_a = _player(connection, "#WTRA")
+            player_b = _player(connection, "#WTRB")
+            _full_season(connection, player_a)
+            _full_season(connection, player_b)
+            _seed_army(connection, tag="#WTRA", base=7300)
+            connection.commit()
+            _materialize_all(connection)
+            connection.commit()
+
+        a_holding = threading.Event()
+        release_a = threading.Event()
+        b_done = threading.Event()
+        finalized: list[dict[str, object]] = []
+        writer_errors: list[BaseException] = []
+
+        def writer_a() -> None:
+            try:
+                with psycopg.connect(connection_info) as connection:
+                    with connection.transaction():
+                        materialize_player_season(connection, player_a, SEASON)
+                        a_holding.set()
+                        assert release_a.wait(10)
+            except (psycopg.Error, ValueError) as error:  # pragma: no cover
+                writer_errors.append(error)
+
+        def writer_b() -> None:
+            try:
+                with psycopg.connect(connection_info) as connection:
+                    with connection.transaction():
+                        materialize_player_season(connection, player_b, SEASON)
+                b_done.set()
+            except (psycopg.Error, ValueError) as error:  # pragma: no cover
+                writer_errors.append(error)
+
+        def finalize() -> None:
+            with psycopg.connect(connection_info) as connection:
+                finalized.append(
+                    finalize_season_detail(
+                        connection, SEASON, AFTER_SEASON, apply=True
+                    )
+                )
+                connection.commit()
+
+        thread_a = threading.Thread(target=writer_a)
+        thread_a.start()
+        assert a_holding.wait(10)
+        thread_b = threading.Thread(target=writer_b)
+        thread_b.start()
+        # B completes while A still holds the season lock: the shared form
+        # does not exclude writers from each other.
+        assert b_done.wait(10)
+        with psycopg.connect(connection_info) as probe:
+            # A's hold is shared: another shared request succeeds while an
+            # exclusive request — what retirement takes — conflicts.
+            assert probe.execute(
+                "SELECT pg_try_advisory_lock_shared(hashtext(%s))",
+                (f"season-retirement:{SEASON}",),
+            ).fetchone()[0]
+            probe.execute(
+                "SELECT pg_advisory_unlock_shared(hashtext(%s))",
+                (f"season-retirement:{SEASON}",),
+            )
+            assert not probe.execute(
+                "SELECT pg_try_advisory_lock(hashtext(%s))",
+                (f"season-retirement:{SEASON}",),
+            ).fetchone()[0]
+            # A also holds the per-player-season writer lock, so a second
+            # materialization for the same player still serializes.
+            assert not probe.execute(
+                "SELECT pg_try_advisory_lock(hashtextextended(%s, 0))",
+                (f"player-season-summary:{player_a}:{SEASON}",),
+            ).fetchone()[0]
+        thread = threading.Thread(target=finalize)
+        thread.start()
+        time.sleep(0.1)
+        assert thread.is_alive()
+        release_a.set()
+        thread_a.join(10)
+        thread_b.join(10)
+        thread.join(10)
+        assert not thread_a.is_alive() and not thread.is_alive()
+        assert not writer_errors
+        assert finalized and finalized[0]["status"] == "finalized", repr(finalized)
+        with psycopg.connect(connection_info) as connection:
+            fenced = materialize_player_season(connection, player_a, SEASON)
+            assert fenced["status"] == SEASON_DETAIL_RETIRED
+
+
 def test_rolling_log_keeps_noncanonical_day_until_anchor_resolution(
     database_url: str,
 ) -> None:

@@ -76,9 +76,26 @@ def _application_relations(connection: Any) -> list[tuple[str, str]]:
 
 
 def acquire_season_lock(connection: Any, season_id: str) -> None:
-    """Use one transaction-scoped lock for every season detail writer."""
+    """Exclusive transaction-scoped season lock held by retirement only.
+
+    Finalization and retirement take this so no writer can be mid-flight
+    while a season is fenced or its detail deleted.
+    """
     connection.execute(
         "SELECT pg_advisory_xact_lock(hashtext(%s))",
+        (f"season-retirement:{season_id}",),
+    )
+
+
+def acquire_season_lock_shared(connection: Any, season_id: str) -> None:
+    """Shared transaction-scoped season lock for detail writers.
+
+    Writers hold this so finalization/retirement still fences them; they
+    do not exclude each other. Writer-vs-writer conflicts stay on upsert
+    keys, row locks, and finer-grained advisory locks.
+    """
+    connection.execute(
+        "SELECT pg_advisory_xact_lock_shared(hashtext(%s))",
         (f"season-retirement:{season_id}",),
     )
 
@@ -101,7 +118,8 @@ def _check_batch(value: int, label: str) -> int:
 def is_season_detail_retired(connection: Any, season_id: str) -> bool:
     """True once a season is finalized (writers fenced) or retired.
 
-    Mutating callers acquire_season_lock first and hold it through their writes.
+    Mutating callers hold a season lock first and keep it through their
+    writes: shared for writers, exclusive for retirement.
     """
     if not _table_exists(connection, "season_detail_retirements"):
         return False
