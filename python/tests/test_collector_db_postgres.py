@@ -45,6 +45,7 @@ def _handoff(
     endpoint: str = "profile",
     completed_at: datetime = NOW,
     collector_work_id: int | None = None,
+    content_fingerprint: str | None = None,
 ) -> ResponseHandoff:
     return ResponseHandoff(
         occurrence_key=occurrence_key,
@@ -57,6 +58,7 @@ def _handoff(
         response_completed_at=completed_at,
         http_status=200,
         response_hash=response_hash,
+        content_fingerprint=content_fingerprint or response_hash,
         byte_size=1,
         spool_key=f"sha256/{response_hash[:2]}/{response_hash}",
         collector_version="python-collector-test",
@@ -294,8 +296,65 @@ def test_upload_claim_is_fenced_and_cleanup_waits_for_processing(
             )
         )
         assert republished.changed is False
-        assert database.deletable_hashes(limit=10) == [response_hash]
+        assert republished.observation_id is None
+        assert republished.processing_job_id is None
+        assert database.deletable_hashes(limit=10) == []
+        assert response_hash not in database.referenced_spool_hashes()
         assert result.upload_id is not None
+
+
+def test_upload_retire_after_follows_the_response_season(
+    database_url: str,
+) -> None:
+    # A season-N response uploaded days later still retires with season N:
+    # retire_after derives from response_completed_at, not upload completion.
+    response_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+    uploaded_later = response_at + timedelta(days=40)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        response_hash = _hash("season-dated")
+        database.record_response(
+            _handoff(
+                occurrence_key="season-dated-response",
+                response_hash=response_hash,
+                player_id=player_id,
+                completed_at=response_at,
+            )
+        )
+        claim = database.claim_upload(owner="uploader", lease_seconds=60)
+        assert claim is not None
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO archive_instances (
+                    instance_id, endpoint, region, bucket, marker_key,
+                    marker_hash, marker_payload_version
+                ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
+                          'evidence', 'clashlens/archive-instance.json',
+                          repeat('f', 64), 'v1')
+                ON CONFLICT (instance_id) DO NOTHING
+                """
+            )
+        database.complete_upload(
+            claim,
+            archive_reference="s3://evidence/season-dated",
+            archive_instance_id="fixture-instance",
+            now=uploaded_later,
+        )
+        with psycopg.connect(connection_info) as connection:
+            row = connection.execute(
+                """
+                SELECT retire_after,
+                       clashlens_season_retire_after(%s),
+                       clashlens_season_retire_after(%s)
+                FROM archive_catalogue WHERE response_hash = %s
+                """,
+                (response_at, uploaded_later, response_hash),
+            ).fetchone()
+        assert row is not None
+        assert row[0] == row[1]
+        assert row[0] != row[2]
 
 
 def test_retryable_upload_failure_returns_to_pending_with_a_fence(
@@ -392,6 +451,297 @@ def test_reset_reprocesses_same_hash_as_a_new_boundary_occurrence(
                 ).fetchone()[0]
                 == 2
             )
+
+
+def test_unchanged_fields_compact_even_when_bytes_differ(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        fingerprint = _hash("same-fields")
+        first = database.record_response(
+            _handoff(
+                occurrence_key="fields-1",
+                response_hash=_hash("bytes-1"),
+                content_fingerprint=fingerprint,
+                player_id=player_id,
+            )
+        )
+        ignored = database.record_response(
+            _handoff(
+                occurrence_key="fields-2",
+                response_hash=_hash("bytes-2"),
+                content_fingerprint=fingerprint,
+                player_id=player_id,
+                completed_at=NOW + timedelta(minutes=5),
+            )
+        )
+
+        assert first.changed is True
+        assert ignored.changed is False
+        assert ignored.observation_id is None
+        with psycopg.connect(connection_info) as connection:
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM collector_observations"
+                ).fetchone()[0]
+                == 1
+            )
+            assert (
+                connection.execute(
+                    "SELECT count(*) FROM collector_response_uploads"
+                ).fetchone()[0]
+                == 1
+            )
+            state = connection.execute(
+                """
+                SELECT last_response_hash, last_seen_at, last_content_fingerprint
+                FROM collector_response_state
+                WHERE endpoint = 'profile'
+                """
+            ).fetchone()
+        assert state == (
+            _hash("bytes-2"),
+            NOW + timedelta(minutes=5),
+            fingerprint,
+        )
+
+
+def test_reset_baseline_stores_unchanged_fields_as_boundary_evidence(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        fingerprint = _hash("boundary-fields")
+        database.record_response(
+            _handoff(
+                occurrence_key="pre-reset-fields",
+                response_hash=_hash("boundary-bytes-1"),
+                content_fingerprint=fingerprint,
+                player_id=player_id,
+            )
+        )
+        boundary = NOW + timedelta(days=1, hours=1)
+        sweep_id = database.begin_reset(boundary)
+        with psycopg.connect(connection_info) as connection:
+            work_id, league_status = connection.execute(
+                """
+                SELECT id, league_history_status FROM collector_work
+                WHERE sweep_id = %s AND kind = 'reset_baseline'
+                """,
+                (sweep_id,),
+            ).fetchone()
+        assert league_status == "not_applicable"
+        result = database.record_response(
+            _handoff(
+                occurrence_key="reset-fields",
+                response_hash=_hash("boundary-bytes-2"),
+                content_fingerprint=fingerprint,
+                player_id=player_id,
+                completed_at=boundary,
+                collector_work_id=work_id,
+            )
+        )
+
+        assert result.changed is True
+        assert result.observation_id is not None
+
+
+def test_season_boundary_reset_requires_league_history(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        # 28-day season grid anchored at 1783918800 (a Monday 05:00 UTC).
+        boundary = datetime.fromtimestamp(1783918800 + 55 * 2419200, UTC)
+        sweep_id = database.begin_reset(boundary)
+        assert sweep_id is not None
+        with psycopg.connect(connection_info) as connection:
+            work_id, league_status = connection.execute(
+                """
+                SELECT id, league_history_status FROM collector_work
+                WHERE sweep_id = %s AND kind = 'reset_baseline'
+                """,
+                (sweep_id,),
+            ).fetchone()
+        assert league_status == "pending"
+
+        database.record_response(
+            _handoff(
+                occurrence_key="season-reset-profile",
+                response_hash=_hash("season-p"),
+                player_id=player_id,
+                completed_at=boundary,
+                collector_work_id=work_id,
+            )
+        )
+        database.record_response(
+            _handoff(
+                occurrence_key="season-reset-battle",
+                response_hash=_hash("season-b"),
+                endpoint="battle_log",
+                player_id=player_id,
+                completed_at=boundary,
+                collector_work_id=work_id,
+            )
+        )
+        assert database.complete_intent(work_id) is False
+
+        database.record_response(
+            _handoff(
+                occurrence_key="season-reset-league",
+                response_hash=_hash("season-l"),
+                endpoint="league_history",
+                player_id=player_id,
+                completed_at=boundary,
+                collector_work_id=work_id,
+            )
+        )
+        assert database.complete_intent(work_id) is True
+
+
+def test_discovery_profile_fetches_league_history_once(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            created = connection.execute(
+                "SELECT clashlens_enqueue_discovery_profiles(ARRAY[%s])",
+                (player_id,),
+            ).fetchone()[0]
+        assert created == 1
+        intents = database.pending_intents(limit=10, now=NOW, interactive=False)
+        assert len(intents) == 1
+        assert intents[0].kind == "discovery_profile"
+        assert intents[0].league_history_required is True
+        work_id = intents[0].work_id
+
+        database.record_response(
+            _handoff(
+                occurrence_key="discovery-profile",
+                response_hash=_hash("disc-p"),
+                player_id=player_id,
+                collector_work_id=work_id,
+            )
+        )
+        assert database.complete_intent(work_id) is False
+        database.record_response(
+            _handoff(
+                occurrence_key="discovery-league",
+                response_hash=_hash("disc-l"),
+                endpoint="league_history",
+                player_id=player_id,
+                collector_work_id=work_id,
+            )
+        )
+        assert database.complete_intent(work_id) is True
+
+
+def test_retired_archive_location_reuploads_under_a_generation(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        hash_a, hash_b = _hash("retired-a"), _hash("retired-b")
+        database.record_response(
+            _handoff(
+                occurrence_key="retired-a-1",
+                response_hash=hash_a,
+                player_id=player_id,
+            )
+        )
+        claim = database.claim_upload(owner="uploader", now=NOW)
+        assert claim is not None
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO archive_instances (
+                    instance_id, endpoint, region, bucket, marker_key,
+                    marker_hash, marker_payload_version
+                ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
+                          'evidence', 'clashlens/archive-instance.json',
+                          repeat('f', 64), 'v1')
+                ON CONFLICT (instance_id) DO NOTHING
+                """
+            )
+        database.complete_upload(
+            claim,
+            archive_reference="s3://evidence/old-a",
+            archive_instance_id="fixture-instance",
+            now=NOW,
+        )
+        # Retirement tombstones the old location; later re-observation must
+        # not write to it again. B's upload completes first so the recycled
+        # row is the only pending upload when A is observed again.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE archive_catalogue SET availability = 'expired' WHERE archive_reference = 's3://evidence/old-a'"
+            )
+        database.record_response(
+            _handoff(
+                occurrence_key="retired-b",
+                response_hash=hash_b,
+                player_id=player_id,
+                completed_at=NOW + timedelta(minutes=5),
+            )
+        )
+        claim_b = database.claim_upload(
+            owner="uploader", now=NOW + timedelta(minutes=5)
+        )
+        assert claim_b is not None
+        assert claim_b.response_hash == hash_b
+        database.complete_upload(
+            claim_b,
+            archive_reference="s3://evidence/b-done",
+            archive_instance_id="fixture-instance",
+            now=NOW + timedelta(minutes=5),
+        )
+        reobserved = database.record_response(
+            _handoff(
+                occurrence_key="retired-a-2",
+                response_hash=hash_a,
+                player_id=player_id,
+                completed_at=NOW + timedelta(minutes=10),
+            )
+        )
+        assert reobserved.changed is True
+
+        recycled = database.claim_upload(
+            owner="uploader", now=NOW + timedelta(minutes=10)
+        )
+        assert recycled is not None
+        assert recycled.response_hash == hash_a
+        assert len(recycled.generation) == 32
+        generation_reference = (
+            f"s3://evidence/sha256/{hash_a[:2]}/{hash_a}"
+            f"/generation/{recycled.generation}"
+        )
+        database.complete_upload(
+            recycled,
+            archive_reference=generation_reference,
+            archive_instance_id="fixture-instance",
+            now=NOW + timedelta(minutes=10),
+        )
+        with psycopg.connect(connection_info) as connection:
+            rows = connection.execute(
+                """
+                SELECT archive_reference, availability
+                FROM archive_catalogue
+                WHERE response_hash = %s
+                ORDER BY first_verified_at
+                """,
+                (hash_a,),
+            ).fetchall()
+        assert rows == [
+            ("s3://evidence/old-a", "expired"),
+            (generation_reference, "verified"),
+        ]
 
 
 def test_archive_instance_validation_and_interactive_permit_budget(

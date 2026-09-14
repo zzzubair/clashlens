@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import threading
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,7 +76,8 @@ class _Spool:
     def final_hashes(self) -> set[str]:
         return set()
 
-    def remove_unreferenced(self, _referenced: set[str]) -> int:
+    def remove_unreferenced(self, referenced: Callable[[], set[str]]) -> int:
+        referenced()
         return 0
 
     def readiness(self) -> tuple[bool, str]:
@@ -364,7 +366,9 @@ def test_one_bad_archive_object_does_not_stop_other_uploads() -> None:
             return "ready"
 
         @staticmethod
-        def write_immutable(_body: bytes, _digest: str) -> str:
+        def write_immutable(
+            _body: bytes, _digest: str, *, generation: str | None = None
+        ) -> str:
             raise ArchiveReadError(
                 "archive_checksum_mismatch",
                 "stored bytes differ",
@@ -421,7 +425,9 @@ def test_background_uploader_drains_multiple_objects_concurrently() -> None:
             return "ready"
 
         @classmethod
-        def write_immutable(cls, _body: bytes, digest: str) -> str:
+        def write_immutable(
+            cls, _body: bytes, digest: str, *, generation: str | None = None
+        ) -> str:
             with cls.lock:
                 cls.writes += 1
                 write_number = cls.writes
@@ -454,6 +460,7 @@ def test_startup_finishes_a_spool_handoff_before_acknowledging_it() -> None:
         response_completed_at=now,
         http_status=200,
         response_hash="1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+        content_fingerprint="1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
         byte_size=7,
         spool_key="sha256/19/1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
         collector_version="test",

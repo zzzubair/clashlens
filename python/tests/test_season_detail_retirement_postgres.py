@@ -962,7 +962,7 @@ def test_retired_only_replay_is_terminal_and_does_not_recreate_detail(
             body = json.loads(
                 (Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json").read_bytes()
             )
-            body["items"][0]["battleTimestamp"] = "2026-05-01T12:00:00Z"
+            body["items"][0]["battleTime"] = "20260501T120000.000Z"
             _observation_id, job_id = store_observation(
                 connection_info,
                 archive_server,

@@ -176,25 +176,25 @@ def test_canonical_analytics_keeps_owned_perspectives_and_raw_evidence(
         )
 
         battle = json.loads(BATTLE_FIXTURE.read_bytes())["items"][0]
-        battle["battleTimestamp"] = "2026-08-04T12:00:00Z"
+        battle["battleTime"] = "20260804T120000.000Z"
         battle["trophies"] = 6200
         battle["opponentPlayerTag"] = "#8PP"
         battle["opponentName"] = "Synthetic Defender"
         battle["armyShareCode"] = "attacker-share-exact"
         zero_trophy = dict(battle)
-        zero_trophy["battleTimestamp"] = "2026-08-04T13:00:00Z"
+        zero_trophy["battleTime"] = "20260804T130000.000Z"
         zero_trophy["opponentPlayerTag"] = "#9PP"
         zero_trophy["opponentName"] = "Synthetic Zero Trophy Defender"
         zero_trophy["stars"] = 0
         zero_trophy["destructionPercentage"] = 0
         zero_trophy["armyShareCode"] = "zero-trophy-share-exact"
         missing_code = dict(battle)
-        missing_code["battleTimestamp"] = "2026-08-04T14:00:00Z"
+        missing_code["battleTime"] = "20260804T140000.000Z"
         missing_code["opponentPlayerTag"] = "#YPP"
         missing_code["opponentName"] = "Synthetic Missing Code Defender"
         del missing_code["armyShareCode"]
         malformed_code = dict(battle)
-        malformed_code["battleTimestamp"] = "2026-08-04T15:00:00Z"
+        malformed_code["battleTime"] = "20260804T150000.000Z"
         malformed_code["opponentPlayerTag"] = "#9PP"
         malformed_code["opponentName"] = "Synthetic Malformed Code Defender"
         malformed_code["stars"] = "three"

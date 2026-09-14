@@ -41,11 +41,19 @@ GLOBAL_PLAYER_RANKINGS_SOURCE_OBSERVATION_CONTRACT = SourceObservationContract(
     default_parser_version=_DEFAULT_PARSER_VERSION,
     supported_parser_versions=_SUPPORTED_PARSER_VERSIONS,
 )
+LEAGUE_HISTORY_SOURCE_OBSERVATION_CONTRACT = SourceObservationContract(
+    endpoint="league_history",
+    endpoint_version="league-history-v1",
+    schema_version="league-history-schema-v1",
+    default_parser_version="supercell-league-history-parser-v1",
+    supported_parser_versions=frozenset({"supercell-league-history-parser-v1"}),
+)
 
 SOURCE_OBSERVATION_CONTRACTS = (
     PROFILE_SOURCE_OBSERVATION_CONTRACT,
     BATTLE_LOG_SOURCE_OBSERVATION_CONTRACT,
     GLOBAL_PLAYER_RANKINGS_SOURCE_OBSERVATION_CONTRACT,
+    LEAGUE_HISTORY_SOURCE_OBSERVATION_CONTRACT,
 )
 
 

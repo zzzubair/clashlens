@@ -23,7 +23,8 @@ WHERE work.status = 'complete'
   AND (%s::bigint[] IS NULL OR work.id = ANY(%s::bigint[]))
   AND NOT EXISTS (
       SELECT 1 FROM collector_observations AS o
-      WHERE o.id IN (work.profile_observation_id, work.battle_log_observation_id)
+      WHERE o.id IN (work.profile_observation_id, work.battle_log_observation_id,
+                     work.league_history_observation_id)
         AND (
           NOT EXISTS (
               SELECT 1 FROM observation_processing_outcomes AS outcome
@@ -37,6 +38,7 @@ WHERE work.status = 'complete'
           )
           OR EXISTS (SELECT 1 FROM player_profile_versions WHERE observation_id = o.id)
           OR EXISTS (SELECT 1 FROM battle_evidence WHERE observation_id = o.id)
+          OR EXISTS (SELECT 1 FROM player_league_history_entries WHERE observation_id = o.id)
           OR EXISTS (
               SELECT 1 FROM leaderboard_snapshot_entries
               WHERE trophy_observation_id = o.id OR profile_observation_id = o.id
@@ -123,7 +125,8 @@ WHERE o.response_completed_at < (
   )
   AND NOT EXISTS (
       SELECT 1 FROM collector_work AS work
-      WHERE o.id IN (work.profile_observation_id, work.battle_log_observation_id)
+      WHERE o.id IN (work.profile_observation_id, work.battle_log_observation_id,
+                     work.league_history_observation_id)
         AND (
             work.status IN ('pending', 'leased', 'waiting_retry')
             OR work.updated_at >= clock_timestamp() - make_interval(hours => %s)
@@ -269,7 +272,8 @@ def prune_completed_history(
                 FROM collector_observations AS observation
                 JOIN collector_work AS work
                   ON observation.id IN (
-                      work.profile_observation_id, work.battle_log_observation_id
+                      work.profile_observation_id, work.battle_log_observation_id,
+                      work.league_history_observation_id
                   )
                 WHERE work.id = ANY(%s::bigint[])
                 ORDER BY observation.id
@@ -285,7 +289,8 @@ def prune_completed_history(
                   ON o.id = COALESCE(p.observation_id, p.replay_observation_id)
                 JOIN collector_work AS work
                   ON o.id IN (
-                      work.profile_observation_id, work.battle_log_observation_id
+                      work.profile_observation_id, work.battle_log_observation_id,
+                      work.league_history_observation_id
                   )
                 WHERE work.id = ANY(%s::bigint[])
                 ORDER BY p.id FOR UPDATE OF p
@@ -354,6 +359,7 @@ def _prune_unused_content(connection: Any, hours: int, limit: int, apply: bool) 
             AND NOT EXISTS (SELECT 1 FROM battle_log_observations WHERE parsed_payload_id = target.id)
             AND NOT EXISTS (SELECT 1 FROM battle_source_rows WHERE parsed_payload_id = target.id)
             AND NOT EXISTS (SELECT 1 FROM official_top200_entries WHERE parsed_payload_id = target.id)
+            AND NOT EXISTS (SELECT 1 FROM player_league_history_entries WHERE parsed_payload_id = target.id)
         """,
         "source_response_parses": """
             target.created_at < clock_timestamp() - make_interval(hours => %s)

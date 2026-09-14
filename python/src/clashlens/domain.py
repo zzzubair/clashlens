@@ -168,6 +168,11 @@ def validate_profile_season_anchor(
     )
 
 
+def is_season_boundary(boundary: datetime) -> bool:
+    """True when a 05:00 UTC Reset boundary also opens a new season."""
+    return ranked_day_for(boundary).season_start == boundary.astimezone(UTC)
+
+
 def ranked_day_for(
     timestamp: datetime,
     *,

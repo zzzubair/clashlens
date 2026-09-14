@@ -12,15 +12,23 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+from .domain import is_season_boundary
+
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
 DOMAIN_RULE_VERSION = "clashlens-domain-rules-v1"
 ANALYTICS_RULE_VERSION = "legend-analytics-v1"
 PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
 SOURCE_PARSER_VERSION = "supercell-source-parser-v2"
+LEAGUE_HISTORY_PARSER_VERSION = "supercell-league-history-parser-v1"
 REVISIT_INTERVAL = timedelta(minutes=5)
 UPLOAD_RETRY_DELAY = timedelta(seconds=5)
-_ENDPOINTS = {"profile", "battle_log", "global_player_rankings"}
-_PLAYER_ENDPOINTS = {"profile", "battle_log"}
+_ENDPOINTS = {
+    "profile",
+    "battle_log",
+    "global_player_rankings",
+    "league_history",
+}
+_PLAYER_ENDPOINTS = {"profile", "battle_log", "league_history"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +49,7 @@ class CollectorIntent:
     due_at: datetime | None = None
     status: str | None = None
     sweep_id: int | None = None
+    league_history_required: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +66,9 @@ class ResponseHandoff:
     response_completed_at: datetime
     http_status: int
     response_hash: str
+    # Digest of only the fields Clash Lens uses (response_fields.py). For
+    # endpoints without a field list this equals response_hash.
+    content_fingerprint: str
     byte_size: int
     spool_key: str
     collector_version: str
@@ -83,6 +95,9 @@ class UploadClaim:
     token: str
     lease_expires_at: datetime
     attempt_count: int
+    # Non-empty when retired bytes were seen again: the upload must use the
+    # hash's generation suffix so the tombstoned location stays untouched.
+    generation: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +280,8 @@ class CollectorDatabase:
             return PROFILE_PARSER_VERSION
         if endpoint in {"battle_log", "global_player_rankings"}:
             return SOURCE_PARSER_VERSION
+        if endpoint == "league_history":
+            return LEAGUE_HISTORY_PARSER_VERSION
         raise ValueError(f"unsupported endpoint: {endpoint}")
 
     @staticmethod
@@ -277,6 +294,7 @@ class CollectorDatabase:
     @classmethod
     def _validate_handoff(cls, handoff: ResponseHandoff) -> None:
         cls._validate_hash(handoff.response_hash)
+        cls._validate_hash(handoff.content_fingerprint)
         if not 1 <= len(handoff.occurrence_key) <= 450:
             raise ValueError("occurrence key must contain 1 to 450 characters")
         if handoff.scope not in {"player", "global"}:
@@ -321,6 +339,8 @@ class CollectorDatabase:
         path = "/v1/players/%23" + handoff.normalized_tag[1:]
         if handoff.endpoint == "battle_log":
             path += "/battlelog"
+        elif handoff.endpoint == "league_history":
+            path += "/leaguehistory"
         return "GET", path, "", "not_applicable"
 
     @staticmethod
@@ -339,8 +359,9 @@ class CollectorDatabase:
             (handoff.collector_work_id,),
         ).fetchone()
         allowed_endpoints = {
-            "discovery_profile": {"profile"},
+            "discovery_profile": {"profile", "league_history"},
             "global_player_rankings": {"global_player_rankings"},
+            "live_refresh": {"profile", "battle_log"},
         }.get(None if row is None else str(row[0]), _PLAYER_ENDPOINTS)
         if (
             row is None
@@ -433,7 +454,7 @@ class CollectorDatabase:
         with self._connection() as connection:
             with connection.transaction():
                 rows = connection.execute(
-                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status FROM collector_work AS work WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
+                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status FROM collector_work AS work WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
                     (intent_time, interactive, interactive, interactive, limit),
                 ).fetchall()
                 intents = [
@@ -446,6 +467,7 @@ class CollectorDatabase:
                         due_at=row[2],
                         status=str(row[6]),
                         sweep_id=None if row[5] is None else int(row[5]),
+                        league_history_required=str(row[7]) == "pending",
                     )
                     for row in rows
                 ]
@@ -524,7 +546,7 @@ class CollectorDatabase:
         with self._connection() as connection:
             with connection.transaction():
                 work = connection.execute(
-                    "SELECT kind, profile_status, battle_log_status, profile_observation_id, battle_log_observation_id FROM collector_work WHERE id = %s AND status IN ('pending', 'waiting_retry') FOR UPDATE",
+                    "SELECT kind, profile_status, battle_log_status, profile_observation_id, battle_log_observation_id, league_history_status, league_history_observation_id FROM collector_work WHERE id = %s AND status IN ('pending', 'waiting_retry') FOR UPDATE",
                     (job_id,),
                 ).fetchone()
                 if work is None:
@@ -538,8 +560,12 @@ class CollectorDatabase:
                     if work[0] in {"discovery_profile", "global_player_rankings"}
                     else (work[3], work[4])
                 )
-                if (work[1], work[2]) != expected or any(
-                    value is None for value in required_ids
+                if work[5] == "observed":
+                    required_ids += (work[6],)
+                if (
+                    (work[1], work[2]) != expected
+                    or work[5] == "pending"
+                    or any(value is None for value in required_ids)
                 ):
                     return False
                 row = connection.execute(
@@ -585,6 +611,10 @@ class CollectorDatabase:
             utc_boundary.microsecond,
         ) != (5, 0, 0, 0):
             raise ValueError("Reset boundary must be 05:00 UTC")
+        # A season-ending Reset adds one league-history fetch per member.
+        league_history_status = (
+            "pending" if is_season_boundary(utc_boundary) else "not_applicable"
+        )
         with self._connection() as connection:
             with connection.transaction():
                 older_boundary = connection.execute(
@@ -645,11 +675,13 @@ class CollectorDatabase:
                     """
                     INSERT INTO collector_work (
                         kind, lane, scope, player_id, normalized_tag, due_at,
-                        coalescing_key, sweep_id, profile_status, battle_log_status
+                        coalescing_key, sweep_id, profile_status,
+                        battle_log_status, league_history_status
                     )
                     SELECT 'reset_baseline', 'reset', 'player', player.id,
                            player.normalized_tag, %s,
-                           'reset:' || %s || ':' || player.id, %s, 'pending', 'pending'
+                           'reset:' || %s || ':' || player.id, %s, 'pending',
+                           'pending', %s
                     FROM unnest(%s::bigint[]) AS member(player_id)
                     JOIN players AS player ON player.id = member.player_id
                     WHERE NOT EXISTS (
@@ -657,7 +689,14 @@ class CollectorDatabase:
                         WHERE existing.coalescing_key = 'reset:' || %s || ':' || player.id
                     )
                     """,
-                    (utc_boundary, sweep_id, sweep_id, member_ids, sweep_id),
+                    (
+                        utc_boundary,
+                        sweep_id,
+                        sweep_id,
+                        league_history_status,
+                        member_ids,
+                        sweep_id,
+                    ),
                 )
         return sweep_id
 
@@ -717,6 +756,7 @@ class CollectorDatabase:
             "profile": "player-profile-v1",
             "battle_log": "battle-log-v1",
             "global_player_rankings": "global-player-rankings-v1",
+            "league_history": "league-history-v1",
         }[handoff.endpoint]
         row = connection.execute(
             """
@@ -840,9 +880,9 @@ class CollectorDatabase:
             """
             INSERT INTO collector_response_state (
                 scope, identity_key, endpoint, player_id, normalized_tag,
-                last_response_hash, last_occurrence_key, last_seen_at,
-                last_observation_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                last_response_hash, last_content_fingerprint,
+                last_occurrence_key, last_seen_at, last_observation_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (scope, identity_key, endpoint) DO UPDATE
             SET request_count = collector_response_state.request_count + 1,
                 player_id = CASE WHEN EXCLUDED.last_seen_at >=
@@ -856,6 +896,10 @@ class CollectorDatabase:
                     collector_response_state.last_seen_at
                     THEN EXCLUDED.last_response_hash
                     ELSE collector_response_state.last_response_hash END,
+                last_content_fingerprint = CASE WHEN EXCLUDED.last_seen_at >=
+                    collector_response_state.last_seen_at
+                    THEN EXCLUDED.last_content_fingerprint
+                    ELSE collector_response_state.last_content_fingerprint END,
                 last_occurrence_key = CASE WHEN EXCLUDED.last_seen_at >=
                     collector_response_state.last_seen_at
                     THEN EXCLUDED.last_occurrence_key
@@ -876,6 +920,7 @@ class CollectorDatabase:
                 handoff.player_id,
                 handoff.normalized_tag,
                 handoff.response_hash,
+                handoff.content_fingerprint,
                 handoff.occurrence_key,
                 handoff.response_completed_at,
                 observation_id,
@@ -891,19 +936,12 @@ class CollectorDatabase:
                 work_kind = self._validate_work_identity(connection, handoff)
                 connection.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (handoff.response_hash,),
-                )
-                archive_reference, archive_catalogue_hash = self._upsert_upload(
-                    connection, handoff
-                )
-                connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                     (state_key,),
                 )
                 state = connection.execute(
                     """
                     SELECT last_response_hash, last_seen_at, last_observation_id,
-                           last_occurrence_key
+                           last_occurrence_key, last_content_fingerprint
                     FROM collector_response_state
                     WHERE scope = %s AND identity_key = %s AND endpoint = %s
                     FOR UPDATE
@@ -938,23 +976,31 @@ class CollectorDatabase:
                         parser_version,
                     )
 
-                # Reset needs boundary-time proof even when bytes match the
-                # previous poll. Ordinary unchanged responses compact to state.
+                # Reset needs boundary-time proof even when the used fields
+                # match the previous poll. Ordinary unchanged responses compact
+                # to state: no observation, job, or upload row is created.
+                # state[4] is the field fingerprint; rows upgraded before the
+                # column existed hold the old byte hash there, so matching the
+                # response hash also counts as unchanged. state[2] must name a
+                # live observation: pruning can NULL it, and a work endpoint
+                # marked observed with no observation can never complete.
                 if (
                     state is not None
-                    and state[0] == handoff.response_hash
+                    and state[2] is not None
+                    and state[4]
+                    in (handoff.content_fingerprint, handoff.response_hash)
                     and work_kind != "reset_baseline"
                 ):
                     self._upsert_response_state(connection, handoff, state[2])
                     self._record_intent_endpoint(connection, handoff, state[2])
+                    # A body still being returned in a later season keeps that
+                    # season's retirement deadline.
                     connection.execute(
                         """
                         UPDATE archive_catalogue
-                        SET last_seen_before = date_trunc(
-                                'hour', GREATEST(%s, clock_timestamp())
-                            ) + interval '1 hour'
+                        SET retire_after = clashlens_season_retire_after(%s)
                         WHERE response_hash = %s AND availability = 'verified'
-                          AND last_seen_before < GREATEST(%s, clock_timestamp())
+                          AND retire_after < clashlens_season_retire_after(%s)
                         """,
                         (
                             handoff.response_completed_at,
@@ -966,6 +1012,50 @@ class CollectorDatabase:
                         False, None, None, handoff.response_hash, parser_version
                     )
 
+                connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (handoff.response_hash,),
+                )
+                archive_reference, archive_catalogue_hash = self._upsert_upload(
+                    connection, handoff
+                )
+                if archive_reference is not None:
+                    availability = connection.execute(
+                        """
+                        SELECT availability
+                        FROM archive_catalogue
+                        WHERE response_hash = %s AND archive_reference = %s
+                        """,
+                        (handoff.response_hash, archive_reference),
+                    ).fetchone()
+                    if availability is None:
+                        raise RuntimeError(
+                            "upload references an unknown archive location"
+                        )
+                    if availability[0] != "verified":
+                        # The old location is tombstoned. Re-observed bytes
+                        # upload under a generation suffix so the tombstone
+                        # stays final; the observation binds on completion.
+                        connection.execute(
+                            """
+                            UPDATE collector_response_uploads
+                            SET state = 'pending', upload_generation = %s,
+                                lease_owner = NULL, lease_token = NULL,
+                                lease_expires_at = NULL, archive_reference = NULL,
+                                archive_instance_id = NULL, completed_at = NULL,
+                                next_attempt_at = clock_timestamp(),
+                                last_error_category = NULL,
+                                last_error_detail = NULL,
+                                local_deleted_at = NULL,
+                                updated_at = clock_timestamp()
+                            WHERE response_hash = %s
+                              AND state = 'complete'
+                              AND archive_reference = %s
+                            """,
+                            (uuid4().hex, handoff.response_hash, archive_reference),
+                        )
+                        archive_reference = None
+                        archive_catalogue_hash = None
                 observation_id = self._upsert_observation(
                     connection,
                     handoff,
@@ -997,11 +1087,13 @@ class CollectorDatabase:
             "profile": "profile_status",
             "battle_log": "battle_log_status",
             "global_player_rankings": "profile_status",
+            "league_history": "league_history_status",
         }[handoff.endpoint]
         observation_column = {
             "profile": "profile_observation_id",
             "battle_log": "battle_log_observation_id",
             "global_player_rankings": "profile_observation_id",
+            "league_history": "league_history_observation_id",
         }[handoff.endpoint]
         connection.execute(
             f"""
@@ -1107,7 +1199,7 @@ class CollectorDatabase:
                         updated_at = clock_timestamp()
                     WHERE response_hash = %s
                     RETURNING response_hash, spool_key, byte_size, lease_expires_at,
-                              attempt_count
+                              attempt_count, upload_generation
                     """,
                     (owner, token, expires, row[0]),
                 ).fetchone()
@@ -1120,6 +1212,7 @@ class CollectorDatabase:
             token,
             claimed[3],
             int(claimed[4]),
+            str(claimed[5]),
         )
 
     def _lock_upload(
@@ -1187,17 +1280,27 @@ class CollectorDatabase:
                         "archive reference is already bound to different bytes"
                     )
                 if existing is None:
+                    # The deadline follows the season the response belongs to,
+                    # not when the upload landed: a season-N body uploaded
+                    # after the season-N boundary still retires with season N.
                     connection.execute(
                         """
                         INSERT INTO archive_catalogue (
-                            response_hash, archive_reference, byte_size, archive_instance_id
-                        ) VALUES (%s, %s, %s, %s)
+                            response_hash, archive_reference, byte_size,
+                            archive_instance_id, retire_after
+                        ) VALUES (%s, %s, %s, %s,
+                                  clashlens_season_retire_after(COALESCE((
+                                      SELECT max(response_completed_at)
+                                      FROM collector_observations
+                                      WHERE response_hash = %s), %s)))
                         """,
                         (
                             claim.response_hash,
                             archive_reference,
                             claim.byte_size,
                             archive_instance_id,
+                            claim.response_hash,
+                            complete_time,
                         ),
                     )
                 connection.execute(
@@ -1274,12 +1377,14 @@ class CollectorDatabase:
                 UNION
                 SELECT state.last_response_hash
                 FROM collector_response_state AS state
-                WHERE NOT EXISTS (
+                WHERE EXISTS (
                     SELECT 1
                     FROM collector_response_uploads AS upload
                     WHERE upload.response_hash = state.last_response_hash
-                      AND upload.state = 'complete'
-                      AND upload.local_deleted_at IS NOT NULL
+                      AND NOT (
+                          upload.state = 'complete'
+                          AND upload.local_deleted_at IS NOT NULL
+                      )
                 )
                 """
             ).fetchall()

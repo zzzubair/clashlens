@@ -803,6 +803,178 @@ print(
 ' "$endpoint"
 }
 
+trial_wait_query() {
+  local label=$1 query=$2 deadline=$(( $(date +%s) + ${3:-420} ))
+  while (( $(date +%s) < deadline )); do
+    if [[ $("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+        -c "$query" 2>/dev/null) == t ]]; then
+      return 0
+    fi
+    sleep 10
+  done
+  printf 'compaction trial timed out waiting for %s\n' "$label" >&2
+  return 1
+}
+
+trial_probe_counts() {
+  local endpoint=$1
+  "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -F',' -U clashlens -d clashlens -c "
+    SELECT
+      (SELECT count(*) FROM collector_observations AS o
+        JOIN players AS p ON p.id = o.player_id
+        WHERE p.normalized_tag = '#2PP' AND o.endpoint = '$endpoint'),
+      (SELECT count(*) FROM python_processing_jobs AS j
+        JOIN collector_observations AS o ON o.id = j.observation_id
+        JOIN players AS p ON p.id = o.player_id
+        WHERE p.normalized_tag = '#2PP' AND o.endpoint = '$endpoint'
+          AND j.work_type = 'process_observation')"
+}
+
+trial_upload_count() {
+  # Upload rows keyed by hashes that #2PP actually stored; other players'
+  # in-flight uploads must not move this count.
+  "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens -c "
+    SELECT count(*) FROM collector_response_uploads AS u
+    WHERE EXISTS (
+      SELECT 1 FROM collector_observations AS o
+      JOIN players AS p ON p.id = o.player_id
+      WHERE p.normalized_tag = '#2PP' AND o.response_hash = u.response_hash
+    )"
+}
+
+trial_mutate() {
+  "$PODMAN_BIN" exec "$CLASH_API" python -c '
+import json, sys, urllib.request
+request = urllib.request.Request(
+    "http://127.0.0.1:8080/_trial/mutate",
+    data=json.dumps({"tag": "#2PP", "modes": json.loads(sys.argv[1])}).encode(),
+    headers={"Authorization": "Bearer trial"},
+    method="POST",
+)
+with urllib.request.urlopen(request, timeout=5) as response:
+    result = json.load(response)
+if not result.get("ok"):
+    raise SystemExit(1)
+' "$1"
+}
+
+trial_refresh_probe() {
+  "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens -c \
+    "SELECT work_id FROM clashlens_enqueue_interactive('live_refresh', '#2PP', 0, true)"
+}
+
+trial_compaction_phase() {
+  # Step-4c evidence on one synthetic player. A live_refresh work row fetches
+  # profile and battle_log on demand through the ordinary response path, so
+  # each phase completes in seconds instead of waiting for the 5-minute poll.
+  local probe_obs probe_jobs base_uploads obs jobs uploads league_obs
+  trial_wait_query "#2PP first polls" \
+    "SELECT EXISTS (SELECT 1 FROM collector_response_state
+        WHERE normalized_tag = '#2PP' AND endpoint = 'profile')
+        AND EXISTS (SELECT 1 FROM collector_response_state
+        WHERE normalized_tag = '#2PP' AND endpoint = 'battle_log')" \
+    420 || return 1
+  trial_wait_query "#2PP league history" \
+    "SELECT EXISTS (SELECT 1 FROM collector_observations AS o
+        JOIN players AS p ON p.id = o.player_id
+        WHERE p.normalized_tag = '#2PP' AND o.endpoint = 'league_history')
+        AND EXISTS (SELECT 1 FROM player_league_history_entries AS e
+        JOIN players AS p ON p.id = e.player_id
+        WHERE p.normalized_tag = '#2PP')" \
+    420 || return 1
+  base_uploads=$(trial_upload_count)
+
+  # Polls of identical bytes and of bytes that differ only in unread fields
+  # must create nothing.
+  trial_mutate '{"profile": "ignored", "battle_log": "ignored"}' || return 1
+  local work_id
+  work_id=$(trial_refresh_probe) || return 1
+  trial_wait_query "#2PP ignored-field refresh" \
+    "SELECT status IN ('complete', 'failed', 'cancelled')
+        FROM collector_work WHERE id = $work_id" \
+    300 || return 1
+  IFS=',' read -r obs jobs < <(trial_probe_counts profile)
+  probe_obs=$obs probe_jobs=$jobs
+  IFS=',' read -r obs jobs < <(trial_probe_counts battle_log)
+  uploads=$(trial_upload_count)
+  printf 'compaction unchanged+ignored: profile obs=%s jobs=%s, battle obs=%s jobs=%s, uploads +%s\n' \
+    "$probe_obs" "$probe_jobs" "$obs" "$jobs" "$((uploads - base_uploads))"
+  (( probe_obs == 1 && probe_jobs == 1 && obs == 1 && jobs == 1 \
+    && uploads == base_uploads )) || return 1
+
+  # A non-Legend battle entry is filtered out of the fingerprint. This must run
+  # before "relevant": modes replace each other, so leaving "relevant" would
+  # drop the extra Legend entry, which is itself a covered change.
+  trial_mutate '{"battle_log": "non_legend"}' || return 1
+  work_id=$(trial_refresh_probe) || return 1
+  trial_wait_query "#2PP non-Legend refresh" \
+    "SELECT status IN ('complete', 'failed', 'cancelled')
+        FROM collector_work WHERE id = $work_id" \
+    300 || return 1
+  IFS=',' read -r obs jobs < <(trial_probe_counts battle_log)
+  uploads=$(trial_upload_count)
+  printf 'compaction non-Legend: battle obs=%s jobs=%s, uploads +%s\n' \
+    "$obs" "$jobs" "$((uploads - base_uploads))"
+  (( obs == 1 && jobs == 1 && uploads == base_uploads )) || return 1
+
+  # A change to a field the fingerprint covers stores the full raw response.
+  trial_mutate '{"profile": "relevant", "battle_log": "relevant"}' || return 1
+  work_id=$(trial_refresh_probe) || return 1
+  trial_wait_query "#2PP relevant-field refresh" \
+    "SELECT status IN ('complete', 'failed', 'cancelled')
+        FROM collector_work WHERE id = $work_id" \
+    300 || return 1
+  IFS=',' read -r obs jobs < <(trial_probe_counts profile)
+  probe_obs=$obs probe_jobs=$jobs
+  IFS=',' read -r obs jobs < <(trial_probe_counts battle_log)
+  uploads=$(trial_upload_count)
+  printf 'compaction changed: profile obs=%s jobs=%s, battle obs=%s jobs=%s, uploads +%s\n' \
+    "$probe_obs" "$probe_jobs" "$obs" "$jobs" "$((uploads - base_uploads))"
+  (( probe_obs == 2 && probe_jobs == 2 && obs == 2 && jobs == 2 \
+    && uploads - base_uploads == 2 )) || return 1
+
+  # League history is collected once at discovery, never on regular polls.
+  league_obs=$("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens \
+    -d clashlens -c "SELECT COALESCE(sum(request_count), 0)
+      FROM collector_response_state
+      WHERE normalized_tag = '#2PP' AND endpoint = 'league_history'")
+  printf 'league-history polls for #2PP: %s (expected 1)\n' "$league_obs"
+  (( league_obs == 1 )) || return 1
+  trial_mutate '{"profile": "clear", "battle_log": "clear"}' || return 1
+  return 0
+}
+
+trial_evidence_snapshot() {
+  "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens -c "
+    SELECT COALESCE(sum(pg_total_relation_size(c.oid)), 0)
+    FROM pg_class AS c
+    JOIN pg_namespace AS n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname IN (
+        'collector_observations', 'python_processing_jobs',
+        'collector_response_uploads', 'archive_catalogue',
+        'observation_processing_outcomes', 'parsed_source_payloads'
+      )"
+}
+
+trial_observation_snapshot() {
+  "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+    -c "SELECT count(*) FROM collector_observations"
+}
+
+trial_league_history_count() {
+  "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens \
+    -c "SELECT count(*) FROM player_league_history_entries"
+}
+
+trial_league_history_row_bytes() {
+  "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens -c "
+    SELECT COALESCE(
+      pg_total_relation_size('player_league_history_entries')
+        / nullif(count(*), 0), 0)
+    FROM player_league_history_entries"
+}
+
 trial_report() {
   local before_requests after_requests requests
   read -r before_requests < "$STATE_DIR/trial-before-counters.tsv"
@@ -925,12 +1097,50 @@ trial_report() {
   projected_gib=$(awk -v bytes="$growth_bytes" -v seconds="$TRIAL_SECONDS" '
     BEGIN { printf "%.3f", bytes * 3600 / seconds * 24 * 182.625 / 1073741824 }
   ')
-  printf 'database growth rate: %.3f MiB/hour; six-month projection: %s GiB (baseline 166-185 GiB)\n' \
+  # The six-month extrapolation is not a measurement (issue #110): the trial
+  # window's first-fetch mix inflates it. Printed for comparison with #82's
+  # baseline only; the honest unit cost is bytes per stored response below.
+  printf 'database growth rate: %.3f MiB/hour; six-month projection: %s GiB (baseline 166-185 GiB, informational)\n' \
     "$(awk -v bytes="$growth_bytes" -v seconds="$TRIAL_SECONDS" \
       'BEGIN { printf "%.3f", bytes * 3600 / seconds / 1048576 }')" \
     "$projected_gib"
-  awk -v projected="$projected_gib" 'BEGIN { exit !(projected <= 185) }' || \
-    report_status=1
+
+  local compaction_status evidence_before evidence_after stored_before stored_after
+  read -r compaction_status < "$STATE_DIR/trial-compaction-status"
+  printf 'field compaction (#2PP):\n'
+  sed 's/^/  /' "$STATE_DIR/trial-compaction.log"
+  (( compaction_status == 0 )) || report_status=1
+  read -r evidence_before < "$STATE_DIR/trial-before-evidence.txt"
+  read -r evidence_after < "$STATE_DIR/trial-after-evidence.txt"
+  read -r stored_before < "$STATE_DIR/trial-before-observations.txt"
+  read -r stored_after < "$STATE_DIR/trial-after-observations.txt"
+  local stored_delta=$((stored_after - stored_before))
+  local bytes_per_response
+  # Whole-database growth (all tables, including derived rows) divided by
+  # responses stored during the window. The collector-side evidence set is
+  # printed separately for comparison with earlier runs.
+  bytes_per_response=$(awk -v bytes="$growth_bytes" -v stored="$stored_delta" \
+    'BEGIN { if (stored > 0) printf "%.0f", bytes / stored; else print "0" }')
+  printf 'storage per stored response: %s bytes whole-database, %s bytes collector evidence (%s stored during window)\n' \
+    "$bytes_per_response" \
+    "$(awk -v bytes="$evidence_after" -v before="$evidence_before" \
+      -v stored="$stored_delta" \
+      'BEGIN { if (stored > 0) printf "%.0f", (bytes - before) / stored; else print "0" }')" \
+    "$stored_delta"
+  # Before field compaction every 5-minute poll on each endpoint stored:
+  # 576 responses per player per day. After, only fingerprint changes store.
+  # Projected daily database growth for 12,500 players at 8/16/32 changed
+  # responses per player per day.
+  awk -v bytes="$bytes_per_response" 'BEGIN {
+    printf "projected daily growth at 12,500 players: before=%.1f GiB (every poll stored); after %.2f/%.2f/%.2f GiB at 8/16/32 changes per player per day\n",
+      bytes * 576 * 12500 / 1073741824,
+      bytes * 8 * 12500 / 1073741824,
+      bytes * 16 * 12500 / 1073741824,
+      bytes * 32 * 12500 / 1073741824
+  }'
+  printf 'league-history rows: %s (%s bytes/row measured, ~12500 rows/season)\n' \
+    "$(trial_league_history_count)" \
+    "$(trial_league_history_row_bytes)"
   return "$report_status"
 }
 
@@ -956,6 +1166,13 @@ trial_inner() {
     date -u '+%Y-%m-%dT%H:%M:%S.%NZ %s%N'
   )
   start_trial_producers
+  trial_evidence_snapshot > "$STATE_DIR/trial-before-evidence.txt"
+  trial_observation_snapshot > "$STATE_DIR/trial-before-observations.txt"
+  local compaction_status=0
+  trial_compaction_phase > "$STATE_DIR/trial-compaction.log" 2>&1 \
+    || compaction_status=$?
+  cat "$STATE_DIR/trial-compaction.log"
+  printf '%s\n' "$compaction_status" > "$STATE_DIR/trial-compaction-status"
   local deadline_nanoseconds remaining_seconds restart_delay
   deadline_nanoseconds=$((TRIAL_STARTED_NANOSECONDS + TRIAL_MINUTES * 60 * 1000000000))
   restart_delay=$((TRIAL_MINUTES * 30))
@@ -996,6 +1213,8 @@ trial_inner() {
   trial_database_counter_snapshot > "$STATE_DIR/trial-after-database-counter.tsv"
   trial_fixture_counter_snapshot > "$STATE_DIR/trial-final-fixture-counter.tsv"
   trial_recovery_snapshot > "$STATE_DIR/trial-recovery.tsv"
+  trial_evidence_snapshot > "$STATE_DIR/trial-after-evidence.txt"
+  trial_observation_snapshot > "$STATE_DIR/trial-after-observations.txt"
   local report_status=0
   trial_report || report_status=$?
   trap - EXIT

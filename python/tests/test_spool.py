@@ -206,6 +206,23 @@ def test_cleanup_cannot_delete_raw_response_while_sidecar_exists(
     assert spool.verify(digest) is None
 
 
+def test_unreferenced_sweep_reads_references_at_sweep_time(
+    tmp_path: Path,
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    body = b"durable handoff"
+    digest = hashlib.sha256(body).hexdigest()
+    with spool.reservation() as reservation:
+        spool.publish(body, digest, reservation)
+
+    # The referenced set is consulted inside the cleanup barrier so a hash
+    # recorded between a stale snapshot and the sweep still survives.
+    assert spool.remove_unreferenced(lambda: {digest}) == 0
+    assert spool.verify(digest) == body
+    assert spool.remove_unreferenced(lambda: set()) == 1
+    assert spool.verify(digest) is None
+
+
 def test_handoff_names_cannot_escape_trusted_directory(tmp_path: Path) -> None:
     spool = Spool(tmp_path / "spool", max_body_bytes=1024)
     for name in ("../outside", "nested/name", ""):

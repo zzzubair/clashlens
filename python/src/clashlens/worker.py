@@ -21,6 +21,11 @@ from .db import (
     LeaseLost,
 )
 from .domain import DomainRuleError
+from .league_history import (
+    LeagueHistoryParseError,
+    complete_league_history,
+    parse_league_history,
+)
 from .profile import ProfileParseError, parse_profile
 from .rankings import (
     RankingParseError,
@@ -475,6 +480,23 @@ class ObservationProcessor:
                 outcome = (
                     "processed_with_gaps" if battle_log.has_row_gap else "processed"
                 )
+            elif claim.endpoint == "league_history":
+                if claim.normalized_tag is None:
+                    return self._fail(claim, "missing_player_scope", retryable=False)
+                parse_started_at = monotonic()
+                history = parse_league_history(
+                    archived.body,
+                    expected_tag=claim.normalized_tag,
+                    observed_at=claim.observed_at,
+                    parser_version=claim.parser_version,
+                )
+                self._record_stage("python_parse_league_history", parse_started_at)
+                domain_started_at = monotonic()
+                complete_league_history(self.database, claim, history)
+                self._record_stage("python_domain_league_history", domain_started_at)
+                outcome = (
+                    "processed_with_gaps" if history.has_row_gap else "processed"
+                )
             else:
                 parse_started_at = monotonic()
                 rankings = parse_global_player_rankings(
@@ -487,7 +509,12 @@ class ObservationProcessor:
                 self.database.complete_rankings(claim, rankings)
                 self._record_stage("python_domain_rankings", domain_started_at)
                 outcome = "processed"
-        except (ProfileParseError, BattleLogParseError, RankingParseError) as error:
+        except (
+            ProfileParseError,
+            BattleLogParseError,
+            RankingParseError,
+            LeagueHistoryParseError,
+        ) as error:
             return self._fail(claim, error.category, detail=str(error), retryable=False)
         except DomainRuleError as error:
             return self._complete_retired(claim, error)

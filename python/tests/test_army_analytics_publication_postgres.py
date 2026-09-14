@@ -65,7 +65,7 @@ def _row(attack: bool, opponent: str, code: str, ts: datetime, stars: int, dest:
     return {
         "battleType": "legend",
         "attack": attack,
-        "battleTimestamp": ts.isoformat().replace("+00:00", "Z"),
+        "battleTime": ts.strftime("%Y%m%dT%H%M%S.000Z"),
         "stars": stars,
         "destructionPercentage": dest,
         "opponentPlayerTag": opponent,

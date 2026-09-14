@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import random
+import time
 from contextlib import ExitStack
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
@@ -28,6 +29,7 @@ from .collector_http import (
     OfficialApiClient,
     ProviderFailure,
 )
+from .response_fields import content_fingerprint
 from .spool import Spool, SpoolError
 
 _GLOBAL_ARCHIVE_FAILURES = {
@@ -169,10 +171,13 @@ class Collector:
                 collector_work_id=intent.work_id,
             )
             endpoints = (
-                ("profile",)
+                ["profile"]
                 if intent.kind == "discovery_profile"
-                else ("profile", "battle_log")
+                else ["profile", "battle_log"]
             )
+            if intent.league_history_required:
+                endpoints.append("league_history")
+            endpoints = tuple(endpoints)
             lane = (
                 "reset"
                 if intent.kind == "reset_baseline"
@@ -342,6 +347,12 @@ class Collector:
             response_completed_at=response.response_completed_at,
             http_status=response.http_status,
             response_hash=digest,
+            content_fingerprint=content_fingerprint(
+                response.endpoint,
+                response.body,
+                http_status=response.http_status,
+                response_hash=digest,
+            ),
             byte_size=len(response.body),
             spool_key=f"sha256/{digest[:2]}/{digest}",
             collector_version=self.collector_version,
@@ -372,6 +383,9 @@ class Collector:
         value["response_completed_at"] = datetime.fromisoformat(
             value["response_completed_at"]
         )
+        # Sidecars written before field compaction replay with the raw digest:
+        # they count as changed once, which stores rather than loses them.
+        value.setdefault("content_fingerprint", value["response_hash"])
         return ResponseHandoff(**value)
 
     def recover_handoffs(self) -> int:
@@ -383,8 +397,7 @@ class Collector:
             self.database.record_response(handoff)
             self.spool.remove_handoff(name)
             recovered += 1
-        referenced = self.database.referenced_spool_hashes()
-        self.spool.remove_unreferenced(referenced)
+        self.spool.remove_unreferenced(self.database.referenced_spool_hashes)
         return recovered
 
     async def upload_once(self, *, owner: str) -> bool:
@@ -433,7 +446,10 @@ class Collector:
                     retryable=False,
                 )
             reference = await asyncio.to_thread(
-                self.archive.write_immutable, body, claim.response_hash
+                self.archive.write_immutable,
+                body,
+                claim.response_hash,
+                generation=claim.generation or None,
             )
             await self._database_call(
                 self.database.complete_upload,
@@ -644,6 +660,7 @@ class Collector:
             )
             for owner in owners
         }
+        last_sweep = 0.0
         try:
             while not stop_requested.is_set():
                 for owner, task in list(owner_tasks.items()):
@@ -655,6 +672,18 @@ class Collector:
                             )
                         )
                 await asyncio.to_thread(self.cleanup_uploaded, limit=128)
+                # Compacted responses leave no upload row or observation, so
+                # their spool bytes are unreferenced. Sweep them under the
+                # cleanup barrier; the referenced set is evaluated inside it so
+                # sidecars still in flight and freshly committed rows protect.
+                # The sweep walks the whole spool, so it is paced per minute,
+                # not per loop.
+                if time.monotonic() - last_sweep >= 60.0:
+                    last_sweep = time.monotonic()
+                    await asyncio.to_thread(
+                        self.spool.remove_unreferenced,
+                        self.database.referenced_spool_hashes,
+                    )
                 await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
         finally:
             if owner_tasks:

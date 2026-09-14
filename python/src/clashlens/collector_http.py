@@ -237,6 +237,8 @@ class OfficialApiClient:
             suffix = f"/v1/players/{quote(normalized_tag, safe='')}"
         elif endpoint == "battle_log":
             suffix = f"/v1/players/{quote(normalized_tag, safe='')}/battlelog"
+        elif endpoint == "league_history":
+            suffix = f"/v1/players/{quote(normalized_tag, safe='')}/leaguehistory"
         else:
             raise ValueError("unknown player endpoint")
         return await self._fetch(pool, endpoint, self.origin + suffix)
