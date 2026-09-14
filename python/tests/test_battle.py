@@ -201,6 +201,24 @@ def test_live_parser_accepts_compact_battle_timestamps(timestamp: object) -> Non
     assert battle.battle_timestamp == datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("timestamp", [True, "9" * 40, -2**70])
+def test_live_parser_marks_unusable_battle_times_as_gaps(
+    timestamp: object,
+) -> None:
+    payload = json.loads(FIXTURE.read_bytes())
+    payload["items"][0]["battleTime"] = timestamp
+
+    parsed = parse_battle_log(
+        json.dumps(payload).encode(),
+        expected_tag="#2PP",
+        observed_at=datetime(2026, 8, 4, 12, 5, tzinfo=UTC),
+        parser_version=SOURCE_PARSER_VERSION,
+    )
+
+    assert parsed.rows[0].outcome == "malformed_legend_row"
+    assert parsed.rows[0].failure_category == "invalid_battle_timestamp"
+
+
 def test_live_parser_reads_battle_timestamp_when_battle_time_is_absent() -> None:
     payload = json.loads(FIXTURE.read_bytes())
     del payload["items"][0]["battleTime"]
