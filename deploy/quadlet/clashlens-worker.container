@@ -34,5 +34,6 @@ Exec=worker --owner production-python-1 --max-jobs 100 --lease-seconds @@WORKER_
 
 [Service]
 Restart=always
+RestartMode=direct
 TimeoutStartSec=5min
 TimeoutStopSec=@@WORKER_STOP@@

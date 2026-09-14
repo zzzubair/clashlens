@@ -22,4 +22,5 @@ Exec=archive --host 0.0.0.0 --port 9000 --root /data
 
 [Service]
 Restart=always
+RestartMode=direct
 TimeoutStartSec=3min

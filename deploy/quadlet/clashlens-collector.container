@@ -36,5 +36,6 @@ Exec=collector @@COLLECTOR_ARGS@@
 
 [Service]
 Restart=always
+RestartMode=direct
 TimeoutStartSec=5min
 TimeoutStopSec=45

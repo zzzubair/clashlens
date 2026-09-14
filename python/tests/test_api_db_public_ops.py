@@ -409,7 +409,7 @@ def test_player_page_withholds_season_days_when_official_history_disagrees(
                         official_season_id = '1783314000',
                         season_day_number = 4,
                         state = 'Complete', coverage = 'complete',
-                        confidence = 'exact'
+                        confidence = 'exact', partial_reasons = '[]'::jsonb
                     WHERE player_id = (
                         SELECT id FROM players WHERE normalized_tag = '#2PP'
                     )

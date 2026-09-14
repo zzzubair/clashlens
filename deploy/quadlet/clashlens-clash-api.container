@@ -20,4 +20,5 @@ Exec=clash --host 0.0.0.0 --port 8080 --players 200
 
 [Service]
 Restart=always
+RestartMode=direct
 TimeoutStartSec=3min

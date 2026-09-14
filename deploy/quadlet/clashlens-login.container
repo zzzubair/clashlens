@@ -20,4 +20,5 @@ Notify=healthy
 
 [Service]
 Restart=always
+RestartMode=direct
 TimeoutStartSec=3min

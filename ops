@@ -988,6 +988,10 @@ container_name() {
   esac
 }
 
+container_state() {
+  "$PODMAN_BIN" inspect --format '{{if and .State.Running (not .State.Paused) (eq .State.Status "running")}}{{if .State.Health}}{{.State.Health.Status}}{{else}}running{{end}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || printf absent
+}
+
 wait_stack() {
   local attempt service state all
   local services=(postgres collector api worker website)
@@ -995,7 +999,7 @@ wait_stack() {
   for attempt in $(seq 1 120); do
     all=true
     for service in "${services[@]}"; do
-      state=$("$PODMAN_BIN" inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$(container_name "$PREFIX" "$service")" 2>/dev/null || true)
+      state=$(container_state "$(container_name "$PREFIX" "$service")")
       [[ "$state" == healthy || "$state" == running ]] || { all=false; break; }
     done
     [[ "$all" == true ]] && return
@@ -1097,7 +1101,7 @@ status() {
   local services=(postgres collector api worker website)
   [[ "$mode" != fixture ]] || services+=(archive clash-api login)
   for service in "${services[@]}"; do
-    state=$($PODMAN_BIN inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$(container_name "$prefix" "$service")" 2>/dev/null || printf absent)
+    state=$(container_state "$(container_name "$prefix" "$service")")
     printf '%-10s %s\n' "$service" "$state"
     [[ "$state" == healthy || "$state" == running ]] || result=1
   done

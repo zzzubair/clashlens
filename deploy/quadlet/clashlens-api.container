@@ -34,5 +34,6 @@ Exec=serve --host 0.0.0.0 --port 8000 @@API_ARGS@@
 
 [Service]
 Restart=always
+RestartMode=direct
 TimeoutStartSec=5min
 TimeoutStopSec=45

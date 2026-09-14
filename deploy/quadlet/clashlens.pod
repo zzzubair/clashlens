@@ -12,3 +12,7 @@ PodmanArgs=--userns=keep-id:uid=10001,gid=10001
 PublishPort=127.0.0.1:@@WEBSITE_PORT@@:3000
 PublishPort=127.0.0.1:@@HEALTH_PORT@@:8081
 @@FIXTURE_PORTS@@
+
+[Service]
+Restart=on-failure
+RestartMode=direct

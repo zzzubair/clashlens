@@ -27,5 +27,6 @@ Exec=postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statemen
 
 [Service]
 Restart=always
+RestartMode=direct
 TimeoutStartSec=5min
 TimeoutStopSec=90
