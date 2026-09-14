@@ -212,10 +212,11 @@ def test_enqueue_cycle_coalescing_terminal_rediscovery_inputs_and_privileges(
                 """INSERT INTO collector_work (
                        kind, lane, scope, player_id, normalized_tag, due_at,
                        coalescing_key, status, profile_status, battle_log_status,
-                       completed_at)
+                       league_history_status, completed_at)
                    SELECT 'discovery_profile', 'ordinary', 'player', id, normalized_tag,
                           clock_timestamp(), 'discovery-profile:' || id,
-                          'complete', 'observed', 'not_applicable', clock_timestamp()
+                          'complete', 'observed', 'not_applicable', 'observed',
+                          clock_timestamp()
                    FROM players WHERE id = %s""",
                 (terminal,),
             )

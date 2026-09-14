@@ -40,10 +40,11 @@ def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
             """
             INSERT INTO collector_work (
                 kind, lane, scope, player_id, normalized_tag, due_at,
-                coalescing_key, status, profile_status, battle_log_status
+                coalescing_key, status, profile_status, battle_log_status,
+                league_history_status
             ) VALUES (
                 'initial_collection', 'interactive', 'player', %s, %s, %s,
-                %s, 'pending', 'pending', 'pending'
+                %s, 'pending', 'pending', 'pending', 'pending'
             ) RETURNING id
             """,
             (player_id, tag, NOW, f"seed:{tag}"),
@@ -76,7 +77,8 @@ def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
             """
             UPDATE collector_work
             SET status = 'complete', profile_status = 'observed',
-                battle_log_status = 'observed', profile_observation_id = %s,
+                battle_log_status = 'observed', league_history_status = 'observed',
+                profile_observation_id = %s,
                 completed_at = %s, updated_at = %s
             WHERE id = %s
             """,

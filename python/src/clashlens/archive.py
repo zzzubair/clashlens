@@ -18,6 +18,7 @@ from minio.error import S3Error
 from .spool import Spool, SpoolError
 
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
+_GENERATION_RE = re.compile(r"^[0-9a-f]{32}$")
 DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_READ_TIMEOUT_SECONDS = 15.0
@@ -333,16 +334,30 @@ class S3ArchiveReader:
                     heartbeat()
         raise AssertionError("unreachable archive retry loop")
 
-    def write_immutable(self, body: bytes, expected_hash: str) -> str:
+    def write_immutable(
+        self,
+        body: bytes,
+        expected_hash: str,
+        *,
+        generation: str | None = None,
+    ) -> str:
         """Create one content-addressed object without replacing prior evidence.
 
         A successful conditional write is sufficient. A conflict or ambiguous
         outcome is accepted only after reading and hashing the exact object.
+        ``generation`` namespaces re-observed bytes whose original location
+        was retired, so a late DELETE on the old key can never reach them.
         """
         if not _HASH_RE.fullmatch(expected_hash):
             raise ArchiveReadError(
                 "invalid_observation_hash",
                 "archive hash must be a lowercase SHA-256 digest",
+                retryable=False,
+            )
+        if generation is not None and not _GENERATION_RE.fullmatch(generation):
+            raise ArchiveReadError(
+                "invalid_observation_hash",
+                "archive generation must be a 32-digit lowercase hex suffix",
                 retryable=False,
             )
         if len(body) > self.max_body_bytes:
@@ -358,6 +373,8 @@ class S3ArchiveReader:
                 retryable=False,
             )
         object_key = f"sha256/{expected_hash[:2]}/{expected_hash}"
+        if generation is not None:
+            object_key += f"/generation/{generation}"
         reference = f"s3://{self.bucket}/{object_key}"
         try:
             self._execute_immutable_put(object_key, body, expected_hash)

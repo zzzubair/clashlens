@@ -212,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     prune_archive = subparsers.add_parser(
         "prune-archive",
-        help="preview or retire six-month inactive raw objects (operator credentials)",
+        help="preview or retire season-expired raw objects (operator credentials)",
     )
     _database_argument(prune_archive)
     _archive_arguments(prune_archive)

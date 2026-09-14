@@ -6,7 +6,7 @@ import json
 import os
 import stat
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from time import time
@@ -774,10 +774,15 @@ class Spool:
                 self._delete_locked(digest)
                 return True
 
-    def remove_unreferenced(self, referenced: set[str]) -> int:
+    def remove_unreferenced(self, referenced: Callable[[], set[str]]) -> int:
         with self._cleanup():
             with self._capacity_lock():
-                protected = referenced | self._handoff_hashes_locked()
+                # Both reads happen inside the barrier, sidecars first: a
+                # hash whose sidecar was removed before this scan has its
+                # upload row committed already, so the later database read
+                # sees it. A snapshot taken outside the barrier can miss
+                # that commit and delete a body a pending upload needs.
+                protected = self._handoff_hashes_locked() | referenced()
                 orphaned = {
                     digest
                     for digest, _size in self._final_files_locked()

@@ -42,7 +42,7 @@ def _live_battle_row(
 
     return {
         "attack": attack,
-        "battleTimestamp": battle_timestamp.isoformat().replace("+00:00", "Z"),
+        "battleTime": battle_timestamp.strftime("%Y%m%dT%H%M%S.000Z"),
         "stars": stars,
         "destructionPercentage": destruction_percentage,
         "armyShareCode": army_share_code,
@@ -515,7 +515,7 @@ def test_concurrent_battle_batches_lock_shared_rows_in_one_order(
     payload = json.loads(BATTLE_FIXTURE.read_bytes())
     first = payload["items"][0]
     second = json.loads(json.dumps(first))
-    second["battleTimestamp"] = "2026-08-04T11:30:00Z"
+    second["battleTime"] = "20260804T113000.000Z"
     second["opponentPlayerTag"] = "#9PP"
     second["opponentName"] = "Second Defender"
     forward = json.dumps({"items": [first, second]}).encode()
@@ -593,7 +593,7 @@ def test_battle_logs_enqueue_live_reconciliation_when_projection_changes(
 
         payload = json.loads(BATTLE_FIXTURE.read_bytes())
         payload["items"] = payload["items"][:1]
-        payload["items"][0]["battleTimestamp"] = event_at.isoformat()
+        payload["items"][0]["battleTime"] = event_at.strftime("%Y%m%dT%H%M%S.000Z")
         unchanged_body = json.dumps(payload).encode()
         changed_payload = json.loads(unchanged_body)
         changed_payload["items"][0]["stars"] = 2

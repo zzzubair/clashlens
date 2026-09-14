@@ -31,7 +31,7 @@ def _live_row(attack: bool, tag: str, code: str | None, ts: datetime):
     row = {
         "battleType": "legend",
         "attack": attack,
-        "battleTimestamp": ts.isoformat().replace("+00:00", "Z"),
+        "battleTime": ts.strftime("%Y%m%dT%H%M%S.000Z"),
         "stars": 3,
         "destructionPercentage": 100,
         "opponentPlayerTag": tag,

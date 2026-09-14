@@ -38,6 +38,12 @@ from clashlens.source_observation_contract import (
             "global-player-rankings-schema-v1",
             frozenset({"supercell-source-parser-v1", "supercell-source-parser-v2"}),
         ),
+        (
+            "league_history",
+            "league-history-v1",
+            "league-history-schema-v1",
+            frozenset({"supercell-league-history-parser-v1"}),
+        ),
     ],
 )
 def test_source_observation_contract_accepts_each_installed_endpoint(
@@ -52,11 +58,10 @@ def test_source_observation_contract_accepts_each_installed_endpoint(
     assert contract.endpoint == endpoint
     assert contract.endpoint_version == endpoint_version
     assert contract.schema_version == schema_version
-    expected_default = (
-        "supercell-profile-parser-v3"
-        if endpoint == "profile"
-        else "supercell-source-parser-v2"
-    )
+    expected_default = {
+        "profile": "supercell-profile-parser-v3",
+        "league_history": "supercell-league-history-parser-v1",
+    }.get(endpoint, "supercell-source-parser-v2")
     assert contract.default_parser_version == expected_default
     assert contract.supported_parser_versions == parser_versions
     assert (

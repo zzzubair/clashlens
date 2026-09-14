@@ -1,5 +1,7 @@
-"""Six-month, last-seen expiry using immutable location tombstones.
+"""Season-based expiry using immutable location tombstones.
 
+Every raw response of a season is retired 56 days after that season ends; a
+body still observed in a later season keeps that season's deadline instead.
 Run only on the collector host with its exact shared spool and a separate
 operator credential. Never configure an upload-age bucket lifecycle instead.
 """
@@ -25,8 +27,8 @@ def retire_archive_objects(
         SELECT response_hash, archive_reference FROM archive_catalogue
         WHERE archive_instance_id = %s AND (
             availability = 'retiring' OR
-            (availability = 'verified' AND last_seen_before < clock_timestamp() - interval '6 months')
-        ) ORDER BY last_seen_before, archive_reference LIMIT %s
+            (availability = 'verified' AND retire_after <= clock_timestamp())
+        ) ORDER BY retire_after, archive_reference LIMIT %s
         """, (instance_id, max_objects),
     ).fetchall()
     retired = protected = eligible = 0
@@ -71,7 +73,7 @@ def retire_archive_objects(
                     WHERE response_hash = %s AND archive_reference = %s
                       AND archive_instance_id = %s AND (
                         availability = 'retiring' OR
-                        (availability = 'verified' AND last_seen_before < clock_timestamp() - interval '6 months')
+                        (availability = 'verified' AND retire_after <= clock_timestamp())
                       ) FOR UPDATE
                     """, (digest, reference, instance_id),
                 ).fetchone()

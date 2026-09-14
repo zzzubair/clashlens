@@ -89,6 +89,11 @@ def profile_payload(tag: str, index: int) -> dict[str, object]:
         # Legend season rather than trusting this weekly tournament field.
         "previousLeagueSeasonId": season - 7 * 24 * 60 * 60,
         "clan": {"tag": "#2CLAN", "name": "Synthetic Clan"},
+        "role": "member",
+        "legendStatistics": {
+            "legendTrophies": 200 + index % 500,
+            "currentSeason": {"trophies": 7_000 - index % 1_500},
+        },
     }
 
 
@@ -96,22 +101,54 @@ def battle_log_payload(
     tag: str, index: int, population: tuple[str, ...]
 ) -> dict[str, object]:
     opponent = population[(index + 1) % len(population)]
+    battle_at = completed_legend_battle_time()
     return {
         "items": [
             {
                 "battleType": "legend",
                 "attack": True,
-                "battleTimestamp": completed_legend_battle_time()
-                .isoformat()
-                .replace("+00:00", "Z"),
+                # Real shape: battleTime is epoch seconds, battleTimestamp the
+                # text form; both are present on live Legend entries.
+                "battleTime": int(battle_at.timestamp()),
+                "battleTimestamp": battle_at.strftime("%Y%m%dT%H%M%S.000Z"),
                 "stars": 3,
                 "destructionPercentage": 100,
                 "opponentPlayerTag": opponent,
                 "opponentName": f"Synthetic Clasher {(index + 1) % len(population) + 1:03d}",
-                "opponentTrophies": 6_999 - index % 1_500,
                 "opponentTownHallLevel": 18,
-                "trophies": 7_000 - index % 1_500,
+                "lootedResources": [
+                    {"resource": "gold", "amount": 525_000},
+                    {"resource": "elixir", "amount": 525_000},
+                    {"resource": "darkElixir", "amount": 4_000},
+                ],
+                "extraLootedResources": [],
+                "availableLoot": [
+                    {"resource": "gold", "amount": 1_000_000},
+                    {"resource": "elixir", "amount": 1_000_000},
+                    {"resource": "darkElixir", "amount": 8_000},
+                ],
                 "armyShareCode": "u1x0-2x1",
+            }
+        ]
+    }
+
+
+def league_history_payload(index: int) -> dict[str, object]:
+    season = current_season_id()
+    return {
+        "items": [
+            {
+                "leagueSeasonId": str(season - SEASON_SECONDS),
+                "leagueTrophies": 5_812 - index % 400,
+                "leagueTierId": 105000036,
+                "placement": index % 400 + 1,
+                "attackWins": 6,
+                "attackLosses": 2,
+                "attackStars": 21,
+                "defenseWins": 5,
+                "defenseLosses": 3,
+                "defenseStars": 18,
+                "maxBattles": 8,
             }
         ]
     }
@@ -141,11 +178,19 @@ class ClashHandler(QuietHandler):
     trial_requests: ClassVar[dict[tuple[str, str], list[float]]] = {}
     trial_lock: ClassVar[threading.Lock] = threading.Lock()
     trial_started_at: ClassVar[float] = 0.0
+    # Field-compaction trial knobs: per-tag per-endpoint modes set through
+    # /_trial/mutate. "ignored" varies bytes the collector does not read,
+    # "relevant" changes a field the fingerprint covers, "non_legend" adds a
+    # battle-log entry the Legend filter drops.
+    trial_mutations: ClassVar[dict[str, dict[str, str]]] = {}
+    trial_mutation_ticks: ClassVar[dict[str, int]] = {}
 
     @classmethod
     def reset_trial_requests(cls) -> None:
         with cls.trial_lock:
             cls.trial_requests = {}
+            cls.trial_mutations = {}
+            cls.trial_mutation_ticks = {}
             cls.trial_generation += 1
             cls.trial_started_at = monotonic()
 
@@ -157,6 +202,34 @@ class ClashHandler(QuietHandler):
             del history[:-32]
 
     @classmethod
+    def mutation_tick(cls, tag: str) -> int:
+        with cls.trial_lock:
+            tick = cls.trial_mutation_ticks.get(tag, 0) + 1
+            cls.trial_mutation_ticks[tag] = tick
+            return tick
+
+    @classmethod
+    def mutation_for(cls, tag: str, endpoint: str) -> str | None:
+        with cls.trial_lock:
+            return cls.trial_mutations.get(tag, {}).get(endpoint)
+
+    @classmethod
+    def set_mutations(cls, tag: str, modes: dict[str, str]) -> None:
+        allowed = {"ignored", "relevant", "non_legend", "clear"}
+        if not modes or any(
+            endpoint not in ("profile", "battle_log") or mode not in allowed
+            for endpoint, mode in modes.items()
+        ):
+            raise ValueError("unknown mutation mode")
+        with cls.trial_lock:
+            current = cls.trial_mutations.setdefault(tag, {})
+            for endpoint, mode in modes.items():
+                if mode == "clear":
+                    current.pop(endpoint, None)
+                else:
+                    current[endpoint] = mode
+
+    @classmethod
     def trial_summary(cls) -> dict[str, object]:
         summary: dict[str, object] = {"players": len(cls.population)}
         with cls.trial_lock:
@@ -165,7 +238,7 @@ class ClashHandler(QuietHandler):
             }
             started_at = cls.trial_started_at
         measured_at = monotonic()
-        for endpoint in ("profile", "battle_log"):
+        for endpoint in ("profile", "battle_log", "league_history"):
             histories = [
                 history
                 for (seen_endpoint, _tag), history in snapshot.items()
@@ -206,21 +279,75 @@ class ClashHandler(QuietHandler):
             return
         suffix = path[len(prefix) :]
         battle_log = suffix.endswith("/battlelog")
-        tag = suffix[: -len("/battlelog")] if battle_log else suffix
+        league_history = suffix.endswith("/leaguehistory")
+        tag = (
+            suffix[: -len("/battlelog")]
+            if battle_log
+            else suffix[: -len("/leaguehistory")] if league_history else suffix
+        )
         index = self.tag_indexes.get(tag.upper())
         if index is None:
             self.send_json(404, {"reason": "notFound"})
         elif battle_log:
-            type(self).record_trial_request("battle_log", tag.upper())
-            payload = battle_log_payload(tag.upper(), index, self.population)
-            if type(self).trial_generation:
-                payload["_trialGeneration"] = type(self).trial_generation
+            tag = tag.upper()
+            type(self).record_trial_request("battle_log", tag)
+            payload = battle_log_payload(tag, index, self.population)
+            mutation = type(self).mutation_for(tag, "battle_log")
+            battle_at = completed_legend_battle_time() + timedelta(minutes=30)
+            if mutation == "relevant":
+                # Deterministic extra Legend entry: every mutated fetch carries
+                # the same fingerprint, so exactly one observation is stored.
+                payload["items"].insert(
+                    0,
+                    {
+                        "battleType": "legend",
+                        "attack": True,
+                        "battleTime": int(battle_at.timestamp()),
+                        "battleTimestamp": battle_at.strftime("%Y%m%dT%H%M%S.000Z"),
+                        "stars": 2,
+                        "destructionPercentage": 80,
+                        "opponentPlayerTag": self.population[
+                            (index + 2) % len(self.population)
+                        ],
+                        "opponentName": f"Synthetic Clasher {(index + 2) % len(self.population) + 1:03d}",
+                        "opponentTownHallLevel": 18,
+                        "lootedResources": [{"resource": "gold", "amount": 400_000}],
+                        "armyShareCode": "u1x0-2x1",
+                    },
+                )
+            elif mutation == "non_legend":
+                payload["items"].insert(
+                    0,
+                    {
+                        "battleType": "friendly",
+                        "attack": True,
+                        "battleTime": int(battle_at.timestamp()),
+                        "battleTimestamp": battle_at.strftime("%Y%m%dT%H%M%S.000Z"),
+                        "stars": 3,
+                        "destructionPercentage": 100,
+                        "opponentPlayerTag": self.population[
+                            (index + 3) % len(self.population)
+                        ],
+                    },
+                )
+            elif mutation == "ignored":
+                payload["ignoredTrialMarker"] = type(self).mutation_tick(tag)
             self.send_json(200, payload)
+        elif league_history:
+            type(self).record_trial_request("league_history", tag.upper())
+            self.send_json(200, league_history_payload(index))
         else:
-            type(self).record_trial_request("profile", tag.upper())
-            payload = profile_payload(tag.upper(), index)
-            if type(self).trial_generation:
-                payload["_trialGeneration"] = type(self).trial_generation
+            tag = tag.upper()
+            type(self).record_trial_request("profile", tag)
+            payload = profile_payload(tag, index)
+            mutation = type(self).mutation_for(tag, "profile")
+            if mutation == "relevant":
+                payload["trophies"] += 1
+            elif mutation == "ignored":
+                payload["donations"] = type(self).mutation_tick(tag)
+                payload["achievements"] = [
+                    {"name": "Trial Marker", "value": payload["donations"]}
+                ]
             self.send_json(200, payload)
 
     def do_POST(self) -> None:
@@ -231,6 +358,25 @@ class ClashHandler(QuietHandler):
         if path == "/_trial/reset":
             type(self).reset_trial_requests()
             self.send_json(200, {"ok": True, "generation": type(self).trial_generation})
+            return
+        if path == "/_trial/mutate":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                request = json.loads(self.rfile.read(length))
+                tag = str(request["tag"]).upper()
+                modes = request["modes"]
+            except (ValueError, KeyError, TypeError):
+                self.send_json(400, {"ok": False})
+                return
+            if tag not in self.tag_indexes:
+                self.send_json(404, {"ok": False})
+                return
+            try:
+                type(self).set_mutations(tag, modes)
+            except ValueError:
+                self.send_json(400, {"ok": False})
+                return
+            self.send_json(200, {"ok": True})
             return
         prefix = "/v1/players/"
         suffix = "/verifytoken"

@@ -160,17 +160,146 @@ ALTER TABLE collector_observations
         )
     );
 
+-- The leaguehistory endpoint joins the collected player set.
+ALTER TABLE collector_observations
+    DROP CONSTRAINT IF EXISTS collector_observations_endpoint_v2_check,
+    DROP CONSTRAINT IF EXISTS collector_observations_scope_v2_check,
+    DROP CONSTRAINT IF EXISTS collector_observations_request_v2_check,
+    ADD CONSTRAINT collector_observations_endpoint_v2_check CHECK (
+        endpoint IN (
+            'profile', 'battle_log', 'global_player_rankings', 'league_history'
+        )
+    ),
+    ADD CONSTRAINT collector_observations_scope_v2_check CHECK (
+        (scope = 'player' AND player_id IS NOT NULL
+            AND normalized_tag IS NOT NULL
+            AND endpoint IN ('profile', 'battle_log', 'league_history'))
+        OR (scope = 'global' AND player_id IS NULL AND normalized_tag IS NULL
+            AND endpoint = 'global_player_rankings')
+    ),
+    ADD CONSTRAINT collector_observations_request_v2_check CHECK (
+        request_method = 'GET'
+        AND request_path <> ''
+        AND request_query !~ '[[:space:]]'
+        AND (
+            (endpoint = 'global_player_rankings'
+                AND request_path = '/v1/locations/global/rankings/players'
+                AND request_query = 'limit=200'
+                AND paging_envelope_state IN ('not_present', 'cursor_present', 'malformed'))
+            OR (endpoint IN ('profile', 'battle_log', 'league_history')
+                AND request_query = ''
+                AND paging_envelope_state = 'not_applicable')
+        )
+    );
+ALTER TABLE collector_transport_failures
+    DROP CONSTRAINT IF EXISTS collector_transport_failures_endpoint_v2_check,
+    DROP CONSTRAINT IF EXISTS collector_transport_failures_scope_v2_check,
+    ADD CONSTRAINT collector_transport_failures_endpoint_v2_check CHECK (
+        endpoint IN (
+            'profile', 'battle_log', 'global_player_rankings', 'league_history'
+        )
+    ),
+    ADD CONSTRAINT collector_transport_failures_scope_v2_check CHECK (
+        (scope = 'player' AND player_id IS NOT NULL
+            AND normalized_tag IS NOT NULL
+            AND endpoint IN ('profile', 'battle_log', 'league_history'))
+        OR (scope = 'global' AND player_id IS NULL AND normalized_tag IS NULL
+            AND endpoint = 'global_player_rankings')
+    );
+-- The generated contract columns are recreated with the new endpoint
+-- (established drop-and-recreate pattern); the claim-probe index follows.
+ALTER TABLE collector_observations
+    DROP COLUMN IF EXISTS endpoint_version,
+    DROP COLUMN IF EXISTS schema_version;
+ALTER TABLE collector_observations
+    ADD COLUMN endpoint_version text
+        GENERATED ALWAYS AS (
+            CASE endpoint
+                WHEN 'profile' THEN 'profile-v1'
+                WHEN 'battle_log' THEN 'battle-log-v1'
+                WHEN 'global_player_rankings' THEN 'global-player-rankings-v1'
+                WHEN 'league_history' THEN 'league-history-v1'
+            END
+        ) STORED,
+    ADD COLUMN schema_version text
+        GENERATED ALWAYS AS (
+            CASE endpoint
+                WHEN 'profile' THEN 'profile-schema-v1'
+                WHEN 'battle_log' THEN 'battle-log-schema-v1'
+                WHEN 'global_player_rankings' THEN 'global-player-rankings-schema-v1'
+                WHEN 'league_history' THEN 'league-history-schema-v1'
+            END
+        ) STORED;
+CREATE INDEX IF NOT EXISTS collector_observations_source_contract_v3
+    ON collector_observations (endpoint, endpoint_version, schema_version);
+
+CREATE OR REPLACE FUNCTION clashlens_fill_collector_provenance_v2()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    NEW.request_method := COALESCE(NEW.request_method, 'GET');
+    IF NEW.endpoint = 'global_player_rankings' THEN
+        NEW.scope := 'global';
+        NEW.request_path := COALESCE(
+            NEW.request_path,
+            '/v1/locations/global/rankings/players'
+        );
+        NEW.request_query := COALESCE(NEW.request_query, 'limit=200');
+        NEW.paging_envelope_state := COALESCE(NEW.paging_envelope_state, 'malformed');
+        NEW.source_adapter_version := COALESCE(
+            NEW.source_adapter_version,
+            'global-player-rankings-v1'
+        );
+    ELSE
+        NEW.scope := COALESCE(NEW.scope, 'player');
+        NEW.request_path := COALESCE(
+            NEW.request_path,
+            '/v1/players/%23' || substring(NEW.normalized_tag FROM 2)
+                || CASE NEW.endpoint
+                       WHEN 'battle_log' THEN '/battlelog'
+                       WHEN 'league_history' THEN '/leaguehistory'
+                       ELSE ''
+                   END
+        );
+        NEW.request_query := COALESCE(NEW.request_query, '');
+        NEW.paging_envelope_state := COALESCE(
+            NEW.paging_envelope_state,
+            CASE TG_TABLE_NAME
+                WHEN 'collector_transport_failures' THEN 'unknown_no_response'
+                ELSE 'not_applicable'
+            END
+        );
+        NEW.source_adapter_version := COALESCE(
+            NEW.source_adapter_version,
+            CASE NEW.endpoint
+                WHEN 'profile' THEN 'player-profile-v1'
+                WHEN 'battle_log' THEN 'battle-log-v1'
+                WHEN 'league_history' THEN 'league-history-v1'
+            END
+        );
+    END IF;
+    RETURN NEW;
+END
+$$;
+
 -- A single row describes the latest bytes seen for one endpoint identity.  It
 -- is intentionally not an observation: unchanged polls update this row only.
+-- last_content_fingerprint digests only the fields Clash Lens reads (see
+-- response_fields.py); for endpoints without a field list it is the raw hash.
 CREATE TABLE IF NOT EXISTS collector_response_state (
     scope text NOT NULL CHECK (scope IN ('player', 'global')),
     identity_key text NOT NULL CHECK (length(identity_key) BETWEEN 1 AND 255),
     endpoint text NOT NULL CHECK (
-        endpoint IN ('profile', 'battle_log', 'global_player_rankings')
+        endpoint IN (
+            'profile', 'battle_log', 'global_player_rankings', 'league_history'
+        )
     ),
     player_id bigint REFERENCES players (id),
     normalized_tag text,
     last_response_hash text NOT NULL CHECK (last_response_hash ~ '^[0-9a-f]{64}$'),
+    last_content_fingerprint text NOT NULL
+        CHECK (last_content_fingerprint ~ '^[0-9a-f]{64}$'),
     last_occurrence_key text NOT NULL,
     last_seen_at timestamptz NOT NULL,
     request_count bigint NOT NULL DEFAULT 1 CHECK (request_count > 0),
@@ -181,7 +310,7 @@ CREATE TABLE IF NOT EXISTS collector_response_state (
     CHECK (
         (
             scope = 'player'
-            AND endpoint IN ('profile', 'battle_log')
+            AND endpoint IN ('profile', 'battle_log', 'league_history')
             AND player_id IS NOT NULL
             AND normalized_tag IS NOT NULL
             AND identity_key = normalized_tag
@@ -212,6 +341,11 @@ CREATE TABLE IF NOT EXISTS collector_response_uploads (
     state text NOT NULL DEFAULT 'pending' CHECK (
         state IN ('pending', 'leased', 'complete', 'failed')
     ),
+    -- Empty for the first upload of a hash. When retired bytes are observed
+    -- again the row is recycled with a generation suffix so the new upload
+    -- writes a fresh immutable key instead of the tombstoned location.
+    upload_generation text NOT NULL DEFAULT ''
+        CHECK (upload_generation ~ '^([0-9a-f]{32})?$'),
     archive_reference text,
     archive_instance_id text REFERENCES archive_instances (instance_id),
     lease_owner text,
@@ -333,9 +467,17 @@ CREATE TABLE IF NOT EXISTS collector_work (
     battle_log_status text NOT NULL DEFAULT 'pending' CHECK (
         battle_log_status IN ('not_applicable', 'pending', 'observed', 'failed')
     ),
+    -- League history is fetched at initial collection and once after each
+    -- season-ending Reset, not on the regular poll or live refresh.
+    league_history_status text NOT NULL DEFAULT 'not_applicable' CHECK (
+        league_history_status IN
+            ('not_applicable', 'pending', 'observed', 'failed')
+    ),
     profile_observation_id bigint REFERENCES collector_observations (id)
         ON DELETE SET NULL,
     battle_log_observation_id bigint REFERENCES collector_observations (id)
+        ON DELETE SET NULL,
+    league_history_observation_id bigint REFERENCES collector_observations (id)
         ON DELETE SET NULL,
     failure_category text,
     failure_detail text,
@@ -351,14 +493,22 @@ CREATE TABLE IF NOT EXISTS collector_work (
         (kind = 'global_player_rankings' AND scope = 'global'
             AND lane = 'ordinary' AND sweep_id IS NULL
             AND profile_status IN ('pending', 'observed')
-            AND battle_log_status = 'not_applicable')
+            AND battle_log_status = 'not_applicable'
+            AND league_history_status = 'not_applicable')
         OR (kind = 'discovery_profile' AND scope = 'player'
             AND lane = 'ordinary' AND sweep_id IS NULL
-            AND battle_log_status = 'not_applicable')
-        OR (kind IN ('initial_collection', 'live_refresh')
-            AND scope = 'player' AND lane = 'interactive' AND sweep_id IS NULL)
+            AND battle_log_status = 'not_applicable'
+            AND league_history_status IN ('pending', 'observed'))
+        OR (kind = 'initial_collection' AND scope = 'player'
+            AND lane = 'interactive' AND sweep_id IS NULL
+            AND league_history_status IN ('pending', 'observed'))
+        OR (kind = 'live_refresh' AND scope = 'player'
+            AND lane = 'interactive' AND sweep_id IS NULL
+            AND league_history_status = 'not_applicable')
         OR (kind = 'reset_baseline' AND scope = 'player'
-            AND lane = 'reset' AND sweep_id IS NOT NULL)
+            AND lane = 'reset' AND sweep_id IS NOT NULL
+            AND league_history_status IN
+                ('not_applicable', 'pending', 'observed'))
     ),
     CHECK (length(COALESCE(failure_category, '')) <= 128),
     CHECK (length(COALESCE(failure_detail, '')) <= 1024)
@@ -562,11 +712,16 @@ BEGIN
         ELSE
             INSERT INTO collector_work (
                 kind, lane, scope, player_id, normalized_tag, due_at,
-                coalescing_key, profile_status, battle_log_status
+                coalescing_key, profile_status, battle_log_status,
+                league_history_status
             ) VALUES (
                 requested_type, 'interactive', 'player', selected_player_id,
                 requested_tag, clock_timestamp(), 'interactive:' || requested_tag,
-                'pending', 'pending'
+                'pending', 'pending',
+                CASE requested_type
+                    WHEN 'initial_collection' THEN 'pending'
+                    ELSE 'not_applicable'
+                END
             ) RETURNING id INTO selected_work_id;
             selected_outcome := 'created';
             selected_reused := false;
@@ -622,14 +777,15 @@ BEGIN
     ), inserted AS (
         INSERT INTO collector_work (
             kind, lane, scope, player_id, normalized_tag, due_at,
-            coalescing_key, profile_status, battle_log_status
+            coalescing_key, profile_status, battle_log_status,
+            league_history_status
         )
         SELECT 'discovery_profile', 'ordinary', 'player', player.id,
                player.normalized_tag, cycle_start,
                'discovery-profile:' || player.id || ':' ||
                    to_char(cycle_start AT TIME ZONE 'UTC',
                            'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-               'pending', 'not_applicable'
+               'pending', 'not_applicable', 'pending'
         FROM requested
         JOIN players AS player ON player.id = requested.player_id
         WHERE NOT (player.active AND player.eligibility_state = 'eligible')
@@ -665,6 +821,194 @@ REVOKE ALL ON FUNCTION clashlens_enqueue_discovery_profiles(bigint[])
 GRANT EXECUTE ON FUNCTION clashlens_enqueue_discovery_profiles(bigint[])
     TO clashlens_python_worker;
 DROP INDEX IF EXISTS collector_response_state_seen;
+
+-- Raw responses retire 56 days after their season ends. The deadline hangs
+-- off the fixed 28-day season grid anchored at 1783918800 (a Monday 05:00 UTC
+-- boundary), so it depends on the response's season, not its age.
+CREATE FUNCTION clashlens_season_retire_after(observed_at timestamptz)
+RETURNS timestamptz
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT to_timestamp(
+        1783918800
+        + floor((extract(epoch FROM observed_at) - 1783918800) / 2419200)
+            * 2419200
+        + 7257600
+    )
+$$;
+ALTER FUNCTION clashlens_season_retire_after(timestamptz) SECURITY DEFINER;
+DO $$
+BEGIN
+    EXECUTE format(
+        'ALTER FUNCTION %I.clashlens_season_retire_after(timestamptz) SET search_path TO pg_catalog, %I',
+        current_schema(), current_schema()
+    );
+END
+$$;
+REVOKE ALL ON FUNCTION clashlens_season_retire_after(timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION clashlens_season_retire_after(timestamptz)
+    TO clashlens_collector;
+
+ALTER TABLE archive_catalogue
+    ADD COLUMN IF NOT EXISTS retire_after timestamptz;
+UPDATE archive_catalogue
+SET retire_after = clashlens_season_retire_after(first_verified_at)
+WHERE retire_after IS NULL;
+ALTER TABLE archive_catalogue
+    ALTER COLUMN retire_after SET NOT NULL,
+    ALTER COLUMN retire_after
+        SET DEFAULT clashlens_season_retire_after(clock_timestamp());
+DROP INDEX IF EXISTS archive_catalogue_retention;
+CREATE INDEX archive_catalogue_retention
+    ON archive_catalogue (availability, retire_after);
+
+-- The retention trigger keeps its verified-location fence. The maintained
+-- column is now retire_after: a later season's sighting extends the deadline,
+-- an earlier one never shortens it. last_seen_before served the retired
+-- six-month model and is dropped.
+CREATE OR REPLACE FUNCTION clashlens_observed_archive_retention()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.archive_catalogue_hash IS NULL THEN
+        RETURN NEW;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM archive_catalogue
+        WHERE response_hash = NEW.response_hash
+          AND archive_reference = NEW.archive_reference
+          AND availability = 'verified'
+    ) THEN
+        RAISE EXCEPTION 'observation requires a currently verified archive location';
+    END IF;
+    UPDATE archive_catalogue
+    SET retire_after = clashlens_season_retire_after(NEW.response_completed_at)
+    WHERE response_hash = NEW.response_hash
+      AND archive_reference = NEW.archive_reference
+      AND retire_after < clashlens_season_retire_after(NEW.response_completed_at);
+    RETURN NEW;
+END $$;
+ALTER TABLE archive_catalogue DROP COLUMN IF EXISTS last_seen_before;
+
+-- One durable row per player per past season, refreshed by the leaguehistory
+-- endpoint at initial collection and after each season-ending Reset. The
+-- restrictive evidence references keep pruning honest: a referenced
+-- observation or parsed payload cannot disappear underneath a season row.
+CREATE TABLE IF NOT EXISTS player_league_history_entries (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    player_id bigint NOT NULL REFERENCES players (id),
+    league_season_id text NOT NULL CHECK (league_season_id ~ '^[0-9]+$'),
+    observed_at timestamptz NOT NULL,
+    observation_id bigint NOT NULL REFERENCES collector_observations (id),
+    parsed_payload_id bigint NOT NULL REFERENCES parsed_source_payloads (id),
+    league_trophies integer,
+    league_tier_id integer,
+    placement integer,
+    attack_wins integer,
+    attack_losses integer,
+    attack_stars integer,
+    defense_wins integer,
+    defense_losses integer,
+    defense_stars integer,
+    max_battles integer,
+    source_json jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE (player_id, league_season_id)
+);
+GRANT SELECT, INSERT, UPDATE ON player_league_history_entries
+    TO clashlens_python_worker;
+GRANT SELECT ON player_league_history_entries TO clashlens_python_api;
+GRANT USAGE, SELECT ON SEQUENCE player_league_history_entries_id_seq
+    TO clashlens_python_worker;
+
+-- League-history jobs are fenced at claim compatibility 6 so a worker image
+-- without the parser can never claim them.
+CREATE OR REPLACE FUNCTION clashlens_set_python_claim_compatibility_v3()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.claim_compatibility_version := CASE
+        WHEN NEW.processing_version = 'clashlens-domain-processing-v1'
+         AND NEW.domain_rule_version = 'clashlens-domain-rules-v1'
+         AND (
+            (NEW.work_type IN ('process_observation', 'replay_observation')
+                AND (
+                    NEW.parser_version IN ('supercell-source-parser-v1','supercell-source-parser-v2')
+                    OR NEW.parser_version = 'supercell-profile-parser-v3'
+                    OR NEW.parser_version = 'supercell-league-history-parser-v1'
+                )
+                AND EXISTS (
+                    SELECT 1 FROM collector_observations AS observation
+                    WHERE observation.id = COALESCE(NEW.observation_id, NEW.replay_observation_id)
+                      AND (
+                        (observation.endpoint = 'profile'
+                            AND observation.endpoint_version = 'profile-v1'
+                            AND observation.schema_version = 'profile-schema-v1')
+                        OR (observation.endpoint = 'league_history'
+                            AND observation.endpoint_version = 'league-history-v1'
+                            AND observation.schema_version = 'league-history-schema-v1'
+                            AND NEW.parser_version = 'supercell-league-history-parser-v1')
+                        OR (NEW.parser_version NOT IN ('supercell-profile-parser-v3', 'supercell-league-history-parser-v1') AND (
+                            (observation.endpoint = 'battle_log'
+                                AND observation.endpoint_version = 'battle-log-v1'
+                                AND observation.schema_version = 'battle-log-schema-v1')
+                            OR (observation.endpoint = 'global_player_rankings'
+                                AND observation.endpoint_version = 'global-player-rankings-v1'
+                                AND observation.schema_version = 'global-player-rankings-schema-v1')
+                        ))
+                      )
+                ))
+            OR (NEW.work_type IN ('reconcile_ranked_day','build_snapshot')
+                AND NEW.analytics_rule_version = 'legend-analytics-v1')
+            OR (NEW.work_type = 'build_analytics'
+                AND NEW.analytics_rule_version = 'legend-analytics-v1'
+                AND NEW.input_json ? 'snapshot_id'
+                AND NEW.input_json ? 'snapshot_version'
+                AND NEW.input_json ? 'snapshot_input_hash'
+                AND NEW.input_json ? 'source_ranked_day_version_id'
+                AND (NEW.input_json->>'snapshot_id') ~ '^[1-9][0-9]*$'
+                AND (NEW.input_json->>'snapshot_version') ~ '^[1-9][0-9]*$'
+                AND (NEW.input_json->>'source_ranked_day_version_id') ~ '^[1-9][0-9]*$'
+                AND length(NEW.input_json->>'snapshot_input_hash') > 0)
+            OR (NEW.work_type IN ('build_army_analytics','redecode_army')
+                AND NEW.analytics_rule_version = 'army-analytics-v2')
+         )
+        THEN CASE
+            WHEN NEW.parser_version = 'supercell-league-history-parser-v1' THEN 6
+            WHEN NEW.parser_version = 'supercell-profile-parser-v3' THEN 5
+            WHEN NEW.work_type IN ('build_army_analytics','redecode_army') THEN 3
+            WHEN NEW.parser_version = 'supercell-source-parser-v2' THEN 2
+            ELSE 1
+        END
+        ELSE 0
+    END;
+    RETURN NEW;
+END $$;
+
+DROP INDEX IF EXISTS python_processing_jobs_pending_claim_v2;
+CREATE INDEX python_processing_jobs_pending_claim_v2
+    ON python_processing_jobs (priority, due_at, created_at, id)
+    WHERE status IN ('pending','waiting_retry','waiting_dependency')
+      AND claim_compatibility_version IN (1,2,3,4,5,6)
+      AND attempt_count < max_attempts;
+DROP INDEX IF EXISTS python_processing_jobs_waiting_dependency_claim_v3;
+CREATE INDEX python_processing_jobs_waiting_dependency_claim_v3
+    ON python_processing_jobs (priority, due_at, created_at, id)
+    WHERE status = 'waiting_dependency'
+      AND claim_compatibility_version IN (1,2,3,4,5,6);
+DROP INDEX IF EXISTS python_processing_jobs_expired_leases_v2;
+CREATE INDEX python_processing_jobs_expired_leases_v2
+    ON python_processing_jobs (lease_expires_at, due_at, created_at, id, priority)
+    WHERE status = 'leased'
+      AND claim_compatibility_version IN (1,2,3,4,5,6)
+      AND attempt_count < max_attempts;
+DROP INDEX IF EXISTS python_processing_jobs_unknown_priority_v2;
+CREATE INDEX python_processing_jobs_unknown_priority_v2
+    ON python_processing_jobs (due_at, created_at, id, priority)
+    WHERE status IN ('pending','waiting_retry')
+      AND claim_compatibility_version IN (1,2,3,4,5,6)
+      AND attempt_count < max_attempts
+      AND priority NOT IN (100,50,25,10);
 
 INSERT INTO clash_lens_schema_migrations(version) VALUES (26)
 ON CONFLICT (version) DO NOTHING;

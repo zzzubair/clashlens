@@ -94,7 +94,7 @@ def test_last_seen_archive_retirement_fences_replay_and_unknown_delete(
                     with pytest.raises(psycopg.errors.RaiseException, match="expired"):
                         future.result(timeout=5)
                 connection.execute("UPDATE archive_catalogue SET availability = 'verified'")
-                connection.execute("UPDATE archive_catalogue SET last_seen_before = clock_timestamp() - interval '7 months'")
+                connection.execute("UPDATE archive_catalogue SET retire_after = clock_timestamp() - interval '1 minute'")
                 # A duplicate sighting extends retention without another raw object.
                 _, pending = store_observation(
                     dsn, archive_server, occurrence_key="expiry-duplicate", endpoint="profile",
@@ -102,7 +102,7 @@ def test_last_seen_archive_retirement_fences_replay_and_unknown_delete(
                 )
                 options = {"bucket": "evidence", "instance_id": "fixture-instance"}
                 assert retire_archive_objects(connection, spool, client, **options)["eligible_objects"] == 0
-                connection.execute("UPDATE archive_catalogue SET last_seen_before = clock_timestamp() - interval '7 months'")
+                connection.execute("UPDATE archive_catalogue SET retire_after = clock_timestamp() - interval '1 minute'")
                 assert retire_archive_objects(connection, spool, client, apply=True, **options)["protected_objects"] == 1
                 assert processor.process_job(pending, owner="expiry-duplicate").outcome == "processed"
                 assert retire_archive_objects(connection, spool, client, **options)["eligible_objects"] == 1

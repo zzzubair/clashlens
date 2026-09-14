@@ -193,13 +193,16 @@ Normal PostgreSQL vacuum makes deleted space reusable; deletion does not shrink
 relation files or imply that retained WAL/backups have expired. Do not run
 `VACUUM FULL` on production as part of routine cleanup.
 
-## Raw archive: six months since last seen
+## Raw archive: 56 days after the season ends
 
 Do **not** configure an upload-age lifecycle on the evidence namespace. A response
-can remain useful for years while its bytes stay unchanged. Catalogue sightings
-use a one-hour upper bound, so deletion can be delayed by an hour, never advanced
-before six calendar months. Existing catalogue entries conservatively start their
-retention clock at migration time.
+retires 56 days after the 28-day season containing its latest sighting ends:
+the season boundary starts the clock, not each response's individual age. A body
+still returned in a later season keeps that season's later deadline; an earlier
+sighting never shortens it. The deadline derives from the response's own
+completion time, not the upload's: a season response uploaded after the season
+boundary still retires with its season. Existing catalogue entries are dated
+by their first verification time.
 
 Run on the collector host, mounting the **exact same spool and lock directory**
 and using its archive instance/bucket/marker configuration. Supply separate

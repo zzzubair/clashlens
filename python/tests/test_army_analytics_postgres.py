@@ -50,9 +50,9 @@ def _battle_row(
     row = {
         "battleType": "legend",
         "attack": True,
-        "battleTimestamp": (DAY_START + timedelta(hours=offset_hours))
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "battleTime": (DAY_START + timedelta(hours=offset_hours)).strftime(
+            "%Y%m%dT%H%M%S.000Z"
+        ),
         "stars": stars,
         "destructionPercentage": destruction,
         "opponentPlayerTag": opponent,

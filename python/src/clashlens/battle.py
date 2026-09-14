@@ -144,7 +144,9 @@ def _parse_row(
         )
     try:
         is_attacker = _parse_direction(source, parser_version)
-        timestamp = _parse_battle_timestamp(source["battleTimestamp"], parser_version)
+        timestamp = _parse_battle_timestamp(
+            _battle_timestamp_value(source, parser_version), parser_version
+        )
         stars = _required_int(source, "stars")
         destruction = _required_int(source, "destructionPercentage")
         raw_army_code = source.get("armyShareCode", None)
@@ -267,11 +269,40 @@ def _parse_opponent(
     return opponent_tag, name, opponent_trophies
 
 
+def _battle_timestamp_value(source: dict[str, Any], parser_version: str) -> Any:
+    # The real battle-log field is battleTime. battleTimestamp only remains
+    # because observations archived before this parser ran carry that name.
+    # The timestamp never comes from opponentTownHallLevel or any other field.
+    if parser_version == LIVE_SOURCE_PARSER_VERSION:
+        value = source.get("battleTime")
+        if value is None:
+            value = source.get("battleTimestamp")
+        return value
+    return source.get("battleTimestamp")
+
+
 def _parse_battle_timestamp(value: Any, parser_version: str) -> datetime:
+    # The recorded real response carries battleTime as epoch seconds; the
+    # string forms below cover battleTimestamp and compact battleTime text.
+    if isinstance(value, bool):
+        raise BattleLogParseError(
+            "invalid_battle_timestamp", "battleTime must be seconds or text"
+        )
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value, UTC)
+        except (OverflowError, OSError, ValueError) as error:
+            raise BattleLogParseError(
+                "invalid_battle_timestamp",
+                f"battleTime is not accepted by adapter "
+                f"{parser_version.rsplit('-', 1)[-1]}",
+            ) from error
     if not isinstance(value, str):
         raise BattleLogParseError(
-            "invalid_battle_timestamp", "battleTimestamp must be text"
+            "invalid_battle_timestamp", "battleTime must be seconds or text"
         )
+    if parser_version != LEGACY_SOURCE_PARSER_VERSION and value.isdigit():
+        return datetime.fromtimestamp(int(value), UTC)
     try:
         if parser_version == LEGACY_SOURCE_PARSER_VERSION:
             if value.endswith("Z") and "-" not in value:
@@ -296,12 +327,12 @@ def _parse_battle_timestamp(value: Any, parser_version: str) -> datetime:
     except ValueError as error:
         raise BattleLogParseError(
             "invalid_battle_timestamp",
-            f"battleTimestamp is not accepted by adapter "
+            f"battleTime is not accepted by adapter "
             f"{parser_version.rsplit('-', 1)[-1]}",
         ) from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise BattleLogParseError(
-            "invalid_battle_timestamp", "battleTimestamp must include a UTC offset"
+            "invalid_battle_timestamp", "battleTime must include a UTC offset"
         )
     return parsed.astimezone(UTC)
 

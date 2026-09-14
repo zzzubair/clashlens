@@ -399,10 +399,10 @@ def test_fresh_precheck_rejects_nonempty_database(
                 """INSERT INTO collector_work (
                        kind, lane, scope, player_id, normalized_tag,
                        due_at, coalescing_key, status, profile_status,
-                       battle_log_status
+                       battle_log_status, league_history_status
                    ) VALUES ('discovery_profile', 'ordinary', 'player', %s, '#8QV',
                        clock_timestamp(), 'precheck-work', 'complete',
-                       'observed', 'not_applicable')""",
+                       'observed', 'not_applicable', 'observed')""",
                 (player_id,),
             )
         attempt("result-work.json")
