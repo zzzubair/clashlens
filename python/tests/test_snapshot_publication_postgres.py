@@ -10,6 +10,7 @@ import pytest
 from domain_test_support import domain_database, store_observation, text
 from psycopg.types.json import Jsonb
 
+from clashlens import api_leaderboard, boundary, snapshots
 from clashlens.analytics import deterministic_tag_hash
 from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
@@ -163,8 +164,11 @@ def _seed_snapshot_job(
         connection.commit()
         fixture_database = Database(connection_info)
         try:
-            manifest = fixture_database._freeze_boundary_manifest(
-                connection, generation_id=int(generation_id), artifact_kind="snapshot"
+            manifest = boundary._freeze_boundary_manifest(
+                fixture_database,
+                connection,
+                generation_id=int(generation_id),
+                artifact_kind="snapshot",
             )
         finally:
             fixture_database.close()
@@ -364,7 +368,7 @@ def _prepare_snapshot_correction(
             """,
             (new_generation_id, generation[0]),
         )
-        manifest = database._freeze_boundary_manifest(
+        manifest = boundary._freeze_boundary_manifest(database,
             connection,
             generation_id=new_generation_id,
             artifact_kind="snapshot",
@@ -576,7 +580,7 @@ def _publish_snapshot_population(
         try:
             before_pg = _snapshot_insert_calls(connection_info)
             before_app = calls[0]
-            database._publish_snapshot_kind(
+            snapshots._publish_snapshot_kind(database,
                 connection,
                 snapshot_kind="frozen",
                 boundary_at=boundary,
@@ -1078,7 +1082,7 @@ def test_snapshot_quality_counts_and_reader_ignore_building_candidate(
             assert candidates[1][2] == old_snapshot[0]
             api = ApiDatabase(connection_info)
             try:
-                frozen = api.get_frozen_leaderboard(limit=10)
+                frozen = api_leaderboard.get_frozen_leaderboard(api, limit=10)
             finally:
                 api.close()
             assert frozen is not None

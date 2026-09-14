@@ -16,6 +16,12 @@ from typing import Any
 from psycopg.types.json import Jsonb
 
 from .db import Claim, Database
+from .job_outcomes import (
+    _observation_source,
+    _record_parsed_payload,
+    _record_processing_outcome,
+    _upsert_player,
+)
 from .profile import ProfileParseError, normalize_player_tag
 from .source_observation_contract import (
     LEAGUE_HISTORY_SOURCE_OBSERVATION_CONTRACT,
@@ -194,11 +200,11 @@ def complete_league_history(
         observed_at,
         endpoint,
         schema_version,
-    ) = database._observation_source(claim)
+    ) = _observation_source(claim)
     with database.pool.connection() as connection:
         with connection.transaction():
             job = database._lock_live_claim(connection, claim)
-            parsed_payload_id = database._record_parsed_payload(
+            parsed_payload_id = _record_parsed_payload(
                 connection,
                 endpoint=endpoint,
                 response_hash=response_hash,
@@ -217,7 +223,7 @@ def complete_league_history(
             ).fetchone()
             player_id = None if player_row is None else player_row[0]
             if player_id is None:
-                player_id = Database._upsert_player(
+                player_id = _upsert_player(
                     connection, history.normalized_tag, active=False
                 )
             for entry in history.entries:
@@ -269,7 +275,8 @@ def complete_league_history(
                         Jsonb(entry.source_json),
                     ),
                 )
-            database._record_processing_outcome(
+            _record_processing_outcome(
+                database,
                 connection,
                 claim,
                 outcome=(

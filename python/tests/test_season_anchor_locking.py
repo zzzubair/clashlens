@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
-from clashlens.db import Database
+from clashlens import ingestion
 
 
 class _Result:
@@ -45,7 +45,7 @@ def test_same_season_anchor_common_path_does_not_lock_confirmed_row() -> None:
         observed_at=datetime(2026, 8, 9, 1, tzinfo=UTC),
     )
 
-    outcome = Database._record_season_anchor(connection, 42, profile)
+    outcome = ingestion._record_season_anchor(connection, 42, profile)
 
     anchor_reads = [
         statement

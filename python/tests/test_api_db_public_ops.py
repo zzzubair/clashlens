@@ -7,6 +7,7 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 from test_api_migration import migrated_production_database
 
+from clashlens import api_accounts, api_analytics, api_leaderboard, api_players
 from clashlens.api_db import ApiDatabase, RequestBinding, _public_army, _screen_events
 
 NOW = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
@@ -133,11 +134,11 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             seed_profile(database, "#2PP", 6000)
             seed_profile(database, "#8PY", 6100)
 
-            player = database.get_player_page("#2PP", now=NOW, freshness_seconds=900)
-            live = database.get_live_leaderboard(
+            player = api_players.get_player_page(database, "#2PP", now=NOW, freshness_seconds=900)
+            live = api_leaderboard.get_live_leaderboard(database,
                 limit=100, now=NOW, freshness_seconds=900
             )
-            analytics = database.get_basic_analytics(now=NOW, freshness_seconds=900)
+            analytics = api_analytics.get_basic_analytics(database, now=NOW, freshness_seconds=900)
 
             assert player is not None
             assert player["tag"] == "#2PP"
@@ -199,7 +200,7 @@ def test_known_player_name_search_uses_current_profiles_and_escapes_wildcards(
             seed_profile(database, "#8PY", 6100)
             seed_profile(database, "#2PP", 6000)
 
-            assert database.search_known_players(
+            assert api_players.search_known_players(database,
                 "Player", now=NOW, freshness_seconds=900
             ) == [
                 {
@@ -224,7 +225,7 @@ def test_known_player_name_search_uses_current_profiles_and_escapes_wildcards(
                 },
             ]
             assert (
-                database.search_known_players("%", now=NOW, freshness_seconds=900) == []
+                api_players.search_known_players(database, "%", now=NOW, freshness_seconds=900) == []
             )
         finally:
             database.close()
@@ -265,7 +266,7 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
                 )
                 connection.commit()
 
-            player = database.get_player_page("#2PP", now=NOW, freshness_seconds=900)
+            player = api_players.get_player_page(database, "#2PP", now=NOW, freshness_seconds=900)
 
             assert player is not None
             current_day = player["screen_ready"]["current_day"]
@@ -481,7 +482,7 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                 )
                 connection.commit()
 
-            player = database.get_player_page("#2PP", now=NOW, freshness_seconds=900)
+            player = api_players.get_player_page(database, "#2PP", now=NOW, freshness_seconds=900)
 
             assert player is not None
             screen = player["screen_ready"]
@@ -537,7 +538,7 @@ def test_concurrent_refreshes_share_one_collector_work_and_public_refresh_identi
         try:
 
             def submit(_index: int):
-                return database.submit_refresh(
+                return api_accounts.submit_refresh(database,
                     anonymous_binding(
                         "refresh.submit",
                         "/v1/players/%232PP/refresh",
@@ -554,7 +555,7 @@ def test_concurrent_refreshes_share_one_collector_work_and_public_refresh_identi
             assert len(refresh_ids) == 1
             assert database.scalar("SELECT count(*) FROM collector_work") == 1
             assert database.scalar("SELECT count(*) FROM api_refresh_requests") == 1
-            status = database.get_refresh_status(next(iter(refresh_ids)))
+            status = api_accounts.get_refresh_status(database, next(iter(refresh_ids)))
             assert status == {
                 "refresh_id": next(iter(refresh_ids)),
                 "tag": "#2PP",
@@ -602,10 +603,10 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
                     (NOW, tags[0]),
                 )
                 connection.commit()
-            first = database.get_live_leaderboard(
+            first = api_leaderboard.get_live_leaderboard(database,
                 limit=100, offset=0, now=NOW, freshness_seconds=900
             )
-            second = database.get_live_leaderboard(
+            second = api_leaderboard.get_live_leaderboard(database,
                 limit=100, offset=100, now=NOW, freshness_seconds=900
             )
             assert first is not None and second is not None
@@ -642,7 +643,7 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
             assert stale_entry["age_seconds"] == 900
             assert stale_entry["freshness"] == "stale"
             assert (
-                database.get_live_leaderboard(
+                api_leaderboard.get_live_leaderboard(database,
                     limit=100, offset=200, now=NOW, freshness_seconds=900
                 )
                 is None

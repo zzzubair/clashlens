@@ -19,7 +19,7 @@ from domain_test_support import (
 )
 from psycopg_pool import PoolTimeout
 
-from clashlens import api_db
+from clashlens import api_analytics, boundary_publication
 from clashlens.api_db import (
     ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS,
     ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS,
@@ -44,9 +44,9 @@ PARTIAL_CODE = "u2x58-3x9999"
 DEFENDER_CODE = "u1x51"
 
 
-def _processor(connection_info: str, archive_server):
+def _processor(connection_info: str, archive_server, monkeypatch):
     database = Database(connection_info)
-    enable_direct_army_fixture(database)
+    enable_direct_army_fixture(database, monkeypatch)
     processor = ObservationProcessor(
         database,
         S3ArchiveReader(
@@ -140,7 +140,7 @@ def _publish_day(
                 day_number,
             ),
         )
-        database._enqueue_army_analytics(connection, ranked_day_start=day_start)
+        boundary_publication._enqueue_army_analytics(database, connection, ranked_day_start=day_start)
 
 
 def _army_job(database: Database) -> int:
@@ -270,7 +270,7 @@ def test_troop_source_hash_pool_timeout_fails_before_expensive_queries(
         hash_connections.append(connection)
         return "a" * 64
 
-    monkeypatch.setattr(api_db, "_selected_source_hash", source_hash)
+    monkeypatch.setattr(api_analytics, "_selected_source_hash", source_hash)
     arguments = {
         "fact_filters": ["true"],
         "fact_params": [],
@@ -279,7 +279,7 @@ def test_troop_source_hash_pool_timeout_fails_before_expensive_queries(
         "selection": selection,
     }
     sequential_connection, _ = fake_connection()
-    expected = api_db._query_troops_aggregates(
+    expected = api_analytics._query_troops_aggregates(
         sequential_connection, **arguments
     )
 
@@ -287,7 +287,7 @@ def test_troop_source_hash_pool_timeout_fails_before_expensive_queries(
     pool = Mock(max_size=2)
     pool.connection.side_effect = PoolTimeout("second connection unavailable")
     with pytest.raises(PoolTimeout):
-        api_db._query_troops_aggregates(
+        api_analytics._query_troops_aggregates(
             timed_out_connection, pool=pool, **arguments
         )
 
@@ -300,8 +300,7 @@ def test_troop_source_hash_pool_timeout_fails_before_expensive_queries(
 
 
 def test_publication_writer_serves_reproducible_perspective_results(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts1 = DAY_START + timedelta(hours=1)
         ts2 = DAY_START + timedelta(hours=3)
@@ -320,7 +319,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
             body=json.dumps({"items": [_row(False, "#2PP", DEFENDER_CODE, ts1, 3, 100)]}).encode(),
             observed_at=ts1 + timedelta(minutes=2), normalized_tag="#8PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         try:
             for index, job in enumerate((j1, j2, j3)):
                 assert processor.process_job(job, owner=f"ingest-{index}").outcome in (
@@ -406,7 +405,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
             try:
                 # Offense lens: partial known component counts individually.
                 selection = _selection()
-                first = api.get_army_analytics(selection)
+                first = api_analytics.get_army_analytics(api, selection)
                 assert first is not None
                 missing_trophy_queries = [
                     query
@@ -539,7 +538,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 }
                 for category, component_column in category_columns.items():
                     fact_queries.clear()
-                    category_result = api.get_army_analytics(
+                    category_result = api_analytics.get_army_analytics(api,
                         _selection(category=category)
                     )
                     assert category_result is not None
@@ -604,7 +603,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                             attacker_vs_defender,
                         ),
                     )
-                malformed = api.get_army_analytics(selection)
+                malformed = api_analytics.get_army_analytics(api, selection)
                 assert malformed is not None
                 malformed_row = next(
                     row for row in malformed["rows"] if row["key"] == "badtyped"
@@ -624,11 +623,11 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 # Reads calculate from retained facts without persistent
                 # per-selection storage. Identical inputs keep one identity;
                 # arbitrary URL-backed trophy ranges get distinct identities.
-                second = api.get_army_analytics(selection)
+                second = api_analytics.get_army_analytics(api, selection)
                 assert second is not None
                 assert second["publication_identity"] == identity
                 other_ranges = [
-                    api.get_army_analytics(
+                    api_analytics.get_army_analytics(api,
                         _selection(population=f"trophies-5000-{maximum}")
                     )
                     for maximum in (8998, 8999)
@@ -647,7 +646,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
 
                 # Defense lens uses the defender's own accepted report.
                 fact_queries.clear()
-                defense = api.get_army_analytics(
+                defense = api_analytics.get_army_analytics(api,
                     _selection(lens="defense", category="siege")
                 )
                 assert defense is not None
@@ -668,8 +667,8 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 assert "heroes" not in payload_queries[0]
 
                 # Per-battle army display keeps perspectives separate.
-                attacker_army = api.get_battle_army(attacker_vs_defender, "attacker")
-                defender_army = api.get_battle_army(attacker_vs_defender, "defender")
+                attacker_army = api_analytics.get_battle_army(api, attacker_vs_defender, "attacker")
+                defender_army = api_analytics.get_battle_army(api, attacker_vs_defender, "defender")
                 assert attacker_army is not None and defender_army is not None
                 attacker_ids = {c["typed_id"] for c in attacker_army["components"]}
                 defender_ids = {c["typed_id"] for c in defender_army["components"]}
@@ -687,14 +686,14 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 snapshot_id = _seed_frozen_snapshot(
                     database, [(defender_id,), (attacker_id,)]
                 )
-                top5 = api.get_army_analytics(_selection(lens="defense", population="top-5"))
+                top5 = api_analytics.get_army_analytics(api, _selection(lens="defense", population="top-5"))
                 assert top5 is not None
                 assert top5["total_attacks"] == 1
                 assert top5["reproducibility"]["snapshot_versions"] == [1]
                 # The attacker sits at position 6 of the frozen snapshot, so a
                 # Top-5 offense cohort excludes both of their attacks.
                 fact_queries.clear()
-                top5_offense = api.get_army_analytics(
+                top5_offense = api_analytics.get_army_analytics(api,
                     _selection(population="top-5")
                 )
                 assert top5_offense is not None
@@ -728,7 +727,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
 
                 # A withheld day inside the range names the affected day.
                 with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
-                    api.get_army_analytics(_selection(start_day=22))
+                    api_analytics.get_army_analytics(api, _selection(start_day=22))
                 assert unavailable.value.affected_days == [22]
 
                 # Corrected evidence changes the deterministic identity.
@@ -740,7 +739,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                 correction_job = _army_job(database)
                 correction = processor.process_job(correction_job, owner="correction")
                 assert correction is not None and correction.outcome == "processed"
-                third = api.get_army_analytics(selection)
+                third = api_analytics.get_army_analytics(api, selection)
                 assert third is not None
                 assert third["publication_identity"] != identity
                 two_star_row = next(
@@ -760,8 +759,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
 
 
 def test_unselected_fact_correction_does_not_change_selected_result(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts = DAY_START + timedelta(hours=1)
         observations = []
@@ -779,7 +777,7 @@ def test_unselected_fact_correction_does_not_change_selected_result(
                     normalized_tag=attacker,
                 )[1]
             )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
         try:
             for index, job in enumerate(observations):
@@ -817,7 +815,7 @@ def test_unselected_fact_correction_does_not_change_selected_result(
                 database, [(player_ids["#2PP"],), (player_ids["#9PP"],)]
             )
             selection = _selection(population="top-5")
-            before = api.get_army_analytics(selection)
+            before = api_analytics.get_army_analytics(api, selection)
             assert before is not None and before["total_attacks"] == 1
             with database.pool.connection() as connection:
                 before_unselected_hash = connection.execute(
@@ -838,7 +836,7 @@ def test_unselected_fact_correction_does_not_change_selected_result(
                 _army_job(database), owner="unselected-correction"
             )
             assert correction is not None and correction.outcome == "processed"
-            after = api.get_army_analytics(selection)
+            after = api_analytics.get_army_analytics(api, selection)
             assert after is not None
             assert after["rows"] == before["rows"]
             assert after["reproducibility"]["source_evidence_hash"] == before[
@@ -915,12 +913,11 @@ def _publish_day_correction(
                 DAY_NUMBER,
             ),
         )
-        database._enqueue_army_analytics(connection, ranked_day_start=DAY_START)
+        boundary_publication._enqueue_army_analytics(database, connection, ranked_day_start=DAY_START)
 
 
 def test_remove_then_reintroduce_preserves_fact_lineage_and_final_marker(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         timestamp = DAY_START + timedelta(hours=1)
         _, battle_job = store_observation(
@@ -934,7 +931,7 @@ def test_remove_then_reintroduce_preserves_fact_lineage_and_final_marker(
             observed_at=timestamp + timedelta(minutes=1),
             normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         try:
             assert (
                 processor.process_job(battle_job, owner="ingest").outcome
@@ -1021,8 +1018,7 @@ def test_remove_then_reintroduce_preserves_fact_lineage_and_final_marker(
 
 
 def test_completed_day_without_army_job_is_unavailable_not_false_empty(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts = DAY_START + timedelta(hours=1)
         _, job = store_observation(
@@ -1030,7 +1026,7 @@ def test_completed_day_without_army_job_is_unavailable_not_false_empty(
             body=json.dumps({"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}).encode(),
             observed_at=ts + timedelta(minutes=1), normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
         try:
             assert processor.process_job(job, owner="ingest").outcome == "processed"
@@ -1040,7 +1036,7 @@ def test_completed_day_without_army_job_is_unavailable_not_false_empty(
             # The ranked-day publication is complete but build_army_analytics has
             # not run: the selection must be unavailable, never a false empty.
             with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
-                api.get_army_analytics(_selection())
+                api_analytics.get_army_analytics(api, _selection())
             assert unavailable.value.affected_days == [DAY_NUMBER]
         finally:
             api.close()
@@ -1048,8 +1044,7 @@ def test_completed_day_without_army_job_is_unavailable_not_false_empty(
 
 
 def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts1 = DAY_START + timedelta(hours=1)
         ts2 = DAY_START + timedelta(hours=3)
@@ -1063,7 +1058,7 @@ def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
             body=json.dumps({"items": [_row(True, "#9PP", PARTIAL_CODE, ts2, 1, 50)]}).encode(),
             observed_at=ts2 + timedelta(minutes=1), normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci, army_cache_capacity=2)
         try:
             for index, job in enumerate((j1, j2)):
@@ -1112,7 +1107,7 @@ def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
             assert trophies == [None, None]
 
             # Trophy-range filter excludes them and reports missing evidence.
-            trophy_filtered = api.get_army_analytics(
+            trophy_filtered = api_analytics.get_army_analytics(api,
                 _selection(population="trophies-5000-9000")
             )
             assert trophy_filtered is not None
@@ -1121,18 +1116,18 @@ def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
 
             # Frozen cohort filters still include the attacks.
             _seed_frozen_snapshot(database, [(attacker_id,), (defender_id,)])
-            top5 = api.get_army_analytics(_selection(population="top-5"))
+            top5 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
             assert top5 is not None
             assert top5["total_attacks"] == 2
             assert top5["missing_trophy_membership_evidence"] == 0
-            cached_top5 = api.get_army_analytics(_selection(population="top-5"))
+            cached_top5 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
             assert cached_top5 == top5
             _seed_frozen_snapshot(
                 database,
                 [(defender_id,), (attacker_id,)],
                 version=2,
             )
-            changed_top5 = api.get_army_analytics(_selection(population="top-5"))
+            changed_top5 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
             assert changed_top5 is not None
             assert changed_top5["total_attacks"] == 0
             assert changed_top5["publication_identity"] != top5["publication_identity"]
@@ -1142,8 +1137,7 @@ def test_missing_start_trophies_keep_facts_and_report_missing_evidence(
 
 
 def test_stale_snapshot_membership_is_reported_as_cohort_evidence(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts = DAY_START + timedelta(hours=1)
         _, job = store_observation(
@@ -1151,7 +1145,7 @@ def test_stale_snapshot_membership_is_reported_as_cohort_evidence(
             body=json.dumps({"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}).encode(),
             observed_at=ts + timedelta(minutes=1), normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
         try:
             processor.process_job(job, owner="ingest")
@@ -1168,7 +1162,7 @@ def test_stale_snapshot_membership_is_reported_as_cohort_evidence(
             _seed_frozen_snapshot(
                 database, [(attacker_id,), (defender_id,)], stale_first=True
             )
-            top2 = api.get_army_analytics(_selection(population="top-5"))
+            top2 = api_analytics.get_army_analytics(api, _selection(population="top-5"))
             assert top2 is not None
             # Position membership still includes the stale entry; the weakness
             # stays visible instead of silently shrinking the cohort.
@@ -1182,8 +1176,7 @@ def test_stale_snapshot_membership_is_reported_as_cohort_evidence(
 
 
 def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts = DAY_START + timedelta(hours=1)
         _, job = store_observation(
@@ -1191,7 +1184,7 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
             body=json.dumps({"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}).encode(),
             observed_at=ts + timedelta(minutes=1), normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
         try:
             processor.process_job(job, owner="ingest")
@@ -1201,15 +1194,18 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
             _publish_day(database, "#2PP", events)
             processor.process_job(_army_job(database), owner="analytics")
             selection = _selection()
-            first = api.get_army_analytics(selection)
+            first = api_analytics.get_army_analytics(api, selection)
             assert first is not None
-            cached = api.get_army_analytics(selection)
+            cached = api_analytics.get_army_analytics(api, selection)
             assert cached == first
             cold_api = ApiDatabase(ci, max_size=2)
             try:
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     concurrent_results = list(
-                        executor.map(cold_api.get_army_analytics, [selection] * 2)
+                        executor.map(
+                            lambda item: api_analytics.get_army_analytics(cold_api, item),
+                            [selection] * 2,
+                        )
                     )
                 assert concurrent_results == [first, first]
             finally:
@@ -1220,7 +1216,7 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
             try:
                 busy_started = monotonic()
                 with pytest.raises(PoolTimeout, match="troop analytics"):
-                    busy_api.get_army_analytics(selection)
+                    api_analytics.get_army_analytics(busy_api, selection)
                 assert monotonic() - busy_started < (
                     ARMY_ANALYTICS_ADMISSION_TIMEOUT_SECONDS + 0.5
                 )
@@ -1238,13 +1234,13 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
                 with pool_busy_api.pool.connection():
                     pair_started = monotonic()
                     with pytest.raises(PoolTimeout):
-                        pool_busy_api.get_army_analytics(selection)
+                        api_analytics.get_army_analytics(pool_busy_api, selection)
                     pair_elapsed = monotonic() - pair_started
                     assert pair_elapsed >= (
                         ARMY_ANALYTICS_PARALLEL_POOL_TIMEOUT_SECONDS * 0.5
                     )
                     assert pair_elapsed < 1
-                assert pool_busy_api.get_army_analytics(selection) == first
+                assert api_analytics.get_army_analytics(pool_busy_api, selection) == first
             finally:
                 pool_busy_api.close()
 
@@ -1253,7 +1249,7 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
             _publish_day_correction(database, "#2PP", events)
             correction = processor.process_job(_army_job(database), owner="correction")
             assert correction is not None and correction.outcome == "processed"
-            second = api.get_army_analytics(selection)
+            second = api_analytics.get_army_analytics(api, selection)
             assert second is not None
             assert second["publication_identity"] != first["publication_identity"]
             assert second["rows"] == first["rows"]
@@ -1271,8 +1267,7 @@ def test_correction_with_unchanged_aggregates_changes_deterministic_identity(
 
 
 def test_concurrent_correction_never_mixes_army_publication_revisions(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts = DAY_START + timedelta(hours=1)
         _, job = store_observation(
@@ -1286,7 +1281,7 @@ def test_concurrent_correction_never_mixes_army_publication_revisions(
             observed_at=ts + timedelta(minutes=1),
             normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         stable_api = ApiDatabase(ci, army_cache_capacity=0)
         racing_api = ApiDatabase(ci, max_size=2, army_cache_capacity=0)
         try:
@@ -1302,7 +1297,7 @@ def test_concurrent_correction_never_mixes_army_publication_revisions(
             _publish_day(database, "#2PP", initial_events)
             processor.process_job(_army_job(database), owner="analytics")
             selection = _selection()
-            before = stable_api.get_army_analytics(selection)
+            before = api_analytics.get_army_analytics(stable_api, selection)
             assert before is not None
 
             source_waiting = Event()
@@ -1365,11 +1360,11 @@ def test_concurrent_correction_never_mixes_army_publication_revisions(
 
             with ThreadPoolExecutor(max_workers=1) as executor:
                 correction_future = executor.submit(correct_facts)
-                concurrent = racing_api.get_army_analytics(selection)
+                concurrent = api_analytics.get_army_analytics(racing_api, selection)
                 correction_future.result()
             assert concurrent is not None
 
-            after = stable_api.get_army_analytics(selection)
+            after = api_analytics.get_army_analytics(stable_api, selection)
             assert after is not None
             assert after["rows"] != before["rows"]
             assert (
@@ -1384,8 +1379,7 @@ def test_concurrent_correction_never_mixes_army_publication_revisions(
 
 
 def test_perspective_disagreement_changes_fact_input_and_version(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts = DAY_START + timedelta(hours=1)
         _, job = store_observation(
@@ -1393,7 +1387,7 @@ def test_perspective_disagreement_changes_fact_input_and_version(
             body=json.dumps({"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}).encode(),
             observed_at=ts + timedelta(minutes=1), normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         try:
             processor.process_job(job, owner="ingest")
             with database.pool.connection() as connection:
@@ -1480,8 +1474,7 @@ def _insert_confirmed_anchor(
 
 
 def test_current_season_clipped_below_start_day_is_unavailable(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts = DAY_START + timedelta(hours=1)
         _, job = store_observation(
@@ -1489,7 +1482,7 @@ def test_current_season_clipped_below_start_day_is_unavailable(
             body=json.dumps({"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}).encode(),
             observed_at=ts + timedelta(minutes=1), normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
         try:
             processor.process_job(job, owner="ingest")
@@ -1501,7 +1494,7 @@ def test_current_season_clipped_below_start_day_is_unavailable(
             # completed source evidence; a request starting at 28 lies beyond
             # the ended days and must name the affected days.
             with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
-                api.get_army_analytics(
+                api_analytics.get_army_analytics(api,
                     _selection(season="current", start_day=28, end_day=28),
                     now=DAY_START + timedelta(days=24, hours=12),
                 )
@@ -1512,8 +1505,7 @@ def test_current_season_clipped_below_start_day_is_unavailable(
 
 
 def test_current_season_without_completed_days_names_previous_season(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts = DAY_START + timedelta(hours=1)
         _, job = store_observation(
@@ -1521,7 +1513,7 @@ def test_current_season_without_completed_days_names_previous_season(
             body=json.dumps({"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}).encode(),
             observed_at=ts + timedelta(minutes=1), normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
         try:
             processor.process_job(job, owner="ingest")
@@ -1537,7 +1529,7 @@ def test_current_season_without_completed_days_names_previous_season(
             # No Legend-day interval of the confirmed current season has ended
             # yet at the season anchor itself.
             with pytest.raises(CurrentSeasonEmpty) as empty:
-                api.get_army_analytics(
+                api_analytics.get_army_analytics(api,
                     _selection(season="current", start_day=23), now=DAY_START
                 )
             assert empty.value.previous_season_id == SEASON_ID
@@ -1546,18 +1538,17 @@ def test_current_season_without_completed_days_names_previous_season(
             with database.pool.connection() as connection:
                 connection.execute("DELETE FROM legend_season_anchors")
             with pytest.raises(CurrentSeasonEmpty) as empty:
-                api.get_army_analytics(_selection(season="current", start_day=23))
+                api_analytics.get_army_analytics(api, _selection(season="current", start_day=23))
             assert empty.value.previous_season_id is None
             # The historical season stays reachable by explicit id.
-            assert api.get_army_analytics(_selection(start_day=23)) is not None
+            assert api_analytics.get_army_analytics(api, _selection(start_day=23)) is not None
         finally:
             api.close()
             database.close()
 
 
 def test_current_season_ended_but_withheld_day_is_unavailable(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         ts = DAY_START + timedelta(hours=1)
         _, job = store_observation(
@@ -1565,7 +1556,7 @@ def test_current_season_ended_but_withheld_day_is_unavailable(
             body=json.dumps({"items": [_row(True, "#8PP", FIXTURE_CODE, ts, 3, 100)]}).encode(),
             observed_at=ts + timedelta(minutes=1), normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
         try:
             processor.process_job(job, owner="ingest")
@@ -1578,7 +1569,7 @@ def test_current_season_ended_but_withheld_day_is_unavailable(
             # but no completed source publication exists for it: the default
             # range must name it unavailable, not fall back to an empty state.
             with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
-                api.get_army_analytics(
+                api_analytics.get_army_analytics(api,
                     _selection(season="current", start_day=1, end_day=1),
                     now=DAY_START + timedelta(days=1, hours=1),
                 )
@@ -1586,13 +1577,13 @@ def test_current_season_ended_but_withheld_day_is_unavailable(
             # Later ended-but-withheld days stay named alongside missing
             # earlier days instead of being silently clipped away.
             with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
-                api.get_army_analytics(
+                api_analytics.get_army_analytics(api,
                     _selection(season="current", start_day=1, end_day=28),
                     now=DAY_START + timedelta(days=24, hours=12),
                 )
             assert unavailable.value.affected_days == list(range(1, 23)) + [24]
             # The completed day itself stays reachable through the chronology.
-            resolved = api.get_army_analytics(
+            resolved = api_analytics.get_army_analytics(api,
                 _selection(season="current", start_day=23, end_day=28),
                 now=DAY_START + timedelta(days=23),
             )
@@ -1689,8 +1680,7 @@ def _mark_shielded(
 
 
 def test_streak_evidence_reports_exclusions_and_shielded_member_days(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as ci:
         day2_start = DAY_START + timedelta(days=1)
         ts1 = DAY_START + timedelta(hours=1)
@@ -1705,7 +1695,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             body=json.dumps({"items": [_row(True, "#9PP", FIXTURE_CODE, ts2, 2, 60)]}).encode(),
             observed_at=ts2 + timedelta(minutes=1), normalized_tag="#2PP",
         )
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci, army_cache_capacity=2)
         try:
             for index, job in enumerate((j1, j2)):
@@ -1770,7 +1760,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             _mark_shielded(database, "#2PP", DAY_START, 23)
             _mark_shielded(database, "#8PP", day2_start, 24)
 
-            streak = api.get_army_analytics(
+            streak = api_analytics.get_army_analytics(api,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )
             assert streak is not None
@@ -1784,12 +1774,12 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             assert evidence["stale_or_uncertain_cohort_members"] == 1
             # Shielded-day evidence counts only confirmed members' member-days.
             assert evidence["shielded_player_days"] == 1
-            cached_streak = api.get_army_analytics(
+            cached_streak = api_analytics.get_army_analytics(api,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )
             assert cached_streak == streak
             cached_streak["rows"].clear()
-            assert api.get_army_analytics(
+            assert api_analytics.get_army_analytics(api,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )["rows"]
             with database.pool.connection() as connection:
@@ -1802,7 +1792,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
                     """,
                     (attacker_id, DAY_START),
                 )
-            changed_in_place = api.get_army_analytics(
+            changed_in_place = api_analytics.get_army_analytics(api,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )
             assert changed_in_place is not None
@@ -1818,13 +1808,13 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
                 version=3,
                 shield_state="not_shielded",
             )
-            changed_streak = api.get_army_analytics(
+            changed_streak = api_analytics.get_army_analytics(api,
                 _selection(population="streak-top-5", start_day=23, end_day=24)
             )
             assert changed_streak is not None
             assert changed_streak["publication_identity"] != streak["publication_identity"]
 
-            non_streak = api.get_army_analytics(
+            non_streak = api_analytics.get_army_analytics(api,
                 _selection(population="top-5", start_day=23, end_day=24)
             )
             assert non_streak is not None
@@ -1836,8 +1826,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
 
 
 def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_rows(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     """Once an included battle lacks an integer trophy_change, subsequent
     same-day battle_time_trophies become unknown/None.
 
@@ -1880,7 +1869,7 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
                 observed_at=ts + timedelta(minutes=1), normalized_tag="#2PP",
             )
             jobs.append(job)
-        database, processor = _processor(ci, archive_server)
+        database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
         try:
             for idx, job in enumerate(jobs):
@@ -1921,7 +1910,7 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
                     "SELECT battle_id, battle_time_trophies FROM army_analytics_battle_facts WHERE ranked_day_start=%s AND is_current ORDER BY battle_id", (day_a,)
                 ).fetchall()}
             assert trophies_a2 == trophies_a
-            trophy_a = api.get_army_analytics(_selection(population="trophies-5000-9000", start_day=23, end_day=23))
+            trophy_a = api_analytics.get_army_analytics(api, _selection(population="trophies-5000-9000", start_day=23, end_day=23))
             assert trophy_a is not None
             assert trophy_a["missing_trophy_membership_evidence"] == 1
             assert trophy_a["total_attacks"] == 2  # a3 excluded from trophy range
@@ -1940,7 +1929,7 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
             assert trophies_b_valid[by_opp["#8P9"]] == 6000
             assert trophies_b_valid[by_opp["#8PY"]] == 6010
             assert trophies_b_valid[by_opp["#8PL"]] == 6030
-            trophy_b_valid = api.get_army_analytics(_selection(population="trophies-5000-9000", start_day=24, end_day=24))
+            trophy_b_valid = api_analytics.get_army_analytics(api, _selection(population="trophies-5000-9000", start_day=24, end_day=24))
             assert trophy_b_valid is not None
             assert trophy_b_valid["missing_trophy_membership_evidence"] == 0
             assert trophy_b_valid["total_attacks"] == 3
@@ -1961,7 +1950,7 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
                     "VALUES ((SELECT id FROM players WHERE normalized_tag='#2PP'), %s, 2, 'Complete', 'complete', %s, %s, %s, 24)",
                     (day_b, json.dumps(b_events_corrected), day_b + timedelta(days=1), SEASON_ID)
                 )
-                database._enqueue_army_analytics(conn, ranked_day_start=day_b)
+                boundary_publication._enqueue_army_analytics(database, conn, ranked_day_start=day_b)
             corr_job = _army_job(database)
             assert processor.process_job(corr_job, owner="correction-b").outcome == "processed"
             with database.pool.connection() as conn:
@@ -1971,7 +1960,7 @@ def test_missing_trophy_change_makes_subsequent_unknown_for_new_and_existing_row
             assert trophies_b_corr[by_opp["#8P9"]] == 6000
             assert trophies_b_corr[by_opp["#8PY"]] == 6010
             assert trophies_b_corr[by_opp["#8PL"]] is None
-            trophy_b_corr = api.get_army_analytics(_selection(population="trophies-5000-9000", start_day=24, end_day=24))
+            trophy_b_corr = api_analytics.get_army_analytics(api, _selection(population="trophies-5000-9000", start_day=24, end_day=24))
             assert trophy_b_corr is not None
             assert trophy_b_corr["missing_trophy_membership_evidence"] == 1
             assert trophy_b_corr["total_attacks"] == 2

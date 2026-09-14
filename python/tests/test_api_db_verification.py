@@ -9,6 +9,7 @@ import psycopg
 import pytest
 from test_api_migration import migrated_production_database
 
+from clashlens import api_accounts, api_verification
 from clashlens.api_db import ApiDatabase, RequestBinding
 from clashlens.collector_db import CollectorDatabase
 from clashlens.verification import KeyAction, VerificationOutcome
@@ -62,7 +63,7 @@ def call_support_transfer(
 
 
 def create_account(database: ApiDatabase, subject: str, username: str) -> int:
-    result = database.create_account(
+    result = api_accounts.create_account(database,
         RequestBinding(
             request_id=str(uuid4()),
             caller="typescript-website",
@@ -79,7 +80,7 @@ def create_account(database: ApiDatabase, subject: str, username: str) -> int:
         display_name=username,
     )
     assert result.status_code == 201
-    account = database.resolve_account("google", subject)
+    account = api_accounts.resolve_account(database, "google", subject)
     assert account is not None
     return account.internal_id
 
@@ -108,7 +109,7 @@ def test_collector_and_verification_share_the_interactive_limit(
         collector_database = CollectorDatabase(connection_info, max_size=16)
         fingerprint = sha256(b"safe-synthetic-key").hexdigest()
         try:
-            database.register_official_credential(fingerprint)
+            api_verification.register_official_credential(database, fingerprint)
 
             def acquire_collector(_index: int):
                 return collector_database.acquire_collector_permit(fingerprint)
@@ -116,11 +117,11 @@ def test_collector_and_verification_share_the_interactive_limit(
             with ThreadPoolExecutor(max_workers=12) as executor:
                 collector_results = list(executor.map(acquire_collector, range(30)))
 
-            python_first = database.acquire_official_permit(
+            python_first = api_verification.acquire_official_permit(database,
                 fingerprint,
                 request_id=str(uuid4()),
             )
-            python_second = database.acquire_official_permit(
+            python_second = api_verification.acquire_official_permit(database,
                 fingerprint,
                 request_id=str(uuid4()),
             )
@@ -151,21 +152,21 @@ def test_gate_cooldown_and_quarantine_persist_and_fail_closed(
         database = ApiDatabase(connection_info)
         fingerprint = sha256(b"safe-synthetic-key-two").hexdigest()
         try:
-            database.register_official_credential(fingerprint)
-            database.apply_official_key_action(
+            api_verification.register_official_credential(database, fingerprint)
+            api_verification.apply_official_key_action(database,
                 fingerprint,
                 KeyAction.COOLDOWN,
                 cooldown_seconds=30,
             )
-            cooldown = database.acquire_official_permit(
+            cooldown = api_verification.acquire_official_permit(database,
                 fingerprint, request_id=str(uuid4())
             )
-            database.apply_official_key_action(
+            api_verification.apply_official_key_action(database,
                 fingerprint,
                 KeyAction.QUARANTINE,
                 cooldown_seconds=30,
             )
-            quarantined = database.acquire_official_permit(
+            quarantined = api_verification.acquire_official_permit(database,
                 fingerprint, request_id=str(uuid4())
             )
 
@@ -193,16 +194,16 @@ def test_concurrent_verified_links_never_transfer_between_accounts_automatically
             second_binding = verification_binding(
                 second_account, "google-second", "#2PP"
             )
-            assert database.reserve_verification(
+            assert api_verification.reserve_verification(database,
                 first_binding, normalized_tag="#2PP"
             ).fresh
-            assert database.reserve_verification(
+            assert api_verification.reserve_verification(database,
                 second_binding, normalized_tag="#2PP"
             ).fresh
 
             def complete(item: tuple[RequestBinding, int]):
                 request, account_id = item
-                return database.complete_verification(
+                return api_verification.complete_verification(database,
                     request,
                     normalized_tag="#2PP",
                     outcome=VerificationOutcome.VERIFIED,
@@ -277,17 +278,17 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
             second_account = create_account(
                 database, "google-support-second", "supportsecond"
             )
-            first_context = database.resolve_account("google", "google-support-first")
-            second_context = database.resolve_account("google", "google-support-second")
+            first_context = api_accounts.resolve_account(database, "google", "google-support-first")
+            second_context = api_accounts.resolve_account(database, "google", "google-support-second")
             assert first_context is not None and second_context is not None
             completed_at = datetime.now(UTC)
             first_binding = verification_binding(
                 first_account, "google-support-first", "#2PP"
             )
-            assert database.reserve_verification(
+            assert api_verification.reserve_verification(database,
                 first_binding, normalized_tag="#2PP"
             ).fresh
-            assert database.complete_verification(
+            assert api_verification.complete_verification(database,
                 first_binding,
                 normalized_tag="#2PP",
                 outcome=VerificationOutcome.VERIFIED,
@@ -297,10 +298,10 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
             second_binding = verification_binding(
                 second_account, "google-support-second", "#2PP"
             )
-            assert database.reserve_verification(
+            assert api_verification.reserve_verification(database,
                 second_binding, normalized_tag="#2PP"
             ).fresh
-            support_required = database.complete_verification(
+            support_required = api_verification.complete_verification(database,
                 second_binding,
                 normalized_tag="#2PP",
                 outcome=VerificationOutcome.VERIFIED,
@@ -398,15 +399,15 @@ def test_support_transfer_is_atomic_restricted_and_idempotent(
             third_account = create_account(
                 database, "google-support-third", "supportthird"
             )
-            third_context = database.resolve_account("google", "google-support-third")
+            third_context = api_accounts.resolve_account(database, "google", "google-support-third")
             assert third_context is not None
             third_binding = verification_binding(
                 third_account, "google-support-third", "#2PP"
             )
-            assert database.reserve_verification(
+            assert api_verification.reserve_verification(database,
                 third_binding, normalized_tag="#2PP"
             ).fresh
-            expired_support = database.complete_verification(
+            expired_support = api_verification.complete_verification(database,
                 third_binding,
                 normalized_tag="#2PP",
                 outcome=VerificationOutcome.VERIFIED,
@@ -463,15 +464,15 @@ def test_verification_request_replay_never_binds_or_persists_a_new_token(
         try:
             account_id = create_account(database, "google-replay", "replayowner")
             request = verification_binding(account_id, "google-replay", "#8PY")
-            reservation = database.reserve_verification(request, normalized_tag="#8PY")
-            completed = database.complete_verification(
+            reservation = api_verification.reserve_verification(database, request, normalized_tag="#8PY")
+            completed = api_verification.complete_verification(database,
                 request,
                 normalized_tag="#8PY",
                 outcome=VerificationOutcome.INVALID_TOKEN,
                 account_id=account_id,
                 completed_at=NOW,
             )
-            replay = database.reserve_verification(request, normalized_tag="#8PY")
+            replay = api_verification.reserve_verification(database, request, normalized_tag="#8PY")
 
             assert reservation.fresh is True
             assert completed.payload == {"status": "invalid_token", "tag": "#8PY"}
@@ -511,7 +512,7 @@ def test_verification_request_replay_never_binds_or_persists_a_new_token(
                     (fingerprint,),
                 )
                 connection.commit()
-            database.register_official_credential(fingerprint)
+            api_verification.register_official_credential(database, fingerprint)
             assert (
                 database.scalar(
                     "SELECT total_budget FROM shared_api_credentials WHERE credential_fingerprint = %s",
@@ -531,7 +532,7 @@ def test_verification_reservation_has_recovery_state_and_stale_reuse_fails_close
         try:
             account_id = create_account(database, "google-crash", "crashowner")
             request = verification_binding(account_id, "google-crash", "#9PY")
-            reservation = database.reserve_verification(request, normalized_tag="#9PY")
+            reservation = api_verification.reserve_verification(database, request, normalized_tag="#9PY")
 
             assert reservation.fresh is True
             assert (
@@ -557,7 +558,7 @@ def test_verification_reservation_has_recovery_state_and_stale_reuse_fails_close
                 )
                 connection.commit()
 
-            reused = database.reserve_verification(request, normalized_tag="#9PY")
+            reused = api_verification.reserve_verification(database, request, normalized_tag="#9PY")
 
             assert reused.fresh is False
             assert reused.result is not None

@@ -317,18 +317,22 @@ def test_current_season_republication_command_is_bounded_and_reports_jobs(
         def __init__(self, database_url: str) -> None:
             assert database_url == "postgresql://worker@postgres/clashlens"
 
-        def enqueue_current_season_republication(
-            self,
-            *,
-            max_jobs: int,
-        ) -> list[int]:
-            assert max_jobs == 7
-            return [41, 42]
-
         def close(self) -> None:
             pass
 
+    def fake_enqueue(
+        database: FakeDatabase,
+        *,
+        max_jobs: int,
+    ) -> list[int]:
+        assert max_jobs == 7
+        return [41, 42]
+
     monkeypatch.setattr("clashlens.cli.Database", FakeDatabase)
+    monkeypatch.setattr(
+        "clashlens.reconciliation_db.enqueue_current_season_republication",
+        fake_enqueue,
+    )
 
     result = main(
         [

@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
 from typing import Any
+from unittest.mock import patch
 
 import psycopg
 import pytest
@@ -14,6 +15,7 @@ from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import ConnectionPool
 
+from clashlens import battle_ingestion, ingestion
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import DEFAULT_POOL_SIZE, Database
 from clashlens.domain import ranked_day_for
@@ -87,25 +89,6 @@ class _WorkerRoleDatabase(Database):
             ).fetchone()
             if worker_view is not None and worker_view[0] is not None:
                 self._jobs_relation = "python_processing_jobs_worker"
-
-
-class _BattleBarrierDatabase(Database):
-    barrier = Barrier(2)
-
-    def complete_battle_log(self, claim: Any, battle_log: Any) -> None:
-        self.barrier.wait(timeout=10)
-        super().complete_battle_log(claim, battle_log)
-
-
-class _AnchorBarrierDatabase(Database):
-    barrier = Barrier(2)
-
-    @staticmethod
-    def _record_season_anchor(
-        connection: Any, profile_version_id: int, profile: Any
-    ) -> str:
-        _AnchorBarrierDatabase.barrier.wait(timeout=10)
-        return Database._record_season_anchor(connection, profile_version_id, profile)
 
 
 def _role_connection(connection_info: str, role: str) -> psycopg.Connection:
@@ -541,14 +524,18 @@ def test_concurrent_battle_batches_lock_shared_rows_in_one_order(
             observed_at=observed_at + timedelta(seconds=1),
             normalized_tag="#2PP",
         )
-        _BattleBarrierDatabase.barrier = Barrier(2)
-        database, processor = _processor(
-            connection_info,
-            archive_server,
-            database_factory=_BattleBarrierDatabase,
-        )
+        barrier = Barrier(2)
+        original_complete = battle_ingestion.complete_battle_log
+
+        def barriered(target: Any, claim: Any, log: Any) -> None:
+            barrier.wait(timeout=10)
+            original_complete(target, claim, log)
+
+        database, processor = _processor(connection_info, archive_server)
         try:
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with patch.object(
+                battle_ingestion, "complete_battle_log", barriered
+            ), ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [
                     executor.submit(
                         processor.process_job,
@@ -1007,14 +994,20 @@ def test_concurrent_initial_season_anchors_use_the_single_confirmed_seam(
             observed_at=datetime(2026, 8, 11, 12, tzinfo=UTC),
             normalized_tag="#8PP",
         )
-        _AnchorBarrierDatabase.barrier = Barrier(2)
-        database, processor = _processor(
-            connection_info,
-            archive_server,
-            database_factory=_AnchorBarrierDatabase,
-        )
+        barrier = Barrier(2)
+        original_anchor = ingestion._record_season_anchor
+
+        def barriered_anchor(
+            connection: Any, profile_version_id: int, profile: Any
+        ) -> str:
+            barrier.wait(timeout=10)
+            return original_anchor(connection, profile_version_id, profile)
+
+        database, processor = _processor(connection_info, archive_server)
         try:
-            with ThreadPoolExecutor(max_workers=2) as executor:
+            with patch.object(
+                ingestion, "_record_season_anchor", barriered_anchor
+            ), ThreadPoolExecutor(max_workers=2) as executor:
                 futures = [
                     executor.submit(
                         processor.process_job,

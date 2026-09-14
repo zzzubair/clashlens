@@ -10,6 +10,7 @@ from domain_test_support import domain_database, store_observation, text
 from test_discovery_history_prune_postgres import _attach_complete_work
 from test_domain_processing_postgres import _processor
 
+from clashlens import api_players, boundary, ingestion
 from clashlens.api_db import ApiDatabase
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
@@ -82,7 +83,7 @@ def test_snapshot_manifest_uses_owning_ranking_version_observed_at(
                     """,
                     (generation_id, player_id),
                 )
-                manifest = database._freeze_boundary_manifest(
+                manifest = boundary._freeze_boundary_manifest(database,
                     connection, generation_id=generation_id, artifact_kind="snapshot"
                 )
                 assert manifest is not None
@@ -139,7 +140,7 @@ def test_one_observation_replays_under_both_parser_versions_without_domain_chang
         try:
             first = processor.process_job(initial_job_id, owner="dedup-parser-v2")
             assert first is not None and first.outcome == "processed"
-            public_result = database.get_player("#2PP")
+            public_result = ingestion.get_player(database, "#2PP")
             with psycopg.connect(connection_info) as connection:
                 replay_v1_job_id = _replay_job(
                     connection, observation_id, "supercell-source-parser-v1"
@@ -155,7 +156,7 @@ def test_one_observation_replays_under_both_parser_versions_without_domain_chang
                 replay = processor.process_job(job_id, owner=owner)
                 assert replay is not None and replay.outcome == "processed"
 
-            assert database.get_player("#2PP") == public_result
+            assert ingestion.get_player(database, "#2PP") == public_result
             with psycopg.connect(connection_info) as connection:
                 payloads = connection.execute(
                     """
@@ -441,7 +442,7 @@ def test_public_profile_uses_latest_occurrence_metadata_and_freshness(
         try:
             assert processor.process_job(first_job, owner="dedup-api-v2") is not None
             assert processor.process_job(second_job, owner="dedup-api-v1") is not None
-            page = api.get_player_page(
+            page = api_players.get_player_page(api,
                 "#2PP", now=second_at + timedelta(minutes=1), freshness_seconds=900
             )
             assert page is not None
@@ -600,7 +601,7 @@ def test_history_cleanup_keeps_reports_latest_profiles_and_unfinished_work(
                     (pending_job,),
                 ).fetchone()[0] == pending_observation
                 assert prune_completed_history(connection, apply=True)["deleted_collection_jobs"] == 0
-            assert database.get_player("#2PP") is not None
+            assert ingestion.get_player(database, "#2PP") is not None
         finally:
             database.close()
 

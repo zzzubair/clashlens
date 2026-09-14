@@ -25,6 +25,15 @@ from uuid import uuid4
 
 import uvicorn
 
+from . import (
+    api_accounts,
+    api_verification,
+    boundary_publication,
+    reconciliation_db,
+)
+from . import (
+    db as _db,
+)
 from .api import create_app
 from .api_db import ApiDatabase
 from .archive import MAX_ARCHIVE_POOL_SIZE, S3ArchiveReader, SpoolFirstReader
@@ -472,8 +481,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "republish-current-season":
             database = Database(_database_url(arguments))
             try:
-                job_ids = database.enqueue_current_season_republication(
-                    max_jobs=arguments.max_jobs
+                job_ids = reconciliation_db.enqueue_current_season_republication(
+                    database, max_jobs=arguments.max_jobs
                 )
                 print(
                     json.dumps(
@@ -783,7 +792,11 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 )
             )
         processor = ObservationProcessor(database, archive)
-        reevaluate = getattr(database, "reevaluate_boundary_publications", None)
+        reevaluate = (
+            lambda: boundary_publication.reevaluate_boundary_publications(database)
+            if isinstance(database, _db.Database)
+            else None
+        )
         if callable(reevaluate):
             reevaluate()
         if isinstance(processor, ObservationProcessor):
@@ -1269,7 +1282,7 @@ def _serve_app(arguments: argparse.Namespace) -> tuple[Any, ApiDatabase]:
     api_database = ApiDatabase(_database_url(arguments))
     try:
         fingerprint = _official_credential_fingerprint(official_key)
-        api_database.register_official_credential(fingerprint)
+        api_verification.register_official_credential(api_database, fingerprint)
         verification_client = OfficialVerificationClient(
             api_key=official_key,
             proxy_url=arguments.official_proxy_url,
@@ -1349,7 +1362,8 @@ def _run_recover_discord(arguments: argparse.Namespace) -> int:
 
     database = ApiDatabase(_database_url(arguments))
     try:
-        status, detail = database.support_attach_discord_identity(
+        status, detail = api_accounts.support_attach_discord_identity(
+            database,
             account_public_id=arguments.target_account_public_id,
             normalized_player_tag=normalized_tag,
             discord_subject=arguments.discord_user_id,

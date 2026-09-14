@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from test_api_migration import migrated_production_database
 
+from clashlens import api_accounts
 from clashlens.api_db import ApiDatabase, RequestBinding
 
 
@@ -34,19 +35,19 @@ def test_account_creation_resolves_google_identity_and_replays_once(
         database = ApiDatabase(connection_info)
         request = binding(request_id="00000000-0000-4000-8000-000000000101")
         try:
-            first = database.create_account(
+            first = api_accounts.create_account(database,
                 request,
                 username="PlayerOne",
                 normalized_username="playerone",
                 display_name="Player One",
             )
-            replay = database.create_account(
+            replay = api_accounts.create_account(database,
                 request,
                 username="PlayerOne",
                 normalized_username="playerone",
                 display_name="Player One",
             )
-            account = database.resolve_account("google", "google-subject-one")
+            account = api_accounts.resolve_account(database, "google", "google-subject-one")
 
             assert first.status_code == 201
             assert first.payload == {
@@ -73,13 +74,13 @@ def test_request_id_reuse_with_changed_non_secret_binding_is_a_conflict(
         database = ApiDatabase(connection_info)
         request_id = "00000000-0000-4000-8000-000000000102"
         try:
-            first = database.create_account(
+            first = api_accounts.create_account(database,
                 binding(request_id=request_id),
                 username="PlayerOne",
                 normalized_username="playerone",
                 display_name="Player One",
             )
-            conflict = database.create_account(
+            conflict = api_accounts.create_account(database,
                 binding(
                     request_id=request_id,
                     identity={"username": "playertwo"},
@@ -103,19 +104,19 @@ def test_username_and_google_provider_uniqueness_fail_safely(
     with migrated_production_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
         try:
-            first = database.create_account(
+            first = api_accounts.create_account(database,
                 binding(subject="google-subject-one"),
                 username="PlayerOne",
                 normalized_username="playerone",
                 display_name="One",
             )
-            same_username = database.create_account(
+            same_username = api_accounts.create_account(database,
                 binding(subject="google-subject-two"),
                 username="PLAYERONE",
                 normalized_username="playerone",
                 display_name="Two",
             )
-            same_provider = database.create_account(
+            same_provider = api_accounts.create_account(database,
                 binding(subject="google-subject-one"),
                 username="PlayerTwo",
                 normalized_username="playertwo",

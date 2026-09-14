@@ -15,6 +15,7 @@ import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation
 
+from clashlens import api_players, reconciliation_db
 from clashlens.api_db import ApiDatabase
 from clashlens.db import Database
 from clashlens.domain import SEASON_ANCHOR_RULE_VERSION
@@ -688,18 +689,18 @@ def test_historical_read_is_detail_independent(database_url: str) -> None:
                     (player_id,),
                 )
                 connection.commit()
-            page = database.get_player_season_summary("#2PP", SEASON)
+            page = api_players.get_player_season_summary(database, "#2PP", SEASON)
             assert page is not None
             assert page["tag"] == "#2PP"
             assert page["attack_count"] == 56
             assert len(page["daily_entries"]) == 28
             assert page["daily_entries"][0]["season_day_number"] == 1
-            assert database.get_player_season_summary("#2PP", "no-such-season") is None
-            assert database.get_player_season_summary("#9Q2", SEASON) is None
+            assert api_players.get_player_season_summary(database, "#2PP", "no-such-season") is None
+            assert api_players.get_player_season_summary(database, "#9Q2", SEASON) is None
             assert [
-                s["official_season_id"] for s in database.list_player_seasons("#2PP")
+                s["official_season_id"] for s in api_players.list_player_seasons(database, "#2PP")
             ] == [SEASON]
-            assert database.list_player_seasons("#9Q2") == []
+            assert api_players.list_player_seasons(database, "#9Q2") == []
         finally:
             database.close()
 
@@ -962,7 +963,7 @@ def _publication_result(*, state="Complete", attack_gain=0, net=0):
 def _publish(
     database, connection, player_id, day, version_id, start, *, version=1, result=None
 ):
-    database._publish_player_daily_log(
+    reconciliation_db._publish_player_daily_log(database,
         connection,
         player_id=player_id,
         ranked_day_start=start,

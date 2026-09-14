@@ -6,6 +6,7 @@ import psycopg
 import pytest
 from domain_test_support import domain_database, text
 
+from clashlens import boundary
 from clashlens.db import Database
 
 BOUNDARY = datetime(2026, 8, 5, 5, tzinfo=UTC)
@@ -108,7 +109,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                 second = _seed_player(connection, "#M2", 1)
                 _sweep_with_members(connection, [first[0], second[0]], BOUNDARY)
                 for player, ranked in (first, second):
-                    database._record_boundary_generation(
+                    boundary._record_boundary_generation(database, 
                         connection,
                         boundary_at=BOUNDARY,
                         player_id=player,
@@ -189,7 +190,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                 next_sweep = _sweep_with_members(
                     connection, [first[0]], next_boundary
                 )
-                next_generation, _ = database._create_boundary_generation(
+                next_generation, _ = boundary._create_boundary_generation(database, 
                     connection,
                     boundary_at=next_boundary,
                     sweep_id=next_sweep,
@@ -197,7 +198,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                     generation=1,
                     supersedes_id=None,
                 )
-                next_manifest = database._freeze_boundary_manifest(
+                next_manifest = boundary._freeze_boundary_manifest(database, 
                     connection,
                     generation_id=next_generation,
                     artifact_kind="snapshot",
@@ -237,7 +238,7 @@ def test_manifest_is_sorted_frozen_and_reused_after_member_change(
                 connection.execute(
                     "ROLLBACK TO SAVEPOINT source_identity_null_to_value_guard"
                 )
-                database._try_enqueue_boundary_artifacts(
+                boundary._try_enqueue_boundary_artifacts(database, 
                     connection, boundary_at=BOUNDARY, generation_id=int(generation)
                 )
                 assert (

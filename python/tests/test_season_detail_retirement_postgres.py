@@ -20,6 +20,7 @@ import psycopg
 import pytest
 from domain_test_support import domain_database
 
+from clashlens import api_analytics, api_players, battle_ingestion, reconciliation_db
 from clashlens.api_db import ApiDatabase
 from clashlens.army_season_summaries import materialize_completed_army_season
 from clashlens.db import Database
@@ -311,8 +312,8 @@ def test_finalize_preview_then_full_retirement_cycle(database_url: str) -> None:
             assert player_report["materialized"] == 1
             assert army_report["season_completed"] is True
             with database.pool.connection() as connection:
-                before_player = database.get_player_season_summary("#2PP", SEASON)
-                before_army = database.get_army_season_summary(
+                before_player = api_players.get_player_season_summary(database, "#2PP", SEASON)
+                before_army = api_analytics.get_army_season_summary(database,
                     SEASON, "offense", "troops", "usage-rate"
                 )
                 assert before_player is not None and len(before_player["daily_entries"]) == 28
@@ -368,13 +369,13 @@ def test_finalize_preview_then_full_retirement_cycle(database_url: str) -> None:
                 assert rerun["status"] == "retired"
                 connection.rollback()
             # Historical API reads are unchanged after actual deletion.
-            after_player = database.get_player_season_summary("#2PP", SEASON)
-            after_army = database.get_army_season_summary(
+            after_player = api_players.get_player_season_summary(database, "#2PP", SEASON)
+            after_army = api_analytics.get_army_season_summary(database,
                 SEASON, "offense", "troops", "usage-rate"
             )
             assert after_player == before_player
             assert after_army == before_army
-            assert [s["official_season_id"] for s in database.list_player_seasons("#2PP")] == [SEASON]
+            assert [s["official_season_id"] for s in api_players.list_player_seasons(database, "#2PP")] == [SEASON]
         finally:
             database.close()
 
@@ -557,13 +558,13 @@ def test_partial_coverage_season_retires(database_url: str) -> None:
                 connection.commit()
             assert player_report["materialized"] == 1
             with database.pool.connection() as connection:
-                before = database.get_player_season_summary("#2PP", SEASON)
+                before = api_players.get_player_season_summary(database, "#2PP", SEASON)
                 assert before is not None and before["coverage_state"] == "partial"
                 _finalize_and_commit(connection)
                 result = retire_season_detail(connection, SEASON, apply=True)
                 connection.commit()
                 assert result["status"] == "retired"
-            assert database.get_player_season_summary("#2PP", SEASON) == before
+            assert api_players.get_player_season_summary(database, "#2PP", SEASON) == before
         finally:
             database.close()
 
@@ -784,8 +785,8 @@ def test_post_finalization_writes_are_fenced(database_url: str) -> None:
                 connection.commit()
                 _materialize_all(connection)
                 connection.commit()
-                before = api.get_player_season_summary("#2PP", SEASON)
-                before_army = api.get_army_season_summary(SEASON, "offense", "troops", "usage-rate")
+                before = api_players.get_player_season_summary(api, "#2PP", SEASON)
+                before_army = api_analytics.get_army_season_summary(api, SEASON, "offense", "troops", "usage-rate")
                 _finalize_and_commit(connection)
                 # Rematerialization returns the explicit retired marker.
                 from clashlens.season_summaries import materialize_player_season
@@ -810,7 +811,7 @@ def test_post_finalization_writes_are_fenced(database_url: str) -> None:
                 from clashlens.reconciliation import ReconciliationResult
 
                 with pytest.raises(DomainRuleError, match=SEASON_DETAIL_RETIRED):
-                    database._publish_player_daily_log(
+                    reconciliation_db._publish_player_daily_log(database,
                         connection,
                         player_id=player_id,
                         ranked_day_start=day5,
@@ -838,9 +839,9 @@ def test_post_finalization_writes_are_fenced(database_url: str) -> None:
                     assert is_detail_retired_for_day(other, LIVE_DAY0) is False
                 connection.rollback()
                 # Summaries are unchanged by fenced writes.
-                assert api.get_player_season_summary("#2PP", SEASON) == before
+                assert api_players.get_player_season_summary(api, "#2PP", SEASON) == before
                 assert (
-                    api.get_army_season_summary(SEASON, "offense", "troops", "usage-rate")
+                    api_analytics.get_army_season_summary(api, SEASON, "offense", "troops", "usage-rate")
                     == before_army
                 )
         finally:
@@ -1009,7 +1010,7 @@ def test_failure_injection_preserves_summaries_and_fence(database_url: str) -> N
                 _materialize_all(connection)
                 connection.commit()
                 _finalize_and_commit(connection)
-                before = database.get_player_season_summary("#2PP", SEASON)
+                before = api_players.get_player_season_summary(database, "#2PP", SEASON)
                 # Deleting the only valid summary blocks retirement.
                 connection.execute(
                     "DELETE FROM player_season_summaries WHERE official_season_id = %s",
@@ -1029,7 +1030,7 @@ def test_failure_injection_preserves_summaries_and_fence(database_url: str) -> N
                     "SELECT count(*) FROM api_player_daily_logs WHERE official_season_id = %s",
                     (SEASON,),
                 ).fetchone()[0] == 28
-                assert database.get_player_season_summary("#2PP", SEASON) == before
+                assert api_players.get_player_season_summary(database, "#2PP", SEASON) == before
                 assert is_season_detail_retired(connection, SEASON) is True
                 connection.rollback()
         finally:
@@ -1137,7 +1138,7 @@ def test_rolling_log_waits_for_finalization_when_ranked_day_is_missing(
                 with psycopg.connect(connection_info) as writer:
                     with writer.transaction():
                         acquire_retirement_reader(writer)
-                        result.extend(Database._guard_battle_rows(writer, [item]))
+                        result.extend(battle_ingestion._guard_battle_rows(writer, [item]))
                         writer_ready.set()
                         assert release.wait(10)
             except (psycopg.Error, ValueError) as error:  # pragma: no cover
@@ -1284,7 +1285,7 @@ def test_rolling_log_keeps_noncanonical_day_until_anchor_resolution(
             battle=SimpleNamespace(ranked_day_start=DAY0 - timedelta(days=1)),
         )
         with psycopg.connect(connection_info) as connection:
-            assert Database._guard_battle_rows(connection, [item]) == [item]
+            assert battle_ingestion._guard_battle_rows(connection, [item]) == [item]
 
 
 def test_pre_anchor_battle_ingestion_works_for_both_paths(

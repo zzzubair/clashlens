@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
 
 import clashlens.army_season_summaries as army_summaries_module
-import clashlens.db as db_module
+from clashlens import api_analytics, army_ingestion
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase
 from clashlens.army_analytics import ArmyAnalyticsSelection, build_army_result
@@ -258,7 +258,7 @@ def test_historical_read_needs_no_battle_facts(database_url: str) -> None:
                 connection.commit()
                 materialize_army_season(connection, SEASON, "offense")
                 connection.commit()
-                before = database.get_army_season_summary(
+                before = api_analytics.get_army_season_summary(database,
                     SEASON, "offense", "troops", "usage-rate"
                 )
                 # Retire every detail row the live reads depend on.
@@ -271,7 +271,7 @@ def test_historical_read_needs_no_battle_facts(database_url: str) -> None:
                     (SEASON,),
                 )
                 connection.commit()
-                after = database.get_army_season_summary(
+                after = api_analytics.get_army_season_summary(database,
                     SEASON, "offense", "troops", "usage-rate"
                 )
             assert before is not None and after is not None
@@ -296,11 +296,11 @@ def test_historical_read_needs_no_battle_facts(database_url: str) -> None:
             rows = {row["key"]: row for row in after["rows"]}
             assert rows["troop:58"]["star_counts"] == [0, 1, 1, 2]
             assert rows["troop:58"]["three_star_rate"] == 0.5
-            assert database.get_army_season_summary(
+            assert api_analytics.get_army_season_summary(database,
                 SEASON, "offense", "troops", "usage-rate"
             ) is not None
             assert (
-                database.get_army_season_summary(
+                api_analytics.get_army_season_summary(database,
                     "unknown-season", "offense", "troops", "usage-rate"
                 )
                 is None
@@ -375,7 +375,7 @@ def test_partial_days_stay_partial_and_live_season_untouched(
             assert summary["days_observed"] == 20
             assert summary["days_missing"] == 8
             assert summary["missing_days"] == list(range(21, 29))
-            read = database.get_army_season_summary(
+            read = api_analytics.get_army_season_summary(database,
                 SEASON, "offense", "troops", "usage-rate"
             )
             assert read is not None
@@ -593,14 +593,14 @@ def test_refresh_failure_warns_and_keeps_day_durable(
             def _boom(connection, season_id, lens):
                 raise RuntimeError("projection unavailable")
 
-            monkeypatch.setattr(db_module, "materialize_army_season", _boom)
+            monkeypatch.setattr(army_ingestion, "materialize_army_season", _boom)
             with database.pool.connection() as connection:
                 # Inside an enclosing day-build-like transaction the refresh
                 # warns instead of raising, and the transaction stays healthy.
                 with pytest.warns(
                     RuntimeWarning, match="army_season_summary_refresh_failed"
                 ):
-                    database._refresh_army_season_summaries(connection, SEASON)
+                    army_ingestion._refresh_army_season_summaries(database, connection, SEASON)
                 marker = connection.execute(
                     """
                     SELECT fact_input_hash FROM army_analytics_completed_days
@@ -630,7 +630,7 @@ def test_refresh_failure_warns_and_keeps_day_durable(
                     """,
                     (SEASON,),
                 )
-                database._refresh_army_season_summaries(connection, SEASON)
+                army_ingestion._refresh_army_season_summaries(database, connection, SEASON)
                 connection.commit()
             with database.pool.connection() as connection:
                 rows = {row["key"]: row for row in _row(connection)["result_rows"]}
@@ -728,7 +728,7 @@ def test_first_materialization_serializes_with_correction(
                             ),
                         )
                         correction_entered.set()
-                        database._refresh_army_season_summaries(
+                        army_ingestion._refresh_army_season_summaries(database,
                             connection, SEASON
                         )
                         connection.commit()

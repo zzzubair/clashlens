@@ -7,10 +7,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
-from clashlens import cli
+from clashlens import cli, ingestion, job_outcomes, reconciliation_db
 from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
 from clashlens.domain import DomainRuleError
 from clashlens.worker import ObservationProcessor, ProcessResult, StageMetrics
@@ -39,18 +40,17 @@ def test_stage_metrics_report_bounded_histogram_percentiles() -> None:
 
 
 def test_worker_terminalizes_race_to_retired_season() -> None:
-    class RetiredDatabase:
-        def __init__(self) -> None:
-            self.finished: list[tuple[int, str]] = []
+    finished: list[tuple[int, str]] = []
 
+    class RetiredDatabase:
         def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
             del lease_seconds
 
-        def complete_reconciliation(self, _claim: object) -> None:
-            raise DomainRuleError("season_detail_retired", "season fence won the race")
+    def complete_reconciliation(_database: object, _claim: object) -> None:
+        raise DomainRuleError("season_detail_retired", "season fence won the race")
 
-        def complete_terminal(self, claim: object, *, outcome: str) -> None:
-            self.finished.append((claim.job_id, outcome))  # type: ignore[attr-defined]
+    def complete_terminal(_database: object, claim: object, *, outcome: str) -> None:
+        finished.append((claim.job_id, outcome))  # type: ignore[attr-defined]
 
     claim = type(
         "Claim",
@@ -63,12 +63,18 @@ def test_worker_terminalizes_race_to_retired_season() -> None:
         },
     )()
     database = RetiredDatabase()
-    result = ObservationProcessor(database, archive=object())._process_claim(
-        claim, lease_seconds=30
-    )
+    with (
+        patch.object(
+            reconciliation_db, "complete_reconciliation", complete_reconciliation
+        ),
+        patch.object(job_outcomes, "complete_terminal", complete_terminal),
+    ):
+        result = ObservationProcessor(database, archive=object())._process_claim(
+            claim, lease_seconds=30
+        )
 
     assert result == ProcessResult(17, "season_detail_retired", "season_detail_retired")
-    assert database.finished == [(17, "season_detail_retired")]
+    assert finished == [(17, "season_detail_retired")]
 
 
 def test_new_observation_reads_only_the_local_spool() -> None:
@@ -103,8 +109,8 @@ def test_new_observation_reads_only_the_local_spool() -> None:
         def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
             assert lease_seconds == 30
 
-        def complete_profile(self, _claim: object, profile: object) -> None:
-            self.profile = profile
+    def complete_profile(_database: object, _claim: object, profile: object) -> None:
+        database.profile = profile
 
     spool = LocalSpool()
     archive = Archive(spool)
@@ -125,9 +131,10 @@ def test_new_observation_reads_only_the_local_spool() -> None:
         observed_at=datetime.now(UTC),
     )
 
-    result = ObservationProcessor(database, archive)._process_claim(
-        claim, lease_seconds=30
-    )
+    with patch.object(ingestion, "complete_profile", complete_profile):
+        result = ObservationProcessor(database, archive)._process_claim(
+            claim, lease_seconds=30
+        )
 
     assert result == ProcessResult(41, "processed")
     assert spool.calls == 1
@@ -154,11 +161,11 @@ def test_missing_new_observation_is_not_repaired_from_archive() -> None:
         def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
             assert lease_seconds == 30
 
-        def fail_claim(self, _claim: object, *, category: str, detail: str, retryable: bool) -> str:
-            assert category == "spool_missing"
-            assert detail.startswith("spool_missing:")
-            assert retryable is False
-            return "failed"
+    def fail_claim(_database: object, _claim: object, *, category: str, detail: str, retryable: bool) -> str:
+        assert category == "spool_missing"
+        assert detail.startswith("spool_missing:")
+        assert retryable is False
+        return "failed"
 
     claim = SimpleNamespace(
         job_id=42,
@@ -177,9 +184,10 @@ def test_missing_new_observation_is_not_repaired_from_archive() -> None:
     )
     archive = Archive()
 
-    result = ObservationProcessor(Database(), archive)._process_claim(
-        claim, lease_seconds=30
-    )
+    with patch.object(job_outcomes, "fail_claim", fail_claim):
+        result = ObservationProcessor(Database(), archive)._process_claim(
+            claim, lease_seconds=30
+        )
 
     assert result == ProcessResult(42, "failed", "spool_missing")
     assert archive.remote_calls == 0
@@ -208,8 +216,8 @@ def test_replay_observation_can_use_archive_fallback() -> None:
         def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
             assert lease_seconds == 30
 
-        def complete_profile(self, _claim: object, _profile: object) -> None:
-            return None
+    def complete_profile(_database: object, _claim: object, _profile: object) -> None:
+        return None
 
     claim = SimpleNamespace(
         job_id=43,
@@ -228,9 +236,10 @@ def test_replay_observation_can_use_archive_fallback() -> None:
     )
     archive = Archive()
 
-    result = ObservationProcessor(Database(), archive)._process_claim(
-        claim, lease_seconds=30
-    )
+    with patch.object(ingestion, "complete_profile", complete_profile):
+        result = ObservationProcessor(Database(), archive)._process_claim(
+            claim, lease_seconds=30
+        )
 
     assert result == ProcessResult(43, "processed")
     assert archive.remote_calls == 1
