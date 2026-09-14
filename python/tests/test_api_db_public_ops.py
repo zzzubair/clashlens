@@ -123,6 +123,75 @@ def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
         connection.commit()
 
 
+def seed_league_history(
+    database: ApiDatabase,
+    tag: str,
+    season_id: str,
+    *,
+    observed_at: datetime = NOW,
+    tier_id: int = 105000036,
+) -> None:
+    with database.pool.connection() as connection:
+        player_id = connection.execute(
+            "SELECT id FROM players WHERE normalized_tag = %s", (tag,)
+        ).fetchone()[0]
+        response_hash = uuid4().hex + uuid4().hex
+        observation_id = connection.execute(
+            """
+            INSERT INTO collector_observations (
+                occurrence_key, scope, player_id, normalized_tag, endpoint,
+                request_started_at, response_completed_at, http_status,
+                response_hash, collector_version, key_label, evidence_headers,
+                request_method, request_path, request_query,
+                paging_envelope_state, source_adapter_version
+            ) VALUES (
+                %s, 'player', %s, %s, 'league_history', %s, %s, 200,
+                %s, 'test', 'normal-test', '{}'::jsonb,
+                'GET', %s, '', 'not_applicable', 'league-history-v1'
+            ) RETURNING id
+            """,
+            (
+                f"seed:{tag}:league-history:{season_id}",
+                player_id,
+                tag,
+                observed_at,
+                observed_at,
+                response_hash,
+                f"/v1/players/%23{tag.removeprefix('#')}/leaguehistory",
+            ),
+        ).fetchone()[0]
+        payload_id = connection.execute(
+            """
+            INSERT INTO parsed_source_payloads (
+                endpoint, response_hash, parser_version, schema_version,
+                parse_outcome, parsed_json
+            ) VALUES (
+                'league_history', %s, 'supercell-league-history-parser-v1',
+                'league-history-schema-v1', 'valid', '{}'::jsonb
+            ) RETURNING id
+            """,
+            (response_hash,),
+        ).fetchone()[0]
+        connection.execute(
+            """
+            INSERT INTO player_league_history_entries (
+                player_id, league_season_id, observed_at, observation_id,
+                parsed_payload_id, league_trophies, league_tier_id, placement,
+                source_json
+            ) VALUES (%s, %s, %s, %s, %s, 5812, %s, 12, '{}'::jsonb)
+            """,
+            (
+                player_id,
+                season_id,
+                observed_at,
+                observation_id,
+                payload_id,
+                tier_id,
+            ),
+        )
+        connection.commit()
+
+
 def test_public_saved_operations_are_bounded_and_screen_ready(
     database_url: str,
 ) -> None:
@@ -134,11 +203,15 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
             seed_profile(database, "#2PP", 6000)
             seed_profile(database, "#8PY", 6100)
 
-            player = api_players.get_player_page(database, "#2PP", now=NOW, freshness_seconds=900)
-            live = api_leaderboard.get_live_leaderboard(database,
-                limit=100, now=NOW, freshness_seconds=900
+            player = api_players.get_player_page(
+                database, "#2PP", now=NOW, freshness_seconds=900
             )
-            analytics = api_analytics.get_basic_analytics(database, now=NOW, freshness_seconds=900)
+            live = api_leaderboard.get_live_leaderboard(
+                database, limit=100, now=NOW, freshness_seconds=900
+            )
+            analytics = api_analytics.get_basic_analytics(
+                database, now=NOW, freshness_seconds=900
+            )
 
             assert player is not None
             assert player["tag"] == "#2PP"
@@ -200,8 +273,8 @@ def test_known_player_name_search_uses_current_profiles_and_escapes_wildcards(
             seed_profile(database, "#8PY", 6100)
             seed_profile(database, "#2PP", 6000)
 
-            assert api_players.search_known_players(database,
-                "Player", now=NOW, freshness_seconds=900
+            assert api_players.search_known_players(
+                database, "Player", now=NOW, freshness_seconds=900
             ) == [
                 {
                     "tag": "#2PP",
@@ -225,7 +298,10 @@ def test_known_player_name_search_uses_current_profiles_and_escapes_wildcards(
                 },
             ]
             assert (
-                api_players.search_known_players(database, "%", now=NOW, freshness_seconds=900) == []
+                api_players.search_known_players(
+                    database, "%", now=NOW, freshness_seconds=900
+                )
+                == []
             )
         finally:
             database.close()
@@ -246,7 +322,7 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
                     UPDATE api_player_daily_logs
                     SET ranked_day_end = %s,
                         official_season_id = '1783918800',
-                        season_day_number = 23,
+                        season_day_number = 25,
                         state = 'Partial',
                         coverage = 'complete',
                         confidence = 'inferred',
@@ -264,14 +340,29 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
                     """,
                     (datetime(2026, 8, 6, 13, 0, tzinfo=UTC),),
                 )
+                connection.execute(
+                    """
+                    UPDATE player_profile_versions
+                    SET current_league_season_id = '1783918800',
+                        previous_league_season_id = '1783314000',
+                        profile_json = '{"currentLeagueSeasonId": 1783918800,
+                                         "previousLeagueSeasonId": 1783314000}'::jsonb
+                    WHERE player_id = (
+                        SELECT id FROM players WHERE normalized_tag = '#2PP'
+                    )
+                    """
+                )
                 connection.commit()
+            seed_league_history(database, "#2PP", "1781499600")
 
-            player = api_players.get_player_page(database, "#2PP", now=NOW, freshness_seconds=900)
+            player = api_players.get_player_page(
+                database, "#2PP", now=NOW, freshness_seconds=900
+            )
 
             assert player is not None
             current_day = player["screen_ready"]["current_day"]
             assert current_day is not None
-            assert current_day["season_day_number"] == 23
+            assert current_day["season_day_number"] == 25
             assert current_day["public_confidence"] == "partial"
             assert current_day["completeness"] == {
                 "state": "partial",
@@ -283,9 +374,11 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
             assert player["screen_ready"]["season_days"] == [current_day]
             assert player["screen_ready"]["season"] == {
                 "id": "1783918800",
-                "current_day_number": 23,
-                "start": "2026-08-06T05:00:00+00:00",
-                "end": "2026-08-06T13:00:00+00:00",
+                "current_day_number": 25,
+                "start": "2026-07-13T05:00:00+00:00",
+                "end": "2026-08-10T05:00:00+00:00",
+                "anchor_source": "official_league_history",
+                "anchor_observed_at": NOW.isoformat(),
             }
             assert player["screen_ready"]["data_quality"] == [
                 {
@@ -296,6 +389,50 @@ def test_player_screen_ready_current_day_preserves_partial_inferred_evidence(
             ]
         finally:
             database.close()
+
+
+def test_player_page_withholds_season_days_when_official_history_disagrees(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            seed_league_history(database, "#2PP", "1781499600")
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE api_player_daily_logs
+                    SET ranked_day_end = '2026-08-07T05:00:00Z',
+                        official_season_id = '1783314000',
+                        season_day_number = 4,
+                        state = 'Complete', coverage = 'complete',
+                        confidence = 'exact'
+                    WHERE player_id = (
+                        SELECT id FROM players WHERE normalized_tag = '#2PP'
+                    )
+                    """
+                )
+                connection.commit()
+
+            player = api_players.get_player_page(
+                database, "#2PP", now=NOW, freshness_seconds=900
+            )
+        finally:
+            database.close()
+
+    assert player is not None
+    assert player["screen_ready"]["season"] is None
+    assert player["screen_ready"]["season_days"] == []
+    assert player["screen_ready"]["data_quality"] == [
+        {
+            "code": "uncertain",
+            "label": "Season boundary conflict",
+            "detail": "The official league history and ranked-day publication disagree, so season days are withheld.",
+        }
+    ]
 
 
 def test_public_army_shows_an_unknown_hero_once_as_unknown() -> None:
@@ -452,7 +589,8 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                         attack_gain = 70, defense_count = 1,
                         defense_three_star_count = 0, defense_loss = 20,
                         net_trophy_change = 50, battles = %s,
-                        partial_reasons = '[]'::jsonb
+                        partial_reasons = '[]'::jsonb,
+                        published_at = '2026-08-06T11:30:00Z'
                     WHERE player_id = (
                         SELECT id FROM players WHERE normalized_tag = '#2PP'
                     ) AND ranked_day_start = '2026-08-06T05:00:00Z'
@@ -482,7 +620,9 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                 )
                 connection.commit()
 
-            player = api_players.get_player_page(database, "#2PP", now=NOW, freshness_seconds=900)
+            player = api_players.get_player_page(
+                database, "#2PP", now=NOW, freshness_seconds=900
+            )
 
             assert player is not None
             screen = player["screen_ready"]
@@ -490,6 +630,14 @@ def test_player_screen_ready_limits_season_days_to_current_official_season(
                 3,
                 2,
             ]
+            assert screen["season"] == {
+                "id": "current-season",
+                "current_day_number": 3,
+                "start": "2026-08-04T05:00:00+00:00",
+                "end": "2026-09-01T05:00:00+00:00",
+                "anchor_source": "daily_publication",
+                "anchor_observed_at": "2026-08-06T11:30:00+00:00",
+            }
             assert all(
                 day["official_season_id"] == "current-season"
                 for day in screen["season_days"]
@@ -538,7 +686,8 @@ def test_concurrent_refreshes_share_one_collector_work_and_public_refresh_identi
         try:
 
             def submit(_index: int):
-                return api_accounts.submit_refresh(database,
+                return api_accounts.submit_refresh(
+                    database,
                     anonymous_binding(
                         "refresh.submit",
                         "/v1/players/%232PP/refresh",
@@ -603,11 +752,11 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
                     (NOW, tags[0]),
                 )
                 connection.commit()
-            first = api_leaderboard.get_live_leaderboard(database,
-                limit=100, offset=0, now=NOW, freshness_seconds=900
+            first = api_leaderboard.get_live_leaderboard(
+                database, limit=100, offset=0, now=NOW, freshness_seconds=900
             )
-            second = api_leaderboard.get_live_leaderboard(database,
-                limit=100, offset=100, now=NOW, freshness_seconds=900
+            second = api_leaderboard.get_live_leaderboard(
+                database, limit=100, offset=100, now=NOW, freshness_seconds=900
             )
             assert first is not None and second is not None
             assert [entry["position"] for entry in first["entries"]] == list(
@@ -643,8 +792,8 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
             assert stale_entry["age_seconds"] == 900
             assert stale_entry["freshness"] == "stale"
             assert (
-                api_leaderboard.get_live_leaderboard(database,
-                    limit=100, offset=200, now=NOW, freshness_seconds=900
+                api_leaderboard.get_live_leaderboard(
+                    database, limit=100, offset=200, now=NOW, freshness_seconds=900
                 )
                 is None
             )

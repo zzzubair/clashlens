@@ -12,6 +12,7 @@ from clashlens.domain import (
     DomainRuleError,
     allocate_trophies,
     ranked_day_for,
+    validate_legend_season_start,
     validate_season_anchor,
 )
 
@@ -88,3 +89,17 @@ def test_season_anchor_accepts_only_adjacent_monday_0500_values() -> None:
     ):
         with pytest.raises(DomainRuleError, match="invalid_season_anchor"):
             validate_season_anchor(current, previous)
+
+
+def test_league_history_anchor_accepts_old_legend_seasons_on_the_28_day_phase() -> None:
+    observed_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+
+    assert validate_legend_season_start(
+        "1781499600", observed_at=observed_at
+    ) == datetime(2026, 6, 15, 5, 0, tzinfo=UTC)
+    for invalid in (
+        str(int(datetime(2026, 6, 22, 5, 0, tzinfo=UTC).timestamp())),
+        str(int(datetime(2026, 8, 10, 5, 0, tzinfo=UTC).timestamp())),
+    ):
+        with pytest.raises(DomainRuleError, match="invalid_season_anchor"):
+            validate_legend_season_start(invalid, observed_at=observed_at)

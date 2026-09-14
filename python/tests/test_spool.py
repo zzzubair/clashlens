@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import subprocess
@@ -474,6 +475,38 @@ def test_btrfs_zero_inodes_passes_inode_gate_but_not_byte_or_object_limits(
             full.reserve(1024)
 
 
+@pytest.mark.parametrize(
+    "free_bytes,free_inodes,error",
+    [
+        (2024, 1000, "free-space floor"),
+        (10_000_000, 11, "free-inode floor"),
+    ],
+)
+def test_physical_capacity_accounts_for_concurrent_reservations(
+    tmp_path: Path, free_bytes: int, free_inodes: int, error: str
+) -> None:
+    from unittest import mock
+
+    from clashlens import spool as spool_module
+
+    spool = Spool(
+        tmp_path / error,
+        max_body_bytes=1024,
+        free_space_floor=1000,
+        free_inode_floor=10,
+    )
+    capacity = _capacity(
+        "ext4", "finite", free_bytes=free_bytes, free_inodes=free_inodes
+    )
+    with mock.patch.object(spool_module, "filesystem_capacity", return_value=capacity):
+        first = spool.reserve(1024)
+        try:
+            with pytest.raises(SpoolError, match=error):
+                spool.reserve(1024)
+        finally:
+            first.release()
+
+
 def test_unknown_and_failed_capacity_do_not_admit(tmp_path: Path) -> None:
     from unittest import mock
 
@@ -496,6 +529,54 @@ def test_unknown_and_failed_capacity_do_not_admit(tmp_path: Path) -> None:
             spool.reserve(512)
         ready, reason = spool.readiness()
         assert ready is False and reason.startswith("storage_error:")
+
+
+def test_writable_probe_uses_real_storage_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    original_write = os.write
+    failed = False
+
+    def fail_once(fd: int, body: bytes | memoryview) -> int:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError(errno.ENOSPC, "quota full")
+        return original_write(fd, body)
+
+    monkeypatch.setattr(os, "write", fail_once)
+    with pytest.raises(OSError) as error:
+        spool.probe_writable(1024)
+    assert error.value.errno == errno.ENOSPC
+    assert spool.stats()["temporary_objects"] == 0
+
+    # The failed probe removes its partial file. A later full-size durable
+    # write must succeed before the collector resumes.
+    monkeypatch.setattr(os, "write", original_write)
+    spool.probe_writable(1024)
+    assert spool.stats()["temporary_objects"] == 0
+
+
+def test_failed_response_write_removes_partial_temporary_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    body = b"raw response"
+    response_hash = hashlib.sha256(body).hexdigest()
+
+    def failed_write(_fd: int, _body: bytes | memoryview) -> int:
+        raise OSError(errno.EIO, "write failed")
+
+    monkeypatch.setattr(os, "write", failed_write)
+    with pytest.raises(OSError) as error:
+        spool.publish(body, response_hash)
+
+    assert error.value.errno == errno.EIO
+    assert list((tmp_path / "spool" / "tmp").iterdir()) == []
+    stats = spool.stats()
+    assert stats["temporary_bytes"] == 0
+    assert stats["temporary_objects"] == 0
 
 
 def test_finite_zero_floor_still_requires_one_inode(tmp_path: Path) -> None:

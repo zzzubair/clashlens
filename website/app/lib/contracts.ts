@@ -244,6 +244,8 @@ export interface PlayerPage {
     anchor: string;
     currentDayNumber: number;
     dayCount: number;
+    anchorSource: "official_league_history" | "daily_publication";
+    anchorObservedAt: string;
   } | null;
   currentDay: RankedDaySummary | null;
   recentDays: RankedDaySummary[];
@@ -314,16 +316,24 @@ export interface HistoricalSeasonSummary {
   defenseCount: number | null;
   defenseLoss: number | null;
   netTrophyChange: number | null;
-  attackStars: Record<string, number>;
-  defenseStars: Record<string, number>;
-  attackStarsUnknown: number;
-  defenseStarsUnknown: number;
+  attackStars: Record<string, number | null>;
+  defenseStars: Record<string, number | null>;
+  attackStarsUnknown: number | null;
+  defenseStarsUnknown: number | null;
   daysObserved: number;
   daysMissing: number[];
   coverageState: "complete" | "partial";
   unresolvedFlags: string[];
   dailyEntries: HistoricalSeasonDayEntry[];
   publishedAt: string | null;
+  source: "tracked_summary" | "official_league_history";
+  officialHistory: OfficialSeasonHistory | null;
+}
+
+export interface OfficialSeasonHistory {
+  observedAt: string;
+  eodTrophies: number | null;
+  finalPlacement: number | null;
 }
 
 export interface SummarizedSeasonRef {
@@ -331,4 +341,6 @@ export interface SummarizedSeasonRef {
   coverageState: "complete" | "partial";
   daysObserved: number;
   daysMissing: number;
+  source: "tracked_summary" | "official_league_history";
+  officialHistory: OfficialSeasonHistory | null;
 }

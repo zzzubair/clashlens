@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import hashlib
 import json
+import math
 import random
 import time
 from contextlib import ExitStack
@@ -14,6 +16,7 @@ from uuid import uuid4
 import psycopg
 from psycopg_pool import PoolTimeout
 
+from . import collector_uploads
 from .archive import ArchiveReadError, S3ArchiveReader
 from .collector_db import (
     CollectorDatabase,
@@ -28,6 +31,7 @@ from .collector_http import (
     KeyPool,
     OfficialApiClient,
     ProviderFailure,
+    retry_after_seconds,
 )
 from .response_fields import content_fingerprint
 from .spool import Spool, SpoolError
@@ -40,6 +44,8 @@ _GLOBAL_ARCHIVE_FAILURES = {
     "archive_unsupported",
 }
 _UPLOAD_CONCURRENCY = 32
+_UPLOAD_LEASE_SECONDS = 60
+_UPLOAD_RENEW_INTERVAL = 20.0
 _REGULAR_PARALLELISM = 36
 
 
@@ -73,12 +79,15 @@ class Collector:
         self.latency_seconds: dict[tuple[str, str], float] = {}
         self.refresh_latency_seconds = 0.0
         self.refresh_count = 0
-        self.last_success_at: datetime | None = None
         self.regular_inflight = 0
         self._regular_admission_lock = asyncio.Lock()
         self.archive_health = "unconfigured" if archive is None else "unknown"
         self._archive_terminal = False
         self._archive_identity_validated = False
+        self._spool_io_failed = False
+        self._spool_capacity_failed = False
+        self._spool_recovery_lock = asyncio.Lock()
+        self._spool_probe_after = 0.0
 
     async def _database_call(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
         for attempt in range(3):
@@ -98,6 +107,8 @@ class Collector:
         lane: str,
         endpoints: tuple[str, ...] = ("profile", "battle_log"),
     ) -> list[str]:
+        if not await self._spool_available():
+            return ["capacity_paused"] * len(endpoints)
         pool = self.interactive_keys if lane == "interactive" else self.regular_keys
         try:
             stack, reservations = await asyncio.to_thread(
@@ -122,8 +133,8 @@ class Collector:
                 )
             finally:
                 await asyncio.to_thread(stack.close)
-        except (OSError, SpoolError):
-            self._count("degraded_capacity")
+        except (OSError, SpoolError) as error:
+            self._record_spool_failure(error)
             return ["capacity_paused"] * len(endpoints)
 
     def _reserve_endpoints(
@@ -224,13 +235,16 @@ class Collector:
         attempts = 3 if important else 1
         pool_name = "interactive" if pool is self.interactive_keys else "regular"
         for attempt in range(attempts):
+            if not await self._spool_available():
+                return "capacity_paused"
             owned_reservation = reservation is None or attempt > 0
-            current_reservation = (
-                self.spool.reserve(self.max_body_bytes)
-                if owned_reservation
-                else reservation
-            )
+            current_reservation = None
             try:
+                current_reservation = (
+                    self.spool.reserve(self.max_body_bytes)
+                    if owned_reservation
+                    else reservation
+                )
                 if owned_reservation:
                     current_reservation.__enter__()
                 started_at = datetime.now(UTC)
@@ -275,6 +289,18 @@ class Collector:
                         return "failed"
                     await asyncio.sleep(_retry_delay(attempt))
                     continue
+                if (
+                    lane == "interactive"
+                    and response.http_status == 429
+                    and self.interactive_fingerprint is not None
+                ):
+                    await self._database_call(
+                        self.database.cooldown_interactive_key,
+                        self.interactive_fingerprint,
+                        math.ceil(
+                            retry_after_seconds(response.headers.get("retry-after"))
+                        ),
+                    )
                 digest = hashlib.sha256(response.body).hexdigest()
                 handoff = self._make_handoff(work, response, digest)
                 name, payload = self.serialize_handoff(handoff)
@@ -288,8 +314,6 @@ class Collector:
                 )
                 await self._database_call(self.database.record_response, handoff)
                 await asyncio.to_thread(self.spool.remove_handoff, name)
-                if 200 <= response.http_status < 300:
-                    self.last_success_at = response.response_completed_at
                 self._count("recorded")
                 outcome = f"http_{response.http_status}"
                 key = (endpoint, pool_name, outcome)
@@ -321,12 +345,15 @@ class Collector:
                         continue
                     return "failed"
                 return "recorded"
-            except (OSError, SpoolError):
-                self._count("degraded_capacity")
+            except (OSError, SpoolError) as error:
+                self._record_spool_failure(error)
                 return "capacity_paused"
             finally:
-                if owned_reservation:
-                    current_reservation.__exit__(None, None, None)
+                if owned_reservation and current_reservation is not None:
+                    try:
+                        current_reservation.__exit__(None, None, None)
+                    except (OSError, SpoolError) as error:
+                        self._record_spool_failure(error)
         raise AssertionError("unreachable collector retry loop")
 
     def _make_handoff(
@@ -404,13 +431,15 @@ class Collector:
         if self.archive is None or self._archive_terminal:
             return False
         claim = await self._database_call(
-            self.database.claim_upload,
+            collector_uploads.claim_upload,
+            self.database,
             owner=owner,
-            lease_seconds=60,
-            now=datetime.now(UTC),
+            lease_seconds=_UPLOAD_LEASE_SECONDS,
         )
         if claim is None:
             return False
+        renewal_stop = asyncio.Event()
+        renewal = asyncio.create_task(self._renew_upload_lease(claim, renewal_stop))
         try:
             config = self.archive.instance_config
             if config is not None and not self._archive_identity_validated:
@@ -436,41 +465,97 @@ class Collector:
                     "archive marker could not be checked",
                     retryable=True,
                 )
-            body = await asyncio.to_thread(
-                self.spool.verify, claim.response_hash, claim.byte_size
-            )
+            try:
+                body = await asyncio.to_thread(
+                    self.spool.verify, claim.response_hash, claim.byte_size
+                )
+            except (OSError, SpoolError) as error:
+                self._record_spool_failure(error)
+                return True
             if body is None:
                 raise ArchiveReadError(
                     "spool_missing",
                     "pending upload has no local raw response",
                     retryable=False,
                 )
-            reference = await asyncio.to_thread(
+            await self._ensure_upload_lease(renewal, claim)
+            reference = await _drain_to_thread(
                 self.archive.write_immutable,
                 body,
                 claim.response_hash,
                 generation=claim.generation or None,
             )
-            await self._database_call(
-                self.database.complete_upload,
-                claim,
-                archive_reference=reference,
-                archive_instance_id=self.archive_instance_id,
+            await self._ensure_upload_lease(renewal, claim)
+            await _stop_task(renewal_stop, renewal)
+            await _drain_awaitable(
+                self._database_call(
+                    collector_uploads.complete_upload,
+                    self.database,
+                    claim,
+                    archive_reference=reference,
+                    archive_instance_id=self.archive_instance_id,
+                )
             )
             self._count("uploaded")
             self.archive_health = "ready"
         except ArchiveReadError as error:
-            await self._database_call(
-                self.database.fail_upload,
-                claim,
-                category=error.category,
-                detail=str(error),
-                retryable=error.retryable,
-            )
+            try:
+                await self._ensure_upload_lease(renewal, claim)
+                await _stop_task(renewal_stop, renewal)
+                await _drain_awaitable(
+                    self._database_call(
+                        collector_uploads.fail_upload,
+                        self.database,
+                        claim,
+                        category=error.category,
+                        detail=str(error),
+                        retryable=error.retryable,
+                    )
+                )
+            except collector_uploads.UploadLeaseLost:
+                self._count("upload_lease_lost")
+                return True
             self._count(error.category)
             self._archive_terminal = error.category in _GLOBAL_ARCHIVE_FAILURES
             self.archive_health = "terminal" if self._archive_terminal else "degraded"
+        except collector_uploads.UploadLeaseLost:
+            # A competing owner can safely retry: immutable archive writes are
+            # content-addressed, and no stale owner reaches the database commit.
+            self._count("upload_lease_lost")
+        finally:
+            renewal_stop.set()
+            await _cancel_task(renewal)
         return True
+
+    async def _renew_upload_lease(
+        self, claim: collector_uploads.UploadClaim, stop_requested: asyncio.Event
+    ) -> None:
+        while not stop_requested.is_set():
+            try:
+                await asyncio.wait_for(
+                    stop_requested.wait(), timeout=_UPLOAD_RENEW_INTERVAL
+                )
+            except TimeoutError:
+                await self._database_call(
+                    collector_uploads.renew_upload,
+                    self.database,
+                    claim,
+                    lease_seconds=_UPLOAD_LEASE_SECONDS,
+                )
+
+    async def _ensure_upload_lease(
+        self,
+        renewal: asyncio.Task[None],
+        claim: collector_uploads.UploadClaim,
+    ) -> None:
+        if renewal.done():
+            await renewal
+        await self._database_call(
+            collector_uploads.renew_upload,
+            self.database,
+            claim,
+            lease_seconds=_UPLOAD_LEASE_SECONDS,
+        )
 
     def cleanup_uploaded(self, *, limit: int = 100) -> int:
         deleted = 0
@@ -544,9 +629,7 @@ class Collector:
                     else:
                         self.regular_inflight -= 1
                 if retry_work:
-                    await _wait_or_stop(
-                        stop_requested, max(1.0, idle_seconds)
-                    )
+                    await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
                     if stop_requested.is_set():
                         break
                     for item in retry_work:
@@ -576,9 +659,7 @@ class Collector:
                         self.regular_inflight += len(work)
                 for item in work:
                     pending[
-                        asyncio.create_task(
-                            self.collect_player(item, lane="ordinary")
-                        )
+                        asyncio.create_task(self.collect_player(item, lane="ordinary"))
                     ] = item
                 if work:
                     continue
@@ -667,34 +748,50 @@ class Collector:
                     if task.done():
                         await task
                         owner_tasks[owner] = asyncio.create_task(
-                            self._upload_owner_loop(
-                                owner, stop_requested, idle_seconds
-                            )
+                            self._upload_owner_loop(owner, stop_requested, idle_seconds)
                         )
-                await asyncio.to_thread(self.cleanup_uploaded, limit=128)
-                # Compacted responses leave no upload row or observation, so
-                # their spool bytes are unreferenced. Sweep them under the
-                # cleanup barrier; the referenced set is evaluated inside it so
-                # sidecars still in flight and freshly committed rows protect.
-                # The sweep walks the whole spool, so it is paced per minute,
-                # not per loop.
-                if time.monotonic() - last_sweep >= 60.0:
-                    last_sweep = time.monotonic()
-                    await asyncio.to_thread(
-                        self.spool.remove_unreferenced,
-                        self.database.referenced_spool_hashes,
-                    )
+                if self._spool_io_failed:
+                    await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
+                    continue
+                try:
+                    await asyncio.to_thread(self.cleanup_uploaded, limit=128)
+                    # Compacted responses leave no upload row or observation, so
+                    # their spool bytes are unreferenced. Sweep them under the
+                    # cleanup barrier; the referenced set is evaluated inside it so
+                    # sidecars still in flight and freshly committed rows protect.
+                    # The sweep walks the whole spool, so it is paced per minute,
+                    # not per loop.
+                    if time.monotonic() - last_sweep >= 60.0:
+                        last_sweep = time.monotonic()
+                        # Startup leaves crash debris younger than its 60-second
+                        # safety window alone. Revisit it here so an immediate
+                        # restart cannot leave that temporary file forever.
+                        await asyncio.to_thread(self.spool.cleanup_stale, 60.0)
+                        await asyncio.to_thread(
+                            self.spool.remove_unreferenced,
+                            self.database.referenced_spool_hashes,
+                        )
+                except (OSError, SpoolError) as error:
+                    self._record_spool_failure(error)
+                if self._spool_capacity_failed:
+                    # Uploads and deletion continue while collection is
+                    # paused, so archived bytes can make room for this probe.
+                    await self._spool_available()
                 await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
         finally:
+            for task in owner_tasks.values():
+                if not task.done():
+                    task.cancel()
             if owner_tasks:
-                await asyncio.gather(
-                    *owner_tasks.values(), return_exceptions=True
-                )
+                await asyncio.gather(*owner_tasks.values(), return_exceptions=True)
 
     async def _upload_owner_loop(
         self, owner: str, stop_requested: asyncio.Event, idle_seconds: float
     ) -> None:
         while not stop_requested.is_set():
+            if self._spool_io_failed:
+                await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
+                continue
             if not await self.upload_once(owner=owner):
                 await _wait_or_stop(stop_requested, max(1.0, idle_seconds))
 
@@ -730,7 +827,20 @@ class Collector:
             return 200, "text/plain", b"ok\n"
         if path not in {"/readyz", "/metrics"}:
             return 404, "text/plain", b"not found\n"
-        ready, reason = await asyncio.to_thread(self.spool.readiness)
+        if self._spool_io_failed:
+            ready, reason = False, "spool_io_failure"
+        elif self._spool_capacity_failed:
+            ready, reason = False, "degraded_capacity"
+        else:
+            try:
+                ready, reason = await asyncio.to_thread(self.spool.readiness)
+            except (OSError, SpoolError) as error:
+                self._record_spool_failure(error)
+                ready, reason = False, "spool_io_failure"
+            if reason.startswith("storage_error:"):
+                self._spool_io_failed = True
+                self._count("spool_io_failure")
+                ready, reason = False, "spool_io_failure"
         regular = self.regular_keys.health()
         interactive = self.interactive_keys.health()
         try:
@@ -749,21 +859,30 @@ class Collector:
                 state = "ready"
             body = state.encode() + b"\n"
             return (200 if healthy else 503), "text/plain", body
-        stats = await asyncio.to_thread(self.spool.stats)
+        stats = None
+        if not self._spool_io_failed:
+            try:
+                stats = await asyncio.to_thread(self.spool.stats)
+            except (OSError, SpoolError) as error:
+                self._record_spool_failure(error)
         lines = [
             f'clashlens_collector_keys_healthy{{pool="regular"}} {regular["healthy"]}',
             f'clashlens_collector_keys_healthy{{pool="interactive"}} {interactive["healthy"]}',
             f"clashlens_collector_regular_inflight {self.regular_inflight}",
-            f"clashlens_spool_bytes {stats['final_bytes']}",
-            f"clashlens_spool_objects {stats['final_objects']}",
-            f"clashlens_spool_reserved_bytes {stats['reserved_bytes']}",
-            f"clashlens_spool_free_bytes {stats['free_bytes']}",
-            f"clashlens_spool_free_inodes {stats['free_inodes']}",
+            f"clashlens_collector_spool_io_failed {int(self._spool_io_failed)}",
+            f"clashlens_collector_spool_capacity_failed {int(self._spool_capacity_failed)}",
             f'clashlens_collector_archive_health{{state="{self.archive_health}"}} 1',
         ]
-        if self.last_success_at is not None:
-            age = max(0.0, (datetime.now(UTC) - self.last_success_at).total_seconds())
-            lines.append(f"clashlens_collector_last_success_age_seconds {age:.6f}")
+        if stats is not None:
+            lines.extend(
+                [
+                    f"clashlens_spool_bytes {stats['final_bytes']}",
+                    f"clashlens_spool_objects {stats['final_objects']}",
+                    f"clashlens_spool_reserved_bytes {stats['reserved_bytes']}",
+                    f"clashlens_spool_free_bytes {stats['free_bytes']}",
+                    f"clashlens_spool_free_inodes {stats['free_inodes']}",
+                ]
+            )
         for (endpoint, pool, outcome), count in sorted(self.endpoint_outcomes.items()):
             lines.append(
                 "clashlens_collector_requests_total"
@@ -802,9 +921,76 @@ class Collector:
     def _count(self, outcome: str) -> None:
         self.outcomes[outcome] = self.outcomes.get(outcome, 0) + 1
 
+    def _record_spool_failure(self, error: OSError | SpoolError) -> None:
+        capacity_error = (
+            isinstance(error, SpoolError)
+            and str(error).startswith("degraded_capacity:")
+        ) or (
+            isinstance(error, OSError) and error.errno in {errno.EDQUOT, errno.ENOSPC}
+        )
+        if capacity_error:
+            self._spool_capacity_failed = True
+            self._count("degraded_capacity")
+            return
+        # An I/O or integrity failure is not known to be safe just because the
+        # next capacity probe succeeds. Keep collection paused and readiness
+        # failed until the service restarts and startup recovery rechecks the
+        # spool before admitting another request.
+        self._spool_io_failed = True
+        self._count("spool_io_failure")
+
+    async def _spool_available(self) -> bool:
+        if self._spool_io_failed:
+            return False
+        if not self._spool_capacity_failed:
+            return True
+        async with self._spool_recovery_lock:
+            if not self._spool_capacity_failed:
+                return True
+            if time.monotonic() < self._spool_probe_after:
+                return False
+            try:
+                await asyncio.to_thread(self.spool.probe_writable, self.max_body_bytes)
+            except (OSError, SpoolError) as error:
+                self._spool_probe_after = time.monotonic() + 1.0
+                self._record_spool_failure(error)
+                return False
+            if self._spool_io_failed:
+                return False
+            self._spool_capacity_failed = False
+            self._spool_probe_after = 0.0
+            self._count("capacity_recovered")
+            return True
+
 
 def _retry_delay(attempt: int) -> float:
     return min(5.0, 0.25 * 2**attempt) + random.uniform(0.0, 0.1)
+
+
+async def _drain_to_thread(operation: Any, *args: Any, **kwargs: Any) -> Any:
+    return await _drain_awaitable(asyncio.to_thread(operation, *args, **kwargs))
+
+
+async def _drain_awaitable(awaitable: Any) -> Any:
+    task = asyncio.create_task(awaitable)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # Python cannot stop a running thread. Keep the upload lease renewer
+        # alive until the immutable write reaches a safe endpoint.
+        await task
+        raise
+
+
+async def _stop_task(stop_requested: asyncio.Event, task: asyncio.Task[None]) -> None:
+    stop_requested.set()
+    await task
+
+
+async def _cancel_task(task: asyncio.Task[None]) -> None:
+    if not task.done():
+        task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
 
 async def _wait_or_stop(stop_requested: asyncio.Event, seconds: float) -> None:

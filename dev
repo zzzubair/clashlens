@@ -1100,7 +1100,7 @@ trial_report() {
   # The six-month extrapolation is not a measurement (issue #110): the trial
   # window's first-fetch mix inflates it. Printed for comparison with #82's
   # baseline only; the honest unit cost is bytes per stored response below.
-  printf 'database growth rate: %.3f MiB/hour; six-month projection: %s GiB (baseline 166-185 GiB, informational)\n' \
+  printf 'database growth rate: %.3f MiB/hour; six-month projection: %s GiB (baseline 166-185 GB = 154.6-172.3 GiB, informational)\n' \
     "$(awk -v bytes="$growth_bytes" -v seconds="$TRIAL_SECONDS" \
       'BEGIN { printf "%.3f", bytes * 3600 / seconds / 1048576 }')" \
     "$projected_gib"
@@ -1154,6 +1154,8 @@ trial_inner() {
   up_stack true
   stop_trial_producers
   trial_db_snapshot > "$STATE_DIR/trial-before-db.tsv"
+  trial_evidence_snapshot > "$STATE_DIR/trial-before-evidence.txt"
+  trial_observation_snapshot > "$STATE_DIR/trial-before-observations.txt"
   trial_database_counter_snapshot > "$STATE_DIR/trial-before-database-counter.tsv"
   trial_reset_fixture_stats
   printf '0\n' > "$STATE_DIR/trial-before-counters.tsv"
@@ -1166,8 +1168,6 @@ trial_inner() {
     date -u '+%Y-%m-%dT%H:%M:%S.%NZ %s%N'
   )
   start_trial_producers
-  trial_evidence_snapshot > "$STATE_DIR/trial-before-evidence.txt"
-  trial_observation_snapshot > "$STATE_DIR/trial-before-observations.txt"
   local compaction_status=0
   trial_compaction_phase > "$STATE_DIR/trial-compaction.log" 2>&1 \
     || compaction_status=$?
@@ -1200,6 +1200,8 @@ trial_inner() {
   done
   trial_service_snapshot > "$STATE_DIR/trial-cutoff-services.tsv"
   trial_db_snapshot > "$STATE_DIR/trial-after-db.tsv"
+  trial_evidence_snapshot > "$STATE_DIR/trial-after-evidence.txt"
+  trial_observation_snapshot > "$STATE_DIR/trial-after-observations.txt"
   TRIAL_SWAP_AFTER_BYTES=$(trial_swap_snapshot)
   : > "$STATE_DIR/trial-swap-stop"
   wait "$swap_monitor_pid"
@@ -1213,8 +1215,6 @@ trial_inner() {
   trial_database_counter_snapshot > "$STATE_DIR/trial-after-database-counter.tsv"
   trial_fixture_counter_snapshot > "$STATE_DIR/trial-final-fixture-counter.tsv"
   trial_recovery_snapshot > "$STATE_DIR/trial-recovery.tsv"
-  trial_evidence_snapshot > "$STATE_DIR/trial-after-evidence.txt"
-  trial_observation_snapshot > "$STATE_DIR/trial-after-observations.txt"
   local report_status=0
   trial_report || report_status=$?
   trap - EXIT

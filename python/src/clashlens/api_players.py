@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .api_db import (
@@ -17,6 +17,97 @@ from .api_db import (
 )
 from .army_decoder import DECODER_VERSION
 from .catalog import CATALOG_VERSION
+from .domain import SEASON_DURATION, DomainRuleError, validate_legend_season_start
+
+_LEGEND_I_TIER_ID = 105000036
+
+
+def _official_history_rows(
+    connection: Any,
+    normalized_tag: str,
+    *,
+    season_id: str | None = None,
+) -> list[dict[str, Any]]:
+    filters = ["player.normalized_tag = %s", "history.league_tier_id = %s"]
+    parameters: list[Any] = [normalized_tag, _LEGEND_I_TIER_ID]
+    if season_id is not None:
+        filters.append("history.league_season_id = %s")
+        parameters.append(season_id)
+    rows = connection.execute(
+        f"""
+        SELECT history.league_season_id, history.observed_at,
+               history.league_trophies, history.placement
+        FROM player_league_history_entries AS history
+        JOIN players AS player ON player.id = history.player_id
+        WHERE {" AND ".join(filters)}
+        ORDER BY history.league_season_id DESC
+        """,
+        parameters,
+    ).fetchall()
+    valid = []
+    for row in rows:
+        observed_at = row[1].astimezone(UTC)
+        try:
+            season_start = validate_legend_season_start(
+                _text(row[0]), observed_at=observed_at
+            )
+        except DomainRuleError:
+            # Old rows predate reader-side validation. They stay retained as
+            # evidence, but an invalid boundary never reaches a season page.
+            continue
+        if season_start + SEASON_DURATION > observed_at:
+            # Official league history describes completed seasons. A row for
+            # the season still in progress cannot be presented as its EOD.
+            continue
+        trophies = None if row[2] is None else int(row[2])
+        placement = None if row[3] is None else int(row[3])
+        valid.append(
+            {
+                "official_season_id": _text(row[0]),
+                "observed_at": observed_at,
+                "season_start": season_start,
+                "season_end": season_start + SEASON_DURATION,
+                "eod_trophies": trophies
+                if trophies is not None and trophies >= 0
+                else None,
+                "final_placement": (
+                    placement if placement is not None and placement >= 1 else None
+                ),
+            }
+        )
+    return valid
+
+
+def _official_history_payload(history: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "source": "official_league_history",
+        "observed_at": history["observed_at"].isoformat(),
+        "eod_trophies": history["eod_trophies"],
+        "final_placement": history["final_placement"],
+    }
+
+
+def _current_history_season(
+    connection: Any, normalized_tag: str, now: datetime
+) -> dict[str, Any] | None:
+    rows = _official_history_rows(connection, normalized_tag)
+    if not rows:
+        return None
+    latest = max(rows, key=lambda item: item["season_start"])
+    now_utc = now.astimezone(UTC)
+    first_possible_current = latest["season_end"]
+    if now_utc < first_possible_current:
+        return None
+    elapsed_seasons = (now_utc - first_possible_current) // SEASON_DURATION
+    season_start = first_possible_current + elapsed_seasons * SEASON_DURATION
+    return {
+        "id": str(int(season_start.timestamp())),
+        "current_day_number": int((now_utc - season_start) // timedelta(days=1)) + 1,
+        "start": season_start,
+        "end": season_start + SEASON_DURATION,
+        "anchor_source": "official_league_history",
+        "anchor_observed_at": latest["observed_at"],
+    }
 
 
 def get_player_page(
@@ -47,23 +138,23 @@ def get_player_page(
         if row is None:
             return None
         observed_at = row[5].astimezone(UTC)
-        age_seconds = max(
-            0, int((now.astimezone(UTC) - observed_at).total_seconds())
-        )
+        age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
         daily_rows = connection.execute(
             """
             SELECT ranked_day_start, ranked_day_end, official_season_id,
                    season_day_number, version, state, coverage, confidence,
                    attack_count, attack_three_star_count, attack_gain,
                    defense_count, defense_three_star_count, defense_loss,
-                   net_trophy_change, adjustments, battles, partial_reasons
+                   net_trophy_change, adjustments, battles, partial_reasons,
+                   published_at
             FROM (
                 SELECT DISTINCT ON (ranked_day_start)
                        ranked_day_start, ranked_day_end, official_season_id,
                        season_day_number, version, state, coverage, confidence,
                        attack_count, attack_three_star_count, attack_gain,
                        defense_count, defense_three_star_count, defense_loss,
-                       net_trophy_change, adjustments, battles, partial_reasons
+                       net_trophy_change, adjustments, battles, partial_reasons,
+                       published_at
                 FROM api_player_daily_logs
                 WHERE player_id = (
                     SELECT id FROM players WHERE normalized_tag = %s
@@ -100,9 +191,7 @@ def get_player_page(
             if battle_ids
             else []
         )
-        armies = {
-            (str(row[0]), _text(row[1])): _public_army(row) for row in army_rows
-        }
+        armies = {(str(row[0]), _text(row[1])): _public_army(row) for row in army_rows}
         display_logs = deepcopy(daily_logs)
         for day in display_logs:
             for battle in day.get("battles", []):
@@ -124,22 +213,41 @@ def get_player_page(
                 (raw_day, screen_day)
                 for raw_day, screen_day in zip(daily_rows, screen_days, strict=True)
                 if raw_day[1] is not None
-                and raw_day[0].astimezone(UTC)
-                <= now_utc
-                < raw_day[1].astimezone(UTC)
+                and raw_day[0].astimezone(UTC) <= now_utc < raw_day[1].astimezone(UTC)
             ),
             None,
         )
         current_day_raw = None if current_day_pair is None else current_day_pair[0]
         current_day = None if current_day_pair is None else current_day_pair[1]
-        season_rows = []
-        if (
+        season_context = _current_history_season(connection, normalized_tag, now_utc)
+        season_anchor_conflict = False
+        if season_context is not None and current_day_raw is not None:
+            season_anchor_conflict = (
+                current_day_raw[2] is None
+                or current_day_raw[3] is None
+                or _text(current_day_raw[2]) != season_context["id"]
+                or int(current_day_raw[3]) != season_context["current_day_number"]
+            )
+        if season_context is None and (
             current_day_raw is not None
             and current_day_raw[2] is not None
             and current_day_raw[3] is not None
         ):
+            season_start = current_day_raw[0].astimezone(UTC) - timedelta(
+                days=int(current_day_raw[3]) - 1
+            )
+            season_context = {
+                "id": _text(current_day_raw[2]),
+                "current_day_number": int(current_day_raw[3]),
+                "start": season_start,
+                "end": season_start + SEASON_DURATION,
+                "anchor_source": "daily_publication",
+                "anchor_observed_at": current_day_raw[18].astimezone(UTC),
+            }
+        season_rows = []
+        if season_context is not None and not season_anchor_conflict:
             # A season is exactly 28 ranked days. Bound this read to the
-            # identified season while retaining the latest frozen
+            # confirmed season while retaining the latest frozen
             # publication for each ranked-day start. Filtering before the
             # bound prevents previous-season rows from filling the result.
             season_rows = connection.execute(
@@ -160,8 +268,8 @@ def get_player_page(
                     WHERE player_id = (
                         SELECT id FROM players WHERE normalized_tag = %s
                     )
-                      AND ranked_day_start >= %s - (%s - 1) * interval '1 day'
-                      AND ranked_day_start < %s + (29 - %s) * interval '1 day'
+                      AND ranked_day_start >= %s
+                      AND ranked_day_start < %s
                     ORDER BY ranked_day_start DESC, version DESC
                 ) AS latest_days
                 WHERE official_season_id = %s
@@ -171,11 +279,9 @@ def get_player_page(
                 """,
                 (
                     normalized_tag,
-                    current_day_raw[0],
-                    int(current_day_raw[3]),
-                    current_day_raw[0],
-                    int(current_day_raw[3]),
-                    _text(current_day_raw[2]),
+                    season_context["start"],
+                    season_context["end"],
+                    season_context["id"],
                 ),
             ).fetchall()
         season_display_logs = [_daily_log(day) for day in season_rows]
@@ -218,6 +324,14 @@ def get_player_page(
                     "detail": current_day["completeness"]["reason"],
                 }
             )
+        if season_anchor_conflict:
+            data_quality.append(
+                {
+                    "code": "uncertain",
+                    "label": "Season boundary conflict",
+                    "detail": "The official league history and ranked-day publication disagree, so season days are withheld.",
+                }
+            )
         return {
             "tag": _text(row[0]),
             "name": _text(row[3]),
@@ -240,16 +354,16 @@ def get_player_page(
                 "recent_days": screen_days,
                 "season_days": season_days,
                 "season": None
-                if (
-                    current_day is None
-                    or current_day["official_season_id"] is None
-                    or current_day["season_day_number"] is None
-                )
+                if season_context is None or season_anchor_conflict
                 else {
-                    "id": current_day["official_season_id"],
-                    "current_day_number": current_day["season_day_number"],
-                    "start": current_day["ranked_day_start"],
-                    "end": current_day["ranked_day_end"],
+                    "id": season_context["id"],
+                    "current_day_number": season_context["current_day_number"],
+                    "start": season_context["start"].isoformat(),
+                    "end": season_context["end"].isoformat(),
+                    "anchor_source": season_context["anchor_source"],
+                    "anchor_observed_at": season_context[
+                        "anchor_observed_at"
+                    ].isoformat(),
                 },
                 "data_quality": data_quality,
                 "provenance": {
@@ -270,30 +384,25 @@ def get_player_page(
         }
 
 
-def list_player_seasons(database: ApiDatabase, normalized_tag: str) -> list[dict[str, Any]]:
-    """List summarized historical seasons for one player.
-
-    Reads the compact summary table only; it never touches current
-    profile evidence, battle decodes, daily publications, or
-    ranked-day detail.
-    """
+def list_player_seasons(
+    database: ApiDatabase, normalized_tag: str
+) -> list[dict[str, Any]]:
+    """List compact summaries plus official history-only seasons."""
     with database.pool.connection() as connection:
         rows = connection.execute(
             """
             SELECT summary.official_season_id, summary.coverage_state,
                    summary.days_observed, summary.days_missing,
                    summary.start_trophies, summary.end_trophies,
-                   summary.published_at
+                   summary.published_at, summary.season_start
             FROM player_season_summaries AS summary
             JOIN players AS player ON player.id = summary.player_id
             WHERE player.normalized_tag = %s
-            ORDER BY summary.season_start NULLS LAST,
-                     summary.official_season_id
             """,
             (normalized_tag,),
         ).fetchall()
-        return [
-            {
+        seasons = {
+            _text(row[0]): {
                 "official_season_id": _text(row[0]),
                 "coverage_state": _text(row[1]),
                 "days_observed": int(row[2]),
@@ -301,20 +410,48 @@ def list_player_seasons(database: ApiDatabase, normalized_tag: str) -> list[dict
                 "start_trophies": None if row[4] is None else int(row[4]),
                 "end_trophies": None if row[5] is None else int(row[5]),
                 "published_at": row[6].astimezone(UTC).isoformat(),
+                "source": "tracked_summary",
+                "official_history": None,
+                "_sort_start": row[7],
             }
             for row in rows
-        ]
+        }
+        for history in _official_history_rows(connection, normalized_tag):
+            season_id = history["official_season_id"]
+            if season_id in seasons:
+                seasons[season_id]["official_history"] = _official_history_payload(
+                    history
+                )
+                continue
+            seasons[season_id] = {
+                "official_season_id": season_id,
+                "coverage_state": "partial",
+                "days_observed": 0,
+                "days_missing": 28,
+                "start_trophies": None,
+                "end_trophies": history["eod_trophies"],
+                "published_at": None,
+                "source": "official_league_history",
+                "official_history": _official_history_payload(history),
+                "_sort_start": history["season_start"],
+            }
+        ordered = sorted(
+            seasons.values(),
+            key=lambda season: (
+                season["_sort_start"] is None,
+                season["_sort_start"] or datetime.max.replace(tzinfo=UTC),
+                season["official_season_id"],
+            ),
+        )
+        for season in ordered:
+            del season["_sort_start"]
+        return ordered
 
 
 def get_player_season_summary(
     database, normalized_tag: str, official_season_id: str
 ) -> dict[str, Any] | None:
-    """Read one historical season directly from its compact summary.
-
-    Uses shared player identity only. A missing summary returns None
-    (the caller reports unavailable/not found); it never falls back to
-    live detail.
-    """
+    """Read tracked detail when retained, with honest official fallback."""
     with database.pool.connection() as connection:
         cursor = connection.execute(
             """
@@ -327,11 +464,52 @@ def get_player_season_summary(
             (normalized_tag, official_season_id),
         )
         row = cursor.fetchone()
-        if row is None:
+        history_rows = _official_history_rows(
+            connection, normalized_tag, season_id=official_season_id
+        )
+        history = history_rows[0] if history_rows else None
+        if row is not None:
+            columns = [d.name for d in cursor.description]
+            record = dict(zip(columns, row))
+            result = _historical_season_summary(record)
+            result["source"] = "tracked_summary"
+            result["official_history"] = (
+                None if history is None else _official_history_payload(history)
+            )
+            return result
+        if history is None:
             return None
-        columns = [d.name for d in cursor.description]
-        record = dict(zip(columns, row))
-        return _historical_season_summary(record)
+        return {
+            "kind": "player-season-summary",
+            "tag": normalized_tag,
+            "official_season_id": official_season_id,
+            "season_start": history["season_start"].isoformat(),
+            "season_end": history["season_end"].isoformat(),
+            "start_trophies": None,
+            "end_trophies": history["eod_trophies"],
+            "final_rank": history["final_placement"],
+            "attack_count": None,
+            "attack_gain": None,
+            "attack_three_star_count": None,
+            "defense_count": None,
+            "defense_loss": None,
+            "defense_three_star_count": None,
+            "net_trophy_change": None,
+            "attack_stars": {str(star): None for star in range(4)},
+            "attack_stars_unknown": None,
+            "defense_stars": {str(star): None for star in range(4)},
+            "defense_stars_unknown": None,
+            "days_observed": 0,
+            "days_missing": 28,
+            "missing_days": list(range(1, 29)),
+            "coverage_state": "partial",
+            "unresolved_flags": ["tracked_day_detail_unavailable"],
+            "daily_entries": [],
+            "projection_version": "official-league-history-fallback-v1",
+            "published_at": None,
+            "source": "official_league_history",
+            "official_history": _official_history_payload(history),
+        }
 
 
 def search_known_players(
@@ -344,9 +522,7 @@ def search_known_players(
 ) -> list[dict[str, Any]]:
     if not 1 <= limit <= 50:
         raise ValueError("known player search limit is outside the supported range")
-    escaped_query = (
-        query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    )
+    escaped_query = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     with database.pool.connection() as connection:
         rows = connection.execute(
             """
@@ -385,5 +561,3 @@ def search_known_players(
                 }
             )
         return results
-
-

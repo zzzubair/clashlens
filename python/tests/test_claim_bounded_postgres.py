@@ -31,9 +31,10 @@ def _seed_production_depth(connection: psycopg.Connection) -> None:
     """Fill an adversarial production-depth queue over 116,460 observations.
 
     It combines 19,220 supported due jobs with 12,500 old future-schema jobs,
-    12,500 older future-due jobs, and 12,500 expired leases. The plan must find
-    eligible work through compatibility/due/expiry indexes without scanning
-    or sorting any adversarial prefix wholesale.
+    12,500 older future-due jobs, 12,500 exhausted dependency resumptions at
+    retired operator priorities, and 12,500 expired leases. The plan must find
+    eligible work through compatibility/due/expiry indexes without scanning or
+    sorting any adversarial prefix wholesale.
     """
     connection.execute(
         """
@@ -98,6 +99,25 @@ def _seed_production_depth(connection: psycopg.Connection) -> None:
                'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
                'clashlens-domain-rules-v1', 'legend-analytics-v1'
         FROM generate_series(1, 19220) AS i
+        JOIN collector_observations AS observation ON observation.id = i
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO python_processing_jobs (
+            observation_id, work_type, deduplication_key, input_json, status,
+            due_at, priority, created_at, parser_version, processing_version,
+            domain_rule_version, analytics_rule_version, attempt_count,
+            max_attempts
+        )
+        SELECT observation.id, 'process_observation',
+               'process-observation:dependency:' || i, '{}',
+               'waiting_dependency', clock_timestamp() - interval '2 hours',
+               CASE WHEN i % 2 = 0 THEN 10 ELSE 50 END,
+               clock_timestamp() - interval '150 days',
+               'supercell-source-parser-v1', 'clashlens-domain-processing-v1',
+               'clashlens-domain-rules-v1', 'legend-analytics-v1', 5, 5
+        FROM generate_series(56721, 69220) AS i
         JOIN collector_observations AS observation ON observation.id = i
         """
     )
@@ -233,6 +253,16 @@ def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
             assert "python_processing_jobs_pending_claim_v2" in plan_text, (
                 f"claim plan does not use the indexed pending probe:\n{plan_text}"
             )
+            assert "Bitmap Heap Scan on python_processing_jobs" not in plan_text, (
+                f"claim plan reads an unbounded candidate set:\n{plan_text}"
+            )
+            assert "python_processing_jobs_unknown_priority_v2" in plan_text, (
+                f"claim plan does not use the indexed catch-all probe:\n{plan_text}"
+            )
+            assert (
+                "python_processing_jobs_waiting_dependency_unknown_priority_v3"
+                in plan_text
+            ), f"dependency catch-all probe is not bounded:\n{plan_text}"
             # The expiry probe may be served by either dedicated partial index;
             # both are bounded indexed access paths. What matters is that no
             # probe falls back to a sequential scan at production depth.
@@ -386,6 +416,84 @@ def test_unknown_priority_jobs_are_claimable(database_url: str) -> None:
             )
             second = database.claim_job(owner="unknown-second")
             assert second is not None and second.job_id == fresh_known_id
+        finally:
+            database.close()
+
+
+def test_exhausted_dependencies_at_old_priorities_keep_age_fairness(
+    database_url: str,
+) -> None:
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            dependency_id = _insert_job(
+                connection,
+                work_type="process_observation",
+                deduplication_key="unknown:exhausted-dependency",
+                input_json={},
+                observation_id=_insert_observation(
+                    connection, occurrence_key="unknown-exhausted-dependency"
+                ),
+                priority=50,
+            )
+            connection.execute(
+                """
+                UPDATE python_processing_jobs
+                SET status = 'waiting_dependency', attempt_count = max_attempts,
+                    due_at = clock_timestamp() - interval '1 minute',
+                    created_at = clock_timestamp() - interval '3 hours'
+                WHERE id = %s
+                """,
+                (dependency_id,),
+            )
+            second_dependency_id = _insert_job(
+                connection,
+                work_type="process_observation",
+                deduplication_key="unknown:second-exhausted-dependency",
+                input_json={},
+                observation_id=_insert_observation(
+                    connection, occurrence_key="unknown-second-exhausted-dependency"
+                ),
+                priority=10,
+            )
+            connection.execute(
+                """
+                UPDATE python_processing_jobs
+                SET status = 'waiting_dependency', attempt_count = max_attempts,
+                    due_at = clock_timestamp() - interval '1 minute',
+                    created_at = clock_timestamp() - interval '2 hours'
+                WHERE id = %s
+                """,
+                (second_dependency_id,),
+            )
+            for index in range(200):
+                _insert_job(
+                    connection,
+                    work_type="process_observation",
+                    deduplication_key=f"dependency:fresh-{index}",
+                    input_json={},
+                    observation_id=_insert_observation(
+                        connection, occurrence_key=f"dependency-fresh-{index}"
+                    ),
+                )
+            connection.commit()
+
+        database = Database(connection_info)
+        try:
+            claim = database.claim_job(owner="unknown-dependency")
+            assert claim is not None and claim.job_id == dependency_id, (
+                "an old dependency resume must outrank fresh live work even at "
+                "an operator-selected priority"
+            )
+            assert claim.is_dependency_resume
+            assert claim.attempt_count == claim.max_attempts, (
+                "dependency resumptions remain eligible without replenishing "
+                "the ordinary retry budget"
+            )
+            second_claim = database.claim_job(owner="second-unknown-dependency")
+            assert second_claim is not None
+            assert second_claim.job_id == second_dependency_id
+            assert second_claim.is_dependency_resume
+            assert second_claim.attempt_count == second_claim.max_attempts
         finally:
             database.close()
 

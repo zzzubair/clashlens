@@ -1,4 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import {
+  createStaticHandler,
+  createStaticRouter,
+  StaticRouterProvider,
+} from "react-router";
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
@@ -12,10 +19,11 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 
 import type {
   HistoricalSeasonSummary,
+  PlayerPage,
   SummarizedSeasonRef,
 } from "../../app/lib/contracts";
 import { PythonApiError } from "../../app/services/python.server";
-import { loader as playerLoader } from "../../app/routes/player";
+import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 
 const TAG = "#2PP";
 const SEASON = "1785714000";
@@ -44,11 +52,60 @@ const SUMMARY: HistoricalSeasonSummary = {
   unresolvedFlags: [],
   dailyEntries: [],
   publishedAt: "2026-05-29T06:00:00+00:00",
+  source: "tracked_summary",
+  officialHistory: null,
 };
 
 const SEASONS: SummarizedSeasonRef[] = [
-  { seasonId: SEASON, coverageState: "partial", daysObserved: 28, daysMissing: 0 },
+  {
+    seasonId: SEASON,
+    coverageState: "partial",
+    daysObserved: 28,
+    daysMissing: 0,
+    source: "tracked_summary",
+    officialHistory: null,
+  },
 ];
+
+const PLAYER = {
+  kind: "player-page",
+  tag: TAG,
+  profile: {
+    tag: TAG,
+    name: "Nova",
+    clan: "Example",
+    trophies: 6000,
+    freshness: { state: "fresh", observedAt: "2026-08-06T12:00:00Z", ageSeconds: 0 },
+    confidence: "high",
+    coverage: "complete",
+    eligibility: "legend-i",
+  },
+  season: null,
+  currentDay: null,
+  recentDays: [],
+  seasonDays: [],
+  dataQuality: [],
+  provenance: {
+    source: "api_player_daily_logs",
+    observedAt: "2026-08-06T12:00:00Z",
+    freshness: "fresh",
+    confidence: "high",
+    coverage: "complete",
+    version: "v1",
+  },
+} satisfies PlayerPage;
+
+async function renderRoute(data: Awaited<ReturnType<typeof playerLoader>>) {
+  const handler = createStaticHandler([
+    { path: "/players/:tag", Component: PlayerRoute, loader: () => data },
+  ]);
+  const context = await handler.query(
+    new Request("https://clashlens.example/players/%232PP?season=missing"),
+  );
+  if (context instanceof Response) throw new Error("unexpected route response");
+  const router = createStaticRouter(handler.dataRoutes, context);
+  return renderToString(createElement(StaticRouterProvider, { router, context }));
+}
 
 function requestFor(season: string | null) {
   const target = season === null ? "/players/%232PP" : `/players/%232PP?season=${season}`;
@@ -92,6 +149,39 @@ describe("player route historical independence", () => {
     expect(data.player).toBeNull();
     expect(data.historical).toBeNull();
     expect(data.historicalError).not.toBeNull();
+  });
+
+  it("keeps retained history discoverable without a current profile", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi.fn().mockRejectedValue(new PythonApiError(404, { error: "missing" })),
+      getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+      getPlayerSeason: vi.fn(),
+    });
+    const data = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute({ ...data, selectedSeason: null });
+    expect(html).toContain(`season=${SEASON}`);
+  });
+
+  it("does not show current-day content for a requested missing season", async () => {
+    const html = await renderRoute({
+      requestedTag: TAG,
+      player: PLAYER,
+      error: null,
+      refreshStatus: null,
+      refreshError: null,
+      noJsIdempotencyKey: "test-idempotency-key",
+      seasons: SEASONS,
+      selectedSeason: "missing",
+      historical: null,
+      historicalError: {
+        error: { code: "missing", message: "That season is unavailable." },
+      },
+    });
+    expect(html).not.toContain("Current Legend day");
+    expect(html).not.toContain("Legend season");
   });
 
   it.each(["", ".data"])(

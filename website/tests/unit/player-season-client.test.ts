@@ -24,7 +24,7 @@ function seasonPayload() {
     defense_stars: { "0": 0, "1": 28, "2": 0, "3": 0 },
     defense_stars_unknown: 0,
     days_observed: 28,
-    days_missing: [],
+    days_missing: 0,
     missing_days: [],
     coverage_state: "partial",
     unresolved_flags: [],
@@ -52,6 +52,42 @@ function seasonPayload() {
     ],
     projection_version: "player-season-summary-v1",
     published_at: "2026-05-29T06:00:00+00:00",
+    source: "tracked_summary",
+    official_history: null,
+  };
+}
+
+function officialSeasonPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    ...seasonPayload(),
+    official_season_id: "1781499600",
+    season_start: "2026-06-15T05:00:00+00:00",
+    season_end: "2026-07-13T05:00:00+00:00",
+    source: "official_league_history",
+    start_trophies: null,
+    end_trophies: 5812,
+    final_rank: 12,
+    attack_count: null,
+    attack_gain: null,
+    defense_count: null,
+    defense_loss: null,
+    net_trophy_change: null,
+    attack_stars: { "0": null, "1": null, "2": null, "3": null },
+    defense_stars: { "0": null, "1": null, "2": null, "3": null },
+    attack_stars_unknown: null,
+    defense_stars_unknown: null,
+    days_observed: 0,
+    days_missing: 28,
+    missing_days: Array.from({ length: 28 }, (_, index) => index + 1),
+    daily_entries: [],
+    published_at: null,
+    official_history: {
+      source: "official_league_history",
+      observed_at: "2026-08-04T12:05:00+00:00",
+      eod_trophies: 5812,
+      final_placement: 12,
+    },
+    ...overrides,
   };
 }
 
@@ -67,6 +103,8 @@ function seasonsPayload() {
         start_trophies: 6000,
         end_trophies: 6280,
         published_at: "2026-05-29T06:00:00+00:00",
+        source: "tracked_summary",
+        official_history: null,
       },
     ],
   };
@@ -115,6 +153,8 @@ describe("historical player-season client boundary", () => {
         coverageState: "partial",
         daysObserved: 28,
         daysMissing: 0,
+        source: "tracked_summary",
+        officialHistory: null,
       },
     ]);
 
@@ -184,12 +224,45 @@ describe("historical player-season client boundary", () => {
     expect(partialDay.adjustmentTotal).toBe(-15);
   });
 
-  it("rejects missing unknown-star totals and non-integer adjustment amounts", async () => {
+  it("keeps official history separate when tracked day detail is unavailable", async () => {
+    const payload = officialSeasonPayload();
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(payload), { status: 200 })),
+    );
+    process.env.NODE_ENV = "test";
+    process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+    const { createPythonClient } = await import("../../app/services/python.server");
+
+    const summary = await createPythonClient().getPlayerSeason("#2PP", "1781499600");
+
+    expect(summary.source).toBe("official_league_history");
+    expect(summary.attackStars["3"]).toBeNull();
+    expect(summary.officialHistory).toEqual({
+      observedAt: "2026-08-04T12:05:00+00:00",
+      eodTrophies: 5812,
+      finalPlacement: 12,
+    });
+  });
+
+  it("rejects missing star totals, invented official stars, and bad adjustments", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({ ...seasonPayload(), attack_stars_unknown: undefined }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify(
+            officialSeasonPayload({
+              attack_stars: { "0": null, "1": null, "2": null, "3": 1 },
+            }),
+          ),
           { status: 200 },
         ),
       )
@@ -208,6 +281,9 @@ describe("historical player-season client boundary", () => {
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
     const { createPythonClient } = await import("../../app/services/python.server");
+    await expect(
+      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
     await expect(
       createPythonClient().getPlayerSeason("#2PP", "1785714000"),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
@@ -242,6 +318,31 @@ describe("historical player-season client boundary", () => {
           }),
           { status: 200 },
         ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify(
+            officialSeasonPayload({ season_end: "2026-06-16T05:00:00+00:00" }),
+          ),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            tag: "#2PP",
+            seasons: [
+              {
+                ...seasonsPayload().seasons[0],
+                source: "official_league_history",
+                days_observed: 0,
+                days_missing: 28,
+                official_history: officialSeasonPayload().official_history,
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
       );
     vi.stubGlobal("fetch", fetchMock);
     process.env.NODE_ENV = "test";
@@ -257,5 +358,12 @@ describe("historical player-season client boundary", () => {
     await expect(
       createPythonClient().getPlayerSeason("#2PP", "1785714000"),
     ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
+    await expect(
+      createPythonClient().getPlayerSeason("#2PP", "1785714000"),
+    ).rejects.toMatchObject({ status: 502, payload: { error: "malformed" } });
+    await expect(createPythonClient().getPlayerSeasons("#2PP")).rejects.toMatchObject({
+      status: 502,
+      payload: { error: "malformed" },
+    });
   });
 });

@@ -1,0 +1,38 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens worker
+PartOf=clashlens.target
+Requires=clashlens-postgres.service
+After=clashlens-postgres.service
+
+[Container]
+Label=org.clashlens.managed=ops
+Image=@@PYTHON_IMAGE@@
+Pull=never
+ContainerName=@@PREFIX@@-python-worker
+Pod=clashlens.pod
+StartWithPod=false
+EnvironmentFile=@@ENV_DIR@@/worker.env
+Volume=@@SPOOL_ROOT@@:/spool:rw,z
+Secret=clashlens-worker-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400
+Secret=clashlens-worker-archive-access-key,type=mount,target=/run/secrets/archive-access-key,uid=10001,gid=10001,mode=0400
+Secret=clashlens-worker-archive-secret-key,type=mount,target=/run/secrets/archive-secret-key,uid=10001,gid=10001,mode=0400
+ReadOnly=true
+Tmpfs=/tmp:rw,noexec,nosuid,nodev,size=32m
+DropCapability=all
+NoNewPrivileges=true
+Memory=@@WORKER_MEMORY@@
+PidsLimit=@@WORKER_PIDS@@
+PodmanArgs=--cpus=@@WORKER_CPUS@@
+HealthCmd=python -m clashlens.cli ready --expected-contract-version 5
+HealthInterval=30s
+HealthTimeout=20s
+HealthRetries=6
+HealthOnFailure=kill
+Notify=healthy
+Exec=worker --owner production-python-1 --max-jobs 100 --lease-seconds @@WORKER_LEASE@@ --concurrency @@WORKER_CONCURRENCY@@ --database-pool-size @@WORKER_DB_POOL@@ --archive-pool-size @@WORKER_ARCHIVE_POOL@@ --run-forever @@WORKER_ARGS@@
+
+[Service]
+Restart=always
+TimeoutStartSec=5min
+TimeoutStopSec=@@WORKER_STOP@@

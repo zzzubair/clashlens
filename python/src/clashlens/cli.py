@@ -201,6 +201,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _database_argument(queue_status)
 
+    failed_items = subparsers.add_parser(
+        "failed-items",
+        help="list collector failures or explicitly retry collection/upload work",
+    )
+    _database_argument(failed_items)
+    failed_items.add_argument(
+        "--limit", type=_bounded_int("failed-item limit", 1, 100), default=20
+    )
+    failed_selector = failed_items.add_mutually_exclusive_group()
+    failed_selector.add_argument(
+        "--work-id", type=_bounded_int("collector work ID", 1, 9223372036854775807)
+    )
+    failed_selector.add_argument("--upload-hash")
+    failed_items.add_argument("--apply", action="store_true")
+
     prune_history = subparsers.add_parser(
         "prune-history",
         help="preview or prune redundant completed history (operator database role)",
@@ -413,6 +428,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             finally:
                 database.close()
             return 0
+        if arguments.command == "failed-items":
+            import psycopg
+
+            from .operator_recovery import inspect_failed_items, retry_failed_item
+
+            if (
+                arguments.apply
+                and arguments.work_id is None
+                and arguments.upload_hash is None
+            ):
+                raise ValueError("--apply requires --work-id or --upload-hash")
+            if arguments.upload_hash is not None and not re.fullmatch(
+                r"[0-9a-f]{64}", arguments.upload_hash
+            ):
+                raise ValueError("upload hash must be a lowercase SHA-256 digest")
+            with psycopg.connect(_database_url(arguments)) as connection:
+                if arguments.work_id is None and arguments.upload_hash is None:
+                    report = inspect_failed_items(connection, limit=arguments.limit)
+                else:
+                    report = retry_failed_item(
+                        connection,
+                        work_id=arguments.work_id,
+                        upload_hash=arguments.upload_hash,
+                        apply=arguments.apply,
+                    )
+            print(json.dumps(report, sort_keys=True, default=str))
+            return 1 if report.get("outcome") == "refused" else 0
         if arguments.command == "prune-archive":
             import psycopg
 
@@ -792,8 +834,8 @@ def _run_worker(arguments: argparse.Namespace) -> int:
                 )
             )
         processor = ObservationProcessor(database, archive)
-        reevaluate = (
-            lambda: boundary_publication.reevaluate_boundary_publications(database)
+        reevaluate = lambda: (
+            boundary_publication.reevaluate_boundary_publications(database)
             if isinstance(database, _db.Database)
             else None
         )

@@ -7,6 +7,8 @@ import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation
 
+from clashlens import api_players
+from clashlens.api_db import ApiDatabase
 from clashlens.db import Database
 from clashlens.league_history import (
     LEAGUE_HISTORY_ENDPOINT_VERSION,
@@ -102,9 +104,7 @@ def test_league_history_parser_rejects_unsupported_bodies(body: bytes) -> None:
         "malformed_json" if body == b"not-json" else "unsupported_league_history_schema"
     )
     with pytest.raises(LeagueHistoryParseError, match=expected):
-        parse_league_history(
-            body, expected_tag="#2PP", observed_at=OBSERVED_AT
-        )
+        parse_league_history(body, expected_tag="#2PP", observed_at=OBSERVED_AT)
 
 
 def test_complete_league_history_stores_season_rows(
@@ -126,9 +126,7 @@ def test_complete_league_history_stores_season_rows(
         )
         database = Database(connection_info)
         try:
-            claim = database.claim_job(
-                owner="league-history-worker", job_id=job_id
-            )
+            claim = database.claim_job(owner="league-history-worker", job_id=job_id)
             assert claim is not None
             assert claim.endpoint == "league_history"
             history = parse_league_history(
@@ -156,6 +154,125 @@ def test_complete_league_history_stores_season_rows(
         assert outcome == ("processed",)
 
 
+def test_public_season_reader_uses_only_valid_legend_history(
+    database_url: str, archive_server
+) -> None:
+    weekly_id = str(int(datetime(2026, 6, 22, 5, 0, tzinfo=UTC).timestamp()))
+    off_phase_legend_id = str(int(datetime(2026, 6, 29, 5, 0, tzinfo=UTC).timestamp()))
+    incomplete_legend_id = str(int(datetime(2026, 7, 13, 5, 0, tzinfo=UTC).timestamp()))
+    older_legend_id = str(int(datetime(2026, 5, 18, 5, 0, tzinfo=UTC).timestamp()))
+    body = _payload(
+        _entry(),
+        _entry(
+            leagueSeasonId=weekly_id,
+            leagueTierId=105000035,
+            leagueTrophies=5700,
+        ),
+        _entry(leagueSeasonId=off_phase_legend_id, leagueTrophies=5750),
+        _entry(leagueSeasonId=incomplete_legend_id, leagueTrophies=5900),
+        _entry(
+            leagueSeasonId=older_legend_id,
+            leagueTrophies=-1,
+            placement=0,
+        ),
+    )
+    with domain_database(database_url) as connection_info:
+        _observation_id, job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="league-history:public-reader",
+            endpoint="league_history",
+            body=body,
+            observed_at=OBSERVED_AT,
+            normalized_tag="#2PP",
+            parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+            processing_version="clashlens-domain-processing-v1",
+            domain_rule_version="clashlens-domain-rules-v1",
+        )
+        worker = Database(connection_info)
+        try:
+            claim = worker.claim_job(owner="league-history-worker", job_id=job_id)
+            assert claim is not None
+            complete_league_history(
+                worker,
+                claim,
+                parse_league_history(
+                    body, expected_tag="#2PP", observed_at=OBSERVED_AT
+                ),
+            )
+        finally:
+            worker.close()
+
+        api = ApiDatabase(connection_info)
+        try:
+            seasons = api_players.list_player_seasons(api, "#2PP")
+            detail = api_players.get_player_season_summary(api, "#2PP", "1781499600")
+            assert (
+                api_players.get_player_season_summary(api, "#2PP", off_phase_legend_id)
+                is None
+            )
+            assert (
+                api_players.get_player_season_summary(api, "#2PP", incomplete_legend_id)
+                is None
+            )
+            with api.pool.connection() as connection:
+                retained = connection.execute(
+                    "SELECT count(*) FROM player_league_history_entries"
+                ).fetchone()
+        finally:
+            api.close()
+
+    assert retained == (5,)
+    assert seasons == [
+        {
+            "official_season_id": older_legend_id,
+            "coverage_state": "partial",
+            "days_observed": 0,
+            "days_missing": 28,
+            "start_trophies": None,
+            "end_trophies": None,
+            "published_at": None,
+            "source": "official_league_history",
+            "official_history": {
+                "source": "official_league_history",
+                "observed_at": OBSERVED_AT.isoformat(),
+                "eod_trophies": None,
+                "final_placement": None,
+            },
+        },
+        {
+            "official_season_id": "1781499600",
+            "coverage_state": "partial",
+            "days_observed": 0,
+            "days_missing": 28,
+            "start_trophies": None,
+            "end_trophies": 5812,
+            "published_at": None,
+            "source": "official_league_history",
+            "official_history": {
+                "source": "official_league_history",
+                "observed_at": OBSERVED_AT.isoformat(),
+                "eod_trophies": 5812,
+                "final_placement": 12,
+            },
+        },
+    ]
+    assert detail is not None
+    assert detail["source"] == "official_league_history"
+    assert detail["season_start"] == "2026-06-15T05:00:00+00:00"
+    assert detail["season_end"] == "2026-07-13T05:00:00+00:00"
+    assert detail["end_trophies"] == 5812
+    assert detail["final_rank"] == 12
+    assert detail["days_observed"] == 0
+    assert detail["missing_days"] == list(range(1, 29))
+    assert detail["attack_count"] is None
+    assert detail["attack_stars"] == {str(star): None for star in range(4)}
+    serialized = json.dumps(detail)
+    assert "account" not in serialized
+    assert "provider" not in serialized
+    assert "source_json" not in serialized
+
+
 def test_complete_league_history_upserts_repeated_seasons(
     database_url: str, archive_server
 ) -> None:
@@ -177,9 +294,7 @@ def test_complete_league_history_upserts_repeated_seasons(
                     processing_version="clashlens-domain-processing-v1",
                     domain_rule_version="clashlens-domain-rules-v1",
                 )
-                claim = database.claim_job(
-                    owner="league-history-worker", job_id=job_id
-                )
+                claim = database.claim_job(owner="league-history-worker", job_id=job_id)
                 assert claim is not None
                 complete_league_history(
                     database,
@@ -223,9 +338,7 @@ def test_complete_league_history_ignores_stale_replays(
                     processing_version="clashlens-domain-processing-v1",
                     domain_rule_version="clashlens-domain-rules-v1",
                 )
-                claim = database.claim_job(
-                    owner="league-history-worker", job_id=job_id
-                )
+                claim = database.claim_job(owner="league-history-worker", job_id=job_id)
                 assert claim is not None
                 complete_league_history(
                     database,

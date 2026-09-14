@@ -658,6 +658,10 @@ class _ReplayInterleaveConnection:
         return getattr(self.__dict__["_real"], name)
 
 
+class _CollectionInterleaveConnection(_ReplayInterleaveConnection):
+    _FENCE_NEEDLE = "FOR UPDATE OF observation"
+
+
 def test_discovery_prune_replay_committed_before_recheck_preserves_rows(
     database_url: str, archive_server
 ) -> None:
@@ -699,6 +703,72 @@ def test_discovery_prune_replay_committed_before_recheck_preserves_rows(
                 "SELECT count(*) FROM known_player_discoveries WHERE observation_id = %s",
                 (observation,),
             ).fetchone()[0] == 1
+
+
+def test_collection_prune_recheck_preserves_newly_protected_observation(
+    database_url: str, archive_server
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        target_observation = target_job = target_work = None
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for endpoint, fixture in [
+                ("profile", PROFILE_FIXTURE),
+                ("battle_log", BATTLE_FIXTURE),
+            ]:
+                for index in range(3):
+                    observation_id, job_id = store_observation(
+                        connection_info,
+                        archive_server,
+                        occurrence_key=f"collection-race-{endpoint}-{index}",
+                        endpoint=endpoint,
+                        body=fixture.read_bytes(),
+                        observed_at=OLD + timedelta(minutes=index),
+                        normalized_tag="#2PP",
+                    )
+                    result = processor.process_job(job_id, owner="collection-race")
+                    assert result is not None and result.outcome == "processed"
+                    work_id = _attach_complete_work(connection_info, observation_id)
+                    if endpoint == "battle_log" and index == 1:
+                        target_observation = observation_id
+                        target_job = job_id
+                        target_work = work_id
+        finally:
+            database.close()
+        assert target_observation is not None
+        assert target_job is not None
+        assert target_work is not None
+        _age_work(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            assert prune_completed_history(connection)["eligible_collection_jobs"] == 2
+            fired = []
+
+            def protect_processing_job():
+                fired.append(True)
+                with psycopg.connect(connection_info) as processing_connection:
+                    processing_connection.execute(
+                        "UPDATE python_processing_jobs "
+                        "SET updated_at = clock_timestamp() WHERE id = %s",
+                        (target_job,),
+                    )
+                    processing_connection.commit()
+
+            with psycopg.connect(connection_info) as cleanup_connection:
+                proxy = _CollectionInterleaveConnection(
+                    cleanup_connection, protect_processing_job
+                )
+                report = prune_completed_history(proxy, apply=True)
+            assert fired == [True]
+            assert report["eligible_collection_jobs"] == 1
+            assert report["deleted_collection_jobs"] == 1
+            assert connection.execute(
+                "SELECT count(*) FROM collector_observations WHERE id = %s",
+                (target_observation,),
+            ).fetchone()[0] == 1
+            assert connection.execute(
+                "SELECT battle_log_observation_id FROM collector_work WHERE id = %s",
+                (target_work,),
+            ).fetchone()[0] == target_observation
 
 
 def test_prune_preview_returns_idle_and_apply_visible_externally(

@@ -219,6 +219,15 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 """,
                 (player[0], observation_id, player[0]),
             )
+            # A newly discovered player starts inactive while its first profile
+            # is still unknown. Cancel ordinary discovery only after a trusted
+            # profile has classified the player as ineligible; explicit Refresh
+            # and frozen Reset work must continue, and their evidence remains
+            # referenced independently.
+            connection.execute(
+                "SELECT clashlens_cancel_inactive_discovery_work(%s)",
+                (player[0],),
+            )
             reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
@@ -1055,7 +1064,6 @@ def _profile_semantic_projection(profile: ParsedProfile) -> dict[str, Any]:
         "season_anchor_state": profile.season_anchor_state,
         "clan_name": clan_name,
     }
-
 
 
 

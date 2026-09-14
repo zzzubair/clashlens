@@ -1,9 +1,7 @@
 import type {
   ArmyAnalytics,
-  BattleArmy,
   HistoricalSeasonSummary,
   PlayerPage,
-  RankedBattleEvent,
   RefreshStatus,
   RefreshWork,
   SearchResponse,
@@ -47,23 +45,30 @@ import {
   decodeSecretValue,
   loadSecretFile,
 } from "../server/signer.server";
+import {
+  mapHistoricalSeason,
+  mapPlayerPage,
+  mapPlayerSeasons,
+} from "./player-response.server";
+import {
+  PythonApiError,
+  isCanonicalPlayerTag,
+  isFiniteNumber,
+  isInteger,
+  isNullableString,
+  isOneOf,
+  isRecord,
+  isResetTimestamp,
+  isString,
+  isUtcTimestamp,
+} from "./python-response.server";
+
+export { PythonApiError } from "./python-response.server";
 
 const DEFAULT_CALLER = "typescript-website";
 const DEFAULT_KEY_ID = "current";
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-
-export class PythonApiError extends Error {
-  readonly status: number;
-  readonly payload: unknown;
-
-  constructor(status: number, payload: unknown) {
-    super("private Python service request failed");
-    this.name = "PythonApiError";
-    this.status = status;
-    this.payload = payload;
-  }
-}
 
 interface ClientConfig {
   baseUrl: URL;
@@ -298,25 +303,7 @@ async function getPlayerSeasons(tag: string): Promise<SummarizedSeasonRef[]> {
     undefined,
     undefined,
   );
-  if (!isRecord(payload) || !Array.isArray(payload.seasons))
-    throw new PythonApiError(502, { error: "malformed" });
-  return payload.seasons.map((value) => {
-    if (
-      !isRecord(value) ||
-      !isString(value.official_season_id) ||
-      value.official_season_id.length === 0 ||
-      !isOneOf(value.coverage_state, ["complete", "partial"] as const) ||
-      !isInteger(value.days_observed) ||
-      !isInteger(value.days_missing)
-    )
-      throw new PythonApiError(502, { error: "malformed" });
-    return {
-      seasonId: value.official_season_id,
-      coverageState: value.coverage_state,
-      daysObserved: value.days_observed,
-      daysMissing: value.days_missing,
-    };
-  });
+  return mapPlayerSeasons(payload);
 }
 
 async function getPlayerSeason(
@@ -330,123 +317,6 @@ async function getPlayerSeason(
     undefined,
   );
   return mapHistoricalSeason(payload);
-}
-
-function mapHistoricalSeason(payload: unknown): HistoricalSeasonSummary {
-  if (
-    !isRecord(payload) ||
-    payload.kind !== "player-season-summary" ||
-    !isCanonicalPlayerTag(payload.tag) ||
-    !isString(payload.official_season_id) ||
-    payload.official_season_id.length === 0 ||
-    !(payload.season_start === null || isString(payload.season_start)) ||
-    !(payload.season_end === null || isString(payload.season_end)) ||
-    !isOneOf(payload.coverage_state, ["complete", "partial"] as const) ||
-    !Array.isArray(payload.daily_entries) ||
-    payload.daily_entries.length > 28 ||
-    !Array.isArray(payload.unresolved_flags) ||
-    !payload.unresolved_flags.every(isString) ||
-    !Array.isArray(payload.missing_days) ||
-    !payload.missing_days.every(isInteger) ||
-    !isInteger(payload.days_observed) ||
-    !isRecord(payload.attack_stars) ||
-    !isRecord(payload.defense_stars) ||
-    !isInteger(payload.attack_stars_unknown) ||
-    !isInteger(payload.defense_stars_unknown)
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  const counts = [
-    payload.attack_count,
-    payload.attack_gain,
-    payload.defense_count,
-    payload.defense_loss,
-    payload.net_trophy_change,
-    payload.start_trophies,
-    payload.end_trophies,
-  ];
-  if (!counts.every((item) => item === null || isInteger(item)))
-    throw new PythonApiError(502, { error: "malformed" });
-  if (
-    !(payload.final_rank === null || isInteger(payload.final_rank)) ||
-    !(payload.published_at === null || isString(payload.published_at))
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  for (const stars of [payload.attack_stars, payload.defense_stars]) {
-    if (!["0", "1", "2", "3"].every((key) => isInteger(stars[key])))
-      throw new PythonApiError(502, { error: "malformed" });
-  }
-  const dailyEntries = payload.daily_entries.map((value) => {
-    if (
-      !isRecord(value) ||
-      !(value.season_day_number === null || isInteger(value.season_day_number)) ||
-      !isString(value.ranked_day_start) ||
-      !(value.ranked_day_end === null || isString(value.ranked_day_end)) ||
-      !isString(value.state) ||
-      !isString(value.coverage) ||
-      typeof value.has_adjustment !== "boolean" ||
-      !Array.isArray(value.flags) ||
-      !value.flags.every(isString)
-    )
-      throw new PythonApiError(502, { error: "malformed" });
-    const metrics = [
-      value.start_trophies,
-      value.end_trophies,
-      value.attack_gain,
-      value.defense_loss,
-      value.net_change,
-      value.attack_count,
-      value.defense_count,
-      value.adjustment_total,
-    ];
-    if (!metrics.every((item) => item === null || isInteger(item)))
-      throw new PythonApiError(502, { error: "malformed" });
-    // Compact entries carry no battle drilldown.
-    if ("battle_id" in value || "battles" in value || "opponent" in value)
-      throw new PythonApiError(502, { error: "malformed" });
-    return {
-      dayNumber: value.season_day_number as number | null,
-      period: isString(value.ranked_day_end)
-        ? `${value.ranked_day_start} – ${value.ranked_day_end}`
-        : (value.ranked_day_start as string),
-      startTrophies: value.start_trophies as number | null,
-      endTrophies: value.end_trophies as number | null,
-      attackGain: value.attack_gain as number | null,
-      defenseLoss: value.defense_loss as number | null,
-      netChange: value.net_change as number | null,
-      attacks: value.attack_count as number | null,
-      defenses: value.defense_count as number | null,
-      state: value.state as string,
-      coverage: value.coverage as string,
-      hasAdjustment: value.has_adjustment as boolean,
-      adjustmentTotal: value.adjustment_total as number | null,
-      flags: value.flags as string[],
-    };
-  });
-  return {
-    kind: "player-season-summary",
-    tag: payload.tag,
-    seasonId: payload.official_season_id,
-    seasonStart: payload.season_start as string | null,
-    seasonEnd: payload.season_end as string | null,
-    startTrophies: payload.start_trophies as number | null,
-    endTrophies: payload.end_trophies as number | null,
-    finalRank: payload.final_rank as number | null,
-    attackCount: payload.attack_count as number | null,
-    attackGain: payload.attack_gain as number | null,
-    defenseCount: payload.defense_count as number | null,
-    defenseLoss: payload.defense_loss as number | null,
-    netTrophyChange: payload.net_trophy_change as number | null,
-    attackStars: payload.attack_stars as Record<string, number>,
-    defenseStars: payload.defense_stars as Record<string, number>,
-    attackStarsUnknown: payload.attack_stars_unknown,
-    defenseStarsUnknown: payload.defense_stars_unknown,
-    daysObserved: payload.days_observed,
-    daysMissing: payload.missing_days as number[],
-    coverageState: payload.coverage_state,
-    unresolvedFlags: payload.unresolved_flags as string[],
-    dailyEntries,
-    publishedAt: payload.published_at as string | null,
-  };
 }
 
 async function requestPlayerRefresh(
@@ -624,49 +494,6 @@ function getConfig(): ClientConfig {
   }
   cachedConfig = { baseUrl, caller, keyId, key };
   return cachedConfig;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-function isString(value: unknown): value is string {
-  return typeof value === "string";
-}
-
-function isUtcTimestamp(value: unknown): value is string {
-  return (
-    isString(value) && Number.isFinite(Date.parse(value)) && /(?:Z|\+00:00)$/.test(value)
-  );
-}
-
-function isResetTimestamp(value: unknown): value is string {
-  if (!isUtcTimestamp(value)) return false;
-  const match = /^(\d{4}-\d{2}-\d{2})T05:00:00(?:Z|\+00:00)$/.exec(value);
-  return (
-    match !== null &&
-    new Date(value).toISOString().slice(0, 19) === `${match[1]}T05:00:00`
-  );
-}
-
-function isNullableString(value: unknown): value is string | null {
-  return value === null || isString(value);
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function isInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value);
-}
-
-function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
-  return isString(value) && values.includes(value as T);
-}
-
-function isCanonicalPlayerTag(value: unknown): value is string {
-  return isString(value) && normalizePlayerTag(value) === value;
 }
 
 function mapRefresh(
@@ -937,61 +764,6 @@ function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {
   };
 }
 
-function mapBattleArmy(value: unknown): BattleArmy | null {
-  if (value === null) return null;
-  if (
-    !isRecord(value) ||
-    !isOneOf(value.state, ["decoded", "partial", "failed"] as const) ||
-    !(value.failure_reason === null || isString(value.failure_reason)) ||
-    !Array.isArray(value.components) ||
-    !Array.isArray(value.unknown_components) ||
-    !isString(value.decoder_version) ||
-    !isString(value.catalog_version)
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  const components = value.components.map((item) => {
-    if (
-      !isRecord(item) ||
-      !isString(item.typed_id) ||
-      !isString(item.name) ||
-      !isInteger(item.quantity) ||
-      item.quantity < 1 ||
-      !isString(item.origin)
-    )
-      throw new PythonApiError(502, { error: "malformed" });
-    return {
-      typedId: item.typed_id,
-      name: item.name,
-      quantity: item.quantity,
-      origin: item.origin,
-    };
-  });
-  const unknownComponents = value.unknown_components.map((item) => {
-    if (
-      !isRecord(item) ||
-      !isInteger(item.numeric_id) ||
-      !isInteger(item.quantity) ||
-      !isString(item.section) ||
-      !isString(item.origin)
-    )
-      throw new PythonApiError(502, { error: "malformed" });
-    return {
-      numericId: item.numeric_id,
-      quantity: item.quantity,
-      section: item.section,
-      origin: item.origin,
-    };
-  });
-  return {
-    state: value.state,
-    failureReason: value.failure_reason,
-    components,
-    unknownComponents,
-    decoderVersion: value.decoder_version,
-    catalogVersion: value.catalog_version,
-  };
-}
-
 function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
   if (
     !isRecord(payload) ||
@@ -1126,153 +898,6 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
   };
 }
 
-function mapPlayerPage(payload: unknown): PlayerPage {
-  if (
-    !isRecord(payload) ||
-    !isCanonicalPlayerTag(payload.tag) ||
-    !isString(payload.name) ||
-    !isInteger(payload.trophies) ||
-    !isRecord(payload.screen_ready)
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  const screen = payload.screen_ready;
-  const mapEvent = (value: unknown, lens: "offense" | "defense"): RankedBattleEvent => {
-    if (
-      !isRecord(value) ||
-      !isString(value.battle_id) ||
-      value.battle_id.length === 0 ||
-      !isUtcTimestamp(value.battle_timestamp) ||
-      !isRecord(value.opponent) ||
-      !isCanonicalPlayerTag(value.opponent.tag) ||
-      !isNullableString(value.opponent.name) ||
-      !isInteger(value.destruction_percentage) ||
-      value.destruction_percentage < 0 ||
-      value.destruction_percentage > 100 ||
-      !isInteger(value.stars) ||
-      value.stars < 0 ||
-      value.stars > 3 ||
-      !isInteger(value.trophy_change) ||
-      (lens === "offense" && value.trophy_change < 0) ||
-      (lens === "defense" && value.trophy_change > 0)
-    )
-      throw new PythonApiError(502, { error: "malformed" });
-    return {
-      battleId: value.battle_id,
-      battleTimestamp: value.battle_timestamp,
-      opponent: {
-        tag: value.opponent.tag,
-        name: value.opponent.name,
-      },
-      destructionPercentage: value.destruction_percentage,
-      stars: value.stars,
-      trophyChange: value.trophy_change,
-      perspectiveDisagreement: value.perspective_disagreement === true,
-      army: mapBattleArmy(value.army ?? null),
-    };
-  };
-  const mapDay = (value: unknown) => {
-    if (
-      !isRecord(value) ||
-      !isString(value.ranked_day_start) ||
-      !isNullableString(value.ranked_day_end) ||
-      !isOneOf(value.state, ["Live", "Complete", "Partial"] as const) ||
-      !(
-        value.confidence === null ||
-        isOneOf(value.confidence, ["exact", "inferred", "partial", "uncertain"] as const)
-      ) ||
-      !isRecord(value.completeness) ||
-      !isOneOf(value.completeness.state, ["complete", "partial", "uncertain"] as const) ||
-      !isString(value.completeness.reason) ||
-      !isOneOf(value.public_confidence, ["high", "partial", "uncertain"] as const) ||
-      !Array.isArray(value.uncertainty_reasons) ||
-      !value.uncertainty_reasons.every(isString) ||
-      !(value.season_day_number === null || isInteger(value.season_day_number)) ||
-      !Array.isArray(value.offense_events) ||
-      value.offense_events.length > 8 ||
-      !Array.isArray(value.defense_events) ||
-      value.defense_events.length > 8
-    )
-      throw new PythonApiError(502, { error: "malformed" });
-    const valid = [
-      value.attack_count,
-      value.attack_three_star_count,
-      value.attack_gain,
-      value.defense_count,
-      value.defense_three_star_count,
-      value.defense_loss,
-      value.net_trophy_change,
-    ].every((item) => item === null || isInteger(item));
-    if (!valid) throw new PythonApiError(502, { error: "malformed" });
-    return {
-      dayNumber: value.season_day_number as number | null,
-      label: "Ranked day",
-      period: isString(value.ranked_day_end)
-        ? `${value.ranked_day_start} – ${value.ranked_day_end}`
-        : value.ranked_day_start,
-      state: value.state,
-      offense: {
-        attacks: value.attack_count as number | null,
-        threeStars: value.attack_three_star_count as number | null,
-        trophyGain: value.attack_gain as number | null,
-      },
-      defense: {
-        defenses: value.defense_count as number | null,
-        threeStarsAgainst: value.defense_three_star_count as number | null,
-        trophyLoss: value.defense_loss as number | null,
-      },
-      trophyChange: value.net_trophy_change as number | null,
-      offenseEvents: value.offense_events.map((event) => mapEvent(event, "offense")),
-      defenseEvents: value.defense_events.map((event) => mapEvent(event, "defense")),
-      completeness: {
-        state: value.completeness.state as "complete" | "partial" | "uncertain",
-        reason: value.completeness.reason as string,
-      },
-      uncertainty: value.uncertainty_reasons as string[],
-    };
-  };
-  if (screen.current_day !== null && screen.current_day !== undefined)
-    mapDay(screen.current_day);
-  if (!Array.isArray(screen.recent_days))
-    throw new PythonApiError(502, { error: "malformed" });
-  if (!Array.isArray(screen.season_days))
-    throw new PythonApiError(502, { error: "malformed" });
-  return {
-    kind: "player-page",
-    tag: payload.tag,
-    profile: {
-      tag: payload.tag,
-      name: payload.name,
-      clan: isString(payload.clan) ? payload.clan : "Unknown",
-      trophies: payload.trophies,
-      freshness: {
-        state:
-          payload.freshness === "fresh" || payload.freshness === "stale"
-            ? payload.freshness
-            : "unknown",
-        observedAt: isString(payload.observed_at) ? payload.observed_at : "",
-        ageSeconds: isFiniteNumber(payload.age_seconds) ? payload.age_seconds : 0,
-      },
-      confidence: isOneOf(payload.public_confidence, [
-        "high",
-        "partial",
-        "uncertain",
-      ] as const)
-        ? payload.public_confidence
-        : "uncertain",
-      coverage: isSnakeProvenance(screen.provenance)
-        ? (screen.provenance.coverage as "complete" | "partial" | "missing" | "unknown")
-        : "missing",
-      eligibility: payload.eligibility === "eligible" ? "legend-i" : "uncertain",
-    },
-    season: mapSeason(screen.season),
-    currentDay: screen.current_day === null ? null : mapDay(screen.current_day),
-    recentDays: screen.recent_days.map(mapDay),
-    seasonDays: screen.season_days.map(mapDay),
-    dataQuality: mapDataQuality(screen.data_quality),
-    provenance: mapSnakeProvenanceRequired(screen.provenance),
-  };
-}
-
 function isSnakeCoverage(value: unknown): value is Record<string, unknown> {
   return (
     isRecord(value) &&
@@ -1353,11 +978,6 @@ function mapLiveLeaderboardProvenance(value: unknown, sourceObservations: unknow
   };
 }
 
-function mapSnakeProvenanceRequired(value: unknown) {
-  if (!isSnakeProvenance(value)) throw new PythonApiError(502, { error: "malformed" });
-  return mapSnakeProvenance(value);
-}
-
 function mapSourceObservations(value: unknown): TrackedLeaderboard["sourceObservations"] {
   if (
     !isRecord(value) ||
@@ -1372,47 +992,6 @@ function mapSourceObservations(value: unknown): TrackedLeaderboard["sourceObserv
     newestObservedAt: value.newest_observed_at,
     staleCount: value.stale_count,
   };
-}
-
-function mapSeason(value: unknown): PlayerPage["season"] {
-  if (value === null) return null;
-  if (
-    !isRecord(value) ||
-    !isString(value.id) ||
-    !isString(value.start) ||
-    !isString(value.end) ||
-    !isInteger(value.current_day_number)
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  return {
-    id: value.id,
-    anchor: value.start,
-    currentDayNumber: value.current_day_number,
-    dayCount: 28,
-  };
-}
-
-function mapDataQuality(value: unknown): PlayerPage["dataQuality"] {
-  if (
-    !Array.isArray(value) ||
-    !value.every(
-      (item) =>
-        isRecord(item) &&
-        isOneOf(item.code, [
-          "stale",
-          "partial",
-          "uncertain",
-          "unavailable",
-          "malformed",
-          "unclassified",
-          "rate-limited",
-        ] as const) &&
-        isString(item.label) &&
-        isString(item.detail),
-    )
-  )
-    throw new PythonApiError(502, { error: "malformed" });
-  return value as PlayerPage["dataQuality"];
 }
 
 type AccountOperations = Pick<

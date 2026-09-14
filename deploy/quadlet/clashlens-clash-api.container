@@ -1,0 +1,23 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens fixture official API
+PartOf=clashlens.target
+
+[Container]
+Label=org.clashlens.managed=ops
+Image=@@FIXTURES_IMAGE@@
+Pull=never
+ContainerName=@@PREFIX@@-clash-api
+Pod=clashlens.pod
+StartWithPod=false
+HealthCmd=["CMD","python","-c","import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3).status == 200"]
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=12
+HealthOnFailure=kill
+Notify=healthy
+Exec=clash --host 0.0.0.0 --port 8080 --players 200
+
+[Service]
+Restart=always
+TimeoutStartSec=3min

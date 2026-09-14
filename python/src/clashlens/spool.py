@@ -439,18 +439,22 @@ class Spool:
         with self._capacity_lock():
             return self._scan_locked()
 
-    def _capacity_facts_locked(self, limit: int) -> None:
+    def _capacity_facts_locked(
+        self, limit: int, *, reserved_bytes: int, reserved_objects: int
+    ) -> None:
         capacity = filesystem_capacity(self.root)
         if capacity["inode_model"] == "unknown":
             raise SpoolError("degraded_capacity: spool unknown filesystem capacity")
         if (
             self.free_space_floor
-            and int(capacity["free_bytes"]) < self.free_space_floor + limit
+            and int(capacity["free_bytes"])
+            < self.free_space_floor + reserved_bytes + limit
         ):
             raise SpoolError("degraded_capacity: spool free-space floor reached")
         if (
             capacity["inode_model"] == "finite"
-            and int(capacity["free_inodes"]) < self.free_inode_floor + 1
+            and int(capacity["free_inodes"])
+            < self.free_inode_floor + reserved_objects + 1
         ):
             raise SpoolError("degraded_capacity: spool free-inode floor reached")
 
@@ -466,7 +470,11 @@ class Spool:
         )
         if bytes_used + limit > self.max_bytes or objects_used + 1 > self.max_objects:
             raise SpoolError("degraded_capacity: spool reservation denied")
-        self._capacity_facts_locked(limit)
+        self._capacity_facts_locked(
+            limit,
+            reserved_bytes=counts["reserved_bytes"],
+            reserved_objects=counts["reserved_objects"],
+        )
 
     def _activate_reservation(self, reservation: SpoolReservation) -> None:
         if reservation.spool is not self:
@@ -537,6 +545,21 @@ class Spool:
         with self._capacity_lock():
             return self._verify_unlocked(digest, expected_size)
 
+    def probe_writable(self, limit: int | None = None) -> None:
+        """Prove a full-size response can be durably written and removed."""
+        size = self.max_body_bytes if limit is None else limit
+        with self.reservation(size) as reservation:
+            try:
+                # Avoid a sparse or compressed all-zero file. This probe must
+                # consume the same physical capacity as a worst-case response.
+                self._write_temp(os.urandom(size), reservation)
+            finally:
+                temporary_name = reservation._temporary_name
+                if temporary_name is not None:
+                    with self._capacity_lock():
+                        self._remove_temp_locked(temporary_name)
+                    reservation._temporary_name = None
+
     def _write_temp(self, body: bytes, reservation: SpoolReservation) -> str:
         with self._capacity_lock():
             tmp_fd = self._sub_dir_fd("tmp")
@@ -556,7 +579,12 @@ class Spool:
             os.fchmod(fd, 0o600)
             os.fsync(fd)
         except BaseException:
-            os.close(fd)
+            try:
+                os.close(fd)
+            finally:
+                with self._capacity_lock():
+                    self._remove_temp_locked(name)
+                reservation._temporary_name = None
             raise
         os.close(fd)
         with self._capacity_lock():

@@ -1,0 +1,38 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens private API
+PartOf=clashlens.target
+Requires=clashlens-postgres.service
+After=clashlens-postgres.service
+
+[Container]
+Label=org.clashlens.managed=ops
+Image=@@PYTHON_IMAGE@@
+Pull=never
+ContainerName=@@PREFIX@@-python-api
+Pod=clashlens.pod
+StartWithPod=false
+EnvironmentFile=@@ENV_DIR@@/api.env
+Secret=clashlens-api-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400
+Secret=clashlens-hmac-current,type=mount,target=/run/secrets/clashlens-hmac-current,uid=10001,gid=10001,mode=0400
+Secret=clashlens-hmac-previous,type=mount,target=/run/secrets/clashlens-hmac-previous,uid=10001,gid=10001,mode=0400
+Secret=clashlens-interactive-1,type=mount,target=/run/secrets/clashlens-interactive-1,uid=10001,gid=10001,mode=0400
+ReadOnly=true
+Tmpfs=/tmp:rw,noexec,nosuid,nodev,size=16m
+DropCapability=all
+NoNewPrivileges=true
+Memory=@@API_MEMORY@@
+PidsLimit=@@API_PIDS@@
+PodmanArgs=--cpus=@@API_CPUS@@
+HealthCmd=["CMD","python","-c","import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8000/readyz',timeout=3).status == 200"]
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=6
+HealthOnFailure=kill
+Notify=healthy
+Exec=serve --host 0.0.0.0 --port 8000 @@API_ARGS@@
+
+[Service]
+Restart=always
+TimeoutStartSec=5min
+TimeoutStopSec=45

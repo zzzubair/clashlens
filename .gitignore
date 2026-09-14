@@ -7,5 +7,6 @@
 *.secret
 /results/
 /.clashlens-dev/
+/.clashlens-ops/
 **/__pycache__/
 .tmp-test-private/

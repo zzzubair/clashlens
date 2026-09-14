@@ -10,3 +10,5 @@ website/build/
 website/.react-router/
 website/playwright-report/
 website/test-results/
+**/__pycache__/
+**/*.py[cod]
