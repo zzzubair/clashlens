@@ -74,11 +74,17 @@ def _check_season_lens(season_id: str, lens: str) -> None:
         raise ValueError("unsupported army summary lens")
 
 
-def acquire_army_season_lock(connection: Any, season_id: str) -> None:
-    """Compatibility name for the shared retirement season lock."""
-    from .season_retirement import acquire_season_lock
+def acquire_army_season_lock(connection: Any, season_id: str, lens: str) -> None:
+    """Serialize whole-season materialization for one lens.
 
-    acquire_season_lock(connection, season_id)
+    The shared retirement season lock only fences retirement; same-lens
+    writers serialize on this finer key so a refresh always projects from
+    the last committed build.
+    """
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"army-season-summary:{season_id}:{lens}",),
+    )
 
 
 def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
@@ -174,8 +180,10 @@ def materialize_army_season(
 ) -> dict[str, Any]:
     """Project and atomically store one season-lens across all categories.
 
-    Competing writers for the same season serialize on the shared
-    season advisory lock (see acquire_army_season_lock). All categories publish together:
+    Competing writers for the same season-lens serialize on the
+    transaction-scoped advisory lock from acquire_army_season_lock; the
+    shared season lock only fences retirement, so the two lenses of one
+    season materialize concurrently. All categories publish together:
     any failure raises and aborts the whole lens, so the prior complete
     lens stays readable and a lens is never published partially.
     Unchanged categories are a no-op that leaves the existing rows
@@ -187,11 +195,11 @@ def materialize_army_season(
     _check_season_lens(season_id, lens)
     from .season_retirement import (
         SEASON_DETAIL_RETIRED,
-        acquire_season_lock,
+        acquire_season_lock_shared,
         is_season_detail_retired,
     )
 
-    acquire_season_lock(connection, season_id)
+    acquire_season_lock_shared(connection, season_id)
     if is_season_detail_retired(connection, season_id):
         return {
             "season_id": season_id,
@@ -202,7 +210,7 @@ def materialize_army_season(
             "failures": [],
             "content_digests": {},
         }
-    acquire_army_season_lock(connection, season_id)
+    acquire_army_season_lock(connection, season_id, lens)
     projected = _project_lens(connection, season_id, lens)
     report: dict[str, Any] = {
         "season_id": season_id,
@@ -296,11 +304,11 @@ def materialize_completed_army_season(
         raise ValueError("official season id is outside the supported range")
     from .season_retirement import (
         SEASON_DETAIL_RETIRED,
-        acquire_season_lock,
+        acquire_season_lock_shared,
         is_season_detail_retired,
     )
 
-    acquire_season_lock(connection, season_id)
+    acquire_season_lock_shared(connection, season_id)
     if is_season_detail_retired(connection, season_id):
         return {
             "season_id": season_id,
