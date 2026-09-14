@@ -332,6 +332,8 @@ class ClashHandler(QuietHandler):
                 )
             elif mutation == "ignored":
                 payload["ignoredTrialMarker"] = type(self).mutation_tick(tag)
+            if type(self).trial_generation:
+                payload["_trialGeneration"] = type(self).trial_generation
             self.send_json(200, payload)
         elif league_history:
             type(self).record_trial_request("league_history", tag.upper())
@@ -348,6 +350,8 @@ class ClashHandler(QuietHandler):
                 payload["achievements"] = [
                     {"name": "Trial Marker", "value": payload["donations"]}
                 ]
+            if type(self).trial_generation:
+                payload["_trialGeneration"] = type(self).trial_generation
             self.send_json(200, payload)
 
     def do_POST(self) -> None:
