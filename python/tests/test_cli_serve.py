@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from clashlens import cli
+from clashlens import api_verification, cli
 
 
 def _secret_text(value: bytes) -> str:
@@ -150,9 +150,9 @@ def _track_pool_close(monkeypatch) -> list[cli.ApiDatabase]:
 
 def _skip_credential_registration(monkeypatch) -> None:
     monkeypatch.setattr(
-        cli.ApiDatabase,
+        api_verification,
         "register_official_credential",
-        lambda self, fingerprint: None,
+        lambda database, fingerprint: None,
     )
 
 
@@ -167,12 +167,12 @@ def test_serve_app_closes_database_pool_when_credential_registration_fails(
 ) -> None:
     arguments = _serve_arguments(tmp_path)
 
-    def fail_registration(self, fingerprint: str) -> None:
-        del self, fingerprint
+    def fail_registration(database: cli.ApiDatabase, fingerprint: str) -> None:
+        del database, fingerprint
         raise RuntimeError("credential registration exploded")
 
     monkeypatch.setattr(
-        cli.ApiDatabase, "register_official_credential", fail_registration
+        api_verification, "register_official_credential", fail_registration
     )
     closed = _track_pool_close(monkeypatch)
 

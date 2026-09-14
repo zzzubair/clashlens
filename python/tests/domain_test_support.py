@@ -13,16 +13,25 @@ import psycopg
 from psycopg.conninfo import make_conninfo
 from psycopg.types.json import Jsonb
 
+from clashlens import army_ingestion, boundary_publication
+
 
 def text(value: Any) -> Any:
     return value.decode("utf-8") if isinstance(value, bytes) else value
 
 
-def enable_direct_army_fixture(database: Any) -> None:
+def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
     """Exercise historical army calculation through a v5-shaped fixture job."""
-    original_complete = database.complete_army_analytics
+    original_complete = army_ingestion.complete_army_analytics
+    original_enqueue = boundary_publication._enqueue_army_analytics
 
-    def enqueue(connection: Any, *, ranked_day_start: datetime) -> None:
+    def enqueue(
+        target: Any, connection: Any, *, ranked_day_start: datetime
+    ) -> None:
+        if target is not database:
+            return original_enqueue(
+                target, connection, ranked_day_start=ranked_day_start
+            )
         if getattr(database, "_suppress_fixture_enqueue", False):
             return
         ranked_day_start = ranked_day_start.astimezone(UTC)
@@ -76,16 +85,18 @@ def enable_direct_army_fixture(database: Any) -> None:
             ),
         )
 
-    def complete(claim: Any) -> None:
+    def complete(target: Any, claim: Any) -> None:
+        if target is not database:
+            return original_complete(target, claim)
         direct_input = {
             key: value
             for key, value in claim.input_json.items()
             if key not in {"generation", "manifest_id", "manifest_digest"}
         }
-        original_complete(replace(claim, input_json=direct_input))
+        original_complete(target, replace(claim, input_json=direct_input))
 
-    database._enqueue_army_analytics = enqueue
-    database.complete_army_analytics = complete
+    monkeypatch.setattr(boundary_publication, "_enqueue_army_analytics", enqueue)
+    monkeypatch.setattr(army_ingestion, "complete_army_analytics", complete)
 
 
 @contextmanager

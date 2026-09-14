@@ -7,7 +7,7 @@ import psycopg
 import pytest
 from test_api_migration import migrated_production_database
 
-from clashlens import cli
+from clashlens import api_accounts, cli
 from clashlens.api_db import ApiDatabase, RequestBinding
 from clashlens.verification import OfficialVerificationResponse
 
@@ -30,7 +30,7 @@ def _seed_account_with_verified_player(
     google_subject: str,
     username: str,
 ) -> str:
-    result = database.create_account(
+    result = api_accounts.create_account(database,
         RequestBinding(
             request_id=str(uuid4()),
             caller="typescript-website",
@@ -47,7 +47,7 @@ def _seed_account_with_verified_player(
         display_name=username.title(),
     )
     assert result.status_code == 201
-    account = database.resolve_account("google", google_subject)
+    account = api_accounts.resolve_account(database, "google", google_subject)
     assert account is not None
     with psycopg.connect(connection_info) as connection:
         connection.execute(
@@ -153,7 +153,7 @@ def test_recovery_attaches_discord_after_token_verification(
             payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
             assert payload["status"] == "attached"
 
-            resolved = database.resolve_account("discord", "1234567890123456789")
+            resolved = api_accounts.resolve_account(database, "discord", "1234567890123456789")
             assert resolved is not None
             assert resolved.username == "recoveruser"
 
@@ -205,7 +205,7 @@ def test_recovery_refuses_an_invalid_current_token(
             assert code == 1
             payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
             assert payload["status"] == "invalid_token"
-            assert database.resolve_account("discord", "1234567890123456789") is None
+            assert api_accounts.resolve_account(database, "discord", "1234567890123456789") is None
         finally:
             database.close()
 
@@ -224,7 +224,7 @@ def test_recovery_refuses_a_discord_identity_owned_elsewhere(
                 google_subject="recover-google-subject",
                 username="recoveruser",
             )
-            other = database.create_account(
+            other = api_accounts.create_account(database,
                 RequestBinding(
                     request_id=str(uuid4()),
                     caller="typescript-website",
@@ -254,7 +254,7 @@ def test_recovery_refuses_a_discord_identity_owned_elsewhere(
             assert code == 1
             payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
             assert payload["status"] == "refused_collision"
-            owner = database.resolve_account("discord", "1111111111111111111")
+            owner = api_accounts.resolve_account(database, "discord", "1111111111111111111")
             assert owner is not None
             assert owner.username == "other"
 
@@ -287,7 +287,7 @@ def test_recovery_audits_a_failed_player_account_mismatch(
                 google_subject="recover-google-subject",
                 username="recoveruser",
             )
-            other = database.create_account(
+            other = api_accounts.create_account(database,
                 RequestBinding(
                     request_id=str(uuid4()),
                     caller="typescript-website",
@@ -304,7 +304,7 @@ def test_recovery_audits_a_failed_player_account_mismatch(
                 display_name="Otherplayer",
             )
             assert other.status_code == 201
-            other_account = database.resolve_account("google", "other-google-subject")
+            other_account = api_accounts.resolve_account(database, "google", "other-google-subject")
             assert other_account is not None
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
@@ -355,7 +355,7 @@ def test_recovery_audits_a_failed_player_account_mismatch(
             assert code == 1
             payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
             assert payload["status"] == "player_not_verified_on_account"
-            assert database.resolve_account("discord", "1234567890123456789") is None
+            assert api_accounts.resolve_account(database, "discord", "1234567890123456789") is None
 
             with psycopg.connect(connection_info) as connection:
                 audits = connection.execute(

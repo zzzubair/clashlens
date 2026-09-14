@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from collections.abc import Callable, Mapping
@@ -13,6 +14,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import (
+    api_accounts,
+    api_analytics,
+    api_leaderboard,
+    api_players,
+    api_verification,
+)
 from .accounts import normalize_display_name, normalize_group_name, normalize_username
 from .api_db import (
     API_CONTRACT_VERSION,
@@ -312,7 +320,7 @@ def create_app(
             content={
                 "query": q,
                 "known_only": True,
-                "results": production_database.search_known_players(
+                "results": api_players.search_known_players(production_database,
                     q,
                     now=current_time(),
                     freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
@@ -325,7 +333,7 @@ def create_app(
     def player(tag: str, request: Request) -> JSONResponse:
         _authorize(request, "player.read", production_database)
         normalized_tag = _safe_tag(tag)
-        result = production_database.get_player_page(
+        result = api_players.get_player_page(production_database,
             normalized_tag,
             now=current_time(),
             freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
@@ -343,7 +351,7 @@ def create_app(
             content=_json_safe(
                 {
                     "tag": normalized_tag,
-                    "seasons": production_database.list_player_seasons(normalized_tag),
+                    "seasons": api_players.list_player_seasons(production_database, normalized_tag),
                 }
             ),
         )
@@ -354,7 +362,7 @@ def create_app(
         normalized_tag = _safe_tag(tag)
         if not 1 <= len(season_id) <= 128:
             raise ApiError(422, "invalid_request")
-        result = production_database.get_player_season_summary(
+        result = api_players.get_player_season_summary(production_database,
             normalized_tag, season_id
         )
         if result is None:
@@ -363,7 +371,9 @@ def create_app(
 
     @app.post("/v1/players/{tag}/refresh")
     async def refresh(tag: str, request: Request) -> JSONResponse:
-        context = _authorize(request, "refresh.submit", production_database)
+        context = await asyncio.to_thread(
+            _authorize, request, "refresh.submit", production_database
+        )
         if await request.body():
             raise ApiError(422, "invalid_request")
         normalized_tag = _safe_tag(tag)
@@ -373,7 +383,9 @@ def create_app(
             "refresh.submit",
             {"tag": normalized_tag},
         )
-        result = production_database.submit_refresh(
+        result = await asyncio.to_thread(
+            api_accounts.submit_refresh,
+            production_database,
             binding,
             normalized_tag=normalized_tag,
             cooldown_seconds=30,
@@ -384,7 +396,7 @@ def create_app(
     def refresh_status(refresh_id: str, request: Request) -> JSONResponse:
         _authorize(request, "refresh.status", production_database)
         _safe_uuid(refresh_id)
-        result = production_database.get_refresh_status(refresh_id)
+        result = api_accounts.get_refresh_status(production_database, refresh_id)
         if result is None:
             raise ApiError(404, "refresh_not_found")
         return JSONResponse(status_code=200, content=result)
@@ -406,14 +418,14 @@ def create_app(
         if kind == "live":
             if official_season_id is not None:
                 raise ApiError(422, "invalid_request")
-            result = production_database.get_live_leaderboard(
+            result = api_leaderboard.get_live_leaderboard(production_database,
                 limit=limit,
                 offset=offset,
                 now=current_time(),
                 freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
             )
         else:
-            result = production_database.get_frozen_leaderboard(
+            result = api_leaderboard.get_frozen_leaderboard(production_database,
                 limit=limit,
                 offset=offset,
                 official_season_id=official_season_id,
@@ -450,7 +462,7 @@ def create_app(
         except ValueError as error:
             raise ApiError(422, "invalid_army_analytics_selection") from error
         try:
-            result = production_database.get_army_analytics(
+            result = api_analytics.get_army_analytics(production_database,
                 selection, now=current_time()
             )
         except CurrentSeasonEmpty as empty:
@@ -495,7 +507,7 @@ def create_app(
             )
         except ValueError as error:
             raise ApiError(422, "invalid_army_analytics_selection") from error
-        result = production_database.get_army_season_summary(
+        result = api_analytics.get_army_season_summary(production_database,
             selection.season, selection.lens, selection.category, selection.sort
         )
         if result is None:
@@ -511,7 +523,7 @@ def create_app(
         _authorize(request, "player.read", production_database)
         if battle_id < 1:
             raise ApiError(422, "invalid_request")
-        result = production_database.get_battle_army(battle_id, perspective)
+        result = api_analytics.get_battle_army(production_database, battle_id, perspective)
         if result is None:
             raise ApiError(404, "battle_army_not_found")
         return JSONResponse(status_code=200, content=_json_safe(result))
@@ -521,7 +533,7 @@ def create_app(
         _authorize(request, "analytics.read", production_database)
         return JSONResponse(
             status_code=200,
-            content=production_database.get_basic_analytics(
+            content=api_analytics.get_basic_analytics(production_database,
                 now=current_time(),
                 freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
             ),
@@ -534,7 +546,7 @@ def create_app(
             normalized_username = normalize_username(username)
         except ValueError as error:
             raise ApiError(404, "user_not_found") from error
-        result = production_database.get_public_user(normalized_username)
+        result = api_accounts.get_public_user(production_database, normalized_username)
         if result is None:
             raise ApiError(404, "user_not_found")
         return JSONResponse(status_code=200, content=result)
@@ -561,7 +573,7 @@ def create_app(
             "account.create",
             {"username": username, "display_name": display_name},
         )
-        result = production_database.create_account(
+        result = api_accounts.create_account(production_database,
             binding,
             username=username,
             normalized_username=username,
@@ -573,7 +585,7 @@ def create_app(
     def get_account(request: Request) -> JSONResponse:
         context = _authorize(request, "account.read", production_database)
         assert production_database is not None and context.account is not None
-        result = production_database.get_account(context.account.internal_id)
+        result = api_accounts.get_account(production_database, context.account.internal_id)
         if result is None:
             raise ApiError(404, "account_not_found")
         return JSONResponse(status_code=200, content=result)
@@ -589,7 +601,7 @@ def create_app(
             raise ApiError(422, "invalid_request") from error
         if len(json.dumps(body.preferences, separators=(",", ":")).encode()) > 4096:
             raise ApiError(422, "invalid_request")
-        result = production_database.update_account(
+        result = api_accounts.update_account(production_database,
             _binding(
                 request,
                 context,
@@ -614,7 +626,7 @@ def create_app(
         return JSONResponse(
             status_code=200,
             content={
-                "players": production_database.list_saved_players(
+                "players": api_accounts.list_saved_players(production_database,
                     context.account.internal_id
                 )
             },
@@ -625,7 +637,7 @@ def create_app(
         context = _authorize(request, "saved_tags.write", production_database)
         assert production_database is not None
         tag = _safe_tag(body.tag)
-        result = production_database.add_saved_player(
+        result = api_accounts.add_saved_player(production_database,
             _binding(request, context, "saved_tags.add", {"tag": tag}),
             normalized_tag=tag,
         )
@@ -636,7 +648,7 @@ def create_app(
         context = _authorize(request, "saved_tags.write", production_database)
         assert production_database is not None
         normalized_tag = _safe_tag(tag)
-        result = production_database.remove_saved_player(
+        result = api_accounts.remove_saved_player(production_database,
             _binding(request, context, "saved_tags.remove", {"tag": normalized_tag}),
             normalized_tag=normalized_tag,
         )
@@ -649,7 +661,7 @@ def create_app(
         return JSONResponse(
             status_code=200,
             content={
-                "groups": production_database.list_groups(context.account.internal_id)
+                "groups": api_accounts.list_groups(production_database, context.account.internal_id)
             },
         )
 
@@ -658,7 +670,7 @@ def create_app(
         context = _authorize(request, "groups.write", production_database)
         assert production_database is not None
         name, normalized_name, tags = _group_values(body)
-        result = production_database.create_group(
+        result = api_accounts.create_group(production_database,
             _binding(
                 request,
                 context,
@@ -677,7 +689,7 @@ def create_app(
         assert production_database is not None
         _safe_uuid(group_id)
         name, normalized_name, tags = _group_values(body)
-        result = production_database.update_group(
+        result = api_accounts.update_group(production_database,
             _binding(
                 request,
                 context,
@@ -696,7 +708,7 @@ def create_app(
         context = _authorize(request, "groups.write", production_database)
         assert production_database is not None
         _safe_uuid(group_id)
-        result = production_database.delete_group(
+        result = api_accounts.delete_group(production_database,
             _binding(request, context, "groups.delete", {"group_id": group_id}),
             group_id=group_id,
         )
@@ -706,7 +718,7 @@ def create_app(
     def summary(request: Request) -> JSONResponse:
         context = _authorize(request, "summary.read", production_database)
         assert production_database is not None and context.account is not None
-        result = production_database.get_multi_account_summary(
+        result = api_accounts.get_multi_account_summary(production_database,
             context.account.internal_id
         )
         if result is None:
@@ -717,7 +729,7 @@ def create_app(
     def submit_export(body: ExportBody, request: Request) -> JSONResponse:
         context = _authorize(request, "exports.submit", production_database)
         assert production_database is not None
-        result = production_database.submit_export(
+        result = api_accounts.submit_export(production_database,
             _binding(request, context, "exports.submit", {"format": body.format}),
             export_format=body.format,
         )
@@ -728,7 +740,7 @@ def create_app(
         context = _authorize(request, "exports.read", production_database)
         assert production_database is not None and context.account is not None
         _safe_uuid(export_id)
-        result = production_database.get_export_status(
+        result = api_accounts.get_export_status(production_database,
             context.account.internal_id, export_id
         )
         if result is None:
@@ -743,7 +755,7 @@ def create_app(
         assert production_database is not None and context.account is not None
         if provider not in _ALLOWED_PROVIDERS:
             raise ApiError(404, "provider_not_found")
-        result = production_database.link_provider(
+        result = api_accounts.link_provider(production_database,
             _binding(
                 request,
                 context,
@@ -767,7 +779,7 @@ def create_app(
         assert production_database is not None and context.account is not None
         if provider not in _ALLOWED_PROVIDERS:
             raise ApiError(404, "provider_not_found")
-        result = production_database.unlink_provider(
+        result = api_accounts.unlink_provider(production_database,
             _binding(
                 request,
                 context,
@@ -782,7 +794,9 @@ def create_app(
 
     @app.post("/v1/players/{tag}/verifytoken")
     async def verify_player_token(tag: str, request: Request) -> JSONResponse:
-        context = _authorize(request, "player_links.verify", production_database)
+        context = await asyncio.to_thread(
+            _authorize, request, "player_links.verify", production_database
+        )
         assert production_database is not None and context.account is not None
         normalized_tag = _safe_tag(tag)
         binding = _binding(
@@ -791,8 +805,11 @@ def create_app(
             "player_links.verify",
             {"tag": normalized_tag},
         )
-        reservation = production_database.reserve_verification(
-            binding, normalized_tag=normalized_tag
+        reservation = await asyncio.to_thread(
+            api_verification.reserve_verification,
+            production_database,
+            binding,
+            normalized_tag=normalized_tag,
         )
         if not reservation.fresh:
             assert reservation.result is not None
@@ -800,13 +817,17 @@ def create_app(
         try:
             token = _strict_verification_token(await request.body(), request.headers)
         except ApiError:
-            result = production_database.complete_invalid_verification_request(
+            result = await asyncio.to_thread(
+                api_verification.complete_invalid_verification_request,
+                production_database,
                 binding,
                 completed_at=current_time(),
             )
             return _operation_response(result)
         if verification_client is None or official_credential_fingerprint is None:
-            result = production_database.complete_verification(
+            result = await asyncio.to_thread(
+                api_verification.complete_verification,
+                production_database,
                 binding,
                 normalized_tag=normalized_tag,
                 outcome=VerificationOutcome.UNAVAILABLE,
@@ -814,12 +835,16 @@ def create_app(
                 completed_at=current_time(),
             )
             return _operation_response(result)
-        permit = production_database.acquire_official_permit(
+        permit = await asyncio.to_thread(
+            api_verification.acquire_official_permit,
+            production_database,
             official_credential_fingerprint,
             request_id=binding.request_id,
         )
         if not permit.granted:
-            result = production_database.complete_verification(
+            result = await asyncio.to_thread(
+                api_verification.complete_verification,
+                production_database,
                 binding,
                 normalized_tag=normalized_tag,
                 outcome=VerificationOutcome.UNAVAILABLE,
@@ -828,7 +853,9 @@ def create_app(
             )
             return _operation_response(result)
         try:
-            official_response = verification_client.verify(normalized_tag, token)
+            official_response = await asyncio.to_thread(
+                verification_client.verify, normalized_tag, token
+            )
             classification = classify_official_response(
                 official_response.http_status, official_response.body
             )
@@ -837,13 +864,17 @@ def create_app(
         except Exception:  # noqa: BLE001 - never repeat an ambiguous source call.
             classification = classify_transport_ambiguity()
         try:
-            production_database.apply_official_key_action(
+            await asyncio.to_thread(
+                api_verification.apply_official_key_action,
+                production_database,
                 official_credential_fingerprint,
                 classification.key_action,
                 cooldown_seconds=verification_cooldown_seconds,
             )
         except Exception:  # noqa: BLE001 - close the durable reservation safely.
-            result = production_database.complete_verification(
+            result = await asyncio.to_thread(
+                api_verification.complete_verification,
+                production_database,
                 binding,
                 normalized_tag=normalized_tag,
                 outcome=VerificationOutcome.UNAVAILABLE,
@@ -851,7 +882,9 @@ def create_app(
                 completed_at=current_time(),
             )
             return _operation_response(result)
-        result = production_database.complete_verification(
+        result = await asyncio.to_thread(
+            api_verification.complete_verification,
+            production_database,
             binding,
             normalized_tag=normalized_tag,
             outcome=classification.outcome,
@@ -887,7 +920,7 @@ def _authorize(
         ) and proof.provider not in _ALLOWED_PROVIDERS:
             raise ApiError(403, "caller_operation_not_authorized")
         account = (
-            database.resolve_account(proof.provider, proof.provider_subject)
+            api_accounts.resolve_account(database, proof.provider, proof.provider_subject)
             if database is not None and proof.provider in _ALLOWED_PROVIDERS
             else None
         )
@@ -903,7 +936,7 @@ def _authorize(
         or not proof.provider_subject
     ):
         raise ApiError(403, "caller_operation_not_authorized")
-    account = database.resolve_account(proof.provider, proof.provider_subject)
+    account = api_accounts.resolve_account(database, proof.provider, proof.provider_subject)
     if account is None and not allow_unresolved_identity:
         raise ApiError(403, "account_not_found")
     return _AuthorizationContext(proof, account)

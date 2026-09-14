@@ -6,6 +6,15 @@ from threading import Event, Lock
 from time import monotonic
 from typing import Any
 
+from . import (
+    army_ingestion,
+    battle_ingestion,
+    boundary_publication,
+    ingestion,
+    job_outcomes,
+    reconciliation_db,
+    snapshots,
+)
 from .archive import ArchiveReadError, ArchiveReadResult, S3ArchiveReader
 from .battle import (
     BattleLogParseError,
@@ -276,7 +285,7 @@ class ObservationProcessor:
                 )
             try:
                 self.database.renew_claim(claim, lease_seconds=lease_seconds)
-                self.database.complete_reconciliation(claim)
+                reconciliation_db.complete_reconciliation(self.database, claim)
             except LeaseLost:
                 return ProcessResult(claim.job_id, "lease_lost")
             except DomainRuleError as error:
@@ -298,9 +307,9 @@ class ObservationProcessor:
             try:
                 self.database.renew_claim(claim, lease_seconds=lease_seconds)
                 if claim.work_type == "build_snapshot":
-                    self.database.complete_snapshot(claim)
+                    snapshots.complete_snapshot(self.database, claim)
                 else:
-                    self.database.complete_analytics(claim)
+                    boundary_publication.complete_analytics(self.database, claim)
             except LeaseLost:
                 return ProcessResult(claim.job_id, "lease_lost")
             except DomainRuleError as error:
@@ -331,9 +340,9 @@ class ObservationProcessor:
             try:
                 self.database.renew_claim(claim, lease_seconds=max(lease_seconds, 300))
                 if claim.work_type == "build_army_analytics":
-                    self.database.complete_army_analytics(claim)
+                    army_ingestion.complete_army_analytics(self.database, claim)
                 else:
-                    self.database.complete_army_redecode(claim)
+                    army_ingestion.complete_army_redecode(self.database, claim)
             except LeaseLost:
                 return ProcessResult(claim.job_id, "lease_lost")
             except DomainRuleError as error:
@@ -417,7 +426,8 @@ class ObservationProcessor:
             self._record_stage("python_lease_renew", renewal_started_at)
         except ArchiveReadError as error:
             try:
-                state = self.database.fail_claim(
+                state = job_outcomes.fail_claim(
+                    self.database,
                     claim,
                     category=error.category,
                     detail=str(error),
@@ -437,7 +447,9 @@ class ObservationProcessor:
             return self._fail(claim, "missing_http_status", retryable=False)
         if claim.http_status < 200 or claim.http_status >= 300:
             try:
-                self.database.complete_classified(claim, outcome="source_non_success")
+                job_outcomes.complete_classified(
+                    self.database, claim, outcome="source_non_success"
+                )
             except LeaseLost:
                 return ProcessResult(claim.job_id, "lease_lost")
             return ProcessResult(claim.job_id, "classified", "non_success")
@@ -459,7 +471,7 @@ class ObservationProcessor:
                 )
                 self._record_stage("python_parse_profile", parse_started_at)
                 domain_started_at = monotonic()
-                self.database.complete_profile(claim, profile)
+                ingestion.complete_profile(self.database, claim, profile)
                 self._record_stage("python_domain_profile", domain_started_at)
                 outcome = "processed"
             elif claim.endpoint == "battle_log":
@@ -475,7 +487,9 @@ class ObservationProcessor:
                 )
                 self._record_stage("python_parse_battle_log", parse_started_at)
                 domain_started_at = monotonic()
-                self.database.complete_battle_log(claim, battle_log)
+                battle_ingestion.complete_battle_log(
+                    self.database, claim, battle_log
+                )
                 self._record_stage("python_domain_battle_log", domain_started_at)
                 outcome = (
                     "processed_with_gaps" if battle_log.has_row_gap else "processed"
@@ -506,7 +520,7 @@ class ObservationProcessor:
                 )
                 self._record_stage("python_parse_rankings", parse_started_at)
                 domain_started_at = monotonic()
-                self.database.complete_rankings(claim, rankings)
+                ingestion.complete_rankings(self.database, claim, rankings)
                 self._record_stage("python_domain_rankings", domain_started_at)
                 outcome = "processed"
         except (
@@ -550,8 +564,8 @@ class ObservationProcessor:
         if error.category != "season_detail_retired":
             raise error
         try:
-            self.database.complete_terminal(
-                claim, outcome="season_detail_retired"
+            job_outcomes.complete_terminal(
+                self.database, claim, outcome="season_detail_retired"
             )
         except LeaseLost:
             return ProcessResult(claim.job_id, "lease_lost")
@@ -566,7 +580,8 @@ class ObservationProcessor:
         retryable: bool,
     ) -> ProcessResult:
         try:
-            state = self.database.fail_claim(
+            state = job_outcomes.fail_claim(
+                self.database,
                 claim,
                 category=category,
                 detail=detail or category,

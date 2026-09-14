@@ -12,6 +12,7 @@ from domain_test_support import (
 )
 from psycopg.types.json import Jsonb
 
+from clashlens import army_ingestion, boundary_publication
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
@@ -21,10 +22,10 @@ SEASON_ID = "1783918800"
 FIXTURE_CODE = "h0p9e14_32d1x53u2x58-1x97s2x2"
 
 
-def _processor(connection_info: str, archive_server):
+def _processor(connection_info: str, archive_server, monkeypatch):
     database = Database(connection_info)
     database._supports_army_season_summaries = False
-    enable_direct_army_fixture(database)
+    enable_direct_army_fixture(database, monkeypatch)
     processor = ObservationProcessor(
         database,
         S3ArchiveReader(
@@ -143,7 +144,7 @@ def _mark_day_complete(database: Database, *, trophies: int = 6000) -> None:
             """,
             (player_id, DAY_START, DAY_START + timedelta(days=1), SEASON_ID, trophies),
         )
-        database._enqueue_army_analytics(connection, ranked_day_start=DAY_START)
+        boundary_publication._enqueue_army_analytics(database, connection, ranked_day_start=DAY_START)
         connection.commit()
 
 
@@ -186,7 +187,7 @@ def _build_fact_population(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[int, int, int, tuple]:
     with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server)
+        database, processor = _processor(connection_info, archive_server, monkeypatch)
         try:
             opponents = ["#8PP", "#9PP"]
             rows = [
@@ -283,7 +284,7 @@ def _build_fact_population(
             before_app = calls[0]
             database._suppress_fixture_enqueue = True
             with database.pool.connection() as connection:
-                database._build_army_facts(connection, DAY_START.isoformat())
+                army_ingestion._build_army_facts(database, connection, DAY_START.isoformat())
                 connection.commit()
             after_app = calls[0]
             after_pg = _fact_insert_calls(connection_info)
@@ -306,7 +307,7 @@ def _build_fact_population(
                     "UPDATE battle_army_decodes SET is_active = false WHERE id = %s",
                     (failed[0],),
                 )
-                database._build_army_facts(
+                army_ingestion._build_army_facts(database, 
                     connection,
                     DAY_START.isoformat(),
                     battle_ids=[int(failed[1])],
@@ -363,10 +364,9 @@ def test_army_fact_statements_are_bounded_and_pinned_failed_decodes_survive(
 
 
 def test_completed_day_publishes_facts_without_legacy_rollups(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server)
+        database, processor = _processor(connection_info, archive_server, monkeypatch)
         try:
             for index, job_id in enumerate(
                 _store_battles(connection_info, archive_server)
@@ -472,10 +472,9 @@ def test_completed_day_publishes_facts_without_legacy_rollups(
 
 
 def test_army_fact_retries_leave_legacy_rollups_untouched(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server)
+        database, processor = _processor(connection_info, archive_server, monkeypatch)
         try:
             _observation, battle_job = store_observation(
                 connection_info,
@@ -534,7 +533,7 @@ def test_army_fact_retries_leave_legacy_rollups_untouched(
                     """,
                     (player_id, DAY_START, DAY_START + timedelta(days=1), SEASON_ID),
                 )
-                database._enqueue_army_analytics(connection, ranked_day_start=DAY_START)
+                boundary_publication._enqueue_army_analytics(database, connection, ranked_day_start=DAY_START)
                 connection.commit()
 
             assert (
@@ -558,7 +557,7 @@ def test_army_fact_build_rolls_back_atomically(
     database_url: str, archive_server, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server)
+        database, processor = _processor(connection_info, archive_server, monkeypatch)
         try:
             _observation, battle_job = store_observation(
                 connection_info,
@@ -590,7 +589,7 @@ def test_army_fact_build_rolls_back_atomically(
             def fail_day(*_args, **_kwargs) -> None:
                 raise ValueError("dependency_not_ready: forced day failure")
 
-            monkeypatch.setattr(database, "_ensure_army_day_dependency", fail_day)
+            monkeypatch.setattr(army_ingestion, "_ensure_army_day_dependency", fail_day)
             result = processor.process_job(_job_id(database), owner="atomic-build")
             assert result.outcome == "retrying"
             with database.pool.connection() as connection:
@@ -611,10 +610,9 @@ def test_army_fact_build_rolls_back_atomically(
 
 
 def test_active_or_incomplete_day_is_withheld_and_retried(
-    database_url: str, archive_server
-) -> None:
+    database_url: str, archive_server, monkeypatch) -> None:
     with domain_database(database_url) as connection_info:
-        database, processor = _processor(connection_info, archive_server)
+        database, processor = _processor(connection_info, archive_server, monkeypatch)
         try:
             future_day = datetime.now(UTC).replace(
                 hour=5, minute=0, second=0, microsecond=0

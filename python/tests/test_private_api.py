@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from test_api_db_public_ops import seed_profile
 from test_api_migration import migrated_production_database
 
+from clashlens import api_accounts, api_analytics, api_verification
 from clashlens.api import create_app
 from clashlens.api_db import ApiDatabase, RequestBinding
 from clashlens.army_analytics import ArmyAnalyticsUnavailable, CurrentSeasonEmpty
@@ -100,7 +101,7 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
         seed_profile(database, "#2PP", 6000)
         verifier = FakeOfficialVerifier()
         fingerprint = hashlib.sha256(b"safe-synthetic-interactive-key").hexdigest()
-        database.register_official_credential(fingerprint)
+        api_verification.register_official_credential(database, fingerprint)
         app = create_app(
             database=database,
             keys={
@@ -390,7 +391,7 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
             assert verifier.calls == 1
             assert database.scalar("SELECT count(*) FROM shared_api_permits") == 1
 
-            owner_context = database.resolve_account("google", "google-api-owner")
+            owner_context = api_accounts.resolve_account(database, "google", "google-api-owner")
             assert owner_context is not None
             crashed_request_id = str(uuid4())
             crashed_binding = RequestBinding(
@@ -404,7 +405,7 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
                 request_target=verify_target,
                 identity={"tag": "#2PP"},
             )
-            assert database.reserve_verification(
+            assert api_verification.reserve_verification(database,
                 crashed_binding, normalized_tag="#2PP"
             ).fresh
             with database.pool.connection() as connection:
@@ -480,7 +481,7 @@ def test_linked_elsewhere_requires_one_bounded_support_candidate(
         seed_profile(database, "#2PP", 6000)
         verifier = FakeOfficialVerifier()
         fingerprint = hashlib.sha256(b"safe-support-candidate-key").hexdigest()
-        database.register_official_credential(fingerprint)
+        api_verification.register_official_credential(database, fingerprint)
         app = create_app(
             database=database,
             keys={("typescript-website", "current"): TS_CURRENT},
@@ -514,8 +515,8 @@ def test_linked_elsewhere_requires_one_bounded_support_candidate(
                         ),
                     )
                     assert response.status_code == 201
-                first = database.resolve_account("google", "google-first-owner")
-                second = database.resolve_account("google", "google-second-owner")
+                first = api_accounts.resolve_account(database, "google", "google-first-owner")
+                second = api_accounts.resolve_account(database, "google", "google-second-owner")
                 assert first is not None and second is not None
                 verify_target = "/v1/players/%232PP/verifytoken"
                 first_token = json_body({"token": "first-owner-secret"})
@@ -596,6 +597,7 @@ def test_linked_elsewhere_requires_one_bounded_support_candidate(
 
 def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
     database_url: str,
+    monkeypatch,
 ) -> None:
     with migrated_production_database(database_url) as connection_info:
         database = ApiDatabase(connection_info)
@@ -638,7 +640,11 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
             },
             "rows": [],
         }
-        database.get_army_analytics = lambda _selection, now=None: payload  # type: ignore[method-assign]
+        monkeypatch.setattr(
+            api_analytics,
+            "get_army_analytics",
+            lambda _database, _selection, now=None: payload,
+        )
         app = create_app(
             database=database,
             keys={("typescript-website", "current"): TS_CURRENT},
@@ -661,19 +667,23 @@ def test_signed_army_analytics_http_contract_preserves_auth_and_error_details(
                 )
                 assert invalid.status_code == 422
 
-            database.get_army_analytics = lambda _selection, now=None: (
-                _ for _ in ()
-            ).throw(  # type: ignore[method-assign]
-                ArmyAnalyticsUnavailable([2, 4])
+            monkeypatch.setattr(
+                api_analytics,
+                "get_army_analytics",
+                lambda _database, _selection, now=None: (_ for _ in ()).throw(
+                    ArmyAnalyticsUnavailable([2, 4])
+                ),
             )
             unavailable = client.get(target, headers=signed_headers(target))
             assert unavailable.status_code == 404
             assert unavailable.json()["affected_days"] == [2, 4]
 
-            database.get_army_analytics = lambda _selection, now=None: (
-                _ for _ in ()
-            ).throw(  # type: ignore[method-assign]
-                CurrentSeasonEmpty("2026-07")
+            monkeypatch.setattr(
+                api_analytics,
+                "get_army_analytics",
+                lambda _database, _selection, now=None: (_ for _ in ()).throw(
+                    CurrentSeasonEmpty("2026-07")
+                ),
             )
             empty = client.get(
                 "/v1/analytics/armies?season=current",

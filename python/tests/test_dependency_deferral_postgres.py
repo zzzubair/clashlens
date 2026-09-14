@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from domain_test_support import domain_database, store_observation
 
+from clashlens import job_outcomes
 from clashlens.db import Database
 
 DAY_START = datetime(2026, 8, 4, 5, tzinfo=UTC)
@@ -33,7 +34,7 @@ def test_archive_deferral_is_nonconsuming_and_claimable(
             claim = database.claim_job(owner="lane-defer", lease_seconds=30)
             assert claim is not None and claim.job_id == job_id
 
-            outcome = database.fail_claim(
+            outcome = job_outcomes.fail_claim(database, 
                 claim,
                 category="archive_unavailable",
                 detail="provider outage",
@@ -64,7 +65,7 @@ def test_archive_deferral_is_nonconsuming_and_claimable(
                     )
                 claim = database.claim_job(owner="lane-defer", lease_seconds=30)
             assert claim is not None and claim.job_id == job_id
-            outcome = database.fail_claim(
+            outcome = job_outcomes.fail_claim(database, 
                 claim,
                 category="degraded_capacity",
                 detail="spool full",
@@ -145,7 +146,7 @@ def test_dependency_deferrals_do_not_exhaust_the_ordinary_retry_budget(
                 ).fetchone()[0]
             assert count == 1
             assert (
-                database.fail_claim(
+                job_outcomes.fail_claim(database, 
                     claim,
                     category="archive_unavailable",
                     detail="outage",
@@ -160,7 +161,7 @@ def test_dependency_deferrals_do_not_exhaust_the_ordinary_retry_budget(
             assert claim is not None and claim.is_dependency_resume
             assert claim.attempt_count == 1 and claim.attempt_number == 2
             assert (
-                database.fail_claim(
+                job_outcomes.fail_claim(database, 
                     claim,
                     category="degraded_capacity",
                     detail="spool full",
@@ -176,7 +177,7 @@ def test_dependency_deferrals_do_not_exhaust_the_ordinary_retry_budget(
             assert claim is not None and claim.is_dependency_resume
             assert claim.attempt_count == 1 and claim.attempt_number == 3
             assert (
-                database.fail_claim(
+                job_outcomes.fail_claim(database, 
                     claim,
                     category="transient_parse_failure",
                     detail="parser hiccup",
@@ -191,7 +192,7 @@ def test_dependency_deferrals_do_not_exhaust_the_ordinary_retry_budget(
             assert claim is not None and not claim.is_dependency_resume
             assert claim.attempt_count == 1
             assert (
-                database.fail_claim(
+                job_outcomes.fail_claim(database, 
                     claim,
                     category="transient_parse_failure",
                     detail="parser hiccup",
@@ -203,7 +204,7 @@ def test_dependency_deferrals_do_not_exhaust_the_ordinary_retry_budget(
             claim = database.claim_job(owner="lane-budget", lease_seconds=30)
             assert claim is not None and not claim.is_dependency_resume
             assert (
-                database.fail_claim(
+                job_outcomes.fail_claim(database, 
                     claim,
                     category="transient_parse_failure",
                     detail="parser hiccup",
@@ -240,7 +241,7 @@ def test_terminal_category_still_consumes_retry_budget(
             claim = database.claim_job(owner="lane-term", lease_seconds=30)
             assert claim is not None and claim.job_id == job_id
 
-            result = database.fail_claim(
+            result = job_outcomes.fail_claim(database, 
                 claim,
                 category="malformed_json",
                 detail="bad body",

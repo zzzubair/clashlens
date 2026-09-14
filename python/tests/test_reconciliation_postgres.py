@@ -9,6 +9,7 @@ import pytest
 from domain_test_support import domain_database, store_observation, text
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
+from clashlens import api_players, reconciliation_db
 from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
@@ -786,7 +787,7 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
 
             api_database = ApiDatabase(connection_info)
             try:
-                player_page = api_database.get_player_page(
+                player_page = api_players.get_player_page(api_database,
                     "#2PP",
                     now=DAY_END + timedelta(minutes=10),
                     freshness_seconds=900,
@@ -1048,7 +1049,7 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
                     ),
                 )
                 connection.commit()
-            assert database.enqueue_current_season_republication(max_jobs=1) == []
+            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1) == []
             with database.pool.connection() as connection:
                 # The source setup runs under v3 and therefore queued a normal
                 # reconciliation. Simulate a deployment whose v2 work is
@@ -1062,11 +1063,11 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
                     (int(reconcile_job[0]),),
                 )
                 connection.commit()
-            republication_jobs = database.enqueue_current_season_republication(
+            republication_jobs = reconciliation_db.enqueue_current_season_republication(database,
                 max_jobs=1
             )
             assert len(republication_jobs) == 1
-            assert database.enqueue_current_season_republication(max_jobs=1) == []
+            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1) == []
             with database.pool.connection() as connection:
                 republication_input = connection.execute(
                     "SELECT input_json FROM python_processing_jobs WHERE id = %s",

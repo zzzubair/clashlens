@@ -14,6 +14,7 @@ from test_snapshot_publication_postgres import (
     _seed_snapshot_job,
 )
 
+from clashlens import api_leaderboard
 from clashlens.api_db import ApiDatabase
 
 BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
@@ -109,7 +110,7 @@ def test_frozen_snapshot_waits_for_complete_analytics_publication(
 
             api = ApiDatabase(connection_info)
             try:
-                assert api.get_frozen_leaderboard(limit=10) is None
+                assert api_leaderboard.get_frozen_leaderboard(api, limit=10) is None
             finally:
                 api.close()
 

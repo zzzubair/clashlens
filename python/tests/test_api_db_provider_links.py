@@ -6,6 +6,7 @@ from uuid import uuid4
 import psycopg
 from test_api_migration import migrated_production_database
 
+from clashlens import api_accounts
 from clashlens.api_db import ApiDatabase, OperationResult, RequestBinding
 
 
@@ -37,14 +38,14 @@ def _create_account(
     subject: str,
     username: str,
 ) -> int:
-    result = database.create_account(
+    result = api_accounts.create_account(database,
         binding(provider=provider, subject=subject, operation="account.create"),
         username=username.title(),
         normalized_username=username,
         display_name=username.title(),
     )
     assert result.status_code == 201
-    context = database.resolve_account(provider, subject)
+    context = api_accounts.resolve_account(database, provider, subject)
     assert context is not None
     return context.internal_id
 
@@ -59,7 +60,7 @@ def test_link_adds_second_provider_and_resolves_through_both(
                 database, provider="google", subject="g-sub-1", username="playerone"
             )
 
-            linked = database.link_provider(
+            linked = api_accounts.link_provider(database,
                 binding(subject="d-sub-1", provider="discord"),
                 account_id=account_id,
                 provider="discord",
@@ -68,12 +69,12 @@ def test_link_adds_second_provider_and_resolves_through_both(
             assert linked.status_code == 200
             assert linked.payload == {"providers": ["discord", "google"]}
 
-            assert database.resolve_account("discord", "d-sub-1") is not None
-            google_account = database.resolve_account("google", "g-sub-1")
+            assert api_accounts.resolve_account(database, "discord", "d-sub-1") is not None
+            google_account = api_accounts.resolve_account(database, "google", "g-sub-1")
             assert google_account is not None
             assert google_account.internal_id == account_id
 
-            replay = database.link_provider(
+            replay = api_accounts.link_provider(database,
                 binding(request_id=str(uuid4()), subject="d-sub-1", provider="discord"),
                 account_id=account_id,
                 provider="discord",
@@ -96,7 +97,7 @@ def test_link_refuses_identity_owned_by_another_account(database_url: str) -> No
                 database, provider="discord", subject="d-sub-2", username="playertwo"
             )
 
-            conflict = database.link_provider(
+            conflict = api_accounts.link_provider(database,
                 binding(subject="d-sub-2", provider="discord"),
                 account_id=first,
                 provider="discord",
@@ -106,8 +107,8 @@ def test_link_refuses_identity_owned_by_another_account(database_url: str) -> No
             assert conflict.payload == {"error": "provider_identity_conflict"}
 
             # Neither account changed hands or grew identities.
-            assert database.resolve_account("discord", "d-sub-2") is not None
-            assert database.resolve_account("discord", "d-sub-2").internal_id == second
+            assert api_accounts.resolve_account(database, "discord", "d-sub-2") is not None
+            assert api_accounts.resolve_account(database, "discord", "d-sub-2").internal_id == second
         finally:
             database.close()
 
@@ -134,7 +135,7 @@ def test_concurrent_links_of_one_subject_return_a_safe_conflict(
                 pool = ApiDatabase(connection_info)
                 try:
                     start.wait()
-                    results[index] = pool.link_provider(
+                    results[index] = api_accounts.link_provider(pool,
                         binding(subject="d-sub-race", provider="discord"),
                         account_id=account_ids[index],
                         provider="discord",
@@ -168,7 +169,7 @@ def test_link_refuses_second_subject_for_held_provider(database_url: str) -> Non
             account_id = _create_account(
                 database, provider="google", subject="g-sub-1", username="playerone"
             )
-            conflict = database.link_provider(
+            conflict = api_accounts.link_provider(database,
                 binding(subject="g-sub-other", provider="google"),
                 account_id=account_id,
                 provider="google",
@@ -190,7 +191,7 @@ def test_unlink_removes_only_the_reauthenticated_identity_and_keeps_the_account(
                 database, provider="google", subject="g-sub-1", username="playerone"
             )
             assert (
-                database.link_provider(
+                api_accounts.link_provider(database,
                     binding(subject="d-sub-1", provider="discord"),
                     account_id=account_id,
                     provider="discord",
@@ -199,7 +200,7 @@ def test_unlink_removes_only_the_reauthenticated_identity_and_keeps_the_account(
                 == 200
             )
 
-            removed = database.unlink_provider(
+            removed = api_accounts.unlink_provider(database,
                 binding(subject="d-sub-1", provider="discord", operation="providers.unlink"),
                 account_id=account_id,
                 provider="discord",
@@ -207,11 +208,11 @@ def test_unlink_removes_only_the_reauthenticated_identity_and_keeps_the_account(
             )
             assert removed.status_code == 200
             assert removed.payload == {"providers": ["google"]}
-            assert database.resolve_account("discord", "d-sub-1") is None
-            assert database.resolve_account("google", "g-sub-1") is not None
+            assert api_accounts.resolve_account(database, "discord", "d-sub-1") is None
+            assert api_accounts.resolve_account(database, "google", "g-sub-1") is not None
 
             # Unlinking an identity that is no longer linked fails safely.
-            missing = database.unlink_provider(
+            missing = api_accounts.unlink_provider(database,
                 binding(
                     request_id=str(uuid4()),
                     subject="d-sub-1",
@@ -235,7 +236,7 @@ def test_unlink_refuses_the_final_linked_identity(database_url: str) -> None:
             account_id = _create_account(
                 database, provider="google", subject="g-sub-1", username="playerone"
             )
-            refused = database.unlink_provider(
+            refused = api_accounts.unlink_provider(database,
                 binding(subject="g-sub-1", provider="google", operation="providers.unlink"),
                 account_id=account_id,
                 provider="google",
@@ -243,7 +244,7 @@ def test_unlink_refuses_the_final_linked_identity(database_url: str) -> None:
             )
             assert refused.status_code == 409
             assert refused.payload == {"error": "final_provider"}
-            assert database.resolve_account("google", "g-sub-1") is not None
+            assert api_accounts.resolve_account(database, "google", "g-sub-1") is not None
         finally:
             database.close()
 
@@ -260,7 +261,7 @@ def test_concurrent_unlinks_of_both_providers_cannot_empty_the_account(
                 database, provider="google", subject="g-sub-race", username="racer"
             )
             assert (
-                database.link_provider(
+                api_accounts.link_provider(database,
                     binding(subject="d-sub-race", provider="discord"),
                     account_id=account_id,
                     provider="discord",
@@ -276,7 +277,7 @@ def test_concurrent_unlinks_of_both_providers_cannot_empty_the_account(
                 pool = ApiDatabase(connection_info)
                 try:
                     start.wait()
-                    results[provider] = pool.unlink_provider(
+                    results[provider] = api_accounts.unlink_provider(pool,
                         binding(
                             subject=subject,
                             provider=provider,
@@ -375,7 +376,7 @@ def test_concurrent_recovery_collision_retains_refusal_audit(
                 pool = ApiDatabase(connection_info)
                 try:
                     start.wait()
-                    results[index] = pool.support_attach_discord_identity(
+                    results[index] = api_accounts.support_attach_discord_identity(pool,
                         account_public_id=public_ids[index],
                         normalized_player_tag=f"#P{index + 1}P",
                         discord_subject="1234567890123456789",
@@ -415,19 +416,19 @@ def test_provider_events_leave_audits_without_duplicating_subjects(
             account_id = _create_account(
                 database, provider="google", subject="g-sub-1", username="playerone"
             )
-            database.link_provider(
+            api_accounts.link_provider(database,
                 binding(subject="d-sub-1", provider="discord"),
                 account_id=account_id,
                 provider="discord",
                 provider_subject="d-sub-1",
             )
-            database.unlink_provider(
+            api_accounts.unlink_provider(database,
                 binding(subject="d-sub-1", provider="discord", operation="providers.unlink"),
                 account_id=account_id,
                 provider="discord",
                 provider_subject="d-sub-1",
             )
-            status, detail = database.support_attach_discord_identity(
+            status, detail = api_accounts.support_attach_discord_identity(database,
                 account_public_id=_public_id(connection_info, account_id),
                 normalized_player_tag="#PLAYERTAG",
                 discord_subject="d-sub-support",

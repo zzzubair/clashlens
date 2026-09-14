@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from test_api_migration import migrated_production_database
 
+from clashlens import api_accounts
 from clashlens.api_db import ApiDatabase, RequestBinding
 
 
@@ -30,7 +31,7 @@ def account_binding(
 
 
 def create_owner(database: ApiDatabase) -> int:
-    created = database.create_account(
+    created = api_accounts.create_account(database,
         RequestBinding(
             request_id=str(uuid4()),
             caller="typescript-website",
@@ -47,7 +48,7 @@ def create_owner(database: ApiDatabase) -> int:
         display_name="Group Owner",
     )
     assert created.status_code == 201
-    account = database.resolve_account("google", "group-owner-subject")
+    account = api_accounts.resolve_account(database, "google", "group-owner-subject")
     assert account is not None
     return account.internal_id
 
@@ -59,7 +60,7 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
         database = ApiDatabase(connection_info)
         try:
             account_id = create_owner(database)
-            saved = database.add_saved_player(
+            saved = api_accounts.add_saved_player(database,
                 account_binding(
                     account_id,
                     "saved_tags.add",
@@ -68,7 +69,7 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
                 ),
                 normalized_tag="#2PP",
             )
-            group = database.create_group(
+            group = api_accounts.create_group(database,
                 account_binding(
                     account_id,
                     "groups.create",
@@ -81,25 +82,25 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
             )
 
             assert saved.payload == {"tag": "#2PP", "saved": True}
-            assert database.list_saved_players(account_id) == [
+            assert api_accounts.list_saved_players(database, account_id) == [
                 {"tag": "#2PP", "name": None}
             ]
             assert group.status_code == 201
             group_id = group.payload["group_id"]
             assert isinstance(group_id, str)
-            assert database.list_groups(account_id) == [
+            assert api_accounts.list_groups(database, account_id) == [
                 {
                     "group_id": group_id,
                     "name": "My Accounts",
                     "tags": ["#2PP", "#8PY"],
                 }
             ]
-            assert database.get_public_user("groupowner") == {
+            assert api_accounts.get_public_user(database, "groupowner") == {
                 "username": "groupowner",
                 "display_name": "Group Owner",
                 "verified_players": [],
             }
-            assert database.get_multi_account_summary(account_id) == {
+            assert api_accounts.get_multi_account_summary(database, account_id) == {
                 "username": "groupowner",
                 "display_name": "Group Owner",
                 "verified_players": [],
@@ -135,8 +136,8 @@ def test_saved_tags_groups_public_user_and_multi_account_stay_separate(
                 )
                 connection.commit()
 
-            public_user = database.get_public_user("groupowner")
-            summary = database.get_multi_account_summary(account_id)
+            public_user = api_accounts.get_public_user(database, "groupowner")
+            summary = api_accounts.get_multi_account_summary(database, account_id)
             assert public_user["verified_players"] == [{"tag": "#2PP", "name": None}]
             assert summary["verified_players"] == [{"tag": "#2PP", "name": None}]
             assert "id" not in str(public_user).lower()
@@ -152,7 +153,7 @@ def test_group_update_and_delete_require_the_owning_account(
         database = ApiDatabase(connection_info)
         try:
             owner_id = create_owner(database)
-            other = database.create_account(
+            other = api_accounts.create_account(database,
                 RequestBinding(
                     request_id=str(uuid4()),
                     caller="typescript-website",
@@ -169,9 +170,9 @@ def test_group_update_and_delete_require_the_owning_account(
                 display_name="Other Owner",
             )
             assert other.status_code == 201
-            other_account = database.resolve_account("google", "other-owner-subject")
+            other_account = api_accounts.resolve_account(database, "google", "other-owner-subject")
             assert other_account is not None
-            created = database.create_group(
+            created = api_accounts.create_group(database,
                 account_binding(
                     owner_id,
                     "groups.create",
@@ -184,7 +185,7 @@ def test_group_update_and_delete_require_the_owning_account(
             )
             group_id = created.payload["group_id"]
 
-            denied = database.update_group(
+            denied = api_accounts.update_group(database,
                 account_binding(
                     other_account.internal_id,
                     "groups.update",
@@ -198,7 +199,7 @@ def test_group_update_and_delete_require_the_owning_account(
                 normalized_name="changed",
                 normalized_tags=[],
             )
-            updated = database.update_group(
+            updated = api_accounts.update_group(database,
                 account_binding(
                     owner_id,
                     "groups.update",
@@ -211,7 +212,7 @@ def test_group_update_and_delete_require_the_owning_account(
                 normalized_name="changed",
                 normalized_tags=["#8PY"],
             )
-            deleted = database.delete_group(
+            deleted = api_accounts.delete_group(database,
                 account_binding(
                     owner_id,
                     "groups.delete",
@@ -230,6 +231,6 @@ def test_group_update_and_delete_require_the_owning_account(
                 "tags": ["#8PY"],
             }
             assert deleted.payload == {"deleted": True, "group_id": group_id}
-            assert database.list_groups(owner_id) == []
+            assert api_accounts.list_groups(database, owner_id) == []
         finally:
             database.close()

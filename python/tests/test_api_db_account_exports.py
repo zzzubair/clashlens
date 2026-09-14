@@ -4,6 +4,7 @@ from test_api_db_organization import account_binding, create_owner
 from test_api_db_public_ops import NOW, seed_profile
 from test_api_migration import migrated_production_database, text
 
+from clashlens import api_accounts, api_leaderboard
 from clashlens.api_db import ApiDatabase
 
 
@@ -16,7 +17,7 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
         database = ApiDatabase(connection_info)
         try:
             account_id = create_owner(database)
-            updated = database.update_account(
+            updated = api_accounts.update_account(database,
                 account_binding(
                     account_id,
                     "account.update",
@@ -150,7 +151,7 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                 )
                 connection.commit()
 
-            frozen = database.get_frozen_leaderboard(limit=100, now=NOW)
+            frozen = api_leaderboard.get_frozen_leaderboard(database, limit=100, now=NOW)
             assert frozen == {
                 "kind": "frozen",
                 "snapshot_id": str(leaderboard_id),
@@ -206,7 +207,7 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                     }
                 ],
             }
-            older = database.get_frozen_leaderboard(
+            older = api_leaderboard.get_frozen_leaderboard(database,
                 limit=100, official_season_id="2026-07", season_day_number=28
             )
             assert older is not None
@@ -217,7 +218,7 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                 "season_day_number": 21,
             }
 
-            export = database.submit_export(
+            export = api_accounts.submit_export(database,
                 account_binding(
                     account_id,
                     "exports.submit",
@@ -233,7 +234,7 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                 "format": "google_sheets_scaffold",
                 "status": "pending",
             }
-            assert database.get_export_status(account_id, export_id) == export.payload
+            assert api_accounts.get_export_status(database, account_id, export_id) == export.payload
             assert (
                 database.scalar(
                     "SELECT count(*) FROM python_processing_jobs WHERE work_type = 'build_export'"
@@ -340,7 +341,7 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
                 )
                 connection.commit()
 
-            latest = database.get_frozen_leaderboard(limit=1, offset=1, now=NOW)
+            latest = api_leaderboard.get_frozen_leaderboard(database, limit=1, offset=1, now=NOW)
             assert latest is not None
             assert latest["official_season_id"] == "2026-08"
             assert latest["season_day_number"] == 21
@@ -356,7 +357,7 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
             assert latest["has_next"] is False
             assert latest["entries"][0]["position"] == 2
 
-            older = database.get_frozen_leaderboard(
+            older = api_leaderboard.get_frozen_leaderboard(database,
                 limit=1, official_season_id="2026-07", season_day_number=28, now=NOW
             )
             assert older is not None
@@ -420,7 +421,7 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
                 )
                 connection.commit()
 
-            newest = database.get_frozen_leaderboard(limit=10, now=NOW)
+            newest = api_leaderboard.get_frozen_leaderboard(database, limit=10, now=NOW)
             assert newest is not None
             assert newest["snapshot_id"] == str(snapshot_id)
             assert newest["season_start_at"] == "2026-07-16T05:00:00+00:00"
@@ -429,7 +430,7 @@ def test_legacy_frozen_leaderboards_keep_daily_selection_and_pagination(
                 "official_season_id": "2026-08",
                 "season_day_number": 21,
             }
-            legacy_latest = database.get_frozen_leaderboard(
+            legacy_latest = api_leaderboard.get_frozen_leaderboard(database,
                 limit=10, official_season_id="2026-08", season_day_number=21
             )
             assert legacy_latest is not None
@@ -515,7 +516,7 @@ def test_frozen_publication_prefers_v2_before_independent_legacy_version(
                 ).fetchone()[0]
                 connection.commit()
 
-            selected = database.get_frozen_leaderboard(
+            selected = api_leaderboard.get_frozen_leaderboard(database,
                 limit=10, official_season_id="2026-08", season_day_number=21
             )
             assert selected is not None
@@ -530,10 +531,10 @@ def test_frozen_publication_prefers_v2_before_independent_legacy_version(
                 "season_day_number": 22,
             }
 
-            previous = database.get_frozen_leaderboard(
+            previous = api_leaderboard.get_frozen_leaderboard(database,
                 limit=10, official_season_id="2026-08", season_day_number=20
             )
-            following = database.get_frozen_leaderboard(
+            following = api_leaderboard.get_frozen_leaderboard(database,
                 limit=10, official_season_id="2026-08", season_day_number=22
             )
             assert previous is not None and following is not None
