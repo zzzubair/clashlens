@@ -11,6 +11,7 @@ Image=@@FIXTURES_IMAGE@@
 Pull=never
 ContainerName=@@PREFIX@@-clash-api
 PodmanArgs=--pod=@@PREFIX@@-pod
+StopSignal=SIGINT
 HealthCmd=["CMD","python","-c","import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3).status == 200"]
 HealthInterval=10s
 HealthTimeout=5s
