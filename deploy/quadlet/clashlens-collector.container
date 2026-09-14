@@ -2,16 +2,14 @@
 [Unit]
 Description=Clash Lens collector
 PartOf=clashlens.target
-Requires=clashlens-postgres.service clashlens-worker.service
-After=clashlens-postgres.service clashlens-worker.service
+Requires=clashlens-pod.service clashlens-postgres.service clashlens-worker.service
+After=clashlens-pod.service clashlens-postgres.service clashlens-worker.service
 
 [Container]
 Label=org.clashlens.managed=ops
 Image=@@COLLECTOR_IMAGE@@
 Pull=never
 ContainerName=@@PREFIX@@-collector
-Pod=clashlens.pod
-StartWithPod=false
 EnvironmentFile=@@ENV_DIR@@/collector.env
 Volume=@@SPOOL_ROOT@@:/spool:rw,z
 Secret=clashlens-collector-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400
@@ -25,7 +23,7 @@ DropCapability=all
 NoNewPrivileges=true
 Memory=@@COLLECTOR_MEMORY@@
 PidsLimit=@@COLLECTOR_PIDS@@
-PodmanArgs=--cpus=@@COLLECTOR_CPUS@@
+PodmanArgs=--pod=@@PREFIX@@-pod --cpus=@@COLLECTOR_CPUS@@
 HealthCmd=["CMD","python","-c","import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8081/readyz',timeout=3).status == 200"]
 HealthInterval=30s
 HealthTimeout=10s

@@ -2,16 +2,14 @@
 [Unit]
 Description=Clash Lens website
 PartOf=clashlens.target
-Requires=clashlens-api.service
-After=clashlens-api.service
+Requires=clashlens-pod.service clashlens-api.service
+After=clashlens-pod.service clashlens-api.service
 
 [Container]
 Label=org.clashlens.managed=ops
 Image=@@WEBSITE_IMAGE@@
 Pull=never
 ContainerName=@@PREFIX@@-website
-Pod=clashlens.pod
-StartWithPod=false
 EnvironmentFile=@@ENV_DIR@@/website.env
 Secret=clashlens-hmac-current,type=mount,target=/run/secrets/clashlens-hmac-current,uid=1000,gid=1000,mode=0400
 Secret=clashlens-login-secret,type=mount,target=/run/secrets/clashlens-login-secret,uid=1000,gid=1000,mode=0400
@@ -23,7 +21,7 @@ DropCapability=all
 NoNewPrivileges=true
 Memory=@@WEBSITE_MEMORY@@
 PidsLimit=@@WEBSITE_PIDS@@
-PodmanArgs=--cpus=@@WEBSITE_CPUS@@
+PodmanArgs=--pod=@@PREFIX@@-pod --cpus=@@WEBSITE_CPUS@@
 HealthCmd=["CMD","node","-e","fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
 HealthInterval=30s
 HealthTimeout=10s

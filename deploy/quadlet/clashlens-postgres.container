@@ -2,21 +2,21 @@
 [Unit]
 Description=Clash Lens PostgreSQL
 PartOf=clashlens.target
+Requires=clashlens-pod.service
+After=clashlens-pod.service
 
 [Container]
 Label=org.clashlens.managed=ops
 Image=@@POSTGRES_IMAGE@@
 Pull=never
 ContainerName=@@PREFIX@@-postgres
-Pod=clashlens.pod
-StartWithPod=false
 User=0
 Volume=clashlens-postgres.volume:/var/lib/postgresql/data
 EnvironmentFile=@@ENV_DIR@@/postgres.env
 Secret=clashlens-postgres-password,type=mount,target=/run/secrets/postgres-password,uid=0,gid=0,mode=0400
 Memory=@@POSTGRES_MEMORY@@
 PidsLimit=@@POSTGRES_PIDS@@
-PodmanArgs=--cpus=@@POSTGRES_CPUS@@
+PodmanArgs=--pod=@@PREFIX@@-pod --cpus=@@POSTGRES_CPUS@@
 HealthCmd=pg_isready -U @@POSTGRES_USER@@ -d @@POSTGRES_DB@@
 HealthInterval=10s
 HealthTimeout=5s

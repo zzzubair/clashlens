@@ -2,16 +2,14 @@
 [Unit]
 Description=Clash Lens worker
 PartOf=clashlens.target
-Requires=clashlens-postgres.service
-After=clashlens-postgres.service
+Requires=clashlens-pod.service clashlens-postgres.service
+After=clashlens-pod.service clashlens-postgres.service
 
 [Container]
 Label=org.clashlens.managed=ops
 Image=@@PYTHON_IMAGE@@
 Pull=never
 ContainerName=@@PREFIX@@-python-worker
-Pod=clashlens.pod
-StartWithPod=false
 EnvironmentFile=@@ENV_DIR@@/worker.env
 Volume=@@SPOOL_ROOT@@:/spool:rw,z
 Secret=clashlens-worker-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400
@@ -23,7 +21,7 @@ DropCapability=all
 NoNewPrivileges=true
 Memory=@@WORKER_MEMORY@@
 PidsLimit=@@WORKER_PIDS@@
-PodmanArgs=--cpus=@@WORKER_CPUS@@
+PodmanArgs=--pod=@@PREFIX@@-pod --cpus=@@WORKER_CPUS@@
 HealthCmd=python -m clashlens.cli ready --expected-contract-version 5
 HealthInterval=30s
 HealthTimeout=20s

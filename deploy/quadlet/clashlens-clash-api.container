@@ -2,14 +2,15 @@
 [Unit]
 Description=Clash Lens fixture official API
 PartOf=clashlens.target
+Requires=clashlens-pod.service
+After=clashlens-pod.service
 
 [Container]
 Label=org.clashlens.managed=ops
 Image=@@FIXTURES_IMAGE@@
 Pull=never
 ContainerName=@@PREFIX@@-clash-api
-Pod=clashlens.pod
-StartWithPod=false
+PodmanArgs=--pod=@@PREFIX@@-pod
 HealthCmd=["CMD","python","-c","import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3).status == 200"]
 HealthInterval=10s
 HealthTimeout=5s

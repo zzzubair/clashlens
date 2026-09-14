@@ -123,10 +123,10 @@ whose recorded version is absent.
 ./ops queue-status
 ```
 
-`status` fails when the target is stopped or any required container is absent,
-stopped, or unhealthy. Logs come from the user journal, which includes both
-container output and systemd lifecycle failures without printing configuration
-files.
+`status` fails when the target or any required system service is stopped, or when
+any required container is absent, stopped, or unhealthy. Logs come from the user
+journal, which includes both container output and systemd lifecycle failures
+without printing configuration files.
 
 ## Failed work
 

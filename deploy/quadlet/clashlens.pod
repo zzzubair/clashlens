@@ -7,6 +7,7 @@ PartOf=clashlens.target
 Label=org.clashlens.managed=ops
 PodName=@@PREFIX@@-pod
 Network=clashlens.network
+ExitPolicy=continue
 ShmSize=@@POSTGRES_SHM@@
 PodmanArgs=--userns=keep-id:uid=10001,gid=10001
 PublishPort=127.0.0.1:@@WEBSITE_PORT@@:3000

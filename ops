@@ -992,16 +992,28 @@ container_state() {
   "$PODMAN_BIN" inspect --format '{{if and .State.Running (not .State.Paused) (eq .State.Status "running")}}{{if .State.Health}}{{.State.Health.Status}}{{else}}running{{end}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || printf absent
 }
 
+service_state() {
+  local state
+  state=$($SYSTEMCTL_BIN --user is-active "clashlens-$1.service" 2>/dev/null || true)
+  printf '%s' "${state:-unknown}"
+}
+
 wait_stack() {
-  local attempt service state all
+  local attempt service state unit_state all
   local services=(postgres collector api worker website)
   [[ "$MODE" != fixture ]] || services+=(archive clash-api login)
   for attempt in $(seq 1 120); do
     all=true
-    for service in "${services[@]}"; do
-      state=$(container_state "$(container_name "$PREFIX" "$service")")
-      [[ "$state" == healthy || "$state" == running ]] || { all=false; break; }
-    done
+    unit_state=$(service_state pod)
+    [[ "$unit_state" == active ]] || all=false
+    if [[ "$all" == true ]]; then
+      for service in "${services[@]}"; do
+        unit_state=$(service_state "$service")
+        [[ "$unit_state" == active ]] || { all=false; break; }
+        state=$(container_state "$(container_name "$PREFIX" "$service")")
+        [[ "$state" == healthy || "$state" == running ]] || { all=false; break; }
+      done
+    fi
     [[ "$all" == true ]] && return
     sleep 1
   done
@@ -1091,19 +1103,25 @@ prepare_managed_runtime() {
 
 status() {
   require_host
-  local prefix service state active result=0 mode
+  local prefix service state unit_state active result=0 mode
   prefix=$(current_prefix)
   mode=production
   [[ "$prefix" != clashlens ]] && mode=fixture
   active=$($SYSTEMCTL_BIN --user is-active clashlens.target 2>/dev/null || true)
   printf 'stack      %s\n' "${active:-unknown}"
   [[ "$active" == active ]] || result=1
+  unit_state=$(service_state pod)
+  printf '%-10s %s\n' pod "$unit_state"
+  [[ "$unit_state" == active ]] || result=1
   local services=(postgres collector api worker website)
   [[ "$mode" != fixture ]] || services+=(archive clash-api login)
   for service in "${services[@]}"; do
+    unit_state=$(service_state "$service")
     state=$(container_state "$(container_name "$prefix" "$service")")
-    printf '%-10s %s\n' "$service" "$state"
-    [[ "$state" == healthy || "$state" == running ]] || result=1
+    printf '%-10s %s' "$service" "$state"
+    [[ "$unit_state" == active ]] || printf ' (unit %s)' "$unit_state"
+    printf '\n'
+    [[ "$unit_state" == active && ( "$state" == healthy || "$state" == running ) ]] || result=1
   done
   return "$result"
 }
