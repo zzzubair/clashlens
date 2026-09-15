@@ -317,6 +317,76 @@ def test_waiting_cleanup_runs_before_a_new_publication(
         spool.close()
 
 
+def test_deletion_batch_blocks_publication_and_keeps_sidecar_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    protected_body = b"protected by durable handoff"
+    orphan_body = b"unreferenced uploaded body"
+    new_body = b"publication waiting for cleanup"
+    protected_digest = hashlib.sha256(protected_body).hexdigest()
+    orphan_digest = hashlib.sha256(orphan_body).hexdigest()
+    new_digest = hashlib.sha256(new_body).hexdigest()
+    protected_payload = ('{"response_hash":"' + protected_digest + '"}').encode()
+    new_payload = ('{"response_hash":"' + new_digest + '"}').encode()
+    with spool.reservation() as reservation:
+        spool.publish_handoff(
+            protected_body,
+            protected_digest,
+            "protected",
+            protected_payload,
+            reservation,
+        )
+    spool.publish(orphan_body, orphan_digest)
+    new_reservation = spool.reserve()
+    batch_entered = threading.Event()
+    release_batch = threading.Event()
+    publication_waiting = threading.Event()
+    publication_finished = threading.Event()
+    publication_thread: list[int] = []
+    original_condition_wait = spool._publication_condition.wait
+
+    def observed_condition_wait(timeout: float | None = None) -> bool:
+        if publication_thread and threading.get_ident() == publication_thread[0]:
+            publication_waiting.set()
+        return original_condition_wait(timeout)
+
+    def delete_batch() -> tuple[bool, bool]:
+        with spool.delete_unreferenced_batch() as delete:
+            batch_entered.set()
+            assert release_batch.wait(timeout=2)
+            return delete(protected_digest), delete(orphan_digest)
+
+    def publish_new() -> None:
+        publication_thread.append(threading.get_ident())
+        spool.publish_handoff(
+            new_body, new_digest, "new", new_payload, new_reservation
+        )
+        publication_finished.set()
+
+    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            batch = executor.submit(delete_batch)
+            assert batch_entered.wait(timeout=2)
+            # Removing a sidecar after the batch snapshot cannot make its body
+            # eligible until a later cleanup pass.
+            spool.remove_handoff("protected")
+            publication = executor.submit(publish_new)
+            assert publication_waiting.wait(timeout=2)
+            assert not publication_finished.is_set()
+            release_batch.set()
+            assert batch.result(timeout=2) == (False, True)
+            assert publication.result(timeout=2) is None
+    finally:
+        release_batch.set()
+        new_reservation.release()
+
+    assert spool.verify(protected_digest) == protected_body
+    assert spool.verify(orphan_digest) is None
+    assert spool.verify(new_digest) == new_body
+
+
 def test_handoff_names_cannot_escape_trusted_directory(tmp_path: Path) -> None:
     spool = Spool(tmp_path / "spool", max_body_bytes=1024)
     for name in ("../outside", "nested/name", ""):

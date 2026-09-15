@@ -7,7 +7,7 @@ import importlib
 import os
 import threading
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -111,6 +111,10 @@ class _Spool:
     def delete_if_unreferenced(self, digest: str) -> bool:
         self.delete(digest)
         return True
+
+    @contextmanager
+    def delete_unreferenced_batch(self):
+        yield self.delete_if_unreferenced
 
 
 class _Client:

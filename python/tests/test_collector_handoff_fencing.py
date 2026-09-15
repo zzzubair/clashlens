@@ -4,12 +4,43 @@ import asyncio
 import errno
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 from test_collector import _Client, _collector, _Reservation, _Spool, _Store
 
 from clashlens.collector_db import CollectorWork
+from clashlens.spool import Spool
+
+
+def test_cleanup_batch_acknowledges_a_file_already_removed_by_a_crash(
+    tmp_path: Path,
+) -> None:
+    digest = "a" * 64
+
+    class CleanupStore:
+        def __init__(self) -> None:
+            self.marked: list[str] = []
+
+        def deletable_hashes(self, **_kwargs: object) -> list[str]:
+            return [digest]
+
+        def delete_spool_if_deletable(self, candidate: str, delete: Any) -> bool:
+            if not delete(candidate):
+                return False
+            self.marked.append(candidate)
+            return True
+
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    store = CleanupStore()
+    collector = _collector(spool, store, _Client(_Spool()))
+
+    try:
+        assert collector.cleanup_uploaded() == 1
+        assert store.marked == [digest]
+    finally:
+        spool.close()
 
 
 def test_same_endpoint_waits_for_predecessor_handoff_ack() -> None:

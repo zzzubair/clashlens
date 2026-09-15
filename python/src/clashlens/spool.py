@@ -808,6 +808,29 @@ class Spool:
                 self._delete_locked(digest)
                 return True
 
+    @contextmanager
+    def delete_unreferenced_batch(self) -> Iterator[Callable[[str], bool]]:
+        """Hold one publication barrier across a batch of guarded deletions."""
+        active = True
+        with self._cleanup():
+            with self._capacity_lock():
+                protected = self._handoff_hashes_locked()
+
+            def delete(digest: str) -> bool:
+                if not active:
+                    raise SpoolError("spool deletion batch is no longer active")
+                self._final(digest)
+                if digest in protected:
+                    return False
+                with self._capacity_lock():
+                    self._delete_locked(digest)
+                    return True
+
+            try:
+                yield delete
+            finally:
+                active = False
+
     def remove_unreferenced(self, referenced: Callable[[], set[str]]) -> int:
         with self._cleanup():
             with self._capacity_lock():

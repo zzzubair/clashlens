@@ -54,6 +54,12 @@ authorize going live. The final PR records the tested commit and CI runs.
   publications enter. Previously, arriving writes could keep cleanup waiting
   while already-uploaded and processed local copies accumulated. The same
   database, raw-handoff, and spool checks still decide whether deletion is safe.
+  Uploaded-copy cleanup now takes that publication barrier once for its
+  existing bounded batch, instead of stopping new publications for each file.
+  The sidecar snapshot remains conservative throughout the batch. Each hash
+  still gets its own authoritative database check, transaction and directory
+  flush; the spool capacity lock is never held across database work. Missing
+  files still allow the database to finish a deletion interrupted by a crash.
 - Quadlet container stop limits now fit within the existing systemd grace:
   40 of 45 seconds for the collector, lease plus 10 of lease plus 15 seconds
   for the worker, and 85 of 90 seconds for PostgreSQL. Podman's default

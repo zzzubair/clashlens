@@ -669,11 +669,13 @@ class Collector:
 
     def cleanup_uploaded(self, *, limit: int = 100) -> int:
         deleted = 0
-        for digest in self.database.deletable_hashes(limit=limit):
-            if self.database.delete_spool_if_deletable(
-                digest, self.spool.delete_if_unreferenced
-            ):
-                deleted += 1
+        candidates = self.database.deletable_hashes(limit=limit)
+        if not candidates:
+            return 0
+        with self.spool.delete_unreferenced_batch() as delete:
+            for digest in candidates:
+                if self.database.delete_spool_if_deletable(digest, delete):
+                    deleted += 1
         return deleted
 
     async def run(
