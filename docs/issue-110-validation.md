@@ -38,6 +38,15 @@ authorize going live. The final PR records the tested commit and CI runs.
   the durable spool. Recovery evidence must identify the actual persisted
   handoffs and prove their replay, rather than treating every fixture request
   start as already acknowledged or allowing an arbitrary loss count.
+- A full-population trial exposed a 626-second initial-discovery tail. New
+  players cannot enter regular polling until discovery confirms eligibility.
+  The collector now divides its existing 80 regular/ordinary work slots
+  equally between those lanes, instead of giving discovery 32 and regular
+  polling 48. Two-endpoint work still reserves at most 640 MiB across those
+  slots at the 4 MiB response limit. Three-endpoint season work has a higher
+  reservation cost, bounded by the same slot and spool limits. API key limits,
+  the separate interactive lane, and the trial's startup and timing checks
+  remain unchanged. The full trial must establish the resulting capacity.
 
 The step-4 target of fewer than 1,500 lines for the whole collector remains
 unmet. Its database handoff, HTTP limits, and upload recovery are separate

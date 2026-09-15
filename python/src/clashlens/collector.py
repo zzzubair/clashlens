@@ -49,8 +49,10 @@ _UPLOAD_RENEW_INTERVAL = 20.0
 _HANDOFF_LOCK_STRIPES = 256
 _HANDOFF_PROTOCOL = 2
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
-_REGULAR_PARALLELISM = 48
-_ORDINARY_INTENT_PARALLELISM = 32
+# Discovery gates regular polling of each new player. Reserve an equal share
+# of the bounded slots for ordinary intents during a cold start.
+_REGULAR_PARALLELISM = 40
+_ORDINARY_INTENT_PARALLELISM = 40
 
 
 class Collector:
