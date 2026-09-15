@@ -80,6 +80,13 @@ authorize going live. The final PR records the tested commit and CI runs.
   Every flush still finishes before the handoff, and cleanup still waits for
   active publications. This avoids holding the global capacity lock during
   disk waits without weakening durability or increasing the spool limits.
+- The regular loop now keeps up to 56 jobs in flight, while ordinary
+  discovery/history work keeps its 32 slots. The measured cold-population
+  phase filled 47 of the previous 48 regular slots while first battle logs
+  queued behind revisits and aggregate requests remained below 120/second.
+  Eight extra paired jobs reserve at most 64 MiB more raw-response capacity.
+  Per-key rates and request concurrency, database and thread pools, oldest-due
+  ordering, the five-second profile reuse window, and cleanup remain unchanged.
 - Quadlet container stop limits now fit within the existing systemd grace:
   40 of 45 seconds for the collector, lease plus 10 of lease plus 15 seconds
   for the worker, and 85 of 90 seconds for PostgreSQL. Podman's default

@@ -51,7 +51,7 @@ _HANDOFF_PROTOCOL = 2
 # Short cleanup turns keep publication moving while the deletion queue drains.
 _CLEANUP_BATCH_SIZE = 16
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
-_REGULAR_PARALLELISM = 48
+_REGULAR_PARALLELISM = 56
 _ORDINARY_INTENT_PARALLELISM = 32
 
 
