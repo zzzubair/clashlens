@@ -38,15 +38,27 @@ authorize going live. The final PR records the tested commit and CI runs.
   the durable spool. Recovery evidence must identify the actual persisted
   handoffs and prove their replay, rather than treating every fixture request
   start as already acknowledged or allowing an arbitrary loss count.
-- A full-population trial exposed a 626-second initial-discovery tail. New
-  players cannot enter regular polling until discovery confirms eligibility.
-  The collector now divides its existing 80 regular/ordinary work slots
-  equally between those lanes, instead of giving discovery 32 and regular
-  polling 48. Two-endpoint work still reserves at most 640 MiB across those
-  slots at the 4 MiB response limit. Three-endpoint season work has a higher
-  reservation cost, bounded by the same slot and spool limits. API key limits,
-  the separate interactive lane, and the trial's startup and timing checks
-  remain unchanged. The full trial must establish the resulting capacity.
+- A full-population trial exposed a 626-second initial-discovery tail.
+  Discovery saved each profile, then regular polling immediately fetched it
+  again alongside the first battle log. For a player's first successful
+  battle-log collection, the collector can reuse that durable profile while
+  it remains within the official five-second profile cache window. Expired
+  profiles, later regular polls, Refresh, and Reset still fetch both endpoints.
+  No request or acknowledgement is invented for the reused profile. The next
+  regular admission remains five minutes after the claim. API key limits,
+  spool protections, and the trial's startup and timing checks are unchanged.
+  This narrowly refines the accepted inventory's literal requirement to fetch
+  both endpoints for every regular job: the fresh discovery response supplies
+  the first profile sample, with another fetch required if reuse expires.
+- Cleanup now gets a turn after current file publications finish, before new
+  publications enter. Previously, arriving writes could keep cleanup waiting
+  while already-uploaded and processed local copies accumulated. The same
+  database, raw-handoff, and spool checks still decide whether deletion is safe.
+- Quadlet container stop limits now fit within the existing systemd grace:
+  40 of 45 seconds for the collector, lease plus 10 of lease plus 15 seconds
+  for the worker, and 85 of 90 seconds for PostgreSQL. Podman's default
+  10-second limit previously undercut those budgets. Manual fallback stops
+  also stop the collector before the worker, matching normal target shutdown.
 
 The step-4 target of fewer than 1,500 lines for the whole collector remains
 unmet. Its database handoff, HTTP limits, and upload recovery are separate

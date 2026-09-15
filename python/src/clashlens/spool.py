@@ -111,6 +111,7 @@ class Spool:
         self._publication_condition = threading.Condition()
         self._active_publications = 0
         self._cleanup_active = False
+        self._cleanup_waiters = 0
         self._reservations: dict[int, SpoolReservation] = {}
         self._actual_counts = {key: 0 for key in self._COUNT_KEYS}
         self._temporary_sizes: dict[str, int | None] = {}
@@ -336,7 +337,7 @@ class Spool:
     @contextmanager
     def _publication(self) -> Iterator[None]:
         with self._publication_condition:
-            while self._cleanup_active:
+            while self._cleanup_active or self._cleanup_waiters:
                 self._publication_condition.wait()
             self._active_publications += 1
         try:
@@ -350,9 +351,14 @@ class Spool:
     @contextmanager
     def _cleanup(self) -> Iterator[None]:
         with self._publication_condition:
-            while self._cleanup_active or self._active_publications:
-                self._publication_condition.wait()
-            self._cleanup_active = True
+            self._cleanup_waiters += 1
+            try:
+                while self._cleanup_active or self._active_publications:
+                    self._publication_condition.wait()
+                self._cleanup_active = True
+            finally:
+                self._cleanup_waiters -= 1
+                self._publication_condition.notify_all()
         try:
             yield
         finally:

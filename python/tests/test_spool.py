@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -222,6 +223,98 @@ def test_unreferenced_sweep_reads_references_at_sweep_time(
     assert spool.verify(digest) == body
     assert spool.remove_unreferenced(lambda: set()) == 1
     assert spool.verify(digest) is None
+
+
+def test_waiting_cleanup_runs_before_a_new_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    bodies = (b"first response", b"second response")
+    digests = tuple(hashlib.sha256(body).hexdigest() for body in bodies)
+    payloads = tuple(
+        ('{"response_hash":"' + digest + '"}').encode() for digest in digests
+    )
+    reservations = tuple(spool.reserve() for _body in bodies)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    cleanup_waiting = threading.Event()
+    cleanup_entered = threading.Event()
+    release_cleanup = threading.Event()
+    second_started = threading.Event()
+    second_entered = threading.Event()
+    original_write_handoff = spool.write_handoff
+    original_condition_wait = spool._publication_condition.wait
+    cleanup_thread: list[int] = []
+
+    def controlled_write_handoff(name: str, payload: bytes) -> None:
+        if name == "first":
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+        elif name == "second":
+            second_entered.set()
+        original_write_handoff(name, payload)
+
+    def referenced() -> set[str]:
+        cleanup_entered.set()
+        assert release_cleanup.wait(timeout=2)
+        return set(digests)
+
+    def observed_condition_wait(timeout: float | None = None) -> bool:
+        if cleanup_thread and threading.get_ident() == cleanup_thread[0]:
+            cleanup_waiting.set()
+        return original_condition_wait(timeout)
+
+    def cleanup_unreferenced() -> int:
+        cleanup_thread.append(threading.get_ident())
+        return spool.remove_unreferenced(referenced)
+
+    def publish_second() -> None:
+        second_started.set()
+        spool.publish_handoff(
+            bodies[1],
+            digests[1],
+            "second",
+            payloads[1],
+            reservations[1],
+        )
+
+    monkeypatch.setattr(spool, "write_handoff", controlled_write_handoff)
+    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    try:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            try:
+                first = executor.submit(
+                    spool.publish_handoff,
+                    bodies[0],
+                    digests[0],
+                    "first",
+                    payloads[0],
+                    reservations[0],
+                )
+                assert first_entered.wait(timeout=2)
+                cleanup = executor.submit(cleanup_unreferenced)
+                assert cleanup_waiting.wait(timeout=2)
+                second = executor.submit(publish_second)
+                assert second_started.wait(timeout=2)
+                assert not second_entered.wait(timeout=0.05)
+
+                release_first.set()
+                assert cleanup_entered.wait(timeout=2)
+                assert not second_entered.is_set()
+                release_cleanup.set()
+
+                assert first.result(timeout=2) is None
+                assert cleanup.result(timeout=2) == 0
+                assert second.result(timeout=2) is None
+                assert spool.verify(digests[0]) == bodies[0]
+                assert spool.verify(digests[1]) == bodies[1]
+            finally:
+                release_first.set()
+                release_cleanup.set()
+    finally:
+        for reservation in reservations:
+            reservation.release()
+        spool.close()
 
 
 def test_handoff_names_cannot_escape_trusted_directory(tmp_path: Path) -> None:

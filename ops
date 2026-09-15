@@ -61,7 +61,7 @@ finish() {
   if (( result != 0 )) && [[ "$UP_IN_PROGRESS" == true ]]; then
     "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
     local unit
-    for unit in clashlens-website clashlens-worker clashlens-api clashlens-collector clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume; do
+    for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume; do
       "$SYSTEMCTL_BIN" --user stop "$unit.service" >/dev/null 2>&1 || true
     done
   fi
@@ -644,7 +644,8 @@ render_units() {
       WEBSITE_MEMORY "$WEBSITE_MEMORY" WEBSITE_CPUS "$WEBSITE_CPUS" WEBSITE_PIDS "$WEBSITE_PIDS" \
       WEBSITE_PORT "$WEBSITE_PORT" HEALTH_PORT "$HEALTH_PORT" COLLECTOR_ARGS "$COLLECTOR_ARGS" API_ARGS "$API_ARGS" \
       WORKER_ARGS "$WORKER_ARGS" WORKER_LEASE "$WORKER_LEASE" WORKER_CONCURRENCY "$WORKER_CONCURRENCY" \
-      WORKER_DB_POOL "$WORKER_DB_POOL" WORKER_ARCHIVE_POOL "$WORKER_ARCHIVE_POOL" WORKER_STOP "$((WORKER_LEASE + 15))"
+      WORKER_DB_POOL "$WORKER_DB_POOL" WORKER_ARCHIVE_POOL "$WORKER_ARCHIVE_POOL" \
+      WORKER_PODMAN_STOP "$((WORKER_LEASE + 10))" WORKER_STOP "$((WORKER_LEASE + 15))"
   done
   if [[ "$MODE" != fixture ]]; then
     rm -f "$QUADLET_DIR/clashlens-archive.container" "$QUADLET_DIR/clashlens-clash-api.container" "$QUADLET_DIR/clashlens-login.container"
@@ -968,7 +969,7 @@ ensure_linger() {
 stop_units() {
   "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
   local unit state
-  for unit in clashlens-website clashlens-worker clashlens-api clashlens-collector clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
+  for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
     "$SYSTEMCTL_BIN" --user stop "$unit.service" >/dev/null 2>&1 || true
   done
   state=$($SYSTEMCTL_BIN --user is-enabled clashlens.target 2>/dev/null || true)

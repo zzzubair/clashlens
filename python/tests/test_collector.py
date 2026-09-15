@@ -8,7 +8,7 @@ import os
 import threading
 from collections.abc import Callable
 from contextlib import AbstractContextManager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self
@@ -250,6 +250,136 @@ def test_player_pair_is_reserved_then_fetched_concurrently_then_handed_off() -> 
         for handoff in store.handoffs
     )
     assert spool.handoffs == {}
+
+
+@pytest.mark.parametrize(
+    ("lane", "expected_endpoints"),
+    [
+        ("ordinary", ["battle_log"]),
+        ("reset", ["profile", "battle_log"]),
+        ("interactive", ["profile", "battle_log"]),
+    ],
+)
+def test_fresh_discovery_profile_is_reused_only_for_first_regular_collection(
+    lane: str, expected_endpoints: list[str]
+) -> None:
+    spool = _Spool()
+    store = _Store(spool)
+    client = _Client(spool)
+    collector = _collector(spool, store, client)
+    now = datetime.now(UTC)
+    work = CollectorWork(
+        1,
+        "#2PP",
+        now,
+        profile_fresh_until=now + timedelta(seconds=1),
+    )
+
+    outcomes = asyncio.run(collector.collect_player(work, lane=lane))
+
+    assert outcomes == ["recorded"] * len(expected_endpoints)
+    assert sorted(handoff.endpoint for handoff in store.handoffs) == sorted(
+        expected_endpoints
+    )
+
+
+def test_regular_collection_fetches_profile_if_freshness_expires_while_reserving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC)
+    clock = [now]
+    monkeypatch.setattr(
+        collector_module, "datetime", SimpleNamespace(now=lambda _zone: clock[0])
+    )
+
+    class DelayedReservationSpool(_Spool):
+        delayed = False
+
+        def reserve(self, limit: int) -> _Reservation:
+            if not self.delayed:
+                self.delayed = True
+                clock[0] = now + timedelta(seconds=2)
+            return super().reserve(limit)
+
+    spool = DelayedReservationSpool()
+    store = _Store(spool)
+    collector = _collector(spool, store, _Client(spool))
+    work = CollectorWork(
+        1,
+        "#2PP",
+        now,
+        profile_fresh_until=now + timedelta(seconds=1),
+    )
+
+    outcomes = asyncio.run(collector.collect_player(work, lane="ordinary"))
+
+    assert outcomes == ["recorded", "recorded"]
+    assert sorted(handoff.endpoint for handoff in store.handoffs) == [
+        "battle_log",
+        "profile",
+    ]
+
+
+def test_regular_collection_fetches_profile_if_battle_finishes_after_freshness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC)
+    clock = [now]
+    monkeypatch.setattr(
+        collector_module, "datetime", SimpleNamespace(now=lambda _zone: clock[0])
+    )
+
+    class DelayedBattleClient(_Client):
+        async def fetch_player(
+            self, pool: KeyPool, tag: str, endpoint: str
+        ) -> FetchedResponse:
+            if endpoint == "battle_log":
+                clock[0] = now + timedelta(seconds=2)
+            return await super().fetch_player(pool, tag, endpoint)
+
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, DelayedBattleClient(spool))
+    work = CollectorWork(
+        1,
+        "#2PP",
+        now,
+        profile_fresh_until=now + timedelta(seconds=1),
+    )
+
+    outcomes = asyncio.run(collector.collect_player(work, lane="ordinary"))
+
+    assert outcomes == ["recorded", "recorded"]
+    assert sorted(handoff.endpoint for handoff in store.handoffs) == [
+        "battle_log",
+        "profile",
+    ]
+
+
+def test_regular_collection_fetches_profile_when_first_battle_fails() -> None:
+    class FailedBattleClient(_Client):
+        async def fetch_player(
+            self, pool: KeyPool, tag: str, endpoint: str
+        ) -> FetchedResponse:
+            if endpoint == "battle_log":
+                raise ProviderFailure("network_failure", retryable=True)
+            return await super().fetch_player(pool, tag, endpoint)
+
+    spool = _Spool()
+    store = _Store(spool)
+    collector = _collector(spool, store, FailedBattleClient(spool))
+    now = datetime.now(UTC)
+    work = CollectorWork(
+        1,
+        "#2PP",
+        now,
+        profile_fresh_until=now + timedelta(seconds=1),
+    )
+
+    outcomes = asyncio.run(collector.collect_player(work, lane="ordinary"))
+
+    assert outcomes == ["recorded", "failed"]
+    assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
 
 
 def test_player_pair_publishes_spool_handoffs_concurrently() -> None:

@@ -25,6 +25,7 @@ PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
 SOURCE_PARSER_VERSION = "supercell-source-parser-v2"
 LEAGUE_HISTORY_PARSER_VERSION = "supercell-league-history-parser-v1"
 REVISIT_INTERVAL = timedelta(minutes=5)
+PROFILE_CACHE_WINDOW = timedelta(seconds=5)
 UPLOAD_RETRY_DELAY = timedelta(seconds=5)
 _ENDPOINTS = {
     "profile",
@@ -41,6 +42,7 @@ class CollectorWork:
     normalized_tag: str
     due_at: datetime
     collector_work_id: int | None = None
+    profile_fresh_until: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,16 +429,49 @@ class CollectorDatabase:
                         ORDER BY next_due_at, id
                         FOR UPDATE SKIP LOCKED
                         LIMIT %s
+                    ), claimed AS (
+                        UPDATE players AS player
+                        SET next_due_at = %s + interval '5 minutes'
+                        FROM due
+                        WHERE player.id = due.id
+                        RETURNING due.id, due.normalized_tag, due.next_due_at
                     )
-                    UPDATE players AS player
-                    SET next_due_at = %s + interval '5 minutes'
-                    FROM due
-                    WHERE player.id = due.id
-                    RETURNING due.id, due.normalized_tag, due.next_due_at
+                    SELECT claimed.id, claimed.normalized_tag, claimed.next_due_at,
+                           CASE
+                               WHEN profile.last_success_at <= %s
+                                AND profile.last_success_at > %s
+                                AND battle.last_success_at IS NULL
+                               THEN profile.last_success_at + %s
+                               ELSE NULL
+                           END AS profile_fresh_until
+                    FROM claimed
+                    LEFT JOIN collector_response_state AS profile
+                      ON profile.scope = 'player'
+                     AND profile.identity_key = claimed.normalized_tag
+                     AND profile.endpoint = 'profile'
+                    LEFT JOIN collector_response_state AS battle
+                      ON battle.scope = 'player'
+                     AND battle.identity_key = claimed.normalized_tag
+                     AND battle.endpoint = 'battle_log'
                     """,
-                    (claim_time, limit, claim_time),
+                    (
+                        claim_time,
+                        limit,
+                        claim_time,
+                        claim_time,
+                        claim_time - PROFILE_CACHE_WINDOW,
+                        PROFILE_CACHE_WINDOW,
+                    ),
                 ).fetchall()
-        return [CollectorWork(int(row[0]), str(row[1]), row[2]) for row in rows]
+        return [
+            CollectorWork(
+                int(row[0]),
+                str(row[1]),
+                row[2],
+                profile_fresh_until=row[3],
+            )
+            for row in rows
+        ]
 
     @staticmethod
     def _regular_admission_open(connection: Any, now: datetime) -> bool:

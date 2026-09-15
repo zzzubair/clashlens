@@ -46,6 +46,7 @@ def _handoff(
     completed_at: datetime = NOW,
     collector_work_id: int | None = None,
     content_fingerprint: str | None = None,
+    http_status: int = 200,
 ) -> ResponseHandoff:
     return ResponseHandoff(
         occurrence_key=occurrence_key,
@@ -56,7 +57,7 @@ def _handoff(
         normalized_tag=tag,
         request_started_at=completed_at - timedelta(seconds=1),
         response_completed_at=completed_at,
-        http_status=200,
+        http_status=http_status,
         response_hash=response_hash,
         content_fingerprint=content_fingerprint or response_hash,
         byte_size=1,
@@ -90,6 +91,62 @@ def test_due_players_are_claimed_without_collector_work_rows(
                 "SELECT next_due_at FROM players WHERE id = %s", (player_id,)
             ).fetchone()[0]
         assert next_due_at == NOW + timedelta(minutes=5)
+
+
+def test_due_claim_reuses_only_a_current_profile_before_the_first_successful_battle(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = CollectorDatabase(connection_info)
+        cases = {
+            "#FRESH": (NOW - timedelta(seconds=1), None),
+            "#STALE": (NOW - timedelta(seconds=6), None),
+            "#FUTURE": (NOW + timedelta(seconds=1), None),
+            "#BATTLE": (NOW - timedelta(seconds=1), 200),
+            "#FAILED": (NOW - timedelta(seconds=1), 404),
+        }
+        for index, (tag, (profile_at, battle_status)) in enumerate(
+            cases.items(), start=1
+        ):
+            player_id = _player(connection_info, tag)
+            database.record_response(
+                _handoff(
+                    occurrence_key=f"profile-{index}",
+                    response_hash=_hash(f"profile-{index}"),
+                    player_id=player_id,
+                    tag=tag,
+                    completed_at=profile_at,
+                )
+            )
+            if battle_status is not None:
+                database.record_response(
+                    _handoff(
+                        occurrence_key=f"battle-{index}",
+                        response_hash=_hash(f"battle-{index}"),
+                        player_id=player_id,
+                        tag=tag,
+                        endpoint="battle_log",
+                        completed_at=NOW - timedelta(seconds=1),
+                        http_status=battle_status,
+                    )
+                )
+
+        work_by_tag = {
+            work.normalized_tag: work
+            for work in database.claim_due_players(limit=10, now=NOW)
+        }
+
+        assert set(work_by_tag) == set(cases)
+        assert work_by_tag["#FRESH"].profile_fresh_until == NOW + timedelta(
+            seconds=4
+        )
+        assert work_by_tag["#FAILED"].profile_fresh_until == NOW + timedelta(
+            seconds=4
+        )
+        assert all(
+            work_by_tag[tag].profile_fresh_until is None
+            for tag in ("#STALE", "#FUTURE", "#BATTLE")
+        )
 
 
 def test_response_state_compacts_unchanged_and_enqueues_changed_response(

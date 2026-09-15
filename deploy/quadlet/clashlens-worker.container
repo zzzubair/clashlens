@@ -10,6 +10,7 @@ Label=org.clashlens.managed=ops
 Image=@@PYTHON_IMAGE@@
 Pull=never
 ContainerName=@@PREFIX@@-python-worker
+StopTimeout=@@WORKER_PODMAN_STOP@@
 EnvironmentFile=@@ENV_DIR@@/worker.env
 Volume=@@SPOOL_ROOT@@:/spool:rw,z
 Secret=clashlens-worker-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400

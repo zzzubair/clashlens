@@ -10,6 +10,7 @@ Label=org.clashlens.managed=ops
 Image=@@POSTGRES_IMAGE@@
 Pull=never
 ContainerName=@@PREFIX@@-postgres
+StopTimeout=85
 User=0
 Volume=clashlens-postgres.volume:/var/lib/postgresql/data
 EnvironmentFile=@@ENV_DIR@@/postgres.env

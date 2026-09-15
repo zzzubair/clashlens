@@ -49,10 +49,8 @@ _UPLOAD_RENEW_INTERVAL = 20.0
 _HANDOFF_LOCK_STRIPES = 256
 _HANDOFF_PROTOCOL = 2
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
-# Discovery gates regular polling of each new player. Reserve an equal share
-# of the bounded slots for ordinary intents during a cold start.
-_REGULAR_PARALLELISM = 40
-_ORDINARY_INTENT_PARALLELISM = 40
+_REGULAR_PARALLELISM = 48
+_ORDINARY_INTENT_PARALLELISM = 32
 
 
 class Collector:
@@ -122,6 +120,17 @@ class Collector:
         pool = self.interactive_keys if lane == "interactive" else self.regular_keys
         try:
             stack, reservations = await self._reserve_endpoints_safely(endpoints)
+            selected_endpoints = endpoints
+            selected_reservations = reservations
+            reuse_fresh_profile = (
+                lane == "ordinary"
+                and endpoints == ("profile", "battle_log")
+                and work.profile_fresh_until is not None
+                and datetime.now(UTC) < work.profile_fresh_until
+            )
+            if reuse_fresh_profile:
+                selected_endpoints = ("battle_log",)
+                selected_reservations = (reservations[1],)
             tasks = [
                 asyncio.create_task(
                     self._collect_endpoint(
@@ -133,11 +142,31 @@ class Collector:
                     )
                 )
                 for endpoint, reservation in zip(
-                    endpoints, reservations, strict=True
+                    selected_endpoints, selected_reservations, strict=True
                 )
             ]
             try:
-                return list(await asyncio.gather(*tasks))
+                outcomes = list(await asyncio.gather(*tasks))
+                if (
+                    reuse_fresh_profile
+                    and work.profile_fresh_until is not None
+                    and (
+                        outcomes != ["recorded"]
+                        or datetime.now(UTC) >= work.profile_fresh_until
+                    )
+                ):
+                    profile_task = asyncio.create_task(
+                        self._collect_endpoint(
+                            work,
+                            "profile",
+                            lane,
+                            pool,
+                            reservation=reservations[0],
+                        )
+                    )
+                    tasks.append(profile_task)
+                    outcomes.insert(0, await profile_task)
+                return outcomes
             except BaseException:
                 for task in tasks:
                     if not task.done():
