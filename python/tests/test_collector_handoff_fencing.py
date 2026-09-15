@@ -300,3 +300,111 @@ def test_regular_stop_drains_sibling_then_reports_child_failure() -> None:
             await loop
 
     asyncio.run(scenario())
+
+
+def test_regular_admission_drains_work_if_the_next_tier_claim_fails() -> None:
+    async def scenario() -> None:
+        spool = _Spool()
+        store = _Store(spool)
+        collector = _collector(spool, store, _Client(spool))
+        work = CollectorWork(1, "#2PP", datetime.now(UTC))
+        started = threading.Event()
+        drained = asyncio.Event()
+        block = asyncio.Event()
+
+        def claim_due_players(
+            *, first_battle_pending: bool, **_kwargs: Any
+        ) -> list[CollectorWork]:
+            if not first_battle_pending:
+                return [work]
+            if not started.wait(1):
+                raise AssertionError("claimed work was not admitted")
+            raise RuntimeError("later tier claim failed")
+
+        async def collect_player(*_args: Any, **_kwargs: Any) -> list[str]:
+            started.set()
+            try:
+                await block.wait()
+            finally:
+                drained.set()
+
+        store.claim_due_players = claim_due_players  # type: ignore[attr-defined]
+        collector.collect_player = collect_player  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="later tier claim failed"):
+            await asyncio.wait_for(
+                collector._regular_loop(asyncio.Event(), 0.001), 1
+            )
+        assert drained.is_set()
+
+    asyncio.run(scenario())
+
+
+def test_regular_admission_serves_repeats_and_borrows_an_empty_first_battle_tier(
+) -> None:
+    async def run_case(
+        first_battles: list[CollectorWork],
+        repeats: list[CollectorWork],
+        expected_starts: int,
+    ) -> list[CollectorWork]:
+        spool = _Spool()
+        store = _Store(spool)
+        collector = _collector(spool, store, _Client(spool))
+        queues = {True: first_battles, False: repeats}
+        started: list[CollectorWork] = []
+        enough_started = asyncio.Event()
+        release = asyncio.Event()
+
+        def claim_due_players(
+            *, limit: int, first_battle_pending: bool, **_kwargs: Any
+        ) -> list[CollectorWork]:
+            queue = queues[first_battle_pending]
+            claimed, queues[first_battle_pending] = queue[:limit], queue[limit:]
+            return claimed
+
+        async def collect_player(
+            work: CollectorWork, **_kwargs: Any
+        ) -> list[str]:
+            started.append(work)
+            if len(started) >= expected_starts:
+                enough_started.set()
+            await release.wait()
+            return ["recorded"]
+
+        store.claim_due_players = claim_due_players  # type: ignore[attr-defined]
+        collector.collect_player = collect_player  # type: ignore[method-assign]
+        stop = asyncio.Event()
+        loop = asyncio.create_task(collector._regular_loop(stop, 0.001))
+        await asyncio.wait_for(enough_started.wait(), 1)
+        stop.set()
+        release.set()
+        await loop
+        return started
+
+    async def scenario() -> None:
+        now = datetime.now(UTC)
+        first_battles = [
+            CollectorWork(index, f"#F{index}", now, first_battle_pending=True)
+            for index in range(1, 101)
+        ]
+        repeats = [
+            CollectorWork(1000 + index, f"#R{index}", now)
+            for index in range(1, 21)
+        ]
+        mixed = await run_case(first_battles, repeats, 56)
+        assert sum(not work.first_battle_pending for work in mixed) == 14
+        assert sum(work.first_battle_pending for work in mixed) == 42
+        assert len({work.player_id for work in mixed}) == len(mixed)
+
+        only_first_battles = first_battles[:60]
+        first_borrowed = await run_case(
+            only_first_battles, [], 56
+        )
+        assert first_borrowed == only_first_battles[:56]
+
+        only_repeats = [
+            CollectorWork(index, f"#R{index}", now) for index in range(1, 61)
+        ]
+        borrowed = await run_case([], only_repeats, 56)
+        assert borrowed == only_repeats[:56]
+
+    asyncio.run(scenario())

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import psycopg
 import pytest
 from domain_test_support import domain_database
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from clashlens.collector_db import (
     CollectorDatabase,
@@ -78,7 +80,14 @@ def test_due_players_are_claimed_without_collector_work_rows(
 
         work = database.claim_due_players(limit=10, now=NOW)
 
-        assert work == [CollectorWork(player_id, "#2PP", NOW - timedelta(seconds=1))]
+        assert work == [
+            CollectorWork(
+                player_id,
+                "#2PP",
+                NOW - timedelta(seconds=1),
+                first_battle_pending=True,
+            )
+        ]
         with psycopg.connect(connection_info) as connection:
             assert (
                 connection.execute(
@@ -147,6 +156,205 @@ def test_due_claim_reuses_only_a_current_profile_before_the_first_successful_bat
             work_by_tag[tag].profile_fresh_until is None
             for tag in ("#STALE", "#FUTURE", "#BATTLE")
         )
+
+
+def test_due_claim_prioritizes_unsuccessful_first_battles_before_repeats(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = CollectorDatabase(connection_info)
+        repeat_player = _player(connection_info, "#REPEAT")
+        failed_player = _player(connection_info, "#FAILED")
+        new_player = _player(connection_info, "#FIRST")
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                UPDATE players SET next_due_at = CASE id
+                    WHEN %s THEN %s - interval '2 minutes'
+                    WHEN %s THEN %s - interval '1 minute'
+                    ELSE %s - interval '1 second' END
+                """,
+                (repeat_player, NOW, failed_player, NOW, NOW),
+            )
+        database.record_response(
+            _handoff(
+                occurrence_key="repeat-battle",
+                response_hash=_hash("repeat-battle"),
+                player_id=repeat_player,
+                tag="#REPEAT",
+                endpoint="battle_log",
+            )
+        )
+        database.record_response(
+            _handoff(
+                occurrence_key="failed-battle",
+                response_hash=_hash("failed-battle"),
+                player_id=failed_player,
+                tag="#FAILED",
+                endpoint="battle_log",
+                http_status=404,
+            )
+        )
+
+        first = database.claim_due_players(
+            limit=2, now=NOW, first_battle_pending=True
+        )
+        second = database.claim_due_players(
+            limit=1, now=NOW, first_battle_pending=False
+        )
+
+        assert [work.player_id for work in first] == [failed_player, new_player]
+        assert [work.player_id for work in second] == [repeat_player]
+        with psycopg.connect(connection_info) as connection:
+            pending = dict(
+                connection.execute(
+                    "SELECT id, first_battle_pending FROM players"
+                ).fetchall()
+            )
+        assert pending == {
+            repeat_player: False,
+            failed_player: True,
+            new_player: True,
+        }
+        options = conninfo_to_dict(connection_info).get("options", "")
+        collector_database = CollectorDatabase(
+            make_conninfo(
+                connection_info,
+                options=f"{options} -c role=clashlens_collector".strip(),
+            )
+        )
+        successful_hash = _hash("successful-retry-battle")
+        collector_database.record_response(
+            _handoff(
+                occurrence_key="successful-retry-battle",
+                response_hash=successful_hash,
+                player_id=failed_player,
+                tag="#FAILED",
+                endpoint="battle_log",
+            )
+        )
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE players SET first_battle_pending = true WHERE id = %s",
+                (failed_player,),
+            )
+        compact = collector_database.record_response(
+            _handoff(
+                occurrence_key="compact-successful-battle",
+                response_hash=successful_hash,
+                player_id=failed_player,
+                tag="#FAILED",
+                endpoint="battle_log",
+                completed_at=NOW + timedelta(minutes=5),
+            )
+        )
+        collector_database.close()
+        assert compact.changed is False
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE players SET active = false WHERE id = %s",
+                (failed_player,),
+            )
+            connection.execute(
+                "UPDATE players SET active = true WHERE id = %s",
+                (failed_player,),
+            )
+            pending_after_reentry = connection.execute(
+                "SELECT first_battle_pending FROM players WHERE id = %s",
+                (failed_player,),
+            ).fetchone()[0]
+        assert pending_after_reentry is False
+
+
+def test_first_battle_priority_rolls_back_with_response_state(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                CREATE FUNCTION fail_first_battle_clear() RETURNS trigger
+                LANGUAGE plpgsql AS $$ BEGIN
+                    RAISE EXCEPTION 'forced first-battle clear failure';
+                END $$
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER fail_first_battle_clear
+                BEFORE UPDATE OF first_battle_pending ON players
+                FOR EACH ROW WHEN (OLD.first_battle_pending AND
+                                   NOT NEW.first_battle_pending)
+                EXECUTE FUNCTION fail_first_battle_clear()
+                """
+            )
+
+        with pytest.raises(psycopg.errors.RaiseException):
+            database.record_response(
+                _handoff(
+                    occurrence_key="rolled-back-battle",
+                    response_hash=_hash("rolled-back-battle"),
+                    player_id=player_id,
+                    endpoint="battle_log",
+                )
+            )
+
+        with psycopg.connect(connection_info) as connection:
+            state_count = connection.execute(
+                """SELECT count(*) FROM collector_response_state
+                WHERE player_id = %s AND endpoint = 'battle_log'""",
+                (player_id,),
+            ).fetchone()[0]
+            pending = connection.execute(
+                "SELECT first_battle_pending FROM players WHERE id = %s",
+                (player_id,),
+            ).fetchone()[0]
+        assert state_count == 0
+        assert pending is True
+
+
+def test_first_battle_priority_migration_backfills_successful_state(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        database.record_response(
+            _handoff(
+                occurrence_key="pre-migration-battle",
+                response_hash=_hash("pre-migration-battle"),
+                player_id=player_id,
+                endpoint="battle_log",
+            )
+        )
+        migration = (
+            Path(__file__).parents[2]
+            / "deploy/migrations/0034_first_battle_priority.sql"
+        ).read_text(encoding="utf-8")
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE players SET first_battle_pending = true WHERE id = %s",
+                (player_id,),
+            )
+            connection.execute(migration)
+            pending, collector_update, collector_insert = connection.execute(
+                """
+                SELECT first_battle_pending,
+                       has_column_privilege(
+                           'clashlens_collector', 'players',
+                           'first_battle_pending', 'UPDATE'),
+                       has_column_privilege(
+                           'clashlens_collector', 'players',
+                           'first_battle_pending', 'INSERT')
+                FROM players WHERE id = %s
+                """,
+                (player_id,),
+            ).fetchone()
+        assert pending is False
+        assert collector_update is True
+        assert collector_insert is False
 
 
 def test_response_state_compacts_unchanged_and_enqueues_changed_response(

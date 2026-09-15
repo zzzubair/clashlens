@@ -52,6 +52,9 @@ _HANDOFF_PROTOCOL = 2
 _CLEANUP_BATCH_SIZE = 16
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
 _REGULAR_PARALLELISM = 56
+# Cold discovery measured 21.21 players/s against 29.27 regular jobs/s.
+# A quarter of regular slots keeps overdue revisits moving until discovery drains.
+_REGULAR_REPEAT_MINIMUM = 14
 _ORDINARY_INTENT_PARALLELISM = 32
 
 
@@ -771,18 +774,56 @@ class Collector:
                     continue
                 work: list[CollectorWork] = []
                 async with self._regular_admission_lock:
+                    def admit(
+                        items: list[CollectorWork], total: list[CollectorWork] = work
+                    ) -> None:
+                        for item in items:
+                            pending[
+                                asyncio.create_task(
+                                    self.collect_player(item, lane="ordinary")
+                                )
+                            ] = item
+                        total.extend(items)
+                        self.regular_inflight += len(items)
+
+                    claim_time = datetime.now(UTC)
+                    available = _REGULAR_PARALLELISM - len(pending)
+                    repeat_inflight = sum(
+                        not item.first_battle_pending for item in pending.values()
+                    )
+                    repeat_limit = min(
+                        available,
+                        max(0, _REGULAR_REPEAT_MINIMUM - repeat_inflight),
+                    )
+                    if repeat_limit > 0:
+                        admit(
+                            await self._database_call(
+                                self.database.claim_due_players,
+                                limit=repeat_limit,
+                                now=claim_time,
+                                first_battle_pending=False,
+                            )
+                        )
+                    available -= len(work)
+                    if available > 0:
+                        admit(
+                            await self._database_call(
+                                self.database.claim_due_players,
+                                limit=available,
+                                now=claim_time,
+                                first_battle_pending=True,
+                            )
+                        )
                     available = _REGULAR_PARALLELISM - len(pending)
                     if available > 0:
-                        work = await self._database_call(
-                            self.database.claim_due_players,
-                            limit=available,
-                            now=datetime.now(UTC),
+                        admit(
+                            await self._database_call(
+                                self.database.claim_due_players,
+                                limit=available,
+                                now=claim_time,
+                                first_battle_pending=False,
+                            )
                         )
-                        self.regular_inflight += len(work)
-                for item in work:
-                    pending[
-                        asyncio.create_task(self.collect_player(item, lane="ordinary"))
-                    ] = item
                 if work:
                     continue
                 if pending:

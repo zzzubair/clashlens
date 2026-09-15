@@ -43,6 +43,7 @@ class CollectorWork:
     due_at: datetime
     collector_work_id: int | None = None
     profile_fresh_until: datetime | None = None
+    first_battle_pending: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -409,23 +410,33 @@ class CollectorDatabase:
         return str(row[0])
 
     def claim_due_players(
-        self, limit: int, now: datetime | None = None
+        self,
+        limit: int,
+        now: datetime | None = None,
+        *,
+        first_battle_pending: bool | None = None,
     ) -> list[CollectorWork]:
         if limit < 1:
             raise ValueError("player claim limit must be positive")
         claim_time = now or datetime.now(UTC)
+        priority_filter = (
+            "" if first_battle_pending is None else "AND first_battle_pending = %s"
+        )
+        priority_params = () if first_battle_pending is None else (first_battle_pending,)
         with self._connection() as connection:
             with connection.transaction():
                 if not self._regular_admission_open(connection, claim_time):
                     return []
                 rows = connection.execute(
-                    """
+                    f"""
                     WITH due AS (
-                        SELECT id, normalized_tag, next_due_at
+                        SELECT id, normalized_tag, next_due_at,
+                               first_battle_pending
                         FROM players
                         WHERE active = true
                           AND next_due_at IS NOT NULL
                           AND next_due_at <= %s
+                          {priority_filter}
                         ORDER BY next_due_at, id
                         FOR UPDATE SKIP LOCKED
                         LIMIT %s
@@ -434,7 +445,8 @@ class CollectorDatabase:
                         SET next_due_at = %s + interval '5 minutes'
                         FROM due
                         WHERE player.id = due.id
-                        RETURNING due.id, due.normalized_tag, due.next_due_at
+                        RETURNING due.id, due.normalized_tag, due.next_due_at,
+                                  due.first_battle_pending
                     )
                     SELECT claimed.id, claimed.normalized_tag, claimed.next_due_at,
                            CASE
@@ -443,7 +455,8 @@ class CollectorDatabase:
                                 AND battle.last_success_at IS NULL
                                THEN profile.last_success_at + %s
                                ELSE NULL
-                           END AS profile_fresh_until
+                           END AS profile_fresh_until,
+                           claimed.first_battle_pending
                     FROM claimed
                     LEFT JOIN collector_response_state AS profile
                       ON profile.scope = 'player'
@@ -456,12 +469,14 @@ class CollectorDatabase:
                     """,
                     (
                         claim_time,
+                        *priority_params,
                         limit,
                         claim_time,
                         claim_time,
                         claim_time - PROFILE_CACHE_WINDOW,
                         PROFILE_CACHE_WINDOW,
                     ),
+                    prepare=False,
                 ).fetchall()
         return [
             CollectorWork(
@@ -469,6 +484,7 @@ class CollectorDatabase:
                 str(row[1]),
                 row[2],
                 profile_fresh_until=row[3],
+                first_battle_pending=bool(row[4]),
             )
             for row in rows
         ]
@@ -1071,6 +1087,15 @@ class CollectorDatabase:
                 else None,
             ),
         )
+        if (
+            handoff.endpoint == "battle_log"
+            and 200 <= handoff.http_status < 300
+        ):
+            connection.execute(
+                """UPDATE players SET first_battle_pending = false
+                WHERE id = %s AND first_battle_pending""",
+                (handoff.player_id,),
+            )
 
     def record_response(self, handoff: ResponseHandoff) -> ResponseResult:
         return self._record_response(handoff, recovering=False)

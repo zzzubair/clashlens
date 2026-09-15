@@ -93,6 +93,20 @@ authorize going live. The final PR records the tested commit and CI runs.
   Eight extra paired jobs reserve at most 64 MiB more raw-response capacity.
   Per-key rates and request concurrency, database and thread pools, oldest-due
   ordering, the five-second profile reuse window, and cleanup remain unchanged.
+- The full 56-slot trial cleared every queue and local spool copy, but its
+  cold-population battle gap still reached 639.138 seconds. Steady collection
+  sustained 87.733 profile/battle requests per second; initial battle requests
+  were waiting behind repeat polls and missing the five-second profile reuse
+  window. A persisted first-battle marker lets indexed claims separate those
+  two groups without scanning response state for the entire population.
+  Successful battle responses clear it in the same transaction as their
+  durable response state, and migration backfill uses existing success proof.
+  Repeat polls retain a quarter of the 56 slots when both groups need work;
+  either group can borrow unused slots. Each group keeps oldest-due order.
+  This refines global oldest-due order to protect initial collection while serving
+  existing players. The five-minute minimum, total slots and HTTP limits stay
+  unchanged. The final PR reports the new trial's actual result; the earlier
+  639-second gap is a failure, not an accepted timing margin.
 - Quadlet container stop limits now fit within the existing systemd grace:
   40 of 45 seconds for the collector, lease plus 10 of lease plus 15 seconds
   for the worker, and 85 of 90 seconds for PostgreSQL. Podman's default
@@ -181,6 +195,16 @@ response's timestamp and identity. One UUID-sized text value on each
 existing endpoint state row adds approximately 1.5 MB at 12,500 players and
 three endpoints, before tuple overhead. There is no per-fetch receipt row
 or new index. The latest-response fields keep their existing meaning.
+
+Migration 0034 adds one boolean per player, approximately 12.5 KB of values
+at 12,500 players before tuple overhead, and a separate claim index. That
+additional index measured 3,874,816 bytes (3.70 MiB) after the isolated query
+experiments; this is an observed allocation, not a permanent size cap. The
+older due-time index remains for unfiltered claims and oldest-due reporting.
+No per-fetch row is added. The claim disables prepared-statement reuse only
+for this bounded query: a generic plan scanned all 12,500 players during the
+update, while repeated actual claims with 37,500 endpoint-state rows used
+roughly 3–5 ms after warm-up. Transaction and row-lock behavior are unchanged.
 
 New handoff files identify the serialized publication protocol used to
 write them. Older changed-response handoffs can be reconciled against
