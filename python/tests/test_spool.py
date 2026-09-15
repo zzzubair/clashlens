@@ -452,6 +452,174 @@ def test_unreferenced_sweep_reads_references_at_sweep_time(
     assert spool.verify(digest) is None
 
 
+def test_unreferenced_sweep_flushes_each_prefix_before_publication_resumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    first_body = b"first orphan"
+    first_digest = hashlib.sha256(first_body).hexdigest()
+    second_body = next(
+        candidate
+        for index in range(10_000)
+        if (candidate := f"same-prefix-orphan-{index}".encode()) != first_body
+        and hashlib.sha256(candidate).hexdigest().startswith(first_digest[:2])
+    )
+    second_digest = hashlib.sha256(second_body).hexdigest()
+    protected_body = b"database referenced body"
+    protected_digest = hashlib.sha256(protected_body).hexdigest()
+    new_body = b"publication after the sweep"
+    new_digest = hashlib.sha256(new_body).hexdigest()
+    for body, digest in (
+        (first_body, first_digest),
+        (second_body, second_digest),
+        (protected_body, protected_digest),
+    ):
+        spool.publish(body, digest)
+    new_reservation = spool.reserve()
+
+    flush_started = threading.Event()
+    release_flush = threading.Event()
+    publication_waiting = threading.Event()
+    publication_thread: list[int] = []
+    prefix_flushes = 0
+    original_sync = spool_module._fsync_dir
+    original_condition_wait = spool._publication_condition.wait
+
+    def controlled_sync(fd: int) -> None:
+        nonlocal prefix_flushes
+        info = os.fstat(fd)
+        prefix = (root / "sha256" / first_digest[:2]).stat()
+        if (info.st_dev, info.st_ino) == (prefix.st_dev, prefix.st_ino):
+            prefix_flushes += 1
+            flush_started.set()
+            assert release_flush.wait(timeout=2)
+        original_sync(fd)
+
+    def observed_condition_wait(timeout: float | None = None) -> bool:
+        if publication_thread and threading.get_ident() == publication_thread[0]:
+            publication_waiting.set()
+        return original_condition_wait(timeout)
+
+    def publish_new() -> None:
+        publication_thread.append(threading.get_ident())
+        spool.publish_handoff(
+            new_body,
+            new_digest,
+            "new",
+            ('{"response_hash":"' + new_digest + '"}').encode(),
+            new_reservation,
+        )
+
+    monkeypatch.setattr(spool_module, "_fsync_dir", controlled_sync)
+    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            sweep = executor.submit(
+                spool.remove_unreferenced, lambda: {protected_digest}
+            )
+            assert flush_started.wait(timeout=2)
+            publication = executor.submit(publish_new)
+            assert publication_waiting.wait(timeout=2)
+            assert not publication.done()
+            release_flush.set()
+            assert sweep.result(timeout=2) == 2
+            assert publication.result(timeout=2) is None
+    finally:
+        release_flush.set()
+        new_reservation.release()
+
+    assert prefix_flushes == 1
+    assert spool.verify(first_digest) is None
+    assert spool.verify(second_digest) is None
+    assert spool.verify(protected_digest) == protected_body
+    assert spool.verify(new_digest) == new_body
+
+
+def test_unreferenced_sweep_propagates_final_directory_flush_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    orphan_bodies = (b"orphan before failed flush", b"orphan flushed afterward")
+    orphan_digests = tuple(hashlib.sha256(body).hexdigest() for body in orphan_bodies)
+    orphan_prefixes = {digest[:2] for digest in orphan_digests}
+    assert len(orphan_prefixes) == 2
+    failed_prefix = min(orphan_prefixes)
+    protected_body = b"protected across failed flush"
+    protected_digest = hashlib.sha256(protected_body).hexdigest()
+    for body, digest in zip(orphan_bodies, orphan_digests, strict=True):
+        spool.publish(body, digest)
+    spool.publish(protected_body, protected_digest)
+    original_sync = spool_module._fsync_dir
+    failed = False
+    flushed_after_failure: set[str] = set()
+
+    def fail_orphan_prefix_sync(fd: int) -> None:
+        nonlocal failed
+        info = os.fstat(fd)
+        for prefix in orphan_prefixes:
+            prefix_info = (root / "sha256" / prefix).stat()
+            if (info.st_dev, info.st_ino) != (
+                prefix_info.st_dev,
+                prefix_info.st_ino,
+            ):
+                continue
+            if prefix == failed_prefix:
+                failed = True
+                raise OSError(errno.EIO, "orphan prefix sync failed")
+            if failed:
+                flushed_after_failure.add(prefix)
+        original_sync(fd)
+
+    monkeypatch.setattr(spool_module, "_fsync_dir", fail_orphan_prefix_sync)
+
+    with pytest.raises(OSError, match="orphan prefix sync failed"):
+        spool.remove_unreferenced(lambda: {protected_digest})
+
+    assert flushed_after_failure == orphan_prefixes - {failed_prefix}
+    assert all(spool.verify(digest) is None for digest in orphan_digests)
+    assert spool.verify(protected_digest) == protected_body
+    assert spool.stats()["final_objects"] == 1
+
+
+def test_unreferenced_sweep_flushes_prior_unlinks_before_propagating_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    bodies = (b"unlinked before error", b"unlink fails")
+    digests = sorted(hashlib.sha256(body).hexdigest() for body in bodies)
+    assert digests[0][:2] != digests[1][:2]
+    for body in bodies:
+        spool.publish(body, hashlib.sha256(body).hexdigest())
+    original_unlink = os.unlink
+    original_sync = spool_module._fsync_dir
+    earlier_prefix_flushed = False
+
+    def fail_later_unlink(path, *args, **kwargs) -> None:
+        if path == digests[1]:
+            raise OSError(errno.EIO, "later unlink failed")
+        original_unlink(path, *args, **kwargs)
+
+    def observe_sync(fd: int) -> None:
+        nonlocal earlier_prefix_flushed
+        info = os.fstat(fd)
+        prefix = (root / "sha256" / digests[0][:2]).stat()
+        if (info.st_dev, info.st_ino) == (prefix.st_dev, prefix.st_ino):
+            earlier_prefix_flushed = True
+        original_sync(fd)
+
+    monkeypatch.setattr(os, "unlink", fail_later_unlink)
+    monkeypatch.setattr(spool_module, "_fsync_dir", observe_sync)
+
+    with pytest.raises(OSError, match="later unlink failed"):
+        spool.remove_unreferenced(lambda: set())
+    assert earlier_prefix_flushed
+    assert spool.verify(digests[0]) is None
+    assert spool.verify(digests[1]) is not None
+
+
 def test_waiting_cleanup_runs_before_a_new_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

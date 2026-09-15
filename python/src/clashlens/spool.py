@@ -809,31 +809,72 @@ class Spool:
             hashes.add(digest)
         return hashes
 
+    def _unlink_final_locked(self, digest: str, prefix_fd: int) -> bool:
+        try:
+            info = os.stat(digest, dir_fd=prefix_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        try:
+            os.unlink(digest, dir_fd=prefix_fd)
+        except FileNotFoundError:
+            return False
+        if stat.S_ISREG(info.st_mode):
+            self._actual_counts["final_bytes"] = max(
+                0, self._actual_counts["final_bytes"] - info.st_size
+            )
+            self._actual_counts["final_objects"] = max(
+                0, self._actual_counts["final_objects"] - 1
+            )
+        return True
+
     def _delete_locked(self, digest: str) -> bool:
         try:
             prefix_fd = self._sub_dir_fd("sha256", digest[:2])
         except FileNotFoundError:
             return False
         try:
-            try:
-                info = os.stat(digest, dir_fd=prefix_fd, follow_symlinks=False)
-            except FileNotFoundError:
+            if not self._unlink_final_locked(digest, prefix_fd):
                 return False
-            try:
-                os.unlink(digest, dir_fd=prefix_fd)
-            except FileNotFoundError:
-                return False
-            if stat.S_ISREG(info.st_mode):
-                self._actual_counts["final_bytes"] = max(
-                    0, self._actual_counts["final_bytes"] - info.st_size
-                )
-                self._actual_counts["final_objects"] = max(
-                    0, self._actual_counts["final_objects"] - 1
-                )
             _fsync_dir(prefix_fd)
             return True
         finally:
             os.close(prefix_fd)
+
+    def _delete_many_locked(self, digests: set[str]) -> int:
+        prefix_fds: dict[str, int] = {}
+        deleted = 0
+        try:
+            delete_error: BaseException | None = None
+            for digest in sorted(digests):
+                try:
+                    prefix = digest[:2]
+                    prefix_fd = prefix_fds.get(prefix)
+                    if prefix_fd is None:
+                        try:
+                            prefix_fd = self._sub_dir_fd("sha256", prefix)
+                        except FileNotFoundError:
+                            continue
+                        prefix_fds[prefix] = prefix_fd
+                    if self._unlink_final_locked(digest, prefix_fd):
+                        deleted += 1
+                except BaseException as error:  # noqa: BLE001
+                    delete_error = error
+                    break
+            sync_error: BaseException | None = None
+            for prefix in sorted(prefix_fds):
+                try:
+                    _fsync_dir(prefix_fds[prefix])
+                except BaseException as error:  # noqa: BLE001
+                    if sync_error is None:
+                        sync_error = error
+            if delete_error is not None:
+                raise delete_error
+            if sync_error is not None:
+                raise sync_error
+            return deleted
+        finally:
+            for prefix_fd in prefix_fds.values():
+                os.close(prefix_fd)
 
     def delete_if_unreferenced(self, digest: str) -> bool:
         self._final(digest)
@@ -881,7 +922,7 @@ class Spool:
                     for digest, _size in self._final_files_locked()
                     if digest not in protected
                 }
-                return sum(self._delete_locked(digest) for digest in orphaned)
+                return self._delete_many_locked(orphaned)
 
     def delete(self, digest: str) -> bool:
         self._final(digest)

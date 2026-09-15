@@ -120,6 +120,17 @@ authorize going live. The final PR records the tested commit and CI runs.
   cancel and drain owners. Uploads created later while collection finishes
   remain durably referenced for the next start; shutdown does not promise an
   unbounded archive drain. Final evidence must report actual cadence and residue.
+- The following full trial cleared every upload and local raw file, with
+  exact crash recovery, but its revisit medians were 305.988 seconds. Timestamp
+  evidence isolated five 19.12–19.74-second admission pauses, exactly once per
+  minute; the next-largest gap was 0.206 seconds. The full orphan sweep held
+  publication while flushing a directory after every unreferenced file deletion.
+  Collection between those pauses exceeded the required request rate. The
+  fix batches only those orphan-deletion flushes by directory, completing every
+  touched-directory flush before releasing the same publication barrier.
+  Sidecars and database references still determine eligibility inside that
+  barrier. Per-hash uploaded-copy deletion and all raw-publication/handoff
+  flushes remain unchanged. The final trial must verify the resulting cadence.
 - Quadlet container stop limits now fit within the existing systemd grace:
   40 of 45 seconds for the collector, lease plus 10 of lease plus 15 seconds
   for the worker, and 85 of 90 seconds for PostgreSQL. Podman's default
