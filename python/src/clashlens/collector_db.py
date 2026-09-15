@@ -423,6 +423,11 @@ class CollectorDatabase:
             "" if first_battle_pending is None else "AND first_battle_pending = %s"
         )
         priority_params = () if first_battle_pending is None else (first_battle_pending,)
+        priority_order = (
+            "first_battle_pending DESC, next_due_at, id"
+            if first_battle_pending is None
+            else "next_due_at, id"
+        )
         with self._connection() as connection:
             with connection.transaction():
                 if not self._regular_admission_open(connection, claim_time):
@@ -437,7 +442,7 @@ class CollectorDatabase:
                           AND next_due_at IS NOT NULL
                           AND next_due_at <= %s
                           {priority_filter}
-                        ORDER BY next_due_at, id
+                        ORDER BY {priority_order}
                         FOR UPDATE SKIP LOCKED
                         LIMIT %s
                     ), claimed AS (

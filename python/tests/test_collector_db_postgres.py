@@ -196,9 +196,7 @@ def test_due_claim_prioritizes_unsuccessful_first_battles_before_repeats(
             )
         )
 
-        first = database.claim_due_players(
-            limit=2, now=NOW, first_battle_pending=True
-        )
+        first = database.claim_due_players(limit=2, now=NOW)
         second = database.claim_due_players(
             limit=1, now=NOW, first_battle_pending=False
         )

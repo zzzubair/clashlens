@@ -811,17 +811,6 @@ class Collector:
                                 self.database.claim_due_players,
                                 limit=available,
                                 now=claim_time,
-                                first_battle_pending=True,
-                            )
-                        )
-                    available = _REGULAR_PARALLELISM - len(pending)
-                    if available > 0:
-                        admit(
-                            await self._database_call(
-                                self.database.claim_due_players,
-                                limit=available,
-                                now=claim_time,
-                                first_battle_pending=False,
                             )
                         )
                 if work:
@@ -958,6 +947,7 @@ class Collector:
             for owner in owners
         }
         last_sweep = 0.0
+        graceful = False
         try:
             while not stop_requested.is_set():
                 for owner, task in list(owner_tasks.items()):
@@ -1002,10 +992,19 @@ class Collector:
                     if deleted == _CLEANUP_BATCH_SIZE
                     else max(1.0, idle_seconds),
                 )
+            await asyncio.gather(*owner_tasks.values())
+            try:
+                await _drain_to_thread(
+                    self.cleanup_uploaded, limit=_UPLOAD_CONCURRENCY
+                )
+            except (OSError, SpoolError) as error:
+                self._record_spool_failure(error)
+            graceful = True
         finally:
-            for task in owner_tasks.values():
-                if not task.done():
-                    task.cancel()
+            if not graceful:
+                for task in owner_tasks.values():
+                    if not task.done():
+                        task.cancel()
             if owner_tasks:
                 await _drain_awaitable(
                     asyncio.gather(*owner_tasks.values(), return_exceptions=True)

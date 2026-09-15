@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import hashlib
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,6 +42,101 @@ def test_cleanup_batch_acknowledges_a_file_already_removed_by_a_crash(
         assert store.marked == [digest]
     finally:
         spool.close()
+
+
+def test_normal_upload_shutdown_finishes_owned_upload_and_removes_its_raw_body(
+    tmp_path: Path,
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    bodies = {
+        hashlib.sha256(body).hexdigest(): body
+        for body in (f"uploaded response {index}".encode() for index in range(17))
+    }
+    digests = set(bodies)
+    for digest, body in bodies.items():
+        with spool.reserve(1024) as reservation:
+            reservation.publish(body, digest)
+
+    class UploadStore:
+        def __init__(self) -> None:
+            self.uploaded: set[str] = set()
+            self.local_deleted: set[str] = set()
+
+        def deletable_hashes(self, *, limit: int) -> list[str]:
+            return sorted(self.uploaded - self.local_deleted)[:limit]
+
+        def delete_spool_if_deletable(self, candidate: str, delete: Any) -> bool:
+            if candidate not in self.uploaded or not delete(candidate):
+                return False
+            self.local_deleted.add(candidate)
+            return True
+
+        def referenced_spool_hashes(self) -> set[str]:
+            return digests - self.local_deleted
+
+    store = UploadStore()
+    collector = _collector(spool, store, _Client(_Spool()))  # type: ignore[arg-type]
+    remaining = list(digests)
+    all_started = asyncio.Event()
+    release = asyncio.Event()
+    stop = asyncio.Event()
+
+    async def upload_once(*, owner: str) -> bool:
+        del owner
+        if not remaining:
+            await stop.wait()
+            return False
+        digest = remaining.pop()
+        if not remaining:
+            all_started.set()
+        await release.wait()
+        store.uploaded.add(digest)
+        return True
+
+    collector.upload_once = upload_once  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        task = asyncio.create_task(collector._upload_loop(stop, 0.001))
+        await asyncio.wait_for(all_started.wait(), 1)
+        stop.set()
+        await asyncio.sleep(0.02)
+        release.set()
+        await asyncio.wait_for(task, 1)
+
+    try:
+        asyncio.run(scenario())
+        assert store.uploaded == digests
+        assert store.local_deleted == digests
+        assert spool.final_hashes().isdisjoint(digests)
+    finally:
+        spool.close()
+
+
+def test_upload_loop_cancellation_still_cancels_its_owner() -> None:
+    spool = _Spool()
+    collector = _collector(spool, _Store(spool), _Client(spool))
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def upload_once(*, owner: str) -> bool:
+        del owner
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    collector.upload_once = upload_once  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        task = asyncio.create_task(collector._upload_loop(asyncio.Event(), 0.001))
+        await asyncio.wait_for(started.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+        assert cancelled.is_set()
+
+    asyncio.run(scenario())
 
 
 def test_same_endpoint_waits_for_predecessor_handoff_ack() -> None:
@@ -313,9 +409,9 @@ def test_regular_admission_drains_work_if_the_next_tier_claim_fails() -> None:
         block = asyncio.Event()
 
         def claim_due_players(
-            *, first_battle_pending: bool, **_kwargs: Any
+            *, first_battle_pending: bool | None = None, **_kwargs: Any
         ) -> list[CollectorWork]:
-            if not first_battle_pending:
+            if first_battle_pending is False:
                 return [work]
             if not started.wait(1):
                 raise AssertionError("claimed work was not admitted")
@@ -355,8 +451,17 @@ def test_regular_admission_serves_repeats_and_borrows_an_empty_first_battle_tier
         release = asyncio.Event()
 
         def claim_due_players(
-            *, limit: int, first_battle_pending: bool, **_kwargs: Any
+            *, limit: int, first_battle_pending: bool | None = None, **_kwargs: Any
         ) -> list[CollectorWork]:
+            if first_battle_pending is None:
+                first_count = min(limit, len(queues[True]))
+                repeat_count = min(limit - first_count, len(queues[False]))
+                claimed = (
+                    queues[True][:first_count] + queues[False][:repeat_count]
+                )
+                queues[True] = queues[True][first_count:]
+                queues[False] = queues[False][repeat_count:]
+                return claimed
             queue = queues[first_battle_pending]
             claimed, queues[first_battle_pending] = queue[:limit], queue[limit:]
             return claimed

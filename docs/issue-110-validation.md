@@ -104,9 +104,22 @@ authorize going live. The final PR records the tested commit and CI runs.
   Repeat polls retain a quarter of the 56 slots when both groups need work;
   either group can borrow unused slots. Each group keeps oldest-due order.
   This refines global oldest-due order to protect initial collection while serving
-  existing players. The five-minute minimum, total slots and HTTP limits stay
+  existing players. After reserving repeat capacity, one priority claim fills
+  the remaining slots with first-battle work and then repeats. This avoids an
+  empty first-battle transaction on every steady-state repeat refill.
+  The five-minute minimum, total slots and HTTP limits stay
   unchanged. The final PR reports the new trial's actual result; the earlier
   639-second gap is a failure, not an accepted timing margin.
+- The next full trial brought both worst gaps below 600 seconds, but its
+  approximately 305-second medians still missed the accepted cadence. It also
+  ended with four pending uploads and four protected local bodies; their exact
+  identities were not captured, so the cause is not established. Independently,
+  normal shutdown was found to cancel upload owners even after collection had
+  been asked to stop gracefully. It now lets already-owned uploads finish and
+  performs one bounded cleanup pass. Errors and forced cancellation still
+  cancel and drain owners. Uploads created later while collection finishes
+  remain durably referenced for the next start; shutdown does not promise an
+  unbounded archive drain. Final evidence must report actual cadence and residue.
 - Quadlet container stop limits now fit within the existing systemd grace:
   40 of 45 seconds for the collector, lease plus 10 of lease plus 15 seconds
   for the worker, and 85 of 90 seconds for PostgreSQL. Podman's default
@@ -200,7 +213,7 @@ Migration 0034 adds one boolean per player, approximately 12.5 KB of values
 at 12,500 players before tuple overhead, and a separate claim index. That
 additional index measured 3,874,816 bytes (3.70 MiB) after the isolated query
 experiments; this is an observed allocation, not a permanent size cap. The
-older due-time index remains for unfiltered claims and oldest-due reporting.
+older due-time index remains for oldest-due reporting.
 No per-fetch row is added. The claim disables prepared-statement reuse only
 for this bounded query: a generic plan scanned all 12,500 players during the
 update, while repeated actual claims with 37,500 endpoint-state rows used
