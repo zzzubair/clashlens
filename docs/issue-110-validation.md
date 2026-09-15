@@ -74,6 +74,12 @@ authorize going live. The final PR records the tested commit and CI runs.
   A visible file left by a failed directory flush is flushed again before
   reuse, including when another writer finds it after preparing its own file.
   Failed flushes never populate the parent-directory cache.
+  Child-directory and temporary-file-removal flushes can run concurrently
+  for separate publications. File changes and capacity counts remain locked;
+  open directory handles and reservations remain held until flushing finishes.
+  Every flush still finishes before the handoff, and cleanup still waits for
+  active publications. This avoids holding the global capacity lock during
+  disk waits without weakening durability or increasing the spool limits.
 - Quadlet container stop limits now fit within the existing systemd grace:
   40 of 45 seconds for the collector, lease plus 10 of lease plus 15 seconds
   for the worker, and 85 of 90 seconds for PostgreSQL. Podman's default

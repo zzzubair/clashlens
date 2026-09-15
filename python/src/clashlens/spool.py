@@ -7,7 +7,7 @@ import os
 import stat
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from time import time
 from typing import Any, Self
@@ -604,7 +604,7 @@ class Spool:
             self._temporary_sizes[name] = len(body)
         return name
 
-    def _remove_temp_locked(self, name: str) -> None:
+    def _unlink_temp_locked(self, name: str) -> None:
         size = self._temporary_sizes.pop(name, None)
         try:
             self._unlink_at(name, "tmp")
@@ -617,6 +617,9 @@ class Spool:
             self._actual_counts["temporary_objects"] = max(
                 0, self._actual_counts["temporary_objects"] - 1
             )
+
+    def _remove_temp_locked(self, name: str) -> None:
+        self._unlink_temp_locked(name)
         tmp_fd = self._sub_dir_fd("tmp")
         try:
             _fsync_dir(tmp_fd)
@@ -633,41 +636,48 @@ class Spool:
     def _publish_reserved(
         self, body: bytes, digest: str, reservation: SpoolReservation
     ) -> None:
+        existing_prefix_fd = None
         with self._capacity_lock():
             if self._verify_unlocked(digest, len(body)) is not None:
-                prefix_fd = self._sub_dir_fd("sha256", digest[:2])
+                existing_prefix_fd = self._sub_dir_fd("sha256", digest[:2])
                 try:
-                    _fsync_dir(prefix_fd)
-                finally:
-                    os.close(prefix_fd)
-                prefix_parent_fd = self._sub_dir_fd("sha256")
-                try:
-                    self._confirm_prefix_locked(digest[:2], prefix_parent_fd)
-                finally:
-                    os.close(prefix_parent_fd)
-                return
+                    prefix_parent_fd = self._sub_dir_fd("sha256")
+                    try:
+                        self._confirm_prefix_locked(digest[:2], prefix_parent_fd)
+                    finally:
+                        os.close(prefix_parent_fd)
+                except BaseException:
+                    os.close(existing_prefix_fd)
+                    raise
+        if existing_prefix_fd is not None:
+            try:
+                _fsync_dir(existing_prefix_fd)
+            finally:
+                os.close(existing_prefix_fd)
+            return
         temporary_name = ""
         try:
             temporary_name = self._write_temp(body, reservation)
-            with self._capacity_lock():
-                prefix_parent_fd = self._sub_dir_fd("sha256")
-                try:
+            with ExitStack() as prefix_fds:
+                with self._capacity_lock():
+                    prefix_parent_fd = self._sub_dir_fd("sha256")
                     try:
-                        os.mkdir(digest[:2], 0o700, dir_fd=prefix_parent_fd)
-                        self._durable_prefixes.discard(digest[:2])
-                    except FileExistsError:
-                        pass
-                    prefix_fd = self._sub_dir_fd("sha256", digest[:2])
-                    try:
+                        try:
+                            os.mkdir(digest[:2], 0o700, dir_fd=prefix_parent_fd)
+                            self._durable_prefixes.discard(digest[:2])
+                        except FileExistsError:
+                            pass
+                        prefix_fd = self._sub_dir_fd("sha256", digest[:2])
+                        prefix_fds.callback(os.close, prefix_fd)
                         winner = self._verify_unlocked(digest, len(body))
                         if winner is None:
-                            tmp_fd = self._sub_dir_fd("tmp")
+                            link_tmp_fd = self._sub_dir_fd("tmp")
                             try:
                                 try:
                                     os.link(
                                         temporary_name,
                                         digest,
-                                        src_dir_fd=tmp_fd,
+                                        src_dir_fd=link_tmp_fd,
                                         dst_dir_fd=prefix_fd,
                                         follow_symlinks=False,
                                     )
@@ -683,7 +693,7 @@ class Spool:
                                             os.link(
                                                 temporary_name,
                                                 digest,
-                                                src_dir_fd=tmp_fd,
+                                                src_dir_fd=link_tmp_fd,
                                                 dst_dir_fd=prefix_fd,
                                                 follow_symlinks=False,
                                             )
@@ -710,7 +720,7 @@ class Spool:
                                             os.link(
                                                 temporary_name,
                                                 digest,
-                                                src_dir_fd=tmp_fd,
+                                                src_dir_fd=link_tmp_fd,
                                                 dst_dir_fd=prefix_fd,
                                                 follow_symlinks=False,
                                             )
@@ -722,16 +732,22 @@ class Spool:
                                     self._actual_counts["final_bytes"] += len(body)
                                     self._actual_counts["final_objects"] += 1
                             finally:
-                                os.close(tmp_fd)
-                        _fsync_dir(prefix_fd)
-                        self._remove_temp_locked(temporary_name)
+                                os.close(link_tmp_fd)
                     finally:
-                        os.close(prefix_fd)
-                finally:
-                    try:
-                        self._confirm_prefix_locked(digest[:2], prefix_parent_fd)
-                    finally:
-                        os.close(prefix_parent_fd)
+                        try:
+                            self._confirm_prefix_locked(
+                                digest[:2], prefix_parent_fd
+                            )
+                        finally:
+                            os.close(prefix_parent_fd)
+                _fsync_dir(prefix_fd)
+            with self._capacity_lock():
+                self._unlink_temp_locked(temporary_name)
+                tmp_fd = self._sub_dir_fd("tmp")
+            try:
+                _fsync_dir(tmp_fd)
+            finally:
+                os.close(tmp_fd)
             reservation._temporary_name = None
         except BaseException:
             if temporary_name:
