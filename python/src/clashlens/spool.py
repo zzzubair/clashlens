@@ -115,6 +115,7 @@ class Spool:
         self._reservations: dict[int, SpoolReservation] = {}
         self._actual_counts = {key: 0 for key in self._COUNT_KEYS}
         self._temporary_sizes: dict[str, int | None] = {}
+        self._durable_prefixes: set[str] = set()
         self._high_water_bytes = 0
         self._closed = False
         try:
@@ -634,6 +635,16 @@ class Spool:
     ) -> None:
         with self._capacity_lock():
             if self._verify_unlocked(digest, len(body)) is not None:
+                prefix_fd = self._sub_dir_fd("sha256", digest[:2])
+                try:
+                    _fsync_dir(prefix_fd)
+                finally:
+                    os.close(prefix_fd)
+                prefix_parent_fd = self._sub_dir_fd("sha256")
+                try:
+                    self._confirm_prefix_locked(digest[:2], prefix_parent_fd)
+                finally:
+                    os.close(prefix_parent_fd)
                 return
         temporary_name = ""
         try:
@@ -643,6 +654,7 @@ class Spool:
                 try:
                     try:
                         os.mkdir(digest[:2], 0o700, dir_fd=prefix_parent_fd)
+                        self._durable_prefixes.discard(digest[:2])
                     except FileExistsError:
                         pass
                     prefix_fd = self._sub_dir_fd("sha256", digest[:2])
@@ -711,13 +723,15 @@ class Spool:
                                     self._actual_counts["final_objects"] += 1
                             finally:
                                 os.close(tmp_fd)
-                            _fsync_dir(prefix_fd)
+                        _fsync_dir(prefix_fd)
                         self._remove_temp_locked(temporary_name)
                     finally:
                         os.close(prefix_fd)
                 finally:
-                    _fsync_dir(prefix_parent_fd)
-                    os.close(prefix_parent_fd)
+                    try:
+                        self._confirm_prefix_locked(digest[:2], prefix_parent_fd)
+                    finally:
+                        os.close(prefix_parent_fd)
             reservation._temporary_name = None
         except BaseException:
             if temporary_name:
@@ -728,6 +742,12 @@ class Spool:
                     pass
             reservation._temporary_name = None
             raise
+
+    def _confirm_prefix_locked(self, prefix: str, prefix_parent_fd: int) -> None:
+        if prefix in self._durable_prefixes:
+            return
+        _fsync_dir(prefix_parent_fd)
+        self._durable_prefixes.add(prefix)
 
     def publish(
         self,

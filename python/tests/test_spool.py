@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+import clashlens.spool as spool_module
 from clashlens.archive import ArchiveReadResult, SpoolFirstReader
 from clashlens.spool import Spool, SpoolError, validate_root
 
@@ -147,6 +148,107 @@ def test_cached_counts_follow_corrupt_final_replacement(tmp_path: Path) -> None:
     stats = spool.stats()
     assert stats["final_bytes"] == len(body)
     assert stats["final_objects"] == 1
+
+
+@pytest.mark.parametrize("failed_directory", ["parent", "prefix"])
+def test_directory_sync_failure_is_retried_before_prefix_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_directory: str,
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    body = b"first response"
+    digest = hashlib.sha256(body).hexdigest()
+    syncs = {"parent": 0, "prefix": 0, "tmp": 0}
+    original_sync = spool_module._fsync_dir
+
+    def directory_identity(path: Path) -> tuple[int, int]:
+        info = path.stat()
+        return info.st_dev, info.st_ino
+
+    def fail_first_directory_sync(fd: int) -> None:
+        info = os.fstat(fd)
+        identity = (info.st_dev, info.st_ino)
+        if identity == directory_identity(root / "sha256"):
+            directory = "parent"
+        elif identity == directory_identity(root / "tmp"):
+            directory = "tmp"
+        elif identity == directory_identity(root / "sha256" / digest[:2]):
+            directory = "prefix"
+        else:
+            original_sync(fd)
+            return
+        syncs[directory] += 1
+        if directory == failed_directory and syncs[directory] == 1:
+            raise OSError(errno.EIO, f"{directory} sync failed")
+        original_sync(fd)
+
+    monkeypatch.setattr(spool_module, "_fsync_dir", fail_first_directory_sync)
+
+    with pytest.raises(OSError, match=f"{failed_directory} sync failed"):
+        spool.publish(body, digest)
+    assert spool.verify(digest) == body
+
+    spool.publish(body, digest)
+    assert syncs[failed_directory] >= 2
+
+    second_body = next(
+        candidate
+        for index in range(10_000)
+        if (candidate := f"same-prefix-{index}".encode()) != body
+        and hashlib.sha256(candidate).hexdigest().startswith(digest[:2])
+    )
+    before_reuse = syncs.copy()
+    spool.publish(second_body, hashlib.sha256(second_body).hexdigest())
+    assert syncs["parent"] == before_reuse["parent"]
+    assert syncs["prefix"] == before_reuse["prefix"] + 1
+    assert syncs["tmp"] == before_reuse["tmp"] + 1
+
+
+def test_concurrent_winner_with_failed_prefix_sync_is_repaired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    body = b"shared response"
+    digest = hashlib.sha256(body).hexdigest()
+    original_sync = spool_module._fsync_dir
+    original_write_temp = spool._write_temp
+    prefix_syncs = 0
+    nested_writer_started = False
+
+    def fail_first_prefix_sync(fd: int) -> None:
+        nonlocal prefix_syncs
+        info = os.fstat(fd)
+        prefix = root / "sha256" / digest[:2]
+        if prefix.exists() and (info.st_dev, info.st_ino) == directory_identity(prefix):
+            prefix_syncs += 1
+            if prefix_syncs == 1:
+                raise OSError(errno.EIO, "prefix sync failed")
+        original_sync(fd)
+
+    def directory_identity(path: Path) -> tuple[int, int]:
+        info = path.stat()
+        return info.st_dev, info.st_ino
+
+    def write_temp_then_publish_competitor(body: bytes, reservation) -> str:
+        nonlocal nested_writer_started
+        name = original_write_temp(body, reservation)
+        if nested_writer_started:
+            return name
+        nested_writer_started = True
+        with pytest.raises(OSError, match="prefix sync failed"):
+            spool.publish(body, digest)
+        return name
+
+    monkeypatch.setattr(spool_module, "_fsync_dir", fail_first_prefix_sync)
+    monkeypatch.setattr(spool, "_write_temp", write_temp_then_publish_competitor)
+
+    spool.publish(body, digest)
+
+    assert prefix_syncs == 2
+    assert spool.verify(digest) == body
 
 
 def test_handoff_records_are_private_atomic_and_recoverable(tmp_path: Path) -> None:

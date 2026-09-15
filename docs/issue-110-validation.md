@@ -68,6 +68,12 @@ authorize going live. The final PR records the tested commit and CI runs.
   Reused league-history hashes keep their original upload time; sorting by
   that time repeatedly selected hot copies ahead of much older profile copies.
   The priority change leaves deletion eligibility and retention unchanged.
+- Raw-file publication records which of the 256 hash-prefix directories have
+  had their parent entry flushed successfully. Later files reuse that proof
+  while keeping body, child-directory, temporary-file and handoff flushes.
+  A visible file left by a failed directory flush is flushed again before
+  reuse, including when another writer finds it after preparing its own file.
+  Failed flushes never populate the parent-directory cache.
 - Quadlet container stop limits now fit within the existing systemd grace:
   40 of 45 seconds for the collector, lease plus 10 of lease plus 15 seconds
   for the worker, and 85 of 90 seconds for PostgreSQL. Podman's default
