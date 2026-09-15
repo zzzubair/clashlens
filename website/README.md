@@ -42,10 +42,10 @@ or cloud storage.
 
 ## Runtime interface
 
-The root deployment starts the website with `website-up` and recovers it with
-`website-start`. The website has no database, collector, worker, archive, or
-admin secret. It connects to `http://python-api:8000` on the private Podman
-network and publishes only the configured host and port.
+The root deployment starts and recovers the website as part of `./ops up`.
+The website has no database, collector, worker, archive, or admin secret. It
+connects to the private API over the pod's loopback interface and publishes
+only the configured host and port.
 
 The application can use Google OpenID Connect when the deployment supplies
 the login settings and protected secret files. Local issuer overrides are for

@@ -253,6 +253,7 @@ def prune_completed_history(
     with connection.transaction():
         connection.execute("SET LOCAL lock_timeout = '1s'")
         connection.execute("SET LOCAL statement_timeout = '30s'")
+        locked_observations: list[tuple[int, int]] = []
         observation_ids: list[int] = []
         candidates = [
             row[0]
@@ -264,19 +265,19 @@ def prune_completed_history(
         if candidates:
             # Block new replay references, then fence existing processing jobs.
             # Recheck eligibility in a fresh READ COMMITTED statement after locks.
-            observation_ids = [
-                int(row[0])
+            locked_observations = [
+                (int(row[0]), int(row[1]))
                 for row in connection.execute(
                     """
-                SELECT observation.id
+                SELECT work.id, observation.id
                 FROM collector_observations AS observation
                 JOIN collector_work AS work
                   ON observation.id IN (
                       work.profile_observation_id, work.battle_log_observation_id,
                       work.league_history_observation_id
-                  )
+                )
                 WHERE work.id = ANY(%s::bigint[])
-                ORDER BY observation.id
+                ORDER BY observation.id, work.id
                 FOR UPDATE OF observation
                 """,
                     (candidates,),
@@ -303,6 +304,12 @@ def prune_completed_history(
                     _ELIGIBLE,
                     (retention_hours, candidates, candidates, retention_hours, max_jobs),
                 ).fetchall()
+            ]
+            retained_candidates = set(candidates)
+            observation_ids = [
+                observation_id
+                for work_id, observation_id in locked_observations
+                if work_id in retained_candidates
             ]
         deleted = 0
         if apply and candidates:

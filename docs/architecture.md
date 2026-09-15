@@ -4,10 +4,11 @@ Clash Lens is one product in one repository with explicit runtime boundaries.
 This document describes those durable boundaries; it is not a product roadmap
 or a record of current implementation status.
 
-The code, migrations, fixtures, and tests are the source of truth for behavior.
+The code, migrations, fixtures, and tests show implemented behavior. Zubair
+defines product behavior, and open GitHub issues record agreed requirements.
 [`domain.md`](domain.md) defines game meanings and evidence rules. The
-deployment runbook defines host operations. If prose conflicts with executable
-behavior, report the conflict and follow the executable contract.
+deployment runbook defines host operations. Report disagreements between
+requirements, documentation, and code rather than silently choosing one.
 
 ## Runtime ownership
 
@@ -97,12 +98,15 @@ identifiers only for relations; public APIs expose stable domain identities,
 not internal IDs.
 
 The raw archive owns untouched official response bodies. Content-address each
-body by a cryptographic hash and retain one immutable body per hash while
-allowing many observation occurrences to reference it. The collector and Python
-workers share a bounded UID/GID-10001 spool at `sha256/<prefix>/<hash>`; fixed
-`flock` stripes protect reads, repair, promotion, and cleanup, while PostgreSQL
-`archive_catalogue` rows prove remote read-back before new observations commit.
-Observation metadata is
+body by a cryptographic hash while allowing many observation occurrences to
+reference it. Recollection after retirement uses a new immutable object location
+so an outstanding deletion cannot remove the new copy. The collector and Python
+workers share a bounded UID/GID-10001 spool at `sha256/<prefix>/<hash>`. A shared
+file lock and publication/cleanup barrier protect its files. Durable sidecars
+bridge the file-to-database handoff across crashes. Workers verify local size and
+SHA-256 before processing; archive upload runs independently in the background.
+A referenced spool body becomes deletable only after processing and upload
+succeed. Observation metadata is
 append-only and records request scope, timing, status, response hash, archive
 reference, and source/collector provenance. Never overwrite evidence with a
 later response; track processing state separately.

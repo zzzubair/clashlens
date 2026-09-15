@@ -1,0 +1,4 @@
+# Managed by Clash Lens ./ops.
+[Volume]
+Label=org.clashlens.managed=ops
+VolumeName=@@POSTGRES_VOLUME@@

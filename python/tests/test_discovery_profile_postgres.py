@@ -13,6 +13,7 @@ from test_domain_processing_postgres import _processor
 
 BATTLE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
 RANKINGS = Path(__file__).parents[1] / "testdata" / "global_top_200_v1.json"
+PROFILE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 OBSERVED_AT = datetime(2026, 8, 4, 12, 5, tzinfo=UTC)
 
 
@@ -267,6 +268,154 @@ def test_enqueue_cycle_coalescing_terminal_rediscovery_inputs_and_privileges(
                     has_table_privilege('clashlens_python_worker', 'collector_work', 'INSERT')"""
             ).fetchone()
             assert privileges == (True, False, False, False)
+
+
+def test_ineligible_profile_cancels_only_ordinary_discovery_and_keeps_evidence(
+    database_url: str, archive_server
+) -> None:
+    payload = json.loads(PROFILE.read_bytes())
+    payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        observation_id, job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="inactive-player-profile",
+            endpoint="profile",
+            body=json.dumps(payload).encode(),
+            observed_at=OBSERVED_AT,
+            normalized_tag="#2PP",
+        )
+        with psycopg.connect(connection_info) as connection:
+            player_id = connection.execute(
+                """UPDATE players
+                   SET active = true, eligibility_state = 'eligible',
+                       next_due_at = clock_timestamp()
+                   WHERE normalized_tag = '#2PP'
+                   RETURNING id"""
+            ).fetchone()[0]
+            unknown_player_id = connection.execute(
+                """INSERT INTO players (
+                       normalized_tag, active, eligibility_state, next_due_at
+                   ) VALUES ('#2PQ', false, 'unknown', NULL)
+                   RETURNING id"""
+            ).fetchone()[0]
+            sweep_id = connection.execute(
+                """INSERT INTO collector_reset_sweeps (boundary_at, member_ids)
+                   VALUES (%s, %s) RETURNING id""",
+                (OBSERVED_AT.replace(hour=5, minute=0), [player_id]),
+            ).fetchone()[0]
+            discovery_id = connection.execute(
+                """INSERT INTO collector_work (
+                       kind, lane, scope, player_id, normalized_tag, due_at,
+                       coalescing_key, profile_status, battle_log_status,
+                       league_history_status, profile_observation_id
+                   ) VALUES (
+                       'discovery_profile', 'ordinary', 'player', %s, '#2PP', %s,
+                       'inactive-cancel:discovery', 'observed', 'not_applicable',
+                       'pending', %s
+                   ) RETURNING id""",
+                (player_id, OBSERVED_AT, observation_id),
+            ).fetchone()[0]
+            refresh_id = connection.execute(
+                """INSERT INTO collector_work (
+                       kind, lane, scope, player_id, normalized_tag, due_at,
+                       coalescing_key, profile_status, battle_log_status,
+                       league_history_status
+                   ) VALUES (
+                       'live_refresh', 'interactive', 'player', %s, '#2PP', %s,
+                       'inactive-cancel:refresh', 'pending', 'pending',
+                       'not_applicable'
+                   ) RETURNING id""",
+                (player_id, OBSERVED_AT),
+            ).fetchone()[0]
+            reset_id = connection.execute(
+                """INSERT INTO collector_work (
+                       kind, lane, scope, player_id, normalized_tag, sweep_id,
+                       due_at, coalescing_key, profile_status, battle_log_status,
+                       league_history_status
+                   ) VALUES (
+                       'reset_baseline', 'reset', 'player', %s, '#2PP', %s, %s,
+                       'inactive-cancel:reset', 'pending', 'pending',
+                       'not_applicable'
+                   ) RETURNING id""",
+                (player_id, sweep_id, OBSERVED_AT),
+            ).fetchone()[0]
+            unknown_discovery_id = connection.execute(
+                """INSERT INTO collector_work (
+                       kind, lane, scope, player_id, normalized_tag, due_at,
+                       coalescing_key, profile_status, battle_log_status,
+                       league_history_status
+                   ) VALUES (
+                       'discovery_profile', 'ordinary', 'player', %s, '#2PQ', %s,
+                       'inactive-cancel:unknown', 'pending', 'not_applicable',
+                       'pending'
+                   ) RETURNING id""",
+                (unknown_player_id, OBSERVED_AT),
+            ).fetchone()[0]
+            connection.commit()
+
+            connection.execute("SET ROLE clashlens_python_worker")
+            assert connection.execute(
+                "SELECT clashlens_cancel_inactive_discovery_work(%s)",
+                (unknown_player_id,),
+            ).fetchone()[0] == 0
+            connection.execute("RESET ROLE")
+
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            result = processor.process_job(job_id, owner="inactive-profile-worker")
+            assert result is not None and result.outcome == "processed"
+            with database.pool.connection() as connection:
+                player = connection.execute(
+                    """SELECT active, eligibility_state, next_due_at
+                       FROM players WHERE id = %s""",
+                    (player_id,),
+                ).fetchone()
+                work = {
+                    int(row[0]): text(row[1])
+                    for row in connection.execute(
+                        """SELECT id, status
+                           FROM collector_work
+                           WHERE id = ANY(%s::bigint[])""",
+                        ([discovery_id, refresh_id, reset_id, unknown_discovery_id],),
+                    ).fetchall()
+                }
+                retained_observation = connection.execute(
+                    """SELECT profile_observation_id
+                       FROM collector_work WHERE id = %s""",
+                    (discovery_id,),
+                ).fetchone()[0]
+                connection.execute("SET ROLE clashlens_python_worker")
+                reentry_count = connection.execute(
+                    "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
+                    ([player_id],),
+                ).fetchone()[0]
+                connection.execute("RESET ROLE")
+                discovery_states = [
+                    text(row[0])
+                    for row in connection.execute(
+                        """SELECT status FROM collector_work
+                           WHERE player_id = %s AND kind = 'discovery_profile'
+                           ORDER BY id""",
+                        (player_id,),
+                    ).fetchall()
+                ]
+            assert (player[0], text(player[1]), player[2]) == (
+                False,
+                "ineligible",
+                None,
+            )
+            assert work == {
+                discovery_id: "cancelled",
+                refresh_id: "pending",
+                reset_id: "pending",
+                unknown_discovery_id: "pending",
+            }
+            assert retained_observation == observation_id
+            assert reentry_count == 1
+            assert discovery_states == ["cancelled", "pending"]
+        finally:
+            database.close()
 
 
 def test_enqueue_failure_rolls_back_discovery_provenance(

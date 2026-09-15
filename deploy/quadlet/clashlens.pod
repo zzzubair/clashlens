@@ -1,0 +1,19 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens private pod
+PartOf=clashlens.target
+
+[Pod]
+Label=org.clashlens.managed=ops
+PodName=@@PREFIX@@-pod
+Network=clashlens.network
+ExitPolicy=continue
+ShmSize=@@POSTGRES_SHM@@
+PodmanArgs=--userns=keep-id:uid=10001,gid=10001
+PublishPort=127.0.0.1:@@WEBSITE_PORT@@:3000
+PublishPort=127.0.0.1:@@HEALTH_PORT@@:8081
+@@FIXTURE_PORTS@@
+
+[Service]
+Restart=on-failure
+RestartMode=direct

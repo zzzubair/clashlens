@@ -48,6 +48,23 @@ and hands durable observations to the Python worker. Use
 growth against the local fixtures; run the matching `./dev down --players 12500`
 after a capacity run.
 
+## Fedora operation
+
+Build a pinned local release, then start its rootless system services as a
+separate command:
+
+```sh
+./ops build --fixture
+./ops up --fixture
+./ops status
+```
+
+Fixture mode is explicit and uses no live credentials. Production uses
+`./ops build` followed by `./ops up` with a private `app.env`. `./ops down`
+keeps retained data and disables restart after reboot. See
+[`docs/deployment.md`](docs/deployment.md) for Fedora setup and production
+configuration.
+
 Clash Lens provides data and analysis. Users make the decisions.
 
 ## Fan Content Notice

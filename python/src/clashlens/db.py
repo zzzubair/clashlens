@@ -320,8 +320,8 @@ def _claim_select_statement(
 ) -> tuple[str, dict[str, Any]]:
     """The bounded claim SELECT and its named parameters.
 
-    The candidate CTE probes one indexed oldest-first range per declared
-    priority, a catch-all probe for priorities outside the declared classes
+    The candidate CTE probes indexed oldest-first ordinary and dependency
+    ranges per declared priority, matching catch-all probes outside those classes
     (scored exactly like the known probes so ordering stays globally
     correct), and the indexed expired-lease set. Every probe applies the full
     supported claim filter against the already-joined observation, so an
@@ -363,6 +363,53 @@ def _claim_select_statement(
     job_filter = f"""job.claim_compatibility_version IN ({claim_versions})
         AND ({dependency_filter}job.attempt_count < job.max_attempts)
         AND {supported_filter}"""
+    ordinary_job_filter = f"""job.claim_compatibility_version IN ({claim_versions})
+        AND job.attempt_count < job.max_attempts
+        AND {supported_filter}"""
+    # Dependency resumptions do not consume the ordinary attempt budget. Keep
+    # them in their own partial-index probe rather than expressing that rule as
+    # an OR across every state, which makes PostgreSQL bitmap-scan the queue
+    # before applying LIMIT.
+    dependency_probe = ""
+    if supports_dependency:
+        dependency_probe = f"""
+                    UNION ALL
+                    (
+                        SELECT job.id, job.due_at, job.created_at
+                        FROM {jobs_relation} AS job
+                        LEFT JOIN collector_observations AS source_observation
+                            ON source_observation.id = COALESCE(
+                                job.observation_id, job.replay_observation_id
+                            )
+                        WHERE job.state = 'waiting_dependency'
+                          AND job.priority = claim_priority.priority
+                          AND job.due_at <= statement_timestamp()
+                          AND job.claim_compatibility_version IN ({claim_versions})
+                          AND {supported_filter}
+                        ORDER BY job.due_at, job.created_at, job.id
+                        LIMIT {_CLAIM_CANDIDATE_LIMIT}
+                    )
+        """
+    unknown_dependency_probe = ""
+    if supports_dependency:
+        unknown_dependency_probe = f"""
+                UNION ALL
+                (
+                    SELECT job.id
+                    FROM {jobs_relation} AS job
+                    LEFT JOIN collector_observations AS source_observation
+                        ON source_observation.id = COALESCE(
+                            job.observation_id, job.replay_observation_id
+                        )
+                    WHERE job.state = 'waiting_dependency'
+                      AND job.priority NOT IN ({_PYTHON_CLAIM_PRIORITY_EXCLUSIONS})
+                      AND job.due_at <= statement_timestamp()
+                      AND job.claim_compatibility_version IN ({claim_versions})
+                      AND {supported_filter}
+                    ORDER BY job.due_at, job.created_at, job.id
+                    LIMIT {_CLAIM_CANDIDATE_LIMIT}
+                )
+        """
     if job_id is not None:
         probe = f"""
             SELECT job.id
@@ -385,17 +432,25 @@ def _claim_select_statement(
                 SELECT claim_id.id
                 FROM (VALUES {_PYTHON_CLAIM_PRIORITIES}) AS claim_priority (priority)
                 CROSS JOIN LATERAL (
-                    SELECT job.id
-                    FROM {jobs_relation} AS job
-                    LEFT JOIN collector_observations AS source_observation
-                        ON source_observation.id = COALESCE(
-                            job.observation_id, job.replay_observation_id
+                    SELECT eligible.id
+                    FROM (
+                        (
+                            SELECT job.id, job.due_at, job.created_at
+                            FROM {jobs_relation} AS job
+                            LEFT JOIN collector_observations AS source_observation
+                                ON source_observation.id = COALESCE(
+                                    job.observation_id, job.replay_observation_id
+                                )
+                            WHERE job.state IN ('pending', 'waiting_retry')
+                              AND job.priority = claim_priority.priority
+                              AND job.due_at <= statement_timestamp()
+                              AND {ordinary_job_filter}
+                            ORDER BY job.due_at, job.created_at, job.id
+                            LIMIT {_CLAIM_CANDIDATE_LIMIT}
                         )
-                    WHERE job.state IN ('pending', 'waiting_retry', 'waiting_dependency')
-                      AND job.priority = claim_priority.priority
-                      AND job.due_at <= statement_timestamp()
-                      AND {job_filter}
-                    ORDER BY job.due_at, job.created_at, job.id
+                        {dependency_probe}
+                    ) AS eligible
+                    ORDER BY eligible.due_at, eligible.created_at, eligible.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
                 ) AS claim_id
                 UNION ALL
@@ -406,13 +461,14 @@ def _claim_select_statement(
                         ON source_observation.id = COALESCE(
                             job.observation_id, job.replay_observation_id
                         )
-                    WHERE job.state IN ('pending', 'waiting_retry', 'waiting_dependency')
+                    WHERE job.state IN ('pending', 'waiting_retry')
                       AND job.priority NOT IN ({_PYTHON_CLAIM_PRIORITY_EXCLUSIONS})
                       AND job.due_at <= statement_timestamp()
-                      AND {job_filter}
+                      AND {ordinary_job_filter}
                     ORDER BY job.due_at, job.created_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
                 )
+                {unknown_dependency_probe}
                 UNION ALL
                 (
                     SELECT job.id
@@ -423,7 +479,7 @@ def _claim_select_statement(
                         )
                     WHERE job.state = 'leased'
                       AND job.lease_expires_at <= statement_timestamp()
-                      AND {job_filter}
+                      AND {ordinary_job_filter}
                     ORDER BY job.lease_expires_at, job.due_at, job.created_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
                 )

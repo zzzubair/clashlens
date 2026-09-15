@@ -41,6 +41,7 @@ test("an account can link, use, and unlink a second sign-in provider", async ({
   await expect(discordRow.getByRole("button", { name: "Unlink" })).toBeVisible();
 
   await page.getByRole("button", { name: "Log out" }).click();
+  await expect(page).toHaveURL("/");
   await signInDiscord(page);
   await expect(page.getByText(accountLabel!, { exact: true })).toBeVisible();
 

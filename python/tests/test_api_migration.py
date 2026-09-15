@@ -82,7 +82,7 @@ def migrated_production_database(
                 migrations = sorted((ROOT / "deploy/migrations").glob("*.sql"))
                 for migration in migrations:
                     version = int(migration.name.split("_", 1)[0])
-                    if 9 <= version <= 26:
+                    if version >= 9:
                         connection.execute(migration.read_text(encoding="utf-8"))
         yield connection_info
     finally:

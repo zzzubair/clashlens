@@ -1,0 +1,33 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens PostgreSQL
+PartOf=clashlens.target
+Requires=clashlens-pod.service
+After=clashlens-pod.service
+
+[Container]
+Label=org.clashlens.managed=ops
+Image=@@POSTGRES_IMAGE@@
+Pull=never
+ContainerName=@@PREFIX@@-postgres
+StopTimeout=85
+User=0
+Volume=clashlens-postgres.volume:/var/lib/postgresql/data
+EnvironmentFile=@@ENV_DIR@@/postgres.env
+Secret=clashlens-postgres-password,type=mount,target=/run/secrets/postgres-password,uid=0,gid=0,mode=0400
+Memory=@@POSTGRES_MEMORY@@
+PidsLimit=@@POSTGRES_PIDS@@
+PodmanArgs=--pod=@@PREFIX@@-pod --cpus=@@POSTGRES_CPUS@@
+HealthCmd=pg_isready -U @@POSTGRES_USER@@ -d @@POSTGRES_DB@@
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=12
+HealthOnFailure=kill
+Notify=healthy
+Exec=postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c track_io_timing=on -c track_wal_io_timing=on
+
+[Service]
+Restart=always
+RestartMode=direct
+TimeoutStartSec=5min
+TimeoutStopSec=90

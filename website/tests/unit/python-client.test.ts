@@ -725,6 +725,8 @@ describe("server-only Python client response boundary", () => {
           start: "2026-08-04T05:00:00+00:00",
           end: "2026-09-01T05:00:00+00:00",
           current_day_number: 3,
+          anchor_source: "daily_publication",
+          anchor_observed_at: "2026-08-06T11:58:00+00:00",
         },
         data_quality: [{ code: "partial", label: "Partial", detail: "Open day." }],
         provenance: {
@@ -807,6 +809,8 @@ describe("server-only Python client response boundary", () => {
     expect(mapped.season).toMatchObject({
       anchor: "2026-08-04T05:00:00+00:00",
       dayCount: 28,
+      anchorSource: "daily_publication",
+      anchorObservedAt: "2026-08-06T11:58:00+00:00",
     });
     expect(mapped.seasonDays.map((day) => day.dayNumber)).toEqual([3, 2]);
     expect(mapped.recentDays.map((day) => day.dayNumber)).toEqual([2]);

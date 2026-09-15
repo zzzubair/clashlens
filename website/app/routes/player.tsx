@@ -25,6 +25,7 @@ import type {
 import { isRefreshStatusPayload, isWebsiteErrorResponse } from "../lib/validation";
 
 export interface PlayerLoaderData {
+  requestedTag: string | null;
   player: PlayerPage | null;
   error: WebsiteErrorResponse | null;
   refreshStatus: RefreshStatus | null;
@@ -45,6 +46,7 @@ export async function loader({
   const normalizedTag = normalizePlayerTag(rawTag);
   if (normalizedTag === null) {
     return {
+      requestedTag: null,
       player: null,
       error: {
         error: {
@@ -123,6 +125,7 @@ export async function loader({
     }
   }
   return {
+    requestedTag: normalizedTag,
     player,
     error,
     refreshStatus,
@@ -290,15 +293,38 @@ export default function PlayerRoute() {
           </header>
           {data.error ? <ErrorNotice error={data.error} /> : null}
           <p className="section-note">
-            Current profile data is unavailable; showing the compact historical summary
+            Current profile data is unavailable; showing the{" "}
+            {data.historical.source === "official_league_history"
+              ? "official EOD result"
+              : "compact historical summary"}{" "}
             only. We did not invent a name or trophy count.
           </p>
           <SeasonNav
             tag={data.historical.tag}
             seasons={data.seasons}
             selectedSeason={data.selectedSeason}
+            currentAvailable={false}
           />
           <HistoricalSeasonPanel summary={data.historical} />
+        </main>
+      );
+    }
+    if (data.requestedTag !== null && data.seasons.length > 0) {
+      return (
+        <main className="page-shell player-page">
+          <h1>Player history</h1>
+          {data.error ? <ErrorNotice error={data.error} /> : null}
+          <p className="section-note">
+            Current profile data is unavailable. Saved historical seasons remain
+            available.
+          </p>
+          <SeasonNav
+            tag={data.requestedTag}
+            seasons={data.seasons}
+            selectedSeason={data.selectedSeason}
+            currentAvailable={false}
+          />
+          {data.historicalError ? <ErrorNotice error={data.historicalError} /> : null}
         </main>
       );
     }
@@ -372,6 +398,16 @@ export default function PlayerRoute() {
 
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {visibleStatus ? <RefreshProgress status={visibleStatus} /> : null}
+      {data.selectedSeason === null && player.dataQuality.length > 0 ? (
+        <section className="data-section" aria-labelledby="data-quality-title">
+          <h2 id="data-quality-title">Data quality</h2>
+          {player.dataQuality.map((notice) => (
+            <p className="section-note" key={`${notice.code}-${notice.label}`}>
+              <strong>{notice.label}:</strong> {notice.detail}
+            </p>
+          ))}
+        </section>
+      ) : null}
 
       <SeasonNav
         tag={player.tag}
@@ -389,14 +425,14 @@ export default function PlayerRoute() {
             </div>
             {data.historicalError ? <ErrorNotice error={data.historicalError} /> : null}
             <p className="section-note">
-              Season {data.selectedSeason} is not available as a compact summary. We did
-              not substitute live detail.
+              Historical data for season {data.selectedSeason} is unavailable. We did not
+              substitute live detail.
             </p>
           </section>
         )
       ) : null}
 
-      {data.selectedSeason !== null && data.historical !== null ? null : (
+      {data.selectedSeason !== null ? null : (
         <>
           {player.currentDay === null ? (
             <section className="data-section" aria-labelledby="current-day-title">
@@ -489,10 +525,12 @@ function SeasonNav({
   tag,
   seasons,
   selectedSeason,
+  currentAvailable = true,
 }: {
   tag: string;
   seasons: SummarizedSeasonRef[];
   selectedSeason: string | null;
+  currentAvailable?: boolean;
 }) {
   if (seasons.length === 0) return null;
   return (
@@ -501,24 +539,26 @@ function SeasonNav({
         <h2>Historical seasons</h2>
       </div>
       <ul className="season-list">
-        <li key="current">
-          {selectedSeason === null ? (
-            <strong aria-current="page">Current season</strong>
-          ) : (
-            <a href={canonicalPlayerPath(tag)}>Current season</a>
-          )}
-        </li>
+        {currentAvailable ? (
+          <li key="current">
+            {selectedSeason === null ? (
+              <strong aria-current="page">Current season</strong>
+            ) : (
+              <a href={canonicalPlayerPath(tag)}>Current season</a>
+            )}
+          </li>
+        ) : null}
         {seasons.map((season) => (
           <li key={season.seasonId}>
             {selectedSeason === season.seasonId ? (
               <strong aria-current="page">
-                Season {season.seasonId} · {season.coverageState}
+                Season {season.seasonId} · {seasonLabel(season)}
               </strong>
             ) : (
               <a
                 href={`${canonicalPlayerPath(tag)}?season=${encodeURIComponent(season.seasonId)}`}
               >
-                Season {season.seasonId} · {season.coverageState}
+                Season {season.seasonId} · {seasonLabel(season)}
               </a>
             )}
           </li>
@@ -529,6 +569,25 @@ function SeasonNav({
 }
 
 function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }) {
+  if (summary.source === "official_league_history") {
+    return (
+      <section className="data-section" aria-labelledby="historical-season-title">
+        <div className="section-heading">
+          <h2 id="historical-season-title">Season {summary.seasonId}</h2>
+        </div>
+        <p className="section-note">
+          Official league history. Tracked Legend day detail is unavailable.
+        </p>
+        {summary.officialHistory ? (
+          <p className="section-note">
+            Official EOD trophies: {formatCount(summary.officialHistory.eodTrophies)} ·
+            Final placement: {formatCount(summary.officialHistory.finalPlacement)} ·
+            Observed {formatTimestamp(summary.officialHistory.observedAt)}
+          </p>
+        ) : null}
+      </section>
+    );
+  }
   return (
     <section className="data-section" aria-labelledby="historical-season-title">
       <div className="section-heading">
@@ -537,11 +596,19 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
         </h2>
       </div>
       <p className="section-note">
-        Compact historical summary · {summary.daysObserved} of 28 days
+        Compact historical summary
+        {` · ${summary.daysObserved} of 28 tracked days`}
         {summary.daysMissing.length > 0
           ? ` · missing days ${summary.daysMissing.join(", ")}`
           : ""}
       </p>
+      {summary.officialHistory ? (
+        <p className="section-note">
+          Official EOD trophies: {formatCount(summary.officialHistory.eodTrophies)} ·
+          Final placement: {formatCount(summary.officialHistory.finalPlacement)} ·
+          Observed {formatTimestamp(summary.officialHistory.observedAt)}
+        </p>
+      ) : null}
       <div className="metric-grid">
         <MetricCard title="Offense">
           <Metric label="Attacks" value={formatCount(summary.attackCount)} />
@@ -588,7 +655,7 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
           <Metric label="Unknown" value={formatCount(summary.defenseStarsUnknown)} />
         </MetricCard>
       </div>
-      {summary.unresolvedFlags.length > 0 ? (
+      {summary.source === "tracked_summary" && summary.unresolvedFlags.length > 0 ? (
         <p className="section-note">Unresolved: {summary.unresolvedFlags.join("; ")}</p>
       ) : null}
       <table aria-label="Daily trophy totals">
@@ -631,6 +698,12 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
       </table>
     </section>
   );
+}
+
+function seasonLabel(season: SummarizedSeasonRef): string {
+  return season.source === "official_league_history"
+    ? "official EOD only"
+    : season.coverageState;
 }
 
 function LegendDay({ day }: { day: RankedDaySummary }) {

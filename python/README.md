@@ -15,8 +15,8 @@ private signed API. Runtime boundaries are in
 - `tests/` — pytest suite, including PostgreSQL-backed tests.
 - `testdata/` — synthetic fixtures only; no credentials or live player bodies.
 
-The production schema is owned by `deploy/migrations/0001_collector.sql`
-through `0026_python_collector_storage.sql`.
+The production schema is owned by the numbered SQL files under
+`deploy/migrations/`.
 See [history retention](../docs/history-retention.md) for compact storage,
 operator-only cleanup, and the limits on replay after expiry. Application startup does not create or
 alter tables; tests apply these migrations directly.
@@ -47,21 +47,20 @@ Record unavailable prerequisites when an integration test skips.
 
 ## Production interface
 
-The root `deploy.sh` owns the lifecycle:
+The root `ops` entry point owns the lifecycle through rootless Podman Quadlet
+services. See the [deployment runbook](../docs/deployment.md) for building a
+release and configuring its services before starting it:
 
 ```sh
-../deploy.sh python-up
-../deploy.sh status
-../deploy.sh queue-status
-../deploy.sh python-start
-../deploy.sh api-start
-../deploy.sh worker-start
-../deploy.sh python-down
+../ops up
+../ops status
+../ops logs worker
+../ops down
 ```
 
-Workers claim fenced jobs from the shared queue and read archive objects only
-through their archive-read credential. The private API is available only on
-the private Podman network at `python-api:8000`.
+Workers claim fenced jobs from the shared queue, verify local spool bytes, and
+use their archive-read credential when archived evidence is needed. The private
+API is reachable only within the stack; the website authenticates its requests.
 
 After a publication contract change, bounded current-season republishing is
 available to the worker role:

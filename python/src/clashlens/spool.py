@@ -7,7 +7,7 @@ import os
 import stat
 import threading
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from time import time
 from typing import Any, Self
@@ -111,9 +111,11 @@ class Spool:
         self._publication_condition = threading.Condition()
         self._active_publications = 0
         self._cleanup_active = False
+        self._cleanup_waiters = 0
         self._reservations: dict[int, SpoolReservation] = {}
         self._actual_counts = {key: 0 for key in self._COUNT_KEYS}
         self._temporary_sizes: dict[str, int | None] = {}
+        self._durable_prefixes: set[str] = set()
         self._high_water_bytes = 0
         self._closed = False
         try:
@@ -336,7 +338,7 @@ class Spool:
     @contextmanager
     def _publication(self) -> Iterator[None]:
         with self._publication_condition:
-            while self._cleanup_active:
+            while self._cleanup_active or self._cleanup_waiters:
                 self._publication_condition.wait()
             self._active_publications += 1
         try:
@@ -350,9 +352,14 @@ class Spool:
     @contextmanager
     def _cleanup(self) -> Iterator[None]:
         with self._publication_condition:
-            while self._cleanup_active or self._active_publications:
-                self._publication_condition.wait()
-            self._cleanup_active = True
+            self._cleanup_waiters += 1
+            try:
+                while self._cleanup_active or self._active_publications:
+                    self._publication_condition.wait()
+                self._cleanup_active = True
+            finally:
+                self._cleanup_waiters -= 1
+                self._publication_condition.notify_all()
         try:
             yield
         finally:
@@ -439,18 +446,22 @@ class Spool:
         with self._capacity_lock():
             return self._scan_locked()
 
-    def _capacity_facts_locked(self, limit: int) -> None:
+    def _capacity_facts_locked(
+        self, limit: int, *, reserved_bytes: int, reserved_objects: int
+    ) -> None:
         capacity = filesystem_capacity(self.root)
         if capacity["inode_model"] == "unknown":
             raise SpoolError("degraded_capacity: spool unknown filesystem capacity")
         if (
             self.free_space_floor
-            and int(capacity["free_bytes"]) < self.free_space_floor + limit
+            and int(capacity["free_bytes"])
+            < self.free_space_floor + reserved_bytes + limit
         ):
             raise SpoolError("degraded_capacity: spool free-space floor reached")
         if (
             capacity["inode_model"] == "finite"
-            and int(capacity["free_inodes"]) < self.free_inode_floor + 1
+            and int(capacity["free_inodes"])
+            < self.free_inode_floor + reserved_objects + 1
         ):
             raise SpoolError("degraded_capacity: spool free-inode floor reached")
 
@@ -466,7 +477,11 @@ class Spool:
         )
         if bytes_used + limit > self.max_bytes or objects_used + 1 > self.max_objects:
             raise SpoolError("degraded_capacity: spool reservation denied")
-        self._capacity_facts_locked(limit)
+        self._capacity_facts_locked(
+            limit,
+            reserved_bytes=counts["reserved_bytes"],
+            reserved_objects=counts["reserved_objects"],
+        )
 
     def _activate_reservation(self, reservation: SpoolReservation) -> None:
         if reservation.spool is not self:
@@ -537,6 +552,21 @@ class Spool:
         with self._capacity_lock():
             return self._verify_unlocked(digest, expected_size)
 
+    def probe_writable(self, limit: int | None = None) -> None:
+        """Prove a full-size response can be durably written and removed."""
+        size = self.max_body_bytes if limit is None else limit
+        with self.reservation(size) as reservation:
+            try:
+                # Avoid a sparse or compressed all-zero file. This probe must
+                # consume the same physical capacity as a worst-case response.
+                self._write_temp(os.urandom(size), reservation)
+            finally:
+                temporary_name = reservation._temporary_name
+                if temporary_name is not None:
+                    with self._capacity_lock():
+                        self._remove_temp_locked(temporary_name)
+                    reservation._temporary_name = None
+
     def _write_temp(self, body: bytes, reservation: SpoolReservation) -> str:
         with self._capacity_lock():
             tmp_fd = self._sub_dir_fd("tmp")
@@ -556,7 +586,12 @@ class Spool:
             os.fchmod(fd, 0o600)
             os.fsync(fd)
         except BaseException:
-            os.close(fd)
+            try:
+                os.close(fd)
+            finally:
+                with self._capacity_lock():
+                    self._remove_temp_locked(name)
+                reservation._temporary_name = None
             raise
         os.close(fd)
         with self._capacity_lock():
@@ -569,7 +604,7 @@ class Spool:
             self._temporary_sizes[name] = len(body)
         return name
 
-    def _remove_temp_locked(self, name: str) -> None:
+    def _unlink_temp_locked(self, name: str) -> None:
         size = self._temporary_sizes.pop(name, None)
         try:
             self._unlink_at(name, "tmp")
@@ -582,6 +617,9 @@ class Spool:
             self._actual_counts["temporary_objects"] = max(
                 0, self._actual_counts["temporary_objects"] - 1
             )
+
+    def _remove_temp_locked(self, name: str) -> None:
+        self._unlink_temp_locked(name)
         tmp_fd = self._sub_dir_fd("tmp")
         try:
             _fsync_dir(tmp_fd)
@@ -598,30 +636,48 @@ class Spool:
     def _publish_reserved(
         self, body: bytes, digest: str, reservation: SpoolReservation
     ) -> None:
+        existing_prefix_fd = None
         with self._capacity_lock():
             if self._verify_unlocked(digest, len(body)) is not None:
-                return
+                existing_prefix_fd = self._sub_dir_fd("sha256", digest[:2])
+                try:
+                    prefix_parent_fd = self._sub_dir_fd("sha256")
+                    try:
+                        self._confirm_prefix_locked(digest[:2], prefix_parent_fd)
+                    finally:
+                        os.close(prefix_parent_fd)
+                except BaseException:
+                    os.close(existing_prefix_fd)
+                    raise
+        if existing_prefix_fd is not None:
+            try:
+                _fsync_dir(existing_prefix_fd)
+            finally:
+                os.close(existing_prefix_fd)
+            return
         temporary_name = ""
         try:
             temporary_name = self._write_temp(body, reservation)
-            with self._capacity_lock():
-                prefix_parent_fd = self._sub_dir_fd("sha256")
-                try:
+            with ExitStack() as prefix_fds:
+                with self._capacity_lock():
+                    prefix_parent_fd = self._sub_dir_fd("sha256")
                     try:
-                        os.mkdir(digest[:2], 0o700, dir_fd=prefix_parent_fd)
-                    except FileExistsError:
-                        pass
-                    prefix_fd = self._sub_dir_fd("sha256", digest[:2])
-                    try:
+                        try:
+                            os.mkdir(digest[:2], 0o700, dir_fd=prefix_parent_fd)
+                            self._durable_prefixes.discard(digest[:2])
+                        except FileExistsError:
+                            pass
+                        prefix_fd = self._sub_dir_fd("sha256", digest[:2])
+                        prefix_fds.callback(os.close, prefix_fd)
                         winner = self._verify_unlocked(digest, len(body))
                         if winner is None:
-                            tmp_fd = self._sub_dir_fd("tmp")
+                            link_tmp_fd = self._sub_dir_fd("tmp")
                             try:
                                 try:
                                     os.link(
                                         temporary_name,
                                         digest,
-                                        src_dir_fd=tmp_fd,
+                                        src_dir_fd=link_tmp_fd,
                                         dst_dir_fd=prefix_fd,
                                         follow_symlinks=False,
                                     )
@@ -637,7 +693,7 @@ class Spool:
                                             os.link(
                                                 temporary_name,
                                                 digest,
-                                                src_dir_fd=tmp_fd,
+                                                src_dir_fd=link_tmp_fd,
                                                 dst_dir_fd=prefix_fd,
                                                 follow_symlinks=False,
                                             )
@@ -664,7 +720,7 @@ class Spool:
                                             os.link(
                                                 temporary_name,
                                                 digest,
-                                                src_dir_fd=tmp_fd,
+                                                src_dir_fd=link_tmp_fd,
                                                 dst_dir_fd=prefix_fd,
                                                 follow_symlinks=False,
                                             )
@@ -676,14 +732,22 @@ class Spool:
                                     self._actual_counts["final_bytes"] += len(body)
                                     self._actual_counts["final_objects"] += 1
                             finally:
-                                os.close(tmp_fd)
-                            _fsync_dir(prefix_fd)
-                        self._remove_temp_locked(temporary_name)
+                                os.close(link_tmp_fd)
                     finally:
-                        os.close(prefix_fd)
-                finally:
-                    _fsync_dir(prefix_parent_fd)
-                    os.close(prefix_parent_fd)
+                        try:
+                            self._confirm_prefix_locked(
+                                digest[:2], prefix_parent_fd
+                            )
+                        finally:
+                            os.close(prefix_parent_fd)
+                _fsync_dir(prefix_fd)
+            with self._capacity_lock():
+                self._unlink_temp_locked(temporary_name)
+                tmp_fd = self._sub_dir_fd("tmp")
+            try:
+                _fsync_dir(tmp_fd)
+            finally:
+                os.close(tmp_fd)
             reservation._temporary_name = None
         except BaseException:
             if temporary_name:
@@ -694,6 +758,12 @@ class Spool:
                     pass
             reservation._temporary_name = None
             raise
+
+    def _confirm_prefix_locked(self, prefix: str, prefix_parent_fd: int) -> None:
+        if prefix in self._durable_prefixes:
+            return
+        _fsync_dir(prefix_parent_fd)
+        self._durable_prefixes.add(prefix)
 
     def publish(
         self,
@@ -739,31 +809,72 @@ class Spool:
             hashes.add(digest)
         return hashes
 
+    def _unlink_final_locked(self, digest: str, prefix_fd: int) -> bool:
+        try:
+            info = os.stat(digest, dir_fd=prefix_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        try:
+            os.unlink(digest, dir_fd=prefix_fd)
+        except FileNotFoundError:
+            return False
+        if stat.S_ISREG(info.st_mode):
+            self._actual_counts["final_bytes"] = max(
+                0, self._actual_counts["final_bytes"] - info.st_size
+            )
+            self._actual_counts["final_objects"] = max(
+                0, self._actual_counts["final_objects"] - 1
+            )
+        return True
+
     def _delete_locked(self, digest: str) -> bool:
         try:
             prefix_fd = self._sub_dir_fd("sha256", digest[:2])
         except FileNotFoundError:
             return False
         try:
-            try:
-                info = os.stat(digest, dir_fd=prefix_fd, follow_symlinks=False)
-            except FileNotFoundError:
+            if not self._unlink_final_locked(digest, prefix_fd):
                 return False
-            try:
-                os.unlink(digest, dir_fd=prefix_fd)
-            except FileNotFoundError:
-                return False
-            if stat.S_ISREG(info.st_mode):
-                self._actual_counts["final_bytes"] = max(
-                    0, self._actual_counts["final_bytes"] - info.st_size
-                )
-                self._actual_counts["final_objects"] = max(
-                    0, self._actual_counts["final_objects"] - 1
-                )
             _fsync_dir(prefix_fd)
             return True
         finally:
             os.close(prefix_fd)
+
+    def _delete_many_locked(self, digests: set[str]) -> int:
+        prefix_fds: dict[str, int] = {}
+        deleted = 0
+        try:
+            delete_error: BaseException | None = None
+            for digest in sorted(digests):
+                try:
+                    prefix = digest[:2]
+                    prefix_fd = prefix_fds.get(prefix)
+                    if prefix_fd is None:
+                        try:
+                            prefix_fd = self._sub_dir_fd("sha256", prefix)
+                        except FileNotFoundError:
+                            continue
+                        prefix_fds[prefix] = prefix_fd
+                    if self._unlink_final_locked(digest, prefix_fd):
+                        deleted += 1
+                except BaseException as error:  # noqa: BLE001
+                    delete_error = error
+                    break
+            sync_error: BaseException | None = None
+            for prefix in sorted(prefix_fds):
+                try:
+                    _fsync_dir(prefix_fds[prefix])
+                except BaseException as error:  # noqa: BLE001
+                    if sync_error is None:
+                        sync_error = error
+            if delete_error is not None:
+                raise delete_error
+            if sync_error is not None:
+                raise sync_error
+            return deleted
+        finally:
+            for prefix_fd in prefix_fds.values():
+                os.close(prefix_fd)
 
     def delete_if_unreferenced(self, digest: str) -> bool:
         self._final(digest)
@@ -773,6 +884,29 @@ class Spool:
                     return False
                 self._delete_locked(digest)
                 return True
+
+    @contextmanager
+    def delete_unreferenced_batch(self) -> Iterator[Callable[[str], bool]]:
+        """Hold one publication barrier across a batch of guarded deletions."""
+        active = True
+        with self._cleanup():
+            with self._capacity_lock():
+                protected = self._handoff_hashes_locked()
+
+            def delete(digest: str) -> bool:
+                if not active:
+                    raise SpoolError("spool deletion batch is no longer active")
+                self._final(digest)
+                if digest in protected:
+                    return False
+                with self._capacity_lock():
+                    self._delete_locked(digest)
+                    return True
+
+            try:
+                yield delete
+            finally:
+                active = False
 
     def remove_unreferenced(self, referenced: Callable[[], set[str]]) -> int:
         with self._cleanup():
@@ -788,7 +922,7 @@ class Spool:
                     for digest, _size in self._final_files_locked()
                     if digest not in protected
                 }
-                return sum(self._delete_locked(digest) for digest in orphaned)
+                return self._delete_many_locked(orphaned)
 
     def delete(self, digest: str) -> bool:
         self._final(digest)

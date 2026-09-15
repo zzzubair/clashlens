@@ -1,0 +1,4 @@
+# Managed by Clash Lens ./ops.
+[Network]
+Label=org.clashlens.managed=ops
+NetworkName=@@NETWORK_NAME@@

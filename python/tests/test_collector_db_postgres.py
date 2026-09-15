@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import psycopg
 import pytest
 from domain_test_support import domain_database
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from clashlens.collector_db import (
     CollectorDatabase,
@@ -46,6 +48,7 @@ def _handoff(
     completed_at: datetime = NOW,
     collector_work_id: int | None = None,
     content_fingerprint: str | None = None,
+    http_status: int = 200,
 ) -> ResponseHandoff:
     return ResponseHandoff(
         occurrence_key=occurrence_key,
@@ -56,7 +59,7 @@ def _handoff(
         normalized_tag=tag,
         request_started_at=completed_at - timedelta(seconds=1),
         response_completed_at=completed_at,
-        http_status=200,
+        http_status=http_status,
         response_hash=response_hash,
         content_fingerprint=content_fingerprint or response_hash,
         byte_size=1,
@@ -77,7 +80,14 @@ def test_due_players_are_claimed_without_collector_work_rows(
 
         work = database.claim_due_players(limit=10, now=NOW)
 
-        assert work == [CollectorWork(player_id, "#2PP", NOW - timedelta(seconds=1))]
+        assert work == [
+            CollectorWork(
+                player_id,
+                "#2PP",
+                NOW - timedelta(seconds=1),
+                first_battle_pending=True,
+            )
+        ]
         with psycopg.connect(connection_info) as connection:
             assert (
                 connection.execute(
@@ -90,6 +100,259 @@ def test_due_players_are_claimed_without_collector_work_rows(
                 "SELECT next_due_at FROM players WHERE id = %s", (player_id,)
             ).fetchone()[0]
         assert next_due_at == NOW + timedelta(minutes=5)
+
+
+def test_due_claim_reuses_only_a_current_profile_before_the_first_successful_battle(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = CollectorDatabase(connection_info)
+        cases = {
+            "#FRESH": (NOW - timedelta(seconds=1), None),
+            "#STALE": (NOW - timedelta(seconds=6), None),
+            "#FUTURE": (NOW + timedelta(seconds=1), None),
+            "#BATTLE": (NOW - timedelta(seconds=1), 200),
+            "#FAILED": (NOW - timedelta(seconds=1), 404),
+        }
+        for index, (tag, (profile_at, battle_status)) in enumerate(
+            cases.items(), start=1
+        ):
+            player_id = _player(connection_info, tag)
+            database.record_response(
+                _handoff(
+                    occurrence_key=f"profile-{index}",
+                    response_hash=_hash(f"profile-{index}"),
+                    player_id=player_id,
+                    tag=tag,
+                    completed_at=profile_at,
+                )
+            )
+            if battle_status is not None:
+                database.record_response(
+                    _handoff(
+                        occurrence_key=f"battle-{index}",
+                        response_hash=_hash(f"battle-{index}"),
+                        player_id=player_id,
+                        tag=tag,
+                        endpoint="battle_log",
+                        completed_at=NOW - timedelta(seconds=1),
+                        http_status=battle_status,
+                    )
+                )
+
+        work_by_tag = {
+            work.normalized_tag: work
+            for work in database.claim_due_players(limit=10, now=NOW)
+        }
+
+        assert set(work_by_tag) == set(cases)
+        assert work_by_tag["#FRESH"].profile_fresh_until == NOW + timedelta(
+            seconds=4
+        )
+        assert work_by_tag["#FAILED"].profile_fresh_until == NOW + timedelta(
+            seconds=4
+        )
+        assert all(
+            work_by_tag[tag].profile_fresh_until is None
+            for tag in ("#STALE", "#FUTURE", "#BATTLE")
+        )
+
+
+def test_due_claim_prioritizes_unsuccessful_first_battles_before_repeats(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = CollectorDatabase(connection_info)
+        repeat_player = _player(connection_info, "#REPEAT")
+        failed_player = _player(connection_info, "#FAILED")
+        new_player = _player(connection_info, "#FIRST")
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                UPDATE players SET next_due_at = CASE id
+                    WHEN %s THEN %s - interval '2 minutes'
+                    WHEN %s THEN %s - interval '1 minute'
+                    ELSE %s - interval '1 second' END
+                """,
+                (repeat_player, NOW, failed_player, NOW, NOW),
+            )
+        database.record_response(
+            _handoff(
+                occurrence_key="repeat-battle",
+                response_hash=_hash("repeat-battle"),
+                player_id=repeat_player,
+                tag="#REPEAT",
+                endpoint="battle_log",
+            )
+        )
+        database.record_response(
+            _handoff(
+                occurrence_key="failed-battle",
+                response_hash=_hash("failed-battle"),
+                player_id=failed_player,
+                tag="#FAILED",
+                endpoint="battle_log",
+                http_status=404,
+            )
+        )
+
+        first = database.claim_due_players(limit=2, now=NOW)
+        second = database.claim_due_players(
+            limit=1, now=NOW, first_battle_pending=False
+        )
+
+        assert [work.player_id for work in first] == [failed_player, new_player]
+        assert [work.player_id for work in second] == [repeat_player]
+        with psycopg.connect(connection_info) as connection:
+            pending = dict(
+                connection.execute(
+                    "SELECT id, first_battle_pending FROM players"
+                ).fetchall()
+            )
+        assert pending == {
+            repeat_player: False,
+            failed_player: True,
+            new_player: True,
+        }
+        options = conninfo_to_dict(connection_info).get("options", "")
+        collector_database = CollectorDatabase(
+            make_conninfo(
+                connection_info,
+                options=f"{options} -c role=clashlens_collector".strip(),
+            )
+        )
+        successful_hash = _hash("successful-retry-battle")
+        collector_database.record_response(
+            _handoff(
+                occurrence_key="successful-retry-battle",
+                response_hash=successful_hash,
+                player_id=failed_player,
+                tag="#FAILED",
+                endpoint="battle_log",
+            )
+        )
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE players SET first_battle_pending = true WHERE id = %s",
+                (failed_player,),
+            )
+        compact = collector_database.record_response(
+            _handoff(
+                occurrence_key="compact-successful-battle",
+                response_hash=successful_hash,
+                player_id=failed_player,
+                tag="#FAILED",
+                endpoint="battle_log",
+                completed_at=NOW + timedelta(minutes=5),
+            )
+        )
+        collector_database.close()
+        assert compact.changed is False
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE players SET active = false WHERE id = %s",
+                (failed_player,),
+            )
+            connection.execute(
+                "UPDATE players SET active = true WHERE id = %s",
+                (failed_player,),
+            )
+            pending_after_reentry = connection.execute(
+                "SELECT first_battle_pending FROM players WHERE id = %s",
+                (failed_player,),
+            ).fetchone()[0]
+        assert pending_after_reentry is False
+
+
+def test_first_battle_priority_rolls_back_with_response_state(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                CREATE FUNCTION fail_first_battle_clear() RETURNS trigger
+                LANGUAGE plpgsql AS $$ BEGIN
+                    RAISE EXCEPTION 'forced first-battle clear failure';
+                END $$
+                """
+            )
+            connection.execute(
+                """
+                CREATE TRIGGER fail_first_battle_clear
+                BEFORE UPDATE OF first_battle_pending ON players
+                FOR EACH ROW WHEN (OLD.first_battle_pending AND
+                                   NOT NEW.first_battle_pending)
+                EXECUTE FUNCTION fail_first_battle_clear()
+                """
+            )
+
+        with pytest.raises(psycopg.errors.RaiseException):
+            database.record_response(
+                _handoff(
+                    occurrence_key="rolled-back-battle",
+                    response_hash=_hash("rolled-back-battle"),
+                    player_id=player_id,
+                    endpoint="battle_log",
+                )
+            )
+
+        with psycopg.connect(connection_info) as connection:
+            state_count = connection.execute(
+                """SELECT count(*) FROM collector_response_state
+                WHERE player_id = %s AND endpoint = 'battle_log'""",
+                (player_id,),
+            ).fetchone()[0]
+            pending = connection.execute(
+                "SELECT first_battle_pending FROM players WHERE id = %s",
+                (player_id,),
+            ).fetchone()[0]
+        assert state_count == 0
+        assert pending is True
+
+
+def test_first_battle_priority_migration_backfills_successful_state(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        database.record_response(
+            _handoff(
+                occurrence_key="pre-migration-battle",
+                response_hash=_hash("pre-migration-battle"),
+                player_id=player_id,
+                endpoint="battle_log",
+            )
+        )
+        migration = (
+            Path(__file__).parents[2]
+            / "deploy/migrations/0034_first_battle_priority.sql"
+        ).read_text(encoding="utf-8")
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE players SET first_battle_pending = true WHERE id = %s",
+                (player_id,),
+            )
+            connection.execute(migration)
+            pending, collector_update, collector_insert = connection.execute(
+                """
+                SELECT first_battle_pending,
+                       has_column_privilege(
+                           'clashlens_collector', 'players',
+                           'first_battle_pending', 'UPDATE'),
+                       has_column_privilege(
+                           'clashlens_collector', 'players',
+                           'first_battle_pending', 'INSERT')
+                FROM players WHERE id = %s
+                """,
+                (player_id,),
+            ).fetchone()
+        assert pending is False
+        assert collector_update is True
+        assert collector_insert is False
 
 
 def test_response_state_compacts_unchanged_and_enqueues_changed_response(
@@ -228,156 +491,165 @@ def test_older_response_does_not_regress_compact_state(
         assert state == (latest_hash, NOW + timedelta(minutes=10), "latest-response")
 
 
-def test_upload_claim_is_fenced_and_cleanup_waits_for_processing(
+def test_serialized_compact_recovery_tracks_applied_occurrence_separately(
     database_url: str,
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
-        response_hash = _hash("a")
-        result = database.record_response(
-            _handoff(
-                occurrence_key="upload-response",
-                response_hash=response_hash,
-                player_id=player_id,
-            )
-        )
-        claim = database.claim_upload(owner="uploader-a", lease_seconds=60, now=NOW)
-        assert claim is not None
-        assert claim.response_hash == response_hash
-        assert (
-            database.claim_upload(owner="uploader-b", lease_seconds=60, now=NOW) is None
-        )
-        with pytest.raises(RuntimeError, match="upload lease lost"):
-            database.complete_upload(
-                claim,
-                archive_reference="s3://evidence/a",
-                archive_instance_id="fixture-instance",
-                owner="uploader-b",
-            )
-
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                """
-                INSERT INTO archive_instances (
-                    instance_id, endpoint, region, bucket, marker_key,
-                    marker_hash, marker_payload_version
-                ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
-                          'evidence', 'clashlens/archive-instance.json',
-                          repeat('f', 64), 'v1')
-                ON CONFLICT (instance_id) DO NOTHING
-                """
-            )
-        database.complete_upload(
-            claim,
-            archive_reference="s3://evidence/a",
-            archive_instance_id="fixture-instance",
-        )
-        assert database.deletable_hashes(limit=10) == []
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s",
-                (NOW,),
-            )
-        assert database.deletable_hashes(limit=10) == [response_hash]
-        assert (
-            database.delete_spool_if_deletable(response_hash, lambda _: False)
-            is False
-        )
-        assert database.deletable_hashes(limit=10) == [response_hash]
-        assert database.delete_spool_if_deletable(response_hash, lambda _: True) is True
-        assert database.deletable_hashes(limit=10) == []
-        republished = database.record_response(
-            _handoff(
-                occurrence_key="upload-response-again",
-                response_hash=response_hash,
-                player_id=player_id,
-                completed_at=NOW + timedelta(minutes=5),
-            )
-        )
-        assert republished.changed is False
-        assert republished.observation_id is None
-        assert republished.processing_job_id is None
-        assert database.deletable_hashes(limit=10) == []
-        assert response_hash not in database.referenced_spool_hashes()
-        assert result.upload_id is not None
-
-
-def test_upload_retire_after_follows_the_response_season(
-    database_url: str,
-) -> None:
-    # A season-N response uploaded days later still retires with season N:
-    # retire_after derives from response_completed_at, not upload completion.
-    response_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
-    uploaded_later = response_at + timedelta(days=40)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        player_id = _player(connection_info)
-        database = CollectorDatabase(connection_info)
-        response_hash = _hash("season-dated")
+        fingerprint = _hash("used-fields")
         database.record_response(
             _handoff(
-                occurrence_key="season-dated-response",
-                response_hash=response_hash,
+                occurrence_key="retained",
+                response_hash=_hash("raw-a"),
+                content_fingerprint=fingerprint,
                 player_id=player_id,
-                completed_at=response_at,
             )
         )
-        claim = database.claim_upload(owner="uploader", lease_seconds=60)
-        assert claim is not None
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                """
-                INSERT INTO archive_instances (
-                    instance_id, endpoint, region, bucket, marker_key,
-                    marker_hash, marker_payload_version
-                ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
-                          'evidence', 'clashlens/archive-instance.json',
-                          repeat('f', 64), 'v1')
-                ON CONFLICT (instance_id) DO NOTHING
-                """
+        database.record_response(
+            _handoff(
+                occurrence_key="newer-compact",
+                response_hash=_hash("raw-b"),
+                content_fingerprint=fingerprint,
+                player_id=player_id,
+                completed_at=NOW + timedelta(minutes=10),
             )
-        database.complete_upload(
-            claim,
-            archive_reference="s3://evidence/season-dated",
-            archive_instance_id="fixture-instance",
-            now=uploaded_later,
         )
+        older = _handoff(
+            occurrence_key="older-compact",
+            response_hash=_hash("raw-c"),
+            content_fingerprint=fingerprint,
+            player_id=player_id,
+            completed_at=NOW + timedelta(minutes=5),
+        )
+
+        recovered = database.record_recovered_response(older, serialized=True)
+        repeated = database.record_recovered_response(older, serialized=True)
+
+        assert recovered.changed is False
+        assert repeated.changed is False
         with psycopg.connect(connection_info) as connection:
-            row = connection.execute(
+            state = connection.execute(
                 """
-                SELECT retire_after,
-                       clashlens_season_retire_after(%s),
-                       clashlens_season_retire_after(%s)
-                FROM archive_catalogue WHERE response_hash = %s
-                """,
-                (response_at, uploaded_later, response_hash),
+                SELECT last_response_hash, last_seen_at, last_occurrence_key,
+                       last_applied_occurrence_key, request_count
+                FROM collector_response_state
+                WHERE scope = 'player' AND identity_key = '#2PP'
+                  AND endpoint = 'profile'
+                """
             ).fetchone()
-        assert row is not None
-        assert row[0] == row[1]
-        assert row[0] != row[2]
+        assert state == (
+            _hash("raw-b"),
+            NOW + timedelta(minutes=10),
+            "newer-compact",
+            "older-compact",
+            3,
+        )
 
 
-def test_retryable_upload_failure_returns_to_pending_with_a_fence(
+def test_changed_recovery_after_successor_does_not_reapply_state(
     database_url: str,
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
+        first = _handoff(
+            occurrence_key="changed-a",
+            response_hash=_hash("changed-a"),
+            player_id=player_id,
+        )
+        second = _handoff(
+            occurrence_key="changed-b",
+            response_hash=_hash("changed-b"),
+            player_id=player_id,
+            completed_at=NOW + timedelta(minutes=5),
+        )
+        first_result = database.record_response(first)
+        database.record_response(second)
+
+        recovered = database.record_recovered_response(first, serialized=True)
+
+        assert recovered.observation_id == first_result.observation_id
+        assert recovered.processing_job_id == first_result.processing_job_id
+        with psycopg.connect(connection_info) as connection:
+            state = connection.execute(
+                """
+                SELECT last_response_hash, last_seen_at, last_occurrence_key,
+                       last_applied_occurrence_key, request_count
+                FROM collector_response_state
+                WHERE scope = 'player' AND identity_key = '#2PP'
+                  AND endpoint = 'profile'
+                """
+            ).fetchone()
+            observations = connection.execute(
+                "SELECT count(*) FROM collector_observations"
+            ).fetchone()[0]
+            jobs = connection.execute(
+                """SELECT count(*) FROM python_processing_jobs
+                WHERE work_type = 'process_observation'"""
+            ).fetchone()[0]
+        assert state == (
+            second.response_hash,
+            second.response_completed_at,
+            second.occurrence_key,
+            second.occurrence_key,
+            2,
+        )
+        assert observations == jobs == 2
+
+        conflict = _handoff(
+            occurrence_key=first.occurrence_key,
+            response_hash=_hash("conflicting-body"),
+            player_id=player_id,
+        )
+        with pytest.raises(ValueError, match="occurrence key conflicts"):
+            database.record_recovered_response(conflict, serialized=True)
+
+
+def test_legacy_compact_recovery_fails_closed_when_commit_is_ambiguous(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        fingerprint = _hash("used-fields")
         database.record_response(
             _handoff(
-                occurrence_key="failed-upload-response",
-                response_hash=_hash("a"),
+                occurrence_key="retained",
+                response_hash=_hash("raw-a"),
+                content_fingerprint=fingerprint,
                 player_id=player_id,
             )
         )
-        claim = database.claim_upload(owner="uploader", lease_seconds=60, now=NOW)
-        assert claim is not None
-        database.fail_upload(claim, category="archive_unavailable", detail="offline")
-        retry = database.claim_upload(
-            owner="uploader-retry", lease_seconds=60, now=NOW + timedelta(minutes=1)
+        legacy = _handoff(
+            occurrence_key="legacy-compact",
+            response_hash=_hash("raw-b"),
+            content_fingerprint=fingerprint,
+            player_id=player_id,
+            completed_at=NOW + timedelta(minutes=5),
         )
-        assert retry is not None
-        assert retry.response_hash == claim.response_hash
+        database.record_response(legacy)
+        changed = _handoff(
+            occurrence_key="later-changed",
+            response_hash=_hash("different-used-fields"),
+            content_fingerprint=_hash("different-used-fields"),
+            player_id=player_id,
+            completed_at=NOW + timedelta(minutes=10),
+        )
+        database.record_response(changed)
+
+        with pytest.raises(RuntimeError, match="no durable commit identity"):
+            database.record_recovered_response(legacy)
+
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute(
+                """
+                SELECT request_count, last_applied_occurrence_key
+                FROM collector_response_state
+                WHERE scope = 'player' AND identity_key = '#2PP'
+                  AND endpoint = 'profile'
+                """
+            ).fetchone() == (3, changed.occurrence_key)
 
 
 def test_transport_failure_is_durable_without_collector_work(
@@ -642,108 +914,6 @@ def test_discovery_profile_fetches_league_history_once(
         assert database.complete_intent(work_id) is True
 
 
-def test_retired_archive_location_reuploads_under_a_generation(
-    database_url: str,
-) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        player_id = _player(connection_info)
-        database = CollectorDatabase(connection_info)
-        hash_a, hash_b = _hash("retired-a"), _hash("retired-b")
-        database.record_response(
-            _handoff(
-                occurrence_key="retired-a-1",
-                response_hash=hash_a,
-                player_id=player_id,
-            )
-        )
-        claim = database.claim_upload(owner="uploader", now=NOW)
-        assert claim is not None
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                """
-                INSERT INTO archive_instances (
-                    instance_id, endpoint, region, bucket, marker_key,
-                    marker_hash, marker_payload_version
-                ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
-                          'evidence', 'clashlens/archive-instance.json',
-                          repeat('f', 64), 'v1')
-                ON CONFLICT (instance_id) DO NOTHING
-                """
-            )
-        database.complete_upload(
-            claim,
-            archive_reference="s3://evidence/old-a",
-            archive_instance_id="fixture-instance",
-            now=NOW,
-        )
-        # Retirement tombstones the old location; later re-observation must
-        # not write to it again. B's upload completes first so the recycled
-        # row is the only pending upload when A is observed again.
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                "UPDATE archive_catalogue SET availability = 'expired' WHERE archive_reference = 's3://evidence/old-a'"
-            )
-        database.record_response(
-            _handoff(
-                occurrence_key="retired-b",
-                response_hash=hash_b,
-                player_id=player_id,
-                completed_at=NOW + timedelta(minutes=5),
-            )
-        )
-        claim_b = database.claim_upload(
-            owner="uploader", now=NOW + timedelta(minutes=5)
-        )
-        assert claim_b is not None
-        assert claim_b.response_hash == hash_b
-        database.complete_upload(
-            claim_b,
-            archive_reference="s3://evidence/b-done",
-            archive_instance_id="fixture-instance",
-            now=NOW + timedelta(minutes=5),
-        )
-        reobserved = database.record_response(
-            _handoff(
-                occurrence_key="retired-a-2",
-                response_hash=hash_a,
-                player_id=player_id,
-                completed_at=NOW + timedelta(minutes=10),
-            )
-        )
-        assert reobserved.changed is True
-
-        recycled = database.claim_upload(
-            owner="uploader", now=NOW + timedelta(minutes=10)
-        )
-        assert recycled is not None
-        assert recycled.response_hash == hash_a
-        assert len(recycled.generation) == 32
-        generation_reference = (
-            f"s3://evidence/sha256/{hash_a[:2]}/{hash_a}"
-            f"/generation/{recycled.generation}"
-        )
-        database.complete_upload(
-            recycled,
-            archive_reference=generation_reference,
-            archive_instance_id="fixture-instance",
-            now=NOW + timedelta(minutes=10),
-        )
-        with psycopg.connect(connection_info) as connection:
-            rows = connection.execute(
-                """
-                SELECT archive_reference, availability
-                FROM archive_catalogue
-                WHERE response_hash = %s
-                ORDER BY first_verified_at
-                """,
-                (hash_a,),
-            ).fetchall()
-        assert rows == [
-            ("s3://evidence/old-a", "expired"),
-            (generation_reference, "verified"),
-        ]
-
-
 def test_archive_instance_validation_and_interactive_permit_budget(
     database_url: str,
 ) -> None:
@@ -801,90 +971,6 @@ def test_health_metrics_report_due_work(database_url: str) -> None:
         assert metrics["oldest_due_age_seconds"] >= 1
         assert metrics["pending_processing"] == 0
         assert metrics["pending_uploads"] == 0
-
-
-def test_hash_reuse_attaches_existing_archive_without_second_upload(
-    database_url: str,
-) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
-        player_id = _player(connection_info)
-        database = CollectorDatabase(connection_info)
-        hash_a, hash_b = _hash("a"), _hash("b")
-        first = database.record_response(
-            _handoff(occurrence_key="a-1", response_hash=hash_a, player_id=player_id)
-        )
-        claim = database.claim_upload(owner="uploader", now=NOW)
-        assert claim is not None
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                """
-                INSERT INTO archive_instances (
-                    instance_id, endpoint, region, bucket, marker_key,
-                    marker_hash, marker_payload_version
-                ) VALUES ('fixture-instance', 'archive.test:443', 'us-east-1',
-                          'evidence', 'clashlens/archive-instance.json', repeat('f', 64), 'v1')
-                """
-            )
-        database.complete_upload(
-            claim,
-            archive_reference="s3://evidence/a",
-            archive_instance_id="fixture-instance",
-        )
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s",
-                (NOW,),
-            )
-        database.delete_spool_if_deletable(hash_a, lambda _: True)
-        database.record_response(
-            _handoff(
-                occurrence_key="b-1",
-                response_hash=hash_b,
-                player_id=player_id,
-                completed_at=NOW + timedelta(minutes=5),
-            )
-        )
-        claim = database.claim_upload(owner="uploader", now=NOW + timedelta(minutes=5))
-        assert claim is not None
-        database.complete_upload(
-            claim,
-            archive_reference="s3://evidence/b",
-            archive_instance_id="fixture-instance",
-        )
-        with psycopg.connect(connection_info) as connection:
-            connection.execute(
-                "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s",
-                (NOW + timedelta(minutes=5),),
-            )
-        database.delete_spool_if_deletable(hash_b, lambda _: True)
-        reused = database.record_response(
-            _handoff(
-                occurrence_key="a-2",
-                response_hash=hash_a,
-                player_id=player_id,
-                completed_at=NOW + timedelta(minutes=10),
-            )
-        )
-        assert reused.changed is True
-        assert (
-            database.claim_upload(
-                owner="second-uploader", now=NOW + timedelta(minutes=10)
-            )
-            is None
-        )
-        with psycopg.connect(connection_info) as connection:
-            assert connection.execute(
-                "SELECT archive_reference, archive_catalogue_hash FROM collector_observations WHERE id = %s",
-                (reused.observation_id,),
-            ).fetchone() == ("s3://evidence/a", hash_a)
-            assert (
-                connection.execute(
-                    "SELECT count(*) FROM archive_catalogue WHERE response_hash = %s",
-                    (hash_a,),
-                ).fetchone()[0]
-                == 1
-            )
-        assert first.observation_id is not None
 
 
 def test_reset_membership_freezes_on_first_insert_and_boundary_is_exact(

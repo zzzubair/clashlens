@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 import subprocess
 import sys
 import textwrap
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+import clashlens.spool as spool_module
 from clashlens.archive import ArchiveReadResult, SpoolFirstReader
 from clashlens.spool import Spool, SpoolError, validate_root
 
@@ -147,6 +150,232 @@ def test_cached_counts_follow_corrupt_final_replacement(tmp_path: Path) -> None:
     assert stats["final_objects"] == 1
 
 
+@pytest.mark.parametrize("failed_directory", ["parent", "prefix"])
+def test_directory_sync_failure_is_retried_before_prefix_reuse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_directory: str,
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    body = b"first response"
+    digest = hashlib.sha256(body).hexdigest()
+    syncs = {"parent": 0, "prefix": 0, "tmp": 0}
+    original_sync = spool_module._fsync_dir
+
+    def directory_identity(path: Path) -> tuple[int, int]:
+        info = path.stat()
+        return info.st_dev, info.st_ino
+
+    def fail_first_directory_sync(fd: int) -> None:
+        info = os.fstat(fd)
+        identity = (info.st_dev, info.st_ino)
+        if identity == directory_identity(root / "sha256"):
+            directory = "parent"
+        elif identity == directory_identity(root / "tmp"):
+            directory = "tmp"
+        elif identity == directory_identity(root / "sha256" / digest[:2]):
+            directory = "prefix"
+        else:
+            original_sync(fd)
+            return
+        syncs[directory] += 1
+        if directory == failed_directory and syncs[directory] == 1:
+            raise OSError(errno.EIO, f"{directory} sync failed")
+        original_sync(fd)
+
+    monkeypatch.setattr(spool_module, "_fsync_dir", fail_first_directory_sync)
+
+    with pytest.raises(OSError, match=f"{failed_directory} sync failed"):
+        spool.publish(body, digest)
+    assert spool.verify(digest) == body
+
+    spool.publish(body, digest)
+    assert syncs[failed_directory] >= 2
+
+    second_body = next(
+        candidate
+        for index in range(10_000)
+        if (candidate := f"same-prefix-{index}".encode()) != body
+        and hashlib.sha256(candidate).hexdigest().startswith(digest[:2])
+    )
+    before_reuse = syncs.copy()
+    spool.publish(second_body, hashlib.sha256(second_body).hexdigest())
+    assert syncs["parent"] == before_reuse["parent"]
+    assert syncs["prefix"] == before_reuse["prefix"] + 1
+    assert syncs["tmp"] == before_reuse["tmp"] + 1
+
+
+def test_concurrent_winner_with_failed_prefix_sync_is_repaired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    body = b"shared response"
+    digest = hashlib.sha256(body).hexdigest()
+    original_sync = spool_module._fsync_dir
+    original_write_temp = spool._write_temp
+    prefix_syncs = 0
+    nested_writer_started = False
+
+    def fail_first_prefix_sync(fd: int) -> None:
+        nonlocal prefix_syncs
+        info = os.fstat(fd)
+        prefix = root / "sha256" / digest[:2]
+        if prefix.exists() and (info.st_dev, info.st_ino) == directory_identity(prefix):
+            prefix_syncs += 1
+            if prefix_syncs == 1:
+                raise OSError(errno.EIO, "prefix sync failed")
+        original_sync(fd)
+
+    def directory_identity(path: Path) -> tuple[int, int]:
+        info = path.stat()
+        return info.st_dev, info.st_ino
+
+    def write_temp_then_publish_competitor(body: bytes, reservation) -> str:
+        nonlocal nested_writer_started
+        name = original_write_temp(body, reservation)
+        if nested_writer_started:
+            return name
+        nested_writer_started = True
+        with pytest.raises(OSError, match="prefix sync failed"):
+            spool.publish(body, digest)
+        return name
+
+    monkeypatch.setattr(spool_module, "_fsync_dir", fail_first_prefix_sync)
+    monkeypatch.setattr(spool, "_write_temp", write_temp_then_publish_competitor)
+
+    spool.publish(body, digest)
+
+    assert prefix_syncs == 2
+    assert spool.verify(digest) == body
+
+
+def test_existing_body_sync_failure_cannot_publish_a_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    body = b"existing raw response"
+    digest = hashlib.sha256(body).hexdigest()
+    spool.publish(body, digest)
+    original_sync = spool_module._fsync_dir
+
+    def fail_prefix_sync(fd: int) -> None:
+        info = os.fstat(fd)
+        prefix = (root / "sha256" / digest[:2]).stat()
+        if (info.st_dev, info.st_ino) == (prefix.st_dev, prefix.st_ino):
+            raise OSError(errno.EIO, "prefix sync failed")
+        original_sync(fd)
+
+    monkeypatch.setattr(spool_module, "_fsync_dir", fail_prefix_sync)
+
+    with spool.reservation() as reservation:
+        with pytest.raises(OSError, match="prefix sync failed"):
+            spool.publish_handoff(
+                body,
+                digest,
+                "failed-handoff",
+                ('{"response_hash":"' + digest + '"}').encode(),
+                reservation,
+            )
+    assert spool.iter_handoffs() == []
+
+
+def test_directory_flush_does_not_block_an_unrelated_publication_or_cleanup_fence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    first_body = b"slow directory flush"
+    first_digest = hashlib.sha256(first_body).hexdigest()
+    second_body = next(
+        candidate
+        for index in range(10_000)
+        if (candidate := f"other-prefix-{index}".encode()) != first_body
+        and not hashlib.sha256(candidate).hexdigest().startswith(first_digest[:2])
+    )
+    second_digest = hashlib.sha256(second_body).hexdigest()
+    first_flush_started = threading.Event()
+    release_first_flush = threading.Event()
+    cleanup_waiting = threading.Event()
+    first_thread: list[int] = []
+    cleanup_thread: list[int] = []
+    original_sync = spool_module._fsync_dir
+    original_condition_wait = spool._publication_condition.wait
+
+    def controlled_sync(fd: int) -> None:
+        info = os.fstat(fd)
+        first_prefix = root / "sha256" / first_digest[:2]
+        if (
+            first_thread
+            and threading.get_ident() == first_thread[0]
+            and first_prefix.exists()
+            and (info.st_dev, info.st_ino) == directory_identity(first_prefix)
+        ):
+            first_flush_started.set()
+            assert release_first_flush.wait(timeout=2)
+        original_sync(fd)
+
+    def directory_identity(path: Path) -> tuple[int, int]:
+        info = path.stat()
+        return info.st_dev, info.st_ino
+
+    def observed_condition_wait(timeout: float | None = None) -> bool:
+        if cleanup_thread and threading.get_ident() == cleanup_thread[0]:
+            cleanup_waiting.set()
+        return original_condition_wait(timeout)
+
+    def publish_first() -> None:
+        first_thread.append(threading.get_ident())
+        with spool.reservation() as reservation:
+            spool.publish_handoff(
+                first_body,
+                first_digest,
+                "first",
+                ('{"response_hash":"' + first_digest + '"}').encode(),
+                reservation,
+            )
+
+    def publish_second() -> None:
+        with spool.reservation() as reservation:
+            spool.publish_handoff(
+                second_body,
+                second_digest,
+                "second",
+                ('{"response_hash":"' + second_digest + '"}').encode(),
+                reservation,
+            )
+
+    def cleanup() -> int:
+        cleanup_thread.append(threading.get_ident())
+        return spool.remove_unreferenced(lambda: {first_digest, second_digest})
+
+    monkeypatch.setattr(spool_module, "_fsync_dir", controlled_sync)
+    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        first = executor.submit(publish_first)
+        assert first_flush_started.wait(timeout=2)
+
+        second = executor.submit(publish_second)
+        second.result(timeout=2)
+        assert spool.verify(second_digest) == second_body
+
+        cleanup_task = executor.submit(cleanup)
+        assert cleanup_waiting.wait(timeout=2)
+        assert not cleanup_task.done()
+
+        release_first_flush.set()
+        first.result(timeout=2)
+        assert cleanup_task.result(timeout=2) == 0
+
+    assert spool.verify(first_digest) == first_body
+    stats = spool.stats()
+    assert stats["final_objects"] == 2
+    assert stats["temporary_objects"] == 0
+    assert stats["reserved_objects"] == 0
+
+
 def test_handoff_records_are_private_atomic_and_recoverable(tmp_path: Path) -> None:
     root = tmp_path / "spool"
     spool = Spool(root, max_body_bytes=1024)
@@ -221,6 +450,336 @@ def test_unreferenced_sweep_reads_references_at_sweep_time(
     assert spool.verify(digest) == body
     assert spool.remove_unreferenced(lambda: set()) == 1
     assert spool.verify(digest) is None
+
+
+def test_unreferenced_sweep_flushes_each_prefix_before_publication_resumes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    first_body = b"first orphan"
+    first_digest = hashlib.sha256(first_body).hexdigest()
+    second_body = next(
+        candidate
+        for index in range(10_000)
+        if (candidate := f"same-prefix-orphan-{index}".encode()) != first_body
+        and hashlib.sha256(candidate).hexdigest().startswith(first_digest[:2])
+    )
+    second_digest = hashlib.sha256(second_body).hexdigest()
+    protected_body = b"database referenced body"
+    protected_digest = hashlib.sha256(protected_body).hexdigest()
+    new_body = b"publication after the sweep"
+    new_digest = hashlib.sha256(new_body).hexdigest()
+    for body, digest in (
+        (first_body, first_digest),
+        (second_body, second_digest),
+        (protected_body, protected_digest),
+    ):
+        spool.publish(body, digest)
+    new_reservation = spool.reserve()
+
+    flush_started = threading.Event()
+    release_flush = threading.Event()
+    publication_waiting = threading.Event()
+    publication_thread: list[int] = []
+    prefix_flushes = 0
+    original_sync = spool_module._fsync_dir
+    original_condition_wait = spool._publication_condition.wait
+
+    def controlled_sync(fd: int) -> None:
+        nonlocal prefix_flushes
+        info = os.fstat(fd)
+        prefix = (root / "sha256" / first_digest[:2]).stat()
+        if (info.st_dev, info.st_ino) == (prefix.st_dev, prefix.st_ino):
+            prefix_flushes += 1
+            flush_started.set()
+            assert release_flush.wait(timeout=2)
+        original_sync(fd)
+
+    def observed_condition_wait(timeout: float | None = None) -> bool:
+        if publication_thread and threading.get_ident() == publication_thread[0]:
+            publication_waiting.set()
+        return original_condition_wait(timeout)
+
+    def publish_new() -> None:
+        publication_thread.append(threading.get_ident())
+        spool.publish_handoff(
+            new_body,
+            new_digest,
+            "new",
+            ('{"response_hash":"' + new_digest + '"}').encode(),
+            new_reservation,
+        )
+
+    monkeypatch.setattr(spool_module, "_fsync_dir", controlled_sync)
+    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            sweep = executor.submit(
+                spool.remove_unreferenced, lambda: {protected_digest}
+            )
+            assert flush_started.wait(timeout=2)
+            publication = executor.submit(publish_new)
+            assert publication_waiting.wait(timeout=2)
+            assert not publication.done()
+            release_flush.set()
+            assert sweep.result(timeout=2) == 2
+            assert publication.result(timeout=2) is None
+    finally:
+        release_flush.set()
+        new_reservation.release()
+
+    assert prefix_flushes == 1
+    assert spool.verify(first_digest) is None
+    assert spool.verify(second_digest) is None
+    assert spool.verify(protected_digest) == protected_body
+    assert spool.verify(new_digest) == new_body
+
+
+def test_unreferenced_sweep_propagates_final_directory_flush_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    orphan_bodies = (b"orphan before failed flush", b"orphan flushed afterward")
+    orphan_digests = tuple(hashlib.sha256(body).hexdigest() for body in orphan_bodies)
+    orphan_prefixes = {digest[:2] for digest in orphan_digests}
+    assert len(orphan_prefixes) == 2
+    failed_prefix = min(orphan_prefixes)
+    protected_body = b"protected across failed flush"
+    protected_digest = hashlib.sha256(protected_body).hexdigest()
+    for body, digest in zip(orphan_bodies, orphan_digests, strict=True):
+        spool.publish(body, digest)
+    spool.publish(protected_body, protected_digest)
+    original_sync = spool_module._fsync_dir
+    failed = False
+    flushed_after_failure: set[str] = set()
+
+    def fail_orphan_prefix_sync(fd: int) -> None:
+        nonlocal failed
+        info = os.fstat(fd)
+        for prefix in orphan_prefixes:
+            prefix_info = (root / "sha256" / prefix).stat()
+            if (info.st_dev, info.st_ino) != (
+                prefix_info.st_dev,
+                prefix_info.st_ino,
+            ):
+                continue
+            if prefix == failed_prefix:
+                failed = True
+                raise OSError(errno.EIO, "orphan prefix sync failed")
+            if failed:
+                flushed_after_failure.add(prefix)
+        original_sync(fd)
+
+    monkeypatch.setattr(spool_module, "_fsync_dir", fail_orphan_prefix_sync)
+
+    with pytest.raises(OSError, match="orphan prefix sync failed"):
+        spool.remove_unreferenced(lambda: {protected_digest})
+
+    assert flushed_after_failure == orphan_prefixes - {failed_prefix}
+    assert all(spool.verify(digest) is None for digest in orphan_digests)
+    assert spool.verify(protected_digest) == protected_body
+    assert spool.stats()["final_objects"] == 1
+
+
+def test_unreferenced_sweep_flushes_prior_unlinks_before_propagating_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "spool"
+    spool = Spool(root, max_body_bytes=1024)
+    bodies = (b"unlinked before error", b"unlink fails")
+    digests = sorted(hashlib.sha256(body).hexdigest() for body in bodies)
+    assert digests[0][:2] != digests[1][:2]
+    for body in bodies:
+        spool.publish(body, hashlib.sha256(body).hexdigest())
+    original_unlink = os.unlink
+    original_sync = spool_module._fsync_dir
+    earlier_prefix_flushed = False
+
+    def fail_later_unlink(path, *args, **kwargs) -> None:
+        if path == digests[1]:
+            raise OSError(errno.EIO, "later unlink failed")
+        original_unlink(path, *args, **kwargs)
+
+    def observe_sync(fd: int) -> None:
+        nonlocal earlier_prefix_flushed
+        info = os.fstat(fd)
+        prefix = (root / "sha256" / digests[0][:2]).stat()
+        if (info.st_dev, info.st_ino) == (prefix.st_dev, prefix.st_ino):
+            earlier_prefix_flushed = True
+        original_sync(fd)
+
+    monkeypatch.setattr(os, "unlink", fail_later_unlink)
+    monkeypatch.setattr(spool_module, "_fsync_dir", observe_sync)
+
+    with pytest.raises(OSError, match="later unlink failed"):
+        spool.remove_unreferenced(lambda: set())
+    assert earlier_prefix_flushed
+    assert spool.verify(digests[0]) is None
+    assert spool.verify(digests[1]) is not None
+
+
+def test_waiting_cleanup_runs_before_a_new_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    bodies = (b"first response", b"second response")
+    digests = tuple(hashlib.sha256(body).hexdigest() for body in bodies)
+    payloads = tuple(
+        ('{"response_hash":"' + digest + '"}').encode() for digest in digests
+    )
+    reservations = tuple(spool.reserve() for _body in bodies)
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    cleanup_waiting = threading.Event()
+    cleanup_entered = threading.Event()
+    release_cleanup = threading.Event()
+    second_started = threading.Event()
+    second_entered = threading.Event()
+    original_write_handoff = spool.write_handoff
+    original_condition_wait = spool._publication_condition.wait
+    cleanup_thread: list[int] = []
+
+    def controlled_write_handoff(name: str, payload: bytes) -> None:
+        if name == "first":
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+        elif name == "second":
+            second_entered.set()
+        original_write_handoff(name, payload)
+
+    def referenced() -> set[str]:
+        cleanup_entered.set()
+        assert release_cleanup.wait(timeout=2)
+        return set(digests)
+
+    def observed_condition_wait(timeout: float | None = None) -> bool:
+        if cleanup_thread and threading.get_ident() == cleanup_thread[0]:
+            cleanup_waiting.set()
+        return original_condition_wait(timeout)
+
+    def cleanup_unreferenced() -> int:
+        cleanup_thread.append(threading.get_ident())
+        return spool.remove_unreferenced(referenced)
+
+    def publish_second() -> None:
+        second_started.set()
+        spool.publish_handoff(
+            bodies[1],
+            digests[1],
+            "second",
+            payloads[1],
+            reservations[1],
+        )
+
+    monkeypatch.setattr(spool, "write_handoff", controlled_write_handoff)
+    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    try:
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            try:
+                first = executor.submit(
+                    spool.publish_handoff,
+                    bodies[0],
+                    digests[0],
+                    "first",
+                    payloads[0],
+                    reservations[0],
+                )
+                assert first_entered.wait(timeout=2)
+                cleanup = executor.submit(cleanup_unreferenced)
+                assert cleanup_waiting.wait(timeout=2)
+                second = executor.submit(publish_second)
+                assert second_started.wait(timeout=2)
+                assert not second_entered.wait(timeout=0.05)
+
+                release_first.set()
+                assert cleanup_entered.wait(timeout=2)
+                assert not second_entered.is_set()
+                release_cleanup.set()
+
+                assert first.result(timeout=2) is None
+                assert cleanup.result(timeout=2) == 0
+                assert second.result(timeout=2) is None
+                assert spool.verify(digests[0]) == bodies[0]
+                assert spool.verify(digests[1]) == bodies[1]
+            finally:
+                release_first.set()
+                release_cleanup.set()
+    finally:
+        for reservation in reservations:
+            reservation.release()
+        spool.close()
+
+
+def test_deletion_batch_blocks_publication_and_keeps_sidecar_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    protected_body = b"protected by durable handoff"
+    orphan_body = b"unreferenced uploaded body"
+    new_body = b"publication waiting for cleanup"
+    protected_digest = hashlib.sha256(protected_body).hexdigest()
+    orphan_digest = hashlib.sha256(orphan_body).hexdigest()
+    new_digest = hashlib.sha256(new_body).hexdigest()
+    protected_payload = ('{"response_hash":"' + protected_digest + '"}').encode()
+    new_payload = ('{"response_hash":"' + new_digest + '"}').encode()
+    with spool.reservation() as reservation:
+        spool.publish_handoff(
+            protected_body,
+            protected_digest,
+            "protected",
+            protected_payload,
+            reservation,
+        )
+    spool.publish(orphan_body, orphan_digest)
+    new_reservation = spool.reserve()
+    batch_entered = threading.Event()
+    release_batch = threading.Event()
+    publication_waiting = threading.Event()
+    publication_finished = threading.Event()
+    publication_thread: list[int] = []
+    original_condition_wait = spool._publication_condition.wait
+
+    def observed_condition_wait(timeout: float | None = None) -> bool:
+        if publication_thread and threading.get_ident() == publication_thread[0]:
+            publication_waiting.set()
+        return original_condition_wait(timeout)
+
+    def delete_batch() -> tuple[bool, bool]:
+        with spool.delete_unreferenced_batch() as delete:
+            batch_entered.set()
+            assert release_batch.wait(timeout=2)
+            return delete(protected_digest), delete(orphan_digest)
+
+    def publish_new() -> None:
+        publication_thread.append(threading.get_ident())
+        spool.publish_handoff(
+            new_body, new_digest, "new", new_payload, new_reservation
+        )
+        publication_finished.set()
+
+    monkeypatch.setattr(spool._publication_condition, "wait", observed_condition_wait)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            batch = executor.submit(delete_batch)
+            assert batch_entered.wait(timeout=2)
+            # Removing a sidecar after the batch snapshot cannot make its body
+            # eligible until a later cleanup pass.
+            spool.remove_handoff("protected")
+            publication = executor.submit(publish_new)
+            assert publication_waiting.wait(timeout=2)
+            assert not publication_finished.is_set()
+            release_batch.set()
+            assert batch.result(timeout=2) == (False, True)
+            assert publication.result(timeout=2) is None
+    finally:
+        release_batch.set()
+        new_reservation.release()
+
+    assert spool.verify(protected_digest) == protected_body
+    assert spool.verify(orphan_digest) is None
+    assert spool.verify(new_digest) == new_body
 
 
 def test_handoff_names_cannot_escape_trusted_directory(tmp_path: Path) -> None:
@@ -474,6 +1033,38 @@ def test_btrfs_zero_inodes_passes_inode_gate_but_not_byte_or_object_limits(
             full.reserve(1024)
 
 
+@pytest.mark.parametrize(
+    "free_bytes,free_inodes,error",
+    [
+        (2024, 1000, "free-space floor"),
+        (10_000_000, 11, "free-inode floor"),
+    ],
+)
+def test_physical_capacity_accounts_for_concurrent_reservations(
+    tmp_path: Path, free_bytes: int, free_inodes: int, error: str
+) -> None:
+    from unittest import mock
+
+    from clashlens import spool as spool_module
+
+    spool = Spool(
+        tmp_path / error,
+        max_body_bytes=1024,
+        free_space_floor=1000,
+        free_inode_floor=10,
+    )
+    capacity = _capacity(
+        "ext4", "finite", free_bytes=free_bytes, free_inodes=free_inodes
+    )
+    with mock.patch.object(spool_module, "filesystem_capacity", return_value=capacity):
+        first = spool.reserve(1024)
+        try:
+            with pytest.raises(SpoolError, match=error):
+                spool.reserve(1024)
+        finally:
+            first.release()
+
+
 def test_unknown_and_failed_capacity_do_not_admit(tmp_path: Path) -> None:
     from unittest import mock
 
@@ -496,6 +1087,54 @@ def test_unknown_and_failed_capacity_do_not_admit(tmp_path: Path) -> None:
             spool.reserve(512)
         ready, reason = spool.readiness()
         assert ready is False and reason.startswith("storage_error:")
+
+
+def test_writable_probe_uses_real_storage_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    original_write = os.write
+    failed = False
+
+    def fail_once(fd: int, body: bytes | memoryview) -> int:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise OSError(errno.ENOSPC, "quota full")
+        return original_write(fd, body)
+
+    monkeypatch.setattr(os, "write", fail_once)
+    with pytest.raises(OSError) as error:
+        spool.probe_writable(1024)
+    assert error.value.errno == errno.ENOSPC
+    assert spool.stats()["temporary_objects"] == 0
+
+    # The failed probe removes its partial file. A later full-size durable
+    # write must succeed before the collector resumes.
+    monkeypatch.setattr(os, "write", original_write)
+    spool.probe_writable(1024)
+    assert spool.stats()["temporary_objects"] == 0
+
+
+def test_failed_response_write_removes_partial_temporary_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    body = b"raw response"
+    response_hash = hashlib.sha256(body).hexdigest()
+
+    def failed_write(_fd: int, _body: bytes | memoryview) -> int:
+        raise OSError(errno.EIO, "write failed")
+
+    monkeypatch.setattr(os, "write", failed_write)
+    with pytest.raises(OSError) as error:
+        spool.publish(body, response_hash)
+
+    assert error.value.errno == errno.EIO
+    assert list((tmp_path / "spool" / "tmp").iterdir()) == []
+    stats = spool.stats()
+    assert stats["temporary_bytes"] == 0
+    assert stats["temporary_objects"] == 0
 
 
 def test_finite_zero_floor_still_requires_one_inode(tmp_path: Path) -> None:

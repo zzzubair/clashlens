@@ -168,6 +168,28 @@ def validate_profile_season_anchor(
     )
 
 
+def validate_legend_season_start(season_id: str, *, observed_at: datetime) -> datetime:
+    """Return a confirmed Legend season start from an official season id."""
+    start = _canonical_season_start(season_id)
+    bootstrap = _canonical_season_start(BOOTSTRAP_CURRENT_SEASON_ID)
+    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+        raise DomainRuleError(
+            "invalid_season_anchor",
+            "season observation time must include a UTC offset",
+        )
+    if (
+        start > observed_at.astimezone(UTC)
+        or start.weekday() != 0
+        or start.time().replace(tzinfo=None) != datetime.min.time().replace(hour=5)
+        or (start - bootstrap) % SEASON_DURATION
+    ):
+        raise DomainRuleError(
+            "invalid_season_anchor",
+            "season ID is not aligned to the observed 28-day Legend phase",
+        )
+    return start
+
+
 def is_season_boundary(boundary: datetime) -> bool:
     """True when a 05:00 UTC Reset boundary also opens a new season."""
     return ranked_day_for(boundary).season_start == boundary.astimezone(UTC)

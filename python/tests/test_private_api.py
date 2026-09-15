@@ -9,7 +9,7 @@ from time import perf_counter
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from test_api_db_public_ops import seed_profile
+from test_api_db_public_ops import seed_league_history, seed_profile
 from test_api_migration import migrated_production_database
 
 from clashlens import api_accounts, api_analytics, api_verification
@@ -89,6 +89,50 @@ class FakeOfficialVerifier:
         assert player_token
         self.calls += 1
         return OfficialVerificationResponse(200, b'{"status":"ok"}')
+
+
+def test_player_season_routes_publish_only_public_history_fields(
+    database_url: str,
+) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            seed_league_history(database, "#2PP", "1781499600")
+            app = create_app(
+                database=database,
+                keys={("typescript-website", "current"): TS_CURRENT},
+                clock=lambda: NOW_SECONDS,
+                now=lambda: NOW,
+            )
+            with TestClient(app) as client:
+                list_target = "/v1/players/%232PP/seasons"
+                list_response = client.get(
+                    list_target, headers=signed_headers(list_target)
+                )
+                detail_target = "/v1/players/%232PP/seasons/1781499600"
+                detail_response = client.get(
+                    detail_target, headers=signed_headers(detail_target)
+                )
+        finally:
+            database.close()
+
+    assert list_response.status_code == 200
+    assert detail_response.status_code == 200
+    assert list_response.json()["seasons"][0]["source"] == "official_league_history"
+    detail = detail_response.json()
+    assert detail["official_history"] == {
+        "source": "official_league_history",
+        "observed_at": "2026-08-06T12:00:00+00:00",
+        "eod_trophies": 5812,
+        "final_placement": 12,
+    }
+    serialized = json.dumps([list_response.json(), detail])
+    assert "account_id" not in serialized
+    assert "provider_subject" not in serialized
+    assert "source_json" not in serialized
 
 
 def test_caller_operation_matrix_google_beta_and_complete_private_operations(
@@ -391,7 +435,9 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
             assert verifier.calls == 1
             assert database.scalar("SELECT count(*) FROM shared_api_permits") == 1
 
-            owner_context = api_accounts.resolve_account(database, "google", "google-api-owner")
+            owner_context = api_accounts.resolve_account(
+                database, "google", "google-api-owner"
+            )
             assert owner_context is not None
             crashed_request_id = str(uuid4())
             crashed_binding = RequestBinding(
@@ -405,8 +451,8 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
                 request_target=verify_target,
                 identity={"tag": "#2PP"},
             )
-            assert api_verification.reserve_verification(database,
-                crashed_binding, normalized_tag="#2PP"
+            assert api_verification.reserve_verification(
+                database, crashed_binding, normalized_tag="#2PP"
             ).fresh
             with database.pool.connection() as connection:
                 connection.execute(
@@ -515,8 +561,12 @@ def test_linked_elsewhere_requires_one_bounded_support_candidate(
                         ),
                     )
                     assert response.status_code == 201
-                first = api_accounts.resolve_account(database, "google", "google-first-owner")
-                second = api_accounts.resolve_account(database, "google", "google-second-owner")
+                first = api_accounts.resolve_account(
+                    database, "google", "google-first-owner"
+                )
+                second = api_accounts.resolve_account(
+                    database, "google", "google-second-owner"
+                )
                 assert first is not None and second is not None
                 verify_target = "/v1/players/%232PP/verifytoken"
                 first_token = json_body({"token": "first-owner-secret"})

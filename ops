@@ -1,0 +1,1184 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+PODMAN_BIN=${PODMAN_BIN:-podman}
+SYSTEMCTL_BIN=${SYSTEMCTL_BIN:-systemctl}
+LOGINCTL_BIN=${LOGINCTL_BIN:-loginctl}
+ENV_FILE=${OPS_ENV_FILE:-"$ROOT/app.env"}
+STATE_DIR=${XDG_STATE_HOME:-"$HOME/.local/state"}/clashlens
+CONFIG_HOME=${XDG_CONFIG_HOME:-"$HOME/.config"}
+QUADLET_DIR=$CONFIG_HOME/containers/systemd
+USER_UNIT_DIR=$CONFIG_HOME/systemd/user
+RELEASE_DIR="$ROOT/.clashlens-ops"
+RELEASE_FILE="$RELEASE_DIR/release.env"
+ACTIVE_RELEASE_FILE="$STATE_DIR/active-release.env"
+TEMPLATE_DIR="$ROOT/deploy/quadlet"
+CANONICAL_REPOSITORY_URL=https://github.com/zzzubair/clashlens
+declare -Ag CONFIG=()
+declare -Ag RELEASE=()
+ADMIN_SECRET_ACTIVE=false
+UP_IN_PROGRESS=false
+OPS_LOCK_FD=
+
+usage() {
+  cat <<'EOF'
+Usage: ./ops build [--fixture]
+       ./ops up [--fixture]
+       ./ops down
+       ./ops status
+       ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login]
+       ./ops queue-status
+       ./ops failed-items [--limit N|--work-id N|--upload-hash SHA256] [--apply]
+       ./ops support-recovery-exec <arguments>
+
+build creates a pinned release. up installs and starts that release; it never
+builds or pulls an image. --fixture is an isolated stack with no live keys.
+down disables the stack across reboot and keeps all database, spool and archive data.
+EOF
+}
+
+die() {
+  printf 'ops: %s\n' "$*" >&2
+  exit 1
+}
+
+cleanup_admin_secret() {
+  [[ "$ADMIN_SECRET_ACTIVE" == true ]] || return 0
+  cleanup_stale_admin_containers || return 1
+  if ! "$PODMAN_BIN" secret rm clashlens-init-database-url >/dev/null 2>&1 || \
+      "$PODMAN_BIN" secret exists clashlens-init-database-url >/dev/null 2>&1; then
+    printf 'ops: could not remove the transient admin database secret\n' >&2
+    return 1
+  fi
+  ADMIN_SECRET_ACTIVE=false
+}
+
+finish() {
+  local result=$?
+  trap - EXIT HUP INT TERM
+  cleanup_admin_secret || result=1
+  if (( result != 0 )) && [[ "$UP_IN_PROGRESS" == true ]]; then
+    "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
+    local unit
+    for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume; do
+      "$SYSTEMCTL_BIN" --user stop "$unit.service" >/dev/null 2>&1 || true
+    done
+  fi
+  exit "$result"
+}
+
+trap finish EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+trim() {
+  local value=$1
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+parse_mode() {
+  MODE=production
+  if (($#)); then
+    [[ $# == 1 && "$1" == --fixture ]] || die "expected only --fixture"
+    MODE=fixture
+  fi
+}
+
+require_host() {
+  command -v "$PODMAN_BIN" >/dev/null 2>&1 || die "Podman is required"
+  command -v "$SYSTEMCTL_BIN" >/dev/null 2>&1 || die "systemd is required"
+  "$PODMAN_BIN" info >/dev/null 2>&1 || die "rootless Podman is unavailable"
+  [[ "$($PODMAN_BIN info --format '{{.Host.Security.Rootless}}')" == true ]] || \
+    die "./ops requires rootless Podman"
+  "$SYSTEMCTL_BIN" --user show-environment >/dev/null 2>&1 || \
+    die "the systemd user manager is unavailable"
+}
+
+load_kv_file() {
+  local file=$1 target=$2 raw line name value
+  [[ -r "$file" ]] || die "cannot read $file"
+  while IFS= read -r raw || [[ -n "$raw" ]]; do
+    line=$(trim "$raw")
+    [[ -z "$line" || "${line:0:1}" == '#' ]] && continue
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] || \
+      die "$file contains an invalid setting"
+    name=${BASH_REMATCH[1]}
+    value=${BASH_REMATCH[2]}
+    [[ "$value" != *$'\n'* && "$value" != *$'\r'* ]] || die "$file contains a multiline value"
+    if [[ "$target" == CONFIG ]]; then CONFIG["$name"]=$value; else RELEASE["$name"]=$value; fi
+  done < "$file"
+}
+
+setting() {
+  local name=$1 fallback=${2-}
+  printf '%s' "${CONFIG[$name]-$fallback}"
+}
+
+require_setting() {
+  local name=$1 value=${CONFIG[$name]-}
+  [[ -n "$value" && "$value" != CHANGE_ME && "$value" != *example.invalid* ]] || \
+    die "$name must be set in app.env"
+}
+
+safe_env_value() {
+  local name=$1 value=$2
+  [[ -n "$value" && "$value" != *[[:space:]]* && "$value" != *'%'* ]] || \
+    die "$name contains characters unsupported by the unit environment file"
+}
+
+validate_number() {
+  local name=$1 value=$2 kind=$3
+  case "$kind" in
+    integer) [[ "$value" =~ ^[1-9][0-9]*$ ]] ;;
+    cpu) [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ && "$value" != 0 ]] ;;
+    memory) [[ "$value" =~ ^[1-9][0-9]*[bBkKmMgGtT]?$ ]] ;;
+  esac || die "$name is invalid"
+}
+
+load_production_config() {
+  [[ "$ENV_FILE" == /* ]] || die "app.env path must be absolute"
+  validate_directory_ancestry "${ENV_FILE%/*}"
+  [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || die "missing or unsafe app.env; copy app.env.example and chmod 600 app.env"
+  [[ "$(stat -c '%u' "$ENV_FILE")" == "$(id -u)" ]] || die "app.env must belong to the service account"
+  [[ "$(stat -c '%a' "$ENV_FILE")" == 600 ]] || die "app.env must have mode 600"
+  load_kv_file "$ENV_FILE" CONFIG
+  local required=(POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD
+    CLASHLENS_COLLECTOR_DB_PASSWORD CLASHLENS_WORKER_DB_PASSWORD CLASHLENS_API_DB_PASSWORD
+    CLASHLENS_ARCHIVE_ENDPOINT CLASHLENS_ARCHIVE_REGION CLASHLENS_ARCHIVE_INSTANCE_ID
+    CLASHLENS_ARCHIVE_MARKER_KEY CLASHLENS_ARCHIVE_MARKER_HASH
+    CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION CLASHLENS_ARCHIVE_BUCKET
+    CLASHLENS_ARCHIVE_ACCESS_KEY CLASHLENS_ARCHIVE_SECRET_KEY
+    CLASHLENS_WORKER_ARCHIVE_ACCESS_KEY CLASHLENS_WORKER_ARCHIVE_SECRET_KEY
+    CLASHLENS_SPOOL_ROOT CLASHLENS_OFFICIAL_API_ORIGIN CLASHLENS_OFFICIAL_API_PROXY_URL
+    CLASHLENS_API_KEY_HOST_DIR CLASHLENS_HMAC_SECRET_FILE)
+  local name
+  for name in "${required[@]}"; do require_setting "$name"; done
+  [[ "$(setting CLASHLENS_ARCHIVE_SECURE)" == true ]] || die "production archive transport must be secure"
+  [[ "$(setting CLASHLENS_ARCHIVE_ENDPOINT)" =~ ^[A-Za-z0-9._:-]+$ && "$(setting CLASHLENS_ARCHIVE_ENDPOINT)" != *://* && "$(setting CLASHLENS_ARCHIVE_ENDPOINT)" != */* ]] || die "CLASHLENS_ARCHIVE_ENDPOINT must be a host and port without a scheme or path"
+  [[ "$(setting CLASHLENS_ARCHIVE_BUCKET)" =~ ^[A-Za-z0-9._-]{3,63}$ ]] || die "CLASHLENS_ARCHIVE_BUCKET is invalid"
+  [[ "$(setting CLASHLENS_ARCHIVE_REGION)" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "CLASHLENS_ARCHIVE_REGION is invalid"
+  [[ "$(setting CLASHLENS_ARCHIVE_INSTANCE_ID)" =~ ^[A-Za-z0-9._:-]{1,128}$ ]] || die "CLASHLENS_ARCHIVE_INSTANCE_ID is invalid"
+  [[ "$(setting CLASHLENS_ARCHIVE_MARKER_KEY)" =~ ^[A-Za-z0-9._/-]+$ && "$(setting CLASHLENS_ARCHIVE_MARKER_KEY)" != /* && "$(setting CLASHLENS_ARCHIVE_MARKER_KEY)" != *..* ]] || die "CLASHLENS_ARCHIVE_MARKER_KEY must be a safe relative key"
+  [[ "$(setting CLASHLENS_ARCHIVE_MARKER_HASH)" =~ ^[0-9a-f]{64}$ ]] || die "CLASHLENS_ARCHIVE_MARKER_HASH must be lowercase SHA-256"
+  [[ "$(setting CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION)" =~ ^[A-Za-z0-9._-]{1,32}$ ]] || die "CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION is invalid"
+  [[ "$(setting CLASHLENS_OFFICIAL_API_ORIGIN)" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || die "production official API origin must be one HTTPS origin without a path"
+  [[ "$(setting CLASHLENS_SPOOL_ROOT)" == /* && "$(setting CLASHLENS_SPOOL_ROOT)" != / ]] || die "CLASHLENS_SPOOL_ROOT must be an absolute non-root path"
+  [[ ! -L "$(setting CLASHLENS_SPOOL_ROOT)" ]] || die "CLASHLENS_SPOOL_ROOT must not be a symlink"
+  [[ "$(setting CLASHLENS_API_KEY_HOST_DIR)" == /* && "$(setting CLASHLENS_API_KEY_HOST_DIR)" != / ]] || die "CLASHLENS_API_KEY_HOST_DIR must be an absolute non-root path"
+  validate_production_spool
+  [[ "$(setting CLASHLENS_PLAYER_DISCOVERY_ENABLED false)" == false ]] || \
+    die "production discovery is disabled by issue #110; remove or set CLASHLENS_PLAYER_DISCOVERY_ENABLED=false"
+  local previous_id previous_file
+  previous_id=$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)
+  previous_file=$(setting CLASHLENS_HMAC_PREVIOUS_SECRET_FILE)
+  [[ -z "$previous_id" && -z "$previous_file" || -n "$previous_id" && -n "$previous_file" ]] || \
+    die "previous HMAC key ID and secret file must be configured together"
+  [[ -z "$previous_id" || "$previous_id" != "$(setting CLASHLENS_HMAC_KEY_ID current)" ]] || \
+    die "current and previous HMAC key IDs must differ"
+  [[ "$(setting CLASHLENS_HMAC_CALLER typescript-website)" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "CLASHLENS_HMAC_CALLER is invalid"
+  [[ "$(setting CLASHLENS_HMAC_KEY_ID current)" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "CLASHLENS_HMAC_KEY_ID is invalid"
+  [[ -z "$previous_id" || "$previous_id" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || die "CLASHLENS_HMAC_PREVIOUS_KEY_ID is invalid"
+  local secret_path
+  for secret_path in "$(setting CLASHLENS_HMAC_SECRET_FILE)" "$previous_file"; do
+    [[ -z "$secret_path" || "$secret_path" =~ ^/run/secrets/[A-Za-z0-9._-]+$ ]] || die "HMAC secret paths must be direct files under /run/secrets"
+  done
+  local numeric
+  for numeric in CLASHLENS_SPOOL_MAX_BYTES CLASHLENS_SPOOL_MAX_OBJECTS CLASHLENS_SPOOL_FREE_SPACE_FLOOR CLASHLENS_SPOOL_FREE_INODE_FLOOR CLASHLENS_MAX_BODY_BYTES; do
+    [[ "$(setting "$numeric" 1)" =~ ^(0|[1-9][0-9]*)$ ]] || die "$numeric must be a non-negative integer"
+  done
+  (( $(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184) > 0 && $(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000) > 0 && $(setting CLASHLENS_MAX_BODY_BYTES 4194304) > 0 )) || die "spool caps and maximum body bytes must be positive"
+  local proxy
+  proxy=$(setting CLASHLENS_OFFICIAL_API_PROXY_URL)
+  [[ "$proxy" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || die "CLASHLENS_OFFICIAL_API_PROXY_URL must be one HTTP(S) origin without credentials or path"
+  local public_origin
+  public_origin=$(setting CLASHLENS_PUBLIC_ORIGIN)
+  [[ -z "$public_origin" || "$public_origin" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || die "CLASHLENS_PUBLIC_ORIGIN must be one HTTPS origin"
+  if [[ -n "$public_origin" ]]; then
+    for name in CLASHLENS_LOGIN_SECRET_FILE CLASHLENS_GOOGLE_CLIENT_ID CLASHLENS_GOOGLE_CLIENT_SECRET_FILE CLASHLENS_DISCORD_CLIENT_ID CLASHLENS_DISCORD_CLIENT_SECRET_FILE; do require_setting "$name"; done
+    for secret_path in "$(setting CLASHLENS_LOGIN_SECRET_FILE)" "$(setting CLASHLENS_GOOGLE_CLIENT_SECRET_FILE)" "$(setting CLASHLENS_DISCORD_CLIENT_SECRET_FILE)"; do
+      [[ "$secret_path" =~ ^/run/secrets/[A-Za-z0-9._-]+$ ]] || die "login secret paths must be direct files under /run/secrets"
+    done
+    [[ "$(setting CLASHLENS_GOOGLE_CLIENT_ID)" =~ ^[A-Za-z0-9._~-]{1,256}$ ]] || die "CLASHLENS_GOOGLE_CLIENT_ID is invalid"
+    [[ "$(setting CLASHLENS_DISCORD_CLIENT_ID)" =~ ^[0-9]{17,20}$ ]] || die "CLASHLENS_DISCORD_CLIENT_ID is invalid"
+  fi
+  for name in POSTGRES_PASSWORD CLASHLENS_COLLECTOR_DB_PASSWORD CLASHLENS_WORKER_DB_PASSWORD CLASHLENS_API_DB_PASSWORD; do
+    [[ "${CONFIG[$name]}" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || die "$name must be 32-128 URL-safe characters"
+  done
+  POSTGRES_DB=$(setting POSTGRES_DB)
+  POSTGRES_USER=$(setting POSTGRES_USER)
+  [[ "$POSTGRES_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "PostgreSQL names are invalid"
+  validate_production_secret_files
+  PREFIX=clashlens
+  NETWORK_NAME=clashlens-private
+  POSTGRES_VOLUME=clashlens-postgres-data
+  SPOOL_ROOT=$(setting CLASHLENS_SPOOL_ROOT)
+  ARCHIVE_ROOT=
+  WEBSITE_PORT=$(setting CLASHLENS_WEBSITE_PORT 3000)
+  HEALTH_PORT=$(setting CLASHLENS_HEALTH_PORT 8081)
+  WORKER_LEASE=$(setting CLASHLENS_WORKER_LEASE_SECONDS 60)
+  WORKER_CONCURRENCY=$(setting CLASHLENS_WORKER_CONCURRENCY 12)
+  WORKER_DB_POOL=$(setting CLASHLENS_WORKER_DATABASE_POOL_SIZE 12)
+  WORKER_ARCHIVE_POOL=$(setting CLASHLENS_WORKER_ARCHIVE_POOL_SIZE 12)
+  POSTGRES_MEMORY=$(setting CLASHLENS_POSTGRES_MEMORY 4g)
+  POSTGRES_SHM=$(setting CLASHLENS_POSTGRES_SHM_SIZE 1g)
+  POSTGRES_CPUS=$(setting CLASHLENS_POSTGRES_CPUS 4)
+  POSTGRES_PIDS=$(setting CLASHLENS_POSTGRES_PIDS 512)
+  COLLECTOR_MEMORY=$(setting CLASHLENS_COLLECTOR_MEMORY 2g)
+  COLLECTOR_CPUS=$(setting CLASHLENS_COLLECTOR_CPUS 4)
+  COLLECTOR_PIDS=$(setting CLASHLENS_COLLECTOR_PIDS 512)
+  API_MEMORY=$(setting CLASHLENS_API_MEMORY 1g)
+  API_CPUS=$(setting CLASHLENS_API_CPUS 2)
+  API_PIDS=$(setting CLASHLENS_API_PIDS 256)
+  WORKER_MEMORY=$(setting CLASHLENS_WORKER_MEMORY 4g)
+  WORKER_CPUS=$(setting CLASHLENS_WORKER_CPUS 6)
+  WORKER_PIDS=$(setting CLASHLENS_WORKER_PIDS 512)
+  WEBSITE_MEMORY=$(setting CLASHLENS_WEBSITE_MEMORY 1g)
+  WEBSITE_CPUS=$(setting CLASHLENS_WEBSITE_CPUS 2)
+  WEBSITE_PIDS=$(setting CLASHLENS_WEBSITE_PIDS 256)
+  COLLECTOR_ARGS=
+  API_ARGS=
+  WORKER_ARGS=--disable-player-discovery
+}
+
+load_fixture_config() {
+  PREFIX=clashlens-ops-fixture
+  NETWORK_NAME=clashlens-ops-fixture-private
+  POSTGRES_VOLUME=clashlens-ops-fixture-postgres-data
+  SPOOL_ROOT="$STATE_DIR/fixture/spool"
+  ARCHIVE_ROOT="$STATE_DIR/fixture/archive"
+  WEBSITE_PORT=15174
+  HEALTH_PORT=18081
+  POSTGRES_DB=clashlens
+  POSTGRES_USER=clashlens
+  CONFIG[POSTGRES_PASSWORD]=fixture_admin_password_000000000001
+  CONFIG[CLASHLENS_COLLECTOR_DB_PASSWORD]=fixture_collector_password_0000001
+  CONFIG[CLASHLENS_WORKER_DB_PASSWORD]=fixture_worker_password_00000000001
+  CONFIG[CLASHLENS_API_DB_PASSWORD]=fixture_api_password_00000000000001
+  WORKER_LEASE=60
+  WORKER_CONCURRENCY=4
+  WORKER_DB_POOL=4
+  WORKER_ARCHIVE_POOL=4
+  POSTGRES_MEMORY=640m
+  POSTGRES_SHM=128m
+  POSTGRES_CPUS=2
+  POSTGRES_PIDS=256
+  COLLECTOR_MEMORY=384m
+  COLLECTOR_CPUS=2
+  COLLECTOR_PIDS=256
+  API_MEMORY=256m
+  API_CPUS=1
+  API_PIDS=128
+  WORKER_MEMORY=384m
+  WORKER_CPUS=2
+  WORKER_PIDS=256
+  WEBSITE_MEMORY=256m
+  WEBSITE_CPUS=1
+  WEBSITE_PIDS=128
+  COLLECTOR_ARGS=--archive-insecure-test-only
+  API_ARGS=--allow-insecure-official-origin
+  WORKER_ARGS='--archive-insecure-test-only --disable-player-discovery'
+}
+
+validate_runtime_values() {
+  local item
+  for item in WEBSITE_PORT HEALTH_PORT WORKER_LEASE WORKER_CONCURRENCY WORKER_DB_POOL WORKER_ARCHIVE_POOL POSTGRES_PIDS COLLECTOR_PIDS API_PIDS WORKER_PIDS WEBSITE_PIDS; do
+    validate_number "$item" "${!item}" integer
+  done
+  (( WEBSITE_PORT <= 65535 && HEALTH_PORT <= 65535 )) || die "published port is invalid"
+  [[ "$WEBSITE_PORT" != "$HEALTH_PORT" ]] || die "website and health ports must differ"
+  for item in POSTGRES_CPUS COLLECTOR_CPUS API_CPUS WORKER_CPUS WEBSITE_CPUS; do validate_number "$item" "${!item}" cpu; done
+  for item in POSTGRES_MEMORY POSTGRES_SHM COLLECTOR_MEMORY API_MEMORY WORKER_MEMORY WEBSITE_MEMORY; do validate_number "$item" "${!item}" memory; done
+  for item in PREFIX NETWORK_NAME POSTGRES_VOLUME SPOOL_ROOT STATE_DIR; do safe_env_value "$item" "${!item}"; done
+  [[ -z "$ARCHIVE_ROOT" ]] || safe_env_value ARCHIVE_ROOT "$ARCHIVE_ROOT"
+  validate_directory_ancestry "$STATE_DIR"
+  validate_directory_ancestry "$STATE_DIR/env"
+  validate_directory_ancestry "$SPOOL_ROOT"
+  [[ -z "$ARCHIVE_ROOT" ]] || validate_directory_ancestry "$ARCHIVE_ROOT"
+  validate_directory_ancestry "$QUADLET_DIR"
+  validate_directory_ancestry "$USER_UNIT_DIR"
+}
+
+validate_directory_ancestry() {
+  local path=$1 current= part
+  local -a parts=()
+  [[ "$path" == /* && "$path" != *'/../'* && "$path" != */.. && "$path" != *'/./'* && "$path" != */. && "$path" != *//* ]] || \
+    die "$path must be a normalized absolute path"
+  IFS='/' read -r -a parts <<< "${path#/}"
+  for part in "${parts[@]}"; do
+    [[ -n "$part" ]] || continue
+    current="$current/$part"
+    [[ ! -L "$current" ]] || die "$path has symlink ancestor $current"
+    [[ ! -e "$current" || -d "$current" ]] || die "$path has non-directory ancestor $current"
+  done
+}
+
+paths_overlap() {
+  local left=${1%/} right=${2%/}
+  [[ "$left" == "$right" || "$left" == "$right/"* || "$right" == "$left/"* ]]
+}
+
+validate_production_spool() {
+  local spool protected
+  spool=$(setting CLASHLENS_SPOOL_ROOT)
+  validate_directory_ancestry "$spool"
+  [[ -d "$spool" && ! -L "$spool" ]] || die "production spool must be a pre-created directory"
+  [[ "$(stat -c '%u' "$spool")" == "$(id -u)" ]] || die "production spool must belong to the service account"
+  [[ "$(stat -c '%a' "$spool")" == 700 ]] || die "production spool must have mode 700"
+  for protected in "$HOME" "$ROOT" "$STATE_DIR" "$CONFIG_HOME" "$QUADLET_DIR" "$USER_UNIT_DIR" "$ENV_FILE" "${ENV_FILE%/*}" "$(setting CLASHLENS_API_KEY_HOST_DIR)"; do
+    paths_overlap "$spool" "$protected" && die "production spool must not overlap $protected"
+  done
+  return 0
+}
+
+acquire_mutation_lock() {
+  command -v flock >/dev/null 2>&1 || die "flock from Fedora util-linux is required"
+  validate_directory_ancestry "$STATE_DIR"
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR"
+  [[ "$(stat -c '%u' "$STATE_DIR")" == "$(id -u)" ]] || die "$STATE_DIR must belong to the service account"
+  local lock_file="$STATE_DIR/ops.lock"
+  [[ ! -L "$lock_file" ]] || die "refusing symlink operation lock $lock_file"
+  [[ ! -e "$lock_file" || -f "$lock_file" && "$(stat -c '%u' "$lock_file")" == "$(id -u)" ]] || die "unsafe operation lock $lock_file"
+  exec {OPS_LOCK_FD}> "$lock_file"
+  chmod 600 "$lock_file"
+  flock --nonblock "$OPS_LOCK_FD" || die "another Clash Lens build, lifecycle, or recovery operation is running"
+}
+
+managed_unit_file() {
+  local file=$1 first=
+  [[ ! -e "$file" ]] && return 0
+  [[ -f "$file" && ! -L "$file" ]] || die "refusing to replace unmanaged path $file"
+  IFS= read -r first < "$file" || true
+  [[ "$first" == '# Managed by Clash Lens ./ops.' ]] || die "refusing to replace unmanaged unit $file"
+}
+
+guard_generated_units() {
+  local template
+  for template in "$TEMPLATE_DIR"/*.container "$TEMPLATE_DIR"/*.network "$TEMPLATE_DIR"/*.pod "$TEMPLATE_DIR"/*.volume; do
+    managed_unit_file "$QUADLET_DIR/${template##*/}"
+  done
+  managed_unit_file "$USER_UNIT_DIR/clashlens.target"
+}
+
+managed_label() {
+  local kind=$1 name=$2 format
+  case "$kind" in
+    container) format='{{index .Config.Labels "org.clashlens.managed"}}' ;;
+    secret) format='{{index .Spec.Labels "org.clashlens.managed"}}' ;;
+    pod|network|volume) format='{{index .Labels "org.clashlens.managed"}}' ;;
+    *) die "unknown managed resource type $kind" ;;
+  esac
+  "$PODMAN_BIN" "$kind" inspect --format "$format" "$name" 2>/dev/null || true
+}
+
+guard_resource() {
+  local kind=$1 name=$2
+  "$PODMAN_BIN" "$kind" exists "$name" >/dev/null 2>&1 || return 0
+  [[ "$(managed_label "$kind" "$name")" == ops ]] || die "refusing to replace unmanaged Podman $kind $name"
+}
+
+guard_existing_resources() {
+  local prefix resource
+  for prefix in clashlens clashlens-ops-fixture; do
+    for resource in postgres collector python-api python-worker website archive clash-api login admin-operation; do
+      guard_resource container "$prefix-$resource"
+    done
+    guard_resource pod "$prefix-pod"
+  done
+  guard_resource network clashlens-private
+  guard_resource network clashlens-ops-fixture-private
+  guard_resource volume clashlens-postgres-data
+  guard_resource volume clashlens-ops-fixture-postgres-data
+  local secret
+  for secret in clashlens-postgres-password clashlens-collector-database-url clashlens-worker-database-url clashlens-api-database-url \
+    clashlens-collector-archive-access-key clashlens-collector-archive-secret-key clashlens-worker-archive-access-key clashlens-worker-archive-secret-key \
+    clashlens-normal-api-keys clashlens-interactive-api-keys clashlens-interactive-1 clashlens-hmac-current clashlens-hmac-previous \
+    clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url; do
+    guard_resource secret "$secret"
+  done
+}
+
+cleanup_stale_admin_containers() {
+  local prefix name managed purpose
+  for prefix in clashlens clashlens-ops-fixture; do
+    name="$prefix-admin-operation"
+    "$PODMAN_BIN" container exists "$name" >/dev/null 2>&1 || continue
+    managed=$(managed_label container "$name")
+    purpose=$($PODMAN_BIN inspect --format '{{index .Config.Labels "org.clashlens.purpose"}}' "$name" 2>/dev/null || true)
+    [[ "$managed" == ops && "$purpose" == transient-admin ]] || { printf 'ops: refusing unmanaged transient container %s\n' "$name" >&2; return 1; }
+    "$PODMAN_BIN" rm --force "$name" >/dev/null 2>&1 || return 1
+    "$PODMAN_BIN" container exists "$name" >/dev/null 2>&1 && return 1
+  done
+}
+
+cleanup_stale_admin_state() {
+  local managed purpose
+  cleanup_stale_admin_containers || die "could not remove a stale transient admin container"
+  "$PODMAN_BIN" secret exists clashlens-init-database-url >/dev/null 2>&1 || { ADMIN_SECRET_ACTIVE=false; return; }
+  managed=$(managed_label secret clashlens-init-database-url)
+  purpose=$($PODMAN_BIN secret inspect --format '{{index .Spec.Labels "org.clashlens.purpose"}}' clashlens-init-database-url 2>/dev/null || true)
+  [[ "$managed" == ops && "$purpose" == transient-admin ]] || die "refusing unmanaged clashlens-init-database-url secret"
+  ADMIN_SECRET_ACTIVE=true
+  cleanup_admin_secret || die "could not remove the stale transient admin secret"
+}
+
+guard_systemd_units() {
+  local unit source fragment expected
+  local -A sources=(
+    [clashlens-postgres.service]="$QUADLET_DIR/clashlens-postgres.container"
+    [clashlens-collector.service]="$QUADLET_DIR/clashlens-collector.container"
+    [clashlens-api.service]="$QUADLET_DIR/clashlens-api.container"
+    [clashlens-worker.service]="$QUADLET_DIR/clashlens-worker.container"
+    [clashlens-website.service]="$QUADLET_DIR/clashlens-website.container"
+    [clashlens-archive.service]="$QUADLET_DIR/clashlens-archive.container"
+    [clashlens-clash-api.service]="$QUADLET_DIR/clashlens-clash-api.container"
+    [clashlens-login.service]="$QUADLET_DIR/clashlens-login.container"
+    [clashlens-pod.service]="$QUADLET_DIR/clashlens.pod"
+    [clashlens-network.service]="$QUADLET_DIR/clashlens.network"
+    [clashlens-postgres-volume.service]="$QUADLET_DIR/clashlens-postgres.volume"
+  )
+  for unit in "${!sources[@]}"; do
+    fragment=$($SYSTEMCTL_BIN --user show "$unit" --property=FragmentPath --value 2>/dev/null || true)
+    [[ -z "$fragment" ]] && continue
+    source=$($SYSTEMCTL_BIN --user show "$unit" --property=SourcePath --value 2>/dev/null || true)
+    expected=${sources[$unit]}
+    [[ "$source" == "$expected" ]] || die "refusing unmanaged systemd unit $unit"
+  done
+  fragment=$($SYSTEMCTL_BIN --user show clashlens.target --property=FragmentPath --value 2>/dev/null || true)
+  [[ -z "$fragment" || "$fragment" == "$USER_UNIT_DIR/clashlens.target" ]] || die "refusing unmanaged systemd unit clashlens.target"
+  for unit in clashlens.service clashlens-python-api.service clashlens-python-worker.service; do
+    fragment=$($SYSTEMCTL_BIN --user show "$unit" --property=FragmentPath --value 2>/dev/null || true)
+    [[ -z "$fragment" ]] || die "refusing unmanaged legacy systemd unit $unit"
+  done
+}
+
+migrate_legacy_units() {
+  local unit file digest expected enabled
+  local -A hashes=(
+    [clashlens.service]=5f80e7a4a59439bec927f760d60279961a77d234efa59eb14e9f39f9ad75c071
+    [clashlens-python-api.service]=0b7fed1118d99aed28bdcc35a301c7a0b00251b050acef42f64d3638946205d5
+    [clashlens-python-worker.service]=69b1e6c2f90e26096dfe934ca9e653ca7a52465aedd9ccf9a5f51f20afc0445d
+    [clashlens-website.service]=85385a87cab7fcb05b09399f760338aabf020b0f389e414e3bfb4c8eab380b66
+  )
+  for unit in "${!hashes[@]}"; do
+    file="$USER_UNIT_DIR/$unit"
+    if [[ -e "$file" ]]; then
+      [[ -f "$file" && ! -L "$file" ]] || die "refusing to replace unmanaged legacy unit $file"
+      digest=$(sha256sum "$file" | cut -d' ' -f1)
+      expected=${hashes[$unit]}
+      [[ "$digest" == "$expected" ]] || die "refusing to replace modified legacy unit $file"
+      "$SYSTEMCTL_BIN" --user disable --now "$unit" >/dev/null || die "could not disable legacy $unit"
+      rm -- "$file"
+    else
+      enabled=$($SYSTEMCTL_BIN --user is-enabled "$unit" 2>/dev/null || true)
+      [[ "$enabled" != enabled && "$enabled" != enabled-runtime ]] || die "enabled legacy $unit has no known deployment file"
+    fi
+  done
+  "$SYSTEMCTL_BIN" --user daemon-reload
+}
+
+source_revision() {
+  git -C "$ROOT" rev-parse --verify HEAD^{commit} 2>/dev/null || die "cannot resolve the source revision"
+}
+
+source_fingerprint() {
+  local file relative digest
+  while IFS= read -r -d '' file; do
+    relative=${file#"$ROOT/"}
+    digest=$(sha256sum "$file" | cut -d' ' -f1)
+    printf '%s\0%s\n' "$relative" "$digest"
+  done < <(git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet ops | sort -z | \
+    while IFS= read -r -d '' relative; do printf '%s\0' "$ROOT/$relative"; done)
+}
+
+image_id() {
+  local identifier
+  identifier=$("$PODMAN_BIN" image inspect --format '{{.Id}}' "$1" 2>/dev/null) || die "image $1 is missing"
+  identifier=${identifier#sha256:}
+  [[ "$identifier" =~ ^[0-9a-f]{64}$ ]] || die "image $1 returned an invalid ID"
+  printf 'sha256:%s\n' "$identifier"
+}
+
+normalize_image_id() {
+  local identifier=${1#sha256:}
+  [[ "$identifier" =~ ^[0-9a-f]{64}$ ]] || die "container returned an invalid image ID"
+  printf 'sha256:%s\n' "$identifier"
+}
+
+build_release() {
+  require_host
+  mkdir -p "$RELEASE_DIR"
+  local revision fingerprint final_fingerprint collector_tag python_tag website_tag postgres_tag fixtures_tag login_tag temporary
+  revision=$(source_revision)
+  fingerprint=$(source_fingerprint | sha256sum | cut -d' ' -f1)
+  collector_tag=localhost/clashlens-release-collector
+  python_tag=localhost/clashlens-release-python
+  website_tag=localhost/clashlens-release-website
+  postgres_tag=docker.io/library/postgres:18-alpine
+  "$PODMAN_BIN" build --pull=missing --file "$ROOT/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$collector_tag" "$ROOT"
+  "$PODMAN_BIN" build --pull=missing --file "$ROOT/python/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$python_tag" "$ROOT/python"
+  "$PODMAN_BIN" build --pull=missing --file "$ROOT/website/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$website_tag" "$ROOT/website"
+  "$PODMAN_BIN" pull "$postgres_tag" >/dev/null
+  fixtures_tag=
+  login_tag=
+  if [[ "$MODE" == fixture ]]; then
+    fixtures_tag=localhost/clashlens-release-fixtures
+    login_tag=localhost/clashlens-release-login
+    "$PODMAN_BIN" build --pull=missing --file "$ROOT/development/Containerfile" --tag "$fixtures_tag" "$ROOT"
+    "$PODMAN_BIN" build --pull=missing --target fixtures --file "$ROOT/website/Containerfile" --tag "$login_tag" "$ROOT/website"
+  fi
+  final_fingerprint=$(source_fingerprint | sha256sum | cut -d' ' -f1)
+  [[ "$final_fingerprint" == "$fingerprint" ]] || die "release inputs changed during build; run ./ops build again"
+  temporary=$(mktemp "$RELEASE_DIR/release.env.XXXXXX")
+  chmod 600 "$temporary"
+  {
+    printf 'RELEASE_MODE=%s\n' "$MODE"
+    printf 'SOURCE_REVISION=%s\n' "$revision"
+    printf 'SOURCE_FINGERPRINT=%s\n' "$fingerprint"
+    printf 'COLLECTOR_IMAGE=%s\n' "$(image_id "$collector_tag")"
+    printf 'PYTHON_IMAGE=%s\n' "$(image_id "$python_tag")"
+    printf 'WEBSITE_IMAGE=%s\n' "$(image_id "$website_tag")"
+    printf 'POSTGRES_IMAGE=%s\n' "$(image_id "$postgres_tag")"
+    [[ -z "$fixtures_tag" ]] || printf 'FIXTURES_IMAGE=%s\n' "$(image_id "$fixtures_tag")"
+    [[ -z "$login_tag" ]] || printf 'LOGIN_IMAGE=%s\n' "$(image_id "$login_tag")"
+  } > "$temporary"
+  mv -f "$temporary" "$RELEASE_FILE"
+  printf 'Release %s built from %s; run ./ops up%s separately.\n' "$MODE" "$revision" "$([[ "$MODE" == fixture ]] && printf ' --fixture')"
+}
+
+load_release() {
+  [[ -f "$RELEASE_FILE" ]] || die "no release is built; run ./ops build first"
+  RELEASE=()
+  load_kv_file "$RELEASE_FILE" RELEASE
+  [[ "${RELEASE[RELEASE_MODE]-}" == "$MODE" ]] || die "built release is ${RELEASE[RELEASE_MODE]-unknown}; build the $MODE release first"
+  local current_fingerprint
+  current_fingerprint=$(source_fingerprint | sha256sum | cut -d' ' -f1)
+  [[ "${RELEASE[SOURCE_FINGERPRINT]-}" == "$current_fingerprint" ]] || \
+    die "release inputs changed after build; run ./ops build again before up"
+  local name
+  for name in COLLECTOR_IMAGE PYTHON_IMAGE WEBSITE_IMAGE POSTGRES_IMAGE; do
+    [[ "${RELEASE[$name]-}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "release manifest has an invalid $name"
+    "$PODMAN_BIN" image exists "${RELEASE[$name]}" || die "pinned $name is missing; run ./ops build again"
+  done
+  if [[ "$MODE" == fixture ]]; then
+    for name in FIXTURES_IMAGE LOGIN_IMAGE; do
+      [[ "${RELEASE[$name]-}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "release manifest has an invalid $name"
+      "$PODMAN_BIN" image exists "${RELEASE[$name]}" || die "pinned $name is missing; run ./ops build --fixture again"
+    done
+  fi
+}
+
+load_active_release() {
+  [[ -f "$ACTIVE_RELEASE_FILE" && ! -L "$ACTIVE_RELEASE_FILE" ]] || die "no active release is recorded; run ./ops up first"
+  [[ "$(stat -c '%a' "$ACTIVE_RELEASE_FILE")" == 600 ]] || die "active release record must have mode 600"
+  RELEASE=()
+  load_kv_file "$ACTIVE_RELEASE_FILE" RELEASE
+  [[ "${RELEASE[RELEASE_MODE]-}" == "$MODE" ]] || die "active release mode does not match the installed stack"
+  local name
+  for name in COLLECTOR_IMAGE PYTHON_IMAGE WEBSITE_IMAGE POSTGRES_IMAGE; do
+    [[ "${RELEASE[$name]-}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "active release has an invalid $name"
+    "$PODMAN_BIN" image exists "${RELEASE[$name]}" || die "active release image $name is missing"
+  done
+  if [[ "$MODE" == fixture ]]; then
+    for name in FIXTURES_IMAGE LOGIN_IMAGE; do
+      [[ "${RELEASE[$name]-}" =~ ^sha256:[0-9a-f]{64}$ ]] || die "active release has an invalid $name"
+      "$PODMAN_BIN" image exists "${RELEASE[$name]}" || die "active release image $name is missing"
+    done
+  fi
+}
+
+promote_active_release() {
+  local temporary
+  temporary=$(mktemp "$STATE_DIR/active-release.env.XXXXXX")
+  chmod 600 "$temporary"
+  cat -- "$RELEASE_FILE" > "$temporary"
+  mv -f "$temporary" "$ACTIVE_RELEASE_FILE"
+}
+
+render() {
+  local source=$1 destination=$2 content token value
+  managed_unit_file "$destination"
+  content=$(<"$source")
+  while (($# > 2)); do
+    token=$3
+    value=$4
+    shift 2
+    content=${content//"@@$token@@"/$value}
+  done
+  [[ "$content" != *'@@'* ]] || die "unrendered value in ${source##*/}"
+  local temporary
+  temporary=$(mktemp "${destination}.XXXXXX")
+  printf '%s\n' "$content" > "$temporary"
+  chmod 644 "$temporary"
+  mv -f "$temporary" "$destination"
+}
+
+render_units() {
+  mkdir -p "$QUADLET_DIR" "$USER_UNIT_DIR"
+  local template base fixture_requires fixture_ports
+  fixture_requires=
+  fixture_ports=
+  [[ "$MODE" != fixture ]] || fixture_requires='Requires=clashlens-archive.service clashlens-clash-api.service clashlens-login.service'
+  [[ "$MODE" != fixture ]] || fixture_ports=$'PublishPort=127.0.0.1:8011:8011\nPublishPort=127.0.0.1:8012:8012'
+  for template in "$TEMPLATE_DIR"/*.container "$TEMPLATE_DIR"/*.network "$TEMPLATE_DIR"/*.pod "$TEMPLATE_DIR"/*.volume; do
+    base=${template##*/}
+    if [[ "$MODE" != fixture && "$base" =~ ^clashlens-(archive|clash-api|login)[.]container$ ]]; then
+      continue
+    fi
+    render "$template" "$QUADLET_DIR/$base" \
+      PREFIX "$PREFIX" NETWORK_NAME "$NETWORK_NAME" POSTGRES_VOLUME "$POSTGRES_VOLUME" \
+      FIXTURE_PORTS "$fixture_ports" \
+      ENV_DIR "$STATE_DIR/env" SPOOL_ROOT "$SPOOL_ROOT" ARCHIVE_ROOT "$ARCHIVE_ROOT" \
+      POSTGRES_IMAGE "${RELEASE[POSTGRES_IMAGE]}" COLLECTOR_IMAGE "${RELEASE[COLLECTOR_IMAGE]}" \
+      PYTHON_IMAGE "${RELEASE[PYTHON_IMAGE]}" WEBSITE_IMAGE "${RELEASE[WEBSITE_IMAGE]}" \
+      FIXTURES_IMAGE "${RELEASE[FIXTURES_IMAGE]-unused}" LOGIN_IMAGE "${RELEASE[LOGIN_IMAGE]-unused}" \
+      POSTGRES_USER "$POSTGRES_USER" POSTGRES_DB "$POSTGRES_DB" POSTGRES_SHM "$POSTGRES_SHM" \
+      POSTGRES_MEMORY "$POSTGRES_MEMORY" POSTGRES_CPUS "$POSTGRES_CPUS" POSTGRES_PIDS "$POSTGRES_PIDS" \
+      COLLECTOR_MEMORY "$COLLECTOR_MEMORY" COLLECTOR_CPUS "$COLLECTOR_CPUS" COLLECTOR_PIDS "$COLLECTOR_PIDS" \
+      API_MEMORY "$API_MEMORY" API_CPUS "$API_CPUS" API_PIDS "$API_PIDS" \
+      WORKER_MEMORY "$WORKER_MEMORY" WORKER_CPUS "$WORKER_CPUS" WORKER_PIDS "$WORKER_PIDS" \
+      WEBSITE_MEMORY "$WEBSITE_MEMORY" WEBSITE_CPUS "$WEBSITE_CPUS" WEBSITE_PIDS "$WEBSITE_PIDS" \
+      WEBSITE_PORT "$WEBSITE_PORT" HEALTH_PORT "$HEALTH_PORT" COLLECTOR_ARGS "$COLLECTOR_ARGS" API_ARGS "$API_ARGS" \
+      WORKER_ARGS "$WORKER_ARGS" WORKER_LEASE "$WORKER_LEASE" WORKER_CONCURRENCY "$WORKER_CONCURRENCY" \
+      WORKER_DB_POOL "$WORKER_DB_POOL" WORKER_ARCHIVE_POOL "$WORKER_ARCHIVE_POOL" \
+      WORKER_PODMAN_STOP "$((WORKER_LEASE + 10))" WORKER_STOP "$((WORKER_LEASE + 15))"
+  done
+  if [[ "$MODE" != fixture ]]; then
+    rm -f "$QUADLET_DIR/clashlens-archive.container" "$QUADLET_DIR/clashlens-clash-api.container" "$QUADLET_DIR/clashlens-login.container"
+  fi
+  render "$TEMPLATE_DIR/clashlens.target" "$USER_UNIT_DIR/clashlens.target" FIXTURE_REQUIRES "$fixture_requires"
+}
+
+write_env() {
+  local file=$1
+  shift
+  local temporary pair
+  temporary=$(mktemp "$STATE_DIR/env/${file}.XXXXXX")
+  chmod 600 "$temporary"
+  for pair in "$@"; do
+    [[ "$pair" =~ ^[A-Za-z_][A-Za-z0-9_]*=[^[:space:]%]+$ ]] || die "unsafe generated environment value"
+    printf '%s\n' "$pair" >> "$temporary"
+  done
+  mv -f "$temporary" "$STATE_DIR/env/$file"
+}
+
+write_environment() {
+  mkdir -p "$STATE_DIR/env"
+  chmod 700 "$STATE_DIR" "$STATE_DIR/env"
+  if [[ "$MODE" == fixture ]]; then
+    mkdir -p "$SPOOL_ROOT" "$ARCHIVE_ROOT"
+    chmod 700 "$SPOOL_ROOT" "$ARCHIVE_ROOT"
+  fi
+  write_env postgres.env "POSTGRES_DB=$POSTGRES_DB" "POSTGRES_USER=$POSTGRES_USER" \
+    POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password PGDATA=/var/lib/postgresql/data/pgdata
+  local archive_endpoint archive_region archive_bucket archive_instance archive_key archive_hash archive_version archive_secure official_origin official_proxy
+  if [[ "$MODE" == fixture ]]; then
+    archive_endpoint=127.0.0.1:9000; archive_region=us-east-1; archive_bucket=evidence; archive_instance=development
+    archive_key=clashlens/archive-instance.json; archive_hash=16d586e6c52a90aed1fed855fd03e9ce7257319cfcb5b824cb52015989b52192
+    archive_version=v1; archive_secure=false; official_origin=http://127.0.0.1:8080; official_proxy=
+  else
+    archive_endpoint=$(setting CLASHLENS_ARCHIVE_ENDPOINT); archive_region=$(setting CLASHLENS_ARCHIVE_REGION); archive_bucket=$(setting CLASHLENS_ARCHIVE_BUCKET)
+    archive_instance=$(setting CLASHLENS_ARCHIVE_INSTANCE_ID); archive_key=$(setting CLASHLENS_ARCHIVE_MARKER_KEY); archive_hash=$(setting CLASHLENS_ARCHIVE_MARKER_HASH)
+    archive_version=$(setting CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION); archive_secure=true
+    official_origin=$(setting CLASHLENS_OFFICIAL_API_ORIGIN); official_proxy=$(setting CLASHLENS_OFFICIAL_API_PROXY_URL '')
+  fi
+  local common=("CLASHLENS_ARCHIVE_ENDPOINT=$archive_endpoint" "CLASHLENS_ARCHIVE_REGION=$archive_region" "CLASHLENS_ARCHIVE_BUCKET=$archive_bucket"
+    "CLASHLENS_ARCHIVE_INSTANCE_ID=$archive_instance" "CLASHLENS_ARCHIVE_MARKER_KEY=$archive_key" "CLASHLENS_ARCHIVE_MARKER_HASH=$archive_hash"
+    "CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION=$archive_version" "CLASHLENS_ARCHIVE_SECURE=$archive_secure" CLASHLENS_SPOOL_ROOT=/spool
+    "CLASHLENS_SPOOL_MAX_BYTES=$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "CLASHLENS_SPOOL_MAX_OBJECTS=$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)"
+    "CLASHLENS_SPOOL_FREE_SPACE_FLOOR=$(setting CLASHLENS_SPOOL_FREE_SPACE_FLOOR 1073741824)" "CLASHLENS_SPOOL_FREE_INODE_FLOOR=$(setting CLASHLENS_SPOOL_FREE_INODE_FLOOR 10000)"
+    "CLASHLENS_MAX_BODY_BYTES=$(setting CLASHLENS_MAX_BODY_BYTES 4194304)")
+  write_env collector.env "${common[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
+    CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key \
+    "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" CLASHLENS_ENABLE_GLOBAL_RANKINGS=true \
+    CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081 "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=$([[ "$MODE" == fixture ]] && printf true || printf false)"
+  write_env worker.env "${common[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
+    CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key
+  local hmac_caller hmac_key_id
+  hmac_caller=$(setting CLASHLENS_HMAC_CALLER typescript-website)
+  hmac_key_id=$(setting CLASHLENS_HMAC_KEY_ID current)
+  local api_environment=(CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url "CLASHLENS_HMAC_CALLER=$hmac_caller" "CLASHLENS_HMAC_KEY_ID=$hmac_key_id"
+    CLASHLENS_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current CLASHLENS_OFFICIAL_KEY_FILE=/run/secrets/clashlens-interactive-1
+    "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin")
+  [[ -z "$official_proxy" ]] || api_environment+=("CLASHLENS_OFFICIAL_PROXY_URL=$official_proxy")
+  if [[ -n "$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)" ]]; then
+    api_environment+=("CLASHLENS_HMAC_PREVIOUS_KEY_ID=$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)" CLASHLENS_HMAC_PREVIOUS_SECRET_FILE=/run/secrets/clashlens-hmac-previous)
+  fi
+  write_env api.env "${api_environment[@]}"
+  if [[ "$MODE" == fixture ]]; then
+    write_env website.env NODE_ENV=test PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
+      "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
+      CLASHLENS_TRUST_PROXY=true CLASHLENS_LOGIN_ENABLED=true CLASHLENS_PUBLIC_ORIGIN=http://127.0.0.1:15174 \
+      CLASHLENS_GOOGLE_ISSUER_URL=http://127.0.0.1:8011 CLASHLENS_GOOGLE_CLIENT_ID=clashlens-browser-test \
+      CLASHLENS_GOOGLE_CLIENT_SECRET_FILE=/run/secrets/clashlens-google-client-secret CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret \
+      CLASHLENS_DISCORD_API_BASE_URL=http://127.0.0.1:8012 CLASHLENS_DISCORD_CLIENT_ID=1234567890123456789 \
+      CLASHLENS_DISCORD_CLIENT_SECRET_FILE=/run/secrets/clashlens-discord-client-secret
+    write_env login.env CLASHLENS_FIXTURE_BIND_HOST=0.0.0.0 CLASHLENS_FIXTURE_OIDC_PUBLIC_HOST=127.0.0.1 CLASHLENS_FIXTURE_OIDC_PORT=8011 \
+      CLASHLENS_FIXTURE_OIDC_REDIRECT_URI=http://127.0.0.1:15174/auth/google/callback CLASHLENS_FIXTURE_DISCORD_PORT=8012 \
+      CLASHLENS_FIXTURE_DISCORD_REDIRECT_URI=http://127.0.0.1:15174/auth/discord/callback
+  else
+    local login_enabled=false public_origin=https://disabled.invalid google_id=disabled discord_id=12345678901234567
+    if [[ -n "$(setting CLASHLENS_PUBLIC_ORIGIN)" ]]; then
+      for name in CLASHLENS_PUBLIC_ORIGIN CLASHLENS_LOGIN_SECRET_FILE CLASHLENS_GOOGLE_CLIENT_ID CLASHLENS_GOOGLE_CLIENT_SECRET_FILE CLASHLENS_DISCORD_CLIENT_ID CLASHLENS_DISCORD_CLIENT_SECRET_FILE; do require_setting "$name"; done
+      login_enabled=true; public_origin=$(setting CLASHLENS_PUBLIC_ORIGIN); google_id=$(setting CLASHLENS_GOOGLE_CLIENT_ID); discord_id=$(setting CLASHLENS_DISCORD_CLIENT_ID)
+    fi
+    write_env website.env NODE_ENV=production PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
+      "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
+      CLASHLENS_TRUST_PROXY=true "CLASHLENS_LOGIN_ENABLED=$login_enabled" "CLASHLENS_PUBLIC_ORIGIN=$public_origin" "CLASHLENS_GOOGLE_CLIENT_ID=$google_id" \
+      CLASHLENS_GOOGLE_CLIENT_SECRET_FILE=/run/secrets/clashlens-google-client-secret CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret \
+      "CLASHLENS_DISCORD_CLIENT_ID=$discord_id" CLASHLENS_DISCORD_CLIENT_SECRET_FILE=/run/secrets/clashlens-discord-client-secret
+  fi
+}
+
+replace_secret() {
+  local name=$1 value=$2
+  guard_resource secret "$name"
+  printf '%s' "$value" | "$PODMAN_BIN" secret create --replace --label org.clashlens.managed=ops "$name" - >/dev/null
+}
+
+validate_mode600_file() {
+  local file=$1
+  [[ "$file" == /* && "$file" != */ ]] || die "secret path $file must be an absolute file"
+  validate_directory_ancestry "${file%/*}"
+  [[ -f "$file" && ! -L "$file" && -r "$file" ]] || die "missing or unsafe secret file $file"
+  [[ "$(stat -c '%a' "$file")" == 600 ]] || die "$file must have mode 600"
+}
+
+read_secret_value() {
+  local file=$1 lines
+  validate_mode600_file "$file"
+  lines=$(wc -l < "$file")
+  (( lines <= 1 )) || die "$file must contain exactly one value"
+  SECRET_VALUE=$(cat -- "$file") || die "cannot read $file"
+  [[ -n "$SECRET_VALUE" && "$SECRET_VALUE" != *$'\n'* && "$SECRET_VALUE" != *$'\r'* ]] || die "$file must contain exactly one value"
+}
+
+validate_production_secret_files() {
+  local secret_dir name file value
+  secret_dir=$(setting CLASHLENS_API_KEY_HOST_DIR)
+  for name in clashlens-normal-1 clashlens-normal-2 clashlens-normal-3 clashlens-normal-4 clashlens-interactive-1; do
+    file="$secret_dir/$name"
+    read_secret_value "$file"
+    value=$SECRET_VALUE
+    [[ -n "$value" && "$value" != *[[:space:],=]* ]] || die "$file contains an invalid API key"
+  done
+  file="$secret_dir/${CONFIG[CLASHLENS_HMAC_SECRET_FILE]##*/}"
+  read_secret_value "$file"
+  [[ "$SECRET_VALUE" =~ ^[A-Za-z0-9_-]{43}$ ]] || die "$file must contain one 32-byte unpadded base64url HMAC key"
+  if [[ -n "$(setting CLASHLENS_HMAC_PREVIOUS_SECRET_FILE)" ]]; then
+    file="$secret_dir/${CONFIG[CLASHLENS_HMAC_PREVIOUS_SECRET_FILE]##*/}"
+    read_secret_value "$file"
+    [[ "$SECRET_VALUE" =~ ^[A-Za-z0-9_-]{43}$ ]] || die "$file must contain one 32-byte unpadded base64url HMAC key"
+  fi
+  if [[ -n "$(setting CLASHLENS_PUBLIC_ORIGIN)" ]]; then
+    file="$secret_dir/${CONFIG[CLASHLENS_LOGIN_SECRET_FILE]##*/}"
+    read_secret_value "$file"
+    [[ "$SECRET_VALUE" =~ ^[A-Za-z0-9_-]{43}$ ]] || die "$file must contain one 32-byte unpadded base64url login key"
+    for name in CLASHLENS_GOOGLE_CLIENT_SECRET_FILE CLASHLENS_DISCORD_CLIENT_SECRET_FILE; do
+      file="$secret_dir/${CONFIG[$name]##*/}"
+      read_secret_value "$file"
+      [[ "${#SECRET_VALUE}" -le 512 && "$SECRET_VALUE" != *[[:space:]]* && "$SECRET_VALUE" != CHANGE_ME && "$SECRET_VALUE" != REPLACE_ME ]] || die "$file contains an invalid provider secret"
+    done
+  fi
+  unset SECRET_VALUE
+}
+
+replace_file_secret() {
+  local name=$1 file=$2
+  validate_mode600_file "$file"
+  guard_resource secret "$name"
+  "$PODMAN_BIN" secret create --replace --label org.clashlens.managed=ops "$name" "$file" >/dev/null
+}
+
+prepare_secrets() {
+  replace_secret clashlens-postgres-password "${CONFIG[POSTGRES_PASSWORD]}"
+  replace_secret clashlens-collector-database-url "postgresql://clashlens_collector:${CONFIG[CLASHLENS_COLLECTOR_DB_PASSWORD]}@127.0.0.1:5432/$POSTGRES_DB?sslmode=disable"
+  replace_secret clashlens-worker-database-url "postgresql://clashlens_python_worker:${CONFIG[CLASHLENS_WORKER_DB_PASSWORD]}@127.0.0.1:5432/$POSTGRES_DB?sslmode=disable"
+  replace_secret clashlens-api-database-url "postgresql://clashlens_python_api:${CONFIG[CLASHLENS_API_DB_PASSWORD]}@127.0.0.1:5432/$POSTGRES_DB?sslmode=disable"
+  if [[ "$MODE" == fixture ]]; then
+    replace_secret clashlens-collector-archive-access-key development
+    replace_secret clashlens-collector-archive-secret-key development
+    replace_secret clashlens-worker-archive-access-key development
+    replace_secret clashlens-worker-archive-secret-key development
+    replace_secret clashlens-normal-api-keys normal-1=dev-normal-key-1,normal-2=dev-normal-key-2,normal-3=dev-normal-key-3,normal-4=dev-normal-key-4
+    replace_secret clashlens-interactive-api-keys interactive-1=dev-interactive-key
+    replace_secret clashlens-interactive-1 dev-interactive-key
+    replace_secret clashlens-hmac-current AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
+    replace_secret clashlens-hmac-previous disabled
+    replace_secret clashlens-login-secret QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8
+    replace_secret clashlens-google-client-secret clashlens-browser-test-secret
+    replace_secret clashlens-discord-client-secret discord-browser-test-secret
+  else
+    replace_secret clashlens-collector-archive-access-key "$(setting CLASHLENS_ARCHIVE_ACCESS_KEY)"
+    replace_secret clashlens-collector-archive-secret-key "$(setting CLASHLENS_ARCHIVE_SECRET_KEY)"
+    replace_secret clashlens-worker-archive-access-key "$(setting CLASHLENS_WORKER_ARCHIVE_ACCESS_KEY)"
+    replace_secret clashlens-worker-archive-secret-key "$(setting CLASHLENS_WORKER_ARCHIVE_SECRET_KEY)"
+    local secret_dir name key_value normal_keys= interactive_key
+    secret_dir=$(setting CLASHLENS_API_KEY_HOST_DIR)
+    for name in clashlens-normal-1 clashlens-normal-2 clashlens-normal-3 clashlens-normal-4; do
+      IFS= read -r key_value < "$secret_dir/$name" || true
+      [[ -n "$key_value" && "$key_value" != *[[:space:],=]* ]] || die "$secret_dir/$name contains an invalid API key"
+      [[ -z "$normal_keys" ]] || normal_keys+=,
+      normal_keys+="${name#clashlens-}=$key_value"
+    done
+    name=clashlens-interactive-1
+    IFS= read -r interactive_key < "$secret_dir/$name" || true
+    [[ -n "$interactive_key" && "$interactive_key" != *[[:space:],=]* ]] || die "$secret_dir/$name contains an invalid API key"
+    replace_secret clashlens-normal-api-keys "$normal_keys"
+    replace_secret clashlens-interactive-api-keys "interactive-1=$interactive_key"
+    replace_file_secret clashlens-interactive-1 "$secret_dir/$name"
+    replace_file_secret clashlens-hmac-current "$secret_dir/${CONFIG[CLASHLENS_HMAC_SECRET_FILE]##*/}"
+    if [[ -n "$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)" ]]; then
+      replace_file_secret clashlens-hmac-previous "$secret_dir/${CONFIG[CLASHLENS_HMAC_PREVIOUS_SECRET_FILE]##*/}"
+    else
+      replace_secret clashlens-hmac-previous disabled
+    fi
+    if [[ -n "$(setting CLASHLENS_PUBLIC_ORIGIN)" ]]; then
+      replace_file_secret clashlens-login-secret "$secret_dir/${CONFIG[CLASHLENS_LOGIN_SECRET_FILE]##*/}"
+      replace_file_secret clashlens-google-client-secret "$secret_dir/${CONFIG[CLASHLENS_GOOGLE_CLIENT_SECRET_FILE]##*/}"
+      replace_file_secret clashlens-discord-client-secret "$secret_dir/${CONFIG[CLASHLENS_DISCORD_CLIENT_SECRET_FILE]##*/}"
+    else
+      replace_secret clashlens-login-secret disabled
+      replace_secret clashlens-google-client-secret disabled
+      replace_secret clashlens-discord-client-secret disabled
+    fi
+  fi
+}
+
+wait_postgres() {
+  local attempt
+  for attempt in $(seq 1 90); do
+    "$PODMAN_BIN" exec "$PREFIX-postgres" pg_isready -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1 && return
+    sleep 1
+  done
+  die "PostgreSQL did not become ready; run ./ops logs postgres"
+}
+
+psql_exec() {
+  "$PODMAN_BIN" exec --interactive "$PREFIX-postgres" psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" "$@"
+}
+
+psql_exec_sensitive() {
+  local options='-c log_statement=none -c log_min_error_statement=panic -c pg_stat_statements.track_utility=off'
+  "$PODMAN_BIN" exec --interactive --env "PGOPTIONS=$options" "$PREFIX-postgres" \
+    psql --quiet --set ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" "$@"
+}
+
+sql_literal() {
+  local value=${1//\'/\'\'}
+  printf "'%s'" "$value"
+}
+
+apply_migrations() {
+  local migration base prefix version exists
+  exists=$(psql_exec --tuples-only --no-align --command "SELECT to_regclass('public.clash_lens_schema_migrations') IS NOT NULL")
+  if [[ "$(trim "$exists")" != t ]]; then psql_exec < "$ROOT/deploy/migrations/0001_collector.sql"; fi
+  for migration in "$ROOT"/deploy/migrations/*.sql; do
+    [[ "${migration##*/}" == 0001_collector.sql ]] && continue
+    base=${migration##*/}; prefix=${base%%_*}; version=$((10#$prefix))
+    exists=$(psql_exec --tuples-only --no-align --command "SELECT EXISTS (SELECT 1 FROM clash_lens_schema_migrations WHERE version=$version)")
+    if [[ "$(trim "$exists")" != t ]]; then
+      printf 'Applying %s...\n' "${migration##*/}"
+      psql_exec < "$migration"
+    fi
+  done
+}
+
+configure_database() {
+  local admin_password collector_password worker_password api_password sql
+  admin_password=$(sql_literal "${CONFIG[POSTGRES_PASSWORD]}")
+  collector_password=$(sql_literal "${CONFIG[CLASHLENS_COLLECTOR_DB_PASSWORD]}")
+  worker_password=$(sql_literal "${CONFIG[CLASHLENS_WORKER_DB_PASSWORD]}")
+  api_password=$(sql_literal "${CONFIG[CLASHLENS_API_DB_PASSWORD]}")
+  sql="BEGIN; ALTER ROLE \"$POSTGRES_USER\" WITH LOGIN PASSWORD $admin_password;"
+  sql+=" ALTER ROLE clashlens_collector WITH LOGIN PASSWORD $collector_password;"
+  sql+=" ALTER ROLE clashlens_python_worker WITH LOGIN PASSWORD $worker_password;"
+  sql+=" ALTER ROLE clashlens_python_api WITH LOGIN PASSWORD $api_password;"
+  sql+=' REVOKE ALL PRIVILEGES ON TABLE python_processing_jobs FROM clashlens_python_worker;'
+  sql+=' GRANT SELECT (id, lease_generation) ON TABLE python_processing_jobs TO clashlens_python_worker; COMMIT;'
+  printf '%s\n' "$sql" | psql_exec_sensitive
+  unset admin_password collector_password worker_password api_password sql
+  local endpoint region bucket instance marker_key marker_hash marker_version
+  if [[ "$MODE" == fixture ]]; then endpoint=127.0.0.1:9000; region=us-east-1; bucket=evidence; instance=development; marker_key=clashlens/archive-instance.json; marker_hash=16d586e6c52a90aed1fed855fd03e9ce7257319cfcb5b824cb52015989b52192; marker_version=v1
+  else endpoint=$(setting CLASHLENS_ARCHIVE_ENDPOINT); region=$(setting CLASHLENS_ARCHIVE_REGION); bucket=$(setting CLASHLENS_ARCHIVE_BUCKET); instance=$(setting CLASHLENS_ARCHIVE_INSTANCE_ID); marker_key=$(setting CLASHLENS_ARCHIVE_MARKER_KEY); marker_hash=$(setting CLASHLENS_ARCHIVE_MARKER_HASH); marker_version=$(setting CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION); fi
+  local q_endpoint q_region q_bucket q_instance q_marker_key q_marker_hash q_marker_version
+  q_endpoint=$(sql_literal "$endpoint"); q_region=$(sql_literal "$region"); q_bucket=$(sql_literal "$bucket"); q_instance=$(sql_literal "$instance")
+  q_marker_key=$(sql_literal "$marker_key"); q_marker_hash=$(sql_literal "$marker_hash"); q_marker_version=$(sql_literal "$marker_version")
+  printf '%s\n' "INSERT INTO archive_instances (instance_id, endpoint, region, bucket, marker_key, marker_hash, marker_payload_version) VALUES ($q_instance, $q_endpoint, $q_region, $q_bucket, $q_marker_key, $q_marker_hash, $q_marker_version) ON CONFLICT (instance_id) DO NOTHING;" | psql_exec
+  local archive_matches
+  archive_matches=$(printf '%s\n' "SELECT count(*) FROM archive_instances WHERE instance_id=$q_instance AND endpoint=$q_endpoint AND region=$q_region AND bucket=$q_bucket AND marker_key=$q_marker_key AND marker_hash=$q_marker_hash AND marker_payload_version=$q_marker_version;" | psql_exec --tuples-only --no-align)
+  [[ "$(trim "$archive_matches")" == 1 ]] || die "archive instance contract differs from retained database"
+}
+
+admin_database_url() {
+  printf 'postgresql://%s:%s@127.0.0.1:5432/%s?sslmode=disable' "$POSTGRES_USER" "${CONFIG[POSTGRES_PASSWORD]}" "$POSTGRES_DB"
+}
+
+create_admin_secret() {
+  cleanup_stale_admin_state
+  printf '%s' "$(admin_database_url)" | "$PODMAN_BIN" secret create --label org.clashlens.managed=ops --label org.clashlens.purpose=transient-admin clashlens-init-database-url - >/dev/null
+  ADMIN_SECRET_ACTIVE=true
+}
+
+run_with_admin_database() {
+  local image=$1
+  shift
+  create_admin_secret
+  set +e
+  "$PODMAN_BIN" run --rm --name "$PREFIX-admin-operation" --label org.clashlens.managed=ops --label org.clashlens.purpose=transient-admin --pod "$PREFIX-pod" \
+    --secret clashlens-init-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400 \
+    "$image" "$@"
+  local result=$?
+  set -e
+  cleanup_admin_secret || result=1
+  return "$result"
+}
+
+bootstrap_fixture() {
+  local manifest digest result receipt_matches
+  manifest="$STATE_DIR/fixture/cohort-200.txt"; result="$STATE_DIR/fixture/bootstrap.json"
+  "$PODMAN_BIN" run --rm --pod "$PREFIX-pod" --user 10001:10001 --volume "$STATE_DIR/fixture:/state:Z" "${RELEASE[FIXTURES_IMAGE]}" manifest --players 200 --output /state/cohort-200.txt
+  digest=$(sha256sum "$manifest" | cut -d' ' -f1)
+  receipt_matches=$(printf '%s\n' "SELECT count(*) FROM population_bootstrap_runs WHERE run_id='ops-fixture-200' AND manifest_sha256='$digest' AND manifest_count=200 AND status='complete' AND players_registered=200 AND discovery_jobs_created=200;" | psql_exec --tuples-only --no-align)
+  [[ "$(trim "$receipt_matches")" == 0 ]] || { [[ "$(trim "$receipt_matches")" == 1 ]] && return; die "fixture bootstrap receipt is ambiguous"; }
+  [[ ! -e "$result" && ! -L "$result" ]] || die "fixture bootstrap receipt file exists without a matching database receipt"
+  create_admin_secret
+  set +e
+  "$PODMAN_BIN" run --rm --name "$PREFIX-admin-operation" --label org.clashlens.managed=ops --label org.clashlens.purpose=transient-admin --pod "$PREFIX-pod" \
+    --secret clashlens-init-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400 \
+    --volume "$STATE_DIR/fixture:/state:Z" "${RELEASE[PYTHON_IMAGE]}" bootstrap-population --database-url-file /run/secrets/database-url \
+    --cohort-file /state/cohort-200.txt --expected-sha256 "$digest" --expected-count 200 --run-id ops-fixture-200 --result-file /state/bootstrap.json >/dev/null
+  local bootstrap_result=$?
+  set -e
+  cleanup_admin_secret || bootstrap_result=1
+  (( bootstrap_result == 0 )) || return "$bootstrap_result"
+}
+
+ensure_linger() {
+  local linger
+  linger=$($LOGINCTL_BIN show-user "$USER" --property=Linger --value 2>/dev/null || true)
+  [[ "$linger" == yes ]] && return
+  if [[ $(id -u) == 0 ]]; then "$LOGINCTL_BIN" enable-linger "$USER"; else sudo "$LOGINCTL_BIN" enable-linger "$USER"; fi
+  [[ "$($LOGINCTL_BIN show-user "$USER" --property=Linger --value)" == yes ]] || die "could not enable user lingering for reboot survival"
+}
+
+stop_units() {
+  "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
+  local unit state
+  for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
+    "$SYSTEMCTL_BIN" --user stop "$unit.service" >/dev/null 2>&1 || true
+  done
+  state=$($SYSTEMCTL_BIN --user is-enabled clashlens.target 2>/dev/null || true)
+  [[ "$state" != enabled && "$state" != enabled-runtime ]] || die "could not disable clashlens.target"
+  for unit in clashlens-website clashlens-worker clashlens-api clashlens-collector clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
+    state=$($SYSTEMCTL_BIN --user is-active "$unit.service" 2>/dev/null || true)
+    case "$state" in active|activating|deactivating|reloading) die "could not stop $unit.service" ;; esac
+  done
+}
+
+container_name() {
+  local prefix=$1 service=$2
+  case "$service" in
+    api) printf '%s-python-api' "$prefix" ;;
+    worker) printf '%s-python-worker' "$prefix" ;;
+    *) printf '%s-%s' "$prefix" "$service" ;;
+  esac
+}
+
+container_state() {
+  "$PODMAN_BIN" inspect --format '{{if and .State.Running (not .State.Paused) (eq .State.Status "running")}}{{if .State.Health}}{{.State.Health.Status}}{{else}}running{{end}}{{else}}{{.State.Status}}{{end}}' "$1" 2>/dev/null || printf absent
+}
+
+service_state() {
+  local state
+  state=$($SYSTEMCTL_BIN --user is-active "clashlens-$1.service" 2>/dev/null || true)
+  printf '%s' "${state:-unknown}"
+}
+
+wait_stack() {
+  local attempt service state unit_state all
+  local services=(postgres collector api worker website)
+  [[ "$MODE" != fixture ]] || services+=(archive clash-api login)
+  for attempt in $(seq 1 120); do
+    all=true
+    unit_state=$(service_state pod)
+    [[ "$unit_state" == active ]] || all=false
+    if [[ "$all" == true ]]; then
+      for service in "${services[@]}"; do
+        unit_state=$(service_state "$service")
+        [[ "$unit_state" == active ]] || { all=false; break; }
+        state=$(container_state "$(container_name "$PREFIX" "$service")")
+        [[ "$state" == healthy || "$state" == running ]] || { all=false; break; }
+      done
+    fi
+    [[ "$all" == true ]] && return
+    sleep 1
+  done
+  status || true
+  return 1
+}
+
+up_stack() {
+  require_host
+  load_release
+  if [[ "$MODE" == fixture ]]; then load_fixture_config; else load_production_config; fi
+  validate_runtime_values
+  [[ ! -L "$STATE_DIR/mode" ]] || die "refusing symlink deployment mode file $STATE_DIR/mode"
+  if [[ -r "$STATE_DIR/mode" && "$(<"$STATE_DIR/mode")" != "$MODE" ]]; then
+    [[ "$($SYSTEMCTL_BIN --user is-active clashlens.target 2>/dev/null || true)" != active ]] || \
+      die "run ./ops down before switching deployment modes"
+  fi
+  guard_generated_units
+  guard_existing_resources
+  cleanup_stale_admin_state
+  ensure_linger
+  migrate_legacy_units
+  guard_systemd_units
+  UP_IN_PROGRESS=true
+  stop_units
+  mkdir -p "$STATE_DIR"
+  local mode_file
+  mode_file=$(mktemp "$STATE_DIR/mode.XXXXXX")
+  chmod 600 "$mode_file"
+  printf '%s\n' "$MODE" > "$mode_file"
+  mv -f "$mode_file" "$STATE_DIR/mode"
+  write_environment
+  prepare_secrets
+  render_units
+  "$SYSTEMCTL_BIN" --user daemon-reload
+  "$SYSTEMCTL_BIN" --user start clashlens-postgres.service
+  wait_postgres
+  apply_migrations
+  configure_database
+  if [[ "$MODE" == fixture ]]; then
+    "$SYSTEMCTL_BIN" --user start clashlens-archive.service clashlens-clash-api.service clashlens-login.service
+    bootstrap_fixture
+  fi
+  if ! "$SYSTEMCTL_BIN" --user start clashlens.target; then
+    stop_units
+    die "the stack failed to start; run ./ops logs"
+  fi
+  if ! wait_stack; then
+    stop_units
+    die "the stack did not become healthy; run ./ops logs"
+  fi
+  if ! "$SYSTEMCTL_BIN" --user enable clashlens.target >/dev/null; then
+    stop_units
+    die "the healthy stack could not be enabled for reboot"
+  fi
+  promote_active_release
+  UP_IN_PROGRESS=false
+  printf 'Clash Lens %s is ready at http://127.0.0.1:%s and is enabled after reboot.\n' "$MODE" "$WEBSITE_PORT"
+}
+
+current_prefix() {
+  [[ ! -L "$STATE_DIR/mode" ]] || die "refusing symlink deployment mode file $STATE_DIR/mode"
+  if [[ -r "$STATE_DIR/mode" && "$(<"$STATE_DIR/mode")" == fixture ]]; then printf clashlens-ops-fixture; else printf clashlens; fi
+}
+
+prepare_managed_runtime() {
+  local service=$1 container actual_image actual_pod expected_pod running
+  validate_directory_ancestry "$STATE_DIR"
+  validate_directory_ancestry "$QUADLET_DIR"
+  validate_directory_ancestry "$USER_UNIT_DIR"
+  MANAGED_PREFIX=$(current_prefix)
+  if [[ "$MANAGED_PREFIX" == clashlens-ops-fixture ]]; then MODE=fixture; else MODE=production; fi
+  load_active_release
+  guard_generated_units
+  guard_existing_resources
+  guard_systemd_units
+  container=$(container_name "$MANAGED_PREFIX" "$service")
+  actual_image=$($PODMAN_BIN inspect --format '{{.Image}}' "$container" 2>/dev/null) || die "$service is not running"
+  actual_image=$(normalize_image_id "$actual_image")
+  [[ "$actual_image" == "${RELEASE[PYTHON_IMAGE]}" ]] || die "$service is not the pinned Python release"
+  actual_pod=$($PODMAN_BIN inspect --format '{{.Pod}}' "$container" 2>/dev/null) || die "cannot inspect $service pod"
+  expected_pod=$($PODMAN_BIN pod inspect --format '{{.Id}}' "$MANAGED_PREFIX-pod" 2>/dev/null) || die "managed pod is absent"
+  [[ "$actual_pod" == "$expected_pod" ]] || die "$service is not in the managed pod"
+  running=$($PODMAN_BIN inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)
+  [[ "$running" == true ]] || die "$service is not running"
+}
+
+status() {
+  require_host
+  local prefix service state unit_state active result=0 mode
+  prefix=$(current_prefix)
+  mode=production
+  [[ "$prefix" != clashlens ]] && mode=fixture
+  active=$($SYSTEMCTL_BIN --user is-active clashlens.target 2>/dev/null || true)
+  printf 'stack      %s\n' "${active:-unknown}"
+  [[ "$active" == active ]] || result=1
+  unit_state=$(service_state pod)
+  printf '%-10s %s\n' pod "$unit_state"
+  [[ "$unit_state" == active ]] || result=1
+  local services=(postgres collector api worker website)
+  [[ "$mode" != fixture ]] || services+=(archive clash-api login)
+  for service in "${services[@]}"; do
+    unit_state=$(service_state "$service")
+    state=$(container_state "$(container_name "$prefix" "$service")")
+    printf '%-10s %s' "$service" "$state"
+    [[ "$unit_state" == active ]] || printf ' (unit %s)' "$unit_state"
+    printf '\n'
+    [[ "$unit_state" == active && ( "$state" == healthy || "$state" == running ) ]] || result=1
+  done
+  return "$result"
+}
+
+logs() {
+  require_host
+  local service=${1:-} unit
+  if [[ -z "$service" ]]; then
+    journalctl --user-unit clashlens.target --user-unit 'clashlens-*.service' --lines 200 --no-pager
+    return
+  fi
+  case "$service" in postgres|collector|api|worker|website|archive|clash-api|login) unit="clashlens-$service.service" ;; *) die "unknown service $service" ;; esac
+  shift || true
+  journalctl --user-unit "$unit" "$@"
+}
+
+exec_service() {
+  require_host
+  prepare_managed_runtime worker
+  "$PODMAN_BIN" exec "$(container_name "$MANAGED_PREFIX" worker)" python -m clashlens.cli queue-status
+}
+
+failed_items() {
+  require_host
+  prepare_managed_runtime worker
+  if [[ "$MODE" == fixture ]]; then load_fixture_config; else load_production_config; fi
+  run_with_admin_database "${RELEASE[PYTHON_IMAGE]}" failed-items --database-url-file /run/secrets/database-url "$@"
+}
+
+command=${1:-}
+[[ -n "$command" ]] || { usage; exit 2; }
+shift
+case "$command" in
+  build) acquire_mutation_lock; parse_mode "$@"; build_release ;;
+  up) acquire_mutation_lock; parse_mode "$@"; up_stack ;;
+  down)
+    (($# == 0)) || die "down takes no arguments"
+    acquire_mutation_lock
+    require_host
+    validate_directory_ancestry "$STATE_DIR"; validate_directory_ancestry "$QUADLET_DIR"; validate_directory_ancestry "$USER_UNIT_DIR"
+    guard_generated_units; guard_existing_resources; cleanup_stale_admin_state; migrate_legacy_units; guard_systemd_units
+    stop_units; "$SYSTEMCTL_BIN" --user daemon-reload
+    printf 'Clash Lens is disabled and stopped; database, spool and fixture archive data were kept.\n'
+    ;;
+  status) (($# == 0)) || die "status takes no arguments"; status ;;
+  logs) logs "$@" ;;
+  queue-status) (($# == 0)) || die "queue-status takes no arguments"; exec_service ;;
+  failed-items)
+    acquire_mutation_lock
+    failed_items "$@"
+    ;;
+  support-recovery-exec)
+    acquire_mutation_lock; require_host; prepare_managed_runtime api
+    [[ "$MANAGED_PREFIX" == clashlens ]] || die "support recovery is unavailable in fixture mode"
+    "$PODMAN_BIN" exec --interactive "$MANAGED_PREFIX-python-api" python -m clashlens.cli recover-discord "$@"
+    ;;
+  help|-h|--help) usage ;;
+  *) usage; die "unknown command $command" ;;
+esac

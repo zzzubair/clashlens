@@ -127,9 +127,9 @@ publication establishing the boundary. Anything else, including a live
 season, is left untouched.
 
 Migrations 0016–0018 separate durable game history from repeated collection
-bookkeeping. They do not delete existing history or remote objects. Deploy with
-`./deploy.sh up` so old collectors and workers are drained before migration;
-start the updated Python services afterwards using the normal deployment flow.
+bookkeeping. They do not delete existing history or remote objects. Follow the
+[`./ops` deployment flow](deployment.md) to stop the running services before
+applying migrations and starting an updated release.
 Back up and rehearse restore before upgrading a populated database. Applying the
 migrations is not a production-cleanup authorization.
 
@@ -164,15 +164,18 @@ preview only. Retention accepts 48–672 hours; each table is limited to 1–100
 candidates per invocation. Schedule bounded runs only after validating their
 reports and queue impact. No automatic schedule is installed.
 
-The collector cleanup removes redundant completed root collections, preserving
+The collector cleanup removes eligible completed explicit collection work, preserving
 both ends and transitions of unchanged log runs, semantic profile anchors,
 latest profile effects and rankings, snapshot/reset references, and unfinished
 or failed work. Completed derived processing jobs (except exports and legacy
 publication-migration anchors) and unreferenced parsed/ranking payloads are also
 eligible. Restrictive domain foreign keys remain a final safety barrier. Lock or
 statement timeout aborts the transaction; investigate rather than disabling
-constraints. Retries/child collection trees and failed work can still accumulate
-and require operator investigation; this is not a universal TTL on all tables.
+constraints. Ordinary five-minute collections have no explicit work row and
+their observations are not selected by this cleanup. Their completed processing
+jobs can be pruned separately, but observation metadata and archive catalogue
+tombstones remain. Failed work also requires operator investigation; this is
+not a time limit on all tables or a bounded database-size guarantee.
 
 The same command also prunes redundant discovery provenance attached to retained
 roots: `known_player_discoveries` rows and observation-backed

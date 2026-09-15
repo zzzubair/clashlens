@@ -1,0 +1,28 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens fixture archive
+PartOf=clashlens.target
+Requires=clashlens-pod.service
+After=clashlens-pod.service
+
+[Container]
+Label=org.clashlens.managed=ops
+Image=@@FIXTURES_IMAGE@@
+Pull=never
+ContainerName=@@PREFIX@@-archive
+PodmanArgs=--pod=@@PREFIX@@-pod
+StopSignal=SIGINT
+User=10001:10001
+Volume=@@ARCHIVE_ROOT@@:/data:rw,z
+HealthCmd=["CMD","python","-c","import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:9000/healthz',timeout=3).status == 200"]
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=12
+HealthOnFailure=kill
+Notify=healthy
+Exec=archive --host 0.0.0.0 --port 9000 --root /data
+
+[Service]
+Restart=always
+RestartMode=direct
+TimeoutStartSec=3min

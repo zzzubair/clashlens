@@ -1,0 +1,26 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens fixture login providers
+PartOf=clashlens.target
+Requires=clashlens-pod.service
+After=clashlens-pod.service
+
+[Container]
+Label=org.clashlens.managed=ops
+Image=@@LOGIN_IMAGE@@
+Pull=never
+ContainerName=@@PREFIX@@-login
+PodmanArgs=--pod=@@PREFIX@@-pod
+StopSignal=SIGINT
+EnvironmentFile=@@ENV_DIR@@/login.env
+HealthCmd=["CMD","node","-e","Promise.all([fetch('http://127.0.0.1:8011/healthz'),fetch('http://127.0.0.1:8012/healthz')]).then(rs=>{if(rs.some(r=>!r.ok))process.exit(1)}).catch(()=>process.exit(1))"]
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=12
+HealthOnFailure=kill
+Notify=healthy
+
+[Service]
+Restart=always
+RestartMode=direct
+TimeoutStartSec=3min

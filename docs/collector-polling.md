@@ -33,8 +33,17 @@ capacity and resumes when cleanup frees it.
 
 One background uploader creates immutable archive objects. A local spool file is
 deletable only after its processing and upload both succeed. Identical bytes
-share one spool/archive object; ordinary repeats update freshness without a new
-observation or processing job.
+share one spool/archive object. The fields listed in `response_fields.py` decide
+whether an ordinary response changed; changes to ignored fields update freshness
+without a new observation, processing job, or archive upload. A changed response
+is stored in full. Reset always stores paired boundary observations, including
+unchanged responses.
+
+League history is collected initially and after each season-ending Reset. It
+is stored in full and parsed separately from profiles and battle logs. Raw
+responses retire 56 days after their season ends; a body seen in a later season
+keeps that season's later deadline. Retirement requires separate operator
+credentials and is never part of starting or stopping the stack.
 
 Each regular key limits starts to 30/second with six concurrent requests. The
 interactive key uses the shared database permit immediately before HTTP. It is
