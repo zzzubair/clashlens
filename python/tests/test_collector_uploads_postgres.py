@@ -163,6 +163,74 @@ def test_upload_claim_is_fenced_and_cleanup_waits_for_processing(
         assert result.upload_id is not None
 
 
+def test_cleanup_prioritizes_oldest_last_use_over_a_reused_upload(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        first_player = _player(connection_info)
+        second_player = _player(connection_info, "#8VV")
+        cold_player = _player(connection_info, "#9YY")
+        database = CollectorDatabase(connection_info)
+        _archive_instance(connection_info)
+        hot_hash = _hash("shared-history")
+        cold_hash = _hash("one-use-profile")
+
+        database.record_response(
+            _handoff(
+                occurrence_key="shared-history-first",
+                response_hash=hot_hash,
+                player_id=first_player,
+                endpoint="league_history",
+            )
+        )
+        hot_claim = claim_upload(database, owner="hot-uploader", now=NOW)
+        assert hot_claim is not None
+        complete_upload(
+            database,
+            hot_claim,
+            archive_reference="s3://evidence/shared-history",
+            archive_instance_id="fixture-instance",
+            now=NOW,
+        )
+        database.record_response(
+            _handoff(
+                occurrence_key="cold-profile",
+                response_hash=cold_hash,
+                player_id=cold_player,
+                tag="#9YY",
+                completed_at=NOW + timedelta(minutes=5),
+            )
+        )
+        cold_claim = claim_upload(
+            database, owner="cold-uploader", now=NOW + timedelta(minutes=5)
+        )
+        assert cold_claim is not None
+        complete_upload(
+            database,
+            cold_claim,
+            archive_reference="s3://evidence/one-use-profile",
+            archive_instance_id="fixture-instance",
+            now=NOW + timedelta(minutes=5),
+        )
+        database.record_response(
+            _handoff(
+                occurrence_key="shared-history-reused",
+                response_hash=hot_hash,
+                player_id=second_player,
+                tag="#8VV",
+                endpoint="league_history",
+                completed_at=NOW + timedelta(minutes=10),
+            )
+        )
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s",
+                (NOW + timedelta(minutes=10),),
+            )
+
+        assert database.deletable_hashes(limit=1) == [cold_hash]
+
+
 def test_upload_renewal_requires_the_same_live_claim(database_url: str) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id = _player(connection_info)

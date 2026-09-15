@@ -1405,7 +1405,8 @@ class CollectorDatabase:
                         AND observation.response_hash = upload.response_hash
                         AND job.status <> 'complete'
                   )
-                ORDER BY upload.completed_at, upload.response_hash
+                ORDER BY upload.latest_sighting_at, upload.completed_at,
+                         upload.response_hash
                 LIMIT %s
                 """,
                 (limit,),

@@ -64,6 +64,10 @@ authorize going live. The final PR records the tested commit and CI runs.
   briefly before continuing; partial or empty turns retain the one-second
   backoff. A measured 128-file turn held publication too long, despite fixing
   the earlier cleanup starvation.
+  Eligible copies are selected by oldest last sighting, not oldest upload.
+  Reused league-history hashes keep their original upload time; sorting by
+  that time repeatedly selected hot copies ahead of much older profile copies.
+  The priority change leaves deletion eligibility and retention unchanged.
 - Quadlet container stop limits now fit within the existing systemd grace:
   40 of 45 seconds for the collector, lease plus 10 of lease plus 15 seconds
   for the worker, and 85 of 90 seconds for PostgreSQL. Podman's default
