@@ -10,10 +10,13 @@ from domain_test_support import (
     enable_direct_army_fixture,
     store_observation,
 )
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
-from clashlens import army_ingestion, boundary_publication
+from clashlens import api_analytics, army_ingestion, boundary_publication
+from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
+from clashlens.army_analytics import ArmyAnalyticsSelection
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
 
@@ -657,6 +660,155 @@ def test_active_or_incomplete_day_is_withheld_and_retried(
             database.close()
 
 
+def test_api_role_reads_current_season_army_analytics(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server, monkeypatch)
+        profile_body = next(iter(archive_server[3].objects.values()))
+        try:
+            _profile_observation, profile_job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="army-api-role-profile",
+                endpoint="profile",
+                body=profile_body,
+                observed_at=DAY_START,
+                normalized_tag="#2PP",
+            )
+            assert (
+                processor.process_job(profile_job, owner="api-role-profile").outcome
+                == "processed"
+            )
+            battle = _battle_row(
+                opponent="#8PP",
+                offset_hours=1,
+                code=FIXTURE_CODE,
+                stars=3,
+                destruction=100,
+            )
+            _battle_observation, battle_job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="army-api-role-battle",
+                endpoint="battle_log",
+                body=json.dumps({"items": [battle]}).encode(),
+                observed_at=DAY_START + timedelta(hours=2),
+                normalized_tag="#2PP",
+            )
+            assert (
+                processor.process_job(battle_job, owner="api-role-battle").outcome
+                == "processed"
+            )
+            with database.pool.connection() as connection:
+                player_id, profile_version_id = connection.execute(
+                    """
+                    SELECT id, current_profile_version_id FROM players
+                    WHERE normalized_tag = '#2PP'
+                    """
+                ).fetchone()
+                battle_id = connection.execute(
+                    "SELECT id FROM legend_battles WHERE attacker_player_id = %s",
+                    (player_id,),
+                ).fetchone()[0]
+                event = {
+                    "battle_id": int(battle_id),
+                    "lens": "offense",
+                    "included": True,
+                    "battle_timestamp": (DAY_START + timedelta(hours=1)).isoformat(),
+                    "trophy_change": 20,
+                    "stars": 3,
+                    "destruction_percentage": 100,
+                }
+                connection.execute(
+                    """
+                    INSERT INTO ranked_day_versions (
+                        player_id, ranked_day_start, ranked_day_end,
+                        official_season_id, season_day_number,
+                        season_anchor_rule_version, reconciliation_rule_version,
+                        result_hash, version, state, confidence, input_hash,
+                        evidence_complete, coverage_complete, start_trophies
+                    ) VALUES (
+                        %s, %s, %s, %s, 23, 'legend-season-anchor-v1',
+                        'legend-ranked-day-v1', repeat('a', 64), 1,
+                        'Complete', 'exact', repeat('b', 64), true, true, 6000
+                    )
+                    """,
+                    (player_id, DAY_START, DAY_START + timedelta(days=1), SEASON_ID),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO api_player_daily_logs (
+                        player_id, ranked_day_start, version, state, coverage,
+                        battles, ranked_day_end, official_season_id,
+                        season_day_number
+                    ) VALUES (
+                        %s, %s, 1, 'Complete', 'complete', %s, %s, %s, 23
+                    )
+                    """,
+                    (
+                        player_id,
+                        DAY_START,
+                        Jsonb([event]),
+                        DAY_START + timedelta(days=1),
+                        SEASON_ID,
+                    ),
+                )
+                army_ingestion._build_army_facts(
+                    database, connection, DAY_START.isoformat()
+                )
+                current_start = DAY_START - timedelta(days=22)
+                updated = connection.execute(
+                    """
+                    UPDATE legend_season_anchors
+                    SET current_league_season_id = %s,
+                        previous_league_season_id = 'previous-season',
+                        current_start = %s, previous_start = %s,
+                        source_profile_version_id = %s
+                    WHERE anchor_rule_version = 'legend-season-anchor-v1'
+                      AND state = 'confirmed'
+                    """,
+                    (
+                        SEASON_ID,
+                        current_start,
+                        current_start - timedelta(days=28),
+                        profile_version_id,
+                    ),
+                ).rowcount
+                assert updated == 1
+                connection.commit()
+
+            options = conninfo_to_dict(connection_info).get("options", "")
+            api = ApiDatabase(
+                make_conninfo(
+                    connection_info,
+                    options=f"{options} -c role=clashlens_python_api".strip(),
+                ),
+                army_cache_capacity=0,
+            )
+            try:
+                result = api_analytics.get_army_analytics(
+                    api,
+                    ArmyAnalyticsSelection.parse(
+                        lens="offense",
+                        season="current",
+                        start_day=23,
+                        end_day=23,
+                        population="trophies-5000-9000",
+                        category="troops",
+                        sort="usage-rate",
+                    ),
+                    now=DAY_START + timedelta(days=1),
+                )
+                assert result is not None
+                assert result["total_attacks"] == 1
+                assert result["reproducibility"]["official_season_id"] == SEASON_ID
+            finally:
+                api.close()
+        finally:
+            database.close()
+
+
 def test_army_tables_have_only_required_runtime_privileges(database_url: str) -> None:
     with domain_database(database_url) as connection_info:
         database = Database(connection_info)
@@ -669,9 +821,23 @@ def test_army_tables_have_only_required_runtime_privileges(database_url: str) ->
                       has_table_privilege('clashlens_python_worker', 'unit_catalog_versions', 'UPDATE'),
                       has_table_privilege('clashlens_python_worker', 'battle_army_decodes', 'INSERT'),
                       has_table_privilege('clashlens_python_worker', 'army_analytics_breakdowns', 'DELETE'),
-                      has_table_privilege('clashlens_python_api', 'exact_armies', 'SELECT')
+                      has_table_privilege('clashlens_python_api', 'exact_armies', 'SELECT'),
+                      has_table_privilege('clashlens_python_api', 'legend_season_anchors', 'SELECT'),
+                      has_table_privilege('clashlens_python_api', 'legend_season_anchors', 'INSERT'),
+                      has_table_privilege('clashlens_python_api', 'legend_season_anchors', 'UPDATE'),
+                      has_table_privilege('clashlens_python_api', 'legend_season_anchors', 'DELETE')
                     """
                 ).fetchone()
-                assert privileges == (True, False, True, True, False)
+                assert privileges == (
+                    True,
+                    False,
+                    True,
+                    True,
+                    False,
+                    True,
+                    False,
+                    False,
+                    False,
+                )
         finally:
             database.close()

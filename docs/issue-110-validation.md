@@ -16,6 +16,12 @@ authorize going live. The final PR records the tested commit and CI runs.
   use validated Legend I history and 28-day boundaries. Official history does
   not manufacture daily coverage or reinterpret the ambiguous official star
   labels as tracked battle totals.
+- Final guest journal review caught a missing API read permission on
+  `legend_season_anchors`: current-season army analytics showed a generic
+  service error despite the browser test passing its heading/form checks.
+  A forward migration grants only SELECT on that public read model. The
+  regression uses the runtime API role, and browser acceptance now requires
+  analytics or a recognized empty/unpublished state.
 - The local claim performance test had previously been described as a host
   timing problem. Reproduction on the base commit found an approximately
   101 ms claim; the query scanned rows that a bounded index probe could avoid.
