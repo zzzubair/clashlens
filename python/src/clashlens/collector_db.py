@@ -926,6 +926,46 @@ class CollectorDatabase:
         return int(existing[0])
 
     @staticmethod
+    def _recovered_observation(
+        connection: Any,
+        handoff: ResponseHandoff,
+        parser_version: str,
+    ) -> ResponseResult | None:
+        existing = connection.execute(
+            """
+            SELECT observation.id, observation.scope, observation.endpoint,
+                   observation.player_id, observation.normalized_tag,
+                   observation.response_hash, job.id
+            FROM collector_observations AS observation
+            LEFT JOIN python_processing_jobs AS job
+              ON job.observation_id = observation.id
+             AND job.work_type = 'process_observation'
+            WHERE observation.occurrence_key = %s
+            """,
+            (handoff.occurrence_key,),
+        ).fetchone()
+        if existing is None:
+            return None
+        expected = (
+            handoff.scope,
+            handoff.endpoint,
+            handoff.player_id,
+            handoff.normalized_tag,
+            handoff.response_hash,
+        )
+        if existing[1:6] != expected:
+            raise ValueError("response occurrence key conflicts with observation")
+        if existing[6] is None:
+            raise RuntimeError("response occurrence is missing its processing job")
+        return ResponseResult(
+            True,
+            int(existing[0]),
+            int(existing[6]),
+            handoff.response_hash,
+            parser_version,
+        )
+
+    @staticmethod
     def _upsert_response_state(
         connection: Any,
         handoff: ResponseHandoff,
@@ -936,9 +976,9 @@ class CollectorDatabase:
             INSERT INTO collector_response_state (
                 scope, identity_key, endpoint, player_id, normalized_tag,
                 last_response_hash, last_content_fingerprint,
-                last_occurrence_key, last_seen_at, last_observation_id,
-                last_success_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                last_occurrence_key, last_applied_occurrence_key,
+                last_seen_at, last_observation_id, last_success_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (scope, identity_key, endpoint) DO UPDATE
             SET request_count = collector_response_state.request_count + 1,
                 player_id = CASE WHEN EXCLUDED.last_seen_at >=
@@ -960,6 +1000,8 @@ class CollectorDatabase:
                     collector_response_state.last_seen_at
                     THEN EXCLUDED.last_occurrence_key
                     ELSE collector_response_state.last_occurrence_key END,
+                last_applied_occurrence_key =
+                    EXCLUDED.last_applied_occurrence_key,
                 last_seen_at = GREATEST(
                     EXCLUDED.last_seen_at, collector_response_state.last_seen_at
                 ),
@@ -986,6 +1028,7 @@ class CollectorDatabase:
                 handoff.response_hash,
                 handoff.content_fingerprint,
                 handoff.occurrence_key,
+                handoff.occurrence_key,
                 handoff.response_completed_at,
                 observation_id,
                 handoff.response_completed_at
@@ -995,11 +1038,33 @@ class CollectorDatabase:
         )
 
     def record_response(self, handoff: ResponseHandoff) -> ResponseResult:
+        return self._record_response(handoff, recovering=False)
+
+    def record_recovered_response(
+        self, handoff: ResponseHandoff, *, serialized: bool = False
+    ) -> ResponseResult:
+        return self._record_response(
+            handoff, recovering=True, serialized=serialized
+        )
+
+    def _record_response(
+        self,
+        handoff: ResponseHandoff,
+        *,
+        recovering: bool,
+        serialized: bool = False,
+    ) -> ResponseResult:
         self._validate_handoff(handoff)
         parser_version = self._parser_for(handoff.endpoint)
         state_key = f"{handoff.scope}:{handoff.identity_key}:{handoff.endpoint}"
         with self._connection() as connection:
             with connection.transaction():
+                if recovering:
+                    recorded = self._recovered_observation(
+                        connection, handoff, parser_version
+                    )
+                    if recorded is not None:
+                        return recorded
                 work_kind = self._validate_work_identity(connection, handoff)
                 connection.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -1008,14 +1073,15 @@ class CollectorDatabase:
                 state = connection.execute(
                     """
                     SELECT last_response_hash, last_seen_at, last_observation_id,
-                           last_occurrence_key, last_content_fingerprint
+                           last_occurrence_key, last_content_fingerprint,
+                           last_applied_occurrence_key
                     FROM collector_response_state
                     WHERE scope = %s AND identity_key = %s AND endpoint = %s
                     FOR UPDATE
                     """,
                     (handoff.scope, handoff.identity_key, handoff.endpoint),
                 ).fetchone()
-                if state is not None and state[3] == handoff.occurrence_key:
+                if state is not None and state[5] == handoff.occurrence_key:
                     recorded = connection.execute(
                         """
                         SELECT observation.id, job.id
@@ -1041,6 +1107,10 @@ class CollectorDatabase:
                         int(recorded[1]),
                         handoff.response_hash,
                         parser_version,
+                    )
+                if recovering and not serialized and state is not None:
+                    raise RuntimeError(
+                        "legacy response handoff has no durable commit identity"
                     )
 
                 # Reset needs boundary-time proof even when the used fields

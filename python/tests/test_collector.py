@@ -164,6 +164,12 @@ class _Store:
         self.referenced.add(handoff.response_hash)
         return object()
 
+    def record_recovered_response(
+        self, handoff: Any, *, serialized: bool = False
+    ) -> object:
+        assert serialized is True
+        return self.record_response(handoff)
+
     def complete_intent(self, work_id: int) -> bool:
         self.spool.events.append(f"complete:{work_id}")
         return True
@@ -483,6 +489,165 @@ def test_run_starts_one_background_uploader() -> None:
     )
 
     assert uploads_started == 1
+
+
+def test_normal_shutdown_removes_only_unreferenced_spool_bodies(
+    tmp_path: Path,
+) -> None:
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    store = _Store(spool)  # type: ignore[arg-type]
+    collector = _collector(  # type: ignore[arg-type]
+        spool,
+        store,
+        _Client(spool),
+    )
+    bodies = {
+        "unreferenced": b"duplicate response",
+        "referenced": b"pending upload response",
+        "handoff": b"in-flight handoff response",
+    }
+    hashes = {
+        name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()
+    }
+
+    async def idle_loop(stop: asyncio.Event, _idle_seconds: float) -> None:
+        await stop.wait()
+
+    async def drain_after_stop(stop: asyncio.Event, _idle_seconds: float) -> None:
+        await stop.wait()
+        for name, body in bodies.items():
+            spool.publish(body, hashes[name])
+        store.referenced.add(hashes["referenced"])
+        spool.write_handoff(
+            "pending-handoff",
+            f'{{"response_hash":"{hashes["handoff"]}"}}'.encode(),
+        )
+
+    async def request_stop(stop: asyncio.Event, _idle_seconds: float) -> None:
+        stop.set()
+
+    collector._regular_loop = drain_after_stop  # type: ignore[method-assign]
+    collector._intent_loop = (  # type: ignore[method-assign]
+        lambda stop, _rankings, idle: idle_loop(stop, idle)
+    )
+    collector._upload_loop = request_stop  # type: ignore[method-assign]
+
+    try:
+        asyncio.run(
+            collector.run(
+                asyncio.Event(),
+                health_host="127.0.0.1",
+                health_port=0,
+            )
+        )
+
+        assert spool.final_hashes() == {hashes["referenced"], hashes["handoff"]}
+        assert [name for name, _payload in spool.iter_handoffs()] == [
+            "pending-handoff"
+        ]
+    finally:
+        spool.close()
+
+
+@pytest.mark.parametrize(
+    "pending_after_second",
+    [(1, 3, 4, 2), (3, 4, 1, 2)],
+    ids=["active-oldest", "new-work-before-active"],
+)
+def test_intent_lane_refills_around_active_rows_without_overadmitting(
+    monkeypatch: pytest.MonkeyPatch, pending_after_second: tuple[int, ...]
+) -> None:
+    spool = _Spool()
+
+    class IntentStore(_Store):
+        def __init__(self) -> None:
+            super().__init__(spool)
+            now = datetime.now(UTC)
+            self.intents = [
+                CollectorIntent(
+                    "discovery_profile", now, index, f"#{index}", work_id=index
+                )
+                for index in range(1, 5)
+            ]
+            self.completed: set[int] = set()
+
+        def pending_intents(
+            self,
+            limit: int,
+            _now: datetime | None = None,
+            *,
+            interactive: bool | None = None,
+            **_kwargs: object,
+        ) -> list[CollectorIntent]:
+            if interactive:
+                return []
+            order = (
+                pending_after_second
+                if 2 in self.completed
+                else tuple(range(1, 5))
+            )
+            by_id = {intent.work_id: intent for intent in self.intents}
+            return [
+                by_id[work_id]
+                for work_id in order
+                if work_id not in self.completed
+            ][:limit]
+
+        @staticmethod
+        def begin_reset(
+            _boundary: datetime, *, local_regular_inflight: int
+        ) -> None:
+            return None
+
+    store = IntentStore()
+    collector = _collector(spool, store, _Client(spool))
+    oldest_release = asyncio.Event()
+    newcomer_release = asyncio.Event()
+    third_started = asyncio.Event()
+    fourth_started = asyncio.Event()
+    active_count = 0
+    maximum_active = 0
+
+    async def collect_intent(intent: CollectorIntent) -> str:
+        nonlocal active_count, maximum_active
+        assert intent.work_id is not None
+        active_count += 1
+        maximum_active = max(maximum_active, active_count)
+        try:
+            if intent.work_id == 1:
+                await oldest_release.wait()
+            elif intent.work_id in {3, 4}:
+                (third_started if intent.work_id == 3 else fourth_started).set()
+                await newcomer_release.wait()
+            store.completed.add(intent.work_id)
+            return "complete"
+        finally:
+            active_count -= 1
+
+    collector.collect_intent = collect_intent  # type: ignore[method-assign]
+    monkeypatch.setattr(collector_module, "_ORDINARY_INTENT_PARALLELISM", 2)
+
+    async def run() -> None:
+        stop = asyncio.Event()
+        task = asyncio.create_task(collector._intent_loop(stop, False, 0.001))
+        try:
+            await asyncio.wait_for(third_started.wait(), timeout=1)
+            await asyncio.sleep(0.05)
+            assert not fourth_started.is_set()
+            newcomer_release.set()
+            await asyncio.wait_for(fourth_started.wait(), timeout=1)
+            while store.completed != {2, 3, 4}:
+                await asyncio.sleep(0.001)
+        finally:
+            stop.set()
+            oldest_release.set()
+            newcomer_release.set()
+            await task
+
+    asyncio.run(run())
+
+    assert maximum_active == 2
+    assert store.completed == {1, 2, 3, 4}
 
 
 def test_one_bad_archive_object_does_not_stop_other_uploads(

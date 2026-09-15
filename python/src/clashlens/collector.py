@@ -46,7 +46,11 @@ _GLOBAL_ARCHIVE_FAILURES = {
 _UPLOAD_CONCURRENCY = 32
 _UPLOAD_LEASE_SECONDS = 60
 _UPLOAD_RENEW_INTERVAL = 20.0
-_REGULAR_PARALLELISM = 36
+_HANDOFF_LOCK_STRIPES = 256
+_HANDOFF_PROTOCOL = 2
+# These slots cover HTTP plus durable handoffs; key limits still bound requests.
+_REGULAR_PARALLELISM = 48
+_ORDINARY_INTENT_PARALLELISM = 32
 
 
 class Collector:
@@ -88,6 +92,10 @@ class Collector:
         self._spool_capacity_failed = False
         self._spool_recovery_lock = asyncio.Lock()
         self._spool_probe_after = 0.0
+        self._handoff_locks = tuple(
+            asyncio.Lock() for _index in range(_HANDOFF_LOCK_STRIPES)
+        )
+        self._handoff_recovery_required = False
 
     async def _database_call(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
         for attempt in range(3):
@@ -111,28 +119,33 @@ class Collector:
             return ["capacity_paused"] * len(endpoints)
         pool = self.interactive_keys if lane == "interactive" else self.regular_keys
         try:
-            stack, reservations = await asyncio.to_thread(
-                self._reserve_endpoints, endpoints
-            )
-            try:
-                return list(
-                    await asyncio.gather(
-                        *(
-                            self._collect_endpoint(
-                                work,
-                                endpoint,
-                                lane,
-                                pool,
-                                reservation=reservation,
-                            )
-                            for endpoint, reservation in zip(
-                                endpoints, reservations, strict=True
-                            )
-                        )
+            stack, reservations = await self._reserve_endpoints_safely(endpoints)
+            tasks = [
+                asyncio.create_task(
+                    self._collect_endpoint(
+                        work,
+                        endpoint,
+                        lane,
+                        pool,
+                        reservation=reservation,
                     )
                 )
+                for endpoint, reservation in zip(
+                    endpoints, reservations, strict=True
+                )
+            ]
+            try:
+                return list(await asyncio.gather(*tasks))
+            except BaseException:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await _drain_awaitable(
+                    asyncio.gather(*tasks, return_exceptions=True)
+                )
+                raise
             finally:
-                await asyncio.to_thread(stack.close)
+                await _drain_to_thread(stack.close)
         except (OSError, SpoolError) as error:
             self._record_spool_failure(error)
             return ["capacity_paused"] * len(endpoints)
@@ -150,6 +163,24 @@ class Collector:
             stack.close()
             raise
         return stack, reservations
+
+    async def _reserve_endpoints_safely(
+        self, endpoints: tuple[str, ...]
+    ) -> tuple[ExitStack, list[Any]]:
+        task = asyncio.create_task(asyncio.to_thread(self._reserve_endpoints, endpoints))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            while not task.done():
+                try:
+                    await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    continue
+            if task.exception() is not None:
+                raise asyncio.CancelledError from None
+            stack, _reservations = task.result()
+            await _drain_to_thread(stack.close)
+            raise
 
     async def collect_rankings(self) -> str:
         return await self._collect_endpoint(
@@ -304,16 +335,37 @@ class Collector:
                 digest = hashlib.sha256(response.body).hexdigest()
                 handoff = self._make_handoff(work, response, digest)
                 name, payload = self.serialize_handoff(handoff)
-                await asyncio.to_thread(
-                    self.spool.publish_handoff,
-                    response.body,
-                    digest,
-                    name,
-                    payload,
-                    current_reservation,
-                )
-                await self._database_call(self.database.record_response, handoff)
-                await asyncio.to_thread(self.spool.remove_handoff, name)
+                async with self._handoff_lock(handoff):
+                    # A predecessor may have failed after its durable publish
+                    # while this response was waiting for the same stripe.
+                    # Recovery must run before any successor can become current.
+                    if self._handoff_recovery_required:
+                        return "capacity_paused"
+                    published = False
+                    try:
+                        await _drain_to_thread(
+                            self.spool.publish_handoff,
+                            response.body,
+                            digest,
+                            name,
+                            payload,
+                            current_reservation,
+                        )
+                        published = True
+                        await _drain_awaitable(
+                            self._database_call(
+                                self.database.record_response, handoff
+                            )
+                        )
+                        await _drain_to_thread(self.spool.remove_handoff, name)
+                    except BaseException as error:
+                        if published or self._sidecar_exists(name):
+                            self._handoff_recovery_required = True
+                            if isinstance(error, (OSError, SpoolError)):
+                                raise _HandoffRecoveryRequired(
+                                    "durable response handoff requires restart recovery"
+                                ) from error
+                        raise
                 self._count("recorded")
                 outcome = f"http_{response.http_status}"
                 key = (endpoint, pool_name, outcome)
@@ -392,9 +444,26 @@ class Collector:
             collector_work_id=work.collector_work_id,
         )
 
+    def _handoff_lock(self, handoff: ResponseHandoff) -> asyncio.Lock:
+        identity = (
+            f"{handoff.scope}\0{handoff.identity_key}\0{handoff.endpoint}"
+        ).encode()
+        stripe = int.from_bytes(hashlib.sha256(identity).digest()[:4], "big")
+        return self._handoff_locks[stripe % len(self._handoff_locks)]
+
+    def _sidecar_exists(self, name: str) -> bool:
+        try:
+            return any(item_name == name for item_name, _ in self.spool.iter_handoffs())
+        except BaseException as error:
+            self._handoff_recovery_required = True
+            raise _HandoffRecoveryRequired(
+                "response handoff state cannot be inspected safely"
+            ) from error
+
     @staticmethod
     def serialize_handoff(handoff: ResponseHandoff) -> tuple[str, bytes]:
         payload = asdict(handoff)
+        payload["handoff_protocol"] = _HANDOFF_PROTOCOL
         payload["request_started_at"] = handoff.request_started_at.isoformat()
         payload["response_completed_at"] = handoff.response_completed_at.isoformat()
         return handoff.occurrence_key, json.dumps(
@@ -403,7 +472,15 @@ class Collector:
 
     @staticmethod
     def deserialize_handoff(payload: bytes) -> ResponseHandoff:
+        handoff, _serialized = Collector._deserialize_handoff(payload)
+        return handoff
+
+    @staticmethod
+    def _deserialize_handoff(payload: bytes) -> tuple[ResponseHandoff, bool]:
         value = json.loads(payload)
+        protocol = value.pop("handoff_protocol", None)
+        if protocol not in {None, _HANDOFF_PROTOCOL}:
+            raise ValueError("unsupported response handoff protocol")
         value["request_started_at"] = datetime.fromisoformat(
             value["request_started_at"]
         )
@@ -413,15 +490,17 @@ class Collector:
         # Sidecars written before field compaction replay with the raw digest:
         # they count as changed once, which stores rather than loses them.
         value.setdefault("content_fingerprint", value["response_hash"])
-        return ResponseHandoff(**value)
+        return ResponseHandoff(**value), protocol == _HANDOFF_PROTOCOL
 
     def recover_handoffs(self) -> int:
         recovered = 0
         for name, payload in self.spool.iter_handoffs():
-            handoff = self.deserialize_handoff(payload)
+            handoff, serialized = self._deserialize_handoff(payload)
             if self.spool.verify(handoff.response_hash, handoff.byte_size) is None:
                 raise SpoolError("handoff raw response is missing or corrupt")
-            self.database.record_response(handoff)
+            self.database.record_recovered_response(
+                handoff, serialized=serialized
+            )
             self.spool.remove_handoff(name)
             recovered += 1
         self.spool.remove_unreferenced(self.database.referenced_spool_hashes)
@@ -576,8 +655,8 @@ class Collector:
         idle_seconds: float = 0.1,
     ) -> None:
         """Run admissions, intent work, uploads, cleanup, and health together."""
-        await asyncio.to_thread(self.recover_handoffs)
-        await asyncio.to_thread(self.spool.cleanup_stale, 60.0)
+        await _drain_to_thread(self.recover_handoffs)
+        await _drain_to_thread(self.spool.cleanup_stale, 60.0)
         server = await asyncio.start_server(
             self._handle_health, health_host, health_port
         )
@@ -603,14 +682,21 @@ class Collector:
                 raise error
             stop_requested.set()
             await asyncio.gather(*tasks)
+            await _drain_to_thread(
+                self.spool.remove_unreferenced,
+                self.database.referenced_spool_hashes,
+            )
         finally:
-            stop_task.cancel()
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(stop_task, *tasks, return_exceptions=True)
-            server.close()
-            await server.wait_closed()
+            async def finish() -> None:
+                stop_task.cancel()
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(stop_task, *tasks, return_exceptions=True)
+                server.close()
+                await server.wait_closed()
+
+            await _drain_awaitable(finish())
 
     async def _regular_loop(
         self, stop_requested: asyncio.Event, idle_seconds: float
@@ -619,6 +705,7 @@ class Collector:
         paused_tasks: set[asyncio.Task[list[str]]] = set()
         retry_work: list[CollectorWork] = []
         stop_wait = asyncio.create_task(stop_requested.wait())
+        graceful = False
         try:
             while not stop_requested.is_set():
                 for task in [task for task in pending if task.done()]:
@@ -671,13 +758,33 @@ class Collector:
                     )
                 else:
                     await _wait_or_stop(stop_requested, idle_seconds)
+            graceful = True
         finally:
             stop_wait.cancel()
-            if pending:
-                results = await asyncio.gather(*pending)
-                self.regular_inflight -= sum(
-                    "capacity_paused" not in outcomes for outcomes in results
+            if not graceful:
+                for task in pending:
+                    if not task.done():
+                        task.cancel()
+            results = await _drain_awaitable(
+                asyncio.gather(stop_wait, *pending, return_exceptions=True)
+            )
+            pending_results = results[1:]
+            self.regular_inflight -= sum(
+                isinstance(outcomes, list)
+                and "capacity_paused" not in outcomes
+                for outcomes in pending_results
+            )
+            if graceful:
+                failure = next(
+                    (
+                        result
+                        for result in pending_results
+                        if isinstance(result, BaseException)
+                    ),
+                    None,
                 )
+                if failure is not None:
+                    raise failure
 
     async def _intent_loop(
         self,
@@ -688,46 +795,79 @@ class Collector:
         active: dict[int, tuple[bool, asyncio.Task[str]]] = {}
         scheduled_boundary: datetime | None = None
         next_rankings_at = datetime.min.replace(tzinfo=UTC)
-        while not stop_requested.is_set():
-            now = datetime.now(UTC)
-            if rankings_enabled and now >= next_rankings_at:
-                await self._database_call(self.database.schedule_rankings_cycle, now)
-                next_rankings_at = _next_five_minute_cycle(now)
-            boundary = now.replace(hour=5, minute=0, second=0, microsecond=0)
-            if now >= boundary and boundary != scheduled_boundary:
-                async with self._regular_admission_lock:
-                    if self.regular_inflight == 0:
-                        sweep_id = await self._database_call(
-                            self.database.begin_reset,
-                            boundary,
-                            local_regular_inflight=0,
-                        )
-                        if sweep_id is not None:
-                            scheduled_boundary = boundary
-            for job_id, (_interactive, task) in list(active.items()):
-                if task.done():
-                    await task
-                    del active[job_id]
-            for is_interactive, limit in ((True, 6), (False, 24)):
-                used = sum(kind == is_interactive for kind, _task in active.values())
-                available = limit - used
-                if available <= 0:
-                    continue
-                intents = await self._database_call(
-                    self.database.pending_intents,
-                    limit=available,
-                    now=now,
-                    interactive=is_interactive,
+        graceful = False
+        try:
+            while not stop_requested.is_set():
+                now = datetime.now(UTC)
+                if rankings_enabled and now >= next_rankings_at:
+                    await self._database_call(
+                        self.database.schedule_rankings_cycle, now
+                    )
+                    next_rankings_at = _next_five_minute_cycle(now)
+                boundary = now.replace(hour=5, minute=0, second=0, microsecond=0)
+                if now >= boundary and boundary != scheduled_boundary:
+                    async with self._regular_admission_lock:
+                        if self.regular_inflight == 0:
+                            sweep_id = await self._database_call(
+                                self.database.begin_reset,
+                                boundary,
+                                local_regular_inflight=0,
+                            )
+                            if sweep_id is not None:
+                                scheduled_boundary = boundary
+                for job_id, (_interactive, task) in list(active.items()):
+                    if task.done():
+                        await task
+                        del active[job_id]
+                for is_interactive, limit in (
+                    (True, 6), (False, _ORDINARY_INTENT_PARALLELISM)
+                ):
+                    used = sum(
+                        kind == is_interactive for kind, _task in active.values()
+                    )
+                    available = limit - used
+                    if available <= 0:
+                        continue
+                    intents = await self._database_call(
+                        self.database.pending_intents,
+                        limit=limit,
+                        now=now,
+                        interactive=is_interactive,
+                    )
+                    for intent in intents:
+                        if intent.work_id is not None and intent.work_id not in active:
+                            active[intent.work_id] = (
+                                is_interactive,
+                                asyncio.create_task(self.collect_intent(intent)),
+                            )
+                            available -= 1
+                            if available == 0:
+                                break
+                await _wait_or_stop(stop_requested, idle_seconds)
+            graceful = True
+        finally:
+            if not graceful:
+                for _interactive, task in active.values():
+                    if not task.done():
+                        task.cancel()
+            if active:
+                results = await _drain_awaitable(
+                    asyncio.gather(
+                        *(task for _interactive, task in active.values()),
+                        return_exceptions=True,
+                    )
                 )
-                for intent in intents:
-                    if intent.work_id is not None and intent.work_id not in active:
-                        active[intent.work_id] = (
-                            is_interactive,
-                            asyncio.create_task(self.collect_intent(intent)),
-                        )
-            await _wait_or_stop(stop_requested, idle_seconds)
-        if active:
-            await asyncio.gather(*(task for _interactive, task in active.values()))
+                if graceful:
+                    failure = next(
+                        (
+                            result
+                            for result in results
+                            if isinstance(result, BaseException)
+                        ),
+                        None,
+                    )
+                    if failure is not None:
+                        raise failure
 
     async def _upload_loop(
         self, stop_requested: asyncio.Event, idle_seconds: float
@@ -783,7 +923,9 @@ class Collector:
                 if not task.done():
                     task.cancel()
             if owner_tasks:
-                await asyncio.gather(*owner_tasks.values(), return_exceptions=True)
+                await _drain_awaitable(
+                    asyncio.gather(*owner_tasks.values(), return_exceptions=True)
+                )
 
     async def _upload_owner_loop(
         self, owner: str, stop_requested: asyncio.Event, idle_seconds: float
@@ -827,7 +969,9 @@ class Collector:
             return 200, "text/plain", b"ok\n"
         if path not in {"/readyz", "/metrics"}:
             return 404, "text/plain", b"not found\n"
-        if self._spool_io_failed:
+        if self._handoff_recovery_required:
+            ready, reason = False, "handoff_recovery_required"
+        elif self._spool_io_failed:
             ready, reason = False, "spool_io_failure"
         elif self._spool_capacity_failed:
             ready, reason = False, "degraded_capacity"
@@ -871,6 +1015,10 @@ class Collector:
             f"clashlens_collector_regular_inflight {self.regular_inflight}",
             f"clashlens_collector_spool_io_failed {int(self._spool_io_failed)}",
             f"clashlens_collector_spool_capacity_failed {int(self._spool_capacity_failed)}",
+            (
+                "clashlens_collector_handoff_recovery_required "
+                f"{int(self._handoff_recovery_required)}"
+            ),
             f'clashlens_collector_archive_health{{state="{self.archive_health}"}} 1',
         ]
         if stats is not None:
@@ -940,6 +1088,8 @@ class Collector:
         self._count("spool_io_failure")
 
     async def _spool_available(self) -> bool:
+        if self._handoff_recovery_required:
+            return False
         if self._spool_io_failed:
             return False
         if not self._spool_capacity_failed:
@@ -972,14 +1122,24 @@ async def _drain_to_thread(operation: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 async def _drain_awaitable(awaitable: Any) -> Any:
-    task = asyncio.create_task(awaitable)
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        # Python cannot stop a running thread. Keep the upload lease renewer
-        # alive until the immutable write reaches a safe endpoint.
-        await task
-        raise
+    task = asyncio.ensure_future(awaitable)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # Cancellation cannot stop a running thread or synchronous database
+            # call. Keep ownership until it reaches a safe endpoint, even if
+            # the owner receives a second cancellation while draining.
+            cancelled = True
+    result = task.result()
+    if cancelled:
+        raise asyncio.CancelledError
+    return result
+
+
+class _HandoffRecoveryRequired(RuntimeError):
+    pass
 
 
 async def _stop_task(stop_requested: asyncio.Event, task: asyncio.Task[None]) -> None:

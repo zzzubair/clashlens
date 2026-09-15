@@ -228,6 +228,167 @@ def test_older_response_does_not_regress_compact_state(
         assert state == (latest_hash, NOW + timedelta(minutes=10), "latest-response")
 
 
+def test_serialized_compact_recovery_tracks_applied_occurrence_separately(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        fingerprint = _hash("used-fields")
+        database.record_response(
+            _handoff(
+                occurrence_key="retained",
+                response_hash=_hash("raw-a"),
+                content_fingerprint=fingerprint,
+                player_id=player_id,
+            )
+        )
+        database.record_response(
+            _handoff(
+                occurrence_key="newer-compact",
+                response_hash=_hash("raw-b"),
+                content_fingerprint=fingerprint,
+                player_id=player_id,
+                completed_at=NOW + timedelta(minutes=10),
+            )
+        )
+        older = _handoff(
+            occurrence_key="older-compact",
+            response_hash=_hash("raw-c"),
+            content_fingerprint=fingerprint,
+            player_id=player_id,
+            completed_at=NOW + timedelta(minutes=5),
+        )
+
+        recovered = database.record_recovered_response(older, serialized=True)
+        repeated = database.record_recovered_response(older, serialized=True)
+
+        assert recovered.changed is False
+        assert repeated.changed is False
+        with psycopg.connect(connection_info) as connection:
+            state = connection.execute(
+                """
+                SELECT last_response_hash, last_seen_at, last_occurrence_key,
+                       last_applied_occurrence_key, request_count
+                FROM collector_response_state
+                WHERE scope = 'player' AND identity_key = '#2PP'
+                  AND endpoint = 'profile'
+                """
+            ).fetchone()
+        assert state == (
+            _hash("raw-b"),
+            NOW + timedelta(minutes=10),
+            "newer-compact",
+            "older-compact",
+            3,
+        )
+
+
+def test_changed_recovery_after_successor_does_not_reapply_state(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        first = _handoff(
+            occurrence_key="changed-a",
+            response_hash=_hash("changed-a"),
+            player_id=player_id,
+        )
+        second = _handoff(
+            occurrence_key="changed-b",
+            response_hash=_hash("changed-b"),
+            player_id=player_id,
+            completed_at=NOW + timedelta(minutes=5),
+        )
+        first_result = database.record_response(first)
+        database.record_response(second)
+
+        recovered = database.record_recovered_response(first, serialized=True)
+
+        assert recovered.observation_id == first_result.observation_id
+        assert recovered.processing_job_id == first_result.processing_job_id
+        with psycopg.connect(connection_info) as connection:
+            state = connection.execute(
+                """
+                SELECT last_response_hash, last_seen_at, last_occurrence_key,
+                       last_applied_occurrence_key, request_count
+                FROM collector_response_state
+                WHERE scope = 'player' AND identity_key = '#2PP'
+                  AND endpoint = 'profile'
+                """
+            ).fetchone()
+            observations = connection.execute(
+                "SELECT count(*) FROM collector_observations"
+            ).fetchone()[0]
+            jobs = connection.execute(
+                """SELECT count(*) FROM python_processing_jobs
+                WHERE work_type = 'process_observation'"""
+            ).fetchone()[0]
+        assert state == (
+            second.response_hash,
+            second.response_completed_at,
+            second.occurrence_key,
+            second.occurrence_key,
+            2,
+        )
+        assert observations == jobs == 2
+
+        conflict = _handoff(
+            occurrence_key=first.occurrence_key,
+            response_hash=_hash("conflicting-body"),
+            player_id=player_id,
+        )
+        with pytest.raises(ValueError, match="occurrence key conflicts"):
+            database.record_recovered_response(conflict, serialized=True)
+
+
+def test_legacy_compact_recovery_fails_closed_when_commit_is_ambiguous(
+    database_url: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        fingerprint = _hash("used-fields")
+        database.record_response(
+            _handoff(
+                occurrence_key="retained",
+                response_hash=_hash("raw-a"),
+                content_fingerprint=fingerprint,
+                player_id=player_id,
+            )
+        )
+        legacy = _handoff(
+            occurrence_key="legacy-compact",
+            response_hash=_hash("raw-b"),
+            content_fingerprint=fingerprint,
+            player_id=player_id,
+            completed_at=NOW + timedelta(minutes=5),
+        )
+        database.record_response(legacy)
+        changed = _handoff(
+            occurrence_key="later-changed",
+            response_hash=_hash("different-used-fields"),
+            content_fingerprint=_hash("different-used-fields"),
+            player_id=player_id,
+            completed_at=NOW + timedelta(minutes=10),
+        )
+        database.record_response(changed)
+
+        with pytest.raises(RuntimeError, match="no durable commit identity"):
+            database.record_recovered_response(legacy)
+
+        with psycopg.connect(connection_info) as connection:
+            assert connection.execute(
+                """
+                SELECT request_count, last_applied_occurrence_key
+                FROM collector_response_state
+                WHERE scope = 'player' AND identity_key = '#2PP'
+                  AND endpoint = 'profile'
+                """
+            ).fetchone() == (3, changed.occurrence_key)
+
+
 def test_transport_failure_is_durable_without_collector_work(
     database_url: str,
 ) -> None:

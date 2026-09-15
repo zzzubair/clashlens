@@ -26,6 +26,32 @@ authorize going live. The final PR records the tested commit and CI runs.
   private API's token-verification client separately requires its existing
   fixed-egress proxy; deployment must configure it rather than removing
   that client's guard.
+- The trial's strict `median < 300` predicate conflicts with the accepted
+  five-minute minimum between admissions and step 4b's explicit acceptance
+  of a 300.008-second median. Loop, database, and request-start scheduling
+  can put a healthy median just above 300 seconds. The predicate remains
+  unchanged; final evidence reports its result separately from the accepted
+  approximate-five-minute cadence and the unchanged 600-second worst-gap
+  bound. Neither the minimum revisit interval nor the test bound is reduced.
+- The fixture counts request starts, not durable collector acknowledgements.
+  A process killed during a request can lose the response before it reaches
+  the durable spool. Recovery evidence must identify the actual persisted
+  handoffs and prove their replay, rather than treating every fixture request
+  start as already acknowledged or allowing an arbitrary loss count.
+
+The step-4 target of fewer than 1,500 lines for the whole collector remains
+unmet. Its database handoff, HTTP limits, and upload recovery are separate
+modules, and preserving their integrity checks takes more than that total.
+The final PR reports their individual and combined sizes. This is separate
+from step 5's limit of 1,500 lines per source file; safety checks are not
+removed or compressed to satisfy either count.
+
+The strengthened crash proof also takes the existing `dev` entry point to
+1,552 lines. It deliberately creates an uncommitted durable handoff, freezes
+and records the exact evidence, checks one-shot recovery before admissions
+resume, and reconciles final counts per endpoint. The replaced aggregate
+counter plumbing was deleted. The remaining size exception is reported
+instead of dropping checks or compressing the code below 1,500 lines.
 
 ## Fedora isolation
 
@@ -89,6 +115,22 @@ The durable last-success metric adds one eight-byte timestamp to each
 existing endpoint state row, approximately 0.3 MB at 12,500 players and
 three endpoints, before tuple overhead. It creates no per-fetch row or
 freshness index. Later errors cannot erase the last successful fetch time.
+
+Migration 0032 separates the last applied handoff identity from the latest
+response's timestamp and identity. One UUID-sized text value on each
+existing endpoint state row adds approximately 1.5 MB at 12,500 players and
+three endpoints, before tuple overhead. There is no per-fetch receipt row
+or new index. The latest-response fields keep their existing meaning.
+
+New handoff files identify the serialized publication protocol used to
+write them. Older changed-response handoffs can be reconciled against
+their stored observations. When an endpoint already has state, an older
+handoff without a matching observation or last-applied identity can be
+ambiguous: a previous version may already have compacted it without keeping
+a receipt. Recovery stops and preserves that file instead of guessing
+whether to apply it again. This can also stop a legitimate uncommitted
+legacy response whose history cannot be proved. It is a limitation of
+legacy evidence, not permission to discard retained raw responses.
 
 ## Separate go-live work
 

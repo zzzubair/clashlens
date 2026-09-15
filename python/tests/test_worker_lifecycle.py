@@ -14,6 +14,13 @@ import pytest
 from clashlens import cli, ingestion, job_outcomes, reconciliation_db
 from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
 from clashlens.domain import DomainRuleError
+from clashlens.league_history import (
+    LEAGUE_HISTORY_ENDPOINT_VERSION,
+    LEAGUE_HISTORY_PARSER_VERSION,
+    LEAGUE_HISTORY_SCHEMA_VERSION,
+    ParsedLeagueHistory,
+)
+from clashlens.operating import WorkerMetrics
 from clashlens.worker import ObservationProcessor, ProcessResult, StageMetrics
 
 
@@ -140,6 +147,63 @@ def test_new_observation_reads_only_the_local_spool() -> None:
     assert spool.calls == 1
     assert archive.remote_calls == 0
     assert database.profile is not None
+
+
+def test_league_history_processing_produces_a_bounded_worker_snapshot() -> None:
+    from clashlens.archive import ArchiveReadResult
+
+    body = b'{"items":[{"leagueSeasonId":"1781499600"}]}'
+    digest = hashlib.sha256(body).hexdigest()
+
+    class Database:
+        def renew_claim(self, _claim: object, *, lease_seconds: int) -> None:
+            assert lease_seconds == 30
+
+    class Archive:
+        def read_verified(
+            self, _reference: str, _digest: str, **_kwargs: object
+        ) -> ArchiveReadResult:
+            return ArchiveReadResult(body, "s3://evidence/source", digest)
+
+    stored_seasons: list[str] = []
+
+    def complete_history(
+        _database: object, _claim: object, history: ParsedLeagueHistory
+    ) -> None:
+        stored_seasons.append(history.entries[0].league_season_id)
+
+    claim = SimpleNamespace(
+        job_id=44,
+        work_type="replay_observation",
+        processing_version=PROCESSING_VERSION,
+        domain_rule_version=DOMAIN_RULE_VERSION,
+        endpoint="league_history",
+        endpoint_version=LEAGUE_HISTORY_ENDPOINT_VERSION,
+        schema_version=LEAGUE_HISTORY_SCHEMA_VERSION,
+        parser_version=LEAGUE_HISTORY_PARSER_VERSION,
+        archive_reference="s3://evidence/sha256/" + digest[:2] + "/" + digest,
+        response_hash=digest,
+        normalized_tag="#2PP",
+        http_status=200,
+        observed_at=datetime.now(UTC),
+    )
+    stage_metrics = StageMetrics()
+    processor = ObservationProcessor(Database(), Archive(), stage_metrics)
+
+    with patch("clashlens.worker.complete_league_history", complete_history):
+        result = processor._process_claim(claim, lease_seconds=30)
+
+    snapshot = WorkerMetrics().snapshot(
+        stages=stage_metrics.snapshot(),
+        database_pool={},
+        queue={},
+        spool={"ready": True},
+    )
+
+    assert result == ProcessResult(44, "processed")
+    assert stored_seasons == ["1781499600"]
+    assert snapshot["stages"]["python_parse_league_history"]["count"] == 1
+    assert snapshot["stages"]["python_domain_league_history"]["count"] == 1
 
 
 def test_missing_new_observation_is_not_repaired_from_archive() -> None:

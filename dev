@@ -275,6 +275,7 @@ SQL
 
 prepare_local_files() {
   mkdir -p "$STATE_DIR"
+  chmod 0755 "$STATE_DIR"
   printf '%s\n' "$HMAC_KEY_B64" > "$STATE_DIR/hmac-key"
   printf '%s\n' "$OFFICIAL_KEY" > "$STATE_DIR/official-key"
   printf '%s\n' "$DATABASE_URL" > "$STATE_DIR/database-url"
@@ -573,12 +574,6 @@ trial_db_snapshot() {
          ORDER BY c.relname"
 }
 
-trial_database_counter_snapshot() {
-  "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -F $'\t' -U clashlens -d clashlens \
-    -c "SELECT COALESCE(sum(request_count), 0) FROM collector_response_state
-         WHERE endpoint IN ('profile', 'battle_log')"
-}
-
 trial_reset_fixture_stats() {
   local attempt
   for attempt in $(seq 1 30); do
@@ -614,6 +609,180 @@ with urllib.request.urlopen(request, timeout=5) as response:
     result = json.load(response)
 print(result["profile"]["requests"] + result["battle_log"]["requests"])
 '
+}
+
+trial_recovery_tool() {
+  local mode=$1
+  "$PODMAN_BIN" run --rm --pod "$POD" --entrypoint python \
+    --env-file "$STATE_DIR/archive.env" \
+    --env CLASHLENS_DATABASE_URL="$DATABASE_URL" \
+    --volume "$SPOOL_VOLUME:/spool:z" \
+    --volume "$STATE_DIR:/state:ro,Z" "$IMAGE_PREFIX-collector" -c '
+import json
+import os
+import sys
+import urllib.request
+from pathlib import Path
+
+import psycopg
+
+from clashlens.collector import Collector
+from clashlens.collector_db import CollectorDatabase
+from clashlens.spool import Spool
+
+mode = sys.argv[1]
+database_url = os.environ["CLASHLENS_DATABASE_URL"]
+endpoints = ("profile", "battle_log")
+
+def database_counts(connection):
+    rows = connection.execute(
+        "SELECT endpoint, COALESCE(sum(request_count), 0) "
+        "FROM collector_response_state GROUP BY endpoint"
+    ).fetchall()
+    return {str(endpoint): int(count) for endpoint, count in rows}
+
+def fixture_counts():
+    request = urllib.request.Request(
+        "http://127.0.0.1:8080/_trial/stats",
+        headers={"Authorization": "Bearer trial"},
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        result = json.load(response)
+    return {endpoint: int(result[endpoint]["requests"]) for endpoint in endpoints}
+
+def is_applied(connection, occurrence_key):
+    return bool(connection.execute(
+        "SELECT EXISTS (SELECT 1 FROM collector_observations "
+        "WHERE occurrence_key = %s) OR EXISTS ("
+        "SELECT 1 FROM collector_response_state "
+        "WHERE last_applied_occurrence_key = %s)",
+        (occurrence_key, occurrence_key),
+    ).fetchone()[0])
+
+def manifest(connection):
+    result = []
+    for path in sorted(Path("/spool/.handoff").iterdir()):
+        if path.name.startswith("handoff-") and path.name.endswith(".tmp"):
+            continue
+        if path.is_symlink() or not path.is_file():
+            raise RuntimeError("unsafe durable handoff path")
+        payload = path.read_bytes()
+        if json.loads(payload).get("handoff_protocol") != 2:
+            raise RuntimeError("crash proof requires protocol-v2 handoffs")
+        handoff = Collector.deserialize_handoff(payload)
+        result.append({
+            "name": path.name,
+            "occurrence_key": handoff.occurrence_key,
+            "endpoint": handoff.endpoint,
+            "applied": is_applied(connection, handoff.occurrence_key),
+        })
+    return result
+
+with psycopg.connect(database_url) as connection:
+    if mode in {"baseline", "snapshot"}:
+        result = {
+            "database": database_counts(connection),
+            "fixture": fixture_counts(),
+            "sidecars": manifest(connection),
+        }
+        if mode == "baseline":
+            if result["sidecars"]:
+                raise RuntimeError("trial baseline has pending durable handoffs")
+            if any(result["fixture"].values()):
+                raise RuntimeError("trial fixture counters did not reset to zero")
+        else:
+            baseline = json.loads(Path("/state/trial-crash-baseline.json").read_text())
+            abandoned = {}
+            database_delta = {}
+            uncommitted_by_endpoint = {}
+            for endpoint in endpoints:
+                fetched = result["fixture"][endpoint]
+                committed = result["database"].get(endpoint, 0) - baseline["database"].get(endpoint, 0)
+                uncommitted = sum(
+                    item["endpoint"] == endpoint and not item["applied"]
+                    for item in result["sidecars"]
+                )
+                database_delta[endpoint] = committed
+                uncommitted_by_endpoint[endpoint] = uncommitted
+                value = fetched - committed - uncommitted
+                if value < 0:
+                    raise RuntimeError(f"negative abandoned count for {endpoint}")
+                abandoned[endpoint] = value
+            if not any(not item["applied"] for item in result["sidecars"]):
+                raise RuntimeError("crash snapshot has no uncommitted durable handoff")
+            result["abandoned"] = abandoned
+            result["database_delta"] = database_delta
+            result["uncommitted"] = uncommitted_by_endpoint
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    elif mode == "recover":
+        cut = json.loads(Path("/state/trial-crash-cut.json").read_text())
+        before = database_counts(connection)
+        if before != cut["database"]:
+            raise RuntimeError("database moved after the stable crash snapshot")
+        connection.commit()
+        database = CollectorDatabase(database_url, max_size=1)
+        spool = Spool(
+            "/spool", max_body_bytes=4 << 20,
+            max_bytes=int(os.environ["CLASHLENS_SPOOL_MAX_BYTES"]),
+            max_objects=int(os.environ["CLASHLENS_SPOOL_MAX_OBJECTS"]),
+            free_space_floor=int(os.environ["CLASHLENS_SPOOL_FREE_SPACE_FLOOR"]),
+            free_inode_floor=int(os.environ["CLASHLENS_SPOOL_FREE_INODE_FLOOR"]),
+        )
+        collector = Collector(
+            database=database, spool=spool, archive=None, client=None,
+            regular_keys=None, interactive_keys=None,
+            archive_instance_id="development",
+            collector_version="clashlens-python-collector-v1",
+            max_body_bytes=4 << 20,
+        )
+        try:
+            recovered = collector.recover_handoffs()
+            after = database_counts(connection)
+            expected = {}
+            for item in cut["sidecars"]:
+                if not item["applied"]:
+                    expected[item["endpoint"]] = expected.get(item["endpoint"], 0) + 1
+            for endpoint in set(before) | set(after) | set(expected):
+                if after.get(endpoint, 0) - before.get(endpoint, 0) != expected.get(endpoint, 0):
+                    raise RuntimeError(f"wrong recovered count for {endpoint}")
+            if recovered != len(cut["sidecars"]):
+                raise RuntimeError("not every captured sidecar was recovered")
+            for item in cut["sidecars"]:
+                if Path("/spool/.handoff", item["name"]).exists():
+                    raise RuntimeError("captured sidecar remains after recovery")
+                if not item["applied"] and not is_applied(connection, item["occurrence_key"]):
+                    raise RuntimeError("recovered occurrence is not durable")
+            second = collector.recover_handoffs()
+            if second != 0 or database_counts(connection) != after:
+                raise RuntimeError("second handoff recovery was not idempotent")
+        finally:
+            spool.close()
+            database.close()
+        print(json.dumps({
+            "captured": len(cut["sidecars"]), "recovered": recovered,
+            "uncommitted": sum(expected.values()), "second_recovery": second,
+            "per_endpoint": expected,
+        }, sort_keys=True, separators=(",", ":")))
+    elif mode == "final":
+        baseline = json.loads(Path("/state/trial-crash-baseline.json").read_text())
+        cut = json.loads(Path("/state/trial-crash-cut.json").read_text())
+        current = database_counts(connection)
+        fixture = fixture_counts()
+        result = {}
+        for endpoint in endpoints:
+            committed = current.get(endpoint, 0) - baseline["database"].get(endpoint, 0)
+            difference = fixture[endpoint] - committed
+            expected = cut["abandoned"][endpoint]
+            if difference != expected:
+                raise RuntimeError(f"final fixture/database mismatch for {endpoint}")
+            result[endpoint] = {
+                "fixture": fixture[endpoint], "database": committed,
+                "abandoned": difference,
+            }
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    else:
+        raise RuntimeError("unknown trial recovery tool mode")
+' "$mode"
 }
 
 trial_swap_snapshot() {
@@ -665,9 +834,11 @@ pause_trial_producers() {
   for name in "$COLLECTOR" "$WORKER"; do
     state=$("$PODMAN_BIN" inspect --format '{{.State.Status}}' "$name" 2>/dev/null || \
       printf missing)
-    if [[ "$state" == running ]]; then
-      "$PODMAN_BIN" pause "$name" >/dev/null || result=1
-    fi
+    [[ "$state" == running ]] || { result=1; continue; }
+    "$PODMAN_BIN" pause "$name" >/dev/null || result=1
+    state=$("$PODMAN_BIN" inspect --format '{{.State.Status}}' "$name" 2>/dev/null || \
+      printf missing)
+    [[ "$state" == paused ]] || result=1
   done
   return "$result"
 }
@@ -707,8 +878,96 @@ start_trial_producers() {
   die "trial collector and worker did not become ready"
 }
 
-restart_trial_producers() {
-  "$PODMAN_BIN" kill "$COLLECTOR" "$WORKER" >/dev/null
+release_trial_state_lock() {
+  [[ -n "${TRIAL_LOCK_APP:-}" ]] || return 0
+  local result=0 remaining
+  "$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens -c \
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+      WHERE application_name = '$TRIAL_LOCK_APP' AND pid <> pg_backend_pid()" \
+    >/dev/null 2>&1 || result=1
+  if [[ -n "${TRIAL_LOCK_CLIENT_PID:-}" ]]; then
+    wait "$TRIAL_LOCK_CLIENT_PID" 2>/dev/null || true
+  fi
+  remaining=$("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens -c \
+    "SELECT count(*) FROM pg_stat_activity WHERE application_name = '$TRIAL_LOCK_APP'" \
+    2>/dev/null) || result=1
+  [[ "$remaining" == 0 ]] || result=1
+  TRIAL_LOCK_APP=""
+  TRIAL_LOCK_CLIENT_PID=""
+  return "$result"
+}
+
+trial_crash_recovery_proof() {
+  TRIAL_LOCK_APP="clashlens-dev-crash-$BASHPID"
+  "$PODMAN_BIN" exec --env PGAPPNAME="$TRIAL_LOCK_APP" "$POSTGRES" \
+    psql -Atq -U clashlens -d clashlens -c \
+    "SELECT pg_advisory_lock(hashtextextended('player:#2PP:profile', 0));
+     SELECT pg_sleep(300)" >/dev/null &
+  TRIAL_LOCK_CLIENT_PID=$!
+
+  local attempt locked=false sidecar=false previous candidate
+  for attempt in $(seq 1 100); do
+    locked=$("$PODMAN_BIN" exec "$POSTGRES" psql -Atq -U clashlens -d clashlens -c \
+      "SELECT EXISTS (
+         SELECT 1 FROM pg_locks AS lock
+         JOIN pg_stat_activity AS activity ON activity.pid = lock.pid
+         WHERE lock.locktype = 'advisory' AND lock.granted
+           AND activity.application_name = '$TRIAL_LOCK_APP')")
+    [[ "$locked" == t ]] && break
+    sleep 0.1
+  done
+  [[ "$locked" == t ]] || die "trial could not hold the response-state lock"
+  trial_refresh_probe >/dev/null
+  for attempt in $(seq 1 300); do
+    if "$PODMAN_BIN" exec "$COLLECTOR" python -c '
+import json
+from pathlib import Path
+for path in Path("/spool/.handoff").iterdir():
+    if path.name.startswith("handoff-") and path.name.endswith(".tmp"):
+        continue
+    value = json.loads(path.read_bytes())
+    if (value.get("handoff_protocol") == 2 and
+            value.get("normalized_tag") == "#2PP" and
+            value.get("endpoint") == "profile"):
+        raise SystemExit(0)
+raise SystemExit(1)
+'; then
+      sidecar=true
+      break
+    fi
+    sleep 0.1
+  done
+  [[ "$sidecar" == true ]] || die "trial did not produce a blocked durable handoff"
+  pause_trial_producers || die "trial could not pause both producers before the crash"
+
+  previous="$STATE_DIR/trial-crash-previous.json"
+  candidate="$STATE_DIR/trial-crash-candidate.json"
+  rm -f "$previous" "$candidate"
+  local stable=false
+  for attempt in $(seq 1 20); do
+    trial_recovery_tool snapshot > "$candidate"
+    if [[ -f "$previous" ]] && cmp -s "$previous" "$candidate"; then
+      mv "$candidate" "$STATE_DIR/trial-crash-cut.json"
+      chmod 0644 "$STATE_DIR/trial-crash-cut.json"
+      stable=true
+      break
+    fi
+    mv "$candidate" "$previous"
+    sleep 0.1
+  done
+  [[ "$stable" == true ]] || die "trial crash snapshot did not become stable"
+
+  "$PODMAN_BIN" kill --signal KILL "$COLLECTOR" "$WORKER" >/dev/null
+  for attempt in $(seq 1 100); do
+    [[ $("$PODMAN_BIN" inspect --format '{{.State.Status}}' "$COLLECTOR") == exited && \
+       $("$PODMAN_BIN" inspect --format '{{.State.Status}}' "$WORKER") == exited ]] && break
+    sleep 0.1
+  done
+  [[ $("$PODMAN_BIN" inspect --format '{{.State.Status}}' "$COLLECTOR") == exited && \
+     $("$PODMAN_BIN" inspect --format '{{.State.Status}}' "$WORKER") == exited ]] || \
+    die "trial producers did not exit after SIGKILL"
+  release_trial_state_lock || die "trial could not release its response-state lock"
+  trial_recovery_tool recover > "$STATE_DIR/trial-crash-recovery.json"
   start_trial_producers
 }
 
@@ -1057,21 +1316,18 @@ trial_report() {
   done < "$STATE_DIR/trial-after-stop-services.tsv"
   printf '\n'
   local pending_handoffs sidecars incomplete_uploads incomplete_processing
-  local duplicate_completions spool_objects database_before database_after
-  local fixture_final acknowledged
+  local duplicate_completions spool_objects
   IFS=$'\t' read -r pending_handoffs sidecars incomplete_uploads \
     incomplete_processing duplicate_completions spool_objects \
     < "$STATE_DIR/trial-recovery.tsv"
-  read -r database_before < "$STATE_DIR/trial-before-database-counter.tsv"
-  read -r database_after < "$STATE_DIR/trial-after-database-counter.tsv"
-  read -r fixture_final < "$STATE_DIR/trial-final-fixture-counter.tsv"
-  acknowledged=$((database_after - database_before))
-  printf 'kill/restart recovery: acknowledged=%s/%s, pending handoffs=%s, sidecars=%s, pending uploads=%s, pending processing=%s, duplicate completions=%s, spool objects=%s\n' \
-    "$acknowledged" "$fixture_final" "$pending_handoffs" "$sidecars" \
+  printf 'kill/restart recovery: %s; final reconciliation: %s\n' \
+    "$(cat "$STATE_DIR/trial-crash-recovery.json")" \
+    "$(cat "$STATE_DIR/trial-final-reconciliation.json")"
+  printf 'recovery residue: pending handoffs=%s, sidecars=%s, pending uploads=%s, pending processing=%s, duplicate completions=%s, spool objects=%s\n' \
+    "$pending_handoffs" "$sidecars" \
     "$incomplete_uploads" "$incomplete_processing" "$duplicate_completions" \
     "$spool_objects"
-  [[ "$acknowledged" == "$fixture_final" && "$pending_handoffs" == 0 && \
-     "$sidecars" == 0 && "$incomplete_uploads" == 0 && \
+  [[ "$pending_handoffs" == 0 && "$sidecars" == 0 && "$incomplete_uploads" == 0 && \
      "$incomplete_processing" == 0 && "$duplicate_completions" == 0 && \
      "$spool_objects" == 0 ]] || report_status=1
   awk -v before="$TRIAL_SWAP_BEFORE_BYTES" -v peak="$TRIAL_SWAP_PEAK_BYTES" \
@@ -1156,12 +1412,13 @@ trial_inner() {
   trial_db_snapshot > "$STATE_DIR/trial-before-db.tsv"
   trial_evidence_snapshot > "$STATE_DIR/trial-before-evidence.txt"
   trial_observation_snapshot > "$STATE_DIR/trial-before-observations.txt"
-  trial_database_counter_snapshot > "$STATE_DIR/trial-before-database-counter.tsv"
   trial_reset_fixture_stats
+  trial_recovery_tool baseline > "$STATE_DIR/trial-crash-baseline.json"
+  chmod 0644 "$STATE_DIR/trial-crash-baseline.json"
   printf '0\n' > "$STATE_DIR/trial-before-counters.tsv"
   TRIAL_SWAP_BEFORE_BYTES=$(trial_swap_snapshot)
   local swap_monitor_pid=""
-  trap 'if [[ -n "$swap_monitor_pid" ]]; then kill "$swap_monitor_pid" 2>/dev/null || true; wait "$swap_monitor_pid" 2>/dev/null || true; fi' EXIT
+  trap 'if [[ -n "$swap_monitor_pid" ]]; then kill "$swap_monitor_pid" 2>/dev/null || true; wait "$swap_monitor_pid" 2>/dev/null || true; fi; release_trial_state_lock || true' EXIT
   trial_swap_monitor &
   swap_monitor_pid=$!
   read -r TRIAL_STARTED_AT TRIAL_STARTED_NANOSECONDS < <(
@@ -1178,7 +1435,7 @@ trial_inner() {
   restart_delay=$((TRIAL_MINUTES * 30))
   (( restart_delay > 60 )) && restart_delay=60
   sleep "$restart_delay"
-  restart_trial_producers
+  trial_crash_recovery_proof
   remaining_seconds=$(awk -v deadline="$deadline_nanoseconds" -v now="$(date +%s%N)" '
     BEGIN {
       remaining = (deadline - now) / 1000000000
@@ -1187,7 +1444,7 @@ trial_inner() {
     }
   ')
   sleep "$remaining_seconds"
-  pause_trial_producers || true
+  pause_trial_producers || die "trial could not pause both producers at cutoff"
   read -r TRIAL_ENDED_AT TRIAL_ENDED_NANOSECONDS < <(
     date -u '+%Y-%m-%dT%H:%M:%S.%NZ %s%N'
   )
@@ -1212,8 +1469,7 @@ trial_inner() {
   resume_trial_producers || true
   stop_trial_producers || true
   trial_service_snapshot > "$STATE_DIR/trial-after-stop-services.tsv"
-  trial_database_counter_snapshot > "$STATE_DIR/trial-after-database-counter.tsv"
-  trial_fixture_counter_snapshot > "$STATE_DIR/trial-final-fixture-counter.tsv"
+  trial_recovery_tool final > "$STATE_DIR/trial-final-reconciliation.json"
   trial_recovery_snapshot > "$STATE_DIR/trial-recovery.tsv"
   local report_status=0
   trial_report || report_status=$?
