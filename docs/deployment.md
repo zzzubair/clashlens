@@ -91,6 +91,43 @@ The database also has separate collector, worker, and API roles. The admin
 database URL exists only as a short-lived Podman secret during fixture
 bootstrap or while an operator explicitly handles a failed item.
 
+### Production archive: Scaleway Object Storage
+
+The raw-response archive is the Scaleway bucket `clashlens-raw-evidence` in
+`nl-ams` (Standard Multi-AZ, private, versioning off). Three Scaleway IAM
+applications each hold one API key:
+
+- `clashlens-archive-collector` — IAM grants object read/write; the bucket
+  policy narrows it to `GetObject` plus `PutObject` only when the
+  `If-None-Match` conditional-create header is present, so it can never
+  overwrite. Its key pair goes in `app.env` as `CLASHLENS_ARCHIVE_*`.
+- `clashlens-archive-worker` — object read only. Its key pair goes in
+  `app.env` as `CLASHLENS_WORKER_ARCHIVE_*`.
+- `clashlens-archive-operator` — object delete only, for `prune-archive`.
+  Keep its key pair in a separate mode-600 file outside `app.env`, the
+  checkout, and the generated unit environment; it is used only by explicit
+  operator runs.
+
+The bucket policy is an allowlist: anything not granted there is denied for
+the scoped credentials, which is what makes list, delete, and unconditional
+writes fail for the runtime identities. Bucket configuration changes (policy
+updates, versioning checks) need the account's own credential; while the
+policy is attached, even it cannot read bucket configuration, so remove the
+policy, make the change, and re-apply it.
+
+The marker object at `clashlens/archive-instance.json` pins the archive
+identity. `CLASHLENS_ARCHIVE_MARKER_HASH` is the lowercase SHA-256 of its
+exact bytes; `up` records the whole contract in `archive_instances` and
+refuses to start against a changed one.
+
+IAM API keys expire one year after creation (organization policy). Rotate
+each pair by creating a new key on the same application, updating `app.env`,
+running `up`, and deleting the old key once the stack is healthy.
+
+Keep `CLASHLENS_GLOBAL_RANKINGS_ENABLED=false` until real collection is
+approved; with it off and no tracked players, the collector makes no
+official API calls at all.
+
 Build from the checkout to be released, review the resulting commit, then run
 the already-built release:
 
