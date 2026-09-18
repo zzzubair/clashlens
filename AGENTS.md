@@ -8,7 +8,7 @@ I'm Zubair. I own this product. I can follow Python and TypeScript, I can't read
 
 ## How to talk to me
 
-- Plain English. If you need a technical word, define it the first time, in the same sentence.
+- Plain English. Define every technical term or abbreviation the first time you use it, in the same sentence—even in findings and proposed requirements.
 - Answer first, detail after. If you need a decision from me, put that in the first line.
 - Options: max three, tell me which one you'd pick and why, and what I lose with each. Don't hand me a list and make me choose blind.
 - Numbers, not adjectives. "Deletes 4,200 lines", not "simplifies a lot".
