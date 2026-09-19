@@ -200,9 +200,10 @@ The existing operation lock prevents concurrent backup, deployment and cleanup.
 `backup-status` exits unsuccessfully for a failed service, inactive timer,
 missing/unreachable remote backups, a full backup older than eight days, disabled
 archiving, or completed WAL files waiting over ten minutes. No WAL activity during
-an idle period is not itself failure. Step 5 should alert on this command and disk
-space: PostgreSQL retains unarchived WAL locally during a storage outage and that
-queue is not capped by `max_wal_size`. Never delete unarchived WAL to free space.
+an idle period is not itself failure. Step 5 of #119 should alert on this command
+and disk space: PostgreSQL retains unarchived WAL locally during a storage outage
+and that queue is not capped by `max_wal_size`. Never delete unarchived WAL to
+free space.
 
 ### Restore into a separate database
 
@@ -229,7 +230,8 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
    object referenced by the sample and verify its hash. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.
 5. Repeat for the seven-day-old boundary, using a full backup from before it.
-   Repeat affected checks after steps 7 and 10 change stored data or maintenance.
+   Repeat affected checks after steps 7 and 10 of #119 change stored data or
+   maintenance.
 
 ### Targets, cost and remaining rollout checks
 

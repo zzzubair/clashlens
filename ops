@@ -27,7 +27,7 @@ Usage: ./ops build [--fixture]
        ./ops up [--fixture]
        ./ops down
        ./ops status
-       ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login]
+       ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login|backup]
        ./ops queue-status
        ./ops backup
        ./ops backup-status

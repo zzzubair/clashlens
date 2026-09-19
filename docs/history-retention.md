@@ -305,9 +305,9 @@ corpus 683,391 objects / 24.4 GB over 29 days with bursty arrival (peak day
 90.7%) and profile/battle-log p50 bodies of 23/66 KB. Central and
 conservative six-month scenarios fit measured Fedora capacity with 20%
 headroom; the seven-day recovery window is modeled as base backup plus
-generated WAL on R2 (labeled assumption; #31 owns backup design), and raw
-retention on Scaleway Standard with request-billing and minimum-size
-ambiguities recorded for #31's final raw-provider workload/cost qualification (#63 is closed).
+generated WAL on R2, and raw retention on Scaleway Standard. These were labeled
+assumptions. Issue #120 owns the later provider and pricing decisions, while
+[`deployment.md`](deployment.md) owns the current backup procedure (#63 is closed).
 
 Retained on Fedora under `/home/zubair/clashlens-issue82-results/`:
 `issue82-gcs-census.json`, `issue82-gcs-bodies.json`,
