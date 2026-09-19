@@ -149,6 +149,131 @@ input, and only then enables the application target. A failed migration leaves a
 services disabled for the next reboot. Re-running `up` applies only migrations
 whose recorded version is absent.
 
+## PostgreSQL backups and recovery
+
+Production builds add WAL-G v3.0.9 to the existing PostgreSQL 18 Alpine image.
+The source archive is SHA-256 checked and compiled without libc dependencies.
+This avoids changing the database's text ordering by switching to Debian.
+Fixture builds still use the unmodified PostgreSQL image.
+
+Backups are opt-in. After approving deployment, set these in private `app.env`:
+
+```ini
+CLASHLENS_BACKUP_ENABLED=true
+CLASHLENS_BACKUP_ENDPOINT=https://ACCOUNT_ID.eu.r2.cloudflarestorage.com
+CLASHLENS_BACKUP_PREFIX=s3://clashlens-pg-backup/rogue-pg18
+CLASHLENS_BACKUP_CREDENTIAL_FILE=/srv/clashlens-secrets/clashlens-backup-r2.env
+```
+
+Use a fresh cluster prefix for a new database or a major PostgreSQL upgrade.
+Never share it with a scratch database. WAL-G owns `basebackups_005/` and
+`wal_005/` below that prefix. Leave bucket lifecycle deletion disabled.
+
+The credential file contains only `AWS_ACCESS_KEY_ID=...` and
+`AWS_SECRET_ACCESS_KEY=...`, without quotes. It must belong to the service
+account with mode 600. `ops` parses it without executing it and mounts the
+resulting JSON as a Podman secret readable only by PostgreSQL's OS user.
+The collector, worker and website receive no backup credentials. Keep the
+separate read-only recovery key outside runtime units, and keep an additional
+protected copy off rogue so losing the host does not also lose recovery access.
+Rotate credentials by replacing the file, running the approved `ops up`,
+verifying backup and restore, then revoking the old key in Cloudflare.
+
+The timer starts a full backup Sundays at 03:00 UTC, and 15 minutes after the
+timer starts. Missed calendar runs are caught up. PostgreSQL continuously uploads
+its change log, called WAL, with `archive_timeout=300`. A successful full backup
+then prunes backups older than the full backup completed before seven days and
+one hour ago. It retains that backup and all newer backups and WAL. Until such
+a backup exists, pruning deletes nothing. Extra manual backups cannot shorten
+the recovery window. The one-hour margin covers scheduling and backup duration;
+this typically retains two or three weekly full backups, rather than exactly two.
+
+```sh
+./ops backup                  # upload now, then apply age-based retention
+./ops backup-status           # remote backup freshness and pending WAL health
+./ops backup-prune            # deletion preview only
+./ops backup-prune --apply    # apply the same retention rule after approval
+./ops logs backup --since today
+```
+
+The existing operation lock prevents concurrent backup, deployment and cleanup.
+`down` stops the timer and backup service. A failed upload never runs pruning.
+`backup-status` exits unsuccessfully for a failed service, inactive timer,
+missing/unreachable remote backups, a full backup older than eight days, disabled
+archiving, or completed WAL files waiting over ten minutes. No WAL activity during
+an idle period is not itself failure. Step 5 should alert on this command and disk
+space: PostgreSQL retains unarchived WAL locally during a storage outage and that
+queue is not capped by `max_wal_size`. Never delete unarchived WAL to free space.
+
+### Restore into a separate database
+
+Use the pinned backup image from the release manifest and the read-only key.
+Create a temporary Podman secret containing the same JSON settings as the backup
+configuration, substituting only the read-only credentials. Do not print it.
+Use a new empty named volume, a unique container name, no production pod and no
+published port. Run WAL-G as OS user `postgres`, mounting the secret at
+`/run/secrets/walg.json` with uid/gid 70 and mode 0400.
+
+1. Run `wal-g --config /run/secrets/walg.json backup-list --detail --json`.
+   Choose a full backup whose **finish time precedes the desired recovery time**.
+   `LATEST` is unsuitable when recovering an older point.
+2. Run `wal-g --config /run/secrets/walg.json backup-fetch /var/lib/postgresql/data/pgdata BACKUP_NAME`
+   against the new volume. Create `recovery.signal` in that directory.
+3. Start PostgreSQL with that volume and `PGDATA`, the read-only secret,
+   `archive_mode=off`, an empty `archive_command`,
+   `restore_command=wal-g --config /run/secrets/walg.json wal-fetch %f %p`,
+   `recovery_target_time=CHOSEN_UTC_TIME`, and `recovery_target_action=pause`.
+4. Confirm both `pg_is_in_recovery()` and `pg_is_wal_replay_paused()` are true,
+   and the log says recovery reached the chosen time. Merely accepting queries
+   does not prove the target was reached. Compare expected accounts, saved-player
+   links, player history, battle links and army summaries. Read every retained raw
+   object referenced by the sample and verify its hash. Missing required evidence
+   means the restore failed. Do not promote this scratch database into production.
+5. Repeat for the seven-day-old boundary, using a full backup from before it.
+   Repeat affected checks after steps 7 and 10 change stored data or maintenance.
+
+### Targets, cost and remaining rollout checks
+
+The intended maximum data loss is **5 minutes plus upload delay**, not a hard
+five-minute guarantee. A provider outage can exceed it. The initial operational
+restore target is **60 minutes**, pending measurement at production size.
+Seven-day recovery starts only after seven days of uninterrupted archived history.
+
+The approved pricing model assumed 100 GB per full backup and 30 GB of WAL per
+seven days. Keeping two to three full backups plus up to roughly 14 days of WAL
+models **260–360 GB**, about **$3.75–$5.25/month** at the #120 R2 rate and free
+allowance, rather than its original roughly $3 estimate. This is a model, not
+measured production growth. Manual backups add up to another full backup each
+until they age out; failed uploads can leave partial objects requiring separately
+reviewed cleanup. Real traffic must be measured before accepting the €60 total
+monthly envelope. Do not silently let failed pruning or WAL uploads accumulate.
+
+The existing raw expiry rule conflicts with complete point-in-time recovery near
+expiry: yesterday's restored catalogue can reference a response deleted today.
+A seven-day physical-deletion delay plus restore-time allowance would address
+that, but would change the agreed 56-day rule. Seven extra days add about 10% to
+the modeled 70-day average raw lifetime, roughly €0.40–€2/month using #120's
+€4–€20 raw-storage range. No expiry rule changes here. Zubair must resolve this
+before production expiry is enabled; step 3 cannot close while it is unresolved.
+
+Validation on 2026-09-19 used a separate PostgreSQL cluster with all 34 migrations
+and synthetic records, under R2 prefix `validation-20260919`. A full backup took
+4.49 seconds, fetching it took 3.46 seconds, and recovery reached the selected
+recent point at 22:53:20 UTC, about 17 seconds after fetch began. The recent
+target was 22:53:03.020339 UTC; it recovered display name `Recovered recent point`
+and 5,080 trophies, excluding later changes to the name and 5,120 trophies.
+An earlier restore to 22:52:18 UTC recovered `Before backup` and 5,040 trophies.
+Both retained the saved-player link, battle link and army summary. The read-only
+R2 key fetched the backup and WAL; direct write/delete attempts were denied.
+These tiny-database timings do not establish production recovery time or worst-case
+data loss. The earlier target was minutes old, **not seven days old**.
+
+Before closing #122: approve and perform deployment, prove scheduled uploads,
+measure worst-case data loss and restore time at the priced size, verify restored
+raw references, resolve expiry, restore a genuine seven-day-old point, and check
+service restart and host reboot. Keep real collection disabled until backups and
+step-5 alerts are proven. This PR does not deploy or close #122.
+
 ## Status and logs
 
 ```sh

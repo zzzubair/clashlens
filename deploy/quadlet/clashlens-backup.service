@@ -1,0 +1,11 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens weekly PostgreSQL backup
+PartOf=clashlens.target
+Requires=clashlens-postgres.service
+After=clashlens-postgres.service
+
+[Service]
+Type=oneshot
+ExecStart=@@ROOT@@/ops backup
+TimeoutStartSec=6h

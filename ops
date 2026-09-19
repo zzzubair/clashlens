@@ -29,6 +29,9 @@ Usage: ./ops build [--fixture]
        ./ops status
        ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login]
        ./ops queue-status
+       ./ops backup
+       ./ops backup-status
+       ./ops backup-prune [--apply]
        ./ops failed-items [--limit N|--work-id N|--upload-hash SHA256] [--apply]
        ./ops support-recovery-exec <arguments>
 
@@ -59,6 +62,7 @@ finish() {
   trap - EXIT HUP INT TERM
   cleanup_admin_secret || result=1
   if (( result != 0 )) && [[ "$UP_IN_PROGRESS" == true ]]; then
+    "$SYSTEMCTL_BIN" --user stop clashlens-backup.timer clashlens-backup.service >/dev/null 2>&1 || true
     "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
     local unit
     for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume; do
@@ -214,6 +218,7 @@ load_production_config() {
   POSTGRES_USER=$(setting POSTGRES_USER)
   [[ "$POSTGRES_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "PostgreSQL names are invalid"
   validate_production_secret_files
+  validate_backup_config
   PREFIX=clashlens
   NETWORK_NAME=clashlens-private
   POSTGRES_VOLUME=clashlens-postgres-data
@@ -364,6 +369,8 @@ guard_generated_units() {
     managed_unit_file "$QUADLET_DIR/${template##*/}"
   done
   managed_unit_file "$USER_UNIT_DIR/clashlens.target"
+  managed_unit_file "$USER_UNIT_DIR/clashlens-backup.service"
+  managed_unit_file "$USER_UNIT_DIR/clashlens-backup.timer"
 }
 
 managed_label() {
@@ -399,7 +406,7 @@ guard_existing_resources() {
   for secret in clashlens-postgres-password clashlens-collector-database-url clashlens-worker-database-url clashlens-api-database-url \
     clashlens-collector-archive-access-key clashlens-collector-archive-secret-key clashlens-worker-archive-access-key clashlens-worker-archive-secret-key \
     clashlens-normal-api-keys clashlens-interactive-api-keys clashlens-interactive-1 clashlens-hmac-current clashlens-hmac-previous \
-    clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url; do
+    clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url clashlens-walg-config; do
     guard_resource secret "$secret"
   done
 }
@@ -452,6 +459,10 @@ guard_systemd_units() {
   done
   fragment=$($SYSTEMCTL_BIN --user show clashlens.target --property=FragmentPath --value 2>/dev/null || true)
   [[ -z "$fragment" || "$fragment" == "$USER_UNIT_DIR/clashlens.target" ]] || die "refusing unmanaged systemd unit clashlens.target"
+  for unit in clashlens-backup.service clashlens-backup.timer; do
+    fragment=$($SYSTEMCTL_BIN --user show "$unit" --property=FragmentPath --value 2>/dev/null || true)
+    [[ -z "$fragment" || "$fragment" == "$USER_UNIT_DIR/$unit" ]] || die "refusing unmanaged systemd unit $unit"
+  done
   for unit in clashlens.service clashlens-python-api.service clashlens-python-worker.service; do
     fragment=$($SYSTEMCTL_BIN --user show "$unit" --property=FragmentPath --value 2>/dev/null || true)
     [[ -z "$fragment" ]] || die "refusing unmanaged legacy systemd unit $unit"
@@ -493,7 +504,7 @@ source_fingerprint() {
     relative=${file#"$ROOT/"}
     digest=$(sha256sum "$file" | cut -d' ' -f1)
     printf '%s\0%s\n' "$relative" "$digest"
-  done < <(git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet ops | sort -z | \
+  done < <(git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet deploy/postgres ops | sort -z | \
     while IFS= read -r -d '' relative; do printf '%s\0' "$ROOT/$relative"; done)
 }
 
@@ -524,7 +535,12 @@ build_release() {
   "$PODMAN_BIN" build --pull=missing --file "$ROOT/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$collector_tag" "$ROOT"
   "$PODMAN_BIN" build --pull=missing --file "$ROOT/python/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$python_tag" "$ROOT/python"
   "$PODMAN_BIN" build --pull=missing --file "$ROOT/website/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$website_tag" "$ROOT/website"
-  "$PODMAN_BIN" pull "$postgres_tag" >/dev/null
+  if [[ "$MODE" == production ]]; then
+    postgres_tag=localhost/clashlens-release-postgres
+    "$PODMAN_BIN" build --pull=missing --file "$ROOT/deploy/postgres/Containerfile" --label "org.opencontainers.image.source=$CANONICAL_REPOSITORY_URL" --label "org.opencontainers.image.revision=$revision" --tag "$postgres_tag" "$ROOT/deploy/postgres"
+  else
+    "$PODMAN_BIN" pull "$postgres_tag" >/dev/null
+  fi
   fixtures_tag=
   login_tag=
   if [[ "$MODE" == fixture ]]; then
@@ -621,11 +637,16 @@ render() {
 
 render_units() {
   mkdir -p "$QUADLET_DIR" "$USER_UNIT_DIR"
-  local template base fixture_requires fixture_ports
+  local template base fixture_requires fixture_ports backup_secret= archive_args= backup_requires=
   fixture_requires=
   fixture_ports=
   [[ "$MODE" != fixture ]] || fixture_requires='Requires=clashlens-archive.service clashlens-clash-api.service clashlens-login.service'
   [[ "$MODE" != fixture ]] || fixture_ports=$'PublishPort=127.0.0.1:8011:8011\nPublishPort=127.0.0.1:8012:8012'
+  if backup_enabled; then
+    backup_secret='Secret=clashlens-walg-config,type=mount,target=/run/secrets/walg.json,uid=70,gid=70,mode=0400'
+    archive_args='-c archive_mode=on -c archive_timeout=300 -c "archive_command=wal-g --config /run/secrets/walg.json wal-push %%p"'
+    backup_requires='Wants=clashlens-backup.timer'
+  fi
   for template in "$TEMPLATE_DIR"/*.container "$TEMPLATE_DIR"/*.network "$TEMPLATE_DIR"/*.pod "$TEMPLATE_DIR"/*.volume; do
     base=${template##*/}
     if [[ "$MODE" != fixture && "$base" =~ ^clashlens-(archive|clash-api|login)[.]container$ ]]; then
@@ -633,6 +654,7 @@ render_units() {
     fi
     render "$template" "$QUADLET_DIR/$base" \
       PREFIX "$PREFIX" NETWORK_NAME "$NETWORK_NAME" POSTGRES_VOLUME "$POSTGRES_VOLUME" \
+      BACKUP_SECRET "$backup_secret" POSTGRES_ARCHIVE_ARGS "$archive_args" \
       FIXTURE_PORTS "$fixture_ports" \
       ENV_DIR "$STATE_DIR/env" SPOOL_ROOT "$SPOOL_ROOT" ARCHIVE_ROOT "$ARCHIVE_ROOT" \
       POSTGRES_IMAGE "${RELEASE[POSTGRES_IMAGE]}" COLLECTOR_IMAGE "${RELEASE[COLLECTOR_IMAGE]}" \
@@ -652,7 +674,12 @@ render_units() {
   if [[ "$MODE" != fixture ]]; then
     rm -f "$QUADLET_DIR/clashlens-archive.container" "$QUADLET_DIR/clashlens-clash-api.container" "$QUADLET_DIR/clashlens-login.container"
   fi
-  render "$TEMPLATE_DIR/clashlens.target" "$USER_UNIT_DIR/clashlens.target" FIXTURE_REQUIRES "$fixture_requires"
+  render "$TEMPLATE_DIR/clashlens.target" "$USER_UNIT_DIR/clashlens.target" FIXTURE_REQUIRES "$fixture_requires" BACKUP_REQUIRES "$backup_requires"
+  if backup_enabled; then
+    [[ "$ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "backup service requires a checkout path without spaces or systemd specifiers"
+    render "$TEMPLATE_DIR/clashlens-backup.service" "$USER_UNIT_DIR/clashlens-backup.service" ROOT "$ROOT"
+    render "$TEMPLATE_DIR/clashlens-backup.timer" "$USER_UNIT_DIR/clashlens-backup.timer"
+  fi
 }
 
 write_env() {
@@ -676,7 +703,8 @@ write_environment() {
     chmod 700 "$SPOOL_ROOT" "$ARCHIVE_ROOT"
   fi
   write_env postgres.env "POSTGRES_DB=$POSTGRES_DB" "POSTGRES_USER=$POSTGRES_USER" \
-    POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password PGDATA=/var/lib/postgresql/data/pgdata
+    POSTGRES_PASSWORD_FILE=/run/secrets/postgres-password PGDATA=/var/lib/postgresql/data/pgdata \
+    PGHOST=/var/run/postgresql "PGUSER=$POSTGRES_USER" "PGDATABASE=$POSTGRES_DB"
   local archive_endpoint archive_region archive_bucket archive_instance archive_key archive_hash archive_version archive_secure official_origin official_proxy
   if [[ "$MODE" == fixture ]]; then
     archive_endpoint=127.0.0.1:9000; archive_region=us-east-1; archive_bucket=evidence; archive_instance=development
@@ -797,6 +825,9 @@ replace_file_secret() {
 }
 
 prepare_secrets() {
+  if backup_enabled; then
+    replace_secret clashlens-walg-config "$(backup_config_json)"
+  fi
   replace_secret clashlens-postgres-password "${CONFIG[POSTGRES_PASSWORD]}"
   replace_secret clashlens-collector-database-url "postgresql://clashlens_collector:${CONFIG[CLASHLENS_COLLECTOR_DB_PASSWORD]}@127.0.0.1:5432/$POSTGRES_DB?sslmode=disable"
   replace_secret clashlens-worker-database-url "postgresql://clashlens_python_worker:${CONFIG[CLASHLENS_WORKER_DB_PASSWORD]}@127.0.0.1:5432/$POSTGRES_DB?sslmode=disable"
@@ -969,6 +1000,7 @@ ensure_linger() {
 }
 
 stop_units() {
+  "$SYSTEMCTL_BIN" --user stop clashlens-backup.timer clashlens-backup.service >/dev/null 2>&1 || true
   "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
   local unit state
   for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
@@ -1096,7 +1128,9 @@ prepare_managed_runtime() {
   container=$(container_name "$MANAGED_PREFIX" "$service")
   actual_image=$($PODMAN_BIN inspect --format '{{.Image}}' "$container" 2>/dev/null) || die "$service is not running"
   actual_image=$(normalize_image_id "$actual_image")
-  [[ "$actual_image" == "${RELEASE[PYTHON_IMAGE]}" ]] || die "$service is not the pinned Python release"
+  local expected_image=${RELEASE[PYTHON_IMAGE]}
+  [[ "$service" != postgres ]] || expected_image=${RELEASE[POSTGRES_IMAGE]}
+  [[ "$actual_image" == "$expected_image" ]] || die "$service is not the pinned release"
   actual_pod=$($PODMAN_BIN inspect --format '{{.Pod}}' "$container" 2>/dev/null) || die "cannot inspect $service pod"
   expected_pod=$($PODMAN_BIN pod inspect --format '{{.Id}}' "$MANAGED_PREFIX-pod" 2>/dev/null) || die "managed pod is absent"
   [[ "$actual_pod" == "$expected_pod" ]] || die "$service is not in the managed pod"
@@ -1136,7 +1170,7 @@ logs() {
     journalctl --user-unit clashlens.target --user-unit 'clashlens-*.service' --lines 200 --no-pager
     return
   fi
-  case "$service" in postgres|collector|api|worker|website|archive|clash-api|login) unit="clashlens-$service.service" ;; *) die "unknown service $service" ;; esac
+  case "$service" in postgres|collector|api|worker|website|archive|clash-api|login|backup) unit="clashlens-$service.service" ;; *) die "unknown service $service" ;; esac
   shift || true
   journalctl --user-unit "$unit" "$@"
 }
@@ -1152,6 +1186,117 @@ failed_items() {
   prepare_managed_runtime worker
   if [[ "$MODE" == fixture ]]; then load_fixture_config; else load_production_config; fi
   run_with_admin_database "${RELEASE[PYTHON_IMAGE]}" failed-items --database-url-file /run/secrets/database-url "$@"
+}
+
+backup_enabled() {
+  [[ "${MODE:-}" == production && "$(setting CLASHLENS_BACKUP_ENABLED false)" == true ]]
+}
+
+validate_backup_config() {
+  [[ "$(setting CLASHLENS_BACKUP_ENABLED false)" =~ ^(true|false)$ ]] || die "CLASHLENS_BACKUP_ENABLED must be true or false"
+  [[ "$(setting CLASHLENS_BACKUP_ENABLED false)" == true ]] || return 0
+  local name
+  for name in CLASHLENS_BACKUP_ENDPOINT CLASHLENS_BACKUP_PREFIX CLASHLENS_BACKUP_CREDENTIAL_FILE; do require_setting "$name"; done
+  [[ "$(setting CLASHLENS_BACKUP_ENDPOINT)" =~ ^https://[a-f0-9]{32}\.eu\.r2\.cloudflarestorage\.com$ ]] || die "backup endpoint must be the R2 EU endpoint"
+  [[ "$(setting CLASHLENS_BACKUP_PREFIX)" =~ ^s3://clashlens-pg-backup/[A-Za-z0-9_-]+$ ]] || die "backup prefix must name a dedicated cluster under s3://clashlens-pg-backup/"
+  command -v python3 >/dev/null || die "backup retention requires Fedora python3"
+  backup_config_json >/dev/null
+}
+
+backup_config_json() {
+  local file line key value access= secret=
+  file=$(setting CLASHLENS_BACKUP_CREDENTIAL_FILE)
+  validate_mode600_file "$file"
+  [[ "$(stat -c '%u' "$file")" == "$(id -u)" ]] || die "backup credential file must belong to the service account"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" ]] && continue
+    key=${line%%=*}; value=${line#*=}
+    case "$key" in
+      AWS_ACCESS_KEY_ID) [[ -z "$access" && "$value" =~ ^[a-f0-9]{32}$ ]] || die "invalid R2 access key ID"; access=$value ;;
+      AWS_SECRET_ACCESS_KEY) [[ -z "$secret" && "$value" =~ ^[a-f0-9]{64}$ ]] || die "invalid R2 secret access key"; secret=$value ;;
+      *) die "backup credential file must contain only AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY" ;;
+    esac
+  done < "$file"
+  [[ -n "$access" && -n "$secret" ]] || die "backup credential file is incomplete"
+  printf '{"AWS_ACCESS_KEY_ID":"%s","AWS_SECRET_ACCESS_KEY":"%s","AWS_ENDPOINT":"%s","AWS_REGION":"auto","AWS_S3_FORCE_PATH_STYLE":"true","WALG_S3_PREFIX":"%s","WALG_COMPRESSION_METHOD":"lz4","WALG_UPLOAD_CONCURRENCY":"2","WALG_DOWNLOAD_CONCURRENCY":"2","WALG_PREVENT_WAL_OVERWRITE":"true"}' \
+    "$access" "$secret" "$(setting CLASHLENS_BACKUP_ENDPOINT)" "$(setting CLASHLENS_BACKUP_PREFIX)"
+}
+
+prepare_backup() {
+  require_host
+  prepare_managed_runtime postgres
+  [[ "$MODE" == production ]] || die "backups are unavailable in fixture mode"
+  "$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" test -r /run/secrets/walg.json || die "backups are not configured on the running release"
+}
+
+wal_g() {
+  "$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" wal-g --config /run/secrets/walg.json "$@"
+}
+
+backup() {
+  prepare_backup
+  wal_g backup-push /var/lib/postgresql/data/pgdata
+  backup_prune --apply
+  printf 'Base backup uploaded and seven-day retention applied.\n'
+}
+
+backup_status() {
+  prepare_backup
+  "$SYSTEMCTL_BIN" --user is-active clashlens-backup.timer
+  [[ "$(service_state backup)" != failed ]] || die "last scheduled backup failed; run ./ops logs backup"
+  wal_g backup-list --detail --json | python3 -c '
+import datetime as dt, json, sys
+rows = json.load(sys.stdin)
+if not rows:
+    sys.exit("No completed backup in remote storage")
+times = [dt.datetime.fromisoformat(r["finish_time"].replace("Z", "+00:00")) for r in rows]
+now = dt.datetime.now(dt.timezone.utc)
+age = (now - max(times)).total_seconds()
+print(f"Remote base backups: {len(rows)}; newest age: {age:.0f} seconds")
+print(f"Oldest completed base backup: {min(times).isoformat()}")
+if min(times) > now - dt.timedelta(days=7):
+    print("Seven-day window is still warming up")
+if not 0 <= age <= 691200:
+    sys.exit("Latest remote base backup is stale or has an invalid time")
+'
+  "$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" sh -ec '
+    test "$(psql -X -At -v ON_ERROR_STOP=1 -c "SHOW archive_mode")" = on
+    stale=$(find "$PGDATA/pg_wal/archive_status" -name "*.ready" -mmin +10 -print)
+    test -z "$stale" || { echo "WAL upload overdue by more than 10 minutes"; exit 1; }
+    psql -X -v ON_ERROR_STOP=1 -c "SELECT archived_count,last_archived_time,failed_count,last_failed_time FROM pg_stat_archiver"
+  '
+}
+
+backup_prune() {
+  local apply= anchor
+  if (($#)); then
+    [[ $# == 1 && "$1" == --apply ]] || die "backup-prune accepts only --apply"
+    apply=--confirm
+  fi
+  prepare_backup
+  # Keep the full backup completed before the recovery boundary and every
+  # later backup/WAL. Extra manual backups must not shorten the promised window.
+  anchor=$(wal_g backup-list --detail --json | python3 -c '
+import datetime as dt, json, re, sys
+now = dt.datetime.now(dt.timezone.utc)
+cutoff = now - dt.timedelta(days=7, hours=1)
+rows = json.load(sys.stdin)
+candidates = []
+for row in rows:
+    name = row["backup_name"]
+    if not re.fullmatch(r"base_[0-9A-F]{24}", name):
+        sys.exit("Retention refuses unexpected or incremental backup names")
+    start = dt.datetime.fromisoformat(row["start_time"].replace("Z", "+00:00"))
+    finish = dt.datetime.fromisoformat(row["finish_time"].replace("Z", "+00:00"))
+    if not start.tzinfo or not finish.tzinfo or not dt.datetime(2020,1,1,tzinfo=dt.timezone.utc) < start <= finish <= now:
+        sys.exit("Retention refuses invalid backup times")
+    if finish <= cutoff:
+        candidates.append((start, name))
+if candidates:
+    print(max(candidates)[1])
+') || die "could not choose a safe retention boundary"
+  [[ -n "$anchor" ]] || { printf 'No backup predates the seven-day window; nothing will be deleted.\n'; return; }
+  wal_g delete before "$anchor" --use-sentinel-time ${apply:+"$apply"}
 }
 
 command=${1:-}
@@ -1172,6 +1317,9 @@ case "$command" in
   status) (($# == 0)) || die "status takes no arguments"; status ;;
   logs) logs "$@" ;;
   queue-status) (($# == 0)) || die "queue-status takes no arguments"; exec_service ;;
+  backup) (($# == 0)) || die "backup takes no arguments"; acquire_mutation_lock; backup ;;
+  backup-status) (($# == 0)) || die "backup-status takes no arguments"; backup_status ;;
+  backup-prune) acquire_mutation_lock; backup_prune "$@" ;;
   failed-items)
     acquire_mutation_lock
     failed_items "$@"
