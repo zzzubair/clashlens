@@ -176,7 +176,7 @@ load_production_config() {
   validate_production_spool
   [[ "$(setting CLASHLENS_PLAYER_DISCOVERY_ENABLED false)" == false ]] || \
     die "production discovery is disabled by issue #110; remove or set CLASHLENS_PLAYER_DISCOVERY_ENABLED=false"
-  [[ "$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED true)" =~ ^(true|false)$ ]] || \
+  [[ "$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" =~ ^(true|false)$ ]] || \
     die "CLASHLENS_GLOBAL_RANKINGS_ENABLED must be true or false"
   local previous_id previous_file
   previous_id=$(setting CLASHLENS_HMAC_PREVIOUS_KEY_ID)
@@ -265,6 +265,7 @@ load_fixture_config() {
   CONFIG[CLASHLENS_COLLECTOR_DB_PASSWORD]=fixture_collector_password_0000001
   CONFIG[CLASHLENS_WORKER_DB_PASSWORD]=fixture_worker_password_00000000001
   CONFIG[CLASHLENS_API_DB_PASSWORD]=fixture_api_password_00000000000001
+  CONFIG[CLASHLENS_GLOBAL_RANKINGS_ENABLED]=true
   WORKER_LEASE=60
   WORKER_CONCURRENCY=4
   WORKER_DB_POOL=4
@@ -724,7 +725,7 @@ write_environment() {
     "CLASHLENS_MAX_BODY_BYTES=$(setting CLASHLENS_MAX_BODY_BYTES 4194304)")
   write_env collector.env "${common[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key \
-    "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "CLASHLENS_ENABLE_GLOBAL_RANKINGS=$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED true)" \
+    "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "CLASHLENS_ENABLE_GLOBAL_RANKINGS=$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" \
     CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081 "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=$([[ "$MODE" == fixture ]] && printf true || printf false)"
   write_env worker.env "${common[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key

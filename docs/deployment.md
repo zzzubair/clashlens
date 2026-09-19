@@ -138,9 +138,8 @@ the already-built release:
 ```
 
 The website and collector health endpoints bind to `127.0.0.1`; PostgreSQL and
-the private API have no host port. Production discovery remains disabled under
-the issue #110 decision, while the single global Top-200 request remains on
-each five-minute cycle.
+the private API have no host port. Production discovery and the global Top-200
+request remain disabled until real collection is approved.
 
 `up` first disables and stops the whole target. It then starts PostgreSQL by
 itself, applies every missing numbered migration in order, verifies the fixed
