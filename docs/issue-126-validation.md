@@ -21,8 +21,11 @@ below 1,048,576 bytes.
 and analytics. It covers reports in either order, a missing side, disagreeing
 outcomes, repeated polls, correction and worker restart. The lifecycle test
 rolls back and retries summaries and retirement, removes every raw fixture body,
-then names IDs and reads all six historical categories through the signed API.
-It checks quantities and star counts after cleanup. Three players' 84
+then reads all six historical categories through the signed API before and after
+naming the IDs. Unknown labels are non-null and namespace-specific; unclassified
+troop IDs are explicitly ambiguous in both troop and siege views until the
+catalogue classifies them. Naming changes labels and classification without
+changing retained quantities, uses, denominators or star counts. Three players' 84
 daily entries and all trophy totals remain identical. Separate tests cover plain
 renames, unavailable legacy summaries, and a five-of-ten whole-season usage rate.
 
@@ -44,9 +47,12 @@ and an empty defense lens. It compares the
 old 22 label-bearing summary rows against 10 unit-namespace rows with the same
 indexes, excluding the new column from the old table.
 
-The PostgreSQL test reports row and allocated bytes for the current shape instead
-of fixing a measurement in this document. The earlier trophy-bearing figures
-are superseded by the unit/quantity v3 representation. The fixture is
+On PostgreSQL 18, the unit/quantity v3 fixture retained 5,267 row bytes per
+season in 10 rows, compared with 15,264 bytes in 22 legacy rows: a reduction of
+9,997 bytes (65.5%) per season. Allocated table/index/TOAST space was 49,152
+versus 81,920 bytes. These are shared season summaries, not per-player costs.
+The later label correction leaves stored bytes unchanged because labels are
+resolved only at read time. The earlier trophy-bearing figures are superseded. The fixture is
 intentionally repeatable, not representative of production unit or quantity
 diversity. Growth depends on distinct unit/quantity groups. The separate
 15,000-battle fixture proves 75,000 uses remain within the enforced 512 KiB
@@ -56,23 +62,28 @@ unmeasured; no production capacity claim is made.
 
 ## Validation
 
-The original v1 validation used only the task-owned copy
-`/tmp/clashlens-126-history.ljZXzqnE` on Rogue and uniquely named rootless fixture
-containers. The final targeted run passed 47 PostgreSQL/usage tests. A subsequent storage
-fixture broadened quantity diversity and passed independently.
-All 312 website unit tests, lint and type checks passed. Three history browser
-tests passed against the physical restore, including accessibility checks.
+Validation used only the task-owned copy `/tmp/clashlens-126-history.ljZXzqnE`
+on Rogue and uniquely named rootless fixture containers. No production data or
+services were changed.
 
-A fresh PostgreSQL physical base backup was restored into a separate container.
-All 12 historical army responses and both player summaries matched exactly.
-Battle and army-fact tables were empty. After backup the source totals were
-changed by 100; the restored total remained two. This checks the new retained
-representation, not remote WAL-G/R2 recovery or seven-day recovery qualification.
-The final-source `./dev check` passed: 789 Python tests passed with three
-existing suite skips, four fixture tests passed, all 312 website unit tests
-passed, and 17 browser tests passed. The one browser skip is the optional
-restored-history scenario, which passed in the separate three-test run. Lint,
-type checking, production builds and the browser asset boundary check passed.
-Those checks predate the whole-season denominator and unit/quantity v3 fix and
-are not evidence for the current representation.
-The separate restore containers and browser session were stopped afterward.
+The unit/quantity v3 pipeline head `6ca5b058` passed full `./dev check`:
+790 Python tests with three existing skips, four fixture tests, 312 website unit
+tests, and 17 browser tests. Lint, type checks, builds and the browser asset
+boundary check passed. The optional restored-history browser case is skipped
+in the generic stack and is checked separately against retained fixture data.
+
+After the unknown-label correction, 23 targeted Python/PostgreSQL tests passed.
+The restored-history browser suite passed all three cases with unknown IDs,
+covering all six categories, corrected two-star outcomes, usage, partial coverage,
+missing summaries and accessibility. All three cases also passed after naming,
+including correct troop/siege filtering and unchanged numerical outcomes.
+
+A fresh v3 PostgreSQL physical base backup was restored into a separate
+container. All 12 named historical army responses and both player summaries
+matched exactly, with zero battle or army-fact rows. Changing source totals by
+100 after backup left the restored total at two. With the label correction,
+reads against that physical restore again verified all 12 named army responses
+and both player summaries, plus readable unknown labels and partial coverage
+for both lenses across all six categories. No raw responses were available.
+This checks the retained representation and its consumers, not remote WAL-G/R2
+recovery or seven-day recovery qualification.

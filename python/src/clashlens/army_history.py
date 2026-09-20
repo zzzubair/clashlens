@@ -79,18 +79,17 @@ def usage_rows(
     unresolved = False
     for typed_id, quantity, count, one_star, two_star, three_star in stored:
         known = is_valid_typed_id(typed_id)
-        if typed_id.startswith("troop:"):
-            if not known:
-                # The encoded troop namespace cannot establish troop vs siege.
-                unresolved = True
-                continue
-            if is_siege_troop(typed_id) != (category == "siege"):
-                continue
+        # Unclassified IDs appear explicitly ambiguous in both views until
+        # the catalogue can determine which category owns them.
+        if typed_id.startswith("troop:") and known and is_siege_troop(typed_id) != (category == "siege"):
+            continue
         unresolved |= not known
+        namespace, numeric_id = typed_id.split(":", 1)
+        kind = "troop or siege" if namespace == "troop" else namespace
         rows.append({
             "key": f"{typed_id}@{quantity}",
             "unit_id": typed_id,
-            "label": catalog_name(typed_id),
+            "label": catalog_name(typed_id) or f"Unknown {kind} (ID {numeric_id})",
             "quantity": quantity,
             "usage_count": count,
             "usage_denominator": denominator,

@@ -261,7 +261,7 @@ def test_corrected_unknown_history_survives_retirement_retry_and_later_naming(
                 connection.commit()
             before_players = {tag: api_players.get_player_season_summary(api, tag, SEASON_ID) for tag in ("#2PP", "#8PP")}
             before = {category: api_analytics.get_army_season_summary(api, SEASON_ID, "offense", category, "usage-rate") for category in HISTORY_READ_CATEGORIES}
-            assert [row["unit_id"] for row in before["troops"]["rows"]] == ["troop:58"]
+            assert {row["unit_id"] for row in before["troops"]["rows"]} == {"troop:58", "troop:900", "troop:901"}
             with database.pool.connection() as connection:
                 finalized = finalize_season_detail(connection, SEASON_ID, SEASON_END + timedelta(days=1), apply=True)
                 assert finalized["status"] == "finalized", json.dumps(finalized, default=str)
@@ -279,11 +279,26 @@ def test_corrected_unknown_history_survives_retirement_retry_and_later_naming(
                 assert retire_season_detail(connection, SEASON_ID, apply=True)["status"] == "retired"
             archive_server[3].objects.clear()
             reads_before = archive_server[3].get_count
-            for namespace in ("troop", "spell", "hero", "pet", "equipment"):
-                monkeypatch.setitem(catalog._CATALOG_ENTRIES, f"{namespace}:900", {"name": f"Named {namespace}", "category": namespace, "is_siege": False})
-            monkeypatch.setitem(catalog._CATALOG_ENTRIES, "troop:901", {"name": "Named siege", "category": "troop", "is_siege": True})
             app = create_app(database=api, keys={("typescript-website", "current"): TS_CURRENT}, clock=lambda: NOW_SECONDS, now=lambda: NOW)
             with TestClient(app) as client:
+                for category in HISTORY_READ_CATEGORIES:
+                    target = f"/v1/analytics/armies/seasons/{SEASON_ID}?lens=offense&category={category}&sort=usage-rate"
+                    response = client.get(target, headers=signed_headers(target))
+                    assert response.status_code == 200
+                    result = response.json()
+                    assert result == before[category]
+                    assert result["collection_coverage"]["state"] == "partial"
+                    unknown_rows = [row for row in result["rows"] if row["unit_id"].split(":")[1] in {"900", "901"}]
+                    assert unknown_rows
+                    for row in unknown_rows:
+                        namespace, numeric_id = row["unit_id"].split(":")
+                        kind = "troop or siege" if namespace == "troop" else namespace
+                        assert row["label"] == f"Unknown {kind} (ID {numeric_id})"
+                # Resolve names only after proving the HTTP response survives
+                # retirement with no catalogue entry or raw response available.
+                for namespace in ("troop", "spell", "hero", "pet", "equipment"):
+                    monkeypatch.setitem(catalog._CATALOG_ENTRIES, f"{namespace}:900", {"name": f"Named {namespace}", "category": namespace, "is_siege": False})
+                monkeypatch.setitem(catalog._CATALOG_ENTRIES, "troop:901", {"name": "Named siege", "category": "troop", "is_siege": True})
                 for category in HISTORY_READ_CATEGORIES:
                     target = f"/v1/analytics/armies/seasons/{SEASON_ID}?lens=offense&category={category}&sort=usage-rate"
                     response = client.get(target, headers=signed_headers(target))
@@ -308,6 +323,10 @@ def test_corrected_unknown_history_survives_retirement_retry_and_later_naming(
                         assert "star_counts" not in row
                         assert "average_destruction" not in row
                         assert "Unknown" not in row["label"]
+                        previous = next(item for item in before[category]["rows"] if item["unit_id"] == row["unit_id"])
+                        assert {key: value for key, value in row.items() if key != "label"} == {
+                            key: value for key, value in previous.items() if key != "label"
+                        }
             api = ApiDatabase(ci)
             assert {tag: api_players.get_player_season_summary(api, tag, SEASON_ID) for tag in before_players} == before_players
             assert archive_server[3].get_count == reads_before
@@ -397,7 +416,10 @@ def test_measure_retained_season_bytes_against_label_based_rows(database_url):
         try:
             result = api_analytics.get_army_season_summary(api, MEASURE_SEASON, "offense", "troops", "usage-rate")
             assert result["total_attacks"] == 224
-            assert sum(row["usage_count"] for row in result["rows"]) == 196
+            assert sum(row["usage_count"] for row in result["rows"] if row["unit_id"] == "troop:58") == 196
+            assert {row["unit_id"]: row["usage_count"] for row in result["rows"] if row["unit_id"] != "troop:58"} == {
+                "troop:900": 28, "troop:901": 28,
+            }
             assert all(row["usage_denominator"] == 224 for row in result["rows"])
         finally:
             api.close()

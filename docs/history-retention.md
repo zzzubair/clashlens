@@ -342,8 +342,12 @@ Player trophy summaries and current/live analytics are unchanged.
 Historical reads do not offer destruction, combinations, day ranges or population
 cohorts. Missing or legacy summaries without unit/quantity evidence
 return unavailable; there is no website fallback to partial battle detail.
-Unclassified troop/siege IDs remain retained and make the category partial until
-named. Separate player trophy-history records remain unchanged.
+Unknown units have deterministic labels such as `Unknown spell (ID 900)`.
+Unclassified troop IDs appear in both troop and siege views as
+`Unknown troop or siege (ID 900)` and keep coverage partial. These are the same
+retained uses, not two separate units. Once the catalogue establishes their
+category, they appear only in that category with the current catalogue name.
+Other unknown namespaces likewise resolve their names at read time. Separate player trophy-history records remain unchanged.
 The API pages unit results in groups of 200.
 
 The migration itself deletes nothing. Rebuilding an eligible nonfinalized season

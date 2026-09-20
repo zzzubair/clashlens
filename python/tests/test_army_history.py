@@ -117,8 +117,20 @@ def test_thousands_of_battles_fit_storage_and_response_bounds(monkeypatch):
 
 def test_unknown_namespaces_and_siege_are_resolved_without_armies(monkeypatch):
     stored = aggregate_usage([fact("h900p900e14_900u5x900-1x901s2x900i7x900-1x901d3x900")])
-    assert usage_rows(stored["troops"], "troops", 1) == ([], True)
-    assert usage_rows(stored["troops"], "siege", 1) == ([], True)
+    before = {}
+    for category, namespace in (
+        ("troops", "troop"), ("siege", "troop"), ("spells", "spell"),
+        ("heroes", "hero"), ("pets", "pet"), ("equipment", "equipment"),
+    ):
+        rows, unresolved = usage_rows(
+            stored["troops" if category == "siege" else category], category, 1
+        )
+        assert unresolved
+        before[category] = {row["unit_id"]: row for row in rows}
+        kind = "troop or siege" if namespace == "troop" else namespace
+        assert before[category][f"{namespace}:900"]["label"] == f"Unknown {kind} (ID 900)"
+        if namespace == "troop":
+            assert before[category]["troop:901"]["label"] == "Unknown troop or siege (ID 901)"
     for namespace in ("troop", "spell", "hero", "pet", "equipment"):
         monkeypatch.setitem(catalog._CATALOG_ENTRIES, f"{namespace}:900",
                             {"name": f"Named {namespace}", "category": namespace, "is_siege": False})
@@ -140,6 +152,11 @@ def test_unknown_namespaces_and_siege_are_resolved_without_armies(monkeypatch):
         assert (row["one_star_count"], row["two_star_count"],
                 row["three_star_count"]) == (0, 0, 1)
         assert row["label"].startswith("Named")
+        assert {key: value for key, value in row.items() if key != "label"} == {
+            key: value for key, value in before[category][typed_id].items() if key != "label"
+        }
+        if category in {"troops", "siege"}:
+            assert [item["unit_id"] for item in rows] == [typed_id]
 
 
 def test_clan_castle_changes_cannot_change_retained_usage():
