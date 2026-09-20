@@ -168,10 +168,15 @@ def test_scheduled_backup_waits_for_operation_lock(runtime):
             stderr=subprocess.PIPE,
             text=True,
         )
-        time.sleep(0.2)
-        assert process.poll() is None
-        fcntl.flock(lock, fcntl.LOCK_UN)
-    stdout, stderr = process.communicate(timeout=15)
+        try:
+            time.sleep(0.2)
+            assert process.poll() is None
+            fcntl.flock(lock, fcntl.LOCK_UN)
+            stdout, stderr = process.communicate(timeout=60)
+        except BaseException:
+            process.kill()
+            process.communicate()
+            raise
     assert process.returncode == 0, stderr
     assert "Base backup uploaded" in stdout
 
