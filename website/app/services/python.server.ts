@@ -844,11 +844,16 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       usageCount: row.usage_count,
       usageDenominator: row.usage_denominator,
       usageRate: row.usage_rate,
-      quantity: payload.history_usage_only === true ? row.quantity : undefined,
-      oneStarCount: payload.history_usage_only === true ? row.one_star_count : undefined,
-      twoStarCount: payload.history_usage_only === true ? row.two_star_count : undefined,
+      quantity:
+        payload.history_usage_only === true ? (row.quantity as number) : undefined,
+      oneStarCount:
+        payload.history_usage_only === true ? (row.one_star_count as number) : undefined,
+      twoStarCount:
+        payload.history_usage_only === true ? (row.two_star_count as number) : undefined,
       threeStarCount:
-        payload.history_usage_only === true ? row.three_star_count : undefined,
+        payload.history_usage_only === true
+          ? (row.three_star_count as number)
+          : undefined,
       starCounts: row.star_counts as [number, number, number, number] | undefined,
       starRates: row.star_rates as [number, number, number, number] | undefined,
       threeStarRate: row.three_star_rate as number | undefined,

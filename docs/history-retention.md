@@ -63,11 +63,14 @@ reports a lower bound, names the missing components, and leaves
 #60 Step 9 live validation, and treats vacuum-reusable space as reusable,
 not as disk shrinkage.
 
-Synthetic fixture illustration (2-player populated season, empty battle
-arrays, PostgreSQL 18): 56 daily logs at 114,688 B allocated and 3 army
-facts retired to zero rows; 2 player summaries at 1,400 B/row and 22
-army summary rows at 8,720 B total retained with byte-identical API
-reads; relation files did not shrink (vacuum-reusable). The labeled
+Pre-migration-0035 synthetic fixture illustration (2-player populated season,
+empty battle arrays, PostgreSQL 18): 56 daily logs at 114,688 B allocated and 3
+army facts retired to zero rows; 2 player summaries at 1,400 B/row and 22
+legacy army summary rows at 8,720 B total retained; relation files did not
+shrink (vacuum-reusable). The current API does not read those legacy army
+rows. See
+[Unit, quantity and outcome summaries](#unit-quantity-and-outcome-summaries-issue-126)
+for the replacement format. The labeled
 12,500-player projection from this fixture is about 114 MB of retained
 summaries over 6.5 seasons against measured Fedora capacity — a lower
 bound, not acceptance: the fixture carries no measured live detail or
@@ -76,14 +79,12 @@ correction/opposite-perspective frequency, and no WAL, backup, spool,
 or remote-tariff costs. The storage CLI leaves those major components
 unmeasured rather than passing zero values.
 
-Migration 0020 adds shared whole-season army summaries: one
-`army_season_summaries` record per (season, lens, category) with
-whole-season usage counts and rates, 0/1/2/3-star attack counts, the
-three-star rate derived from the stored attack sample, and the underlying
-denominators plus excluded/undecodable counts and honest coverage.
-Summaries are projected from the current versioned battle facts and read
-back without battle detail; offense and defense stay separate. Existing
-detail is retained; no cleanup is authorized by this migration.
+Migration 0020 created the base `army_season_summaries` records and the
+materialization command below. Migration 0035 replaced its label-based outcome
+rows for newly built summaries. The
+[issue 126 section](#unit-quantity-and-outcome-summaries-issue-126) owns the
+current stored and public contract. Existing detail is retained; neither
+migration authorizes cleanup by itself.
 
 ```sh
 python -m clashlens.cli materialize-army-season-summaries --season-id 1785714000
@@ -328,12 +329,14 @@ close those gates based on unit-test results alone.
 
 ## Unit, quantity and outcome summaries (issue 126)
 
-Migration 0035 and projection `army-unit-usage-v3` replace the earlier outcome
+This section owns the current retained army-history contract. Migration 0035
+and projection `army-unit-usage-v3` replace the earlier outcome
 and composition contract for newly built historical army summaries. They retain
 one whole-season usage count per namespace-qualified unit ID and quantity, using
 the season's usable battles as the denominator, plus 1★, 2★ and 3★ counts. Rates
-and catalogue names are resolved when read. Battle-time trophy values and all
-clan-castle contributions are excluded.
+and catalogue names are resolved when read. An army with five copies of a unit
+records quantity five and one use. Battle-time trophy values and all clan-castle
+contributions are excluded.
 Player trophy summaries and current/live analytics are unchanged.
 
 Historical reads do not offer destruction, combinations, day ranges or population
@@ -348,4 +351,4 @@ replaces its old outcome arrays and deletes obsolete combination/clan-castle
 summary categories. Already finalized legacy data is not silently rewritten or
 reconstructed. A summary exceeding the 512 KiB retained category limit aborts
 materialization and prevents retirement. See [issue-126-validation.md](issue-126-validation.md)
-for behavioral evidence, deletion effects and measured storage change.
+for behavioral evidence and storage measurements.

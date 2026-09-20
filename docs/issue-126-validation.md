@@ -1,40 +1,12 @@
 # Unit, quantity and outcome history
 
-## Contract and deletion effects
+## Contract
 
-Historical army summaries retain usage. Destruction and unit-to-unit
-relationships belong to current battle analytics. Current battle evidence keeps
-unit IDs, quantities and source information. Historical army summaries keep one
-ending usage count per namespace-qualified unit ID and quantity, with the
-whole-season usable-battle count as its denominator. They also keep 1★, 2★ and
-3★ counts for that unit and quantity. Five copies in one army contribute one
-using battle with quantity five. Battle-time trophy values are not retained.
-
-Clan-castle contributions, including spells and siege machines, are excluded
-from historical usage. No compositions, hero assignments, unit co-occurrences
-or destruction are retained in new army summaries. Current analytics and
-player trophy history are unchanged. The new projection stores all troop IDs
-in one namespace, classifies troop versus siege at read time, and withholds
-unclassified troop IDs until the maintained catalogue identifies them. Other
-unknown namespaces remain explicit. Names are never stored in new summaries.
-
-Migration 0035 adds a nullable `unit_usage` column and deletes no data. New
-summaries leave the old `result_rows` empty. Rebuilding a nonfinalized season
-replaces old per-category outcome rows and removes that season/lens's obsolete
-combination and clan-castle categories. Already finalized legacy summaries remain
-untouched, but their API reads are unavailable because their lost IDs,
-quantities and outcomes cannot be reconstructed. They are not presented as the new
-history format. Rebuild eligible seasons before finalizing them. No production
-migration, deployment, deletion, or archive-retention change was performed.
-
-Existing bounded detail retirement still deletes daily logs, battle facts and
-unreferenced battle evidence only after verifying all required summaries. Player
-daily trophy entries and season totals are not altered. Retained unit JSON has a
-512 KiB per-category limit; exceeding it fails the summary transaction and blocks
-finalization rather than truncating counts. API reads use 200-row pages so a
-readable retained category cannot exceed the fixed response limit through JSON
-expansion. Page identity changes when numerical results change, including later
-classification; a plain rename changes only display text.
+[Compact history and retention](history-retention.md#unit-quantity-and-outcome-summaries-issue-126)
+owns the current stored, public, deletion and availability rules. This file
+records the behavioral and storage evidence for that contract. This change did
+not run a production migration, deployment, deletion or archive-retention
+operation.
 
 ## Behavioral checks
 
