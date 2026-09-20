@@ -178,8 +178,9 @@ protected copy off rogue so losing the host does not also lose recovery access.
 Rotate credentials by replacing the file, running the approved `ops up`,
 verifying backup and restore, then revoking the old key in Cloudflare.
 
-The timer starts a full backup Sundays at 03:00 UTC, and 15 minutes after the
-timer starts. Missed calendar runs are caught up. PostgreSQL continuously uploads
+The timer starts a full backup Sundays at 03:00 UTC. Missed calendar runs are
+caught up; restarting the stack does not add another full backup. Run
+`./ops backup` once during the approved initial rollout. PostgreSQL continuously uploads
 its change log, called WAL, with `archive_timeout=300`. A successful full backup
 then prunes backups older than the full backup completed before seven days and
 one hour ago. It retains that backup and all newer backups and WAL. Until such
