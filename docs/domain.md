@@ -26,9 +26,11 @@ A domain change is complete only when every affected source observation, derived
 - Use a confirmed official season anchor. Use half-open intervals: a season
   includes its start boundary and excludes its end boundary.
 - Derive other season boundaries in exact 28-day steps from a confirmed anchor. Store the official season ID and the season-anchor rule version with each derived ranked day and season.
-- A newer valid Legend I profile may advance the confirmed anchor when its
-  current and previous season boundaries are Mondays at 05:00 UTC and exactly
-  28 days apart. If accepted profiles disagree, retain the last confirmed
+- A newer valid Legend I profile may advance the confirmed anchor from its
+  current season ID and observation time. That ID must be a Monday at 05:00 UTC,
+  no later than the observation, and aligned in exact 28-day steps from the
+  confirmed bootstrap anchor. Derive the previous boundary by subtracting 28
+  days; do not require or trust a previous-season field in the profile. If accepted profiles disagree, retain the last confirmed
   anchor and mark the new source contract as conflicting.
 - A player can have up to 8 attacks and 8 defenses in one ranked day.
 - Store and calculate time in Coordinated Universal Time (UTC).

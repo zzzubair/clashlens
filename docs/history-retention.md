@@ -325,3 +325,26 @@ Legend day. Those checks require separate authorization before real traffic.
 Scaleway permissions, immutable object creation, a proven backup restore, and
 final-host acceptance remain launch checks. Do not enable production cleanup or
 close those gates based on unit-test results alone.
+
+## Unit, quantity and trophy summaries (issue 126)
+
+Migration 0035 and projection `army-unit-usage-v1` replace the earlier outcome
+and composition contract for newly built historical army summaries. They retain
+per-unit usage grouped by namespace-qualified ID, total army quantity and
+battle-time trophy value, with counts and denominators. Rates and catalogue
+names are resolved when read. All clan-castle contributions are excluded.
+Player trophy summaries and current/live analytics are unchanged.
+
+Historical reads do not offer stars, destruction, combinations, day ranges or
+population cohorts. Missing or legacy summaries without quantity/trophy evidence
+return unavailable; there is no website fallback to partial battle detail.
+Unclassified troop/siege IDs remain retained and make the category partial until
+named. Unknown trophy values are explicit and never assigned a guessed value.
+The API pages results in groups of 200.
+
+The migration itself deletes nothing. Rebuilding an eligible nonfinalized season
+replaces its old outcome arrays and deletes obsolete combination/clan-castle
+summary categories. Already finalized legacy data is not silently rewritten or
+reconstructed. A summary exceeding the 512 KiB retained category limit aborts
+materialization and prevents retirement. See [issue-126-validation.md](issue-126-validation.md)
+for behavioral evidence, deletion effects and measured storage change.

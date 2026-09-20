@@ -24,14 +24,13 @@ from .api_db import (
     _text,
 )
 from .army_analytics import (
-    ARMY_ANALYTICS_RULE_VERSION,
-    SORTS,
     ArmyAnalyticsSelection,
     ArmyAnalyticsUnavailable,
     CurrentSeasonEmpty,
     build_army_result,
 )
 from .army_decoder import DECODER_VERSION
+from .army_history import HISTORY_READ_CATEGORIES, HISTORY_SORTS, usage_rows
 from .catalog import CATALOG_VERSION, catalog_name
 from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION
 
@@ -42,6 +41,7 @@ def get_army_season_summary(
     lens: str,
     category: str,
     sort: str,
+    *, offset: int = 0,
 ) -> dict[str, Any] | None:
     """Read one historical whole-season army aggregate from its summary.
 
@@ -52,8 +52,10 @@ def get_army_season_summary(
     returns None (the caller reports unavailable); it never falls back
     to live detail.
     """
-    if sort not in SORTS:
-        raise ValueError("unsupported army analytics sort")
+    if not 0 <= offset <= 1_000_000:
+        raise ValueError("invalid history offset")
+    if category not in HISTORY_READ_CATEGORIES or sort not in HISTORY_SORTS:
+        return None
     with database.pool.connection() as connection:
         row = connection.execute(
             """
@@ -63,39 +65,24 @@ def get_army_season_summary(
                    unknown_component_occurrences,
                    perspective_disagreement_count,
                    missing_trophy_membership_evidence, result_rows,
-                   projection_version, content_digest
+                   projection_version, content_digest, unit_usage
             FROM army_season_summaries
             WHERE official_season_id = %s AND lens = %s AND category = %s
             """,
-            (official_season_id, lens, category),
+            (official_season_id, lens, "troops" if category == "siege" else category),
         ).fetchone()
         if row is None:
             return None
-        stored_rows = _json_array(row[11])
-        sort_field = {
-            "usage-rate": "usage_rate",
-            "usage-count": "usage_count",
-            "three-star-rate": "three_star_rate",
-            "average-stars": "average_stars",
-            "average-destruction": "average_destruction",
-        }[sort]
-        rows = [
-            {
-                "key": _text(item["key"]),
-                "label": _text(item["label"]),
-                "usage_count": int(item["usage_count"]),
-                "usage_denominator": int(item["usage_denominator"]),
-                "usage_rate": float(item["usage_rate"]),
-                "star_counts": [int(value) for value in item["star_counts"]],
-                "star_rates": [float(value) for value in item["star_rates"]],
-                "three_star_rate": float(item["three_star_rate"]),
-                "average_stars": float(item["average_stars"]),
-                "average_destruction": float(item["average_destruction"]),
-                "unknown_excluded_attacks": int(item["unknown_excluded_attacks"]),
-            }
-            for item in stored_rows
-        ]
+        if row[14] is None:
+            return None  # Legacy counts cannot recover quantities or trophies.
+        rows, unresolved = usage_rows(_json_array(row[14]), category)
+        sort_field = "usage_rate" if sort == "usage-rate" else "usage_count"
         rows.sort(key=lambda item: (-float(item[sort_field]), item["key"]))
+        numeric_rows = [{key: value for key, value in item.items() if key != "label"}
+                        for item in rows]
+        read_digest = hashlib.sha256(json.dumps(
+            [numeric_rows, unresolved], sort_keys=True, separators=(",", ":")
+        ).encode()).hexdigest()
         army_states = {
             _text(state): int(count) for state, count in dict(row[6] or {}).items()
         }
@@ -114,6 +101,9 @@ def get_army_season_summary(
         ).hexdigest()
         return {
             "kind": "army-analytics",
+            "history_usage_only": True,
+            "pagination": {"offset": offset, "total_rows": len(rows),
+                           "next_offset": offset + 200 if offset + 200 < len(rows) else None},
             "selection": requested,
             "total_attacks": total_attacks,
             "usable_army_sample": int(row[5]),
@@ -129,7 +119,7 @@ def get_army_season_summary(
                 "shielded_player_days": 0,
             },
             "collection_coverage": {
-                "state": _text(row[3]),
+                "state": "partial" if unresolved or int(row[10]) else _text(row[3]),
                 "completed_days": int(row[0]),
             },
             "freshness": {"state": "frozen"},
@@ -141,12 +131,12 @@ def get_army_season_summary(
             "versions": {
                 "decoder": DECODER_VERSION,
                 "catalog": CATALOG_VERSION,
-                "analytics": ARMY_ANALYTICS_RULE_VERSION,
+                "analytics": _text(row[12]),
             },
             "publication_identity": (
-                f"army-season-{publication_key[:24]}-{_text(row[13])[:16]}"
+                f"army-season-{publication_key[:24]}-{_text(row[13])[:16]}-{read_digest[:16]}"
             ),
-            "rows": rows,
+            "rows": rows[offset:offset + 200],
         }
 
 
