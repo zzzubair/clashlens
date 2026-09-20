@@ -1,4 +1,4 @@
-"""Season usage by unit, quantity and battle-time trophy bucket."""
+"""Whole-season usage and star counts by unit ID and quantity."""
 from __future__ import annotations
 
 from collections import Counter
@@ -11,7 +11,6 @@ HISTORY_READ_CATEGORIES = HISTORY_CATEGORIES | {"siege"}
 HISTORY_SORTS = frozenset({"usage-rate", "usage-count"})
 _NAMESPACE = {"troop": "troops", "spell": "spells", "hero": "heroes",
               "pet": "pets", "equipment": "equipment"}
-_TROPHY_BUCKET_SIZE = 100
 
 
 def home_units(fact: dict[str, Any]) -> Counter[str]:
@@ -53,35 +52,22 @@ def home_units(fact: dict[str, Any]) -> Counter[str]:
     return units
 
 
-def _trophy_bucket(trophies: int | None) -> int | None:
-    if trophies is None:
-        return None
-    return trophies // _TROPHY_BUCKET_SIZE * _TROPHY_BUCKET_SIZE
-
-
 def aggregate_usage(facts: list[dict[str, Any]]) -> dict[str, list[list[Any]]]:
-    """[typed ID, using battles, [[quantity, trophy bucket, battles]]]."""
-    usage_counts: Counter[str] = Counter()
-    evidence_counts: dict[str, Counter[tuple[int, int | None]]] = {}
+    """[typed ID, quantity, uses, one-star, two-star, three-star]."""
+    counts: dict[tuple[str, int], list[int]] = {}
     for fact in facts:
         if fact["army_state"] not in {"decoded", "partial"}:
             continue
-        trophy_bucket = _trophy_bucket(fact.get("battle_time_trophies"))
+        stars = int(fact["stars"])
         for typed_id, quantity in home_units(fact).items():
-            usage_counts[typed_id] += 1
-            evidence_counts.setdefault(typed_id, Counter())[quantity, trophy_bucket] += 1
+            totals = counts.setdefault((typed_id, quantity), [0, 0, 0, 0])
+            totals[0] += 1
+            if stars:
+                totals[stars] += 1
     result: dict[str, list[list[Any]]] = {key: [] for key in HISTORY_CATEGORIES}
-    for typed_id, count in sorted(usage_counts.items()):
-        evidence = [
-            [quantity, trophy_bucket, evidence_count]
-            for (quantity, trophy_bucket), evidence_count in sorted(
-                evidence_counts[typed_id].items(),
-                key=lambda item: (item[0][0],
-                                  -1 if item[0][1] is None else item[0][1]),
-            )
-        ]
+    for (typed_id, quantity), totals in sorted(counts.items()):
         result[_NAMESPACE[typed_id.split(":", 1)[0]]].append(
-            [typed_id, count, evidence]
+            [typed_id, quantity, *totals]
         )
     return result
 
@@ -91,7 +77,7 @@ def usage_rows(
 ) -> tuple[list[dict], bool]:
     rows = []
     unresolved = False
-    for typed_id, count, evidence in stored:
+    for typed_id, quantity, count, one_star, two_star, three_star in stored:
         known = is_valid_typed_id(typed_id)
         if typed_id.startswith("troop:"):
             if not known:
@@ -102,23 +88,15 @@ def usage_rows(
                 continue
         unresolved |= not known
         rows.append({
-            "key": typed_id,
+            "key": f"{typed_id}@{quantity}",
             "unit_id": typed_id,
             "label": catalog_name(typed_id),
+            "quantity": quantity,
             "usage_count": count,
             "usage_denominator": denominator,
             "usage_rate": count / denominator if denominator else 0,
-            "quantity_trophy_groups": [
-                {
-                    "quantity": quantity,
-                    "battle_trophy_min": trophy_bucket,
-                    "battle_trophy_max": (
-                        None if trophy_bucket is None
-                        else trophy_bucket + _TROPHY_BUCKET_SIZE - 1
-                    ),
-                    "usage_count": evidence_count,
-                }
-                for quantity, trophy_bucket, evidence_count in evidence
-            ],
+            "one_star_count": one_star,
+            "two_star_count": two_star,
+            "three_star_count": three_star,
         })
     return rows, unresolved

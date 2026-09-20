@@ -34,7 +34,7 @@ test("missing historical summary stays unavailable with legacy filters in the UR
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test("retired IDs named later render unit quantity and trophy usage", async ({
+test("retired IDs named later render quantity, usage and star counts", async ({
   page,
 }) => {
   const season = process.env.CLASHLENS_E2E_HISTORY_SEASON;
@@ -43,10 +43,9 @@ test("retired IDs named later render unit quantity and trophy usage", async ({
   const row = page.getByRole("row").filter({ hasText: "Named troop" });
   await expect(row).toContainText("1 / 2");
   await expect(row).toContainText("50.0%");
-  await expect(row.getByRole("cell").first()).toHaveText("5 at 6,000–6,099 (1 use)");
-  await expect(
-    page.getByRole("columnheader", { name: "Quantity and trophy bucket" }),
-  ).toBeVisible();
+  await expect(row.getByRole("cell").first()).toHaveText("5");
+  await expect(row.getByRole("cell").nth(3)).toHaveText("1");
+  await expect(page.getByRole("columnheader", { name: "Quantity" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Average stars" })).toHaveCount(0);
   await expect(page.getByLabel("Start Legend day")).toBeDisabled();
   await page.goto(`/analytics/armies?season=${season}&category=pets`);

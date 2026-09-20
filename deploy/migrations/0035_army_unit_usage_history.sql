@@ -1,4 +1,4 @@
--- Whole-season unit usage plus quantity and 100-trophy-bucket evidence.
+-- Whole-season unit and quantity usage with 1/2/3-star outcome counts.
 -- Existing finalized summaries lack
 -- this evidence and remain untouched; the API reports them unavailable.
 -- Rebuild nonfinalized seasons from facts before finalizing them.

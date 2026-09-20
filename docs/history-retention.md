@@ -326,21 +326,21 @@ Scaleway permissions, immutable object creation, a proven backup restore, and
 final-host acceptance remain launch checks. Do not enable production cleanup or
 close those gates based on unit-test results alone.
 
-## Unit, quantity and trophy summaries (issue 126)
+## Unit, quantity and outcome summaries (issue 126)
 
-Migration 0035 and projection `army-unit-usage-v2` replace the earlier outcome
+Migration 0035 and projection `army-unit-usage-v3` replace the earlier outcome
 and composition contract for newly built historical army summaries. They retain
-one whole-season usage count per namespace-qualified unit ID, using the season's
-usable battles as the denominator. Quantity remains related to the 100-trophy
-bucket in which the unit was used. Rates and catalogue names are resolved when
-read. All clan-castle contributions are excluded.
+one whole-season usage count per namespace-qualified unit ID and quantity, using
+the season's usable battles as the denominator, plus 1★, 2★ and 3★ counts. Rates
+and catalogue names are resolved when read. Battle-time trophy values and all
+clan-castle contributions are excluded.
 Player trophy summaries and current/live analytics are unchanged.
 
-Historical reads do not offer stars, destruction, combinations, day ranges or
-population cohorts. Missing or legacy summaries without quantity/trophy evidence
+Historical reads do not offer destruction, combinations, day ranges or population
+cohorts. Missing or legacy summaries without unit/quantity evidence
 return unavailable; there is no website fallback to partial battle detail.
 Unclassified troop/siege IDs remain retained and make the category partial until
-named. Unknown trophy values are explicit and never assigned a guessed value.
+named. Separate player trophy-history records remain unchanged.
 The API pages unit results in groups of 200.
 
 The migration itself deletes nothing. Rebuilding an eligible nonfinalized season

@@ -188,12 +188,10 @@ export interface ArmyAnalytics {
     usageCount: number;
     usageDenominator: number;
     usageRate: number;
-    quantityTrophyGroups?: Array<{
-      quantity: number;
-      battleTrophyMin: number | null;
-      battleTrophyMax: number | null;
-      usageCount: number;
-    }>;
+    quantity?: number;
+    oneStarCount?: number;
+    twoStarCount?: number;
+    threeStarCount?: number;
     starCounts?: [number, number, number, number];
     starRates?: [number, number, number, number];
     threeStarRate?: number;

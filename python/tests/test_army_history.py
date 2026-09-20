@@ -1,10 +1,13 @@
-"""Usage counts keep quantity and trophy relationships after catalogue updates."""
+"""Finalized usage keeps unit quantities and star outcomes by ID."""
 import json
+from contextlib import contextmanager
 from dataclasses import asdict
+from types import SimpleNamespace
 
-from clashlens import catalog
+from clashlens import api_analytics, catalog
 from clashlens.army_decoder import DecodedArmy, decode_army_share_code
 from clashlens.army_history import aggregate_usage, usage_rows
+from clashlens.army_season_summaries import PROJECTION_VERSION
 
 
 def fact(code, stars=3, destruction=100, trophies=6000):
@@ -24,59 +27,92 @@ def fact(code, stars=3, destruction=100, trophies=6000):
     }
 
 
-def test_whole_season_rate_keeps_quantity_and_trophy_bucket_evidence():
-    stored = aggregate_usage([
-        fact("u2x58-3x58", trophies=6000), fact("u5x58", trophies=6000),
-        fact("u1x58", trophies=6000), fact("u1x0", trophies=6000),
-        fact("u5x58", trophies=6100), fact("u1x58", trophies=None),
-    ])
-    rows, unresolved = usage_rows(stored["troops"], "troops", 6)
-    assert not unresolved
-    by_id = {row["unit_id"]: row for row in rows}
-    assert (by_id["troop:58"]["usage_count"],
-            by_id["troop:58"]["usage_denominator"],
-            by_id["troop:58"]["usage_rate"]) == (5, 6, 5 / 6)
-    assert by_id["troop:58"]["quantity_trophy_groups"] == [
-        {"quantity": 1, "battle_trophy_min": None, "battle_trophy_max": None,
-         "usage_count": 1},
-        {"quantity": 1, "battle_trophy_min": 6000, "battle_trophy_max": 6099,
-         "usage_count": 1},
-        {"quantity": 5, "battle_trophy_min": 6000, "battle_trophy_max": 6099,
-         "usage_count": 2},
-        {"quantity": 5, "battle_trophy_min": 6100, "battle_trophy_max": 6199,
-         "usage_count": 1},
+def test_five_uses_are_five_of_ten_with_quantity_and_star_counts():
+    stars = [1, 2, 3, 3, 0]
+    facts = [
+        fact(
+            "u5x58" if index < 5 else "u1x0",
+            stars=stars[index] if index < 5 else 0,
+            trophies=5000 + index * 100,
+        )
+        for index in range(10)
     ]
-
-
-def test_five_uses_across_trophy_buckets_are_five_of_ten():
-    facts = [fact("u1x58" if index < 5 else "u1x0", trophies=5000 + index * 100)
-             for index in range(10)]
     rows, unresolved = usage_rows(aggregate_usage(facts)["troops"], "troops", 10)
     assert not unresolved
     row = next(row for row in rows if row["unit_id"] == "troop:58")
-    assert (row["usage_count"], row["usage_denominator"], row["usage_rate"]) == (
-        5, 10, .5,
-    )
-    assert len(row["quantity_trophy_groups"]) == 5
+    assert row == {
+        "key": "troop:58@5", "unit_id": "troop:58", "label": "Ice Golem",
+        "quantity": 5, "usage_count": 5, "usage_denominator": 10,
+        "usage_rate": .5, "one_star_count": 1, "two_star_count": 1,
+        "three_star_count": 2,
+    }
+    without_trophies = [{**item, "battle_time_trophies": None} for item in facts]
+    assert aggregate_usage(without_trophies) == aggregate_usage(facts)
 
 
-def test_thousands_of_battles_fit_the_retained_category_limit():
+def test_thousands_of_battles_fit_storage_and_response_bounds(monkeypatch):
+    for unit_id in range(100, 105):
+        monkeypatch.setitem(catalog._CATALOG_ENTRIES, f"troop:{unit_id}", {
+            "name": f"Unit {unit_id}", "category": "troop", "is_siege": False,
+        })
     facts = [
         {
-            "army_state": "decoded",
-            "battle_time_trophies": 5000 + index,
+            "army_state": "decoded", "stars": index % 4,
             "home_troops": [
-                [f"troop:{unit_id}", (index + unit_id) % 5 + 1, "home"]
-                for unit_id in range(100, 110)
+                [f"troop:{unit_id}", (index + unit_id) % 100 + 1, "home"]
+                for unit_id in range(100, 105)
             ],
             "spells": [], "siege": [], "heroes": [],
             "unresolved_components": [],
         }
-        for index in range(3000)
+        for index in range(15_000)
     ]
     retained = aggregate_usage(facts)["troops"]
     assert len(json.dumps(retained).encode()) < 524_288
-    assert sum(row[1] for row in retained) == 30_000
+    assert sum(row[2] for row in retained) == 75_000
+
+    stored_row = (
+        28,
+        0,
+        [],
+        "complete",
+        15_000,
+        15_000,
+        {"fully_decoded": 15_000},
+        0,
+        0,
+        0,
+        0,
+        [],
+        PROJECTION_VERSION,
+        "a" * 64,
+        retained,
+    )
+
+    class Connection:
+        def execute(self, *_args, **_kwargs):
+            return self
+
+        def fetchone(self):
+            return stored_row
+
+    @contextmanager
+    def connection():
+        yield Connection()
+
+    database = SimpleNamespace(pool=SimpleNamespace(connection=connection))
+    response_page = api_analytics.get_army_season_summary(
+        database, "season", "offense", "troops", "usage-rate"
+    )
+    assert response_page is not None
+    assert response_page["pagination"] == {
+        "offset": 0,
+        "total_rows": 500,
+        "next_offset": 200,
+    }
+    assert len(response_page["rows"]) == 200
+    response_bytes = json.dumps(response_page, separators=(",", ":")).encode()
+    assert len(response_bytes) < 1_048_576
 
 
 def test_unknown_namespaces_and_siege_are_resolved_without_armies(monkeypatch):
@@ -98,13 +134,11 @@ def test_unknown_namespaces_and_siege_are_resolved_without_armies(monkeypatch):
         )
         assert not unresolved
         row = next(r for r in rows if r["unit_id"] == typed_id)
-        assert (row["usage_count"], row["usage_denominator"]) == (1, 1)
-        assert row["quantity_trophy_groups"] == [{
-            "quantity": quantity,
-            "battle_trophy_min": 6000,
-            "battle_trophy_max": 6099,
-            "usage_count": 1,
-        }]
+        assert (row["quantity"], row["usage_count"], row["usage_denominator"]) == (
+            quantity, 1, 1,
+        )
+        assert (row["one_star_count"], row["two_star_count"],
+                row["three_star_count"]) == (0, 0, 1)
         assert row["label"].startswith("Named")
 
 

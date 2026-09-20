@@ -128,7 +128,8 @@ def test_raw_battle_reconciles_to_both_player_pages_and_analytics(database_url, 
                 assert result["total_attacks"] == (1 if lens == "offense" else 0)
                 if lens == "offense":
                     assert result["rows"][0]["usage_count"] == 1
-                    assert result["rows"][0]["quantity_trophy_groups"][0]["quantity"] == 5
+                    assert result["rows"][0]["quantity"] == 5
+                    assert result["rows"][0]["three_star_count"] == 1
                 else:
                     assert result["rows"] == []
         finally:
@@ -277,17 +278,20 @@ def test_unknown_history_survives_retirement_retry_and_later_naming(
                     result = response.json()
                     assert result["unknown_affected_attacks"] == 1  # At collection.
                     assert result["total_attacks"] == 2
-                    assert result["versions"]["analytics"] == "army-unit-usage-v2"
+                    assert result["versions"]["analytics"] == "army-unit-usage-v3"
                     assert result["rows"]
                     for row in result["rows"]:
                         assert row["usage_count"] == 1
                         assert row["usage_denominator"] == 2
-                        assert row["quantity_trophy_groups"] == [{
-                            "quantity": 5 if row["unit_id"] == "troop:900" else 1,
-                            "battle_trophy_min": 6000,
-                            "battle_trophy_max": 6099,
-                            "usage_count": 1,
-                        }]
+                        assert row["quantity"] == (
+                            5 if row["unit_id"] == "troop:900" else 1
+                        )
+                        if row["unit_id"] == "troop:58":
+                            assert (row["one_star_count"], row["two_star_count"],
+                                    row["three_star_count"]) == (1, 0, 0)
+                        else:
+                            assert (row["one_star_count"], row["two_star_count"],
+                                    row["three_star_count"]) == (0, 0, 1)
                         assert "star_counts" not in row
                         assert "average_destruction" not in row
                         assert "Unknown" not in row["label"]
@@ -342,7 +346,7 @@ def test_all_players_keep_28_daily_trophy_entries_and_totals(database_url):
 
 
 def test_measure_retained_season_bytes_against_label_based_rows(database_url):
-    """A repeatable 224-attack season cost with quantities and trophies."""
+    """A repeatable 224-attack season cost with unit quantities."""
     specs = []
     for index in range(224):
         code = UNKNOWN_CODE if index % 8 == 0 else f"h0p9e14_32u{1 + index % 5}x58s1x2i{1 + index % 4}x0"
@@ -402,7 +406,7 @@ def test_api_rename_changes_only_the_displayed_name(database_url, monkeypatch):
             api.close()
 
 
-def test_legacy_unknown_summary_reports_partial_id_evidence(database_url):
+def test_legacy_usage_shape_is_unavailable(database_url):
     with domain_database(database_url) as ci:
         api = ApiDatabase(ci)
         try:
@@ -410,14 +414,17 @@ def test_legacy_unknown_summary_reports_partial_id_evidence(database_url):
                 _seed(connection, offense=[{"stars": 3, "army_state": "partial", "home_troops": [["troop:58", 1]],
                     "unresolved": [{"numeric_id": 900, "quantity": 1, "section": "u", "origin": "home"}]}])
                 materialize_army_season(connection, MEASURE_SEASON, "offense")
-                connection.execute("UPDATE army_season_summaries SET unit_usage=NULL, projection_version='army-season-summary-v1'")
+                connection.execute(
+                    "UPDATE army_season_summaries "
+                    "SET projection_version='army-unit-usage-v2'"
+                )
             result = api_analytics.get_army_season_summary(api, MEASURE_SEASON, "offense", "troops", "usage-rate")
             assert result is None
         finally:
             api.close()
 
 
-def test_cross_trophy_usage_keeps_whole_season_denominator_after_retirement(database_url):
+def test_quantity_usage_keeps_whole_season_denominator_after_retirement(database_url):
     with domain_database(database_url) as ci:
         api = ApiDatabase(ci)
         try:
@@ -439,6 +446,8 @@ def test_cross_trophy_usage_keeps_whole_season_denominator_after_retirement(data
             assert (row["usage_count"], row["usage_denominator"], row["usage_rate"]) == (
                 5, 10, .5,
             )
-            assert len(row["quantity_trophy_groups"]) == 5
+            assert row["quantity"] == 1
+            assert (row["one_star_count"], row["two_star_count"],
+                    row["three_star_count"]) == (0, 0, 5)
         finally:
             api.close()

@@ -31,6 +31,7 @@ from .army_analytics import (
 )
 from .army_decoder import DECODER_VERSION
 from .army_history import HISTORY_READ_CATEGORIES, HISTORY_SORTS, usage_rows
+from .army_season_summaries import PROJECTION_VERSION as ARMY_HISTORY_VERSION
 from .catalog import CATALOG_VERSION, catalog_name
 from .domain import RANKED_DAY_DURATION, SEASON_ANCHOR_RULE_VERSION
 
@@ -73,8 +74,8 @@ def get_army_season_summary(
         ).fetchone()
         if row is None:
             return None
-        if row[14] is None:
-            return None  # Legacy counts cannot recover quantities or trophies.
+        if row[14] is None or _text(row[12]) != ARMY_HISTORY_VERSION:
+            return None
         rows, unresolved = usage_rows(_json_array(row[14]), category, int(row[5]))
         sort_field = "usage_rate" if sort == "usage-rate" else "usage_count"
         rows.sort(key=lambda item: (-float(item[sort_field]), item["key"]))
@@ -1002,6 +1003,4 @@ _ARMY_ANALYTICS_COMPONENT_COLUMN = {
     "hero-pet": "heroes",
     "hero-equipment": "heroes",
 }
-
-
 

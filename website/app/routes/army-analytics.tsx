@@ -160,9 +160,8 @@ export default function ArmyAnalyticsRoute() {
         {isHistorical ? (
           <p>
             Historical seasons show the whole season (Legend days 1–28, all players). Only
-            unit usage, quantities and 100-trophy buckets are retained. Day ranges,
-            population filters, battle outcomes and combinations apply to the current
-            season only.
+            unit quantities, usage and 1★/2★/3★ counts are retained. Day ranges,
+            population filters and combinations apply to the current season only.
           </p>
         ) : null}
         <label>
@@ -289,9 +288,12 @@ export default function ArmyAnalyticsRoute() {
           <p>
             Collection coverage {analytics.collectionCoverage.state} ({""}
             {analytics.collectionCoverage.completedDays} days) · freshness{" "}
-            {analytics.freshness.state} · attacks missing battle-time trophy evidence:{" "}
-            {analytics.missingTrophyMembershipEvidence} · stale or uncertain cohort
-            members: {analytics.cohortEvidence.staleOrUncertainCohortMembers}
+            {analytics.freshness.state}
+            {!isHistorical
+              ? ` · attacks missing battle-time trophy evidence: ${analytics.missingTrophyMembershipEvidence}`
+              : null}{" "}
+            · stale or uncertain cohort members:{" "}
+            {analytics.cohortEvidence.staleOrUncertainCohortMembers}
             {analytics.cohortEvidence.streakExcludedPlayers > 0
               ? ` · streak-excluded players: ${analytics.cohortEvidence.streakExcludedPlayers}`
               : null}
@@ -306,7 +308,14 @@ export default function ArmyAnalyticsRoute() {
               <thead>
                 <tr>
                   <th>{isHistorical ? "Unit" : "Item or combination"}</th>
-                  {isHistorical ? <th>Quantity and trophy bucket</th> : null}
+                  {isHistorical ? (
+                    <>
+                      <th>Quantity</th>
+                      <th>1★</th>
+                      <th>2★</th>
+                      <th>3★</th>
+                    </>
+                  ) : null}
                   <th>Uses / denominator</th>
                   <th>Usage rate</th>
                   {!isHistorical ? (
@@ -328,19 +337,12 @@ export default function ArmyAnalyticsRoute() {
                   <tr key={row.key}>
                     <th scope="row">{row.label}</th>
                     {isHistorical ? (
-                      <td>
-                        {row.quantityTrophyGroups?.map((group) => (
-                          <div
-                            key={`${group.quantity}-${group.battleTrophyMin ?? "unknown"}`}
-                          >
-                            {group.quantity} at{" "}
-                            {group.battleTrophyMin === null
-                              ? "Unknown"
-                              : `${group.battleTrophyMin.toLocaleString()}–${group.battleTrophyMax!.toLocaleString()}`}{" "}
-                            ({group.usageCount} {group.usageCount === 1 ? "use" : "uses"})
-                          </div>
-                        ))}
-                      </td>
+                      <>
+                        <td>{row.quantity}</td>
+                        <td>{row.oneStarCount}</td>
+                        <td>{row.twoStarCount}</td>
+                        <td>{row.threeStarCount}</td>
+                      </>
                     ) : null}
                     <td>
                       {row.usageCount} / {row.usageDenominator}
@@ -366,7 +368,8 @@ export default function ArmyAnalyticsRoute() {
           </div>
           {analytics.pagination ? (
             <p>
-              Showing {analytics.rows.length} of {analytics.pagination.totalRows} units.
+              Showing {analytics.rows.length} of {analytics.pagination.totalRows}{" "}
+              unit/quantity rows.
               {analytics.pagination.nextOffset !== null ? (
                 <Link
                   to={`?${new URLSearchParams({ season: requestedSeason, lens: analytics.selection.lens, category: analytics.selection.category, sort: analytics.selection.sort, offset: String(analytics.pagination.nextOffset) })}`}

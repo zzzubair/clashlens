@@ -1,4 +1,4 @@
-"""Whole-season usage by ID with quantity and trophy-bucket evidence."""
+"""Whole-season usage and outcomes by unit ID and quantity."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .army_history import HISTORY_CATEGORIES, aggregate_usage
 # slices agree on when a season is finalizable.
 from .season_summaries import _season_completed
 
-PROJECTION_VERSION = "army-unit-usage-v2"
+PROJECTION_VERSION = "army-unit-usage-v3"
 LENSES = ("offense", "defense")
 # Historical army reads cover the whole-season sample, never a
 # population-filtered cohort; per-cohort historical filters are out of scope.
@@ -79,9 +79,9 @@ def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
     """
     rows = connection.execute(
         """
-        SELECT army_state, home_troops,
+        SELECT stars, army_state, home_troops,
                spells, siege, heroes, unresolved_components,
-               perspective_disagreement, battle_time_trophies
+               perspective_disagreement
         FROM army_analytics_battle_facts
         WHERE official_season_id = %s AND lens = %s AND is_current
         ORDER BY battle_id
@@ -90,18 +90,17 @@ def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
     ).fetchall()
     facts = [
         {
-            "army_state": _text(row[0]),
-            "home_troops": row[1] or [],
-            "spells": row[2] or [],
-            "siege": row[3] or [],
-            "heroes": row[4] or [],
-            "unresolved_components": row[5] or [],
-            "perspective_disagreement": bool(row[6]),
-            "battle_time_trophies": row[7],
+            "stars": int(row[0]),
+            "army_state": _text(row[1]),
+            "home_troops": row[2] or [],
+            "spells": row[3] or [],
+            "siege": row[4] or [],
+            "heroes": row[5] or [],
+            "unresolved_components": row[6] or [],
+            "perspective_disagreement": bool(row[7]),
         }
         for row in rows
     ]
-    missing_trophies = sum(1 for row in rows if row[7] is None)
     observed = {
         int(row[0])
         for row in connection.execute(
@@ -138,7 +137,7 @@ def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
             "unknown_affected_attacks": sum(bool(f["unresolved_components"]) for f in facts),
             "unknown_component_occurrences": sum(len(f["unresolved_components"]) for f in facts),
             "perspective_disagreement_count": sum(f["perspective_disagreement"] for f in facts),
-            "missing_trophy_membership_evidence": missing_trophies,
+            "missing_trophy_membership_evidence": 0,
             "result_rows": [],
             "unit_usage": usage[category],
             "projection_version": PROJECTION_VERSION,

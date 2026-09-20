@@ -66,6 +66,80 @@ describe("army analytics route historical reads", () => {
     });
   });
 
+  it("renders finalized quantity, usage and star counts", async () => {
+    const getArmySeasonSummary = vi.fn().mockResolvedValue({
+      kind: "army-analytics",
+      selection: {
+        season: SEASON,
+        lens: "offense",
+        startDay: 1,
+        endDay: 28,
+        population: "all",
+        category: "troops",
+        sort: "usage-rate",
+      },
+      totalAttacks: 10,
+      usableArmySample: 10,
+      armyStates: { fully_decoded: 10 },
+      armyStatesSumConfirmed: true,
+      unknownAffectedAttacks: 0,
+      unknownComponentOccurrences: 0,
+      perspectiveDisagreementCount: 0,
+      missingTrophyMembershipEvidence: 0,
+      cohortEvidence: {
+        staleOrUncertainCohortMembers: 0,
+        streakExcludedPlayers: 0,
+        shieldedPlayerDays: 0,
+      },
+      collectionCoverage: { state: "complete", completedDays: 28 },
+      freshness: { state: "frozen" },
+      reproducibility: {
+        officialSeasonId: SEASON,
+        legendDays: [1, 28],
+        snapshotVersions: [],
+      },
+      versions: { decoder: "decoder", catalog: "catalog", analytics: "v3" },
+      publicationIdentity: "publication",
+      pagination: { offset: 0, totalRows: 1, nextOffset: null },
+      rows: [
+        {
+          key: "troop:58@5",
+          label: "Ice Golem",
+          quantity: 5,
+          usageCount: 5,
+          usageDenominator: 10,
+          usageRate: 0.5,
+          oneStarCount: 1,
+          twoStarCount: 1,
+          threeStarCount: 2,
+        },
+      ],
+    });
+    mocks.createPythonClient.mockReturnValue({
+      getArmySeasonSummary,
+      getArmyAnalytics: vi.fn(),
+    });
+    const handler = createStaticHandler([
+      { path: "/analytics/armies", Component: ArmyRoute, loader: armyLoader },
+    ]);
+    const context = await handler.query(requestFor(`season=${SEASON}`));
+    if (context instanceof Response) throw new Error("unexpected response");
+    const html = renderToString(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+      }),
+    );
+    expect(html).toContain("<th>Quantity</th>");
+    expect(html).toContain("<th>1★</th>");
+    expect(html).toContain("<th>2★</th>");
+    expect(html).toContain("<th>3★</th>");
+    expect(html).toContain("Ice Golem");
+    expect(html.replaceAll("<!-- -->", "")).toContain("5 / 10");
+    expect(html).toContain("50.0%");
+    expect(html).not.toContain("attacks missing battle-time trophy evidence");
+  });
+
   it("reports unavailable when historical detail exists but its summary is missing", async () => {
     const getArmySeasonSummary = vi
       .fn()
