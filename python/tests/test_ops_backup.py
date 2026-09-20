@@ -68,9 +68,7 @@ elif args[:2] == ["--user", "is-active"]:
     manager.chmod(0o700)
     git = tmp_path / "git"
     git.write_text(
-        f"#!{sys.executable}\n"
-        "import sys\n"
-        "sys.stdout.buffer.write(b'ops\\0')\n"
+        f"#!{sys.executable}\nimport sys\nsys.stdout.buffer.write(b'ops\\0')\n"
     )
     git.chmod(0o700)
     env = dict(
