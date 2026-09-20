@@ -197,10 +197,11 @@ this typically retains two or three weekly full backups, rather than exactly two
 ```
 
 The existing operation lock prevents concurrent backup, deployment and cleanup.
-A scheduled backup waits for an in-progress operation; manual commands still
-fail immediately on contention. `down` stops the timer and backup service. A
-failed upload never runs pruning. Backup commands reject checkout changes that
-have not been deployed before accessing the backup secret.
+A scheduled backup waits for an in-progress operation; a manually started backup
+and backup pruning still fail immediately on contention. `down` stops the timer
+and backup service. A failed upload never runs pruning. Backup commands reject
+changes covered by the active release fingerprint before accessing backup
+credentials or remote storage.
 `backup-status` exits unsuccessfully for a failed service, inactive timer,
 missing/unreachable remote backups, a full backup older than eight days, disabled
 archiving, or completed WAL files waiting over ten minutes. No WAL activity during
