@@ -507,7 +507,7 @@ source_revision() {
 source_fingerprint() {
   local file relative digest listing found_ops=false
   listing=$(mktemp)
-  if ! git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet deploy/postgres ops | sort -z > "$listing"; then
+  if ! git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet deploy/postgres ops | LC_ALL=C sort -z > "$listing"; then
     rm -f "$listing"
     die "cannot enumerate release inputs"
   fi

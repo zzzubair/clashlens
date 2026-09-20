@@ -201,3 +201,71 @@ def test_changed_checkout_is_rejected_before_remote_activity(runtime, tmp_path):
     assert result.returncode != 0
     assert "release inputs changed after deployment" in result.stderr
     assert not Path(env["REMOTE_ACTIVITY"]).exists()
+
+
+def test_backup_accepts_unchanged_release_across_locales(runtime, tmp_path):
+    locales = subprocess.check_output(["locale", "-a"], text=True).splitlines()
+    english = next((name for name in locales if name.lower() == "en_us.utf8"), None)
+    if english is None:
+        pytest.skip("cross-locale regression requires the en_US.utf8 host locale")
+
+    env, _ = runtime
+    env = dict(env, PATH=os.environ["PATH"], BACKUPS=json.dumps([backup_row(1, 1)]))
+    checkout = tmp_path / "locale-checkout"
+    checkout.mkdir()
+    shutil.copy2(OPS, checkout / "ops")
+    (checkout / "website").mkdir()
+    for name in ("A", "a", "a-b"):
+        (checkout / "website" / name).write_text(name)
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True, env=env)
+
+    # The persisted release contract hashes relative paths and their file bytes
+    # in byte order, independently of the service manager's language settings.
+    paths = ["ops", "website/A", "website/a", "website/a-b"]
+    records = b"".join(
+        path.encode()
+        + b"\0"
+        + hashlib.sha256((checkout / path).read_bytes()).hexdigest().encode()
+        + b"\n"
+        for path in paths
+    )
+    manifest = Path(env["XDG_STATE_HOME"]) / "clashlens" / "active-release.env"
+    lines = manifest.read_text().splitlines()
+    manifest.write_text(
+        "\n".join(
+            f"SOURCE_FINGERPRINT={hashlib.sha256(records).hexdigest()}"
+            if line.startswith("SOURCE_FINGERPRINT=")
+            else line
+            for line in lines
+        )
+        + "\n"
+    )
+
+    for language in ("C", english):
+        activity = Path(env["REMOTE_ACTIVITY"])
+        activity.unlink(missing_ok=True)
+        result = subprocess.run(
+            ["bash", str(checkout / "ops"), "backup", "--wait-for-lock"],
+            env=dict(env, LC_ALL=language),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Base backup uploaded" in result.stdout
+        assert activity.exists()
+
+    (checkout / "website" / "A").write_text("changed after deployment")
+    activity.unlink()
+    result = subprocess.run(
+        ["bash", str(checkout / "ops"), "backup", "--wait-for-lock"],
+        env=dict(env, LC_ALL=english),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "release inputs changed after deployment" in result.stderr
+    assert not activity.exists()

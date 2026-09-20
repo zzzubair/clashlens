@@ -202,6 +202,9 @@ and backup pruning still fail immediately on contention. `down` stops the timer
 and backup service. A failed upload never runs pruning. Backup commands reject
 changes covered by the active release fingerprint before accessing backup
 credentials or remote storage.
+Release fingerprints use byte-ordered filenames so terminal and scheduled-service
+language settings cannot make unchanged code appear different. Rebuild and deploy
+after upgrading this check; do not edit a saved fingerprint or bypass the guard.
 `backup-status` exits unsuccessfully for a failed service, inactive timer,
 missing/unreachable remote backups, a full backup older than eight days, disabled
 archiving, or completed WAL files waiting over ten minutes. No WAL activity during
