@@ -7,5 +7,5 @@ After=clashlens-postgres.service
 
 [Service]
 Type=oneshot
-ExecStart=@@ROOT@@/ops backup
+ExecStart=@@ROOT@@/ops backup --wait-for-lock
 TimeoutStartSec=6h

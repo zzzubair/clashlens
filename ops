@@ -343,6 +343,7 @@ validate_production_spool() {
 }
 
 acquire_mutation_lock() {
+  local wait=${1:-false}
   command -v flock >/dev/null 2>&1 || die "flock from Fedora util-linux is required"
   validate_directory_ancestry "$STATE_DIR"
   mkdir -p "$STATE_DIR"
@@ -353,7 +354,11 @@ acquire_mutation_lock() {
   [[ ! -e "$lock_file" || -f "$lock_file" && "$(stat -c '%u' "$lock_file")" == "$(id -u)" ]] || die "unsafe operation lock $lock_file"
   exec {OPS_LOCK_FD}> "$lock_file"
   chmod 600 "$lock_file"
-  flock --nonblock "$OPS_LOCK_FD" || die "another Clash Lens build, lifecycle, or recovery operation is running"
+  if [[ "$wait" == true ]]; then
+    flock "$OPS_LOCK_FD" || die "could not acquire the Clash Lens operation lock"
+  else
+    flock --nonblock "$OPS_LOCK_FD" || die "another Clash Lens build, lifecycle, or recovery operation is running"
+  fi
 }
 
 managed_unit_file() {
@@ -500,13 +505,22 @@ source_revision() {
 }
 
 source_fingerprint() {
-  local file relative digest
+  local file relative digest listing found_ops=false
+  listing=$(mktemp)
+  if ! git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet deploy/postgres ops | sort -z > "$listing"; then
+    rm -f "$listing"
+    die "cannot enumerate release inputs"
+  fi
   while IFS= read -r -d '' file; do
-    relative=${file#"$ROOT/"}
+    relative=$file
+    [[ "$relative" != ops ]] || found_ops=true
+    file="$ROOT/$relative"
+    [[ -f "$file" ]] || { rm -f "$listing"; die "release input $relative is missing"; }
     digest=$(sha256sum "$file" | cut -d' ' -f1)
     printf '%s\0%s\n' "$relative" "$digest"
-  done < <(git -C "$ROOT" ls-files -co --exclude-standard -z -- .containerignore Containerfile python website development deploy/migrations deploy/quadlet deploy/postgres ops | sort -z | \
-    while IFS= read -r -d '' relative; do printf '%s\0' "$ROOT/$relative"; done)
+  done < "$listing"
+  rm -f "$listing"
+  [[ "$found_ops" == true ]] || die "release inputs do not include ops"
 }
 
 image_id() {
@@ -1227,6 +1241,10 @@ prepare_backup() {
   require_host
   prepare_managed_runtime postgres
   [[ "$MODE" == production ]] || die "backups are unavailable in fixture mode"
+  local current_fingerprint
+  [[ "${RELEASE[SOURCE_FINGERPRINT]-}" =~ ^[0-9a-f]{64}$ ]] || die "active release has an invalid SOURCE_FINGERPRINT"
+  current_fingerprint=$(source_fingerprint | sha256sum | cut -d' ' -f1)
+  [[ "$current_fingerprint" == "${RELEASE[SOURCE_FINGERPRINT]}" ]] || die "release inputs changed after deployment; run ./ops up before using backups"
   "$PODMAN_BIN" exec --user postgres "$MANAGED_PREFIX-postgres" test -r /run/secrets/walg.json || die "backups are not configured on the running release"
 }
 
@@ -1318,7 +1336,15 @@ case "$command" in
   status) (($# == 0)) || die "status takes no arguments"; status ;;
   logs) logs "$@" ;;
   queue-status) (($# == 0)) || die "queue-status takes no arguments"; exec_service ;;
-  backup) (($# == 0)) || die "backup takes no arguments"; acquire_mutation_lock; backup ;;
+  backup)
+    wait_for_lock=false
+    if (($#)); then
+      [[ $# == 1 && "$1" == --wait-for-lock ]] || die "backup accepts only --wait-for-lock"
+      wait_for_lock=true
+    fi
+    acquire_mutation_lock "$wait_for_lock"
+    backup
+    ;;
   backup-status) (($# == 0)) || die "backup-status takes no arguments"; backup_status ;;
   backup-prune) acquire_mutation_lock; backup_prune "$@" ;;
   failed-items)
