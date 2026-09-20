@@ -814,16 +814,26 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
   )
     throw new PythonApiError(502, { error: "malformed" });
   const rows = payload.rows.map((row) => {
+    if (!isRecord(row)) throw new PythonApiError(502, { error: "malformed" });
+    const quantityTrophyGroups = row.quantity_trophy_groups;
     if (
-      !isRecord(row) ||
       !isString(row.key) ||
       !isString(row.label) ||
       !isInteger(row.usage_count) ||
       !isInteger(row.usage_denominator) ||
       !isFiniteNumber(row.usage_rate) ||
       (payload.history_usage_only === true
-        ? !isInteger(row.quantity) ||
-          !(row.battle_trophies === null || isInteger(row.battle_trophies))
+        ? !Array.isArray(quantityTrophyGroups) ||
+          !quantityTrophyGroups.every(
+            (group) =>
+              isRecord(group) &&
+              isInteger(group.quantity) &&
+              isInteger(group.usage_count) &&
+              ((group.battle_trophy_min === null && group.battle_trophy_max === null) ||
+                (isInteger(group.battle_trophy_min) &&
+                  isInteger(group.battle_trophy_max) &&
+                  group.battle_trophy_max >= group.battle_trophy_min)),
+          )
         : !Array.isArray(row.star_counts) ||
           row.star_counts.length !== 4 ||
           !row.star_counts.every(isInteger) ||
@@ -842,11 +852,14 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       usageCount: row.usage_count,
       usageDenominator: row.usage_denominator,
       usageRate: row.usage_rate,
-      quantity:
-        payload.history_usage_only === true ? (row.quantity as number) : undefined,
-      battleTrophies:
+      quantityTrophyGroups:
         payload.history_usage_only === true
-          ? (row.battle_trophies as number | null)
+          ? quantityTrophyGroups!.map((group) => ({
+              quantity: group.quantity as number,
+              battleTrophyMin: group.battle_trophy_min as number | null,
+              battleTrophyMax: group.battle_trophy_max as number | null,
+              usageCount: group.usage_count as number,
+            }))
           : undefined,
       starCounts: row.star_counts as [number, number, number, number] | undefined,
       starRates: row.star_rates as [number, number, number, number] | undefined,

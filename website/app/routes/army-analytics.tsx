@@ -160,8 +160,9 @@ export default function ArmyAnalyticsRoute() {
         {isHistorical ? (
           <p>
             Historical seasons show the whole season (Legend days 1–28, all players). Only
-            unit, quantity, trophy value and usage are retained. Day ranges, population
-            filters, battle outcomes and combinations apply to the current season only.
+            unit usage, quantities and 100-trophy buckets are retained. Day ranges,
+            population filters, battle outcomes and combinations apply to the current
+            season only.
           </p>
         ) : null}
         <label>
@@ -305,12 +306,7 @@ export default function ArmyAnalyticsRoute() {
               <thead>
                 <tr>
                   <th>{isHistorical ? "Unit" : "Item or combination"}</th>
-                  {isHistorical ? (
-                    <>
-                      <th>Quantity</th>
-                      <th>Battle-time trophies</th>
-                    </>
-                  ) : null}
+                  {isHistorical ? <th>Quantity and trophy bucket</th> : null}
                   <th>Uses / denominator</th>
                   <th>Usage rate</th>
                   {!isHistorical ? (
@@ -332,10 +328,19 @@ export default function ArmyAnalyticsRoute() {
                   <tr key={row.key}>
                     <th scope="row">{row.label}</th>
                     {isHistorical ? (
-                      <>
-                        <td>{row.quantity}</td>
-                        <td>{row.battleTrophies ?? "Unknown"}</td>
-                      </>
+                      <td>
+                        {row.quantityTrophyGroups?.map((group) => (
+                          <div
+                            key={`${group.quantity}-${group.battleTrophyMin ?? "unknown"}`}
+                          >
+                            {group.quantity} at{" "}
+                            {group.battleTrophyMin === null
+                              ? "Unknown"
+                              : `${group.battleTrophyMin.toLocaleString()}–${group.battleTrophyMax!.toLocaleString()}`}{" "}
+                            ({group.usageCount} {group.usageCount === 1 ? "use" : "uses"})
+                          </div>
+                        ))}
+                      </td>
                     ) : null}
                     <td>
                       {row.usageCount} / {row.usageDenominator}
@@ -361,8 +366,7 @@ export default function ArmyAnalyticsRoute() {
           </div>
           {analytics.pagination ? (
             <p>
-              Showing {analytics.rows.length} of {analytics.pagination.totalRows}{" "}
-              unit/quantity/trophy groups.
+              Showing {analytics.rows.length} of {analytics.pagination.totalRows} units.
               {analytics.pagination.nextOffset !== null ? (
                 <Link
                   to={`?${new URLSearchParams({ season: requestedSeason, lens: analytics.selection.lens, category: analytics.selection.category, sort: analytics.selection.sort, offset: String(analytics.pagination.nextOffset) })}`}

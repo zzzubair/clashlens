@@ -1,4 +1,5 @@
--- Unit + quantity + battle-time trophies. Existing finalized summaries lack
+-- Whole-season unit usage plus quantity and 100-trophy-bucket evidence.
+-- Existing finalized summaries lack
 -- this evidence and remain untouched; the API reports them unavailable.
 -- Rebuild nonfinalized seasons from facts before finalizing them.
 BEGIN;

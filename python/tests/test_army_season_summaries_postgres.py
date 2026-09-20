@@ -220,16 +220,16 @@ def test_complete_season_materializes_whole_season_aggregates(
             assert states["missing_code"] == 1
             assert summary["result_rows"] == []
             assert summary["unit_usage"] == [
-                ["troop:58", 1, 6000, 1, 3],
-                ["troop:58", 2, None, 1, 1],
-                ["troop:58", 2, 6000, 2, 3],
+                ["troop:58", 4, [[1, 6000, 1], [2, None, 1], [2, 6000, 2]]],
             ]
             with database.pool.connection() as connection:
-                assert _row(connection, category="spells")["unit_usage"] == [["spell:2", 1, 6000, 2, 3]]
+                assert _row(connection, category="spells")["unit_usage"] == [
+                    ["spell:2", 2, [[1, 6000, 2]]]
+                ]
                 defense = _row(connection, lens="defense")
             assert defense["total_attacks"] == 2
             assert defense["usable_army_sample"] == 2
-            assert defense["unit_usage"] == [["troop:51", 3, 6000, 2, 2]]
+            assert defense["unit_usage"] == [["troop:51", 2, [[3, 6000, 2]]]]
         finally:
             database.close()
 
@@ -335,7 +335,8 @@ def test_repeat_is_unchanged_and_correction_refreshes(database_url: str) -> None
             assert third["content_digests"]["troops"] != first["content_digests"]["troops"]
             with database.pool.connection() as connection:
                 assert _row(connection)["unit_usage"] == [
-                    ["troop:58", 2, None, 1, 1], ["troop:58", 2, 6000, 3, 3]]
+                    ["troop:58", 4, [[2, None, 1], [2, 6000, 3]]]
+                ]
         finally:
             database.close()
 
@@ -473,7 +474,7 @@ def test_projected_troop_use_counts_match_live_builder(database_url: str) -> Non
                 sort="usage-rate",
             )
             expected = build_army_result(facts, selection)
-            assert sum(row[3] for row in stored["unit_usage"]) == expected["rows"][0]["usage_count"]
+            assert sum(row[1] for row in stored["unit_usage"]) == expected["rows"][0]["usage_count"]
             assert stored["total_attacks"] == expected["total_attacks"]
             assert stored["usable_army_sample"] == expected["usable_army_sample"]
             assert dict(stored["army_states"]) == expected["army_states"]
@@ -616,7 +617,9 @@ def test_refresh_failure_warns_and_keeps_day_durable(
                 army_ingestion._refresh_army_season_summaries(database, connection, SEASON)
                 connection.commit()
             with database.pool.connection() as connection:
-                assert ["troop:58", 3, 6000, 2, 3] in _row(connection)["unit_usage"]
+                assert _row(connection)["unit_usage"] == [
+                    ["troop:58", 4, [[1, 6000, 1], [2, None, 1], [3, 6000, 2]]]
+                ]
         finally:
             database.close()
 
@@ -748,6 +751,6 @@ def test_first_materialization_serializes_with_correction(
                 summary = _row(connection)
             assert summary["total_attacks"] == 2
             assert summary["usable_army_sample"] == 2
-            assert sum(row[3] for row in summary["unit_usage"] if row[0] == "troop:58") == 2
+            assert sum(row[1] for row in summary["unit_usage"] if row[0] == "troop:58") == 2
         finally:
             database.close()

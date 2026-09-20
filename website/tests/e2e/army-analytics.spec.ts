@@ -41,22 +41,21 @@ test("retired IDs named later render unit quantity and trophy usage", async ({
   test.skip(!season, "Requires the retired-history PostgreSQL restore fixture.");
   await page.goto(`/analytics/armies?season=${season}&category=troops`);
   const row = page.getByRole("row").filter({ hasText: "Named troop" });
-  await expect(row).toContainText("1 / 1");
-  await expect(row).toContainText("100.0%");
-  await expect(row.getByRole("cell").first()).toHaveText("5");
-  await expect(row.getByRole("cell").nth(1)).toHaveText("6000");
+  await expect(row).toContainText("1 / 2");
+  await expect(row).toContainText("50.0%");
+  await expect(row.getByRole("cell").first()).toHaveText("5 at 6,000–6,099 (1 use)");
   await expect(
-    page.getByRole("columnheader", { name: "Battle-time trophies" }),
+    page.getByRole("columnheader", { name: "Quantity and trophy bucket" }),
   ).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Average stars" })).toHaveCount(0);
   await expect(page.getByLabel("Start Legend day")).toBeDisabled();
   await page.goto(`/analytics/armies?season=${season}&category=pets`);
   await expect(page.getByRole("row").filter({ hasText: "Named pet" })).toContainText(
-    "1 / 1",
+    "1 / 2",
   );
   await page.goto(`/analytics/armies?season=${season}&category=siege`);
   await expect(page.getByRole("row").filter({ hasText: "Named siege" })).toContainText(
-    "1 / 1",
+    "1 / 2",
   );
   await expectNoSeriousAccessibilityViolations(page);
 });

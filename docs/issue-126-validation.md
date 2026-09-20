@@ -4,12 +4,12 @@
 
 Historical army summaries retain usage. Stars, destruction and unit-to-unit
 relationships belong to current battle analytics. Current battle evidence keeps
-unit IDs, quantities and source information. Historical army summaries keep
-only usage grouped by namespace-qualified unit ID, total quantity in an army, and
-the lens owner's trophies immediately before the battle. Each group stores its
-using-battle count and the eligible-battle denominator at that trophy value; the
-API derives the rate. Five copies in one army contribute one using battle with
-quantity five. Missing trophies remain an explicit unknown group.
+unit IDs, quantities and source information. Historical army summaries keep one
+ending usage count per namespace-qualified unit ID, with the whole-season
+usable-battle count as its denominator. Quantity and the lens owner's
+battle-time trophies remain related evidence, grouped into 100-trophy buckets
+beneath that unit. Five copies in one army contribute one using battle with
+quantity five. Missing trophies remain an explicit unknown evidence group.
 
 Clan-castle contributions, including spells and siege machines, are excluded
 from historical usage. No compositions, hero assignments, unit co-occurrences,
@@ -39,19 +39,20 @@ classification; a plain rename changes only display text.
 
 ## Behavioral checks
 
-`test_army_history.py` proves quantity summation, one using battle per unit,
-separate denominators at different trophy values, unknown trophies, namespace
+`test_army_history.py` proves quantity summation, one using battle per unit, the
+whole-season denominator across trophy buckets, unknown trophies, namespace
 overlap, later troop/siege classification, and exclusion of known and unknown
-clan-castle contributions.
+clan-castle contributions. A 3,000-battle fixture retains 30,000 unit uses and
+must remain below the 524,288-byte category bound.
 
 `test_id_history_postgres.py` traces raw ingestion through both player pages
 and analytics. It covers reports in either order, a missing side, disagreeing
 outcomes, repeated polls, correction and worker restart. The lifecycle test
 rolls back and retries summaries and retirement, removes every raw fixture body,
 then names IDs and reads all six historical categories through the signed API.
-It checks exact quantities and trophy values after cleanup. Three players' 84
+It checks quantities and trophy buckets after cleanup. Three players' 84
 daily entries and all trophy totals remain identical. Separate tests cover plain
-renames, unavailable legacy summaries, and 450 trophy groups across three pages.
+renames, unavailable legacy summaries, and a five-of-ten cross-trophy usage rate.
 
 The defender trace deliberately lacks its prior-day automatic-defense basis;
 it remains partial and is excluded from completed-day analytics. The offense
@@ -66,23 +67,24 @@ summaries and later-named IDs read from a restored retired fixture.
 ## Storage measurement
 
 The repeatable fixture contains 224 offense attacks, 28 with an unknown army,
-five home-troop quantities, 28 trophy values, four known clan-castle arrangements
+five home-troop quantities, three trophy buckets, four known clan-castle arrangements
 and an empty defense lens. It compares the
 old 22 label-bearing summary rows against 10 unit-namespace rows with the same
 indexes, excluding the new column from the old table.
 
-Measured in PostgreSQL 18: old rows 15,264 bytes and 81,920 allocated bytes;
-new rows 5,971 bytes and 49,152 allocated bytes. The change is -9,293 row bytes
-per season, a 60.9% reduction for this fixture. These are shared season datasets,
-not per-player costs. Over 6.5 identical seasons the row saving is about 60.4 KB.
-The fixture is intentionally repeatable, not representative of production trophy
-or quantity diversity. Growth depends on distinct unit/quantity/trophy groups.
+The PostgreSQL test reports row and allocated bytes for the current shape instead
+of fixing a measurement in this document. The earlier exact-trophy v1 figures
+are superseded by the bucketed v2 representation. The fixture is intentionally
+repeatable, not representative of production trophy or quantity diversity.
+Growth depends on distinct unit/quantity/trophy-bucket groups. The separate
+3,000-battle, ten-unit fixture proves 30,000 uses remain within the enforced
+512 KiB per-category limit.
 WAL, backups, raw archive bytes, at-scale indexes and realistic diversity remain
 unmeasured; no production capacity claim is made.
 
 ## Validation
 
-Validation uses only the task-owned copy
+The original v1 validation used only the task-owned copy
 `/tmp/clashlens-126-history.ljZXzqnE` on Rogue and uniquely named rootless fixture
 containers. The final targeted run passed 47 PostgreSQL/usage tests. A subsequent storage
 fixture broadened quantity and trophy diversity and passed independently.
@@ -99,5 +101,6 @@ existing suite skips, four fixture tests passed, all 312 website unit tests
 passed, and 17 browser tests passed. The one browser skip is the optional
 restored-history scenario, which passed in the separate three-test run. Lint,
 type checking, production builds and the browser asset boundary check passed.
-Earlier checks against the superseded representation are not counted here.
+Those checks predate the whole-season denominator and trophy-bucket v2 fix and
+are not evidence for the current representation.
 The separate restore containers and browser session were stopped afterward.

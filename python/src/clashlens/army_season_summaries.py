@@ -1,4 +1,4 @@
-"""Whole-season unit usage by ID, quantity and battle-time trophies."""
+"""Whole-season usage by ID with quantity and trophy-bucket evidence."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from .army_history import HISTORY_CATEGORIES, aggregate_usage
 # slices agree on when a season is finalizable.
 from .season_summaries import _season_completed
 
-PROJECTION_VERSION = "army-unit-usage-v1"
+PROJECTION_VERSION = "army-unit-usage-v2"
 LENSES = ("offense", "defense")
 # Historical army reads cover the whole-season sample, never a
 # population-filtered cohort; per-cohort historical filters are out of scope.

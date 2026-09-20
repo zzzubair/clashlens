@@ -75,7 +75,7 @@ def get_army_season_summary(
             return None
         if row[14] is None:
             return None  # Legacy counts cannot recover quantities or trophies.
-        rows, unresolved = usage_rows(_json_array(row[14]), category)
+        rows, unresolved = usage_rows(_json_array(row[14]), category, int(row[5]))
         sort_field = "usage_rate" if sort == "usage-rate" else "usage_count"
         rows.sort(key=lambda item: (-float(item[sort_field]), item["key"]))
         numeric_rows = [{key: value for key, value in item.items() if key != "label"}
@@ -1002,7 +1002,6 @@ _ARMY_ANALYTICS_COMPONENT_COLUMN = {
     "hero-pet": "heroes",
     "hero-equipment": "heroes",
 }
-
 
 
 

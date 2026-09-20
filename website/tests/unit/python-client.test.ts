@@ -1014,14 +1014,20 @@ describe("server-only Python client response boundary", () => {
       history_usage_only: true,
       rows: [
         {
-          key: "troop:58@5@6000",
+          key: "troop:58",
           unit_id: "troop:58",
           label: "Yeti",
-          quantity: 5,
-          battle_trophies: 6000,
           usage_count: 2,
           usage_denominator: 4,
           usage_rate: 0.5,
+          quantity_trophy_groups: [
+            {
+              quantity: 5,
+              battle_trophy_min: 6000,
+              battle_trophy_max: 6099,
+              usage_count: 2,
+            },
+          ],
         },
       ],
       publication_identity: "army-season-abc123-def45678",
@@ -1068,9 +1074,15 @@ describe("server-only Python client response boundary", () => {
     });
     expect(mapped.collectionCoverage).toEqual({ state: "partial", completedDays: 20 });
     expect(mapped.rows[0]).toMatchObject({
-      quantity: 5,
-      battleTrophies: 6000,
       usageCount: 2,
+      quantityTrophyGroups: [
+        {
+          quantity: 5,
+          battleTrophyMin: 6000,
+          battleTrophyMax: 6099,
+          usageCount: 2,
+        },
+      ],
     });
     expect(mapped.rows[0].starCounts).toBeUndefined();
   });

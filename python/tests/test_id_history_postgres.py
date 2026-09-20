@@ -128,7 +128,7 @@ def test_raw_battle_reconciles_to_both_player_pages_and_analytics(database_url, 
                 assert result["total_attacks"] == (1 if lens == "offense" else 0)
                 if lens == "offense":
                     assert result["rows"][0]["usage_count"] == 1
-                    assert result["rows"][0]["quantity"] == 5
+                    assert result["rows"][0]["quantity_trophy_groups"][0]["quantity"] == 5
                 else:
                     assert result["rows"] == []
         finally:
@@ -277,13 +277,17 @@ def test_unknown_history_survives_retirement_retry_and_later_naming(
                     result = response.json()
                     assert result["unknown_affected_attacks"] == 1  # At collection.
                     assert result["total_attacks"] == 2
-                    assert result["versions"]["analytics"] == "army-unit-usage-v1"
+                    assert result["versions"]["analytics"] == "army-unit-usage-v2"
                     assert result["rows"]
                     for row in result["rows"]:
                         assert row["usage_count"] == 1
-                        assert row["usage_denominator"] == 1
-                        assert row["battle_trophies"] == (6040 if row["unit_id"] == "troop:58" else 6000)
-                        assert row["quantity"] == (5 if row["unit_id"] == "troop:900" else 1)
+                        assert row["usage_denominator"] == 2
+                        assert row["quantity_trophy_groups"] == [{
+                            "quantity": 5 if row["unit_id"] == "troop:900" else 1,
+                            "battle_trophy_min": 6000,
+                            "battle_trophy_max": 6099,
+                            "usage_count": 1,
+                        }]
                         assert "star_counts" not in row
                         assert "average_destruction" not in row
                         assert "Unknown" not in row["label"]
@@ -377,7 +381,7 @@ def test_measure_retained_season_bytes_against_label_based_rows(database_url):
             result = api_analytics.get_army_season_summary(api, MEASURE_SEASON, "offense", "troops", "usage-rate")
             assert result["total_attacks"] == 224
             assert sum(row["usage_count"] for row in result["rows"]) == 196
-            assert all(row["usage_denominator"] == 8 for row in result["rows"])
+            assert all(row["usage_denominator"] == 224 for row in result["rows"])
         finally:
             api.close()
 
@@ -413,24 +417,28 @@ def test_legacy_unknown_summary_reports_partial_id_evidence(database_url):
             api.close()
 
 
-def test_quantity_trophy_pages_survive_retirement_and_do_not_repeat_groups(database_url):
-    # A category can exceed one API page without exceeding the retained JSON
-    # limit. Every page stays below the API response limit.
+def test_cross_trophy_usage_keeps_whole_season_denominator_after_retirement(database_url):
     with domain_database(database_url) as ci:
         api = ApiDatabase(ci)
         try:
             with psycopg.connect(ci) as connection:
-                _seed(connection, offense=[{"stars": 3, "home_troops": [["troop:58", 5]], "trophies": 5000 + i} for i in range(450)])
+                _seed(connection, offense=[
+                    {
+                        "stars": 3,
+                        "home_troops": [["troop:58" if index < 5 else "troop:0", 1]],
+                        "trophies": 5000 + index * 100,
+                    }
+                    for index in range(10)
+                ])
                 materialize_army_season(connection, MEASURE_SEASON, "offense")
                 connection.execute("DELETE FROM army_analytics_battle_facts")
-            first = api_analytics.get_army_season_summary(api, MEASURE_SEASON, "offense", "troops", "usage-rate")
-            second = api_analytics.get_army_season_summary(api, MEASURE_SEASON, "offense", "troops", "usage-rate", offset=first["pagination"]["next_offset"])
-            last = api_analytics.get_army_season_summary(api, MEASURE_SEASON, "offense", "troops", "usage-rate", offset=second["pagination"]["next_offset"])
-            assert [len(page["rows"]) for page in (first, second, last)] == [200, 200, 50]
-            assert last["pagination"]["next_offset"] is None
-            rows = first["rows"] + second["rows"] + last["rows"]
-            assert {row["battle_trophies"] for row in rows} == set(range(5000, 5450))
-            assert all(row["usage_count"] == row["usage_denominator"] == 1 for row in rows)
-            assert all(len(json.dumps(page).encode()) < 1_048_576 for page in (first, second, last))
+            result = api_analytics.get_army_season_summary(
+                api, MEASURE_SEASON, "offense", "troops", "usage-rate"
+            )
+            row = next(row for row in result["rows"] if row["unit_id"] == "troop:58")
+            assert (row["usage_count"], row["usage_denominator"], row["usage_rate"]) == (
+                5, 10, .5,
+            )
+            assert len(row["quantity_trophy_groups"]) == 5
         finally:
             api.close()
