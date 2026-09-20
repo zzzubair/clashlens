@@ -214,16 +214,29 @@ def test_reports_in_either_order_repeated_polls_restart_and_correction(
             api.close()
 
 
-def test_unknown_history_survives_retirement_retry_and_later_naming(
+def test_corrected_unknown_history_survives_retirement_retry_and_later_naming(
     database_url, archive_server, monkeypatch, tmp_path,
 ):
     with domain_database(database_url) as ci:
         database, processor = _processor(ci, archive_server, monkeypatch)
         api = ApiDatabase(ci)
         try:
-            _ingest(ci, archive_server, processor, "attacker-1", True)
-            _ingest(ci, archive_server, processor, "defender-2", False)
-            _ingest(ci, archive_server, processor, "other-3", True, opponent="#9PP", code="u1x58", stars=1, destruction=50)
+            first_job = _ingest(ci, archive_server, processor, "attacker-1", True)
+            _ingest(ci, archive_server, processor, "repeat-2", True)
+            database.close()
+            database, processor = _processor(ci, archive_server, monkeypatch)
+            assert processor.process_job(first_job, owner="restart") is None
+            _ingest(ci, archive_server, processor, "defender-3", False)
+            _ingest(
+                ci,
+                archive_server,
+                processor,
+                "correction-4",
+                True,
+                stars=2,
+                destruction=80,
+            )
+            _ingest(ci, archive_server, processor, "other-5", True, opponent="#9PP", code="u1x58", stars=1, destruction=50)
             _publish_reports(database, processor)
             with database.pool.connection() as connection:
                 _ensure_canonical_anchor(connection, SEASON_ID, SEASON_START)
@@ -291,7 +304,7 @@ def test_unknown_history_survives_retirement_retry_and_later_naming(
                                     row["three_star_count"]) == (1, 0, 0)
                         else:
                             assert (row["one_star_count"], row["two_star_count"],
-                                    row["three_star_count"]) == (0, 0, 1)
+                                    row["three_star_count"]) == (0, 1, 0)
                         assert "star_counts" not in row
                         assert "average_destruction" not in row
                         assert "Unknown" not in row["label"]
