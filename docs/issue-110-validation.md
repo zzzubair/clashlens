@@ -244,7 +244,8 @@ legacy evidence, not permission to discard retained raw responses.
 
 Issue #110 explicitly requires a separate go for:
 
-1. Daily backups, continuous WAL archival, and a proven scratch restore.
+1. The backup and recovery requirements in [`deployment.md`](deployment.md),
+   including continuous WAL archival and a proven scratch restore.
 2. Production Google/Discord credentials and both real login flows.
 3. A full real Legend day through 05:00 UTC, with agreed keys/cost limits,
    EOD comparisons, and measured database, swap, disk, and archive growth.

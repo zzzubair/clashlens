@@ -4,6 +4,7 @@ Description=Clash Lens
 Requires=clashlens-pod.service clashlens-postgres.service clashlens-collector.service clashlens-api.service clashlens-worker.service clashlens-website.service
 After=clashlens-postgres.service
 @@FIXTURE_REQUIRES@@
+@@BACKUP_REQUIRES@@
 
 [Install]
 WantedBy=default.target

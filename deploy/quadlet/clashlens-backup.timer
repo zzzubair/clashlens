@@ -1,0 +1,9 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens weekly PostgreSQL backup schedule
+PartOf=clashlens.target
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00 UTC
+Persistent=true
+Unit=clashlens-backup.service

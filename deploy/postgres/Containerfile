@@ -1,0 +1,13 @@
+FROM docker.io/library/golang:1.26 AS wal-g
+WORKDIR /build
+# Build without libc so PostgreSQL can keep its existing Alpine collation rules.
+ADD https://github.com/wal-g/wal-g/archive/refs/tags/v3.0.9.tar.gz /tmp/wal-g.tar.gz
+RUN echo 'b06bc26c4865c07d0c269101910f63c7eedd03790b7c054a7da0980a7a9cc31d  /tmp/wal-g.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/wal-g.tar.gz --strip-components=1
+RUN CGO_ENABLED=0 GOEXPERIMENT=jsonv2 go build -mod=readonly -p=2 -trimpath \
+    -ldflags='-s -w -X github.com/wal-g/wal-g/cmd/pg.walgVersion=v3.0.9' \
+    -o /wal-g ./main/pg
+
+FROM docker.io/library/postgres:18-alpine
+COPY --from=wal-g /wal-g /usr/local/bin/wal-g
+RUN wal-g --version

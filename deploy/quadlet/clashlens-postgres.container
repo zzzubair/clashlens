@@ -15,6 +15,7 @@ User=0
 Volume=clashlens-postgres.volume:/var/lib/postgresql/data
 EnvironmentFile=@@ENV_DIR@@/postgres.env
 Secret=clashlens-postgres-password,type=mount,target=/run/secrets/postgres-password,uid=0,gid=0,mode=0400
+@@BACKUP_SECRET@@
 Memory=@@POSTGRES_MEMORY@@
 PidsLimit=@@POSTGRES_PIDS@@
 PodmanArgs=--pod=@@PREFIX@@-pod --cpus=@@POSTGRES_CPUS@@
@@ -24,7 +25,7 @@ HealthTimeout=5s
 HealthRetries=12
 HealthOnFailure=kill
 Notify=healthy
-Exec=postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c track_io_timing=on -c track_wal_io_timing=on
+Exec=postgres -c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c track_io_timing=on -c track_wal_io_timing=on @@POSTGRES_ARCHIVE_ARGS@@
 
 [Service]
 Restart=always

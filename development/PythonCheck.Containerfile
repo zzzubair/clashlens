@@ -11,6 +11,7 @@ RUN uv sync --locked --all-groups --no-install-project
 COPY python/src ./src
 COPY python/tests ./tests
 COPY python/testdata ./testdata
+COPY ops /workspace/ops
 COPY .github /workspace/.github
 COPY deploy /workspace/deploy
 COPY development /workspace/development
