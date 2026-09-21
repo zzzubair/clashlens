@@ -149,6 +149,7 @@ export interface BattleArmy {
 }
 
 export interface ArmyAnalytics {
+  pagination?: { offset: number; totalRows: number; nextOffset: number | null };
   kind: "army-analytics";
   selection: {
     lens: "offense" | "defense";
@@ -187,12 +188,16 @@ export interface ArmyAnalytics {
     usageCount: number;
     usageDenominator: number;
     usageRate: number;
-    starCounts: [number, number, number, number];
-    starRates: [number, number, number, number];
-    threeStarRate: number;
-    averageStars: number;
-    averageDestruction: number;
-    unknownExcludedAttacks: number;
+    quantity?: number;
+    oneStarCount?: number;
+    twoStarCount?: number;
+    threeStarCount?: number;
+    starCounts?: [number, number, number, number];
+    starRates?: [number, number, number, number];
+    threeStarRate?: number;
+    averageStars?: number;
+    averageDestruction?: number;
+    unknownExcludedAttacks?: number;
   }>;
 }
 

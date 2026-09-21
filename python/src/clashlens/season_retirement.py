@@ -189,7 +189,7 @@ def finalize_season_detail(
     happens separately in :func:`retire_season_detail` so a crash between
     the two is restart-safe.
     """
-    from .army_analytics import CATEGORIES
+    from .army_history import HISTORY_CATEGORIES
     from .army_season_summaries import LENSES, _project_lens
     from .army_season_summaries import _digest as _army_digest
     from .season_summaries import _digest as _player_digest
@@ -307,7 +307,7 @@ def finalize_season_detail(
         except Exception as error:  # noqa: BLE001 - reported, blocks finalization
             failures.append({"lens": lens, "error": str(error)[:200]})
             continue
-        for category in sorted(CATEGORIES):
+        for category in sorted(HISTORY_CATEGORIES):
             key = f"{lens}:{category}"
             summary = projected_lens.get(category)
             if summary is None:

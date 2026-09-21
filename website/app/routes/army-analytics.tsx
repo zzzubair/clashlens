@@ -27,20 +27,6 @@ const allowed = {
   ],
 } as const;
 
-// Transitional missing-summary signal: the compact summary endpoint reports
-// 404 army_analytics_unavailable while summaries are not yet materialized.
-// Only this shape falls back to detail; 422 and other errors propagate.
-function isMissingArmySummary(cause: unknown): boolean {
-  if (typeof cause !== "object" || cause === null) return false;
-  const { status, payload } = cause as { status?: unknown; payload?: unknown };
-  return (
-    status === 404 &&
-    typeof payload === "object" &&
-    payload !== null &&
-    (payload as { error?: unknown }).error === "army_analytics_unavailable"
-  );
-}
-
 export async function loader({ request }: LoaderFunctionArgs) {
   const source = new URL(request.url).searchParams;
   const season = source.get("season") ?? "current";
@@ -50,40 +36,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const python = await import("../services/python.server");
   try {
     if (season !== "current") {
-      // Historical seasons prefer the shared whole-season summary:
-      // Legend days 1-28 with the whole-season sample, served without
-      // touching battle detail. Summaries are materialized after deploy,
-      // so a missing summary (404 army_analytics_unavailable only) falls
-      // back to the existing detailed read with the requested range and
-      // population until materialization lands. No fallback on 422 or
-      // other errors.
-      const client = python.createPythonClient();
       const summaryQuery = new URLSearchParams({ lens, category, sort });
-      try {
-        return {
-          analytics: await client.getArmySeasonSummary(season, summaryQuery),
-          error: null,
-          seasonEmpty: null,
-          historicalSummary: true,
-        };
-      } catch (summaryCause) {
-        if (!isMissingArmySummary(summaryCause)) throw summaryCause;
-        const query = new URLSearchParams({
-          season,
-          lens,
-          start_day: source.get("start_day") ?? "1",
-          end_day: source.get("end_day") ?? "28",
-          population: source.get("population") ?? "top-100",
-          category,
-          sort,
-        });
-        return {
-          analytics: await client.getArmyAnalytics(query),
-          error: null,
-          seasonEmpty: null,
-          historicalSummary: false,
-        };
-      }
+      if (source.has("offset")) summaryQuery.set("offset", source.get("offset")!);
+      return {
+        analytics: await python
+          .createPythonClient()
+          .getArmySeasonSummary(season, summaryQuery),
+        error: null,
+        seasonEmpty: null,
+        historicalSummary: true,
+        requestedSeason: season,
+      };
     }
     const query = new URLSearchParams({
       season,
@@ -99,6 +62,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       error: null,
       seasonEmpty: null,
       historicalSummary: false,
+      requestedSeason: season,
     };
   } catch (cause) {
     if (cause instanceof python.NoCompletedLegendDaysError) {
@@ -110,6 +74,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           error: null,
           seasonEmpty: { previousSeasonId: cause.previousSeasonId },
           historicalSummary: false,
+          requestedSeason: season,
         },
         { status: 404 },
       );
@@ -153,7 +118,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
         error.error.affectedDays = (payload as { affected_days: number[] }).affected_days;
       }
       return data(
-        { analytics: null, error, seasonEmpty: null, historicalSummary: false },
+        {
+          analytics: null,
+          error,
+          seasonEmpty: null,
+          historicalSummary: season !== "current",
+          requestedSeason: season,
+        },
         { status: pythonError.status },
       );
     }
@@ -162,6 +133,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       error: safeWebsiteError(cause),
       seasonEmpty: null,
       historicalSummary: false,
+      requestedSeason: season,
     };
   }
 }
@@ -171,13 +143,9 @@ export function headers() {
 }
 
 export default function ArmyAnalyticsRoute() {
-  const { analytics, error, seasonEmpty, historicalSummary } =
+  const { analytics, error, seasonEmpty, historicalSummary, requestedSeason } =
     useLoaderData<typeof loader>();
   const selected = analytics?.selection;
-  // Day-range and population controls are disabled only while a compact
-  // whole-season summary (Legend days 1-28, all players) is served. While
-  // the transitional detail fallback is served, the requested controls
-  // stay enabled and keep their requested values.
   const isHistorical = historicalSummary === true;
   return (
     <main className="page-shell">
@@ -191,8 +159,9 @@ export default function ArmyAnalyticsRoute() {
       <Form method="get" className="search-panel" aria-label="Army analytics filters">
         {isHistorical ? (
           <p>
-            Historical seasons show the whole season (Legend days 1–28, all players). Day
-            ranges and population filters apply to the current season only.
+            Historical seasons show the whole season (Legend days 1–28, all players). Only
+            unit quantities, usage and 1★/2★/3★ counts are retained. Day ranges,
+            population filters and combinations apply to the current season only.
           </p>
         ) : null}
         <label>
@@ -205,7 +174,7 @@ export default function ArmyAnalyticsRoute() {
         </label>
         <label>
           Season
-          <input name="season" defaultValue={selected?.season ?? "current"} required />
+          <input name="season" defaultValue={requestedSeason} required />
         </label>
         <label>
           Start Legend day
@@ -240,17 +209,29 @@ export default function ArmyAnalyticsRoute() {
         <label>
           Category
           <select name="category" defaultValue={selected?.category ?? "troops"}>
-            {allowed.category.map((value) => (
-              <option key={value}>{value}</option>
-            ))}
+            {allowed.category
+              .filter(
+                (value) =>
+                  !isHistorical ||
+                  ["troops", "spells", "siege", "heroes", "pets", "equipment"].includes(
+                    value,
+                  ),
+              )
+              .map((value) => (
+                <option key={value}>{value}</option>
+              ))}
           </select>
         </label>
         <label>
           Sort
           <select name="sort" defaultValue={selected?.sort ?? "usage-rate"}>
-            {allowed.sort.map((value) => (
-              <option key={value}>{value}</option>
-            ))}
+            {allowed.sort
+              .filter(
+                (value) => !isHistorical || ["usage-rate", "usage-count"].includes(value),
+              )
+              .map((value) => (
+                <option key={value}>{value}</option>
+              ))}
           </select>
         </label>
         <button type="submit">Apply</button>
@@ -285,7 +266,9 @@ export default function ArmyAnalyticsRoute() {
               <strong>{analytics.usableArmySample}</strong>
             </article>
             <article className="metric-card">
-              <h2>Unknown-affected attacks</h2>
+              <h2>
+                {isHistorical ? "Unknown at collection" : "Unknown-affected attacks"}
+              </h2>
               <strong>{analytics.unknownAffectedAttacks}</strong>
             </article>
           </section>
@@ -305,9 +288,12 @@ export default function ArmyAnalyticsRoute() {
           <p>
             Collection coverage {analytics.collectionCoverage.state} ({""}
             {analytics.collectionCoverage.completedDays} days) · freshness{" "}
-            {analytics.freshness.state} · attacks missing battle-time trophy evidence:{" "}
-            {analytics.missingTrophyMembershipEvidence} · stale or uncertain cohort
-            members: {analytics.cohortEvidence.staleOrUncertainCohortMembers}
+            {analytics.freshness.state}
+            {!isHistorical
+              ? ` · attacks missing battle-time trophy evidence: ${analytics.missingTrophyMembershipEvidence}`
+              : null}{" "}
+            · stale or uncertain cohort members:{" "}
+            {analytics.cohortEvidence.staleOrUncertainCohortMembers}
             {analytics.cohortEvidence.streakExcludedPlayers > 0
               ? ` · streak-excluded players: ${analytics.cohortEvidence.streakExcludedPlayers}`
               : null}
@@ -321,41 +307,78 @@ export default function ArmyAnalyticsRoute() {
             <table className="data-table" aria-label="Army analytics results">
               <thead>
                 <tr>
-                  <th>Item or combination</th>
+                  <th>{isHistorical ? "Unit" : "Item or combination"}</th>
+                  {isHistorical ? (
+                    <>
+                      <th>Quantity</th>
+                      <th>1★</th>
+                      <th>2★</th>
+                      <th>3★</th>
+                    </>
+                  ) : null}
                   <th>Uses / denominator</th>
                   <th>Usage rate</th>
-                  <th>0★</th>
-                  <th>1★</th>
-                  <th>2★</th>
-                  <th>3★</th>
-                  <th>Three-star rate</th>
-                  <th>Average stars</th>
-                  <th>Average destruction</th>
-                  <th>Unknown-excluded attacks</th>
+                  {!isHistorical ? (
+                    <>
+                      <th>0★</th>
+                      <th>1★</th>
+                      <th>2★</th>
+                      <th>3★</th>
+                      <th>Three-star rate</th>
+                      <th>Average stars</th>
+                      <th>Average destruction</th>
+                      <th>Unknown-excluded attacks</th>
+                    </>
+                  ) : null}
                 </tr>
               </thead>
               <tbody>
                 {analytics.rows.map((row) => (
                   <tr key={row.key}>
                     <th scope="row">{row.label}</th>
+                    {isHistorical ? (
+                      <>
+                        <td>{row.quantity}</td>
+                        <td>{row.oneStarCount}</td>
+                        <td>{row.twoStarCount}</td>
+                        <td>{row.threeStarCount}</td>
+                      </>
+                    ) : null}
                     <td>
                       {row.usageCount} / {row.usageDenominator}
                     </td>
                     <td>{formatRate(row.usageRate)}</td>
-                    {row.starCounts.map((count, index) => (
-                      <td key={index}>
-                        {count} ({formatRate(row.starRates[index])})
-                      </td>
-                    ))}
-                    <td>{formatRate(row.threeStarRate)}</td>
-                    <td>{row.averageStars.toFixed(2)}</td>
-                    <td>{row.averageDestruction.toFixed(1)}%</td>
-                    <td>{row.unknownExcludedAttacks}</td>
+                    {!isHistorical ? (
+                      <>
+                        {row.starCounts?.map((count, index) => (
+                          <td key={index}>
+                            {count} ({formatRate(row.starRates![index])})
+                          </td>
+                        ))}
+                        <td>{formatRate(row.threeStarRate!)}</td>
+                        <td>{row.averageStars!.toFixed(2)}</td>
+                        <td>{row.averageDestruction!.toFixed(1)}%</td>
+                        <td>{row.unknownExcludedAttacks}</td>
+                      </>
+                    ) : null}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          {analytics.pagination ? (
+            <p>
+              Showing {analytics.rows.length} of {analytics.pagination.totalRows}{" "}
+              unit/quantity rows.
+              {analytics.pagination.nextOffset !== null ? (
+                <Link
+                  to={`?${new URLSearchParams({ season: requestedSeason, lens: analytics.selection.lens, category: analytics.selection.category, sort: analytics.selection.sort, offset: String(analytics.pagination.nextOffset) })}`}
+                >
+                  Next results
+                </Link>
+              ) : null}
+            </p>
+          ) : null}
           <p>
             <small>
               Publication {analytics.publicationIdentity} · decoder{" "}

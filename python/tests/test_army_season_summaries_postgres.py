@@ -1,7 +1,7 @@
 """Shared whole-season army summaries (issue #82, army slice).
 
 An army_season_summaries row per (season, lens, category) is projected
-from the current versioned battle facts with the shared builder.
+from current versioned battle facts, grouped by unit and quantity.
 Historical reads use the summary alone, survive detail removal, refresh
 atomically on late corrections, and leave live seasons untouched.
 """
@@ -131,7 +131,6 @@ def _offense_specs():
     return [
         {"stars": 3, "home_troops": troops, "spells": [["spell:2", 1]]},
         {"stars": 3, "home_troops": troops, "spells": [["spell:2", 1]]},
-        # Missing battle-time trophy evidence is counted, not filtered.
         {"stars": 2, "destruction": 80, "home_troops": troops, "trophies": None},
         {
             "stars": 1,
@@ -199,7 +198,7 @@ def test_complete_season_materializes_whole_season_aggregates(
                 )
                 connection.commit()
             assert report["season_completed"] is True
-            assert report["lenses"]["offense"]["materialized"] == 11
+            assert report["lenses"]["offense"]["materialized"] == 5
             assert report["lenses"]["offense"]["failures"] == []
             with database.pool.connection() as connection:
                 summary = _row(connection)
@@ -211,36 +210,26 @@ def test_complete_season_materializes_whole_season_aggregates(
             assert summary["days_missing"] == 0
             assert summary["missing_days"] == []
             assert summary["projection_version"] == PROJECTION_VERSION
-            assert summary["missing_trophy_membership_evidence"] == 1
+            assert summary["missing_trophy_membership_evidence"] == 0
             assert summary["unknown_affected_attacks"] == 1
             assert summary["unknown_component_occurrences"] == 1
             states = dict(summary["army_states"])
             assert states["fully_decoded"] == 3
             assert states["partial"] == 1
             assert states["missing_code"] == 1
-            rows = {row["key"]: row for row in summary["result_rows"]}
-            troops = rows["troop:58"]
-            assert troops["usage_count"] == 4
-            assert troops["usage_denominator"] == 4
-            assert troops["usage_rate"] == 1.0
-            assert troops["star_counts"] == [0, 1, 1, 2]
-            assert troops["three_star_rate"] == 0.5
-            assert troops["average_stars"] == pytest.approx(2.25)
-            assert troops["average_destruction"] == pytest.approx(82.5)
-            spells = {
-                row["key"]: row
-                for row in _row(connection, category="spells")["result_rows"]
-            }["spell:2"]
-            assert spells["usage_count"] == 2
-            assert spells["usage_denominator"] == 4
+            assert summary["result_rows"] == []
+            assert summary["unit_usage"] == [
+                ["troop:58", 1, 1, 1, 0, 0],
+                ["troop:58", 2, 3, 0, 1, 2],
+            ]
             with database.pool.connection() as connection:
+                assert _row(connection, category="spells")["unit_usage"] == [
+                    ["spell:2", 1, 2, 0, 0, 2]
+                ]
                 defense = _row(connection, lens="defense")
             assert defense["total_attacks"] == 2
             assert defense["usable_army_sample"] == 2
-            assert {
-                row["key"]: row["usage_count"]
-                for row in defense["result_rows"]
-            } == {"troop:51": 2}
+            assert defense["unit_usage"] == [["troop:51", 3, 2, 0, 0, 1]]
         finally:
             database.close()
 
@@ -293,9 +282,8 @@ def test_historical_read_needs_no_battle_facts(database_url: str) -> None:
             assert after["reproducibility"]["legend_days"] == [1, 28]
             assert after["reproducibility"]["snapshot_versions"] == []
             assert after["publication_identity"].startswith("army-season-")
-            rows = {row["key"]: row for row in after["rows"]}
-            assert rows["troop:58"]["star_counts"] == [0, 1, 1, 2]
-            assert rows["troop:58"]["three_star_rate"] == 0.5
+            assert sum(row["usage_count"] for row in after["rows"]) == 4
+            assert all("star_counts" not in row for row in after["rows"])
             assert api_analytics.get_army_season_summary(database,
                 SEASON, "offense", "troops", "usage-rate"
             ) is not None
@@ -321,11 +309,11 @@ def test_repeat_is_unchanged_and_correction_refreshes(database_url: str) -> None
                 connection.commit()
                 second = materialize_army_season(connection, SEASON, "offense")
                 connection.commit()
-            assert first["materialized"] == 11
+            assert first["materialized"] == 5
             assert second == {
                 **first,
                 "materialized": 0,
-                "unchanged": 11,
+                "unchanged": 5,
             }
             with database.pool.connection() as connection:
                 assert _row(connection)["published_at"] == published_at
@@ -334,7 +322,7 @@ def test_repeat_is_unchanged_and_correction_refreshes(database_url: str) -> None
                 connection.execute(
                     """
                     UPDATE army_analytics_battle_facts
-                    SET stars = 3, destruction_percentage = 100
+                    SET home_troops = '[["troop:58", 2]]'::jsonb
                     WHERE official_season_id = %s AND lens = 'offense'
                       AND army_state = 'partial'
                     """,
@@ -346,12 +334,9 @@ def test_repeat_is_unchanged_and_correction_refreshes(database_url: str) -> None
             assert third["materialized"] >= 1
             assert third["content_digests"]["troops"] != first["content_digests"]["troops"]
             with database.pool.connection() as connection:
-                rows = {
-                    row["key"]: row
-                    for row in _row(connection)["result_rows"]
-                }
-            assert rows["troop:58"]["star_counts"] == [0, 0, 1, 3]
-            assert rows["troop:58"]["three_star_rate"] == 0.75
+                assert _row(connection)["unit_usage"] == [
+                    ["troop:58", 2, 4, 1, 1, 2]
+                ]
         finally:
             database.close()
 
@@ -432,9 +417,8 @@ def test_historical_season_endpoint_serves_summary_without_facts(
                 assert payload["selection"]["population"] == "all"
                 assert payload["total_attacks"] == 5
                 assert payload["usable_army_sample"] == 4
-                rows = {row["key"]: row for row in payload["rows"]}
-                assert rows["troop:58"]["usage_count"] == 4
-                assert rows["troop:58"]["three_star_rate"] == 0.5
+                assert sum(row["usage_count"] for row in payload["rows"]) == 4
+                assert all("star_counts" not in row for row in payload["rows"])
                 missing = client.get(
                     "/v1/analytics/armies/seasons/unknown-season",
                     headers=signed_headers(
@@ -453,8 +437,8 @@ def test_historical_season_endpoint_serves_summary_without_facts(
             database.close()
 
 
-def test_projected_troops_match_live_builder(database_url: str) -> None:
-    """The stored troops aggregate equals the shared live builder output."""
+def test_projected_troop_use_counts_match_live_builder(database_url: str) -> None:
+    """Splitting quantities preserves the live total using-battle count."""
     specs = _offense_specs()
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = ApiDatabase(connection_info)
@@ -490,7 +474,7 @@ def test_projected_troops_match_live_builder(database_url: str) -> None:
                 sort="usage-rate",
             )
             expected = build_army_result(facts, selection)
-            assert stored["result_rows"] == expected["rows"]
+            assert sum(row[2] for row in stored["unit_usage"]) == expected["rows"][0]["usage_count"]
             assert stored["total_attacks"] == expected["total_attacks"]
             assert stored["usable_army_sample"] == expected["usable_army_sample"]
             assert dict(stored["army_states"]) == expected["army_states"]
@@ -569,7 +553,7 @@ def test_failed_lens_keeps_prior_and_reports_lens_failure(
                 connection.commit()
             assert report["lenses"]["offense"]["failures"] != []
             assert report["lenses"]["defense"]["failures"] == []
-            assert report["lenses"]["defense"]["unchanged"] == 11
+            assert report["lenses"]["defense"]["unchanged"] == 5
             with database.pool.connection() as connection:
                 assert _row(connection)["content_digest"] == prior["content_digest"]
         finally:
@@ -625,7 +609,7 @@ def test_refresh_failure_warns_and_keeps_day_durable(
                 connection.execute(
                     """
                     UPDATE army_analytics_battle_facts
-                    SET stars = 0
+                    SET home_troops = '[["troop:58", 3]]'::jsonb
                     WHERE official_season_id = %s AND lens = 'offense' AND stars = 3
                     """,
                     (SEASON,),
@@ -633,8 +617,11 @@ def test_refresh_failure_warns_and_keeps_day_durable(
                 army_ingestion._refresh_army_season_summaries(database, connection, SEASON)
                 connection.commit()
             with database.pool.connection() as connection:
-                rows = {row["key"]: row for row in _row(connection)["result_rows"]}
-            assert rows["troop:58"]["star_counts"] == [2, 1, 1, 0]
+                assert _row(connection)["unit_usage"] == [
+                    ["troop:58", 1, 1, 1, 0, 0],
+                    ["troop:58", 2, 1, 0, 1, 0],
+                    ["troop:58", 3, 2, 0, 0, 2],
+                ]
         finally:
             database.close()
 
@@ -766,7 +753,6 @@ def test_first_materialization_serializes_with_correction(
                 summary = _row(connection)
             assert summary["total_attacks"] == 2
             assert summary["usable_army_sample"] == 2
-            rows = {row["key"]: row for row in summary["result_rows"]}
-            assert rows["troop:58"]["usage_count"] == 2
+            assert sum(row[2] for row in summary["unit_usage"] if row[0] == "troop:58") == 2
         finally:
             database.close()

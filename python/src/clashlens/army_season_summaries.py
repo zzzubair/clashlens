@@ -1,39 +1,22 @@
-"""Shared whole-season army summaries (issue #82, army slice).
-
-One independently readable ``army_season_summaries`` record per
-(season, lens, category) holds the whole-season aggregate projected from
-the current versioned ``army_analytics_battle_facts`` rows: usage counts
-and rates, 0/1/2/3-star attack counts with the three-star rate derived
-from the stored attack sample, and the underlying denominators plus
-excluded/undecodable counts and honest coverage. Projection reuses
-``build_army_result`` so denominators and star math match the live reads.
-Historical reads serve these rows only and never touch battle facts;
-offense and defense stay separate lenses so opposite perspectives are
-never mixed into duplicate attacks. Unknown stays explicit and a season
-with fewer than 28 completed army days stays partial. Existing detail is
-retained; no cleanup is authorized here.
-"""
+"""Whole-season usage and outcomes by unit ID and quantity."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from datetime import datetime
 from typing import Any
 
 from psycopg.types.json import Jsonb
 
-from .army_analytics import (
-    CATEGORIES,
-    ArmyAnalyticsSelection,
-    build_army_result,
-)
+from .army_history import HISTORY_CATEGORIES, aggregate_usage
 
 # The completed-season gate is shared with the player summaries so both
 # slices agree on when a season is finalizable.
 from .season_summaries import _season_completed
 
-PROJECTION_VERSION = "army-season-summary-v1"
+PROJECTION_VERSION = "army-unit-usage-v3"
 LENSES = ("offense", "defense")
 # Historical army reads cover the whole-season sample, never a
 # population-filtered cohort; per-cohort historical filters are out of scope.
@@ -56,6 +39,7 @@ _SUMMARY_COLUMNS = (
     "perspective_disagreement_count",
     "missing_trophy_membership_evidence",
     "result_rows",
+    "unit_usage",
     "projection_version",
     "content_digest",
 )
@@ -95,9 +79,9 @@ def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
     """
     rows = connection.execute(
         """
-        SELECT stars, destruction_percentage, army_state, home_troops,
-               spells, siege, cc_troops, heroes, unresolved_components,
-               perspective_disagreement, battle_time_trophies
+        SELECT stars, army_state, home_troops,
+               spells, siege, heroes, unresolved_components,
+               perspective_disagreement
         FROM army_analytics_battle_facts
         WHERE official_season_id = %s AND lens = %s AND is_current
         ORDER BY battle_id
@@ -107,19 +91,16 @@ def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
     facts = [
         {
             "stars": int(row[0]),
-            "destruction_percentage": int(row[1]),
-            "army_state": _text(row[2]),
-            "home_troops": row[3] or [],
-            "spells": row[4] or [],
-            "siege": row[5] or [],
-            "cc_troops": row[6] or [],
-            "heroes": row[7] or [],
-            "unresolved_components": row[8] or [],
-            "perspective_disagreement": bool(row[9]),
+            "army_state": _text(row[1]),
+            "home_troops": row[2] or [],
+            "spells": row[3] or [],
+            "siege": row[4] or [],
+            "heroes": row[5] or [],
+            "unresolved_components": row[6] or [],
+            "perspective_disagreement": bool(row[7]),
         }
         for row in rows
     ]
-    missing_trophies = sum(1 for row in rows if row[10] is None)
     observed = {
         int(row[0])
         for row in connection.execute(
@@ -133,37 +114,32 @@ def _project_lens(connection: Any, season_id: str, lens: str) -> dict[str, Any]:
     missing = sorted(set(_SEASON_DAYS) - observed)
     coverage_state = "complete" if len(observed) == 28 and not missing else "partial"
     summaries: dict[str, Any] = {}
-    for category in sorted(CATEGORIES):
-        # Direct construction: the historical sample is the whole season
-        # ("all"), which live-selection validation does not name. Only the
-        # category, sort, and day range reach the shared builder.
-        selection = ArmyAnalyticsSelection(
-            lens=lens,
-            season=season_id,
-            start_day=1,
-            end_day=28,
-            population=HISTORICAL_POPULATION,
-            category=category,
-            sort="usage-rate",
-        )
-        result = build_army_result(facts, selection)
+    usage = aggregate_usage(facts)
+    states = Counter(fact["army_state"] for fact in facts)
+    army_states = {
+        "fully_decoded": states.pop("decoded", 0),
+        "partial": states.pop("partial", 0),
+        "missing_code": states.pop("missing_army_share_code", 0),
+        "empty_code": states.pop("empty_army_share_code", 0),
+        "malformed": states.pop("malformed", 0),
+        "structurally_unsupported": states.pop("structurally_unsupported", 0),
+        **dict(sorted(states.items())),
+    }
+    for category in sorted(HISTORY_CATEGORIES):
         summaries[category] = {
             "days_observed": len(observed),
             "days_missing": len(missing),
             "missing_days": missing,
             "coverage_state": coverage_state,
-            "total_attacks": result["total_attacks"],
-            "usable_army_sample": result["usable_army_sample"],
-            "army_states": result["army_states"],
-            "unknown_affected_attacks": result["unknown_affected_attacks"],
-            "unknown_component_occurrences": result[
-                "unknown_component_occurrences"
-            ],
-            "perspective_disagreement_count": result[
-                "perspective_disagreement_count"
-            ],
-            "missing_trophy_membership_evidence": missing_trophies,
-            "result_rows": result["rows"],
+            "total_attacks": len(facts),
+            "usable_army_sample": army_states["fully_decoded"] + army_states["partial"],
+            "army_states": army_states,
+            "unknown_affected_attacks": sum(bool(f["unresolved_components"]) for f in facts),
+            "unknown_component_occurrences": sum(len(f["unresolved_components"]) for f in facts),
+            "perspective_disagreement_count": sum(f["perspective_disagreement"] for f in facts),
+            "missing_trophy_membership_evidence": 0,
+            "result_rows": [],
+            "unit_usage": usage[category],
             "projection_version": PROJECTION_VERSION,
         }
     return summaries
@@ -212,6 +188,11 @@ def materialize_army_season(
         }
     acquire_army_season_lock(connection, season_id, lens)
     projected = _project_lens(connection, season_id, lens)
+    connection.execute(
+        "DELETE FROM army_season_summaries WHERE official_season_id = %s "
+        "AND lens = %s AND NOT (category = ANY(%s))",
+        (season_id, lens, sorted(HISTORY_CATEGORIES)),
+    )
     report: dict[str, Any] = {
         "season_id": season_id,
         "lens": lens,
@@ -270,6 +251,7 @@ def _upsert_category(
         summary["perspective_disagreement_count"],
         summary["missing_trophy_membership_evidence"],
         Jsonb(summary["result_rows"]),
+        Jsonb(summary["unit_usage"]),
         summary["projection_version"],
         digest,
     ]

@@ -814,23 +814,28 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
   )
     throw new PythonApiError(502, { error: "malformed" });
   const rows = payload.rows.map((row) => {
+    if (!isRecord(row)) throw new PythonApiError(502, { error: "malformed" });
     if (
-      !isRecord(row) ||
       !isString(row.key) ||
       !isString(row.label) ||
       !isInteger(row.usage_count) ||
       !isInteger(row.usage_denominator) ||
       !isFiniteNumber(row.usage_rate) ||
-      !Array.isArray(row.star_counts) ||
-      row.star_counts.length !== 4 ||
-      !row.star_counts.every(isInteger) ||
-      !Array.isArray(row.star_rates) ||
-      row.star_rates.length !== 4 ||
-      !row.star_rates.every(isFiniteNumber) ||
-      !isFiniteNumber(row.three_star_rate) ||
-      !isFiniteNumber(row.average_stars) ||
-      !isFiniteNumber(row.average_destruction) ||
-      !isInteger(row.unknown_excluded_attacks)
+      (payload.history_usage_only === true
+        ? !isInteger(row.quantity) ||
+          !isInteger(row.one_star_count) ||
+          !isInteger(row.two_star_count) ||
+          !isInteger(row.three_star_count)
+        : !Array.isArray(row.star_counts) ||
+          row.star_counts.length !== 4 ||
+          !row.star_counts.every(isInteger) ||
+          !Array.isArray(row.star_rates) ||
+          row.star_rates.length !== 4 ||
+          !row.star_rates.every(isFiniteNumber) ||
+          !isFiniteNumber(row.three_star_rate) ||
+          !isFiniteNumber(row.average_stars) ||
+          !isFiniteNumber(row.average_destruction) ||
+          !isInteger(row.unknown_excluded_attacks))
     )
       throw new PythonApiError(502, { error: "malformed" });
     return {
@@ -839,12 +844,22 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       usageCount: row.usage_count,
       usageDenominator: row.usage_denominator,
       usageRate: row.usage_rate,
-      starCounts: row.star_counts as [number, number, number, number],
-      starRates: row.star_rates as [number, number, number, number],
-      threeStarRate: row.three_star_rate,
-      averageStars: row.average_stars,
-      averageDestruction: row.average_destruction,
-      unknownExcludedAttacks: row.unknown_excluded_attacks,
+      quantity:
+        payload.history_usage_only === true ? (row.quantity as number) : undefined,
+      oneStarCount:
+        payload.history_usage_only === true ? (row.one_star_count as number) : undefined,
+      twoStarCount:
+        payload.history_usage_only === true ? (row.two_star_count as number) : undefined,
+      threeStarCount:
+        payload.history_usage_only === true
+          ? (row.three_star_count as number)
+          : undefined,
+      starCounts: row.star_counts as [number, number, number, number] | undefined,
+      starRates: row.star_rates as [number, number, number, number] | undefined,
+      threeStarRate: row.three_star_rate as number | undefined,
+      averageStars: row.average_stars as number | undefined,
+      averageDestruction: row.average_destruction as number | undefined,
+      unknownExcludedAttacks: row.unknown_excluded_attacks as number | undefined,
     };
   });
   const armyStates = Object.fromEntries(
@@ -853,7 +868,23 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
       return [state, count];
     }),
   );
+  const pagination = payload.pagination;
+  if (
+    pagination !== undefined &&
+    (!isRecord(pagination) ||
+      !isInteger(pagination.offset) ||
+      !isInteger(pagination.total_rows) ||
+      !(pagination.next_offset === null || isInteger(pagination.next_offset)))
+  )
+    throw new PythonApiError(502, { error: "malformed" });
   return {
+    pagination: isRecord(pagination)
+      ? {
+          offset: pagination.offset as number,
+          totalRows: pagination.total_rows as number,
+          nextOffset: pagination.next_offset as number | null,
+        }
+      : undefined,
     kind: "army-analytics",
     selection: {
       lens: selection.lens,

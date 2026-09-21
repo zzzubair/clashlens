@@ -1011,6 +1011,21 @@ describe("server-only Python client response boundary", () => {
   it("maps a whole-season army summary without day ranges or population filters", async () => {
     const payload = {
       ...armyAnalyticsPayload(),
+      history_usage_only: true,
+      rows: [
+        {
+          key: "troop:58@5",
+          unit_id: "troop:58",
+          label: "Yeti",
+          quantity: 5,
+          usage_count: 2,
+          usage_denominator: 4,
+          usage_rate: 0.5,
+          one_star_count: 0,
+          two_star_count: 1,
+          three_star_count: 1,
+        },
+      ],
       publication_identity: "army-season-abc123-def45678",
       collection_coverage: { state: "partial", completed_days: 20 },
       reproducibility: {
@@ -1054,7 +1069,14 @@ describe("server-only Python client response boundary", () => {
       population: "all",
     });
     expect(mapped.collectionCoverage).toEqual({ state: "partial", completedDays: 20 });
-    expect(mapped.rows[0]).toMatchObject({ key: "troop:58", usageCount: 2 });
+    expect(mapped.rows[0]).toMatchObject({
+      usageCount: 2,
+      quantity: 5,
+      oneStarCount: 0,
+      twoStarCount: 1,
+      threeStarCount: 1,
+    });
+    expect(mapped.rows[0].starCounts).toBeUndefined();
   });
 
   it("rejects an army analytics payload with malformed evidence coverage", async () => {

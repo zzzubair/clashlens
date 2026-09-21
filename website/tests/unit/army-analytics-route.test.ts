@@ -1,3 +1,10 @@
+import { createElement } from "react";
+import { renderToString } from "react-dom/server";
+import {
+  createStaticHandler,
+  createStaticRouter,
+  StaticRouterProvider,
+} from "react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -10,7 +17,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
   return { ...actual, createPythonClient: mocks.createPythonClient };
 });
 
-import { loader as armyLoader } from "../../app/routes/army-analytics";
+import ArmyRoute, { loader as armyLoader } from "../../app/routes/army-analytics";
 import { PythonApiError } from "../../app/services/python.server";
 
 const SEASON = "1785714000";
@@ -59,7 +66,81 @@ describe("army analytics route historical reads", () => {
     });
   });
 
-  it("falls back to the requested detailed selection only on a missing summary", async () => {
+  it("renders finalized quantity, usage and star counts", async () => {
+    const getArmySeasonSummary = vi.fn().mockResolvedValue({
+      kind: "army-analytics",
+      selection: {
+        season: SEASON,
+        lens: "offense",
+        startDay: 1,
+        endDay: 28,
+        population: "all",
+        category: "troops",
+        sort: "usage-rate",
+      },
+      totalAttacks: 10,
+      usableArmySample: 10,
+      armyStates: { fully_decoded: 10 },
+      armyStatesSumConfirmed: true,
+      unknownAffectedAttacks: 0,
+      unknownComponentOccurrences: 0,
+      perspectiveDisagreementCount: 0,
+      missingTrophyMembershipEvidence: 0,
+      cohortEvidence: {
+        staleOrUncertainCohortMembers: 0,
+        streakExcludedPlayers: 0,
+        shieldedPlayerDays: 0,
+      },
+      collectionCoverage: { state: "complete", completedDays: 28 },
+      freshness: { state: "frozen" },
+      reproducibility: {
+        officialSeasonId: SEASON,
+        legendDays: [1, 28],
+        snapshotVersions: [],
+      },
+      versions: { decoder: "decoder", catalog: "catalog", analytics: "v3" },
+      publicationIdentity: "publication",
+      pagination: { offset: 0, totalRows: 1, nextOffset: null },
+      rows: [
+        {
+          key: "troop:58@5",
+          label: "Ice Golem",
+          quantity: 5,
+          usageCount: 5,
+          usageDenominator: 10,
+          usageRate: 0.5,
+          oneStarCount: 1,
+          twoStarCount: 1,
+          threeStarCount: 2,
+        },
+      ],
+    });
+    mocks.createPythonClient.mockReturnValue({
+      getArmySeasonSummary,
+      getArmyAnalytics: vi.fn(),
+    });
+    const handler = createStaticHandler([
+      { path: "/analytics/armies", Component: ArmyRoute, loader: armyLoader },
+    ]);
+    const context = await handler.query(requestFor(`season=${SEASON}`));
+    if (context instanceof Response) throw new Error("unexpected response");
+    const html = renderToString(
+      createElement(StaticRouterProvider, {
+        router: createStaticRouter(handler.dataRoutes, context),
+        context,
+      }),
+    );
+    expect(html).toContain("<th>Quantity</th>");
+    expect(html).toContain("<th>1★</th>");
+    expect(html).toContain("<th>2★</th>");
+    expect(html).toContain("<th>3★</th>");
+    expect(html).toContain("Ice Golem");
+    expect(html.replaceAll("<!-- -->", "")).toContain("5 / 10");
+    expect(html).toContain("50.0%");
+    expect(html).not.toContain("attacks missing battle-time trophy evidence");
+  });
+
+  it("reports unavailable when historical detail exists but its summary is missing", async () => {
     const getArmySeasonSummary = vi
       .fn()
       .mockRejectedValue(
@@ -77,19 +158,14 @@ describe("army analytics route historical reads", () => {
       params: {},
     } as never);
     expect(getArmySeasonSummary).toHaveBeenCalledTimes(1);
-    expect(getArmyAnalytics).toHaveBeenCalledTimes(1);
-    const [query] = getArmyAnalytics.mock.calls[0] as [URLSearchParams];
-    expect(query.get("season")).toBe(SEASON);
-    expect(query.get("lens")).toBe("defense");
-    expect(query.get("start_day")).toBe("3");
-    expect(query.get("end_day")).toBe("9");
-    expect(query.get("population")).toBe("band-51-100");
-    expect(query.get("category")).toBe("heroes");
-    expect(query.get("sort")).toBe("usage-count");
+    expect(getArmyAnalytics).not.toHaveBeenCalled();
     expect(data).toMatchObject({
-      error: null,
-      seasonEmpty: null,
-      historicalSummary: false,
+      init: { status: 404 },
+      data: {
+        analytics: null,
+        historicalSummary: true,
+        error: { error: { code: "unavailable" } },
+      },
     });
   });
 
@@ -134,4 +210,43 @@ describe("army analytics route historical reads", () => {
     expect(query.get("population")).toBe("band-51-100");
     expect(data).toMatchObject({ error: null, seasonEmpty: null });
   });
+});
+
+it("keeps a resolved current season on the live path when Apply is submitted", async () => {
+  const getArmySeasonSummary = vi.fn();
+  const getArmyAnalytics = vi.fn().mockResolvedValue({
+    selection: {
+      season: SEASON,
+      lens: "offense",
+      startDay: 1,
+      endDay: 28,
+      population: "top-100",
+      category: "troops",
+      sort: "usage-rate",
+    },
+    rows: [],
+    armyStates: {},
+    cohortEvidence: {},
+    collectionCoverage: {},
+    freshness: {},
+    reproducibility: { snapshotVersions: [] },
+    versions: {},
+  });
+  mocks.createPythonClient.mockReturnValue({ getArmyAnalytics, getArmySeasonSummary });
+  const handler = createStaticHandler([
+    { path: "/analytics/armies", Component: ArmyRoute, loader: armyLoader },
+  ]);
+  const context = await handler.query(requestFor("season=current"));
+  if (context instanceof Response) throw new Error("unexpected response");
+  const html = renderToString(
+    createElement(StaticRouterProvider, {
+      router: createStaticRouter(handler.dataRoutes, context),
+      context,
+    }),
+  );
+  const season = html.match(/<input[^>]*name="season"[^>]*value="([^"]+)"/)?.[1];
+  expect(season).toBe("current");
+  await armyLoader({ request: requestFor(`season=${season}`), params: {} } as never);
+  expect(getArmyAnalytics).toHaveBeenCalledTimes(2);
+  expect(getArmySeasonSummary).not.toHaveBeenCalled();
 });

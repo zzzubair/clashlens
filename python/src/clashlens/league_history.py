@@ -1,9 +1,10 @@
 """Parser and storage for the official per-player league-history endpoint.
 
-``/players/{tag}/leaguehistory`` answers one row per past season and is the
-reliable Legend season anchor the profile's weekly fields are not. The
-collector fetches it at initial collection and once after each season-ending
-Reset; the full raw response is archived like every other stored response.
+``/players/{tag}/leaguehistory`` answers one row per past season. These rows
+supply official past-season results; the validated current-season ID from the
+profile anchors the active season. The collector fetches league history at
+initial collection and once after each season-ending Reset; the full raw
+response is archived like every other stored response.
 """
 
 from __future__ import annotations
