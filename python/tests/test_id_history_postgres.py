@@ -22,6 +22,7 @@ from test_army_analytics_publication_postgres import (
     _row,
 )
 from test_army_history import fact
+from test_army_season_summaries_postgres import DAY0 as MEASURE_DAY_START
 from test_army_season_summaries_postgres import SEASON as MEASURE_SEASON
 from test_army_season_summaries_postgres import _seed
 from test_private_api import NOW, NOW_SECONDS, TS_CURRENT, signed_headers
@@ -423,6 +424,85 @@ def test_measure_retained_season_bytes_against_label_based_rows(database_url):
             assert all(row["usage_denominator"] == 224 for row in result["rows"])
         finally:
             api.close()
+
+
+def test_thousands_of_battles_fit_stored_and_signed_response_bounds(
+    database_url, monkeypatch,
+):
+    for unit_id in range(100, 105):
+        monkeypatch.setitem(catalog._CATALOG_ENTRIES, f"troop:{unit_id}", {
+            "name": f"Unit {unit_id}", "category": "troop", "is_siege": False,
+        })
+    with domain_database(database_url) as ci:
+        with psycopg.connect(ci) as connection:
+            player_id = _seed(connection)
+            connection.execute(
+                """
+                INSERT INTO army_analytics_battle_facts (
+                    battle_id, evidence_id, source_ranked_day_version_id,
+                    ranked_day_start, official_season_id, season_day_number,
+                    lens, population_player_id, stars, destruction_percentage,
+                    army_state, home_troops, spells, siege, cc_troops, heroes,
+                    unresolved_components, perspective_disagreement,
+                    battle_time_trophies, input_hash, version
+                )
+                SELECT 7000 + fact, 8000 + fact, 4242,
+                       %s, %s, 1, 'offense', %s, fact %% 4, 100, 'decoded',
+                       jsonb_build_array(
+                           jsonb_build_array('troop:100', (fact + 100) %% 100 + 1, 'home'),
+                           jsonb_build_array('troop:101', (fact + 101) %% 100 + 1, 'home'),
+                           jsonb_build_array('troop:102', (fact + 102) %% 100 + 1, 'home'),
+                           jsonb_build_array('troop:103', (fact + 103) %% 100 + 1, 'home'),
+                           jsonb_build_array('troop:104', (fact + 104) %% 100 + 1, 'home')
+                       ),
+                       '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb,
+                       '[]'::jsonb, false, 6000,
+                       md5('offense:' || fact) || md5('history:' || fact), 1
+                FROM generate_series(0, 14999) AS facts(fact)
+                """,
+                (MEASURE_DAY_START, MEASURE_SEASON, player_id),
+            )
+            materialize_army_season(connection, MEASURE_SEASON, "offense")
+            stored_bytes = connection.execute(
+                "SELECT octet_length(unit_usage::text) "
+                "FROM army_season_summaries "
+                "WHERE official_season_id=%s AND lens='offense' AND category='troops'",
+                (MEASURE_SEASON,),
+            ).fetchone()[0]
+        assert stored_bytes < 524_288
+
+        api = ApiDatabase(ci)
+        app = create_app(
+            database=api,
+            keys={("typescript-website", "current"): TS_CURRENT},
+            clock=lambda: NOW_SECONDS,
+            now=lambda: NOW,
+        )
+        rows = []
+        response_bytes = []
+        with TestClient(app) as client:
+            for offset, expected_count in ((0, 200), (200, 200), (400, 100)):
+                target = (
+                    f"/v1/analytics/armies/seasons/{MEASURE_SEASON}"
+                    f"?lens=offense&category=troops&sort=usage-rate&offset={offset}"
+                )
+                response = client.get(target, headers=signed_headers(target))
+                assert response.status_code == 200, response.text
+                assert len(response.content) < 1_048_576
+                response_bytes.append(len(response.content))
+                result = response.json()
+                assert result["pagination"]["total_rows"] == 500
+                assert result["total_attacks"] == 15_000
+                assert len(result["rows"]) == expected_count
+                rows.extend(result["rows"])
+        assert len(rows) == 500
+        assert sum(row["usage_count"] for row in rows) == 75_000
+        print("HISTORY_BOUND " + json.dumps({
+            "attacks": 15_000,
+            "uses": 75_000,
+            "stored_bytes": stored_bytes,
+            "response_page_bytes": response_bytes,
+        }, sort_keys=True))
 
 
 def test_api_rename_changes_only_the_displayed_name(database_url, monkeypatch):

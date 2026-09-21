@@ -1,13 +1,9 @@
 """Finalized usage keeps unit quantities and star outcomes by ID."""
-import json
-from contextlib import contextmanager
 from dataclasses import asdict
-from types import SimpleNamespace
 
-from clashlens import api_analytics, catalog
+from clashlens import catalog
 from clashlens.army_decoder import DecodedArmy, decode_army_share_code
 from clashlens.army_history import aggregate_usage, usage_rows
-from clashlens.army_season_summaries import PROJECTION_VERSION
 
 
 def fact(code, stars=3, destruction=100, trophies=6000):
@@ -48,71 +44,6 @@ def test_five_uses_are_five_of_ten_with_quantity_and_star_counts():
     }
     without_trophies = [{**item, "battle_time_trophies": None} for item in facts]
     assert aggregate_usage(without_trophies) == aggregate_usage(facts)
-
-
-def test_thousands_of_battles_fit_storage_and_response_bounds(monkeypatch):
-    for unit_id in range(100, 105):
-        monkeypatch.setitem(catalog._CATALOG_ENTRIES, f"troop:{unit_id}", {
-            "name": f"Unit {unit_id}", "category": "troop", "is_siege": False,
-        })
-    facts = [
-        {
-            "army_state": "decoded", "stars": index % 4,
-            "home_troops": [
-                [f"troop:{unit_id}", (index + unit_id) % 100 + 1, "home"]
-                for unit_id in range(100, 105)
-            ],
-            "spells": [], "siege": [], "heroes": [],
-            "unresolved_components": [],
-        }
-        for index in range(15_000)
-    ]
-    retained = aggregate_usage(facts)["troops"]
-    assert len(json.dumps(retained).encode()) < 524_288
-    assert sum(row[2] for row in retained) == 75_000
-
-    stored_row = (
-        28,
-        0,
-        [],
-        "complete",
-        15_000,
-        15_000,
-        {"fully_decoded": 15_000},
-        0,
-        0,
-        0,
-        0,
-        [],
-        PROJECTION_VERSION,
-        "a" * 64,
-        retained,
-    )
-
-    class Connection:
-        def execute(self, *_args, **_kwargs):
-            return self
-
-        def fetchone(self):
-            return stored_row
-
-    @contextmanager
-    def connection():
-        yield Connection()
-
-    database = SimpleNamespace(pool=SimpleNamespace(connection=connection))
-    response_page = api_analytics.get_army_season_summary(
-        database, "season", "offense", "troops", "usage-rate"
-    )
-    assert response_page is not None
-    assert response_page["pagination"] == {
-        "offset": 0,
-        "total_rows": 500,
-        "next_offset": 200,
-    }
-    assert len(response_page["rows"]) == 200
-    response_bytes = json.dumps(response_page, separators=(",", ":")).encode()
-    assert len(response_bytes) < 1_048_576
 
 
 def test_unknown_namespaces_and_siege_are_resolved_without_armies(monkeypatch):
