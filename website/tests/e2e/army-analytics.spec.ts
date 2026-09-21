@@ -48,9 +48,12 @@ test("retired IDs render honest labels, quantities and stars before and after na
     ["pets", "pet", 900, 1],
     ["equipment", "equipment", 900, 1],
   ] as const) {
-    const response = await page.goto(`/analytics/armies?season=${season}&category=${category}`);
+    const response = await page.goto(
+      `/analytics/armies?season=${season}&category=${category}`,
+    );
     expect(response?.status()).toBe(200);
-    const kind = category === "troops" || category === "siege" ? "troop or siege" : namespace;
+    const kind =
+      category === "troops" || category === "siege" ? "troop or siege" : namespace;
     const label = unknown ? `Unknown ${kind} (ID ${id})` : `Named ${namespace}`;
     const row = page.getByRole("row").filter({ hasText: label });
     await expect(row).toContainText("1 / 2");
@@ -60,12 +63,18 @@ test("retired IDs render honest labels, quantities and stars before and after na
     await expect(row.getByRole("cell").nth(2)).toHaveText("1");
     await expect(row.getByRole("cell").nth(3)).toHaveText("0");
     await expect(page.getByRole("columnheader", { name: "Quantity" })).toBeVisible();
-    await expect(page.getByRole("columnheader", { name: "Average stars" })).toHaveCount(0);
+    await expect(page.getByRole("columnheader", { name: "Average stars" })).toHaveCount(
+      0,
+    );
     await expect(page.getByLabel("Start Legend day")).toBeDisabled();
     if (unknown) {
       await expect(page.getByText(/Collection coverage partial/)).toBeVisible();
     } else if (category === "troops" || category === "siege") {
-      await expect(page.getByRole("row").filter({ hasText: category === "troops" ? "Named siege" : "Named troop" })).toHaveCount(0);
+      await expect(
+        page
+          .getByRole("row")
+          .filter({ hasText: category === "troops" ? "Named siege" : "Named troop" }),
+      ).toHaveCount(0);
     }
     await expectNoSeriousAccessibilityViolations(page);
   }

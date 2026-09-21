@@ -13,9 +13,6 @@ operation.
 `test_army_history.py` proves quantity summation, one using battle per unit,
 whole-season denominators, 1★/2★/3★ counts, namespace overlap, later troop/siege
 classification, and exclusion of known and unknown clan-castle contributions.
-A 15,000-battle fixture retains 75,000 unit uses across 500 unit/quantity rows;
-the retained category must remain below 524,288 bytes and its 200-row API page
-below 1,048,576 bytes.
 
 `test_id_history_postgres.py` traces raw ingestion through both player pages
 and analytics. It covers reports in either order, a missing side, disagreeing
@@ -28,6 +25,9 @@ catalogue classifies them. Naming changes labels and classification without
 changing retained quantities, uses, denominators or star counts. Three players' 84
 daily entries and all trophy totals remain identical. Separate tests cover plain
 renames, unavailable legacy summaries, and a five-of-ten whole-season usage rate.
+Its PostgreSQL-backed 15,000-battle fixture retains 75,000 unit uses across 500
+unit/quantity rows. The stored category must remain below 524,288 bytes, and
+each signed 200-row API response must remain below 1,048,576 bytes.
 
 The defender trace deliberately lacks its prior-day automatic-defense basis;
 it remains partial and is excluded from completed-day analytics. The offense
