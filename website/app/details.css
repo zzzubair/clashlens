@@ -1,0 +1,275 @@
+/* Player and army-analysis presentation. Route-scoped by design. */
+.player-page,
+.analytics-page {
+  --detail-positive: #167653;
+  --detail-negative: #b94154;
+  --detail-gold: #b98213;
+  width: min(100% - 3rem, 72rem);
+  font-variant-numeric: tabular-nums;
+}
+.player-page :is(h1, h2, h3),
+.analytics-page :is(h1, h2, h3) { font-family: var(--cl-font-heading); }
+[data-theme="dark"] :is(.player-page, .analytics-page) { --detail-positive: #72ddb1; --detail-negative: #ff97a5; --detail-gold: #e5bd62; }
+/* Player profile and season rail */
+.player-page .player-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1.5rem;
+  max-width: none;
+  margin-bottom: 1.35rem;
+  padding: 1.25rem 1.4rem;
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-border);
+  border-left: 4px solid var(--cl-action);
+  border-radius: 0.75rem;
+}
+.player-page .player-profile { min-width: 0; }
+
+.player-page .player-header h1 { margin: 0.15rem 0 0.35rem; font-size: clamp(2rem, 5vw, 3.15rem); letter-spacing: -0.045em; }
+.player-page .player-identity { margin: 0; }
+.player-page .player-clan::before { content: "Clan "; color: var(--cl-muted); }
+.player-page .player-summary { display: grid; grid-template-columns: minmax(13rem, auto) auto; align-items: center; gap: 0.75rem; width: auto; }
+.player-page .player-trophy-card {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0 1.15rem 0 0;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--cl-border);
+}
+.player-page .player-trophy-card .metric-label { color: var(--cl-muted); }
+.player-page .player-trophy-count {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--cl-ink);
+  font-size: clamp(1.85rem, 4vw, 2.5rem);
+  line-height: 1;
+}
+.player-page .trophy-mark {
+  width: 0.8rem;
+  height: 0.8rem;
+  background: var(--detail-gold);
+  border-radius: 50% 50% 45% 45%;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--detail-gold) 18%, transparent);
+}
+.player-page .player-freshness { margin: 0; color: var(--cl-muted); font-size: 0.72rem; }
+.player-page .player-freshness > span { font-weight: 650; }
+.player-page .player-refresh-form button { width: auto; min-width: 5.75rem; min-height: 2.75rem; }
+.player-page nav.data-section { margin-top: 1rem; padding-bottom: 1.1rem; border-bottom: 1px solid var(--cl-border); }
+.player-page nav.data-section h2 { font-size: 1rem; }
+.player-page .season-list { gap: 0.4rem; }
+.player-page .season-list :is(a, strong) { min-height: 2.75rem; padding: 0.62rem 0.8rem; border-radius: 0.4rem; }
+.player-page > .data-section { margin-top: 1.65rem; }
+.player-page > .data-section > h2 { margin-bottom: 0.35rem; }
+.player-page > .data-section > .section-note { max-width: 68ch; margin: 0 0 1rem; font-size: 0.9rem; }
+/* Day scoreboards */
+.player-page .legend-days { gap: 0.65rem; }
+.player-page .legend-day { border-color: var(--cl-border); border-radius: 0.65rem; background: var(--cl-surface); }
+.player-page .legend-day > summary {
+  display: grid;
+  grid-template-columns: minmax(10rem, 1.35fr) repeat(3, minmax(6.25rem, 0.72fr)) auto auto;
+  gap: 0.8rem;
+  align-items: center;
+  min-height: 4.75rem;
+  padding: 0.55rem 0.85rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+}
+.player-page .legend-day[open] > summary { color: var(--cl-ink); background: var(--cl-panel); border-bottom: 1px solid var(--cl-border); }
+.player-page .legend-day > summary:hover,
+.player-page .legend-day[open] > summary:hover { background: var(--cl-panel); }
+.player-page .legend-day > summary strong::before { display: none; }
+.player-page .legend-day > summary::after { content: "+"; color: var(--cl-muted); font-size: 1.35rem; font-weight: 400; }
+.player-page .legend-day[open] > summary::after { content: "−"; }
+.player-page .legend-day-date,
+.player-page .legend-day-stat { display: grid; min-width: 0; }
+.player-page .legend-day-date { gap: 0.1rem; }
+.player-page .legend-day-date strong { overflow-wrap: normal; }
+.player-page .legend-day-date small,
+.player-page .legend-day-stat small,
+.player-page .legend-day-stat > span { color: var(--cl-muted); font-size: 0.7rem; }
+.player-page .legend-day-stat { grid-template-columns: auto 1fr; gap: 0 0.45rem; padding-left: 0.65rem; border-left: 2px solid var(--cl-border); }
+.player-page .legend-day-stat small { grid-column: 1 / -1; }
+.player-page .legend-day-stat strong { font-size: 1.08rem; }
+.player-page .legend-day-stat > span { align-self: end; white-space: nowrap; }
+.player-page .legend-day-offense { border-left-color: var(--detail-positive); }
+.player-page .legend-day-defense { border-left-color: var(--detail-negative); }
+.player-page .score-positive { color: var(--detail-positive); }
+.player-page .score-negative { color: var(--detail-negative); }
+.player-page .score-neutral { color: var(--cl-ink); }
+.player-page .legend-day-live { justify-self: end; }
+/* Compact sport-scoreline battle rows */
+.player-page .battle-columns { gap: 0; padding: 0; }
+.player-page .battle-column + .battle-column { border-left: 1px solid var(--cl-border); }
+.player-page .battle-column h3 {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  color: var(--cl-muted);
+  font-size: 0.82rem;
+  border-bottom: 1px solid var(--cl-border);
+}
+.player-page .battle-slots { gap: 0; grid-auto-rows: auto; }
+.player-page .battle-slot {
+  display: grid;
+  grid-template-columns: 1.3rem minmax(0, 1fr) minmax(8.6rem, auto);
+  grid-template-rows: 2.75rem 2.75rem;
+  gap: 0 0.55rem;
+  min-height: 5.5rem;
+  padding: 0 0.55rem;
+  background: var(--cl-surface);
+  border: 0;
+  border-bottom: 1px solid var(--cl-border);
+  border-radius: 0;
+}
+.player-page .battle-slot-attack { border-left: 3px solid var(--detail-positive); }
+.player-page .battle-slot-defense { border-left: 3px solid var(--detail-negative); }
+.player-page .battle-number { grid-row: 1 / 3; align-self: center; color: var(--cl-muted); font-size: 0.7rem; }
+.player-page .battle-opponent { display: grid; grid-column: 2; grid-row: 1 / 3; align-content: center; justify-content: start; gap: 0.08rem; }
+.player-page .battle-opponent :is(strong, .player-tag, time) { font-size: 0.72rem; }
+.player-page .battle-opponent strong { color: var(--cl-ink); font-size: 0.84rem; }
+.player-page .battle-opponent time { color: var(--cl-muted); }
+.player-page .battle-score {
+  display: grid;
+  grid-column: 3;
+  grid-row: 1;
+  grid-template-columns: repeat(3, minmax(2.6rem, auto));
+  align-items: center;
+  justify-self: end;
+  text-align: right;
+}
+.player-page .battle-score > * { padding-left: 0.45rem; white-space: nowrap; }
+.player-page .battle-score strong { font-size: 1rem; }
+.player-page .battle-army {
+  grid-column: 3;
+  grid-row: 2;
+  justify-self: end;
+  min-height: 2.75rem;
+  margin: 0;
+  padding: 0 0.45rem;
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+.player-page .battle-disagreement { grid-column: 2 / -1; grid-row: 3; padding: 0.3rem 0; font-size: 0.72rem; }
+.player-page .battle-slot-empty {
+  min-height: 2.75rem;
+  grid-template-rows: 2.75rem;
+  background: color-mix(in srgb, var(--cl-panel) 55%, transparent);
+  border-left-color: var(--cl-border);
+  border-style: dashed;
+}
+/* Analytics query bar and results */
+.analytics-page .hero { max-width: none; margin-bottom: 1.1rem; padding-bottom: 1rem; border-bottom: 1px solid var(--cl-border); }
+.analytics-page .hero h1 { margin-bottom: 0.3rem; font-size: clamp(2rem, 4vw, 2.8rem); }
+.analytics-page .hero-copy { margin: 0; font-size: 1rem; }
+.analytics-page .analytics-filters {
+  margin-bottom: 1.4rem;
+  padding: 0.9rem;
+  background: var(--cl-surface);
+  border-radius: 0.65rem;
+  box-shadow: none;
+}
+.analytics-page .filter-heading { margin-bottom: 0.8rem; }
+.analytics-page .analytics-season {
+  padding: 0.3rem 0.55rem;
+  color: var(--cl-muted);
+  background: var(--cl-panel);
+  border: 1px solid var(--cl-border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+.analytics-page .segmented-control { padding: 0.15rem; }
+.analytics-page .segmented-control span { display: grid; place-items: center; min-height: 2.75rem; padding: 0.45rem 1rem; }
+.analytics-page .segmented-control input:checked + span { color: var(--cl-on-action, #fff); background: var(--cl-action); box-shadow: none; }
+.analytics-page .filter-grid { gap: 0.65rem; }
+.analytics-page .filter-field { gap: 0.3rem; color: var(--cl-muted); }
+.analytics-page .filter-field :is(select, input) {
+  min-height: 2.75rem;
+  padding: 0.5rem 0.65rem;
+  background: var(--cl-paper);
+  border-color: var(--cl-border);
+  font-size: 0.9rem;
+}
+.analytics-page .filter-footer { align-items: center; margin-top: 0.75rem; }
+.analytics-page .filter-details summary,
+.analytics-page .analytics-breakdown summary { min-height: 2.75rem; }
+.analytics-page .filter-details[open] { padding-top: 0.45rem; border-top: 1px solid var(--cl-border); }
+.analytics-page .filter-footer .button { min-height: 2.75rem; }
+.analytics-page .analytics-empty {
+  justify-items: start;
+  padding: 1.25rem;
+  text-align: left;
+  border-left: 4px solid var(--cl-action);
+  border-radius: 0.5rem;
+}
+.analytics-page .analytics-empty h2 { margin: 0 0 0.35rem; }
+.analytics-page .analytics-empty .button { margin-top: 1rem; }
+.analytics-page .analytics-results { display: grid; gap: 1rem; }
+.analytics-page .analytics-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-border);
+  border-radius: 0.65rem;
+  overflow: hidden;
+}
+.analytics-page .analytics-kpi { display: grid; gap: 0.1rem; padding: 0.8rem 1rem; border-right: 1px solid var(--cl-border); }
+.analytics-page .analytics-kpi:last-child { border-right: 0; }
+.analytics-page .analytics-kpi-primary { box-shadow: inset 0 3px 0 var(--cl-action); }
+.analytics-page .analytics-kpi span { color: var(--cl-muted); font-size: 0.75rem; }
+.analytics-page .analytics-kpi strong {
+  color: var(--cl-ink);
+  font-family: var(--cl-font-heading);
+  font-size: clamp(1.45rem, 3vw, 2rem);
+}
+.analytics-page .section-heading { margin: 0; }
+.analytics-page .section-heading .section-note { margin: 0; font-size: 0.8rem; }
+.analytics-page .analytics-table-wrap { border-color: var(--cl-border); border-radius: 0.5rem; }
+.analytics-page .analytics-table { min-width: 46rem; }
+.analytics-page .analytics-table :is(th, td) { padding: 0.65rem 0.75rem; }
+.analytics-page .analytics-table :is(th, td):not(:first-child) { text-align: right; }
+.analytics-page .analytics-table thead th { color: var(--cl-surface); background: var(--cl-ink); text-transform: none; }
+.analytics-page .analytics-table tbody th { color: var(--cl-ink); font-weight: 700; }
+.analytics-page .analytics-table tbody tr:hover { background: var(--cl-panel); }
+.analytics-page .analytics-breakdown { margin-top: 0; padding-top: 0.25rem; border-top: 1px solid var(--cl-border); }
+.analytics-page .analytics-breakdown > .section-note { font-size: 0.82rem; }
+@media (max-width: 48rem) {
+.player-page .player-header { grid-template-columns: 1fr; }
+.player-page .player-summary { grid-template-columns: 1fr auto; width: 100%; }
+.player-page .legend-day > summary { grid-template-columns: minmax(8rem, 1fr) repeat(3, minmax(4.5rem, 0.7fr)) auto; gap: 0.45rem; }
+.player-page .legend-day-live { grid-column: 1; grid-row: 2; justify-self: start; }
+.player-page .legend-day > summary::after { grid-column: 5; grid-row: 1 / 3; }
+.player-page .battle-columns { grid-template-columns: 1fr; }
+.player-page .battle-column + .battle-column { border-left: 0; border-top: 1px solid var(--cl-border); }
+}
+@media (max-width: 34rem) {
+  .player-page,
+.analytics-page { width: calc(100% - 2rem); }
+.player-page .player-header { gap: 1rem; padding: 1rem; }
+.player-page .player-summary { grid-template-columns: 1fr auto; }
+.player-page .player-trophy-card { padding-right: 0.75rem; }
+.player-page .player-freshness { max-width: 14rem; }
+.player-page .legend-day > summary { grid-template-columns: 1fr 1fr auto; gap: 0.55rem; padding: 0.7rem; }
+.player-page .legend-day-date { grid-column: 1 / 3; }
+.player-page .legend-day-offense { grid-column: 1; grid-row: 2; }
+.player-page .legend-day-defense { grid-column: 2; grid-row: 2; }
+.player-page .legend-day-net { grid-column: 2; grid-row: 3; }
+.player-page .legend-day-live { grid-column: 1; grid-row: 3; }
+.player-page .legend-day > summary::after { grid-column: 3; grid-row: 1; }
+.player-page .legend-day-stat { padding-left: 0.45rem; }
+.player-page .battle-slot { grid-template-columns: 1.3rem minmax(0, 1fr); }
+.player-page .battle-opponent { grid-row: 1; }
+.player-page .battle-score { grid-column: 2; grid-row: 2; justify-self: start; }
+.player-page .battle-army { grid-column: 2; grid-row: 2; }
+.analytics-page .filter-heading { flex-wrap: wrap; }
+.analytics-page .filter-grid { grid-template-columns: 1fr; }
+.analytics-page .filter-footer { align-items: stretch; flex-direction: column; }
+.analytics-page .filter-footer .button { width: 100%; }
+.analytics-page .analytics-kpis { grid-template-columns: 1fr; }
+.analytics-page .analytics-kpi { border-right: 0; border-bottom: 1px solid var(--cl-border); }
+.analytics-page .analytics-kpi:last-child { border-bottom: 0; }
+}

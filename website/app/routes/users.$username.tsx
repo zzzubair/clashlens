@@ -64,7 +64,7 @@ export default function UserRoute() {
   const data = useLoaderData<typeof loader>();
   if (data.notFound) {
     return (
-      <main className="page-shell narrow-shell">
+      <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
         <section className="hero" aria-labelledby="user-not-found-title">
           <h1 id="user-not-found-title">User not found</h1>
           <p>No Clash Lens user exists at this address.</p>
@@ -73,7 +73,7 @@ export default function UserRoute() {
     );
   }
   return (
-    <main className="page-shell narrow-shell">
+    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="user-title">
         <h1 id="user-title">{data.user?.displayName ?? "User"}</h1>
         <p className="player-tag">@{data.user?.username ?? ""}</p>

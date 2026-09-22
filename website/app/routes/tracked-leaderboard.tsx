@@ -85,78 +85,121 @@ export default function TrackedLeaderboardRoute() {
   const { leaderboard, error } = useLoaderData<typeof loader>();
   const view = leaderboard?.view ?? "live";
   const daily = leaderboard?.daily;
+  const entries = leaderboard?.entries ?? [];
+  const newestObservedAt = leaderboard
+    ? (leaderboard.sourceObservations?.newestObservedAt ?? latestObservation(entries))
+    : null;
+  const oldestObservedAt = leaderboard?.sourceObservations?.oldestObservedAt ?? null;
+
   return (
-    <main className="page-shell">
-      <section className="hero" aria-labelledby="leaderboard-title">
-        <h1 id="leaderboard-title">
-          {daily ? `Daily leaderboard · Day ${daily.dayNumber}` : "Live leaderboard"}
-        </h1>
+    <main id="main-content" tabIndex={-1} className="page-shell rankings-page">
+      <section className="rankings-header" aria-labelledby="leaderboard-title">
+        <div className="rankings-heading">
+          <div>
+            <p className="rankings-kicker">Tracked player rankings</p>
+            <h1 id="leaderboard-title">
+              {daily ? `Day ${daily.dayNumber} standings` : "Latest saved standings"}
+            </h1>
+          </div>
+          <nav aria-label="Leaderboard views" className="leaderboard-view-switch">
+            <Link
+              className="button secondary"
+              aria-current={view === "live" ? "page" : undefined}
+              to={leaderboardUrl("live", 1)}
+            >
+              Latest
+            </Link>
+            <Link
+              className="button secondary"
+              aria-current={view === "daily" ? "page" : undefined}
+              to="/leaderboards/tracked?view=daily&page=1"
+            >
+              Daily
+            </Link>
+          </nav>
+        </div>
         {daily ? (
-          <p>
+          <p className="rankings-context">
             Legend season {formatDate(daily.seasonStartAt)} –{" "}
-            {formatDate(daily.seasonEndAt)} · reset{" "}
+            {formatDate(daily.seasonEndAt)} · Day reset{" "}
             <time dateTime={daily.resetAt}>{formatTimestamp(daily.resetAt)}</time>
           </p>
-        ) : null}
-        {leaderboard?.view === "live" ? (
-          <p>
-            Generated{" "}
-            <time dateTime={leaderboard.generatedAt}>
-              {formatTimestamp(leaderboard.generatedAt)}
-            </time>
-            {leaderboard.sourceObservations ? (
+        ) : leaderboard ? (
+          <p className="rankings-context">
+            Latest saved player records
+            {newestObservedAt ? (
               <>
-                {" · "}source observations{" "}
-                {leaderboard.sourceObservations.oldestObservedAt &&
-                leaderboard.sourceObservations.newestObservedAt ? (
-                  <>
-                    {formatTimestamp(leaderboard.sourceObservations.oldestObservedAt)}–
-                    {formatTimestamp(leaderboard.sourceObservations.newestObservedAt)}
-                  </>
-                ) : (
-                  "none"
-                )}
-                {" · "}stale: {leaderboard.sourceObservations.staleCount}
+                , observed through{" "}
+                <time dateTime={newestObservedAt}>
+                  {formatTimestamp(newestObservedAt)}
+                </time>
               </>
             ) : null}
+            {oldestObservedAt && oldestObservedAt !== newestObservedAt ? (
+              <>
+                . The players shown were observed from{" "}
+                <time dateTime={oldestObservedAt}>
+                  {formatTimestamp(oldestObservedAt)}
+                </time>
+              </>
+            ) : null}
+            .
           </p>
         ) : null}
-        <nav aria-label="Leaderboard views" className="hero-actions">
-          <Link className="button secondary" to={leaderboardUrl("live", 1)}>
-            Live
-          </Link>
-          <Link className="button secondary" to="/leaderboards/tracked?view=daily&page=1">
-            Daily
-          </Link>
-        </nav>
       </section>
+
       {error ? <ErrorNotice error={error} /> : null}
+
       {leaderboard ? (
-        <section className="data-section" aria-label="Leaderboard entries">
+        <section className="standings-board" aria-labelledby="standings-table-title">
+          <div className="standings-toolbar">
+            <div>
+              <h2 id="standings-table-title">Standings</h2>
+              <p>
+                {entries.length > 0
+                  ? `Ranks ${entries[0].rank}–${entries[entries.length - 1].rank}`
+                  : "No ranks on this page"}
+                {` · ${leaderboard.totalTracked.toLocaleString()} tracked players`}
+              </p>
+            </div>
+            <span className="page-position">
+              Page {leaderboard.page} of {leaderboard.pageCount}
+            </span>
+          </div>
           <div
-            aria-label={`${view === "daily" ? "Daily" : "Live"} leaderboard table`}
+            aria-label={`${view === "daily" ? "Daily" : "Latest saved"} leaderboard table`}
             className="table-wrap tracked-leaderboard-viewport"
             role="region"
             tabIndex={0}
           >
             <table
-              aria-label={view === "daily" ? "Daily leaderboard" : "Live leaderboard"}
-              className="data-table"
+              aria-label={view === "daily" ? "Daily leaderboard" : "Latest saved standings"}
+              className="data-table leaderboard-table"
             >
-              <caption className="sr-only">Players on the {view} leaderboard</caption>
+              <caption className="sr-only">
+                {view === "daily"
+                  ? "Players in the saved daily snapshot"
+                  : "Players in the latest saved standings"}
+              </caption>
               <thead>
                 <tr>
                   <th scope="col">Rank</th>
                   <th scope="col">Player</th>
                   <th scope="col">Clan</th>
                   <th scope="col">Trophies</th>
-                  <th scope="col">Last updated</th>
+                  <th scope="col">Observed</th>
                 </tr>
               </thead>
               <tbody>
-                {leaderboard.entries.map((entry) => (
-                  <tr key={entry.tag}>
-                    <td data-label="Rank">{entry.rank}</td>
+                {entries.map((entry) => (
+                  <tr
+                    className="leaderboard-row"
+                    data-podium-rank={entry.rank <= 3 ? entry.rank : undefined}
+                    key={entry.tag}
+                  >
+                    <td className="rank-cell" data-label="Rank">
+                      <span className="rank-mark">{entry.rank}</span>
+                    </td>
                     <th scope="row" data-label="Player">
                       <Link
                         className="player-name"
@@ -166,17 +209,13 @@ export default function TrackedLeaderboardRoute() {
                         {entry.name}
                       </Link>
                       <span className="player-tag">{entry.tag}</span>
-                      <Link
-                        className="view-player-link"
-                        to={canonicalPlayerPath(entry.tag)}
-                        reloadDocument
-                      >
-                        View player →
-                      </Link>
                     </th>
                     <td data-label="Clan">{entry.clan}</td>
-                    <td data-label="Trophies">{entry.trophies.toLocaleString()}</td>
-                    <td data-label="Last updated">
+                    <td className="trophy-cell" data-label="Trophies">
+                      <TrophyMark />
+                      <strong>{entry.trophies.toLocaleString()}</strong>
+                    </td>
+                    <td data-label="Observed">
                       <time dateTime={entry.freshness.observedAt}>
                         {formatTimestamp(entry.freshness.observedAt)}
                       </time>
@@ -186,38 +225,65 @@ export default function TrackedLeaderboardRoute() {
               </tbody>
             </table>
           </div>
-          <nav aria-label="Leaderboard pages" className="hero-actions">
+          <nav aria-label="Leaderboard pages" className="standings-pagination">
             {leaderboard.hasPrevious ? (
-              <Link to={leaderboardUrl(view, leaderboard.page - 1, daily ?? undefined)}>
+              <Link
+                className="button button-secondary"
+                to={leaderboardUrl(view, leaderboard.page - 1, daily ?? undefined)}
+              >
                 Previous
               </Link>
             ) : null}
-            <span>
+            <span className="pagination-status">
               Page {leaderboard.page} of {leaderboard.pageCount}
             </span>
             {leaderboard.hasNext ? (
-              <Link to={leaderboardUrl(view, leaderboard.page + 1, daily ?? undefined)}>
+              <Link
+                className="button button-secondary"
+                to={leaderboardUrl(view, leaderboard.page + 1, daily ?? undefined)}
+              >
                 Next
               </Link>
             ) : null}
           </nav>
           {daily ? (
-            <nav aria-label="Daily snapshots" className="hero-actions">
-              {daily.previousSnapshot ? (
-                <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>Older</Link>
-              ) : null}
-              {daily.nextSnapshot ? (
-                <Link to={leaderboardUrl("daily", 1, daily.nextSnapshot)}>Newer</Link>
-              ) : null}
+            <nav aria-label="Daily snapshots" className="snapshot-pagination">
+              <span>Saved day snapshots</span>
+              <div>
+                {daily.previousSnapshot ? (
+                  <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>Older</Link>
+                ) : null}
+                {daily.nextSnapshot ? (
+                  <Link to={leaderboardUrl("daily", 1, daily.nextSnapshot)}>Newer</Link>
+                ) : null}
+              </div>
             </nav>
           ) : null}
         </section>
       ) : (
         <div className="empty-state">
           <h2>Leaderboard unavailable</h2>
-          <p>Saved data remains protected while the live service is unavailable.</p>
+          <p>We couldn’t load the standings. Please try again in a moment.</p>
         </div>
       )}
     </main>
   );
+}
+
+function TrophyMark() {
+  return (
+    <svg className="trophy-mark" aria-hidden="true" viewBox="0 0 20 20">
+      <path d="M6 3h8v3.5c0 2.6-1.6 4.7-4 4.7s-4-2.1-4-4.7V3Z" />
+      <path d="M6 5H3.8v1.2c0 2 1.2 3.2 3.2 3.2M14 5h2.2v1.2c0 2-1.2 3.2-3.2 3.2M10 11.2V15m-3 2h6m-5.5-2h5" />
+    </svg>
+  );
+}
+
+function latestObservation(entries: TrackedLeaderboard["entries"]) {
+  return entries.reduce<string | null>((latest, entry) => {
+    if (latest === null) return entry.freshness.observedAt;
+    return Date.parse(entry.freshness.observedAt) > Date.parse(latest)
+      ? entry.freshness.observedAt
+      : latest;
+  }, null);
 }

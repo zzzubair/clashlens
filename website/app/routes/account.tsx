@@ -69,7 +69,7 @@ export function headers() {
 export default function AccountRoute() {
   const data = useLoaderData<typeof loader>();
   return (
-    <main className="page-shell">
+    <main id="main-content" tabIndex={-1} className="page-shell">
       <section className="hero" aria-labelledby="account-title">
         <h1 id="account-title">Your account</h1>
         <p className="lede">

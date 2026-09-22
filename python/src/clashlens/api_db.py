@@ -606,6 +606,9 @@ def _screen_event(
         "stars": stars,
         "trophy_change": trophy_change,
         "perspective_disagreement": battle.get("disagreement") is True,
+        "army_share_code": battle.get("army_share_code")
+        if isinstance(battle.get("army_share_code"), str)
+        else None,
     }
     if isinstance(battle.get("army"), Mapping):
         event["army"] = battle["army"]

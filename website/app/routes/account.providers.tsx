@@ -110,7 +110,7 @@ export function headers() {
 export default function AccountProvidersRoute() {
   const data = useLoaderData<typeof loader>();
   return (
-    <main className="page-shell narrow-shell">
+    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="providers-title">
         <h1 id="providers-title">Sign-in connections</h1>
         <p className="lede">

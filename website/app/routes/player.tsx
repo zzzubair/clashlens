@@ -1,14 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   redirect,
   useFetcher,
   useLoaderData,
+  useLocation,
   useRevalidator,
+  useSearchParams,
   type LoaderFunctionArgs,
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import { formatTimestamp } from "../components/Provenance";
 import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import type {
   HistoricalSeasonDayEntry,
@@ -153,6 +154,15 @@ let documentReloadHandled = false;
 
 export default function PlayerRoute() {
   const data = useLoaderData<typeof loader>();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const requestedDay = searchParams.get("day");
+  const selectedDay =
+    requestedDay &&
+    /^\d{4}-\d{2}-\d{2}$/.test(requestedDay) &&
+    !Number.isNaN(Date.parse(requestedDay))
+      ? requestedDay
+      : null;
   const refreshFetcher = useFetcher<RefreshWork | RefreshError>();
   const revalidator = useRevalidator();
   const [workId, setWorkId] = useState<string | null>(null);
@@ -188,6 +198,51 @@ export default function PlayerRoute() {
   const refreshResourcePath = player
     ? `/resources/players/${encodeURIComponent(player.tag)}/refresh`
     : null;
+
+  useEffect(() => {
+    if (!location.hash.startsWith("#battle-")) return;
+    let battleId: string;
+    try {
+      battleId = decodeURIComponent(location.hash.slice(1));
+    } catch {
+      return;
+    }
+    const battle = document.getElementById(battleId);
+    if (!battle?.matches(".battle-slot")) return;
+    let frame = 0;
+    let highlightTimer: ReturnType<typeof setTimeout> | undefined;
+    const highlight = () => {
+      if (document.hidden) return;
+      cancelAnimationFrame(frame);
+      clearTimeout(highlightTimer);
+      battle.classList.remove("battle-arrival");
+      const day = battle.closest("details");
+      if (day) day.open = true;
+      battle.scrollIntoView({ block: "center", behavior: "instant" });
+      // Let scrolling and layout finish before the two-second highlight starts.
+      frame = requestAnimationFrame(() => {
+        frame = requestAnimationFrame(() => {
+          battle.classList.add("battle-arrival");
+          highlightTimer = setTimeout(
+            () => battle.classList.remove("battle-arrival"),
+            2000,
+          );
+        });
+      });
+    };
+    if (document.readyState === "complete") highlight();
+    else window.addEventListener("load", highlight, { once: true });
+    window.addEventListener("pageshow", highlight);
+    document.addEventListener("visibilitychange", highlight);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(highlightTimer);
+      window.removeEventListener("load", highlight);
+      window.removeEventListener("pageshow", highlight);
+      document.removeEventListener("visibilitychange", highlight);
+      battle.classList.remove("battle-arrival");
+    };
+  }, [location.hash, location.key, player?.tag]);
 
   useEffect(() => {
     if (documentReloadHandled) return;
@@ -282,7 +337,7 @@ export default function PlayerRoute() {
   if (player === null) {
     if (data.selectedSeason !== null && data.historical !== null) {
       return (
-        <main className="page-shell player-page">
+        <main id="main-content" tabIndex={-1} className="page-shell player-page">
           <header className="player-header">
             <div>
               <h1>{data.historical.tag}</h1>
@@ -293,11 +348,7 @@ export default function PlayerRoute() {
           </header>
           {data.error ? <ErrorNotice error={data.error} /> : null}
           <p className="section-note">
-            Current profile data is unavailable; showing the{" "}
-            {data.historical.source === "official_league_history"
-              ? "official EOD result"
-              : "compact historical summary"}{" "}
-            only. We did not invent a name or trophy count.
+            Showing saved season results. The current profile is unavailable.
           </p>
           <SeasonNav
             tag={data.historical.tag}
@@ -311,7 +362,7 @@ export default function PlayerRoute() {
     }
     if (data.requestedTag !== null && data.seasons.length > 0) {
       return (
-        <main className="page-shell player-page">
+        <main id="main-content" tabIndex={-1} className="page-shell player-page">
           <h1>Player history</h1>
           {data.error ? <ErrorNotice error={data.error} /> : null}
           <p className="section-note">
@@ -329,10 +380,10 @@ export default function PlayerRoute() {
       );
     }
     return (
-      <main className="page-shell narrow-page">
+      <main id="main-content" tabIndex={-1} className="page-shell narrow-page">
         <h1>Player data unavailable</h1>
         {data.error ? <ErrorNotice error={data.error} /> : null}
-        <p>We did not replace saved data with an invented result.</p>
+        <p>Try refreshing the page in a moment.</p>
       </main>
     );
   }
@@ -345,26 +396,33 @@ export default function PlayerRoute() {
   const refreshActionPath = `/resources/players/${encodeURIComponent(player.tag)}/refresh`;
 
   return (
-    <main className="page-shell player-page">
+    <main id="main-content" tabIndex={-1} className="page-shell player-page">
       <header className="player-header">
-        <div>
+        <div className="player-profile">
           <h1>{player.profile.name}</h1>
           <p className="player-identity">
             <span className="player-tag prominent">{player.tag}</span>
-            <span>{player.profile.clan}</span>
+            <span className="player-clan">{player.profile.clan}</span>
           </p>
         </div>
         <div className="player-summary">
           <div className="player-trophy-card">
-            <span className="metric-label">Trophies</span>
-            <strong>{player.profile.trophies.toLocaleString()}</strong>
-            <span className="metric-label">Last updated</span>
-            <time
-              className="player-updated"
-              dateTime={player.profile.freshness.observedAt}
-            >
-              {formatTimestamp(player.profile.freshness.observedAt)}
-            </time>
+            <div>
+              <span className="metric-label">Current trophies</span>
+              <strong className="player-trophy-count">
+                <span className="trophy-mark" aria-hidden="true" />
+                {player.profile.trophies.toLocaleString()}
+              </strong>
+            </div>
+            <p className="player-freshness">
+              <span>Updated</span>{" "}
+              <time
+                className="player-updated"
+                dateTime={player.profile.freshness.observedAt}
+              >
+                {formatPlayerTimestamp(player.profile.freshness.observedAt)}
+              </time>
+            </p>
           </div>
           <refreshFetcher.Form
             className="player-refresh-form"
@@ -398,17 +456,6 @@ export default function PlayerRoute() {
 
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {visibleStatus ? <RefreshProgress status={visibleStatus} /> : null}
-      {data.selectedSeason === null && player.dataQuality.length > 0 ? (
-        <section className="data-section" aria-labelledby="data-quality-title">
-          <h2 id="data-quality-title">Data quality</h2>
-          {player.dataQuality.map((notice) => (
-            <p className="section-note" key={`${notice.code}-${notice.label}`}>
-              <strong>{notice.label}:</strong> {notice.detail}
-            </p>
-          ))}
-        </section>
-      ) : null}
-
       <SeasonNav
         tag={player.tag}
         seasons={data.seasons}
@@ -425,97 +472,37 @@ export default function PlayerRoute() {
             </div>
             {data.historicalError ? <ErrorNotice error={data.historicalError} /> : null}
             <p className="section-note">
-              Historical data for season {data.selectedSeason} is unavailable. We did not
-              substitute live detail.
+              Results for {seasonLabel(data.selectedSeason)} are unavailable.
             </p>
           </section>
         )
       ) : null}
 
       {data.selectedSeason !== null ? null : (
-        <>
-          {player.currentDay === null ? (
-            <section className="data-section" aria-labelledby="current-day-title">
-              <div className="section-heading">
-                <h2 id="current-day-title">Current Legend day</h2>
-              </div>
-              <p className="section-note">Current Legend day data is not available.</p>
-            </section>
-          ) : (
-            <section className="data-section" aria-labelledby="current-day-title">
-              <div className="section-heading">
-                <h2 id="current-day-title">Current Legend day</h2>
-              </div>
-              <p className="section-note">
-                Ranked day {player.currentDay!.dayNumber ?? "Unknown"} ·{" "}
-                {player.currentDay!.period}
-              </p>
-              <div className="metric-grid">
-                <MetricCard title="Offense">
-                  <Metric
-                    label="Attacks observed"
-                    value={formatCount(player.currentDay!.offense.attacks)}
-                  />
-                  <Metric
-                    label="Three-stars"
-                    value={formatFraction(
-                      player.currentDay!.offense.threeStars,
-                      player.currentDay!.offense.attacks,
-                    )}
-                  />
-                  <Metric
-                    label="Trophy gain"
-                    value={formatSigned(player.currentDay!.offense.trophyGain)}
-                  />
-                </MetricCard>
-                <MetricCard title="Defense">
-                  <Metric
-                    label="Defenses observed"
-                    value={formatCount(player.currentDay!.defense.defenses)}
-                  />
-                  <Metric
-                    label="Three-stars against"
-                    value={formatCount(player.currentDay!.defense.threeStarsAgainst)}
-                  />
-                  <Metric
-                    label="Trophy loss"
-                    value={
-                      player.currentDay!.defense.trophyLoss === null
-                        ? "Unknown"
-                        : formatSigned(-player.currentDay!.defense.trophyLoss)
-                    }
-                  />
-                </MetricCard>
-                <MetricCard title="Trophy change">
-                  <Metric
-                    label="Net change"
-                    value={formatSigned(player.currentDay!.trophyChange)}
-                  />
-                  <Metric
-                    label="Season day"
-                    value={
-                      player.season
-                        ? `${player.season.currentDayNumber} / ${player.season.dayCount}`
-                        : "Unknown"
-                    }
-                  />
-                </MetricCard>
-              </div>
-            </section>
-          )}
-
-          <section className="data-section" aria-labelledby="season-days-title">
-            <h2 id="season-days-title">Legend season</h2>
-            <div className="legend-days">
-              {player.seasonDays.map((day) => (
-                <LegendDay
-                  key={`${day.period}-${day.dayNumber ?? "unknown"}`}
-                  day={day}
-                />
-              ))}
-            </div>
-          </section>
-        </>
+        <section className="data-section" aria-labelledby="season-days-title">
+          <h2 id="season-days-title">Daily Legend log</h2>
+          {selectedDay &&
+          !player.seasonDays.some((day) => legendDayKey(day.period) === selectedDay) ? (
+            <p className="section-note" role="status">
+              No saved Legend log for {legendDayDate(selectedDay)}.
+            </p>
+          ) : null}
+          {player.dataQuality.length > 0 ? (
+            <p className="section-note">
+              Recent battles from Clash of Clans. Some daily totals are unavailable
+              because tracking started partway through the season.
+            </p>
+          ) : null}
+          <div className="legend-days">
+            {player.seasonDays.map((day) => (
+              <LegendDay
+                key={`${day.period}-${day.dayNumber ?? "unknown"}`}
+                day={day}
+                selectedDay={selectedDay}
+              />
+            ))}
+          </div>
+        </section>
       )}
     </main>
   );
@@ -551,14 +538,12 @@ function SeasonNav({
         {seasons.map((season) => (
           <li key={season.seasonId}>
             {selectedSeason === season.seasonId ? (
-              <strong aria-current="page">
-                Season {season.seasonId} · {seasonLabel(season)}
-              </strong>
+              <strong aria-current="page">{seasonLabel(season.seasonId)}</strong>
             ) : (
               <a
                 href={`${canonicalPlayerPath(tag)}?season=${encodeURIComponent(season.seasonId)}`}
               >
-                Season {season.seasonId} · {seasonLabel(season)}
+                {seasonLabel(season.seasonId)}
               </a>
             )}
           </li>
@@ -573,17 +558,27 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
     return (
       <section className="data-section" aria-labelledby="historical-season-title">
         <div className="section-heading">
-          <h2 id="historical-season-title">Season {summary.seasonId}</h2>
+          <h2 id="historical-season-title">
+            {seasonLabel(summary.seasonId, summary.seasonEnd)}
+          </h2>
         </div>
         <p className="section-note">
-          Official league history. Tracked Legend day detail is unavailable.
+          Season result from Clash of Clans. Daily battle logs were not recorded for this
+          season.
         </p>
         {summary.officialHistory ? (
-          <p className="section-note">
-            Official EOD trophies: {formatCount(summary.officialHistory.eodTrophies)} ·
-            Final placement: {formatCount(summary.officialHistory.finalPlacement)} ·
-            Observed {formatTimestamp(summary.officialHistory.observedAt)}
-          </p>
+          <div className="metric-grid">
+            <MetricCard title="Season finish">
+              <Metric
+                label="Final trophies"
+                value={formatCount(summary.officialHistory.eodTrophies)}
+              />
+              <Metric
+                label="Final rank"
+                value={formatCount(summary.officialHistory.finalPlacement)}
+              />
+            </MetricCard>
+          </div>
         ) : null}
       </section>
     );
@@ -592,21 +587,14 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
     <section className="data-section" aria-labelledby="historical-season-title">
       <div className="section-heading">
         <h2 id="historical-season-title">
-          Season {summary.seasonId} · {summary.coverageState}
+          {seasonLabel(summary.seasonId, summary.seasonEnd)}
         </h2>
       </div>
-      <p className="section-note">
-        Compact historical summary
-        {` · ${summary.daysObserved} of 28 tracked days`}
-        {summary.daysMissing.length > 0
-          ? ` · missing days ${summary.daysMissing.join(", ")}`
-          : ""}
-      </p>
+      <p className="section-note">{summary.daysObserved} of 28 Legend days recorded</p>
       {summary.officialHistory ? (
         <p className="section-note">
-          Official EOD trophies: {formatCount(summary.officialHistory.eodTrophies)} ·
-          Final placement: {formatCount(summary.officialHistory.finalPlacement)} ·
-          Observed {formatTimestamp(summary.officialHistory.observedAt)}
+          Final trophies: {formatCount(summary.officialHistory.eodTrophies)} · Final rank:{" "}
+          {formatCount(summary.officialHistory.finalPlacement)}
         </p>
       ) : null}
       <div className="metric-grid">
@@ -656,80 +644,172 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
         </MetricCard>
       </div>
       {summary.source === "tracked_summary" && summary.unresolvedFlags.length > 0 ? (
-        <p className="section-note">Unresolved: {summary.unresolvedFlags.join("; ")}</p>
+        <p className="section-note">Some daily totals are unavailable.</p>
       ) : null}
-      <table aria-label="Daily trophy totals">
-        <thead>
-          <tr>
-            <th scope="col">Day</th>
-            <th scope="col">Start</th>
-            <th scope="col">Attack</th>
-            <th scope="col">Defense</th>
-            <th scope="col">Net</th>
-            <th scope="col">End</th>
-            <th scope="col">Attacks</th>
-            <th scope="col">Defenses</th>
-            <th scope="col">State</th>
-            <th scope="col">Coverage</th>
-            <th scope="col">Flags</th>
-            <th scope="col">Adjustment</th>
-          </tr>
-        </thead>
-        <tbody>
-          {summary.dailyEntries.map((day) => (
-            <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
-              <td>{day.dayNumber ?? "Unknown"}</td>
-              <td>{formatCount(day.startTrophies)}</td>
-              <td>{formatSigned(day.attackGain)}</td>
-              <td>
-                {day.defenseLoss === null ? "Unknown" : formatSigned(-day.defenseLoss)}
-              </td>
-              <td>{formatSigned(day.netChange)}</td>
-              <td>{formatCount(day.endTrophies)}</td>
-              <td>{formatCount(day.attacks)}</td>
-              <td>{formatCount(day.defenses)}</td>
-              <td>{day.state}</td>
-              <td>{day.coverage}</td>
-              <td>{day.flags.length > 0 ? day.flags.join("; ") : "—"}</td>
-              <td>{formatAdjustment(day)}</td>
+      <div className="table-wrap top-space">
+        <table className="data-table" aria-label="Daily trophy totals">
+          <thead>
+            <tr>
+              <th scope="col">Day</th>
+              <th scope="col">Start</th>
+              <th scope="col">Attack</th>
+              <th scope="col">Defense</th>
+              <th scope="col">Net</th>
+              <th scope="col">End</th>
+              <th scope="col">Attacks</th>
+              <th scope="col">Defenses</th>
+              <th scope="col">Adjustment</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {summary.dailyEntries.map((day) => (
+              <tr key={`${day.period}-${day.dayNumber ?? "unknown"}`}>
+                <td>{day.dayNumber ?? "Unknown"}</td>
+                <td>{formatCount(day.startTrophies)}</td>
+                <td>{formatSigned(day.attackGain)}</td>
+                <td>
+                  {day.defenseLoss === null ? "Unknown" : formatSigned(-day.defenseLoss)}
+                </td>
+                <td>{formatSigned(day.netChange)}</td>
+                <td>{formatCount(day.endTrophies)}</td>
+                <td>{formatCount(day.attacks)}</td>
+                <td>{formatCount(day.defenses)}</td>
+                <td>{formatAdjustment(day)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }
 
-function seasonLabel(season: SummarizedSeasonRef): string {
-  return season.source === "official_league_history"
-    ? "official EOD only"
-    : season.coverageState;
+function seasonLabel(seasonId: string, seasonEnd?: string | null): string {
+  const end = seasonEnd
+    ? new Date(seasonEnd)
+    : new Date((Number(seasonId) + 28 * 24 * 60 * 60) * 1000);
+  return Number.isNaN(end.getTime())
+    ? "Past season"
+    : formatPlayerDate(end).replace("Sept", "Sep");
 }
 
-function LegendDay({ day }: { day: RankedDaySummary }) {
+function formatPlayerDate(date: Date): string {
+  return date.toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+function legendDayDate(period: string): string {
+  const date = new Date(period.split(" – ")[0]);
+  return Number.isNaN(date.getTime()) ? "Date unavailable" : formatPlayerDate(date);
+}
+
+function formatPlayerTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time unavailable";
+  return `${formatPlayerDate(date)}, ${date.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  })} UTC`;
+}
+
+function legendDayKey(period: string): string {
+  return period.split(" – ")[0].slice(0, 10);
+}
+
+function LegendDay({
+  day,
+  selectedDay,
+}: {
+  day: RankedDaySummary;
+  selectedDay: string | null;
+}) {
+  const dayKey = legendDayKey(day.period);
   return (
-    <details className="legend-day" open={day.state === "Live"}>
+    <details
+      className="legend-day"
+      id={`legend-day-${dayKey}`}
+      open={selectedDay ? selectedDay === dayKey : day.state === "Live"}
+    >
       <summary>
-        <strong>Day {day.dayNumber ?? "Unknown"}</strong>
-        <span>{day.state}</span>
-        <span>{formatCount(day.offense.attacks)} attacks</span>
-        <span>{formatCount(day.defense.defenses)} defenses</span>
-        <span>{formatSigned(day.trophyChange)} trophies</span>
+        <span className="legend-day-date">
+          <strong>{legendDayDate(day.period)}</strong>
+          <small>Day {day.dayNumber ?? "—"}</small>
+        </span>
+        <span className="legend-day-stat legend-day-offense">
+          <small>Attacks</small>
+          <strong className={valueTone(day.offense.trophyGain)}>
+            {formatSigned(day.offense.trophyGain)}
+          </strong>
+          <span>{formatCount(day.offense.attacks)} used</span>
+        </span>
+        <span className="legend-day-stat legend-day-defense">
+          <small>Defenses</small>
+          <strong
+            className={valueTone(
+              day.defense.trophyLoss === null ? null : -day.defense.trophyLoss,
+            )}
+          >
+            {formatSigned(
+              day.defense.trophyLoss === null ? null : -day.defense.trophyLoss,
+            )}
+          </strong>
+          <span>{formatCount(day.defense.defenses)} taken</span>
+        </span>
+        <span className="legend-day-stat legend-day-net">
+          <small>Net</small>
+          <strong className={valueTone(day.trophyChange ?? battleTrophyChange(day))}>
+            {formatSigned(day.trophyChange ?? battleTrophyChange(day))}
+          </strong>
+        </span>
+        {day.state === "Live" ? <LiveBadge /> : null}
       </summary>
       <div className="battle-columns">
-        <BattleColumn title="Attacks" events={day.offenseEvents} />
-        <BattleColumn title="Defenses" events={day.defenseEvents} />
+        <BattleColumn title="Attacks" events={day.offenseEvents} day={dayKey} />
+        <BattleColumn title="Defenses" events={day.defenseEvents} day={dayKey} />
       </div>
     </details>
   );
 }
 
+function LiveBadge() {
+  const dot = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let frame = 0;
+    const breathe = (time: number) => {
+      const phase = (1 - Math.cos((time / 2600) * Math.PI * 2)) / 2;
+      dot.current?.style.setProperty("--live-pulse", String(phase));
+      frame = requestAnimationFrame(breathe);
+    };
+    frame = requestAnimationFrame(breathe);
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  return (
+    <span className="legend-day-live" aria-label="Today's live Legend log">
+      <span className="legend-live-dot" ref={dot} aria-hidden="true" />
+      Live
+    </span>
+  );
+}
+
+function battleTrophyChange(day: RankedDaySummary): number | null {
+  return day.offense.trophyGain === null || day.defense.trophyLoss === null
+    ? null
+    : day.offense.trophyGain - day.defense.trophyLoss;
+}
+
 function BattleColumn({
   title,
   events,
+  day,
 }: {
   title: "Attacks" | "Defenses";
   events: RankedBattleEvent[];
+  day: string;
 }) {
   return (
     <section className="battle-column" aria-label={title}>
@@ -738,21 +818,57 @@ function BattleColumn({
         {Array.from({ length: 8 }, (_, index) => {
           const event = events[index];
           return event ? (
-            <li className="battle-slot" key={event.battleId}>
+            <li
+              className={`battle-slot battle-slot-${title === "Attacks" ? "attack" : "defense"}`}
+              id={`battle-${event.battleId}`}
+              key={event.battleId}
+            >
+              <span className="battle-number" aria-hidden="true">
+                {index + 1}
+              </span>
               <div className="battle-opponent">
-                <strong>{event.opponent.name ?? event.opponent.tag}</strong>
+                <a
+                  className="battle-profile-link"
+                  href={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
+                  aria-label={`View ${event.opponent.name ?? event.opponent.tag}'s Legend log for ${legendDayDate(day)}`}
+                >
+                  <strong>{event.opponent.name ?? event.opponent.tag}</strong>
+                </a>
                 <span className="player-tag">{event.opponent.tag}</span>
+                <time dateTime={event.battleTimestamp}>
+                  {new Date(event.battleTimestamp).toLocaleTimeString("en-GB", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    timeZone: "UTC",
+                  })}{" "}
+                  UTC
+                </time>
               </div>
-              <time dateTime={event.battleTimestamp}>
-                {formatTimestamp(event.battleTimestamp)}
-              </time>
-              <span>{event.stars} ★</span>
-              <span>{event.destructionPercentage}%</span>
-              <strong>{formatSigned(event.trophyChange)}</strong>
+              <div
+                className="battle-score"
+                role="group"
+                aria-label={`${event.stars} stars, ${event.destructionPercentage}% destruction, ${formatSigned(event.trophyChange)} trophies`}
+              >
+                <span aria-hidden="true">{event.stars}★</span>
+                <span aria-hidden="true">{event.destructionPercentage}%</span>
+                <strong className={valueTone(event.trophyChange)} aria-hidden="true">
+                  {formatSigned(event.trophyChange)}
+                </strong>
+              </div>
               {event.perspectiveDisagreement ? (
-                <span className="battle-disagreement">Perspective disagreement</span>
+                <span className="battle-disagreement">Result awaiting confirmation</span>
               ) : null}
-              {event.army ? <BattleArmyDetails army={event.army} /> : null}
+              {event.armyShareCode ? (
+                <a
+                  className="battle-army"
+                  href={`https://link.clashofclans.com/en?action=CopyArmy&army=${encodeURIComponent(event.armyShareCode)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`Copy army from the battle against ${event.opponent.name ?? event.opponent.tag}, opens in a new tab`}
+                >
+                  Copy army
+                </a>
+              ) : null}
             </li>
           ) : (
             <li
@@ -764,31 +880,6 @@ function BattleColumn({
         })}
       </ol>
     </section>
-  );
-}
-
-function BattleArmyDetails({ army }: { army: RankedBattleEvent["army"] }) {
-  if (!army) return null;
-  return (
-    <details className="battle-army">
-      <summary>Attacking army · {army.state}</summary>
-      {army.failureReason ? <p>{army.failureReason}</p> : null}
-      <ul>
-        {army.components.map((component, index) => (
-          <li key={`${component.typedId}-${component.origin}-${index}`}>
-            {component.name} ×{component.quantity} <small>({component.origin})</small>
-          </li>
-        ))}
-        {army.unknownComponents.map((component, index) => (
-          <li key={`unknown-${component.section}-${component.numericId}-${index}`}>
-            Unknown ID {component.numericId} ×{component.quantity}{" "}
-            <small>
-              ({component.section}, {component.origin})
-            </small>
-          </li>
-        ))}
-      </ul>
-    </details>
   );
 }
 
@@ -832,6 +923,11 @@ function formatSigned(value: number | null): string {
   return value > 0 ? `+${value}` : String(value);
 }
 
+function valueTone(value: number | null): string {
+  if (value === null || value === 0) return "score-neutral";
+  return value > 0 ? "score-positive" : "score-negative";
+}
+
 function formatCount(value: number | null): string {
   return value === null ? "Unknown" : String(value);
 }
@@ -840,12 +936,6 @@ function formatAdjustment(day: HistoricalSeasonDayEntry): string {
   if (!day.hasAdjustment) return "No";
   if (day.adjustmentTotal === null) return "Yes · unknown amount";
   return `Yes · ${formatSigned(day.adjustmentTotal)}`;
-}
-
-function formatFraction(numerator: number | null, denominator: number | null): string {
-  return numerator === null || denominator === null
-    ? "Unknown"
-    : `${numerator} / ${denominator}`;
 }
 
 async function safeError(cause: unknown): Promise<WebsiteErrorResponse> {

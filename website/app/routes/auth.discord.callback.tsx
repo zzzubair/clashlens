@@ -50,7 +50,12 @@ export default function CallbackErrorRoute() {
     error: { code: string; message: string } | null;
   };
   return (
-    <main className="page-shell narrow-shell" role="alert">
+    <main
+      id="main-content"
+      tabIndex={-1}
+      className="page-shell narrow-shell"
+      role="alert"
+    >
       <p className="eyebrow">Clash Lens</p>
       <h1>Sign-in could not be completed</h1>
       <p>{data.error?.message ?? "Discord sign-in could not be completed. Try again."}</p>

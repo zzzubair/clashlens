@@ -1,0 +1,257 @@
+:root {
+  color-scheme: light;
+  --cl-input-border: #9fb2cc;
+}
+
+/* Switch text and surfaces together, without a low-contrast intermediate frame. */
+.theme-changing *,
+.theme-changing *::before,
+.theme-changing *::after {
+  transition: none !important;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --cl-ink: #eef3fb;
+  --cl-paper: #0e172a;
+  --cl-panel: #1c2b47;
+  --cl-surface: #15213a;
+  --cl-muted: #a3b3cc;
+  --cl-border: #2b3d5e;
+  --cl-input-border: #4d6488;
+  --cl-blue: #7fb3ff;
+  --cl-blue-dark: #a9cbff;
+  --cl-action: #f6bd2e;
+  --cl-action-hover: #ffcb47;
+  --cl-action-shade: #a8730a;
+  --cl-on-action: #1a1200;
+  --cl-header-bg: #0a1120;
+  --cl-header-ink: #f2f6fd;
+  --cl-header-muted: #93a6c4;
+  --cl-header-soft: #ffffff17;
+  --cl-silver: #c2cedd;
+  --cl-bronze: #d9976b;
+  --cl-action-text: #7fb3ff;
+  --cl-action-soft: #1c3158;
+  --cl-action-border: #33579a;
+  --cl-gold: #f0c24a;
+  --cl-positive: #57d16d;
+  --cl-negative: #ff7a7a;
+  --cl-shadow: none;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 2.75rem;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  color: var(--cl-header-ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+.theme-toggle:active,
+.theme-toggle:hover {
+  background: var(--cl-header-soft);
+}
+
+/* Keep the header usable at 320px and when the page is zoomed. */
+@media (max-width: 24rem) {
+  .site-header {
+    gap: 0.25rem;
+  }
+  .site-brand {
+    font-size: 1.05rem;
+  }
+  .site-nav {
+    gap: 0.25rem;
+  }
+  .site-nav .nav-link {
+    min-width: 2.75rem;
+    padding-inline: 0.35rem;
+  }
+}
+
+.skip-link {
+  position: fixed;
+  z-index: 100;
+}
+main {
+  scroll-margin-top: 6rem;
+}
+.lede,
+.coverage-summary,
+.table-detail,
+.day-range,
+.quality-list p {
+  color: var(--cl-muted);
+}
+:is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 3px solid var(--cl-action-text);
+  outline-offset: 3px;
+}
+.home-page .search-controls input:focus-visible,
+#main-content:focus {
+  outline: none;
+}
+.home-page .search-controls:focus-within {
+  outline: 2px solid var(--cl-action-text);
+  outline-offset: 2px;
+}
+.segmented-control input:focus-visible + span {
+  outline-color: var(--cl-action-text);
+}
+.segmented-control input:checked + span {
+  box-shadow: inset 0 0 0 1px var(--cl-action-text);
+}
+.button[aria-current="page"],
+.season-list [aria-current="page"] {
+  border-color: var(--cl-action-text);
+}
+.form-field input,
+.form-field textarea,
+.filter-field input,
+.filter-field select,
+.home-page .search-controls {
+  border-color: var(--cl-input-border);
+}
+.table-wrap {
+  max-width: 100%;
+}
+.button.danger-button {
+  color: #fff;
+  background: #b3261e;
+  border-color: transparent;
+}
+.button.danger-button:hover {
+  color: #fff;
+  background: #91221e;
+}
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: 1rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .legend-live-dot::after {
+    transform: none;
+    opacity: 0.3;
+  }
+}
+
+/* Dark surfaces cover the shared controls, data views, and account forms. */
+[data-theme="dark"] .leaderboard-table thead th {
+  background: var(--cl-panel);
+  border-color: var(--cl-border);
+}
+[data-theme="dark"]
+  :is(.table-wrap, .leaderboard-table td, .leaderboard-table th) {
+  border-color: var(--cl-border);
+}
+[data-theme="dark"] .data-table tbody tr:hover,
+[data-theme="dark"] .battle-slot:has(.battle-profile-link:hover) {
+  background: var(--cl-panel);
+}
+[data-theme="dark"] .battle-slot-empty {
+  background: var(--cl-paper);
+  border-color: var(--cl-border);
+}
+[data-theme="dark"] .battle-slot.battle-arrival {
+  background: #243541;
+}
+[data-theme="dark"]
+  :is(
+    .data-table thead th,
+    .legend-day[open] > summary
+  ) {
+  color: var(--cl-ink);
+  background: var(--cl-panel);
+}
+[data-theme="dark"] .legend-day[open] > summary:hover {
+  background: var(--cl-action-soft);
+}
+[data-theme="dark"] .header-back:is(:hover, :focus-visible),
+[data-theme="dark"]
+  :is(
+    .home-page .analytics-link,
+    .home-leaderboard .leaderboard-more,
+    .battle-army,
+    .season-list a
+  ):hover {
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
+  border-color: var(--cl-action-border);
+}
+[data-theme="dark"] .player-trophy-card {
+  background: var(--cl-surface);
+  border-color: var(--cl-border);
+}
+[data-theme="dark"]
+  :is(
+    .state-live,
+    .state-available,
+    .state-fresh,
+    .state-complete,
+    .status-banner-success
+  ) {
+  color: #c5edd7;
+  background: #213b30;
+}
+[data-theme="dark"]
+  :is(
+    .state-stale,
+    .state-rate-limited,
+    .state-unavailable,
+    .notice-warning,
+    .status-banner-warning
+  ) {
+  color: #f6dcab;
+  background: #41351e;
+}
+[data-theme="dark"] :is(.state-uncertain, .state-malformed, .state-partial) {
+  color: #ffc7bd;
+  background: #442929;
+}
+[data-theme="dark"] .form-field :is(input, textarea)[aria-invalid="true"] {
+  border-color: #f59e9e;
+  background: #442929;
+}
+[data-theme="dark"] .field-error {
+  color: #ffb2b2;
+}
+[data-theme="dark"] .search-suggestion:is(:hover, :focus-visible) {
+  color: var(--cl-ink);
+  background: var(--cl-action-soft);
+}
+[data-theme="dark"]
+  .search-suggestion:is(:hover, :focus-visible)
+  :is(small, .search-suggestion-meta) {
+  color: var(--cl-muted);
+}
+[data-theme="dark"] .empty-chart span {
+  background: #685848;
+}
+[data-theme="dark"] .empty-chart span:nth-child(2) {
+  background: #928069;
+}
+[data-theme="dark"] .empty-chart span:nth-child(3) {
+  background: #c99470;
+}
+
+@media (forced-colors: active) {
+  .home-page .search-controls:focus-within,
+  :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline-color: Highlight;
+  }
+  .segmented-control input:checked + span,
+  .button[aria-current="page"],
+  .season-list [aria-current="page"] {
+    outline: 2px solid Highlight;
+  }
+}

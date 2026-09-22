@@ -100,76 +100,117 @@ export default function Home() {
     }, SEARCH_DEBOUNCE_MS);
   }
 
-  return (
-    <main className="page-shell">
-      <section className="hero" aria-labelledby="home-title">
-        <div className="brand-lockup">
-          <img
-            className="brand-mark"
-            src="/brand/clashlens-mark.svg"
-            alt=""
-            width="128"
-            height="128"
-          />
-          <h1 id="home-title">Clash Lens</h1>
-        </div>
-      </section>
+  const leaderboard = data.leaderboard;
+  const latestObservedAt = leaderboard ? latestObservation(leaderboard.entries) : null;
 
-      <section className="search-panel" aria-labelledby="search-title">
-        <h2 id="search-title">Find a player</h2>
-        <form method="get" className="search-form">
-          <label htmlFor="player-search">Search player tags or names</label>
-          <div className="search-controls">
-            <input
-              id="player-search"
-              name="q"
-              type="search"
-              value={searchQuery}
-              placeholder="Player tag or Name"
-              autoComplete="off"
-              onChange={(event) => handleSearchInput(event.currentTarget.value)}
-            />
-            <button type="submit" aria-label="Search">
-              <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20">
+  return (
+    <main id="main-content" tabIndex={-1} className="page-shell home-page">
+      <section className="home-overview" aria-labelledby="search-title">
+        <div className="home-intro">
+          <h1 id="search-title">Legend League</h1>
+          <p>
+            {leaderboard
+              ? `Daily results, rankings and armies for ${leaderboard.totalTracked.toLocaleString()} tracked players.`
+              : "Daily results, rankings and armies for tracked players."}
+          </p>
+        </div>
+        <div className="player-search-panel">
+          <form
+            method="get"
+            role="search"
+            className="search-form"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                if (searchTimer.current !== null) clearTimeout(searchTimer.current);
+                setRequestedQuery("");
+              }
+            }}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget)) {
+                if (searchTimer.current !== null) clearTimeout(searchTimer.current);
+                setRequestedQuery("");
+              }
+            }}
+          >
+            <label className="sr-only" htmlFor="player-search">Player search</label>
+            <div className="search-controls">
+              <svg
+                className="search-field-icon"
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                width="20"
+                height="20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+              >
                 <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
               </svg>
-            </button>
-          </div>
-          {suggestionsOpen ? (
-            <SearchSuggestions
-              data={suggestionData}
-              loading={searchFetcher.state !== "idle"}
-            />
+              <input
+                id="player-search"
+                name="q"
+                type="search"
+                value={searchQuery}
+                placeholder="Search name or #tag"
+                autoComplete="off"
+                autoCapitalize="none"
+                enterKeyHint="search"
+                aria-controls={suggestionsOpen ? "player-search-suggestions" : undefined}
+                aria-describedby="search-keyboard-help"
+                onChange={(event) => handleSearchInput(event.currentTarget.value)}
+              />
+              <button type="submit">Search</button>
+            </div>
+            <span className="sr-only" id="search-keyboard-help">
+              Suggestions appear below as you type. Press Tab to reach them, or Escape to
+              dismiss.
+            </span>
+            {suggestionsOpen ? (
+              <SearchSuggestions
+                data={suggestionData}
+                loading={searchFetcher.state !== "idle"}
+              />
+            ) : null}
+          </form>
+          {data.search && searchQuery === data.query ? (
+            <SearchResults search={data.search} />
           ) : null}
-        </form>
-        {data.search && searchQuery === data.query ? (
-          <SearchResults search={data.search} />
-        ) : null}
+        </div>
       </section>
 
       {data.error ? <ErrorNotice error={data.error} /> : null}
 
-      <section className="data-section" aria-labelledby="army-analytics-link-title">
+      <section
+        className="data-section home-leaderboard"
+        aria-labelledby="live-leaderboard-title"
+      >
         <div className="section-heading">
-          <h2 id="army-analytics-link-title">Legend army analytics</h2>
-          <Link className="button secondary" to="/analytics/armies">
-            Explore armies →
+          <div>
+            <h2 id="live-leaderboard-title">Rankings</h2>
+            {leaderboard ? (
+              <p className="standings-context">
+                <span>
+                  Top {leaderboard.entries.length} of {leaderboard.totalTracked} tracked
+                  players
+                </span>
+                {latestObservedAt ? (
+                  <span>
+                    Saved through{" "}
+                    <time dateTime={latestObservedAt}>
+                      {formatTimestamp(latestObservedAt)}
+                    </time>
+                  </span>
+                ) : null}
+              </p>
+            ) : null}
+          </div>
+          <Link className="section-link leaderboard-more" to="/leaderboards/tracked">
+            Full rankings
           </Link>
         </div>
-        <p>
-          Compare completed Legend-day attacking armies with explicit evidence coverage.
-        </p>
-      </section>
-
-      <section className="data-section" aria-labelledby="live-leaderboard-title">
-        <div className="section-heading">
-          <h2 id="live-leaderboard-title">Live leaderboard</h2>
-          <Link className="button secondary" to="/leaderboards/tracked">
-            View all →
-          </Link>
-        </div>
-        {data.leaderboard ? (
-          <LeaderboardTable entries={data.leaderboard.entries} />
+        {leaderboard ? (
+          <LeaderboardTable entries={leaderboard.entries} />
         ) : (
           <div className="empty-state">
             <h3>Tracked player data is unavailable</h3>
@@ -253,30 +294,31 @@ function SearchResults({ search }: { search: SearchResponse }) {
     const result = search.results[0];
     return (
       <div className="search-results" aria-live="polite">
-        <h3>Exact valid player tag</h3>
+        <h3>Player found</h3>
         {result ? (
           <SearchResult result={result} />
         ) : (
           <p>
-            <strong>{search.exactTag}</strong> is valid but is not in the known fixture
-            cohort.
+            We haven't saved a profile for <strong>{search.exactTag}</strong> yet.
           </p>
         )}
-        <Link
-          className="text-link"
-          to={canonicalPlayerPath(search.exactTag)}
-          reloadDocument
-        >
-          Open the canonical player page
-        </Link>
+        {!result ? (
+          <Link
+            className="button button-secondary"
+            to={canonicalPlayerPath(search.exactTag)}
+            reloadDocument
+          >
+            Open player profile
+          </Link>
+        ) : null}
       </div>
     );
   }
   if (search.results.length === 0) {
     return (
       <div className="search-results" aria-live="polite">
-        <h3>No known players found</h3>
-        <p>No refresh or discovery work was created.</p>
+        <h3>No players found</h3>
+        <p>Try a different name or enter the player's full tag.</p>
       </div>
     );
   }
@@ -317,21 +359,28 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
 function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
   return (
     <div className="table-wrap">
-      <table aria-label="Live leaderboard" className="data-table responsive-table">
-        <caption className="sr-only">First 25 players on the live leaderboard</caption>
+      <table aria-label="Latest saved standings" className="data-table leaderboard-table">
+        <caption className="sr-only">Tracked players in rank order</caption>
         <thead>
           <tr>
             <th scope="col">Rank</th>
             <th scope="col">Player</th>
             <th scope="col">Clan</th>
             <th scope="col">Trophies</th>
-            <th scope="col">Last updated</th>
+            <th scope="col">Observed</th>
           </tr>
         </thead>
         <tbody>
           {entries.map((entry) => (
-            <tr key={entry.tag} data-testid="tracked-player-row">
-              <td data-label="Rank">{entry.rank}</td>
+            <tr
+              className="leaderboard-row"
+              key={entry.tag}
+              data-testid="tracked-player-row"
+              data-podium-rank={entry.rank <= 3 ? entry.rank : undefined}
+            >
+              <td className="rank-cell" data-label="Rank">
+                <span className="rank-mark">{entry.rank}</span>
+              </td>
               <th scope="row" data-label="Player">
                 <Link
                   className="player-name"
@@ -341,17 +390,13 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
                   {entry.name}
                 </Link>
                 <span className="player-tag">{entry.tag}</span>
-                <Link
-                  className="view-player-link"
-                  to={canonicalPlayerPath(entry.tag)}
-                  reloadDocument
-                >
-                  View player →
-                </Link>
               </th>
               <td data-label="Clan">{entry.clan}</td>
-              <td data-label="Trophies">{entry.trophies.toLocaleString()}</td>
-              <td data-label="Last updated">
+              <td className="trophy-cell" data-label="Trophies">
+                <TrophyMark />
+                <strong>{entry.trophies.toLocaleString()}</strong>
+              </td>
+              <td data-label="Observed">
                 <time dateTime={entry.freshness.observedAt}>
                   {formatTimestamp(entry.freshness.observedAt)}
                 </time>
@@ -362,6 +407,24 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
       </table>
     </div>
   );
+}
+
+function TrophyMark() {
+  return (
+    <svg className="trophy-mark" aria-hidden="true" viewBox="0 0 20 20">
+      <path d="M6 3h8v3.5c0 2.6-1.6 4.7-4 4.7s-4-2.1-4-4.7V3Z" />
+      <path d="M6 5H3.8v1.2c0 2 1.2 3.2 3.2 3.2M14 5h2.2v1.2c0 2-1.2 3.2-3.2 3.2M10 11.2V15m-3 2h6m-5.5-2h5" />
+    </svg>
+  );
+}
+
+function latestObservation(entries: TrackedPlayerEntry[]) {
+  return entries.reduce<string | null>((latest, entry) => {
+    if (latest === null) return entry.freshness.observedAt;
+    return Date.parse(entry.freshness.observedAt) > Date.parse(latest)
+      ? entry.freshness.observedAt
+      : latest;
+  }, null);
 }
 
 async function safeError(cause: unknown): Promise<WebsiteErrorResponse> {

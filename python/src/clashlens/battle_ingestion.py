@@ -943,13 +943,16 @@ def _recheck_battle_rows(connection: Any, rows: list[Any]) -> None:
 def _refresh_battle_disagreements(connection: Any, battle_ids: list[int]) -> None:
     if not battle_ids:
         return
+    # Battles are already matched by Legend day, attacker and defender. Keep
+    # each report's timestamp as evidence, but compare the army and result:
+    # different reported times alone do not make this a different attack.
     connection.execute(
         """
         WITH target AS (
             SELECT unnest(%s::bigint[]) AS battle_id
         ), normalized AS (
             SELECT p.battle_id, p.perspective,
-                   e.battle_timestamp, e.stars,
+                   e.stars,
                    e.destruction_percentage, e.army_share_code,
                    CASE WHEN p.perspective = 'attacker'
                        THEN e.reporter_trophies ELSE e.opponent_trophies
@@ -963,8 +966,6 @@ def _refresh_battle_disagreements(connection: Any, battle_ids: list[int]) -> Non
             JOIN target ON target.battle_id = p.battle_id
         ), paired AS (
             SELECT target.battle_id, count(normalized.battle_id) AS evidence_count,
-                   max(battle_timestamp) FILTER (WHERE perspective = 'attacker') AS a_timestamp,
-                   max(battle_timestamp) FILTER (WHERE perspective = 'defender') AS d_timestamp,
                    max(stars) FILTER (WHERE perspective = 'attacker') AS a_stars,
                    max(stars) FILTER (WHERE perspective = 'defender') AS d_stars,
                    max(destruction_percentage) FILTER (WHERE perspective = 'attacker') AS a_destruction,
@@ -985,7 +986,6 @@ def _refresh_battle_disagreements(connection: Any, battle_ids: list[int]) -> Non
         ), classified AS (
             SELECT battle_id, evidence_count,
                    array_remove(ARRAY[
-                       CASE WHEN a_timestamp IS DISTINCT FROM d_timestamp THEN 'battle_timestamp' END,
                        CASE WHEN a_stars IS DISTINCT FROM d_stars THEN 'stars' END,
                        CASE WHEN a_destruction IS DISTINCT FROM d_destruction THEN 'destruction_percentage' END,
                        CASE WHEN a_army IS DISTINCT FROM d_army THEN 'army_share_code' END,
@@ -1111,5 +1111,4 @@ def _record_battle_sources(
             """, (log_id,),
         ).fetchall()
     }
-
 

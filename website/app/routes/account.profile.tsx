@@ -210,7 +210,7 @@ export default function AccountProfileRoute() {
   }
 
   return (
-    <main className="page-shell narrow-shell">
+    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="profile-title">
         <h1 id="profile-title">Edit profile</h1>
         <p className="lede">

@@ -62,7 +62,16 @@ export function formatAge(seconds: number): string {
 }
 
 export function formatTimestamp(value: string): string {
-  return value.replace("T", " ").replace("Z", " UTC");
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return `${new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  }).format(date)} UTC`;
 }
 
 function capitalize(value: string): string {

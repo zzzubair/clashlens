@@ -328,6 +328,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       trophyChange: value.trophy_change,
       perspectiveDisagreement: value.perspective_disagreement === true,
       army: mapBattleArmy(value.army ?? null),
+      armyShareCode: isString(value.army_share_code) ? value.army_share_code : null,
     };
   };
   const mapDay = (value: unknown) => {

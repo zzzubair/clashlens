@@ -213,6 +213,7 @@ export interface RankedBattleEvent {
   trophyChange: number;
   perspectiveDisagreement: boolean;
   army: BattleArmy | null;
+  armyShareCode?: string | null;
 }
 
 export interface RankedDaySummary {

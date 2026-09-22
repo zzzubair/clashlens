@@ -301,7 +301,7 @@ export default function GroupsRoute() {
       : loaderData.createIdempotencyKey;
 
   return (
-    <main className="page-shell narrow-shell">
+    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="groups-title">
         <h1 id="groups-title">Private groups</h1>
         <p className="lede">

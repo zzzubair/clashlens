@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   Form,
   Link,
+  NavLink,
   isRouteErrorResponse,
   useLoaderData,
   useLocation,
@@ -15,8 +16,12 @@ import {
 } from "react-router";
 
 import type { Route } from "./+types/root";
+import { ThemeToggle, themeInitialization } from "./components/ThemeToggle";
 import "./app.css";
 import "./theme.css";
+import "./explore.css";
+import "./appearance.css";
+import "./details.css";
 
 export interface RootLoaderData {
   loggedIn: boolean;
@@ -41,15 +46,15 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
 
 export function Layout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Clash Lens</title>
-        <meta name="theme-color" content="#28170F" />
-        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-        <link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png" />
-        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <meta name="theme-color" content="#eef4fb" suppressHydrationWarning />
+        <meta name="color-scheme" content="light dark" />
+        <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
+        <link rel="icon" href="data:," />
         <link rel="manifest" href="/site.webmanifest" />
         <Meta />
         <Links />
@@ -58,9 +63,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <a className="skip-link" href="#main-content">
           Skip to main content
         </a>
-        <div id="main-content" tabIndex={-1}>
-          {children}
-        </div>
+        {children}
         <footer className="page-footer">
           <p>
             Clash Lens is an unofficial fan project and is not affiliated with or endorsed
@@ -82,29 +85,46 @@ export default function App() {
   const data = useLoaderData<typeof loader>();
   const location = useLocation();
   const navigate = useNavigate();
+  const previousPath = useRef(location.pathname);
+  useEffect(() => {
+    if (previousPath.current !== location.pathname && !location.hash) {
+      document.getElementById("main-content")?.focus({ preventScroll: true });
+    }
+    previousPath.current = location.pathname;
+  }, [location.pathname, location.hash]);
+  const backLink = (
+    <Link
+      className="header-back"
+      to="/"
+      replace
+      onClick={(event) => {
+        const hasSameOriginReferrer =
+          window.history.length > 1 &&
+          document.referrer !== "" &&
+          new URL(document.referrer).origin === window.location.origin;
+        if ((window.history.state?.idx ?? 0) > 0 || hasSameOriginReferrer) {
+          event.preventDefault();
+          void navigate(-1);
+        }
+      }}
+    >
+      <span aria-hidden="true">←</span> Back
+    </Link>
+  );
   return (
     <>
       <header className="site-header">
-        {location.pathname !== "/" ? (
-          <Link
-            className="header-back"
-            to="/"
-            replace
-            onClick={(event) => {
-              const hasSameOriginReferrer =
-                window.history.length > 1 &&
-                document.referrer !== "" &&
-                new URL(document.referrer).origin === window.location.origin;
-              if ((window.history.state?.idx ?? 0) > 0 || hasSameOriginReferrer) {
-                event.preventDefault();
-                void navigate(-1);
-              }
-            }}
-          >
-            ← Back
-          </Link>
-        ) : null}
-        <nav className="site-nav" aria-label="Account navigation">
+        <Link className="site-brand" to="/" aria-label="Clash Lens home">
+          <BrandMark />
+          Clash Lens
+        </Link>
+        <nav className="primary-nav" aria-label="Main navigation">
+          <NavLink to="/" end>Home</NavLink>
+          <NavLink to="/leaderboards/tracked">Rankings</NavLink>
+          <NavLink to="/analytics/armies">Armies</NavLink>
+        </nav>
+        <nav className="site-nav" aria-label="Account and appearance">
+          <ThemeToggle />
           {data.loggedIn ? (
             <>
               <Link className="nav-link" to="/account">
@@ -131,6 +151,7 @@ export default function App() {
           )}
         </nav>
       </header>
+      {location.pathname !== "/" ? <div className="page-back">{backLink}</div> : null}
       <Outlet />
     </>
   );
@@ -139,18 +160,43 @@ export default function App() {
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   const isNotFound = isRouteErrorResponse(error) && error.status === 404;
   return (
-    <main className="page-shell narrow-shell" role="alert">
-      <p className="eyebrow">Clash Lens</p>
-      <h1>{isNotFound ? "Page not found" : "The page could not be loaded"}</h1>
-      <p>
-        {isNotFound
-          ? "This route does not exist."
-          : "The website returned a safe error. Saved data is not changed by this page error."}
-      </p>
-      <a className="button button-primary" href="/">
-        Return home
-      </a>
-    </main>
+    <>
+      <header className="site-header">
+        <Link className="site-brand" to="/" aria-label="Clash Lens home">
+          <BrandMark />
+          Clash Lens
+        </Link>
+        <div className="site-nav">
+          <ThemeToggle />
+        </div>
+      </header>
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="page-shell narrow-shell"
+        role="alert"
+      >
+        <p className="eyebrow">Clash Lens</p>
+        <h1>{isNotFound ? "Page not found" : "The page could not be loaded"}</h1>
+        <p>
+          {isNotFound
+            ? "This route does not exist."
+            : "The website returned a safe error. Saved data is not changed by this page error."}
+        </p>
+        <a className="button button-primary" href="/">
+          Return home
+        </a>
+      </main>
+    </>
+  );
+}
+
+function BrandMark() {
+  return (
+    <svg className="brand-mark" aria-hidden="true" viewBox="0 0 32 32">
+      <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" strokeWidth="3" />
+      <circle cx="16" cy="16" r="6" fill="var(--cl-action)" />
+    </svg>
   );
 }
 

@@ -189,7 +189,7 @@ export default function VerifyPlayerRoute() {
   const status = actionData?.status ?? null;
 
   return (
-    <main className="page-shell narrow-shell">
+    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="verify-title">
         <h1 id="verify-title">Verify a player</h1>
         <p className="lede">
