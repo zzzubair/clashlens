@@ -138,7 +138,8 @@ let documentReloadHandled = false;
 
 export default function PlayerRoute() {
   const data = useLoaderData<typeof loader>();
-  return <PlayerContent key={data.requestedTag ?? "invalid"} data={data} />;
+  const location = useLocation();
+  return <PlayerContent key={location.key} data={data} />;
 }
 
 function PlayerContent({ data }: { data: PlayerLoaderData }) {

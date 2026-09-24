@@ -134,6 +134,10 @@ export default function Home() {
             action="/"
             role="search"
             className="search-form"
+            onSubmit={() => {
+              if (searchTimer.current !== null) clearTimeout(searchTimer.current);
+              setRequestedQuery("");
+            }}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
                 if (searchTimer.current !== null) clearTimeout(searchTimer.current);
