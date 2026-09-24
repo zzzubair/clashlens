@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   data,
   Form,
@@ -34,6 +34,9 @@ const allowed = {
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const source = new URL(request.url).searchParams;
+  if ((source.get("category") ?? "troops") === "troops" && source.get("cc") === "1") {
+    source.set("category", "cc-troops");
+  }
   const recentAvailable =
     import.meta.env.DEV || process.env.CLASHLENS_ARMY_PREVIEW === "true";
   if (
@@ -309,6 +312,61 @@ function SortHeading({
   );
 }
 
+const ArmyResultRow = memo(function ArmyResultRow({
+  row,
+  isHistorical,
+}: {
+  row: ArmyRow;
+  isHistorical: boolean;
+}) {
+  return (
+    <tr>
+      <th scope="row">{row.label}</th>
+      {isHistorical ? <td>{row.quantity}</td> : null}
+      <td>
+        {row.usageCount.toLocaleString()} / {row.usageDenominator.toLocaleString()}
+      </td>
+      <td>{formatRate(row.usageRate)}</td>
+      {[1, 2, 3].map((stars) => {
+        const count =
+          row.starCounts?.[stars] ??
+          [row.oneStarCount, row.twoStarCount, row.threeStarCount][stars - 1] ??
+          0;
+        return (
+          <td key={stars}>
+            <strong className="analytics-star-rate">
+              {formatRate(row.usageCount ? count / row.usageCount : 0)}
+            </strong>
+            <span className="analytics-star-count">
+              {count.toLocaleString()} {count === 1 ? "battle" : "battles"}
+            </span>
+          </td>
+        );
+      })}
+      {!isHistorical ? (
+        <>
+          <td>{row.averageStars!.toFixed(2)}</td>
+          <td>{row.averageDestruction!.toFixed(1)}%</td>
+        </>
+      ) : null}
+    </tr>
+  );
+});
+
+const ArmyBreakdownRow = memo(function ArmyBreakdownRow({ row }: { row: ArmyRow }) {
+  return (
+    <tr>
+      <th scope="row">{row.label}</th>
+      {row.starCounts?.map((count, index) => (
+        <td key={index}>
+          {count} ({formatRate(row.starRates![index])})
+        </td>
+      ))}
+      <td>{row.unknownExcludedAttacks}</td>
+    </tr>
+  );
+});
+
 export default function ArmyAnalyticsRoute() {
   const result = useLoaderData<typeof loader>();
   const { analytics, error, seasonEmpty, historicalSummary, requestedSeason } = result;
@@ -321,6 +379,14 @@ export default function ArmyAnalyticsRoute() {
   const isHistorical = historicalSummary === true;
   const lens = selected?.lens ?? params.get("lens") ?? "offense";
   const population = selected?.population ?? params.get("population") ?? "top-100";
+  const category =
+    selected?.category ??
+    ((params.get("category") ?? "troops") === "troops" && params.get("cc") === "1"
+      ? "cc-troops"
+      : params.get("category")) ??
+    "troops";
+  const showCategory = category === "cc-troops" ? "troops" : category;
+  const clanCastle = category === "cc-troops";
   const unavailable = "selectionUnavailable" in result && result.selectionUnavailable;
   const snapshot = "snapshot" in result ? result.snapshot : null;
   const unreadableArmyRecords = analytics
@@ -385,7 +451,7 @@ export default function ArmyAnalyticsRoute() {
     const values = {
       lens,
       population: isHistorical ? "all" : population,
-      category: selected?.category ?? params.get("category") ?? "troops",
+      category: showCategory,
       sort: selected?.sort ?? params.get("sort") ?? "usage-rate",
       season: requestedSeason,
       start_day: String(selected?.startDay ?? params.get("start_day") ?? 1),
@@ -401,11 +467,15 @@ export default function ArmyAnalyticsRoute() {
         control.value = value;
       }
     }
+    const ccToggle = filterForm.current.elements.namedItem("cc");
+    if (ccToggle instanceof HTMLInputElement) ccToggle.checked = clanCastle;
   }, [
     params,
     selected,
     lens,
     population,
+    showCategory,
+    clanCastle,
     isHistorical,
     requestedSeason,
     navigation.state,
@@ -441,6 +511,14 @@ export default function ArmyAnalyticsRoute() {
         onChange={(event) => {
           if (pendingChange.current !== null) clearTimeout(pendingChange.current);
           const form = event.currentTarget;
+          if (
+            event.target instanceof HTMLSelectElement &&
+            event.target.name === "category" &&
+            event.target.value !== "troops"
+          ) {
+            const ccToggle = form.elements.namedItem("cc");
+            if (ccToggle instanceof HTMLInputElement) ccToggle.checked = false;
+          }
           const apply = () => {
             pendingChange.current = null;
             if (!form.checkValidity()) return;
@@ -498,27 +576,56 @@ export default function ArmyAnalyticsRoute() {
           </span>
         </div>
         <div className="filter-grid analytics-main-filters">
-          <label className="filter-field">
-            Show
-            <select
-              name="category"
-              defaultValue={selected?.category ?? params.get("category") ?? "troops"}
-            >
-              {allowed.category
-                .filter(
-                  (value) =>
-                    !isHistorical ||
-                    ["troops", "spells", "siege", "heroes", "pets", "equipment"].includes(
-                      value,
-                    ),
-                )
-                .map((value) => (
-                  <option key={value} value={value}>
-                    {filterLabels[value]}
+          <div className="analytics-show-filter">
+            <label className="filter-field">
+              Show
+              <select name="category" defaultValue={showCategory}>
+                {allowed.category
+                  .filter(
+                    (value) =>
+                      value !== "cc-troops" &&
+                      value !== "cc-composition" &&
+                      (!isHistorical ||
+                        [
+                          "troops",
+                          "spells",
+                          "siege",
+                          "heroes",
+                          "pets",
+                          "equipment",
+                        ].includes(value)),
+                  )
+                  .map((value) => (
+                    <option key={value} value={value}>
+                      {filterLabels[value]}
+                    </option>
+                  ))}
+                {category === "cc-composition" ? (
+                  <option value="cc-composition" hidden>
+                    Clan Castle army
                   </option>
-                ))}
-            </select>
-          </label>
+                ) : null}
+              </select>
+            </label>
+            {showCategory === "troops" ? (
+              <>
+                <label className="analytics-cc-toggle">
+                  <input
+                    type="checkbox"
+                    name="cc"
+                    value="1"
+                    defaultChecked={clanCastle}
+                  />
+                  Clan Castle troops
+                </label>
+                {isHistorical ? (
+                  <p className="form-help">
+                    Clan Castle troop stats are unavailable for past seasons.
+                  </p>
+                ) : null}
+              </>
+            ) : null}
+          </div>
           <label className="filter-field">
             Players
             <select
@@ -615,6 +722,11 @@ export default function ArmyAnalyticsRoute() {
             </details>
           )}
         </div>
+        <noscript>
+          <button type="submit" className="button button-secondary">
+            Apply filters
+          </button>
+        </noscript>
       </Form>
       {error && !unavailable ? <ErrorNotice error={error} /> : null}
       {seasonEmpty || unavailable || (!analytics && !error) ? (
@@ -722,39 +834,7 @@ export default function ArmyAnalyticsRoute() {
                   </tr>
                 ) : null}
                 {rows.map((row) => (
-                  <tr key={row.key}>
-                    <th scope="row">{row.label}</th>
-                    {isHistorical ? <td>{row.quantity}</td> : null}
-                    <td>
-                      {row.usageCount.toLocaleString()} /{" "}
-                      {row.usageDenominator.toLocaleString()}
-                    </td>
-                    <td>{formatRate(row.usageRate)}</td>
-                    {[1, 2, 3].map((stars) => {
-                      const count =
-                        row.starCounts?.[stars] ??
-                        [row.oneStarCount, row.twoStarCount, row.threeStarCount][
-                          stars - 1
-                        ] ??
-                        0;
-                      return (
-                        <td key={stars}>
-                          <strong className="analytics-star-rate">
-                            {formatRate(row.usageCount ? count / row.usageCount : 0)}
-                          </strong>
-                          <span className="analytics-star-count">
-                            {count.toLocaleString()} {count === 1 ? "battle" : "battles"}
-                          </span>
-                        </td>
-                      );
-                    })}
-                    {!isHistorical ? (
-                      <>
-                        <td>{row.averageStars!.toFixed(2)}</td>
-                        <td>{row.averageDestruction!.toFixed(1)}%</td>
-                      </>
-                    ) : null}
-                  </tr>
+                  <ArmyResultRow key={row.key} row={row} isHistorical={isHistorical} />
                 ))}
               </tbody>
             </table>
@@ -808,15 +888,7 @@ export default function ArmyAnalyticsRoute() {
                   </thead>
                   <tbody>
                     {sortedRows(analytics.rows, breakdownSort ?? tableSort).map((row) => (
-                      <tr key={row.key}>
-                        <th scope="row">{row.label}</th>
-                        {row.starCounts?.map((count, index) => (
-                          <td key={index}>
-                            {count} ({formatRate(row.starRates![index])})
-                          </td>
-                        ))}
-                        <td>{row.unknownExcludedAttacks}</td>
-                      </tr>
+                      <ArmyBreakdownRow key={row.key} row={row} />
                     ))}
                   </tbody>
                 </table>

@@ -48,6 +48,7 @@ These are what the words in this repo mean. Use the plain version when you talk 
 - **Job**: one unit of work for the worker. Usually "process this one response".
 - **Lease**: a time limit a worker gets on a job. Run over it and another worker can take the job.
 - **Migration**: a numbered SQL file under `deploy/migrations` that changes the database shape.
+- **Index**: an extra lookup list in the database that helps it find matching records without reading every row.
 - **Fixture**: a fake version of an outside service (Clash API, Google login, storage) that runs locally so nothing needs real credentials.
 - **Trial**: a timed run of the whole system against fake players to see if it keeps up.
 - **Reconciliation**: working out a player's real daily result when their battles and profile snapshots don't line up.

@@ -923,10 +923,10 @@ def search_public_users(
                    SELECT 1 FROM verified_player_links AS link
                    JOIN players AS player ON player.id = link.player_id
                    LEFT JOIN LATERAL (
-                       SELECT name FROM player_profile_versions
-                       WHERE player_id = player.id
+                       SELECT name, player_id FROM player_profile_versions
+                       WHERE normalized_tag = player.normalized_tag
                        ORDER BY observed_at DESC, id DESC LIMIT 1
-                   ) AS profile ON true
+                   ) AS profile ON profile.player_id = player.id
                    WHERE link.account_id = account.id
                      AND (player.normalized_tag = %s OR
                           profile.name ILIKE %s ESCAPE '\\')
@@ -1015,10 +1015,10 @@ def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:
         FROM verified_player_links AS link
         JOIN players AS player ON player.id = link.player_id
         LEFT JOIN LATERAL (
-            SELECT name FROM player_profile_versions
-            WHERE player_id = player.id
+            SELECT name, player_id FROM player_profile_versions
+            WHERE normalized_tag = player.normalized_tag
             ORDER BY observed_at DESC, id DESC LIMIT 1
-        ) AS profile ON true
+        ) AS profile ON profile.player_id = player.id
         WHERE link.account_id = %s
         ORDER BY player.normalized_tag
         LIMIT 500

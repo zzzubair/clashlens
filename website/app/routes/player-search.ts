@@ -4,6 +4,7 @@ import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type { SearchResponse, WebsiteErrorResponse } from "../lib/contracts";
 
 export interface PlayerSearchLoaderData {
+  query: string;
   search: SearchResponse | null;
   error: WebsiteErrorResponse | null;
 }
@@ -14,6 +15,7 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<Response>
 
   if (rawQuery.length > MAX_SEARCH_QUERY_LENGTH) {
     return noStoreJson({
+      query,
       search: null,
       error: {
         error: {
@@ -24,17 +26,18 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<Response>
     });
   }
 
-  if (query === "") return noStoreJson({ search: null, error: null });
+  if (query === "") return noStoreJson({ query, search: null, error: null });
 
   try {
     const { createPythonClient } = await import("../services/python.server");
     return noStoreJson({
+      query,
       search: await createPythonClient().searchPlayers(query, 5),
       error: null,
     });
   } catch (cause) {
     const { safeWebsiteError } = await import("../server/errors.server");
-    return noStoreJson({ search: null, error: safeWebsiteError(cause) });
+    return noStoreJson({ query, search: null, error: safeWebsiteError(cause) });
   }
 }
 

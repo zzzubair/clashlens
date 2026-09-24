@@ -27,3 +27,19 @@ test("player page stays within a narrow viewport", async ({ page }) => {
     ),
   ).toBe(0);
 });
+
+test("season navigation clears refresh state for the same player", async ({ page }) => {
+  await page.goto("/players/%232PP");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  const refresh = page.getByRole("region", { name: "Player refresh" });
+  await expect(refresh).toBeVisible();
+
+  const seasons = page.getByRole("navigation", { name: "Historical seasons" });
+  await seasons.getByRole("link").first().click();
+  await expect(page).toHaveURL(/\/players\/%232PP\?season=/);
+  await expect(refresh).toHaveCount(0);
+
+  await seasons.getByRole("link", { name: "Current season" }).click();
+  await expect(page).toHaveURL(/\/players\/%232PP$/);
+  await expect(refresh).toHaveCount(0);
+});

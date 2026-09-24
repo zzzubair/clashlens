@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useFetcher, useLoaderData, type LoaderFunctionArgs } from "react-router";
+import {
+  Form,
+  Link,
+  useFetcher,
+  useLoaderData,
+  type LoaderFunctionArgs,
+} from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark, latestObservation } from "../components/LeaderboardShared";
@@ -26,29 +32,32 @@ export interface HomeLoaderData {
 export async function loader({ request }: LoaderFunctionArgs): Promise<HomeLoaderData> {
   const rawQuery = new URL(request.url).searchParams.get("q") ?? "";
   const query = rawQuery.trim();
-  let leaderboard: TrackedLeaderboard | null = null;
-  let search: SearchResponse | null = null;
+  const invalidQuery = rawQuery.length > MAX_SEARCH_QUERY_LENGTH;
+  const client = import("../services/python.server").then(({ createPythonClient }) =>
+    createPythonClient(),
+  );
+  const [leaderboardResult, searchResult] = await Promise.allSettled([
+    client.then((python) => python.getTrackedLeaderboard(25, "live")),
+    !invalidQuery && query !== ""
+      ? client.then((python) => python.searchPlayers(query))
+      : Promise.resolve(null),
+  ]);
+  const leaderboard =
+    leaderboardResult.status === "fulfilled" ? leaderboardResult.value : null;
+  const search = searchResult.status === "fulfilled" ? searchResult.value : null;
   let error: WebsiteErrorResponse | null = null;
-  try {
-    const { createPythonClient } = await import("../services/python.server");
-    leaderboard = await createPythonClient().getTrackedLeaderboard(25, "live");
-  } catch (cause) {
-    error = await safeError(cause);
+  if (leaderboardResult.status === "rejected") {
+    error = await safeError(leaderboardResult.reason);
   }
-  if (rawQuery.length > MAX_SEARCH_QUERY_LENGTH) {
+  if (invalidQuery) {
     error = {
       error: {
         code: "invalid_input",
         message: "Check the submitted value and try again.",
       },
     };
-  } else if (query !== "") {
-    try {
-      const { createPythonClient } = await import("../services/python.server");
-      search = await createPythonClient().searchPlayers(query);
-    } catch (cause) {
-      error = error ?? (await safeError(cause));
-    }
+  } else if (searchResult.status === "rejected" && error === null) {
+    error = await safeError(searchResult.reason);
   }
   return { leaderboard, search, query, error };
 }
@@ -78,7 +87,11 @@ export default function Home() {
   const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
   const requestMatchesInput =
     requestedQuery.toLocaleLowerCase() === normalizedQuery && normalizedQuery !== "";
-  const suggestionData = requestMatchesInput ? searchFetcher.data : undefined;
+  const suggestionData =
+    requestMatchesInput &&
+    searchFetcher.data?.query.toLocaleLowerCase() === normalizedQuery
+      ? searchFetcher.data
+      : undefined;
   const suggestionsOpen =
     requestMatchesInput &&
     (searchFetcher.state !== "idle" ||
@@ -116,10 +129,15 @@ export default function Home() {
           </p>
         </div>
         <div className="player-search-panel">
-          <form
+          <Form
             method="get"
+            action="/"
             role="search"
             className="search-form"
+            onSubmit={() => {
+              if (searchTimer.current !== null) clearTimeout(searchTimer.current);
+              setRequestedQuery("");
+            }}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
                 if (searchTimer.current !== null) clearTimeout(searchTimer.current);
@@ -175,7 +193,7 @@ export default function Home() {
                 loading={searchFetcher.state !== "idle"}
               />
             ) : null}
-          </form>
+          </Form>
           {data.search && searchQuery === data.query ? (
             <SearchResults search={data.search} />
           ) : null}
@@ -205,7 +223,10 @@ export default function Home() {
               </p>
             ) : null}
           </div>
-          <Link className="section-link leaderboard-more" to="/leaderboards/tracked">
+          <Link
+            className="section-link leaderboard-more"
+            to="/leaderboards/tracked?view=live&page=1"
+          >
             Full rankings
           </Link>
         </div>
@@ -277,11 +298,10 @@ function SearchSuggestions({
           ))}
           {results.map((result) => (
             <li key={result.tag}>
-              <Link
+              <a
                 className="search-suggestion"
                 data-testid="search-suggestion"
-                to={canonicalPlayerPath(result.tag)}
-                reloadDocument
+                href={canonicalPlayerPath(result.tag)}
               >
                 <span className="search-suggestion-player">
                   <strong>{result.name}</strong>
@@ -290,22 +310,21 @@ function SearchSuggestions({
                 <span className="search-suggestion-meta">
                   {result.clan} · {result.trophies.toLocaleString()}
                 </span>
-              </Link>
+              </a>
             </li>
           ))}
           {unknownExactTag ? (
             <li>
-              <Link
+              <a
                 className="search-suggestion"
                 data-testid="search-suggestion"
-                to={canonicalPlayerPath(unknownExactTag)}
-                reloadDocument
+                href={canonicalPlayerPath(unknownExactTag)}
               >
                 <span className="search-suggestion-player">
                   <strong>Open {unknownExactTag}</strong>
                   <small>Player tag</small>
                 </span>
-              </Link>
+              </a>
             </li>
           ) : null}
         </ul>
@@ -365,13 +384,12 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
           </p>
         )}
         {!result ? (
-          <Link
+          <a
             className="button button-secondary"
-            to={canonicalPlayerPath(search.exactTag)}
-            reloadDocument
+            href={canonicalPlayerPath(search.exactTag)}
           >
             Open player profile
-          </Link>
+          </a>
         ) : null}
       </section>
     );
@@ -408,9 +426,9 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
   return (
     <div className="search-result">
       <div>
-        <Link className="player-name" to={canonicalPlayerPath(result.tag)} reloadDocument>
+        <a className="player-name" href={canonicalPlayerPath(result.tag)}>
           {result.name}
-        </Link>
+        </a>
         <span className="player-tag">{result.tag}</span>
       </div>
       <div className="search-context">
@@ -447,13 +465,9 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
                 <span className="rank-mark">{entry.rank}</span>
               </td>
               <th scope="row" data-label="Player">
-                <Link
-                  className="player-name"
-                  to={canonicalPlayerPath(entry.tag)}
-                  reloadDocument
-                >
+                <a className="player-name" href={canonicalPlayerPath(entry.tag)}>
                   {entry.name}
-                </Link>
+                </a>
                 <span className="player-tag">{entry.tag}</span>
               </th>
               <td data-label="Clan">{entry.clan}</td>

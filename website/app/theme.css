@@ -2,21 +2,27 @@
   font-family: Barlow;
   font-weight: 400;
   font-display: swap;
-  src: url("/fonts/barlow-regular.ttf") format("truetype");
+  src:
+    url("/fonts/barlow-regular.woff2") format("woff2"),
+    url("/fonts/barlow-regular.ttf") format("truetype");
 }
 
 @font-face {
   font-family: Barlow;
   font-weight: 600;
   font-display: swap;
-  src: url("/fonts/barlow-semibold.ttf") format("truetype");
+  src:
+    url("/fonts/barlow-semibold.woff2") format("woff2"),
+    url("/fonts/barlow-semibold.ttf") format("truetype");
 }
 
 @font-face {
   font-family: Barlow;
   font-weight: 700;
   font-display: swap;
-  src: url("/fonts/barlow-bold.ttf") format("truetype");
+  src:
+    url("/fonts/barlow-bold.woff2") format("woff2"),
+    url("/fonts/barlow-bold.ttf") format("truetype");
 }
 
 :root {

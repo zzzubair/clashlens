@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -111,7 +112,7 @@ class ArmyAnalyticsSelection:
 
 
 def build_army_result(
-    facts: list[dict[str, Any]], selection: ArmyAnalyticsSelection
+    facts: Iterable[dict[str, Any]], selection: ArmyAnalyticsSelection
 ) -> dict[str, Any]:
     category = selection.category
     relationship_category = category in {

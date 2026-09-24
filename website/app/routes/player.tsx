@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Link,
   redirect,
   useFetcher,
   useLoaderData,
@@ -74,57 +75,40 @@ export async function loader({
     });
   }
 
-  let player: PlayerPage | null = null;
-  let error: WebsiteErrorResponse | null = null;
-  let seasons: SummarizedSeasonRef[];
-  let historical: HistoricalSeasonSummary | null = null;
-  let historicalError: WebsiteErrorResponse | null = null;
   const selectedSeason = readSeasonParam(url.searchParams.get("season"));
-  try {
-    const { createPythonClient } = await import("../services/python.server");
-    player = await createPythonClient().getPlayer(normalizedTag);
-  } catch (cause) {
-    error = await safeError(cause);
-  }
-  try {
-    const { createPythonClient } = await import("../services/python.server");
-    seasons = await createPythonClient().getPlayerSeasons(normalizedTag);
-  } catch {
-    seasons = [];
-  }
-  if (selectedSeason !== null) {
-    try {
-      const { createPythonClient } = await import("../services/python.server");
-      historical = await createPythonClient().getPlayerSeason(
-        normalizedTag,
-        selectedSeason,
-      );
-    } catch (cause) {
-      historicalError = await safeError(cause);
-    }
-  }
-
-  let refreshStatus: RefreshStatus | null = null;
-  let refreshError: WebsiteErrorResponse | null = null;
   const workId = url.searchParams.get("refresh");
-  if (workId) {
-    if (!/^[A-Za-z0-9_-]{1,128}$/.test(workId)) {
-      refreshError = await safeError({
-        status: 400,
-        payload: { error: "invalid_input" },
-      });
-    } else {
-      try {
-        const { createPythonClient } = await import("../services/python.server");
-        refreshStatus = await createPythonClient().getRefreshStatus(
-          workId,
-          normalizedTag,
-        );
-      } catch (cause) {
-        refreshError = await safeError(cause);
-      }
-    }
-  }
+  const validWorkId = workId && /^[A-Za-z0-9_-]{1,128}$/.test(workId);
+  const client = import("../services/python.server").then(({ createPythonClient }) =>
+    createPythonClient(),
+  );
+  const [playerResult, seasonsResult, historicalResult, refreshResult] =
+    await Promise.allSettled([
+      client.then((api) => api.getPlayer(normalizedTag)),
+      client.then((api) => api.getPlayerSeasons(normalizedTag)),
+      selectedSeason === null
+        ? Promise.resolve(null)
+        : client.then((api) => api.getPlayerSeason(normalizedTag, selectedSeason)),
+      validWorkId
+        ? client.then((api) => api.getRefreshStatus(workId, normalizedTag))
+        : Promise.resolve(null),
+    ]);
+  const player = playerResult.status === "fulfilled" ? playerResult.value : null;
+  const error =
+    playerResult.status === "rejected" ? await safeError(playerResult.reason) : null;
+  const seasons = seasonsResult.status === "fulfilled" ? seasonsResult.value : [];
+  const historical =
+    historicalResult.status === "fulfilled" ? historicalResult.value : null;
+  const historicalError =
+    historicalResult.status === "rejected"
+      ? await safeError(historicalResult.reason)
+      : null;
+  const refreshStatus = refreshResult.status === "fulfilled" ? refreshResult.value : null;
+  const refreshError =
+    workId && !validWorkId
+      ? await safeError({ status: 400, payload: { error: "invalid_input" } })
+      : refreshResult.status === "rejected"
+        ? await safeError(refreshResult.reason)
+        : null;
   return {
     requestedTag: normalizedTag,
     player,
@@ -155,6 +139,11 @@ let documentReloadHandled = false;
 export default function PlayerRoute() {
   const data = useLoaderData<typeof loader>();
   const location = useLocation();
+  return <PlayerContent key={location.key} data={data} />;
+}
+
+function PlayerContent({ data }: { data: PlayerLoaderData }) {
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const requestedDay = searchParams.get("day");
   const selectedDay =
@@ -171,7 +160,7 @@ export default function PlayerRoute() {
 
   useEffect(() => {
     const status = data.refreshStatus;
-    if (status) {
+    if (status && status.tag === data.requestedTag) {
       setWorkId(status.workId);
       setLastStatus(status);
       setPollingError(null);
@@ -181,7 +170,7 @@ export default function PlayerRoute() {
   useEffect(() => {
     const refresh =
       refreshFetcher.data && "workId" in refreshFetcher.data ? refreshFetcher.data : null;
-    if (refresh) {
+    if (refresh && refresh.tag === data.requestedTag) {
       setWorkId(refresh.workId);
       setLastStatus(refresh);
       setPollingError(null);
@@ -193,7 +182,10 @@ export default function PlayerRoute() {
     lastStatus?.state === "failed" ||
     lastStatus?.state === "unavailable" ||
     pollingError !== null;
-  const refreshedPlayer = lastStatus && "player" in lastStatus ? lastStatus.player : null;
+  const refreshedPlayer =
+    lastStatus && "player" in lastStatus && lastStatus.tag === data.requestedTag
+      ? lastStatus.player
+      : null;
   const player = refreshedPlayer ?? data.player;
   const refreshResourcePath = player
     ? `/resources/players/${encodeURIComponent(player.tag)}/refresh`
@@ -392,7 +384,9 @@ export default function PlayerRoute() {
     refreshFetcher.data && "error" in refreshFetcher.data ? refreshFetcher.data : null;
   const refreshError = data.refreshError;
   const visibleRefreshError = actionError ?? pollingError ?? refreshError;
-  const visibleStatus = lastStatus ?? data.refreshStatus;
+  const visibleStatus =
+    lastStatus ??
+    (data.refreshStatus?.tag === data.requestedTag ? data.refreshStatus : null);
   const refreshActionPath = `/resources/players/${encodeURIComponent(player.tag)}/refresh`;
 
   return (
@@ -539,7 +533,7 @@ function SeasonNav({
             {selectedSeason === null ? (
               <strong aria-current="page">Current season</strong>
             ) : (
-              <a href={canonicalPlayerPath(tag)}>Current season</a>
+              <Link to={canonicalPlayerPath(tag)}>Current season</Link>
             )}
           </li>
         ) : null}
@@ -548,11 +542,11 @@ function SeasonNav({
             {selectedSeason === season.seasonId ? (
               <strong aria-current="page">{seasonLabel(season.seasonId)}</strong>
             ) : (
-              <a
-                href={`${canonicalPlayerPath(tag)}?season=${encodeURIComponent(season.seasonId)}`}
+              <Link
+                to={`${canonicalPlayerPath(tag)}?season=${encodeURIComponent(season.seasonId)}`}
               >
                 {seasonLabel(season.seasonId)}
-              </a>
+              </Link>
             )}
           </li>
         ))}
@@ -706,13 +700,20 @@ function seasonLabel(seasonId: string, seasonEnd?: string | null): string {
     : formatPlayerDate(end).replace("Sept", "Sep");
 }
 
+const playerDateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+const playerTimeFormatter = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "UTC",
+});
+
 function formatPlayerDate(date: Date): string {
-  return date.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  return playerDateFormatter.format(date);
 }
 
 function legendDayDate(period: string): string {
@@ -723,11 +724,7 @@ function legendDayDate(period: string): string {
 function formatPlayerTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Time unavailable";
-  return `${formatPlayerDate(date)}, ${date.toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "UTC",
-  })} UTC`;
+  return `${formatPlayerDate(date)}, ${playerTimeFormatter.format(date)} UTC`;
 }
 
 function legendDayKey(period: string): string {
@@ -742,6 +739,7 @@ function LegendDay({
   selectedDay: string | null;
 }) {
   const dayKey = legendDayKey(day.period);
+  const dayLabel = legendDayDate(day.period);
   return (
     <details
       className="legend-day"
@@ -750,7 +748,7 @@ function LegendDay({
     >
       <summary>
         <span className="legend-day-date">
-          <strong>{legendDayDate(day.period)}</strong>
+          <strong>{dayLabel}</strong>
           <span className="legend-day-meta">
             <small>Day {day.dayNumber ?? "—"}</small>
             {day.state === "Live" ? <LiveBadge /> : null}
@@ -802,8 +800,18 @@ function LegendDay({
         </span>
       </summary>
       <div className="battle-columns">
-        <BattleColumn title="Attacks" events={day.offenseEvents} day={dayKey} />
-        <BattleColumn title="Defenses" events={day.defenseEvents} day={dayKey} />
+        <BattleColumn
+          title="Attacks"
+          events={day.offenseEvents}
+          day={dayKey}
+          dayLabel={dayLabel}
+        />
+        <BattleColumn
+          title="Defenses"
+          events={day.defenseEvents}
+          day={dayKey}
+          dayLabel={dayLabel}
+        />
       </div>
     </details>
   );
@@ -839,10 +847,12 @@ function BattleColumn({
   title,
   events,
   day,
+  dayLabel,
 }: {
   title: "Attacks" | "Defenses";
   events: RankedBattleEvent[];
   day: string;
+  dayLabel: string;
 }) {
   return (
     <section className="battle-column" aria-label={title}>
@@ -863,18 +873,13 @@ function BattleColumn({
                 <a
                   className="battle-profile-link"
                   href={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
-                  aria-label={`View ${event.opponent.name ?? event.opponent.tag}'s Legend log for ${legendDayDate(day)}`}
+                  aria-label={`View ${event.opponent.name ?? event.opponent.tag}'s Legend log for ${dayLabel}`}
                 >
                   <strong>{event.opponent.name ?? event.opponent.tag}</strong>
                 </a>
                 <span className="player-tag">{event.opponent.tag}</span>
                 <time dateTime={event.battleTimestamp}>
-                  {new Date(event.battleTimestamp).toLocaleTimeString("en-GB", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    timeZone: "UTC",
-                  })}{" "}
-                  UTC
+                  {playerTimeFormatter.format(new Date(event.battleTimestamp))} UTC
                 </time>
               </div>
               <div

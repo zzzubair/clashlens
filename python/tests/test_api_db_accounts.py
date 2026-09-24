@@ -205,5 +205,67 @@ def test_public_search_finds_linked_players_without_exposing_private_lists(datab
                 {"tag": "#2PP", "name": "Player #2PP"},
                 {"tag": "#8PY", "name": "Player #8PY"},
             ]
+            # A newer parsed identity wins even when it is not the current
+            # publishable profile. The old name must stop matching search.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO player_profile_versions (
+                        player_id, observation_id, normalized_tag,
+                        endpoint_version, schema_version, parser_version,
+                        observed_at, source_http_status, name, trophies,
+                        league_tier_id, league_tier_name, eligibility_state,
+                        profile_json, source_contract_state
+                    )
+                    SELECT player_id, observation_id, normalized_tag,
+                           endpoint_version, schema_version, 'renamed-profile-test',
+                           observed_at + interval '1 minute', source_http_status,
+                           'Renamed_#2PP', trophies, league_tier_id,
+                           league_tier_name, eligibility_state, profile_json,
+                           source_contract_state
+                    FROM player_profile_versions
+                    WHERE normalized_tag = '#2PP'
+                    ORDER BY observed_at DESC, id DESC LIMIT 1
+                    """
+                )
+            assert (
+                api_accounts.search_public_users(database, "Renamed_#2PP") == expected
+            )
+            assert api_accounts.search_public_users(database, "Player #2PP") == []
+            assert api_accounts.search_public_users(database, "Renamed%#2PP") == []
+            assert api_accounts.get_public_user(database, "groupowner")[
+                "verified_players"
+            ][0] == {
+                "tag": "#2PP",
+                "name": "Renamed_#2PP",
+            }
+            # A contradictory stored tag must not expose another player's
+            # identity, or make the older name appear current again.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO player_profile_versions (
+                        player_id, observation_id, normalized_tag,
+                        endpoint_version, schema_version, parser_version,
+                        observed_at, source_http_status, name, trophies,
+                        league_tier_id, league_tier_name, eligibility_state,
+                        profile_json
+                    )
+                    SELECT player_id, observation_id, '#2PP',
+                           endpoint_version, schema_version, 'cross-player-test',
+                           observed_at + interval '2 minutes', source_http_status,
+                           'Private #8PY', trophies, league_tier_id,
+                           league_tier_name, eligibility_state, profile_json
+                    FROM player_profile_versions
+                    WHERE normalized_tag = '#8PY'
+                    ORDER BY observed_at DESC, id DESC LIMIT 1
+                    """
+                )
+            assert api_accounts.search_public_users(database, "Private #8PY") == []
+            assert api_accounts.search_public_users(database, "Renamed_#2PP") == []
+            assert api_accounts.search_public_users(database, "#2PP") == expected
+            assert api_accounts.get_public_user(database, "groupowner")[
+                "verified_players"
+            ][0] == {"tag": "#2PP", "name": None}
         finally:
             database.close()

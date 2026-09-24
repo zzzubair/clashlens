@@ -183,3 +183,11 @@ podman build --file Containerfile --tag clashlens-website:prototype .
 
 The root repository `Containerfile` builds the Python asyncio collector; this
 `website/Containerfile` builds the Node application.
+
+## Font assets
+
+The browser loads the three Barlow weights as WOFF2, with the original TTF files
+retained as fallbacks. The WOFF2 files were converted from those exact originals
+with fontTools 4.66.0, without removing characters or changing glyphs. Their SIL
+Open Font License remains in `public/fonts/OFL.txt`. Font conversion is a one-time
+asset step and adds no application or build dependency.

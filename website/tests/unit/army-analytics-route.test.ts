@@ -224,6 +224,47 @@ describe("army analytics route historical reads", () => {
     expect(data).toMatchObject({ error: null, seasonEmpty: null });
   });
 
+  it("reads individual Clan Castle troops when the toggle is on", async () => {
+    const getArmyAnalytics = vi.fn().mockResolvedValue({ selection: {} });
+    mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });
+
+    await armyLoader({
+      request: requestFor("season=current&category=troops&cc=1"),
+      params: {},
+    } as never);
+    expect(getArmyAnalytics.mock.calls[0][0].get("category")).toBe("cc-troops");
+
+    await armyLoader({
+      request: requestFor("season=current&category=troops"),
+      params: {},
+    } as never);
+    expect(getArmyAnalytics.mock.calls[1][0].get("category")).toBe("troops");
+  });
+
+  it("does not show regular troop results for an unavailable past-season Clan Castle selection", async () => {
+    const getArmySeasonSummary = vi
+      .fn()
+      .mockRejectedValue(
+        new PythonApiError(404, { error: "army_analytics_unavailable" }),
+      );
+    const getArmyAnalytics = vi.fn();
+    mocks.createPythonClient.mockReturnValue({
+      getArmySeasonSummary,
+      getArmyAnalytics,
+    });
+
+    const result = await armyLoader({
+      request: requestFor(`season=${SEASON}&category=troops&cc=1`),
+      params: {},
+    } as never);
+    expect(getArmySeasonSummary.mock.calls[0][1].get("category")).toBe("cc-troops");
+    expect(getArmyAnalytics).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      init: { status: 404 },
+      data: { analytics: null, error: { error: { code: "unavailable" } } },
+    });
+  });
+
   it("uses captured-preview defaults only when filters are absent", async () => {
     const defaults = await armyLoader({
       request: requestFor("recent=1"),
@@ -256,6 +297,15 @@ describe("army analytics route historical reads", () => {
           sort: "usage-count",
         },
       },
+      error: null,
+    });
+
+    const clanCastle = await armyLoader({
+      request: requestFor("recent=1&cc=1"),
+      params: {},
+    } as never);
+    expect(clanCastle).toMatchObject({
+      analytics: { selection: { category: "cc-troops" } },
       error: null,
     });
   });
