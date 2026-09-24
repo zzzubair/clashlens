@@ -69,6 +69,60 @@ test("captured preview reconciles counts, updates filters and reverses sorting",
   await expectNoSeriousAccessibilityViolations(page);
 });
 
+test("Clan Castle switches between individual and regular troop results", async ({
+  page,
+}) => {
+  await page.goto("/analytics/armies?recent=1&category=troops");
+  const toggle = page.getByRole("checkbox", { name: "Clan Castle troops" });
+  const rows = page
+    .getByRole("table", { name: "Army analytics results" })
+    .getByRole("row");
+  await expect(toggle).not.toBeChecked();
+  await expect(page.getByRole("heading", { name: "Troops", exact: true })).toBeVisible();
+  await expect(rows).toHaveCount(32);
+  const choices = await page.locator('select[name="category"] option').allTextContents();
+  expect(choices).not.toContain("Clan Castle army");
+  expect(choices).not.toContain("Clan Castle troops");
+
+  await toggle.check();
+  await expect(page).toHaveURL(/category=troops/);
+  await expect(page).toHaveURL(/cc=1/);
+  await expect(page.getByRole("heading", { name: "Clan Castle troops" })).toBeVisible();
+  await expect(rows).toHaveCount(24);
+  await expect(toggle).toBeChecked();
+
+  await toggle.uncheck();
+  await expect(page.getByRole("heading", { name: "Troops", exact: true })).toBeVisible();
+  await expect(rows).toHaveCount(32);
+  await expect(page).not.toHaveURL(/cc=1/);
+  await expect(toggle).not.toBeChecked();
+});
+
+test("Clan Castle toggle works when JavaScript is off", async ({ browser }) => {
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  try {
+    const page = await context.newPage();
+    await page.goto("/analytics/armies?recent=1&category=troops");
+    const toggle = page.getByRole("checkbox", { name: "Clan Castle troops" });
+    const apply = page.getByRole("button", { name: "Apply filters" });
+    await expect(apply).toBeVisible();
+
+    await toggle.check();
+    await apply.click();
+    await expect(page).toHaveURL(/cc=1/);
+    await expect(page.getByRole("heading", { name: "Clan Castle troops" })).toBeVisible();
+
+    await toggle.uncheck();
+    await apply.click();
+    await expect(page).not.toHaveURL(/cc=1/);
+    await expect(
+      page.getByRole("heading", { name: "Troops", exact: true }),
+    ).toBeVisible();
+  } finally {
+    await context.close();
+  }
+});
+
 test("large army view keeps every row and shows the browser's local time", async ({
   browser,
 }) => {
@@ -118,6 +172,17 @@ test("missing historical summary stays unavailable with legacy filters in the UR
     page.getByText("Army analytics are unavailable for the selected Legend days."),
   ).toBeVisible();
   await expect(page.getByRole("table")).toHaveCount(0);
+
+  await page.goto("/analytics/armies?season=missing-history-126&category=troops&cc=1");
+  const toggle = page.getByRole("checkbox", { name: "Clan Castle troops" });
+  await expect(toggle).toBeChecked();
+  await expect(
+    page.getByText("Clan Castle troop stats are unavailable for past seasons."),
+  ).toBeVisible();
+  await expect(page.getByRole("table")).toHaveCount(0);
+  await toggle.uncheck();
+  await expect(page).not.toHaveURL(/cc=1/);
+  await expect(toggle).not.toBeChecked();
   await expectNoSeriousAccessibilityViolations(page);
 });
 
