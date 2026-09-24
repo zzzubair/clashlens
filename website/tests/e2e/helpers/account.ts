@@ -63,7 +63,9 @@ export async function ensureAccount(
     await page.getByRole("button", { name: "Create account" }).click();
   }
   await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
-  await expect(page.getByRole("heading", { name: "Linked accounts" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Linked accounts", exact: true }),
+  ).toBeVisible();
 }
 
 export async function expectNoSeriousAccessibilityViolations(page: Page): Promise<void> {

@@ -627,7 +627,8 @@ export default function ArmyAnalyticsRoute() {
           <p>
             {seasonEmpty
               ? "Stats will appear after the first Legend day is complete."
-              : "We don’t have the complete daily records needed for this selection. Try a different day range or player group."}
+              : (error?.error.message ??
+                "We don’t have the complete daily records needed for this selection. Try a different day range or player group.")}
           </p>
           {seasonEmpty?.previousSeasonId ? (
             <Link
