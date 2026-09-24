@@ -91,7 +91,5 @@ function applyTheme(dark: boolean) {
     });
   }
   document.documentElement.dataset.theme = theme;
-  document
-    .querySelector('meta[name="theme-color"]')
-    ?.setAttribute("content", "#2456ff");
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#2456ff");
 }

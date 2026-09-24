@@ -106,9 +106,8 @@ passed; 93 login/account tests passed. Twelve page checks across phone, tablet
 and desktop sizes found no page overflow or JavaScript errors. Provider-start
 redirects and secure cookies passed for both providers; a real Google sign-in
 created an account and loaded its account data. Discord completion, provider
-linking and physical iPad/Safari testing remain to be verified. Two existing
-army-render tests still assume the earlier table markup and Apply button;
-they also fail before the HTTPS setup changes and were left unchanged.
+linking and physical iPad/Safari testing remain to be verified. Army tests now
+cover automatic filter changes and sortable table headings in the current UI.
 
 Player-verification setup exposed a real response-format mismatch: Supercell
 returns `tag`, `token` and `status`, while the client expected only `status`.
@@ -117,8 +116,8 @@ them before classification. All 31 verification tests pass, including five
 new regression cases. A live deliberately-invalid token was correctly rejected
 through the restricted gateway. The user then linked two real players; a read-only
 database check confirmed both links on the `sloothy` account.
-Python lint could not run because Ruff is not installed in the available
-environments. The login accessibility scan also reports one existing `region`
+Python lint passed with the locked environment during checkpoint validation.
+The earlier login accessibility scan reported one `region`
 warning (content outside a page landmark), outside this setup's scope.
 
 Account and public-profile update (22 September 2026): saved players and groups
@@ -166,6 +165,15 @@ separate rate-limit records for the shared interactive API key; review that
 before running both environments with continuous real traffic.
 
 ## Container check
+
+Daily logs prefer the recorded starting trophy count. A calculated value requires
+complete battle coverage or all eight attacks and eight defenses, with matching
+totals and timestamps. Incomplete evidence stays unavailable. Calculations from
+the next day's start also require consecutive days within the same season.
+
+The local fake-service stack enables `CLASHLENS_ARMY_PREVIEW` for browser tests of
+the captured army data. `saved=1` selects the backend's saved publications instead.
+The capture is a bounded generated JSON file, excluded from automatic formatting.
 
 Build the separate website image with:
 

@@ -233,7 +233,9 @@ function SearchSuggestions({
   const results = search?.results.slice(0, 5) ?? [];
   const users = search?.users.slice(0, 3) ?? [];
   const unknownExactTag =
-    search?.exactTag && results.length === 0 ? search.exactTag : null;
+    search?.exactTag && !results.some((result) => result.tag === search.exactTag)
+      ? search.exactTag
+      : null;
 
   return (
     <div
@@ -351,7 +353,7 @@ function SearchResults({ search }: { search: SearchResponse }) {
 
 function PlayerSearchResults({ search }: { search: SearchResponse }) {
   if (search.exactTag) {
-    const result = search.results[0];
+    const result = search.results.find((entry) => entry.tag === search.exactTag);
     return (
       <section>
         <h3>Player found</h3>

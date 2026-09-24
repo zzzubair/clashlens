@@ -113,7 +113,10 @@ def test_official_client_calls_only_verifytoken_through_the_fixed_proxy() -> Non
 
     def transport(request: object) -> OfficialVerificationResponse:
         captured.append(request)
-        return OfficialVerificationResponse(http_status=200, body=b'{"status":"ok"}')
+        return OfficialVerificationResponse(
+            http_status=200,
+            body=b'{"tag":"#2PP","token":"one-time-token","status":"ok"}',
+        )
 
     client = OfficialVerificationClient(
         api_key=b"safe-synthetic-api-key",
@@ -143,7 +146,10 @@ def test_official_client_can_use_the_loopback_development_fixture() -> None:
 
     def transport(request: object) -> OfficialVerificationResponse:
         captured.append(request)
-        return OfficialVerificationResponse(http_status=200, body=b'{"status":"ok"}')
+        return OfficialVerificationResponse(
+            http_status=200,
+            body=b'{"tag":"#2PP","token":"VERIFY-2PP","status":"ok"}',
+        )
 
     client = OfficialVerificationClient(
         api_key=b"safe-synthetic-api-key",
@@ -218,6 +224,26 @@ def test_official_client_rejects_insecure_origin_without_test_opt_in() -> None:
             proxy_url="",
             api_origin="http://127.0.0.1:8080",
         )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"status":"ok"}',
+        b'{"tag":"#2PP","status":"ok"}',
+        b'{"tag":"#2PP","token":"private-player-token","status":"ok","extra":true}',
+        b"not JSON",
+    ],
+)
+def test_official_client_rejects_unbound_success(body: bytes) -> None:
+    client = OfficialVerificationClient(
+        api_key=b"safe-synthetic-api-key",
+        proxy_url="http://fixed-egress.internal:3128",
+        transport=lambda _request: OfficialVerificationResponse(200, body),
+    )
+
+    with pytest.raises(VerificationTransportError):
+        client.verify("#2PP", "private-player-token")
 
 
 def test_official_client_rejects_non_loopback_insecure_test_origin() -> None:

@@ -57,7 +57,15 @@ export function recentArmyAnalytics(source: URLSearchParams) {
   const analytics: ArmyAnalytics = {
     ...summary,
     kind: "army-analytics",
-    selection: { lens, season: "recent", startDay: 0, endDay: 0, population, category, sort },
+    selection: {
+      lens,
+      season: "recent",
+      startDay: 0,
+      endDay: 0,
+      population,
+      category,
+      sort,
+    },
     cohortEvidence: {
       staleOrUncertainCohortMembers: 0,
       streakExcludedPlayers: 0,

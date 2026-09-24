@@ -50,7 +50,9 @@
   background: var(--cl-header-soft);
 }
 @media (hover: hover) and (pointer: fine) {
-  .theme-toggle:hover { background: var(--cl-header-soft); }
+  .theme-toggle:hover {
+    background: var(--cl-header-soft);
+  }
 }
 a,
 summary {

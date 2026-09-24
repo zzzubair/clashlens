@@ -72,6 +72,30 @@ describe("server-only Python client response boundary", () => {
       null,
     ],
     ["missing battle counts", "2026-09-21T21:41:20Z", "missing-count", 5632, null, null],
+    [
+      "partial day with one saved attack",
+      "2026-09-21T21:41:20Z",
+      "partial-current",
+      5632,
+      null,
+      null,
+    ],
+    [
+      "uncertain day with one saved attack",
+      "2026-09-21T21:41:20Z",
+      "uncertain-current",
+      5632,
+      null,
+      null,
+    ],
+    [
+      "all sixteen battles without a reset snapshot",
+      "2026-09-21T21:41:20Z",
+      "full-battles",
+      5632,
+      5632,
+      5597,
+    ],
     ["stored total takes priority", "2026-09-21T21:41:20Z", "stored", 5632, 5500, 5465],
     ["incomplete older day", "2026-09-21T21:41:20Z", "partial-older", 5632, 5462, null],
     ["gap between days", "2026-09-21T21:41:20Z", "gap", 5632, 5462, null],
@@ -117,17 +141,30 @@ describe("server-only Python client response boundary", () => {
       };
       const day = makeDay(
         21,
-        variant === "zero-net"
-          ? Array(8).fill(40)
-          : variant === "negative-net"
-            ? [40, 40, 40, 40]
-            : [40, 40, 40, 30],
-        variant === "negative-net" ? 0 : 8,
+        variant.endsWith("-current")
+          ? []
+          : variant === "zero-net" || variant === "full-battles"
+            ? Array(8).fill(40)
+            : variant === "negative-net"
+              ? [40, 40, 40, 40]
+              : [40, 40, 40, 30],
+        variant.endsWith("-current") ? 1 : variant === "negative-net" ? 0 : 8,
       );
       const older = makeDay(
         variant === "gap" ? 19 : 20,
         variant === "partial-older" ? [40, 40, 40, 40] : [40, 40, 40, 40, 40, 40, 40, 5],
       );
+      if (
+        !variant.endsWith("-current") &&
+        variant !== "full-battles" &&
+        variant !== "stored"
+      ) {
+        day.completeness = {
+          state: "complete",
+          reason: "All changes since reset are recorded.",
+        };
+      }
+      if (variant === "uncertain-current") day.completeness.state = "uncertain";
       if (variant === "missing-count") day.attack_count = null;
       if (variant === "stored") day.start_trophies = 5500;
       if (variant === "season-reset") {

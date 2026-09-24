@@ -44,3 +44,31 @@ test("public pages render without browser JavaScript", async ({ browser }) => {
 
   await context.close();
 });
+
+test("search suggestions keep the exact tag alongside a matching player name", async ({
+  page,
+}) => {
+  await page.route("**/resources/players/search?*", async (route) => {
+    await route.fulfill({
+      json: {
+        search: {
+          exactTag: "#2PP",
+          users: [],
+          results: [{ tag: "#2PY", name: "#2PP", clan: "Test clan", trophies: 5000 }],
+        },
+        error: null,
+      },
+    });
+  });
+  await page.goto("/");
+  await page
+    .getByRole("searchbox", { name: "Search players and Clash Lens profiles" })
+    .fill("#2PP");
+  const suggestions = page.getByRole("region", {
+    name: "Player and profile search suggestions",
+  });
+  await expect(
+    suggestions.getByRole("link", { name: "Open #2PP Player tag" }),
+  ).toHaveAttribute("href", "/players/%232PP");
+  await expect(suggestions.locator('a[href="/players/%232PY"]')).toBeVisible();
+});

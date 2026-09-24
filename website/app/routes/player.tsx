@@ -493,10 +493,12 @@ export default function PlayerRoute() {
               because tracking started partway through the season.
             </p>
           ) : null}
-          {player.seasonDays.some((day) => day.startTrophiesCalculation || day.startTrophies == null) ? (
+          {player.seasonDays.some(
+            (day) => day.startTrophiesCalculation || day.startTrophies == null,
+          ) ? (
             <p className="section-note">
-              Calculated totals use saved trophies minus recorded changes.
-              Unavailable means the saved history is incomplete.
+              Calculated totals use saved trophies minus recorded changes. Unavailable
+              means the saved history is incomplete.
             </p>
           ) : null}
           <div className="legend-days">
@@ -758,13 +760,19 @@ function LegendDay({
           <small>Starting trophies</small>
           <strong
             className={day.startTrophies == null ? "stat-unavailable" : undefined}
-            title={day.startTrophiesCalculation
-              ? `${day.startTrophiesCalculation.trophies.toLocaleString("en-GB")} − (${formatSigned(day.startTrophiesCalculation.netChange)}) = ${day.startTrophies?.toLocaleString("en-GB")}`
-              : undefined}
+            title={
+              day.startTrophiesCalculation
+                ? `${day.startTrophiesCalculation.trophies.toLocaleString("en-GB")} − (${formatSigned(day.startTrophiesCalculation.netChange)}) = ${day.startTrophies?.toLocaleString("en-GB")}`
+                : undefined
+            }
           >
-            {day.startTrophies == null ? "Unavailable" : day.startTrophies.toLocaleString("en-GB")}
+            {day.startTrophies == null
+              ? "Unavailable"
+              : day.startTrophies.toLocaleString("en-GB")}
           </strong>
-          {day.startTrophiesCalculation ? <span className="legend-day-start-source">Calculated</span> : null}
+          {day.startTrophiesCalculation ? (
+            <span className="legend-day-start-source">Calculated</span>
+          ) : null}
         </span>
         <span className="legend-day-stat legend-day-offense">
           <small>Attacks</small>

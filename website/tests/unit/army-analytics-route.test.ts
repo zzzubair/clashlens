@@ -265,6 +265,9 @@ describe("army analytics route historical reads", () => {
     "population=top-99",
     "category=unknown",
     "sort=alphabetical",
+    "sample=0",
+    "sample=no",
+    "sample=",
   ])("rejects an invalid captured-preview filter: %s", async (filter) => {
     const result = await armyLoader({
       request: requestFor(`recent=1&${filter}`),
@@ -277,6 +280,20 @@ describe("army analytics route historical reads", () => {
         error: { error: { code: "invalid_input" } },
       },
     });
+  });
+
+  it("redirects the original sample link to the captured preview", async () => {
+    const result = await armyLoader({
+      request: requestFor(
+        "sample=1&season=current&start_day=1&end_day=7&category=spells",
+      ),
+      params: {},
+    } as never);
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(302);
+    expect((result as Response).headers.get("location")).toBe(
+      "?category=spells&recent=1",
+    );
   });
 
   it("reconciles recorded, included and excluded captured defense records", async () => {

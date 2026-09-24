@@ -481,7 +481,8 @@ function calculateStartingTrophies(
     if (
       observedAt >= start &&
       observedAt < end &&
-      (events.length > 0 || day.completeness.state === "complete") &&
+      (day.completeness.state === "complete" ||
+        (day.offense.attacks === 8 && day.defense.defenses === 8)) &&
       events.every((event) => Date.parse(event.battleTimestamp) <= observedAt)
     ) {
       trophies = profile.trophies;

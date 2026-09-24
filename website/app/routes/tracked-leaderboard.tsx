@@ -130,14 +130,12 @@ export default function TrackedLeaderboardRoute() {
             Latest saved player records
             {newestObservedAt ? (
               <>
-                , last updated{" "}
-                <LocalTimestamp value={newestObservedAt} />
+                , last updated <LocalTimestamp value={newestObservedAt} />
               </>
             ) : null}
             {oldestObservedAt && oldestObservedAt !== newestObservedAt ? (
               <>
-                . Updates shown from{" "}
-                <LocalTimestamp value={oldestObservedAt} />
+                . Updates shown from <LocalTimestamp value={oldestObservedAt} />
               </>
             ) : null}
             .
@@ -170,7 +168,9 @@ export default function TrackedLeaderboardRoute() {
             tabIndex={0}
           >
             <table
-              aria-label={view === "daily" ? "Daily leaderboard" : "Latest saved standings"}
+              aria-label={
+                view === "daily" ? "Daily leaderboard" : "Latest saved standings"
+              }
               className="data-table leaderboard-table"
             >
               <caption className="sr-only">
@@ -246,7 +246,9 @@ export default function TrackedLeaderboardRoute() {
               <span>Saved day snapshots</span>
               <div>
                 {daily.previousSnapshot ? (
-                  <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>Older</Link>
+                  <Link to={leaderboardUrl("daily", 1, daily.previousSnapshot)}>
+                    Older
+                  </Link>
                 ) : null}
                 {daily.nextSnapshot ? (
                   <Link to={leaderboardUrl("daily", 1, daily.nextSnapshot)}>Newer</Link>
