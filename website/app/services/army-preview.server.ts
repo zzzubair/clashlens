@@ -39,18 +39,19 @@ const sortFields = {
 } as const;
 
 export function recentArmyAnalytics(source: URLSearchParams) {
-  const lens = source.get("lens") === "defense" ? "defense" : "offense";
+  const lensValue = source.get("lens");
+  if (lensValue !== null && lensValue !== "offense" && lensValue !== "defense")
+    return null;
+  const lens = lensValue ?? "offense";
   const requestedPopulation = source.get("population") ?? "top-100";
-  const population = Object.hasOwn(capture.groups, requestedPopulation)
-    ? requestedPopulation
-    : "top-100";
+  if (!Object.hasOwn(capture.groups, requestedPopulation)) return null;
+  const population = requestedPopulation;
   const group = capture.groups[population][lens];
-  const category = Object.hasOwn(group.categories, source.get("category") ?? "")
-    ? source.get("category")!
-    : "troops";
-  const sort = Object.hasOwn(sortFields, source.get("sort") ?? "")
-    ? (source.get("sort")! as keyof typeof sortFields)
-    : "usage-rate";
+  const category = source.get("category") ?? "troops";
+  if (!Object.hasOwn(group.categories, category)) return null;
+  const sortValue = source.get("sort");
+  if (sortValue !== null && !Object.hasOwn(sortFields, sortValue)) return null;
+  const sort = (sortValue ?? "usage-rate") as keyof typeof sortFields;
   const { categories, battleFrom, battleTo, invalidBattleRows, ...summary } = group;
   const field = sortFields[sort];
   const analytics: ArmyAnalytics = {

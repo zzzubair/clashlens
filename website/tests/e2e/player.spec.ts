@@ -11,10 +11,9 @@ test("player page canonicalizes the tag and shows collected profile data", async
   ).toBeVisible();
   await expect(page.getByText("#2PP", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Current Legend day", exact: true }),
+    page.getByRole("heading", { name: "Daily Legend log", exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("Trophies", { exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Legend season" })).toBeVisible();
+  await expect(page.getByText("Current trophies", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
 });
 

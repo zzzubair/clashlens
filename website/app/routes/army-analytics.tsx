@@ -46,6 +46,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
     const { recentArmyAnalytics } = await import("../services/army-preview.server");
     const recent = recentArmyAnalytics(source);
+    if (recent === null) {
+      return data(
+        {
+          recentAvailable,
+          analytics: null,
+          error: {
+            error: {
+              code: "invalid_input",
+              message: "Check the army analytics selection.",
+            },
+          } satisfies WebsiteErrorResponse,
+          seasonEmpty: null,
+          historicalSummary: false,
+          requestedSeason: "current",
+        },
+        { status: 422 },
+      );
+    }
     return {
       ...recent,
       recentAvailable,
@@ -266,7 +284,15 @@ export default function ArmyAnalyticsRoute() {
   const population = selected?.population ?? params.get("population") ?? "top-100";
   const unavailable = "selectionUnavailable" in result && result.selectionUnavailable;
   const snapshot = "snapshot" in result ? result.snapshot : null;
-  const excludedArmies = analytics ? analytics.totalAttacks - analytics.usableArmySample : 0;
+  const unreadableArmyRecords = analytics
+    ? analytics.totalAttacks - analytics.usableArmySample
+    : 0;
+  const recordedBattleRecords = analytics
+    ? analytics.totalAttacks + (snapshot?.invalidBattleRows ?? 0)
+    : 0;
+  const excludedBattleRecords = analytics
+    ? recordedBattleRecords - analytics.usableArmySample
+    : 0;
   const partialArmies = analytics?.armyStates.partial ?? 0;
   const [chosenSort, setChosenSort] = useState<TableSort | null>(null);
   const [breakdownSort, setBreakdownSort] = useState<TableSort | null>(null);
@@ -439,7 +465,7 @@ export default function ArmyAnalyticsRoute() {
         <div className="filter-footer">
           {snapshot ? (
             <p className="form-help">
-              Player groups use the leaderboard at collection time. Includes all available recent Legend battles, not every battle in a full season.
+              Player groups use the leaderboard at collection time. Includes the battle records saved in this snapshot, not every battle from a complete Legend day.
             </p>
           ) : <details className="filter-details">
             <summary>Season & day range</summary>
@@ -524,19 +550,19 @@ export default function ArmyAnalyticsRoute() {
         <section className="analytics-results" aria-label="Army statistics" aria-busy={navigation.state !== "idle"}>
           <div className="analytics-kpis" aria-label="Battle coverage">
             <article className="analytics-kpi analytics-kpi-primary">
-              <span>{lens === "offense" ? "Attacks recorded" : "Defenses recorded"}</span>
-              <strong>{analytics.totalAttacks.toLocaleString()}</strong>
-              <small>All battles in this selection</small>
+              <span>Battle records</span>
+              <strong>{recordedBattleRecords.toLocaleString()}</strong>
+              <small>Recorded in this selection</small>
             </article>
             <article className="analytics-kpi">
-              <span>Armies included</span>
+              <span>Records included</span>
               <strong>{analytics.usableArmySample.toLocaleString()}</strong>
               <small>Enough army details to use in these stats</small>
             </article>
             <article className="analytics-kpi">
-              <span>Armies excluded</span>
-              <strong>{excludedArmies.toLocaleString()}</strong>
-              <small>Army details missing or unreadable</small>
+              <span>Records excluded</span>
+              <strong>{excludedBattleRecords.toLocaleString()}</strong>
+              <small>Opponent or army details missing</small>
             </article>
           </div>
           {partialArmies > 0 ? (
@@ -602,8 +628,8 @@ export default function ArmyAnalyticsRoute() {
               <p className="section-note">
                 {snapshot ? "Recent battle logs can omit older battles and include unfinished days." : `${analytics.collectionCoverage.completedDays} completed Legend days.`}{" "}
                 {analytics.perspectiveDisagreementCount} battles have conflicting reports.{" "}
-                {excludedArmies.toLocaleString()} armies could not be read and are excluded from every row.{" "}
-                {snapshot?.invalidBattleRows ? `${snapshot.invalidBattleRows} other battle records had no opponent and were left out of these totals. ` : ""}
+                {unreadableArmyRecords.toLocaleString()} battle records had missing or unreadable army details and are excluded from every row.{" "}
+                {snapshot?.invalidBattleRows ? `${snapshot.invalidBattleRows} other battle ${snapshot.invalidBattleRows === 1 ? "record had" : "records had"} no opponent and ${snapshot.invalidBattleRows === 1 ? "was" : "were"} excluded. ` : ""}
                 Additional exclusions below apply when unknown details prevent a particular combination from being identified.
               </p>
               <div className="table-wrap analytics-table-wrap" tabIndex={0} role="region" aria-label="Star breakdown table">

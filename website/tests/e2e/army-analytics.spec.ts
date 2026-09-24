@@ -3,20 +3,69 @@ import { expect, test } from "@playwright/test";
 import { expectNoSeriousAccessibilityViolations } from "./helpers/account";
 
 test("army analytics loads the real backend's current honest state", async ({ page }) => {
-  const response = await page.goto("/analytics/armies");
+  const response = await page.goto("/analytics/armies?saved=1&season=current");
 
   expect([200, 404]).toContain(response?.status());
   await expect(page.getByRole("heading", { name: "Army analytics" })).toBeVisible();
   await expect(page.getByRole("form", { name: "Army analytics filters" })).toBeVisible();
   await expect(
-    page
-      .getByRole("region", { name: "Army evidence coverage" })
-      .or(
-        page.getByText(
-          /^(No completed Legend days this season|No completed Legend-day army publication is available for this selection\.|Army analytics are unavailable for the selected Legend days\.)$/,
-        ),
-      ),
+    page.getByRole("region", { name: "Army statistics" }).or(
+      page.getByRole("heading", {
+        name: /^(A new season is underway|No army stats for these days yet)$/,
+      }),
+    ),
   ).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
+});
+
+test("captured preview reconciles counts, updates filters and reverses sorting", async ({
+  page,
+}) => {
+  const response = await page.goto(
+    "/analytics/armies?recent=1&lens=defense&population=top-100&category=troops&sort=usage-rate",
+  );
+
+  expect(response?.status()).toBe(200);
+  const coverage = page.getByLabel("Battle coverage");
+  await expect(coverage).toContainText(/Battle records\s*1,593\s*Recorded/);
+  await expect(coverage).toContainText(/Records included\s*1,591/);
+  await expect(coverage).toContainText(/Records excluded\s*2/);
+
+  await page.getByLabel("Show").selectOption("spells");
+  await expect(page).toHaveURL(/category=spells/);
+  await expect(page.getByRole("heading", { name: "Spells", exact: true })).toBeVisible();
+
+  await page.getByLabel("Players").selectOption("top-50");
+  await expect(page).toHaveURL(/population=top-50/);
+  await page
+    .getByRole("form", { name: "Army analytics filters" })
+    .getByText("Attacks", { exact: true })
+    .click();
+  await expect(page).toHaveURL(/lens=offense/);
+
+  const table = page.getByRole("table", { name: "Army analytics results" });
+  await table.getByRole("button", { name: "Sort by Name, A to Z" }).click();
+  await expect(table.getByRole("columnheader", { name: /Name/ })).toHaveAttribute(
+    "aria-sort",
+    "ascending",
+  );
+  const ascendingFirst = await table
+    .getByRole("row")
+    .nth(1)
+    .getByRole("rowheader")
+    .innerText();
+
+  await table.getByRole("button", { name: "Sort by Name, Z to A" }).click();
+  await expect(table.getByRole("columnheader", { name: /Name/ })).toHaveAttribute(
+    "aria-sort",
+    "descending",
+  );
+  const descendingFirst = await table
+    .getByRole("row")
+    .nth(1)
+    .getByRole("rowheader")
+    .innerText();
+  expect(descendingFirst).not.toBe(ascendingFirst);
   await expectNoSeriousAccessibilityViolations(page);
 });
 
@@ -59,17 +108,13 @@ test("retired IDs render honest labels, quantities and stars before and after na
     await expect(row).toContainText("1 / 2");
     await expect(row).toContainText("50.0%");
     await expect(row.getByRole("cell").first()).toHaveText(String(quantity));
-    await expect(row.getByRole("cell").nth(1)).toHaveText("0");
-    await expect(row.getByRole("cell").nth(2)).toHaveText("1");
-    await expect(row.getByRole("cell").nth(3)).toHaveText("0");
+    await expect(row.getByRole("cell").nth(3)).toContainText("0 battles");
+    await expect(row.getByRole("cell").nth(4)).toContainText("1 battle");
+    await expect(row.getByRole("cell").nth(5)).toContainText("0 battles");
     await expect(page.getByRole("columnheader", { name: "Quantity" })).toBeVisible();
-    await expect(page.getByRole("columnheader", { name: "Average stars" })).toHaveCount(
-      0,
-    );
-    await expect(page.getByLabel("Start Legend day")).toBeDisabled();
-    if (unknown) {
-      await expect(page.getByText(/Collection coverage partial/)).toBeVisible();
-    } else if (category === "troops" || category === "siege") {
+    await expect(page.getByRole("columnheader", { name: /Avg\. stars/ })).toHaveCount(0);
+    await expect(page.getByLabel("From Legend day")).toBeDisabled();
+    if (!unknown && (category === "troops" || category === "siege")) {
       await expect(
         page
           .getByRole("row")

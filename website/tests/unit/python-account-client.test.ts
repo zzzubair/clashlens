@@ -96,6 +96,19 @@ describe("server-only Python account client", () => {
     await expect(client.searchPlayers("nova")).rejects.toMatchObject({ status: 502 });
   });
 
+  it("rejects search responses without public profile results", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ query: "nova", known_only: true, results: [] }),
+        ),
+    );
+    const client = await importClient();
+    await expect(client.searchPlayers("nova")).rejects.toMatchObject({ status: 502 });
+  });
+
   it("creates an account with the exact body, Google identity, and idempotency request ID", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(

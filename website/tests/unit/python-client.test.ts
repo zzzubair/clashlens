@@ -656,6 +656,7 @@ describe("server-only Python client response boundary", () => {
           JSON.stringify({
             query: "Nova",
             known_only: true,
+            users: [],
             results: [
               {
                 tag: "#2PP",
@@ -687,11 +688,14 @@ describe("server-only Python client response boundary", () => {
   it("derives an exact tag from the submitted query, not the Python payload", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ query: "#2pp", known_only: true, results: [] }), {
-          status: 200,
-        }),
-      ),
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ query: "#2pp", known_only: true, results: [], users: [] }),
+            { status: 200 },
+          ),
+        ),
     );
     process.env.NODE_ENV = "test";
     process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
@@ -712,6 +716,7 @@ describe("server-only Python client response boundary", () => {
         destruction_percentage: 100,
         stars: 3,
         trophy_change: 40,
+        army_share_code: "u1x0-2x1",
       },
       {
         battle_id: "attack-7",
@@ -944,6 +949,7 @@ describe("server-only Python client response boundary", () => {
       trophyChange: event.trophy_change,
       perspectiveDisagreement: false,
       army: null,
+      armyShareCode: event.army_share_code ?? null,
     });
     expect(mappedCurrentDay.offenseEvents).toEqual(offenseEvents.map(mapExpectedEvent));
     expect(mappedCurrentDay.defenseEvents).toEqual(defenseEvents.map(mapExpectedEvent));

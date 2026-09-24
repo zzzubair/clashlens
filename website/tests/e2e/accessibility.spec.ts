@@ -3,9 +3,9 @@ import { expect, test } from "@playwright/test";
 import { expectNoSeriousAccessibilityViolations } from "./helpers/account";
 
 for (const [name, path, heading] of [
-  ["home", "/", "Clash Lens"],
+  ["home", "/", "Legend League"],
   ["player", "/players/%232PP", "Synthetic Clasher 001"],
-  ["leaderboard", "/leaderboards/tracked", "Live leaderboard"],
+  ["leaderboard", "/leaderboards/tracked", "Latest saved standings"],
   ["login", "/login", "Sign in"],
 ] as const) {
   test(`${name} has no serious or critical accessibility violations`, async ({

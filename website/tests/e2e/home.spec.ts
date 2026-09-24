@@ -6,20 +6,22 @@ test("home and the full leaderboard show collected synthetic players", async ({
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "Clash Lens", exact: true }),
+    page.getByRole("heading", { name: "Legend League", exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("searchbox", { name: "Search player tags or names" }),
+    page.getByRole("searchbox", { name: "Search players and Clash Lens profiles" }),
   ).toBeVisible();
-  const homeTable = page.getByRole("table", { name: "Live leaderboard" });
+  const homeTable = page.getByRole("table", { name: "Latest saved standings" });
   await expect(homeTable).toBeVisible();
   await expect(homeTable.getByText("Synthetic Clasher 001")).toBeVisible();
   await expect(homeTable.getByText("#2PP", { exact: true })).toBeVisible();
 
-  await page.getByRole("link", { name: "View all →" }).click();
+  await page.getByRole("link", { name: "Full rankings" }).click();
   await expect(page).toHaveURL(/\/leaderboards\/tracked\?view=live&page=1$/);
-  await expect(page.getByRole("heading", { name: "Live leaderboard" })).toBeVisible();
-  await expect(page.getByRole("table", { name: "Live leaderboard" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Latest saved standings" }),
+  ).toBeVisible();
+  await expect(page.getByRole("table", { name: "Latest saved standings" })).toBeVisible();
 });
 
 test("player search uses saved backend data", async ({ page }) => {
@@ -38,7 +40,7 @@ test("public pages render without browser JavaScript", async ({ browser }) => {
 
   const response = await page.goto("/");
   expect(response?.status()).toBe(200);
-  await expect(page.getByRole("table", { name: "Live leaderboard" })).toBeVisible();
+  await expect(page.getByRole("table", { name: "Latest saved standings" })).toBeVisible();
 
   await context.close();
 });

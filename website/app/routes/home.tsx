@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useFetcher, useLoaderData, type LoaderFunctionArgs } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
+import { TrophyMark, latestObservation } from "../components/LeaderboardShared";
 import { LocalTimestamp } from "../components/Provenance";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
@@ -230,7 +231,7 @@ function SearchSuggestions({
 }) {
   const search = data?.search;
   const results = search?.results.slice(0, 5) ?? [];
-  const users = search?.users?.slice(0, 3) ?? [];
+  const users = search?.users.slice(0, 3) ?? [];
   const unknownExactTag =
     search?.exactTag && results.length === 0 ? search.exactTag : null;
 
@@ -312,7 +313,7 @@ function SearchSuggestions({
 }
 
 function SearchResults({ search }: { search: SearchResponse }) {
-  const users = search.users ?? [];
+  const users = search.users;
   return (
     <div className="search-results" aria-live="polite">
       {users.length > 0 ? (
@@ -467,24 +468,6 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
       </table>
     </div>
   );
-}
-
-function TrophyMark() {
-  return (
-    <svg className="trophy-mark" aria-hidden="true" viewBox="0 0 20 20">
-      <path d="M6 3h8v3.5c0 2.6-1.6 4.7-4 4.7s-4-2.1-4-4.7V3Z" />
-      <path d="M6 5H3.8v1.2c0 2 1.2 3.2 3.2 3.2M14 5h2.2v1.2c0 2-1.2 3.2-3.2 3.2M10 11.2V15m-3 2h6m-5.5-2h5" />
-    </svg>
-  );
-}
-
-function latestObservation(entries: TrackedPlayerEntry[]) {
-  return entries.reduce<string | null>((latest, entry) => {
-    if (latest === null) return entry.freshness.observedAt;
-    return Date.parse(entry.freshness.observedAt) > Date.parse(latest)
-      ? entry.freshness.observedAt
-      : latest;
-  }, null);
 }
 
 async function safeError(cause: unknown): Promise<WebsiteErrorResponse> {

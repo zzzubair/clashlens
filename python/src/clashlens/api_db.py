@@ -676,6 +676,7 @@ def _daily_log(day: Any) -> dict[str, Any]:
         "adjustments": _json_array(day[15]),
         "battles": _json_array(day[16]),
         "partial_reasons": _json_array(day[17]),
+        "start_trophies": None if day[18] is None else int(day[18]),
     }
 
 

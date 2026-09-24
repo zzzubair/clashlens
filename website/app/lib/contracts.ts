@@ -113,7 +113,7 @@ export interface SearchResponse {
   query: string;
   exactTag: string | null;
   results: KnownPlayerResult[];
-  users?: import("./account-contracts").PublicUserResult[];
+  users: import("./account-contracts").PublicUserResult[];
   knownOnly: boolean;
 }
 

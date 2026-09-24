@@ -722,11 +722,11 @@ function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {
     !isRecord(payload) ||
     !isString(payload.query) ||
     !Array.isArray(payload.results) ||
+    !Array.isArray(payload.users) ||
     typeof payload.known_only !== "boolean"
   )
     throw new PythonApiError(502, { error: "malformed" });
-  const users =
-    payload.users === undefined ? undefined : mapPublicUserResults(payload.users);
+  const users = mapPublicUserResults(payload.users);
   if (users === null) throw new PythonApiError(502, { error: "malformed" });
   const results = payload.results.map((item) => {
     if (
@@ -764,7 +764,7 @@ function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {
     query: payload.query,
     exactTag: normalizePlayerTag(submittedQuery),
     results: results as SearchResponse["results"],
-    ...(users === undefined ? {} : { users }),
+    users,
     knownOnly: payload.known_only,
   };
 }
