@@ -1,4 +1,4 @@
-import { Link, data, redirect, useActionData, useLoaderData } from "react-router";
+import { data, redirect, useActionData, useLoaderData } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { PrivateGroup } from "../lib/account-contracts";
@@ -353,9 +353,7 @@ export default function GroupsRoute() {
                     <ul className="player-link-list">
                       {group.tags.map((tag) => (
                         <li key={tag}>
-                          <Link to={canonicalPlayerPath(tag)} reloadDocument>
-                            {tag}
-                          </Link>
+                          <a href={canonicalPlayerPath(tag)}>{tag}</a>
                           <span className="player-tag">{tag}</span>
                         </li>
                       ))}

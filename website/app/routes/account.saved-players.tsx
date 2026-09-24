@@ -1,4 +1,4 @@
-import { Link, data, redirect, useActionData, useLoaderData } from "react-router";
+import { data, redirect, useActionData, useLoaderData } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { SavedPlayer } from "../lib/account-contracts";
@@ -235,9 +235,9 @@ export default function SavedPlayersRoute() {
               return (
                 <li key={player.tag}>
                   <span className="player-action-name">
-                    <Link to={canonicalPlayerPath(player.tag)} reloadDocument>
+                    <a href={canonicalPlayerPath(player.tag)}>
                       {player.name ?? player.tag}
-                    </Link>
+                    </a>
                     <span className="player-tag">{player.tag}</span>
                   </span>
                   <form method="post" className="inline-form">

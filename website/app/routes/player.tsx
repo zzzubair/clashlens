@@ -870,13 +870,13 @@ function BattleColumn({
                 {index + 1}
               </span>
               <div className="battle-opponent">
-                <Link
+                <a
                   className="battle-profile-link"
-                  to={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
+                  href={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
                   aria-label={`View ${event.opponent.name ?? event.opponent.tag}'s Legend log for ${dayLabel}`}
                 >
                   <strong>{event.opponent.name ?? event.opponent.tag}</strong>
-                </Link>
+                </a>
                 <span className="player-tag">{event.opponent.tag}</span>
                 <time dateTime={event.battleTimestamp}>
                   {playerTimeFormatter.format(new Date(event.battleTimestamp))} UTC

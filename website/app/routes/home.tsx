@@ -298,11 +298,10 @@ function SearchSuggestions({
           ))}
           {results.map((result) => (
             <li key={result.tag}>
-              <Link
+              <a
                 className="search-suggestion"
                 data-testid="search-suggestion"
-                to={canonicalPlayerPath(result.tag)}
-                reloadDocument
+                href={canonicalPlayerPath(result.tag)}
               >
                 <span className="search-suggestion-player">
                   <strong>{result.name}</strong>
@@ -311,22 +310,21 @@ function SearchSuggestions({
                 <span className="search-suggestion-meta">
                   {result.clan} · {result.trophies.toLocaleString()}
                 </span>
-              </Link>
+              </a>
             </li>
           ))}
           {unknownExactTag ? (
             <li>
-              <Link
+              <a
                 className="search-suggestion"
                 data-testid="search-suggestion"
-                to={canonicalPlayerPath(unknownExactTag)}
-                reloadDocument
+                href={canonicalPlayerPath(unknownExactTag)}
               >
                 <span className="search-suggestion-player">
                   <strong>Open {unknownExactTag}</strong>
                   <small>Player tag</small>
                 </span>
-              </Link>
+              </a>
             </li>
           ) : null}
         </ul>
@@ -386,13 +384,12 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
           </p>
         )}
         {!result ? (
-          <Link
+          <a
             className="button button-secondary"
-            to={canonicalPlayerPath(search.exactTag)}
-            reloadDocument
+            href={canonicalPlayerPath(search.exactTag)}
           >
             Open player profile
-          </Link>
+          </a>
         ) : null}
       </section>
     );
@@ -429,9 +426,9 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
   return (
     <div className="search-result">
       <div>
-        <Link className="player-name" to={canonicalPlayerPath(result.tag)} reloadDocument>
+        <a className="player-name" href={canonicalPlayerPath(result.tag)}>
           {result.name}
-        </Link>
+        </a>
         <span className="player-tag">{result.tag}</span>
       </div>
       <div className="search-context">
@@ -468,13 +465,9 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
                 <span className="rank-mark">{entry.rank}</span>
               </td>
               <th scope="row" data-label="Player">
-                <Link
-                  className="player-name"
-                  to={canonicalPlayerPath(entry.tag)}
-                  reloadDocument
-                >
+                <a className="player-name" href={canonicalPlayerPath(entry.tag)}>
                   {entry.name}
-                </Link>
+                </a>
                 <span className="player-tag">{entry.tag}</span>
               </th>
               <td data-label="Clan">{entry.clan}</td>
