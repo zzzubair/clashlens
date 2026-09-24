@@ -127,7 +127,7 @@ export default function App() {
           <NavLink to="/" end>
             Home
           </NavLink>
-          <NavLink to="/leaderboards/tracked">Rankings</NavLink>
+          <NavLink to="/leaderboards/tracked?view=live&page=1">Rankings</NavLink>
           <NavLink to="/analytics/armies">Armies</NavLink>
           <NavLink to="/account/saved-players">Saved players</NavLink>
           <NavLink to="/account/groups">Groups</NavLink>

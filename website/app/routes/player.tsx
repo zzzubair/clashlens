@@ -700,13 +700,20 @@ function seasonLabel(seasonId: string, seasonEnd?: string | null): string {
     : formatPlayerDate(end).replace("Sept", "Sep");
 }
 
+const playerDateFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+const playerTimeFormatter = new Intl.DateTimeFormat("en-GB", {
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "UTC",
+});
+
 function formatPlayerDate(date: Date): string {
-  return date.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
+  return playerDateFormatter.format(date);
 }
 
 function legendDayDate(period: string): string {
@@ -717,11 +724,7 @@ function legendDayDate(period: string): string {
 function formatPlayerTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Time unavailable";
-  return `${formatPlayerDate(date)}, ${date.toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "UTC",
-  })} UTC`;
+  return `${formatPlayerDate(date)}, ${playerTimeFormatter.format(date)} UTC`;
 }
 
 function legendDayKey(period: string): string {
@@ -736,6 +739,7 @@ function LegendDay({
   selectedDay: string | null;
 }) {
   const dayKey = legendDayKey(day.period);
+  const dayLabel = legendDayDate(day.period);
   return (
     <details
       className="legend-day"
@@ -744,7 +748,7 @@ function LegendDay({
     >
       <summary>
         <span className="legend-day-date">
-          <strong>{legendDayDate(day.period)}</strong>
+          <strong>{dayLabel}</strong>
           <span className="legend-day-meta">
             <small>Day {day.dayNumber ?? "—"}</small>
             {day.state === "Live" ? <LiveBadge /> : null}
@@ -796,8 +800,18 @@ function LegendDay({
         </span>
       </summary>
       <div className="battle-columns">
-        <BattleColumn title="Attacks" events={day.offenseEvents} day={dayKey} />
-        <BattleColumn title="Defenses" events={day.defenseEvents} day={dayKey} />
+        <BattleColumn
+          title="Attacks"
+          events={day.offenseEvents}
+          day={dayKey}
+          dayLabel={dayLabel}
+        />
+        <BattleColumn
+          title="Defenses"
+          events={day.defenseEvents}
+          day={dayKey}
+          dayLabel={dayLabel}
+        />
       </div>
     </details>
   );
@@ -833,10 +847,12 @@ function BattleColumn({
   title,
   events,
   day,
+  dayLabel,
 }: {
   title: "Attacks" | "Defenses";
   events: RankedBattleEvent[];
   day: string;
+  dayLabel: string;
 }) {
   return (
     <section className="battle-column" aria-label={title}>
@@ -857,18 +873,13 @@ function BattleColumn({
                 <Link
                   className="battle-profile-link"
                   to={`${canonicalPlayerPath(event.opponent.tag)}?day=${day}#battle-${encodeURIComponent(event.battleId)}`}
-                  aria-label={`View ${event.opponent.name ?? event.opponent.tag}'s Legend log for ${legendDayDate(day)}`}
+                  aria-label={`View ${event.opponent.name ?? event.opponent.tag}'s Legend log for ${dayLabel}`}
                 >
                   <strong>{event.opponent.name ?? event.opponent.tag}</strong>
                 </Link>
                 <span className="player-tag">{event.opponent.tag}</span>
                 <time dateTime={event.battleTimestamp}>
-                  {new Date(event.battleTimestamp).toLocaleTimeString("en-GB", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    timeZone: "UTC",
-                  })}{" "}
-                  UTC
+                  {playerTimeFormatter.format(new Date(event.battleTimestamp))} UTC
                 </time>
               </div>
               <div

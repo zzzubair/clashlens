@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import {
   data,
   Form,
@@ -308,6 +308,61 @@ function SortHeading({
     </th>
   );
 }
+
+const ArmyResultRow = memo(function ArmyResultRow({
+  row,
+  isHistorical,
+}: {
+  row: ArmyRow;
+  isHistorical: boolean;
+}) {
+  return (
+    <tr>
+      <th scope="row">{row.label}</th>
+      {isHistorical ? <td>{row.quantity}</td> : null}
+      <td>
+        {row.usageCount.toLocaleString()} / {row.usageDenominator.toLocaleString()}
+      </td>
+      <td>{formatRate(row.usageRate)}</td>
+      {[1, 2, 3].map((stars) => {
+        const count =
+          row.starCounts?.[stars] ??
+          [row.oneStarCount, row.twoStarCount, row.threeStarCount][stars - 1] ??
+          0;
+        return (
+          <td key={stars}>
+            <strong className="analytics-star-rate">
+              {formatRate(row.usageCount ? count / row.usageCount : 0)}
+            </strong>
+            <span className="analytics-star-count">
+              {count.toLocaleString()} {count === 1 ? "battle" : "battles"}
+            </span>
+          </td>
+        );
+      })}
+      {!isHistorical ? (
+        <>
+          <td>{row.averageStars!.toFixed(2)}</td>
+          <td>{row.averageDestruction!.toFixed(1)}%</td>
+        </>
+      ) : null}
+    </tr>
+  );
+});
+
+const ArmyBreakdownRow = memo(function ArmyBreakdownRow({ row }: { row: ArmyRow }) {
+  return (
+    <tr>
+      <th scope="row">{row.label}</th>
+      {row.starCounts?.map((count, index) => (
+        <td key={index}>
+          {count} ({formatRate(row.starRates![index])})
+        </td>
+      ))}
+      <td>{row.unknownExcludedAttacks}</td>
+    </tr>
+  );
+});
 
 export default function ArmyAnalyticsRoute() {
   const result = useLoaderData<typeof loader>();
@@ -722,39 +777,7 @@ export default function ArmyAnalyticsRoute() {
                   </tr>
                 ) : null}
                 {rows.map((row) => (
-                  <tr key={row.key}>
-                    <th scope="row">{row.label}</th>
-                    {isHistorical ? <td>{row.quantity}</td> : null}
-                    <td>
-                      {row.usageCount.toLocaleString()} /{" "}
-                      {row.usageDenominator.toLocaleString()}
-                    </td>
-                    <td>{formatRate(row.usageRate)}</td>
-                    {[1, 2, 3].map((stars) => {
-                      const count =
-                        row.starCounts?.[stars] ??
-                        [row.oneStarCount, row.twoStarCount, row.threeStarCount][
-                          stars - 1
-                        ] ??
-                        0;
-                      return (
-                        <td key={stars}>
-                          <strong className="analytics-star-rate">
-                            {formatRate(row.usageCount ? count / row.usageCount : 0)}
-                          </strong>
-                          <span className="analytics-star-count">
-                            {count.toLocaleString()} {count === 1 ? "battle" : "battles"}
-                          </span>
-                        </td>
-                      );
-                    })}
-                    {!isHistorical ? (
-                      <>
-                        <td>{row.averageStars!.toFixed(2)}</td>
-                        <td>{row.averageDestruction!.toFixed(1)}%</td>
-                      </>
-                    ) : null}
-                  </tr>
+                  <ArmyResultRow key={row.key} row={row} isHistorical={isHistorical} />
                 ))}
               </tbody>
             </table>
@@ -808,15 +831,7 @@ export default function ArmyAnalyticsRoute() {
                   </thead>
                   <tbody>
                     {sortedRows(analytics.rows, breakdownSort ?? tableSort).map((row) => (
-                      <tr key={row.key}>
-                        <th scope="row">{row.label}</th>
-                        {row.starCounts?.map((count, index) => (
-                          <td key={index}>
-                            {count} ({formatRate(row.starRates![index])})
-                          </td>
-                        ))}
-                        <td>{row.unknownExcludedAttacks}</td>
-                      </tr>
+                      <ArmyBreakdownRow key={row.key} row={row} />
                     ))}
                   </tbody>
                 </table>

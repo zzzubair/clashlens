@@ -223,7 +223,10 @@ export default function Home() {
               </p>
             ) : null}
           </div>
-          <Link className="section-link leaderboard-more" to="/leaderboards/tracked">
+          <Link
+            className="section-link leaderboard-more"
+            to="/leaderboards/tracked?view=live&page=1"
+          >
             Full rankings
           </Link>
         </div>

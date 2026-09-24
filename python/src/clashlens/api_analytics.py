@@ -540,19 +540,27 @@ def get_army_analytics(
                     """,
                     tuple(fact_params),
                 ).fetchall()
-                facts = []
-                for row in facts_rows:
-                    components = {
-                        "home_troops": [],
-                        "spells": [],
-                        "siege": [],
-                        "cc_troops": [],
-                        "heroes": [],
-                    }
-                    components[component_column] = row[8]
-                    facts.append(
-                        {
-                            "id": int(row[0]),
+                source_digest = hashlib.sha256()
+                source_digest.update(b'{"facts":[')
+
+                def selected_facts():
+                    separator = b""
+                    for row in facts_rows:
+                        fact_id = int(row[0])
+                        input_hash = _text(row[11])
+                        source_digest.update(separator)
+                        source_digest.update(f'[{fact_id},"{input_hash}"]'.encode())
+                        separator = b","
+                        components = {
+                            "home_troops": [],
+                            "spells": [],
+                            "siege": [],
+                            "cc_troops": [],
+                            "heroes": [],
+                        }
+                        components[component_column] = row[8]
+                        yield {
+                            "id": fact_id,
                             "battle_id": int(row[1]),
                             "population_player_id": int(row[2]),
                             "battle_time_trophies": (
@@ -567,24 +575,24 @@ def get_army_analytics(
                             **components,
                             "unresolved_components": row[9],
                             "perspective_disagreement": bool(row[10]),
-                            "input_hash": _text(row[11]),
+                            "input_hash": input_hash,
                             "source_ranked_day_version_id": int(row[12]),
                         }
-                    )
-                result = build_army_result(facts, resolved)
-                source_hash = hashlib.sha256(
+
+                result = build_army_result(selected_facts(), resolved)
+                source_digest.update(b'],"selection":')
+                source_digest.update(
                     json.dumps(
-                        {
-                            "selection": requested,
-                            "facts": [
-                                (fact["id"], fact["input_hash"]) for fact in facts
-                            ],
-                            "snapshots": snapshot_ids,
-                        },
-                        sort_keys=True,
-                        separators=(",", ":"),
+                        requested, sort_keys=True, separators=(",", ":")
                     ).encode()
-                ).hexdigest()
+                )
+                source_digest.update(b',"snapshots":')
+                source_digest.update(
+                    json.dumps(snapshot_ids, separators=(",", ":")).encode()
+                )
+                source_digest.update(b"}")
+                source_hash = source_digest.hexdigest()
+                del facts_rows
             result["missing_trophy_membership_evidence"] = missing_trophies
             if cohort_evidence is None:
                 cohort_evidence = {
@@ -1003,4 +1011,3 @@ _ARMY_ANALYTICS_COMPONENT_COLUMN = {
     "hero-pet": "heroes",
     "hero-equipment": "heroes",
 }
-

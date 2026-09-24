@@ -24,7 +24,7 @@ def get_live_leaderboard(
     with database.pool.connection() as connection:
         rows = connection.execute(
             """
-            WITH selected AS (
+            WITH selected AS MATERIALIZED (
                 SELECT player.normalized_tag, profile.name, profile.trophies,
                        player.current_observed_at AS observed_at,
                        player.eligibility_state,
@@ -34,31 +34,37 @@ def get_live_leaderboard(
                   ON profile.id = player.current_profile_version_id
                 WHERE player.active = true
                   AND profile.source_contract_state = 'accepted'
-            ), ranked AS (
-                SELECT selected.*,
-                       row_number() OVER (
-                           ORDER BY trophies DESC, md5(normalized_tag), normalized_tag
-                       ) AS position,
-                       count(*) OVER () AS total_entries,
+            ), stats AS (
+                SELECT count(*) AS total_entries,
                        count(*) FILTER (
                            WHERE observed_at < %s - make_interval(secs => %s)
-                       ) OVER () AS stale_count,
-                       min(observed_at) OVER () AS oldest_observed_at,
-                       max(observed_at) OVER () AS newest_observed_at
+                       ) AS stale_count,
+                       min(observed_at) AS oldest_observed_at,
+                       max(observed_at) AS newest_observed_at
                 FROM selected
+            ), page AS MATERIALIZED (
+                SELECT * FROM selected
+                ORDER BY trophies DESC, md5(normalized_tag), normalized_tag
+                LIMIT %s OFFSET %s
             ), totals AS (
                 SELECT count(*)::bigint AS tracked_population FROM players WHERE active
             )
-            SELECT ranked.normalized_tag, ranked.name, ranked.trophies,
-                   ranked.observed_at, ranked.eligibility_state, ranked.clan,
-                   ranked.position, COALESCE(ranked.total_entries, 0),
-                   COALESCE(ranked.stale_count, 0), ranked.oldest_observed_at,
-                   ranked.newest_observed_at, totals.tracked_population
-            FROM totals
-            LEFT JOIN ranked ON ranked.position > %s AND ranked.position <= %s
-            ORDER BY ranked.position NULLS LAST
+            SELECT page.normalized_tag, page.name, page.trophies,
+                   page.observed_at, page.eligibility_state, page.clan,
+                   CASE WHEN page.normalized_tag IS NOT NULL THEN
+                       row_number() OVER (
+                           ORDER BY page.trophies DESC, md5(page.normalized_tag),
+                                    page.normalized_tag
+                       ) + %s
+                   END AS position,
+                   stats.total_entries, stats.stale_count,
+                   stats.oldest_observed_at, stats.newest_observed_at,
+                   totals.tracked_population
+            FROM stats CROSS JOIN totals
+            LEFT JOIN page ON true
+            ORDER BY position NULLS LAST
             """,
-            (now, freshness_seconds, offset, offset + limit),
+            (now, freshness_seconds, limit, offset, offset),
         ).fetchall()
         total_entries = int(rows[0][7]) if rows else 0
         if offset and offset >= total_entries:

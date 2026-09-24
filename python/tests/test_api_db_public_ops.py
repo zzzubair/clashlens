@@ -800,3 +800,33 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
             )
         finally:
             database.close()
+
+
+def test_live_leaderboard_reports_empty_population(database_url: str) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            empty = api_leaderboard.get_live_leaderboard(
+                database, limit=25, now=NOW, freshness_seconds=900
+            )
+            assert empty is not None
+            assert empty["entries"] == []
+            assert empty["tracked_population"] == 0
+            assert empty["total_entries"] == 0
+            assert empty["page_count"] == 0
+            assert empty["source_observations"] == {
+                "oldest_observed_at": None,
+                "newest_observed_at": None,
+                "stale_count": 0,
+            }
+            assert (
+                api_leaderboard.get_live_leaderboard(
+                    database, limit=25, offset=25, now=NOW,
+                    freshness_seconds=900,
+                )
+                is None
+            )
+        finally:
+            database.close()

@@ -2,6 +2,16 @@ import { useEffect, useState } from "react";
 import type { DataProvenance, Freshness } from "../lib/contracts";
 import { StateBadge } from "./StateBadge";
 
+const utcTimestampFormatter = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  timeZone: "UTC",
+});
+let localTimestampFormatter: Intl.DateTimeFormat | null = null;
+
 export function FreshnessText({ freshness }: { freshness: Freshness }) {
   return (
     <span className="freshness-text">
@@ -65,14 +75,7 @@ export function formatAge(seconds: number): string {
 export function formatTimestamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Unknown";
-  return `${new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "UTC",
-  }).format(date)} UTC`;
+  return `${utcTimestampFormatter.format(date)} UTC`;
 }
 
 export function LocalTimestamp({ value }: { value: string }) {
@@ -83,18 +86,19 @@ export function LocalTimestamp({ value }: { value: string }) {
   // to the server's UTC text, then switch after the page becomes interactive.
   useEffect(() => {
     const date = new Date(value);
-    setLocalTime(
-      Number.isNaN(date.getTime())
-        ? "Unknown"
-        : new Intl.DateTimeFormat(undefined, {
-            day: "numeric",
-            month: "short",
-            year: "numeric",
-            hour: "2-digit",
-            minute: "2-digit",
-            timeZoneName: "short",
-          }).format(date),
-    );
+    if (Number.isNaN(date.getTime())) {
+      setLocalTime("Unknown");
+      return;
+    }
+    localTimestampFormatter ??= new Intl.DateTimeFormat(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+    setLocalTime(localTimestampFormatter.format(date));
   }, [value]);
 
   return (

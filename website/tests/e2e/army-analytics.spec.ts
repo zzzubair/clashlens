@@ -69,6 +69,44 @@ test("captured preview reconciles counts, updates filters and reverses sorting",
   await expectNoSeriousAccessibilityViolations(page);
 });
 
+test("large army view keeps every row and shows the browser's local time", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ timezoneId: "Asia/Kolkata" });
+  try {
+    const page = await context.newPage();
+    await page.goto(
+      "/analytics/armies?recent=1&lens=defense&population=top-200&category=cc-composition&sort=usage-rate",
+    );
+    await expect(
+      page.getByRole("table", { name: "Army analytics results" }).getByRole("row"),
+    ).toHaveCount(113);
+    await page.getByText("Full star breakdown & coverage").click();
+    await expect(
+      page.getByRole("table", { name: "Army star breakdown" }).getByRole("row"),
+    ).toHaveCount(113);
+
+    const timestamp = page.getByLabel("Real battle data").locator("time");
+    const value = await timestamp.getAttribute("datetime");
+    expect(value).not.toBeNull();
+    const expected = await page.evaluate(
+      (date) =>
+        new Intl.DateTimeFormat(undefined, {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          timeZoneName: "short",
+        }).format(new Date(date!)),
+      value,
+    );
+    await expect(timestamp).toHaveText(expected);
+  } finally {
+    await context.close();
+  }
+});
+
 test("missing historical summary stays unavailable with legacy filters in the URL", async ({
   page,
 }) => {
