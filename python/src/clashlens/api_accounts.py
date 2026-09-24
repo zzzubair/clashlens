@@ -924,7 +924,8 @@ def search_public_users(
                    JOIN players AS player ON player.id = link.player_id
                    LEFT JOIN LATERAL (
                        SELECT name FROM player_profile_versions
-                       WHERE player_id = player.id
+                       WHERE normalized_tag = player.normalized_tag
+                         AND player_id = player.id
                        ORDER BY observed_at DESC, id DESC LIMIT 1
                    ) AS profile ON true
                    WHERE link.account_id = account.id
@@ -1016,7 +1017,8 @@ def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:
         JOIN players AS player ON player.id = link.player_id
         LEFT JOIN LATERAL (
             SELECT name FROM player_profile_versions
-            WHERE player_id = player.id
+            WHERE normalized_tag = player.normalized_tag
+              AND player_id = player.id
             ORDER BY observed_at DESC, id DESC LIMIT 1
         ) AS profile ON true
         WHERE link.account_id = %s

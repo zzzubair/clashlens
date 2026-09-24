@@ -235,7 +235,7 @@ export default function SavedPlayersRoute() {
               return (
                 <li key={player.tag}>
                   <span className="player-action-name">
-                    <Link to={canonicalPlayerPath(player.tag)} reloadDocument>
+                    <Link to={canonicalPlayerPath(player.tag)}>
                       {player.name ?? player.tag}
                     </Link>
                     <span className="player-tag">{player.tag}</span>

@@ -20,6 +20,7 @@ vi.mock("../../app/services/python.server", async (importOriginal) => {
 import type {
   HistoricalSeasonSummary,
   PlayerPage,
+  RefreshStatus,
   SummarizedSeasonRef,
 } from "../../app/lib/contracts";
 import { PythonApiError } from "../../app/services/python.server";
@@ -95,6 +96,17 @@ const PLAYER = {
   },
 } satisfies PlayerPage;
 
+const REFRESH_STATUS: RefreshStatus = {
+  kind: "refresh-status",
+  workId: "work_1",
+  tag: TAG,
+  state: "complete",
+  progressPercent: 100,
+  message: "Complete",
+  publishedAt: "2026-08-06T12:00:00Z",
+  player: PLAYER,
+};
+
 async function renderRoute(data: Awaited<ReturnType<typeof playerLoader>>) {
   const handler = createStaticHandler([
     { path: "/players/:tag", Component: PlayerRoute, loader: () => data },
@@ -119,7 +131,9 @@ describe("player route historical independence", () => {
 
   it("returns the compact season even when the current profile is unavailable", async () => {
     mocks.createPythonClient.mockReturnValue({
-      getPlayer: vi.fn().mockRejectedValue(new PythonApiError(404, { error: "missing" })),
+      getPlayer: vi.fn(() => {
+        throw new PythonApiError(404, { error: "missing" });
+      }),
       getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
       getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
     });
@@ -132,6 +146,76 @@ describe("player route historical independence", () => {
     expect(data.selectedSeason).toBe(SEASON);
     expect(data.historical).toMatchObject({ seasonId: SEASON, attackCount: 56 });
     expect(data.historicalError).toBeNull();
+  });
+
+  it("loads the profile, seasons, saved season, and refresh status in one waiting period", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let started = 0;
+    const delayed = <T>(value: T) => {
+      started += 1;
+      return gate.then(() => value);
+    };
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi.fn(() => delayed(PLAYER)),
+      getPlayerSeasons: vi.fn(() => delayed(SEASONS)),
+      getPlayerSeason: vi.fn(() => delayed(SUMMARY)),
+      getRefreshStatus: vi.fn(() => delayed(REFRESH_STATUS)),
+    });
+
+    const loading = playerLoader({
+      request: new Request(`${requestFor(SEASON).url}&refresh=work_1`),
+      params: { tag: TAG },
+    } as never);
+    try {
+      await vi.waitFor(() => expect(started).toBe(4));
+    } finally {
+      release();
+    }
+    const data = await loading;
+    expect(data.player?.tag).toBe(TAG);
+    expect(data.seasons).toEqual(SEASONS);
+    expect(data.historical?.seasonId).toBe(SEASON);
+    expect(data.refreshStatus?.workId).toBe("work_1");
+  });
+
+  it("keeps the profile available when optional season and refresh requests fail", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi.fn().mockResolvedValue(PLAYER),
+      getPlayerSeasons: vi.fn().mockRejectedValue(new PythonApiError(503, {})),
+      getPlayerSeason: vi.fn().mockRejectedValue(new PythonApiError(404, {})),
+      getRefreshStatus: vi.fn().mockRejectedValue(new PythonApiError(503, {})),
+    });
+    const data = await playerLoader({
+      request: new Request(`${requestFor(SEASON).url}&refresh=work_1`),
+      params: { tag: TAG },
+    } as never);
+    expect(data.player?.tag).toBe(TAG);
+    expect(data.error).toBeNull();
+    expect(data.seasons).toEqual([]);
+    expect(data.historical).toBeNull();
+    expect(data.historicalError).not.toBeNull();
+    expect(data.refreshStatus).toBeNull();
+    expect(data.refreshError).not.toBeNull();
+  });
+
+  it("shows saved-data fallbacks if the backend client cannot start", async () => {
+    mocks.createPythonClient.mockImplementation(() => {
+      throw new Error("backend configuration unavailable");
+    });
+    const data = await playerLoader({
+      request: new Request(`${requestFor(SEASON).url}&refresh=work_1`),
+      params: { tag: TAG },
+    } as never);
+    expect(data.player).toBeNull();
+    expect(data.error).not.toBeNull();
+    expect(data.seasons).toEqual([]);
+    expect(data.historical).toBeNull();
+    expect(data.historicalError).not.toBeNull();
+    expect(data.refreshStatus).toBeNull();
+    expect(data.refreshError).not.toBeNull();
   });
 
   it("reports an unavailable season without substituting live detail", async () => {

@@ -27,3 +27,26 @@ test("player page stays within a narrow viewport", async ({ page }) => {
     ),
   ).toBe(0);
 });
+
+test("player links keep the document and clear the previous player's refresh", async ({
+  page,
+}) => {
+  await page.goto("/players/%232PP");
+  await page.evaluate(() => {
+    document.documentElement.dataset.playerNavigationMarker = "kept";
+  });
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Player refresh" })).toBeVisible();
+
+  await page
+    .getByRole("link", { name: /View Synthetic Clasher 002's Legend log/ })
+    .first()
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Synthetic Clasher 002" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.dataset.playerNavigationMarker),
+  ).toBe("kept");
+  await expect(page.getByRole("region", { name: "Player refresh" })).toHaveCount(0);
+});

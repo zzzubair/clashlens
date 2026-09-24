@@ -109,7 +109,7 @@ export default function UserRoute() {
           <ul className="player-link-list">
             {data.user.verifiedPlayers.map((player) => (
               <li key={player.tag}>
-                <Link to={canonicalPlayerPath(player.tag)} reloadDocument>
+                <Link to={canonicalPlayerPath(player.tag)}>
                   {player.name ?? player.tag}
                 </Link>
                 <span className="player-tag">{player.tag}</span>

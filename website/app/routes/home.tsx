@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useFetcher, useLoaderData, type LoaderFunctionArgs } from "react-router";
+import {
+  Form,
+  Link,
+  useFetcher,
+  useLoaderData,
+  type LoaderFunctionArgs,
+} from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark, latestObservation } from "../components/LeaderboardShared";
@@ -26,29 +32,32 @@ export interface HomeLoaderData {
 export async function loader({ request }: LoaderFunctionArgs): Promise<HomeLoaderData> {
   const rawQuery = new URL(request.url).searchParams.get("q") ?? "";
   const query = rawQuery.trim();
-  let leaderboard: TrackedLeaderboard | null = null;
-  let search: SearchResponse | null = null;
+  const invalidQuery = rawQuery.length > MAX_SEARCH_QUERY_LENGTH;
+  const client = import("../services/python.server").then(({ createPythonClient }) =>
+    createPythonClient(),
+  );
+  const [leaderboardResult, searchResult] = await Promise.allSettled([
+    client.then((python) => python.getTrackedLeaderboard(25, "live")),
+    !invalidQuery && query !== ""
+      ? client.then((python) => python.searchPlayers(query))
+      : Promise.resolve(null),
+  ]);
+  const leaderboard =
+    leaderboardResult.status === "fulfilled" ? leaderboardResult.value : null;
+  const search = searchResult.status === "fulfilled" ? searchResult.value : null;
   let error: WebsiteErrorResponse | null = null;
-  try {
-    const { createPythonClient } = await import("../services/python.server");
-    leaderboard = await createPythonClient().getTrackedLeaderboard(25, "live");
-  } catch (cause) {
-    error = await safeError(cause);
+  if (leaderboardResult.status === "rejected") {
+    error = await safeError(leaderboardResult.reason);
   }
-  if (rawQuery.length > MAX_SEARCH_QUERY_LENGTH) {
+  if (invalidQuery) {
     error = {
       error: {
         code: "invalid_input",
         message: "Check the submitted value and try again.",
       },
     };
-  } else if (query !== "") {
-    try {
-      const { createPythonClient } = await import("../services/python.server");
-      search = await createPythonClient().searchPlayers(query);
-    } catch (cause) {
-      error = error ?? (await safeError(cause));
-    }
+  } else if (searchResult.status === "rejected" && error === null) {
+    error = await safeError(searchResult.reason);
   }
   return { leaderboard, search, query, error };
 }
@@ -78,7 +87,11 @@ export default function Home() {
   const normalizedQuery = searchQuery.trim().toLocaleLowerCase();
   const requestMatchesInput =
     requestedQuery.toLocaleLowerCase() === normalizedQuery && normalizedQuery !== "";
-  const suggestionData = requestMatchesInput ? searchFetcher.data : undefined;
+  const suggestionData =
+    requestMatchesInput &&
+    searchFetcher.data?.query.toLocaleLowerCase() === normalizedQuery
+      ? searchFetcher.data
+      : undefined;
   const suggestionsOpen =
     requestMatchesInput &&
     (searchFetcher.state !== "idle" ||
@@ -116,8 +129,9 @@ export default function Home() {
           </p>
         </div>
         <div className="player-search-panel">
-          <form
+          <Form
             method="get"
+            action="/"
             role="search"
             className="search-form"
             onKeyDown={(event) => {
@@ -175,7 +189,7 @@ export default function Home() {
                 loading={searchFetcher.state !== "idle"}
               />
             ) : null}
-          </form>
+          </Form>
           {data.search && searchQuery === data.query ? (
             <SearchResults search={data.search} />
           ) : null}
@@ -281,7 +295,6 @@ function SearchSuggestions({
                 className="search-suggestion"
                 data-testid="search-suggestion"
                 to={canonicalPlayerPath(result.tag)}
-                reloadDocument
               >
                 <span className="search-suggestion-player">
                   <strong>{result.name}</strong>
@@ -299,7 +312,6 @@ function SearchSuggestions({
                 className="search-suggestion"
                 data-testid="search-suggestion"
                 to={canonicalPlayerPath(unknownExactTag)}
-                reloadDocument
               >
                 <span className="search-suggestion-player">
                   <strong>Open {unknownExactTag}</strong>
@@ -368,7 +380,6 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
           <Link
             className="button button-secondary"
             to={canonicalPlayerPath(search.exactTag)}
-            reloadDocument
           >
             Open player profile
           </Link>
@@ -408,7 +419,7 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
   return (
     <div className="search-result">
       <div>
-        <Link className="player-name" to={canonicalPlayerPath(result.tag)} reloadDocument>
+        <Link className="player-name" to={canonicalPlayerPath(result.tag)}>
           {result.name}
         </Link>
         <span className="player-tag">{result.tag}</span>
@@ -447,11 +458,7 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
                 <span className="rank-mark">{entry.rank}</span>
               </td>
               <th scope="row" data-label="Player">
-                <Link
-                  className="player-name"
-                  to={canonicalPlayerPath(entry.tag)}
-                  reloadDocument
-                >
+                <Link className="player-name" to={canonicalPlayerPath(entry.tag)}>
                   {entry.name}
                 </Link>
                 <span className="player-tag">{entry.tag}</span>
