@@ -26,6 +26,7 @@ import "./details.css";
 export interface RootLoaderData {
   loggedIn: boolean;
   accountLabel: string | null;
+  accountUsername: string | null;
   logoutIdempotencyKey: string | null;
 }
 
@@ -40,7 +41,12 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<RootLoade
     const { loadRootNavigation } = await import("./server/root-navigation.server");
     return await loadRootNavigation(request);
   } catch {
-    return { loggedIn: false, accountLabel: null, logoutIdempotencyKey: null };
+    return {
+      loggedIn: false,
+      accountLabel: null,
+      accountUsername: null,
+      logoutIdempotencyKey: null,
+    };
   }
 }
 
@@ -51,7 +57,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Clash Lens</title>
-        <meta name="theme-color" content="#eef4fb" suppressHydrationWarning />
+        <meta name="theme-color" content="#2456ff" suppressHydrationWarning />
         <meta name="color-scheme" content="light dark" />
         <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
         <link rel="icon" href="data:," />
@@ -115,23 +121,44 @@ export default function App() {
     <>
       <header className="site-header">
         <Link className="site-brand" to="/" aria-label="Clash Lens home">
-          <BrandMark />
           Clash Lens
         </Link>
         <nav className="primary-nav" aria-label="Main navigation">
-          <NavLink to="/" end>Home</NavLink>
+          <NavLink to="/" end>
+            Home
+          </NavLink>
           <NavLink to="/leaderboards/tracked">Rankings</NavLink>
           <NavLink to="/analytics/armies">Armies</NavLink>
+          <NavLink to="/account/saved-players">Saved players</NavLink>
+          <NavLink to="/account/groups">Groups</NavLink>
         </nav>
         <nav className="site-nav" aria-label="Account and appearance">
           <ThemeToggle />
           {data.loggedIn ? (
             <>
-              <Link className="nav-link" to="/account">
-                Account
-                {data.accountLabel ? (
-                  <span className="nav-account-name">{data.accountLabel}</span>
-                ) : null}
+              <Link
+                className="nav-link nav-account"
+                to={
+                  data.accountUsername
+                    ? `/users/${encodeURIComponent(data.accountUsername)}`
+                    : "/account"
+                }
+              >
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <circle cx="12" cy="8" r="4" />
+                  <path d="M4 21v-2a8 8 0 0 1 16 0v2" />
+                </svg>
+                <span className="nav-account-name">{data.accountLabel ?? "Account"}</span>
               </Link>
               <Form method="post" action="/logout" className="nav-form">
                 <input
@@ -146,7 +173,7 @@ export default function App() {
             </>
           ) : (
             <Link className="nav-link nav-link-primary" to="/login">
-              Log in
+              Account
             </Link>
           )}
         </nav>
@@ -163,7 +190,6 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
     <>
       <header className="site-header">
         <Link className="site-brand" to="/" aria-label="Clash Lens home">
-          <BrandMark />
           Clash Lens
         </Link>
         <div className="site-nav">
@@ -188,15 +214,6 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
         </a>
       </main>
     </>
-  );
-}
-
-function BrandMark() {
-  return (
-    <svg className="brand-mark" aria-hidden="true" viewBox="0 0 32 32">
-      <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" strokeWidth="3" />
-      <circle cx="16" cy="16" r="6" fill="var(--cl-action)" />
-    </svg>
   );
 }
 

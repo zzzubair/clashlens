@@ -320,6 +320,9 @@ def create_app(
             content={
                 "query": q,
                 "known_only": True,
+                "users": api_accounts.search_public_users(
+                    production_database, q, limit=limit
+                ),
                 "results": api_players.search_known_players(production_database,
                     q,
                     now=current_time(),

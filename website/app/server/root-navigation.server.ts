@@ -7,6 +7,7 @@ const NAVIGATION_ACCOUNT_TIMEOUT_MS = 250;
 export interface RootNavigationData {
   loggedIn: boolean;
   accountLabel: string | null;
+  accountUsername: string | null;
   logoutIdempotencyKey: string | null;
 }
 
@@ -18,17 +19,20 @@ export async function loadRootNavigation(request: Request): Promise<RootNavigati
     if (identity === null) return loggedOutNavigation();
 
     let accountLabel: string | null = null;
+    let accountUsername: string | null = null;
     try {
       const account = await createPythonClient(identity, {
         accountReadTimeoutMs: NAVIGATION_ACCOUNT_TIMEOUT_MS,
       }).getAccount();
       accountLabel = account.displayName;
+      accountUsername = account.username;
     } catch {
       accountLabel = null;
     }
     return {
       loggedIn: true,
       accountLabel,
+      accountUsername,
       logoutIdempotencyKey: freshIdempotencyKey(),
     };
   } catch {
@@ -40,6 +44,7 @@ function loggedOutNavigation(): RootNavigationData {
   return {
     loggedIn: false,
     accountLabel: null,
+    accountUsername: null,
     logoutIdempotencyKey: null,
   };
 }

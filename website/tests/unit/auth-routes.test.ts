@@ -45,6 +45,8 @@ import { loader as callbackLoader } from "../../app/routes/auth.google.callback"
 import { loader as googleStartLoader } from "../../app/routes/auth.google";
 import { loader as loginLoader } from "../../app/routes/login";
 import { action as logoutAction, loader as logoutLoader } from "../../app/routes/logout";
+import { action as refreshAction } from "../../app/routes/refresh";
+import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -130,6 +132,53 @@ function oauthCookie(
     )}`,
   };
 }
+
+describe("refresh behind the public HTTPS address", () => {
+  beforeEach(() => {
+    mocks.getWebsiteConfig.mockReturnValue(testConfig());
+    mocks.createPythonClient.mockReset();
+    clearPublicRefreshLimits();
+  });
+
+  it.each(["Origin", "Referer"])(
+    "accepts the configured public %s through a local proxy",
+    async (header) => {
+      const work = { id: "refresh-work", status: "queued" };
+      mocks.createPythonClient.mockReturnValue({
+        requestRefresh: vi.fn().mockResolvedValue(work),
+      });
+      const result = await refreshAction({
+        request: new Request("http://127.0.0.1:15173/players/%232PP/refresh", {
+          method: "POST",
+          headers: {
+            [header]: ORIGIN,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({ idempotencyKey: IDEMPOTENCY_KEY }),
+        }),
+        params: { tag: "#2PP" },
+      } as never);
+      expect(dataOf(result)).toMatchObject({ status: 202, data: work });
+    },
+  );
+
+  it("rejects an attacker origin even when forwarded request addresses match it", async () => {
+    const result = await refreshAction({
+      request: new Request("https://attacker.example/players/%232PP/refresh", {
+        method: "POST",
+        headers: {
+          Origin: "https://attacker.example",
+          "X-Forwarded-Host": "attacker.example",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({ idempotencyKey: IDEMPOTENCY_KEY }),
+      }),
+      params: { tag: "#2PP" },
+    } as never);
+    expect(dataOf(result)).toMatchObject({ status: 403 });
+    expect(mocks.createPythonClient).not.toHaveBeenCalled();
+  });
+});
 
 describe("login loader", () => {
   beforeEach(() => {

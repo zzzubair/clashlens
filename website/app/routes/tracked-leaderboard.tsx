@@ -1,7 +1,7 @@
 import { Link, redirect, useLoaderData, type LoaderFunctionArgs } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import { formatTimestamp } from "../components/Provenance";
+import { LocalTimestamp } from "../components/Provenance";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import type {
   SnapshotSelector,
@@ -122,25 +122,21 @@ export default function TrackedLeaderboardRoute() {
           <p className="rankings-context">
             Legend season {formatDate(daily.seasonStartAt)} –{" "}
             {formatDate(daily.seasonEndAt)} · Day reset{" "}
-            <time dateTime={daily.resetAt}>{formatTimestamp(daily.resetAt)}</time>
+            <LocalTimestamp value={daily.resetAt} />
           </p>
         ) : leaderboard ? (
           <p className="rankings-context">
             Latest saved player records
             {newestObservedAt ? (
               <>
-                , observed through{" "}
-                <time dateTime={newestObservedAt}>
-                  {formatTimestamp(newestObservedAt)}
-                </time>
+                , last updated{" "}
+                <LocalTimestamp value={newestObservedAt} />
               </>
             ) : null}
             {oldestObservedAt && oldestObservedAt !== newestObservedAt ? (
               <>
-                . The players shown were observed from{" "}
-                <time dateTime={oldestObservedAt}>
-                  {formatTimestamp(oldestObservedAt)}
-                </time>
+                . Updates shown from{" "}
+                <LocalTimestamp value={oldestObservedAt} />
               </>
             ) : null}
             .
@@ -187,7 +183,7 @@ export default function TrackedLeaderboardRoute() {
                   <th scope="col">Player</th>
                   <th scope="col">Clan</th>
                   <th scope="col">Trophies</th>
-                  <th scope="col">Observed</th>
+                  <th scope="col">Last updated</th>
                 </tr>
               </thead>
               <tbody>
@@ -215,10 +211,8 @@ export default function TrackedLeaderboardRoute() {
                       <TrophyMark />
                       <strong>{entry.trophies.toLocaleString()}</strong>
                     </td>
-                    <td data-label="Observed">
-                      <time dateTime={entry.freshness.observedAt}>
-                        {formatTimestamp(entry.freshness.observedAt)}
-                      </time>
+                    <td data-label="Last updated">
+                      <LocalTimestamp value={entry.freshness.observedAt} />
                     </td>
                   </tr>
                 ))}

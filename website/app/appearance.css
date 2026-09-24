@@ -1,6 +1,7 @@
 :root {
   color-scheme: light;
-  --cl-input-border: #9fb2cc;
+  --cl-input-border: var(--cl-outline);
+  -webkit-text-size-adjust: 100%;
 }
 
 /* Switch text and surfaces together, without a low-contrast intermediate frame. */
@@ -12,32 +13,23 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --cl-ink: #eef3fb;
-  --cl-paper: #0e172a;
-  --cl-panel: #1c2b47;
-  --cl-surface: #15213a;
-  --cl-muted: #a3b3cc;
-  --cl-border: #2b3d5e;
-  --cl-input-border: #4d6488;
-  --cl-blue: #7fb3ff;
-  --cl-blue-dark: #a9cbff;
-  --cl-action: #f6bd2e;
-  --cl-action-hover: #ffcb47;
-  --cl-action-shade: #a8730a;
-  --cl-on-action: #1a1200;
-  --cl-header-bg: #0a1120;
-  --cl-header-ink: #f2f6fd;
-  --cl-header-muted: #93a6c4;
-  --cl-header-soft: #ffffff17;
+  --cl-ink: #ffffff;
+  --cl-paper: #181818;
+  --cl-panel: #303030;
+  --cl-surface: #242424;
+  --cl-muted: #bdbdbd;
+  --cl-border: #4c4c4c;
+  --cl-outline: #8a8a8a;
+  --cl-blue: #91b6ff;
+  --cl-blue-dark: #b6ceff;
   --cl-silver: #c2cedd;
   --cl-bronze: #d9976b;
-  --cl-action-text: #7fb3ff;
-  --cl-action-soft: #1c3158;
-  --cl-action-border: #33579a;
-  --cl-gold: #f0c24a;
+  --cl-action-text: #91b6ff;
+  --cl-action-soft: #343434;
+  --cl-action-border: #8a8a8a;
+  --cl-gold: #ffe600;
   --cl-positive: #57d16d;
   --cl-negative: #ff7a7a;
-  --cl-shadow: none;
 }
 
 .theme-toggle {
@@ -50,13 +42,19 @@
   padding: 0;
   color: var(--cl-header-ink);
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: 0.5rem;
+  border: 2px solid #000000;
+  border-radius: 0;
   cursor: pointer;
 }
-.theme-toggle:active,
-.theme-toggle:hover {
+.theme-toggle:active {
   background: var(--cl-header-soft);
+}
+@media (hover: hover) and (pointer: fine) {
+  .theme-toggle:hover { background: var(--cl-header-soft); }
+}
+a,
+summary {
+  touch-action: manipulation;
 }
 
 /* Keep the header usable at 320px and when the page is zoomed. */
@@ -94,6 +92,9 @@ main {
   outline: 3px solid var(--cl-action-text);
   outline-offset: 3px;
 }
+.site-header :is(a, button):focus-visible {
+  outline-color: #ffffff;
+}
 .home-page .search-controls input:focus-visible,
 #main-content:focus {
   outline: none;
@@ -110,7 +111,7 @@ main {
 }
 .button[aria-current="page"],
 .season-list [aria-current="page"] {
-  border-color: var(--cl-action-text);
+  border-color: #000000;
 }
 .form-field input,
 .form-field textarea,
@@ -131,10 +132,8 @@ main {
   color: #fff;
   background: #91221e;
 }
-@media (pointer: coarse) {
-  input,
-  select,
-  textarea {
+@media (any-pointer: coarse) {
+  main :is(input, select, textarea) {
     font-size: 1rem;
   }
 }
@@ -146,17 +145,11 @@ main {
 }
 
 /* Dark surfaces cover the shared controls, data views, and account forms. */
-[data-theme="dark"] .leaderboard-table thead th {
-  background: var(--cl-panel);
-  border-color: var(--cl-border);
-}
-[data-theme="dark"]
-  :is(.table-wrap, .leaderboard-table td, .leaderboard-table th) {
-  border-color: var(--cl-border);
-}
-[data-theme="dark"] .data-table tbody tr:hover,
-[data-theme="dark"] .battle-slot:has(.battle-profile-link:hover) {
-  background: var(--cl-panel);
+@media (hover: hover) and (pointer: fine) {
+  [data-theme="dark"] .data-table tbody tr:hover,
+  [data-theme="dark"] .battle-slot:has(.battle-profile-link:hover) {
+    background: var(--cl-panel);
+  }
 }
 [data-theme="dark"] .battle-slot-empty {
   background: var(--cl-paper);
@@ -165,28 +158,31 @@ main {
 [data-theme="dark"] .battle-slot.battle-arrival {
   background: #243541;
 }
-[data-theme="dark"]
-  :is(
-    .data-table thead th,
-    .legend-day[open] > summary
-  ) {
+[data-theme="dark"] .legend-day[open] > summary {
   color: var(--cl-ink);
   background: var(--cl-panel);
 }
-[data-theme="dark"] .legend-day[open] > summary:hover {
-  background: var(--cl-action-soft);
-}
-[data-theme="dark"] .header-back:is(:hover, :focus-visible),
-[data-theme="dark"]
-  :is(
-    .home-page .analytics-link,
-    .home-leaderboard .leaderboard-more,
-    .battle-army,
-    .season-list a
-  ):hover {
+[data-theme="dark"] .header-back:focus-visible {
   color: var(--cl-action-text);
   background: var(--cl-action-soft);
   border-color: var(--cl-action-border);
+}
+@media (hover: hover) and (pointer: fine) {
+  [data-theme="dark"] .legend-day[open] > summary:hover {
+    background: var(--cl-action-soft);
+  }
+  [data-theme="dark"]
+    :is(
+      .header-back,
+      .home-page .analytics-link,
+      .home-leaderboard .leaderboard-more,
+      .battle-army,
+      .season-list a
+    ):hover {
+    color: var(--cl-action-text);
+    background: var(--cl-action-soft);
+    border-color: var(--cl-action-border);
+  }
 }
 [data-theme="dark"] .player-trophy-card {
   background: var(--cl-surface);
@@ -235,13 +231,13 @@ main {
   color: var(--cl-muted);
 }
 [data-theme="dark"] .empty-chart span {
-  background: #685848;
+  background: var(--cl-blue);
 }
 [data-theme="dark"] .empty-chart span:nth-child(2) {
-  background: #928069;
+  background: var(--cl-blue-dark);
 }
 [data-theme="dark"] .empty-chart span:nth-child(3) {
-  background: #c99470;
+  background: var(--cl-action);
 }
 
 @media (forced-colors: active) {

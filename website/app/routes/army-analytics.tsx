@@ -1,15 +1,19 @@
+import { useEffect, useRef, useState } from "react";
 import {
   data,
   Form,
   Link,
+  redirect,
   useLoaderData,
   useSearchParams,
   useNavigation,
+  useSubmit,
   type LoaderFunctionArgs,
 } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import type { WebsiteErrorResponse } from "../lib/contracts";
+import { LocalTimestamp } from "../components/Provenance";
+import type { ArmyAnalytics, WebsiteErrorResponse } from "../lib/contracts";
 
 const allowed = {
   lens: ["offense", "defense"],
@@ -26,17 +30,31 @@ const allowed = {
     "hero-equipment",
     "cc-composition",
   ],
-  sort: [
-    "usage-rate",
-    "usage-count",
-    "three-star-rate",
-    "average-stars",
-    "average-destruction",
-  ],
 } as const;
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const source = new URL(request.url).searchParams;
+  const recentAvailable = import.meta.env.DEV || process.env.CLASHLENS_ARMY_PREVIEW === "true";
+  if (
+    recentAvailable && source.get("saved") !== "1" &&
+    (source.get("recent") === "1" || source.has("sample") || !source.has("season"))
+  ) {
+    if (source.has("sample")) {
+      for (const key of ["sample", "season", "start_day", "end_day"]) source.delete(key);
+      source.set("recent", "1");
+      return redirect(`?${source}`);
+    }
+    const { recentArmyAnalytics } = await import("../services/army-preview.server");
+    const recent = recentArmyAnalytics(source);
+    return {
+      ...recent,
+      recentAvailable,
+      error: null,
+      seasonEmpty: null,
+      historicalSummary: false,
+      requestedSeason: "current",
+    };
+  }
   const season = source.get("season") ?? "current";
   const lens = source.get("lens") ?? "offense";
   const category = source.get("category") ?? "troops";
@@ -47,6 +65,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const summaryQuery = new URLSearchParams({ lens, category, sort });
       if (source.has("offset")) summaryQuery.set("offset", source.get("offset")!);
       return {
+        recentAvailable,
         analytics: await python
           .createPythonClient()
           .getArmySeasonSummary(season, summaryQuery),
@@ -66,6 +85,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       sort,
     });
     return {
+      recentAvailable,
       analytics: await python.createPythonClient().getArmyAnalytics(query),
       error: null,
       seasonEmpty: null,
@@ -78,6 +98,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       // state and link to the previous season instead of serving its data.
       return data(
         {
+          recentAvailable,
           analytics: null,
           error: null,
           seasonEmpty: { previousSeasonId: cause.previousSeasonId },
@@ -127,6 +148,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       }
       return data(
         {
+          recentAvailable,
           analytics: null,
           error,
           selectionUnavailable: payloadError === "army_analytics_unavailable",
@@ -138,6 +160,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       );
     }
     return {
+      recentAvailable,
       analytics: null,
       error: safeWebsiteError(cause),
       seasonEmpty: null,
@@ -163,24 +186,133 @@ const filterLabels: Record<string, string> = {
   "hero-pet": "Hero and pet",
   "hero-equipment": "Hero and equipment",
   "cc-composition": "Clan Castle army",
-  "usage-rate": "Most used",
-  "usage-count": "Total uses",
-  "three-star-rate": "Three-star rate",
-  "average-stars": "Average stars",
-  "average-destruction": "Average destruction",
 };
 const topPlayers = [5, 10, 20, 50, 100, 200, 500, 1000];
+
+type ArmyRow = ArmyAnalytics["rows"][number];
+const sortColumns = {
+  name: { label: "Name", value: (row: ArmyRow) => row.label },
+  quantity: { label: "Quantity", value: (row: ArmyRow) => row.quantity ?? 0 },
+  "usage-count": { label: "Battles / included", value: (row: ArmyRow) => row.usageCount },
+  "usage-rate": { label: "Usage", value: (row: ArmyRow) => row.usageRate },
+  "one-star-rate": { label: "1-star", value: (row: ArmyRow) => starRate(row, 1) },
+  "two-star-rate": { label: "2-star", value: (row: ArmyRow) => starRate(row, 2) },
+  "three-star-rate": { label: "3-star", value: (row: ArmyRow) => starRate(row, 3) },
+  "average-stars": { label: "Avg. stars", value: (row: ArmyRow) => row.averageStars ?? 0 },
+  "average-destruction": { label: "Avg. destruction", value: (row: ArmyRow) => row.averageDestruction ?? 0 },
+  "zero-star-rate": { label: "0-star", value: (row: ArmyRow) => starRate(row, 0) },
+  exclusions: { label: "Additional exclusions", value: (row: ArmyRow) => row.unknownExcludedAttacks ?? 0 },
+} as const;
+type SortColumn = keyof typeof sortColumns;
+type TableSort = { column: SortColumn; direction: "ascending" | "descending" };
+const nameOrder = new Intl.Collator("en", { sensitivity: "base", numeric: true });
+
+function starRate(row: ArmyRow, stars: number) {
+  const count = row.starCounts?.[stars] ?? [0, row.oneStarCount, row.twoStarCount, row.threeStarCount][stars] ?? 0;
+  return row.usageCount ? count / row.usageCount : 0;
+}
+
+function sortedRows(rows: ArmyRow[], sort: TableSort) {
+  const value = sortColumns[sort.column].value;
+  return [...rows].sort((a, b) => {
+    const left = value(a);
+    const right = value(b);
+    const comparison = typeof left === "string" && typeof right === "string"
+      ? nameOrder.compare(left, right)
+      : Number(left) - Number(right);
+    return comparison * (sort.direction === "ascending" ? 1 : -1)
+      || nameOrder.compare(a.label, b.label) || a.key.localeCompare(b.key);
+  });
+}
+
+function SortHeading({ column, sort, onSort }: {
+  column: SortColumn;
+  sort: TableSort;
+  onSort: (sort: TableSort) => void;
+}) {
+  const active = sort.column === column;
+  const direction = active
+    ? sort.direction === "ascending" ? "descending" : "ascending"
+    : column === "name" ? "ascending" : "descending";
+  const label = sortColumns[column].label;
+  const order = column === "name"
+    ? direction === "ascending" ? "A to Z" : "Z to A"
+    : direction === "ascending" ? "lowest first" : "highest first";
+  return (
+    <th scope="col" aria-sort={active ? sort.direction : undefined} className="analytics-sort-heading">
+      <button type="button" className="analytics-sort-button"
+        aria-label={`Sort by ${label}, ${order}`}
+        title={`Sort by ${label}, ${order}`}
+        onClick={() => onSort({ column, direction })}
+      >
+        {label}<span aria-hidden="true">{active ? sort.direction === "ascending" ? "↑" : "↓" : "↕"}</span>
+      </button>
+    </th>
+  );
+}
+
 
 export default function ArmyAnalyticsRoute() {
   const result = useLoaderData<typeof loader>();
   const { analytics, error, seasonEmpty, historicalSummary, requestedSeason } = result;
   const [params] = useSearchParams();
   const navigation = useNavigation();
+  const submit = useSubmit();
+  const filterForm = useRef<HTMLFormElement>(null);
+  const pendingChange = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selected = analytics?.selection;
   const isHistorical = historicalSummary === true;
   const lens = selected?.lens ?? params.get("lens") ?? "offense";
   const population = selected?.population ?? params.get("population") ?? "top-100";
   const unavailable = "selectionUnavailable" in result && result.selectionUnavailable;
+  const snapshot = "snapshot" in result ? result.snapshot : null;
+  const excludedArmies = analytics ? analytics.totalAttacks - analytics.usableArmySample : 0;
+  const partialArmies = analytics?.armyStates.partial ?? 0;
+  const [chosenSort, setChosenSort] = useState<TableSort | null>(null);
+  const [breakdownSort, setBreakdownSort] = useState<TableSort | null>(null);
+  const defaultColumn = selected?.sort && Object.hasOwn(sortColumns, selected.sort)
+    ? selected.sort as SortColumn : "usage-rate";
+  const columns: SortColumn[] = ["name", ...(isHistorical ? ["quantity" as const] : []), "usage-count", "usage-rate", "one-star-rate", "two-star-rate", "three-star-rate", ...(!isHistorical ? ["average-stars" as const, "average-destruction" as const] : [])];
+  const tableSort: TableSort = chosenSort && columns.includes(chosenSort.column)
+    ? chosenSort : { column: defaultColumn, direction: "descending" };
+  const rows = analytics ? sortedRows(analytics.rows, tableSort) : [];
+
+
+  useEffect(() => {
+    return () => {
+      if (pendingChange.current !== null) clearTimeout(pendingChange.current);
+    };
+  }, []);
+
+  // Leaving through a link must cancel a day edit that is still waiting.
+  useEffect(() => {
+    if (navigation.state !== "idle" && !navigation.formData && pendingChange.current !== null) {
+      clearTimeout(pendingChange.current);
+      pendingChange.current = null;
+    }
+  }, [navigation.state, navigation.formData]);
+
+  // Update existing controls after URL navigation without replacing the form,
+  // which would lose keyboard focus and close the day-range disclosure.
+  useEffect(() => {
+    if (!filterForm.current || navigation.state !== "idle" || pendingChange.current !== null) return;
+    const values = {
+      lens,
+      population: isHistorical ? "all" : population,
+      category: selected?.category ?? params.get("category") ?? "troops",
+      sort: selected?.sort ?? params.get("sort") ?? "usage-rate",
+      season: requestedSeason,
+      start_day: String(selected?.startDay ?? params.get("start_day") ?? 1),
+      end_day: String(selected?.endDay ?? params.get("end_day") ?? 28),
+    };
+    for (const [name, value] of Object.entries(values)) {
+      const control = filterForm.current.elements.namedItem(name);
+      if (control instanceof RadioNodeList || control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
+        control.value = value;
+      }
+    }
+  }, [params, selected, lens, population, isHistorical, requestedSeason, navigation.state]);
+
   return (
     <main id="main-content" tabIndex={-1} className="page-shell analytics-page">
       <section className="hero" aria-labelledby="army-analytics-title">
@@ -189,12 +321,47 @@ export default function ArmyAnalyticsRoute() {
           Compare usage and battle results across tracked Legend League armies.
         </p>
       </section>
+      {snapshot ? (
+        <aside className="notice sample-data-notice" aria-label="Real battle data">
+          <div>
+            <strong>Real battle data.</strong> Recent Legend battles from the top {snapshot.playerCount} players.
+            <br />
+            Fetched <LocalTimestamp value={snapshot.fetchedAt} />. This is a saved snapshot; daily coverage is incomplete.
+          </div>
+          <Link to="?saved=1">Completed-day stats</Link>
+        </aside>
+      ) : null}
       <Form
         method="get"
+        ref={filterForm}
+        replace
+        preventScrollReset
         className="search-panel analytics-filters"
         aria-label="Army analytics filters"
-        key={params.toString()}
+        onChange={(event) => {
+          if (pendingChange.current !== null) clearTimeout(pendingChange.current);
+          const form = event.currentTarget;
+          const apply = () => {
+            pendingChange.current = null;
+            if (!form.checkValidity()) return;
+            const values = new FormData(form);
+            if (Number(values.get("start_day")) > Number(values.get("end_day"))) return;
+            void submit(form, { replace: true, preventScrollReset: true });
+          };
+          if (event.target instanceof HTMLInputElement && event.target.type === "number") {
+            pendingChange.current = setTimeout(apply, 350);
+          } else {
+            apply();
+          }
+        }}
+        onSubmit={() => {
+          if (pendingChange.current !== null) clearTimeout(pendingChange.current);
+          pendingChange.current = null;
+        }}
       >
+        <input type="hidden" name="sort" value={selected?.sort ?? params.get("sort") ?? "usage-rate"} />
+        {snapshot ? <input type="hidden" name="recent" value="1" /> : null}
+        {params.get("saved") === "1" ? <input type="hidden" name="saved" value="1" /> : null}
         <div className="filter-heading">
           <fieldset className="segmented-control">
             <legend className="sr-only">Battle perspective</legend>
@@ -211,11 +378,11 @@ export default function ArmyAnalyticsRoute() {
               </label>
             ))}
           </fieldset>
-          <span className="analytics-season">
-            {isHistorical ? "Past season" : "Current season"}
+          <span className="analytics-season" role="status">
+            {navigation.state !== "idle" ? "Updating…" : snapshot ? "Recent real battles" : isHistorical ? "Past season" : "Current season"}
           </span>
         </div>
-        <div className="filter-grid">
+        <div className="filter-grid analytics-main-filters">
           <label className="filter-field">
             Show
             <select
@@ -253,42 +420,28 @@ export default function ArmyAnalyticsRoute() {
                 <option value={population}>Selected player group</option>
               ) : null}
               <optgroup label="Leaderboard position">
-                {topPlayers.map((count) => (
+                {topPlayers.filter((count) => !snapshot || count <= snapshot.playerCount).map((count) => (
                   <option key={count} value={`top-${count}`}>
                     Top {count.toLocaleString()}
                   </option>
                 ))}
               </optgroup>
-              <optgroup label="Top players on every selected day">
+              {!snapshot ? <optgroup label="Top players on every selected day">
                 {topPlayers.map((count) => (
                   <option key={count} value={`streak-top-${count}`}>
                     Consistent top {count.toLocaleString()}
                   </option>
                 ))}
-              </optgroup>
-            </select>
-          </label>
-          <label className="filter-field">
-            Sort by
-            <select
-              name="sort"
-              defaultValue={selected?.sort ?? params.get("sort") ?? "usage-rate"}
-            >
-              {allowed.sort
-                .filter(
-                  (value) =>
-                    !isHistorical || ["usage-rate", "usage-count"].includes(value),
-                )
-                .map((value) => (
-                  <option key={value} value={value}>
-                    {filterLabels[value]}
-                  </option>
-                ))}
+              </optgroup> : null}
             </select>
           </label>
         </div>
         <div className="filter-footer">
-          <details className="filter-details">
+          {snapshot ? (
+            <p className="form-help">
+              Player groups use the leaderboard at collection time. Includes all available recent Legend battles, not every battle in a full season.
+            </p>
+          ) : <details className="filter-details">
             <summary>Season & day range</summary>
             <div className="filter-grid">
               <label className="filter-field">
@@ -311,6 +464,7 @@ export default function ArmyAnalyticsRoute() {
                 <input
                   name="start_day"
                   type="number"
+                  required
                   min="1"
                   max="28"
                   defaultValue={selected?.startDay ?? params.get("start_day") ?? 1}
@@ -322,6 +476,7 @@ export default function ArmyAnalyticsRoute() {
                 <input
                   name="end_day"
                   type="number"
+                  required
                   min="1"
                   max="28"
                   defaultValue={selected?.endDay ?? params.get("end_day") ?? 28}
@@ -334,14 +489,7 @@ export default function ArmyAnalyticsRoute() {
                 ? "Past seasons include all players across all 28 Legend days."
                 : "Only completed Legend days are included. Each day starts at 05:00 UTC."}
             </p>
-          </details>
-          <button
-            className="button button-primary"
-            type="submit"
-            disabled={navigation.state !== "idle"}
-          >
-            {navigation.state !== "idle" ? "Updating…" : "Apply filters"}
-          </button>
+          </details>}
         </div>
       </Form>
       {error && !unavailable ? <ErrorNotice error={error} /> : null}
@@ -365,74 +513,80 @@ export default function ArmyAnalyticsRoute() {
               View previous season
             </Link>
           ) : null}
+          {result.recentAvailable ? (
+            <Link className="button button-secondary" to="?recent=1">
+              View recent real battles
+            </Link>
+          ) : null}
         </section>
       ) : null}
       {analytics ? (
-        <section className="analytics-results" aria-label="Army statistics">
-          <div className="analytics-kpis" aria-label="Selected sample">
+        <section className="analytics-results" aria-label="Army statistics" aria-busy={navigation.state !== "idle"}>
+          <div className="analytics-kpis" aria-label="Battle coverage">
             <article className="analytics-kpi analytics-kpi-primary">
-              <span>Attacks in sample</span>
+              <span>{lens === "offense" ? "Attacks recorded" : "Defenses recorded"}</span>
               <strong>{analytics.totalAttacks.toLocaleString()}</strong>
+              <small>All battles in this selection</small>
             </article>
             <article className="analytics-kpi">
-              <span>Armies analyzed</span>
+              <span>Armies included</span>
               <strong>{analytics.usableArmySample.toLocaleString()}</strong>
+              <small>Enough army details to use in these stats</small>
             </article>
             <article className="analytics-kpi">
-              <span>Details unavailable</span>
-              <strong>{analytics.unknownAffectedAttacks.toLocaleString()}</strong>
+              <span>Armies excluded</span>
+              <strong>{excludedArmies.toLocaleString()}</strong>
+              <small>Army details missing or unreadable</small>
             </article>
           </div>
+          {partialArmies > 0 ? (
+            <p className="section-note analytics-coverage-note">
+              {partialArmies.toLocaleString()} of the included armies are partly readable. Known troops, spells and equipment count; unknown items do not.
+            </p>
+          ) : null}
           <div className="section-heading">
             <h2>{filterLabels[analytics.selection.category]}</h2>
             <span className="section-note">
-              Days {analytics.selection.startDay}–{analytics.selection.endDay} ·{" "}
+              {snapshot ? `${shortDate(snapshot.battleFrom)} – ${shortDate(snapshot.battleTo)} (UTC)` : `Days ${analytics.selection.startDay}–${analytics.selection.endDay}`} ·{" "}
               {analytics.selection.lens === "offense" ? "Attacks" : "Defenses"}
             </span>
           </div>
-          <div className="table-wrap analytics-table-wrap">
-            <table className="data-table analytics-table" aria-label="Army analytics results">
+          <p className="section-note analytics-coverage-note" id="army-rate-help">
+            {lens === "defense" ? "Results are the attacking army’s stars against the selected players. " : ""}
+            Star rates show how often battles using each component ended with that result. Each battle counts once per component.
+          </p>
+          <div className="table-wrap analytics-table-wrap" tabIndex={0} role="region" aria-label="Army results table">
+            <table className="data-table analytics-table" aria-label="Army analytics results" aria-describedby="army-rate-help">
               <thead>
                 <tr>
-                  <th>{isHistorical ? "Unit" : "Army component"}</th>
-                  {isHistorical ? (
-                    <>
-                      <th>Quantity</th>
-                      <th>1★</th>
-                      <th>2★</th>
-                      <th>3★</th>
-                    </>
-                  ) : null}
-                  <th>Uses / sample</th>
-                  <th>Usage</th>
-                  {!isHistorical ? (
-                    <>
-                      <th>3-star rate</th>
-                      <th>Avg. stars</th>
-                      <th>Avg. destruction</th>
-                    </>
-                  ) : null}
+                  {columns.map((column) => (
+                    <SortHeading key={column} column={column} sort={tableSort} onSort={setChosenSort} />
+                  ))}
                 </tr>
               </thead>
               <tbody>
-                {analytics.rows.map((row) => (
+                {analytics.rows.length === 0 ? (
+                  <tr><td colSpan={isHistorical ? 7 : 8}>No recognized components in this selection.</td></tr>
+                ) : null}
+                {rows.map((row) => (
                   <tr key={row.key}>
                     <th scope="row">{row.label}</th>
-                    {isHistorical ? (
-                      <>
-                        <td>{row.quantity}</td>
-                        <td>{row.oneStarCount}</td>
-                        <td>{row.twoStarCount}</td>
-                        <td>{row.threeStarCount}</td>
-                      </>
-                    ) : null}
+                    {isHistorical ? <td>{row.quantity}</td> : null}
                     <td>
-                      {row.usageCount} / {row.usageDenominator}
+                      {row.usageCount.toLocaleString()} / {row.usageDenominator.toLocaleString()}
                     </td>
                     <td>{formatRate(row.usageRate)}</td>
+                    {[1, 2, 3].map((stars) => {
+                      const count = row.starCounts?.[stars] ?? [row.oneStarCount, row.twoStarCount, row.threeStarCount][stars - 1] ?? 0;
+                      return (
+                        <td key={stars}>
+                          <strong className="analytics-star-rate">{formatRate(row.usageCount ? count / row.usageCount : 0)}</strong>
+                          <span className="analytics-star-count">{count.toLocaleString()} {count === 1 ? "battle" : "battles"}</span>
+                        </td>
+                      );
+                    })}
                     {!isHistorical ? (
                       <>
-                        <td>{formatRate(row.threeStarRate!)}</td>
                         <td>{row.averageStars!.toFixed(2)}</td>
                         <td>{row.averageDestruction!.toFixed(1)}%</td>
                       </>
@@ -444,26 +598,25 @@ export default function ArmyAnalyticsRoute() {
           </div>
           {!isHistorical ? (
             <details className="analytics-breakdown">
-              <summary>Star breakdown & sample coverage</summary>
+              <summary>Full star breakdown & coverage</summary>
               <p className="section-note">
-                {analytics.collectionCoverage.completedDays} completed days.{" "}
+                {snapshot ? "Recent battle logs can omit older battles and include unfinished days." : `${analytics.collectionCoverage.completedDays} completed Legend days.`}{" "}
                 {analytics.perspectiveDisagreementCount} battles have conflicting reports.{" "}
-                {analytics.unknownAffectedAttacks} attacks have incomplete army details.
+                {excludedArmies.toLocaleString()} armies could not be read and are excluded from every row.{" "}
+                {snapshot?.invalidBattleRows ? `${snapshot.invalidBattleRows} other battle records had no opponent and were left out of these totals. ` : ""}
+                Additional exclusions below apply when unknown details prevent a particular combination from being identified.
               </p>
-              <div className="table-wrap analytics-table-wrap">
+              <div className="table-wrap analytics-table-wrap" tabIndex={0} role="region" aria-label="Star breakdown table">
                 <table className="data-table analytics-table" aria-label="Army star breakdown">
                   <thead>
                     <tr>
-                      <th>Army component</th>
-                      <th>0★</th>
-                      <th>1★</th>
-                      <th>2★</th>
-                      <th>3★</th>
-                      <th>Excluded attacks</th>
+                      {(["name", "zero-star-rate", "one-star-rate", "two-star-rate", "three-star-rate", "exclusions"] as const).map((column) => (
+                        <SortHeading key={column} column={column} sort={breakdownSort ?? tableSort} onSort={setBreakdownSort} />
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {analytics.rows.map((row) => (
+                    {sortedRows(analytics.rows, breakdownSort ?? tableSort).map((row) => (
                       <tr key={row.key}>
                         <th scope="row">{row.label}</th>
                         {row.starCounts?.map((count, index) => (
@@ -483,7 +636,7 @@ export default function ArmyAnalyticsRoute() {
             <div className="hero-actions">
               <span>
                 Showing {analytics.rows.length} of {analytics.pagination.totalRows}{" "}
-                results
+                results{analytics.pagination.totalRows > analytics.rows.length ? ". Heading sorts apply to this page." : ""}
               </span>
               {analytics.pagination.nextOffset !== null ? (
                 <Link
@@ -511,6 +664,10 @@ function seasonName(seasonId: string) {
         year: "numeric",
         timeZone: "UTC",
       });
+}
+
+function shortDate(value: string) {
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(value));
 }
 
 function formatRate(value: number) {

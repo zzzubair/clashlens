@@ -26,7 +26,7 @@ test("player search uses saved backend data", async ({ page }) => {
   await page.goto("/?q=Synthetic%20Clasher%20001");
 
   await expect(
-    page.getByRole("heading", { name: "Known Clash Lens players" }),
+    page.getByRole("heading", { name: "Clash of Clans players" }),
   ).toBeVisible();
   await expect(page.getByText("Synthetic Clasher 001").first()).toBeVisible();
   await expect(page.getByText("#2PP", { exact: true }).first()).toBeVisible();

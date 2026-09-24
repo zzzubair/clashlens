@@ -1,4 +1,4 @@
-import { Link, data, redirect, useLoaderData } from "react-router";
+import { Link, data, redirect, useLoaderData, useRouteLoaderData } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
 import type { PublicUser } from "../lib/account-contracts";
@@ -6,6 +6,7 @@ import { normalizeUsername } from "../lib/account-validation";
 import type { WebsiteErrorResponse } from "../lib/contracts";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import type { Route } from "./+types/users.$username";
+import type { RootLoaderData } from "../root";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -62,6 +63,10 @@ export function headers() {
 
 export default function UserRoute() {
   const data = useLoaderData<typeof loader>();
+  const navigation = useRouteLoaderData<RootLoaderData>("root");
+  const isOwnProfile = Boolean(
+    data.user && navigation?.accountUsername === data.user.username,
+  );
   if (data.notFound) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
@@ -77,12 +82,29 @@ export default function UserRoute() {
       <section className="hero" aria-labelledby="user-title">
         <h1 id="user-title">{data.user?.displayName ?? "User"}</h1>
         <p className="player-tag">@{data.user?.username ?? ""}</p>
+        {isOwnProfile ? (
+          <p className="hero-actions">
+            <Link className="button button-secondary" to="/account/profile">
+              Edit profile
+            </Link>
+            <Link className="button button-secondary" to="/account/providers">
+              Sign-in connections
+            </Link>
+          </p>
+        ) : null}
       </section>
 
       {data.error ? <ErrorNotice error={data.error} /> : null}
 
       <section className="data-section" aria-labelledby="user-players-title">
-        <h2 id="user-players-title">Verified players</h2>
+        <div className="section-heading">
+          <h2 id="user-players-title">Linked accounts</h2>
+          {isOwnProfile ? (
+            <Link className="button button-secondary" to="/account/verify-player">
+              Link account
+            </Link>
+          ) : null}
+        </div>
         {data.user && data.user.verifiedPlayers.length > 0 ? (
           <ul className="player-link-list">
             {data.user.verifiedPlayers.map((player) => (
@@ -96,8 +118,8 @@ export default function UserRoute() {
           </ul>
         ) : (
           <div className="empty-state">
-            <h3>No verified players</h3>
-            <p>This user has not verified any player links yet.</p>
+            <h3>No linked accounts yet</h3>
+            <p>This user has not linked any Clash of Clans accounts yet.</p>
           </div>
         )}
       </section>

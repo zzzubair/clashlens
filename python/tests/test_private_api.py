@@ -214,6 +214,7 @@ def test_caller_operation_matrix_google_beta_and_complete_private_operations(
             assert search.json() == {
                 "query": "Player",
                 "known_only": True,
+                "users": [],
                 "results": [
                     {
                         "tag": "#2PP",

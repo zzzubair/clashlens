@@ -9,7 +9,7 @@ export const themeInitialization = `(() => {
   try { saved = localStorage.getItem("${STORAGE_KEY}"); } catch {}
   const dark = saved === "dark" || (saved !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.dataset.theme = dark ? "dark" : "light";
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#0e172a" : "#eef4fb");
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#2456ff");
 })();`;
 
 export function ThemeToggle() {
@@ -93,5 +93,5 @@ function applyTheme(dark: boolean) {
   document.documentElement.dataset.theme = theme;
   document
     .querySelector('meta[name="theme-color"]')
-    ?.setAttribute("content", dark ? "#0e172a" : "#eef4fb");
+    ?.setAttribute("content", "#2456ff");
 }

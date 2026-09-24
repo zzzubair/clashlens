@@ -113,6 +113,7 @@ export interface SearchResponse {
   query: string;
   exactTag: string | null;
   results: KnownPlayerResult[];
+  users?: import("./account-contracts").PublicUserResult[];
   knownOnly: boolean;
 }
 
@@ -221,6 +222,8 @@ export interface RankedDaySummary {
   label: string;
   period: string;
   state: "Live" | "Complete" | "Partial" | "Uncertain";
+  startTrophies?: number | null;
+  startTrophiesCalculation?: { trophies: number; netChange: number };
   offense: {
     attacks: number | null;
     threeStars: number | null;

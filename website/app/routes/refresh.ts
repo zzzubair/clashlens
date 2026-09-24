@@ -51,18 +51,6 @@ async function safeStatusErrorResponse(error: unknown) {
   });
 }
 
-function sameOrigin(request: Request): boolean {
-  const origin = request.headers.get("Origin");
-  if (origin) return origin === new URL(request.url).origin;
-  const referer = request.headers.get("Referer");
-  if (!referer) return false;
-  try {
-    return new URL(referer).origin === new URL(request.url).origin;
-  } catch {
-    return false;
-  }
-}
-
 async function readIdempotencyKey(request: Request): Promise<string | null> {
   const contentType = request.headers
     .get("Content-Type")
@@ -112,7 +100,12 @@ async function readIdempotencyKey(request: Request): Promise<string | null> {
 }
 
 export async function action({ request, params }: Route.ActionArgs) {
-  if (request.method !== "POST" || !sameOrigin(request)) {
+  const { isSameOrigin } = await import("../server/actions.server");
+  const { getWebsiteConfig } = await import("../server/config.server");
+  if (
+    request.method !== "POST" ||
+    !isSameOrigin(request, getWebsiteConfig().publicOrigin)
+  ) {
     return safeErrorResponse({ status: 403, payload: { error: "forbidden" } });
   }
   const normalized = normalizePlayerTag(params.tag ?? "");

@@ -18,7 +18,10 @@ test("a Clasher can sign in and use account features against the real backend", 
   await signIn(page);
   await ensureAccount(page, "lensscout", "Lens Scout");
 
-  await page.getByRole("link", { name: "Manage saved players" }).click();
+  await page
+    .getByRole("navigation", { name: "Main navigation" })
+    .getByRole("link", { name: "Saved players" })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Saved players", exact: true }),
   ).toBeVisible();
@@ -43,11 +46,11 @@ test("a Clasher can sign in and use account features against the real backend", 
 
   await page.goto("/account/verify-player");
   await page.getByLabel("Player tag").fill("#2PP");
-  await page.getByLabel("One-time verification token").fill("VERIFY-2PP");
-  await page.getByRole("button", { name: "Verify player" }).click();
-  await expect(
-    page.getByText(/The player was verified and linked|This player is already linked/),
-  ).toBeVisible();
+  await page.getByLabel("API token", { exact: true }).fill("VERIFY-2PP");
+  await page.getByRole("button", { name: "Link account" }).click();
+  await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
+  const linkedAccounts = page.getByRole("region", { name: "Linked accounts" });
+  await expect(linkedAccounts.getByText("#2PP", { exact: true })).toBeVisible();
 
   await page.goto("/users/lensscout");
   await expect(page.getByRole("heading", { name: "Lens Scout" })).toBeVisible();

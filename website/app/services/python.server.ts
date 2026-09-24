@@ -24,6 +24,7 @@ import {
   mapGroupResult,
   mapGroups,
   mapPublicUser,
+  mapPublicUserResults,
   mapSavedTagResult,
   mapSavedTags,
   mapSummary,
@@ -724,6 +725,9 @@ function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {
     typeof payload.known_only !== "boolean"
   )
     throw new PythonApiError(502, { error: "malformed" });
+  const users =
+    payload.users === undefined ? undefined : mapPublicUserResults(payload.users);
+  if (users === null) throw new PythonApiError(502, { error: "malformed" });
   const results = payload.results.map((item) => {
     if (
       !isRecord(item) ||
@@ -760,6 +764,7 @@ function mapSearch(payload: unknown, submittedQuery: string): SearchResponse {
     query: payload.query,
     exactTag: normalizePlayerTag(submittedQuery),
     results: results as SearchResponse["results"],
+    ...(users === undefined ? {} : { users }),
     knownOnly: payload.known_only,
   };
 }

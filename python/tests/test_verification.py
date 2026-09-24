@@ -10,6 +10,7 @@ from clashlens.verification import (
     OfficialVerificationClient,
     OfficialVerificationResponse,
     VerificationOutcome,
+    VerificationTransportError,
     classify_official_response,
     classify_transport_ambiguity,
     load_official_api_key_file,
@@ -159,6 +160,55 @@ def test_official_client_can_use_the_loopback_development_fixture() -> None:
         "http://127.0.0.1:8080/v1/players/%232PP/verifytoken"
     )
     assert request.proxy_url == ""  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [("ok", VerificationOutcome.VERIFIED), ("invalid", VerificationOutcome.INVALID_TOKEN)],
+)
+def test_official_client_classifies_live_response_without_returning_echoed_token(
+    status: str, expected: VerificationOutcome
+) -> None:
+    def transport(_request: object) -> OfficialVerificationResponse:
+        return OfficialVerificationResponse(
+            200,
+            json.dumps(
+                {"tag": "#2PP", "token": "private-player-token", "status": status}
+            ).encode(),
+        )
+
+    client = OfficialVerificationClient(
+        api_key=b"safe-synthetic-api-key",
+        proxy_url="http://fixed-egress.internal:3128",
+        transport=transport,
+    )
+    response = client.verify("#2PP", "private-player-token")
+
+    assert classify_official_response(response.http_status, response.body).outcome is expected
+    assert b"private-player-token" not in response.body
+
+
+@pytest.mark.parametrize(
+    ("tag", "token", "status"),
+    [
+        ("#2PQ", "private-player-token", "ok"),
+        ("#2PP", "another-token", "ok"),
+        ("#2PP", "private-player-token", "OK"),
+    ],
+)
+def test_official_client_rejects_echoes_for_another_request_or_unknown_status(
+    tag: str, token: str, status: str
+) -> None:
+    client = OfficialVerificationClient(
+        api_key=b"safe-synthetic-api-key",
+        proxy_url="http://fixed-egress.internal:3128",
+        transport=lambda _request: OfficialVerificationResponse(
+            200, json.dumps({"tag": tag, "token": token, "status": status}).encode()
+        ),
+    )
+
+    with pytest.raises(VerificationTransportError):
+        client.verify("#2PP", "private-player-token")
 
 
 def test_official_client_rejects_insecure_origin_without_test_opt_in() -> None:

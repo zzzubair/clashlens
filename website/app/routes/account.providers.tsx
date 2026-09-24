@@ -38,6 +38,8 @@ export async function loader({
     };
   } catch (error) {
     if (error instanceof Response) throw error;
+    const { isAccountNotFoundError } = await import("../server/actions.server");
+    if (isAccountNotFoundError(error)) throw redirect("/account/setup");
     const { safeWebsiteError } = await import("../server/errors.server");
     return {
       providers: [],
@@ -114,15 +116,18 @@ export default function AccountProvidersRoute() {
       <section className="hero" aria-labelledby="providers-title">
         <h1 id="providers-title">Sign-in connections</h1>
         <p className="lede">
-          Your Clash Lens account stays yours no matter which providers are connected.
-          Linking needs a fresh sign-in with that provider; your last connection cannot be
-          removed.
+          Connect Google, Discord, or both to sign in to the same Clash Lens account.
+          Linking asks you to sign in with that service.
         </p>
       </section>
 
       {data.error ? <ErrorNotice error={data.error} /> : null}
 
-      <section className="form-panel" aria-label="Connected sign-in providers">
+      <section className="form-panel stack-form" aria-label="Connected sign-in providers">
+        <p id="provider-requirement" className="form-help">
+          <strong>Keep at least one sign-in connection.</strong> To unlink your only
+          connection, link the other first.
+        </p>
         <ul className="player-link-list">
           {(["discord", "google"] as const).map((provider) => {
             const linked = data.providers.includes(provider);
@@ -143,11 +148,7 @@ export default function AccountProvidersRoute() {
                       type="submit"
                       className="button button-secondary"
                       disabled={isLast}
-                      title={
-                        isLast
-                          ? "Your last remaining sign-in connection cannot be removed."
-                          : undefined
-                      }
+                      aria-describedby={isLast ? "provider-requirement" : undefined}
                     >
                       Unlink
                     </button>

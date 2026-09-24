@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useFetcher, useLoaderData, type LoaderFunctionArgs } from "react-router";
 
 import { ErrorNotice } from "../components/ErrorNotice";
-import { formatTimestamp } from "../components/Provenance";
+import { LocalTimestamp } from "../components/Provenance";
 import { canonicalPlayerPath } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type {
@@ -132,7 +132,9 @@ export default function Home() {
               }
             }}
           >
-            <label className="sr-only" htmlFor="player-search">Player search</label>
+            <label className="sr-only" htmlFor="player-search">
+              Search players and Clash Lens profiles
+            </label>
             <div className="search-controls">
               <svg
                 className="search-field-icon"
@@ -152,7 +154,7 @@ export default function Home() {
                 name="q"
                 type="search"
                 value={searchQuery}
-                placeholder="Search name or #tag"
+                placeholder="Search player, @username or #tag"
                 autoComplete="off"
                 autoCapitalize="none"
                 enterKeyHint="search"
@@ -196,10 +198,7 @@ export default function Home() {
                 </span>
                 {latestObservedAt ? (
                   <span>
-                    Saved through{" "}
-                    <time dateTime={latestObservedAt}>
-                      {formatTimestamp(latestObservedAt)}
-                    </time>
+                    Last updated <LocalTimestamp value={latestObservedAt} />
                   </span>
                 ) : null}
               </p>
@@ -231,6 +230,7 @@ function SearchSuggestions({
 }) {
   const search = data?.search;
   const results = search?.results.slice(0, 5) ?? [];
+  const users = search?.users?.slice(0, 3) ?? [];
   const unknownExactTag =
     search?.exactTag && results.length === 0 ? search.exactTag : null;
 
@@ -239,17 +239,39 @@ function SearchSuggestions({
       id="player-search-suggestions"
       className="search-dropdown"
       role="region"
-      aria-label="Player search suggestions"
+      aria-label="Player and profile search suggestions"
       aria-live="polite"
       aria-busy={loading}
     >
       {loading && !search ? <p className="search-dropdown-status">Searching…</p> : null}
       {data?.error ? <p className="search-dropdown-status">Search unavailable.</p> : null}
-      {!loading && search && results.length === 0 && !unknownExactTag ? (
-        <p className="search-dropdown-status">No players found.</p>
+      {!loading &&
+      search &&
+      results.length === 0 &&
+      users.length === 0 &&
+      !unknownExactTag ? (
+        <p className="search-dropdown-status">No players or profiles found.</p>
       ) : null}
-      {results.length > 0 || unknownExactTag ? (
+      {results.length > 0 || users.length > 0 || unknownExactTag ? (
         <ul className="search-dropdown-list">
+          {users.map((user) => (
+            <li key={`user:${user.username}`}>
+              <Link
+                className="search-suggestion"
+                data-testid="search-suggestion"
+                to={`/users/${encodeURIComponent(user.username)}`}
+              >
+                <span className="search-suggestion-player">
+                  <strong>{user.displayName}</strong>
+                  <small>@{user.username} · Clash Lens</small>
+                </span>
+                <span className="search-suggestion-meta">
+                  {user.linkedPlayerCount} linked{" "}
+                  {user.linkedPlayerCount === 1 ? "account" : "accounts"}
+                </span>
+              </Link>
+            </li>
+          ))}
           {results.map((result) => (
             <li key={result.tag}>
               <Link
@@ -290,10 +312,47 @@ function SearchSuggestions({
 }
 
 function SearchResults({ search }: { search: SearchResponse }) {
+  const users = search.users ?? [];
+  return (
+    <div className="search-results" aria-live="polite">
+      {users.length > 0 ? (
+        <section aria-labelledby="profile-search-title">
+          <h3 id="profile-search-title">Clash Lens profiles</h3>
+          <ul className="search-result-list">
+            {users.map((user) => (
+              <li key={user.username}>
+                <div className="search-result">
+                  <div>
+                    <Link
+                      className="player-name"
+                      to={`/users/${encodeURIComponent(user.username)}`}
+                    >
+                      {user.displayName}
+                    </Link>
+                    <span className="player-tag">@{user.username}</span>
+                  </div>
+                  <span>
+                    {user.linkedPlayerCount} linked{" "}
+                    {user.linkedPlayerCount === 1 ? "account" : "accounts"}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {search.results.length > 0 || search.exactTag || users.length === 0 ? (
+        <PlayerSearchResults search={search} />
+      ) : null}
+    </div>
+  );
+}
+
+function PlayerSearchResults({ search }: { search: SearchResponse }) {
   if (search.exactTag) {
     const result = search.results[0];
     return (
-      <div className="search-results" aria-live="polite">
+      <section>
         <h3>Player found</h3>
         {result ? (
           <SearchResult result={result} />
@@ -311,20 +370,23 @@ function SearchResults({ search }: { search: SearchResponse }) {
             Open player profile
           </Link>
         ) : null}
-      </div>
+      </section>
     );
   }
   if (search.results.length === 0) {
     return (
-      <div className="search-results" aria-live="polite">
-        <h3>No players found</h3>
-        <p>Try a different name or enter the player's full tag.</p>
-      </div>
+      <section>
+        <h3>No players or profiles found</h3>
+        <p>
+          Try a Clash Lens username, display name, Clash of Clans name, or full player
+          tag.
+        </p>
+      </section>
     );
   }
   return (
-    <div className="search-results" aria-live="polite">
-      <h3>Known Clash Lens players</h3>
+    <section>
+      <h3>Clash of Clans players</h3>
       <p className="section-note">
         Names are not unique. Tag, clan, trophies, and data age distinguish each result.
       </p>
@@ -335,7 +397,7 @@ function SearchResults({ search }: { search: SearchResponse }) {
           </li>
         ))}
       </ul>
-    </div>
+    </section>
   );
 }
 
@@ -367,7 +429,7 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
             <th scope="col">Player</th>
             <th scope="col">Clan</th>
             <th scope="col">Trophies</th>
-            <th scope="col">Observed</th>
+            <th scope="col">Last updated</th>
           </tr>
         </thead>
         <tbody>
@@ -396,10 +458,8 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
                 <TrophyMark />
                 <strong>{entry.trophies.toLocaleString()}</strong>
               </td>
-              <td data-label="Observed">
-                <time dateTime={entry.freshness.observedAt}>
-                  {formatTimestamp(entry.freshness.observedAt)}
-                </time>
+              <td data-label="Last updated">
+                <LocalTimestamp value={entry.freshness.observedAt} />
               </td>
             </tr>
           ))}

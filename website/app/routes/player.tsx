@@ -493,6 +493,12 @@ export default function PlayerRoute() {
               because tracking started partway through the season.
             </p>
           ) : null}
+          {player.seasonDays.some((day) => day.startTrophiesCalculation || day.startTrophies == null) ? (
+            <p className="section-note">
+              Calculated totals use saved trophies minus recorded changes.
+              Unavailable means the saved history is incomplete.
+            </p>
+          ) : null}
           <div className="legend-days">
             {player.seasonDays.map((day) => (
               <LegendDay
@@ -646,7 +652,12 @@ function HistoricalSeasonPanel({ summary }: { summary: HistoricalSeasonSummary }
       {summary.source === "tracked_summary" && summary.unresolvedFlags.length > 0 ? (
         <p className="section-note">Some daily totals are unavailable.</p>
       ) : null}
-      <div className="table-wrap top-space">
+      <div
+        className="table-wrap top-space"
+        tabIndex={0}
+        role="region"
+        aria-label="Daily trophy totals table"
+      >
         <table className="data-table" aria-label="Daily trophy totals">
           <thead>
             <tr>
@@ -738,7 +749,22 @@ function LegendDay({
       <summary>
         <span className="legend-day-date">
           <strong>{legendDayDate(day.period)}</strong>
-          <small>Day {day.dayNumber ?? "—"}</small>
+          <span className="legend-day-meta">
+            <small>Day {day.dayNumber ?? "—"}</small>
+            {day.state === "Live" ? <LiveBadge /> : null}
+          </span>
+        </span>
+        <span className="legend-day-stat legend-day-start">
+          <small>Starting trophies</small>
+          <strong
+            className={day.startTrophies == null ? "stat-unavailable" : undefined}
+            title={day.startTrophiesCalculation
+              ? `${day.startTrophiesCalculation.trophies.toLocaleString("en-GB")} − (${formatSigned(day.startTrophiesCalculation.netChange)}) = ${day.startTrophies?.toLocaleString("en-GB")}`
+              : undefined}
+          >
+            {day.startTrophies == null ? "Unavailable" : day.startTrophies.toLocaleString("en-GB")}
+          </strong>
+          {day.startTrophiesCalculation ? <span className="legend-day-start-source">Calculated</span> : null}
         </span>
         <span className="legend-day-stat legend-day-offense">
           <small>Attacks</small>
@@ -766,7 +792,6 @@ function LegendDay({
             {formatSigned(day.trophyChange ?? battleTrophyChange(day))}
           </strong>
         </span>
-        {day.state === "Live" ? <LiveBadge /> : null}
       </summary>
       <div className="battle-columns">
         <BattleColumn title="Attacks" events={day.offenseEvents} day={dayKey} />

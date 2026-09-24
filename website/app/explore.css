@@ -1,4 +1,4 @@
-/* Home and rankings share a compact scorebook language. */
+/* Bright section bars frame plain, readable standings. */
 .home-page,
 .rankings-page {
   max-width: 72rem;
@@ -18,9 +18,10 @@
   min-height: 2.75rem;
   padding: 0.55rem 0.8rem;
   color: var(--cl-action-text);
-  border: 1px solid var(--cl-action-border);
-  border-radius: 0.55rem;
-  background: var(--cl-action-soft);
+  border: 2px solid var(--cl-outline);
+  border-radius: 0;
+  background: var(--cl-surface);
+  box-shadow: 3px 3px 0 #000000;
   font-size: 0.84rem;
   font-weight: 650;
   white-space: nowrap;
@@ -29,20 +30,20 @@
 .button.secondary,
 .button-secondary {
   color: var(--cl-ink);
-  border-color: var(--cl-border);
+  border-color: var(--cl-outline);
   background: var(--cl-surface);
 }
 
 .button.secondary:hover,
 .button-secondary:hover {
   color: var(--cl-action-text);
-  border-color: var(--cl-action-border);
+  border-color: var(--cl-outline);
   background: var(--cl-action-soft);
 }
 
 .button[aria-current="page"] {
   color: var(--cl-on-action);
-  border-color: var(--cl-action);
+  border-color: #000000;
   background: var(--cl-action);
 }
 
@@ -53,7 +54,7 @@
   gap: clamp(2rem, 6vw, 5rem);
   align-items: end;
   padding: 1rem 0 clamp(2rem, 5vw, 3rem);
-  border-bottom: 1px solid var(--cl-border);
+  border-bottom: 3px solid var(--cl-outline);
 }
 
 .home-intro {
@@ -113,17 +114,17 @@
   gap: 0.55rem;
   min-height: 3.75rem;
   padding: 0.42rem 0.42rem 0.42rem 1rem;
-  border: 1px solid var(--cl-border);
-  border-radius: 0.7rem;
+  border: 2px solid var(--cl-outline);
+  border-radius: 0;
   background: var(--cl-surface);
-  box-shadow: 0 0.45rem 1.5rem color-mix(in srgb, var(--cl-ink) 7%, transparent);
+  box-shadow: var(--cl-shadow);
 }
 
 .home-page .search-controls:focus-within {
-  border-color: var(--cl-action);
+  border-color: var(--cl-outline);
   outline: 3px solid color-mix(in srgb, var(--cl-action) 22%, transparent);
   outline-offset: 2px;
-  box-shadow: none;
+  box-shadow: var(--cl-shadow);
 }
 
 .search-field-icon {
@@ -144,14 +145,14 @@
   min-width: 6.4rem;
   min-height: 2.85rem;
   padding-inline: 1rem;
-  border-radius: 0.48rem;
+  border-radius: 0;
   font-size: 0.84rem;
 }
 
 .home-page .search-dropdown {
   top: calc(100% + 0.65rem);
-  border-radius: 0.65rem;
-  box-shadow: 0 1rem 2.5rem color-mix(in srgb, var(--cl-ink) 13%, transparent);
+  border-radius: 0;
+  box-shadow: var(--cl-shadow);
 }
 
 .home-page .search-suggestion {
@@ -167,7 +168,7 @@
   margin-top: 1rem;
   padding: 1rem;
   border: 1px solid var(--cl-border);
-  border-radius: 0.65rem;
+  border-radius: 0;
   background: var(--cl-surface);
 }
 
@@ -199,9 +200,24 @@
 .home-leaderboard {
   overflow: hidden;
   margin-top: clamp(2rem, 5vw, 3.25rem);
-  border: 1px solid var(--cl-border);
-  border-radius: 0.8rem;
+  border: 2px solid var(--cl-outline);
+  border-radius: 0;
   background: var(--cl-surface);
+  box-shadow: var(--cl-shadow);
+}
+
+.home-leaderboard > .section-heading,
+.standings-toolbar {
+  --cl-ink: #000000;
+  --cl-muted: #333333;
+  --cl-action-text: #1641cc;
+  --cl-action-soft: #e6edff;
+  --cl-action-border: #000000;
+  --cl-outline: #000000;
+  --cl-surface: #ffffff;
+  --cl-panel: #fff24d;
+  background: var(--cl-action);
+  border-bottom: 2px solid #000000;
 }
 
 .home-leaderboard > .section-heading {
@@ -348,7 +364,6 @@
 
 /* Shared standings table */
 .table-wrap {
-  border-color: var(--cl-border);
   scrollbar-width: thin;
   scrollbar-color: var(--cl-border) transparent;
 }
@@ -367,20 +382,21 @@
 
 .leaderboard-table th,
 .leaderboard-table td {
-  padding: 0.68rem 0.85rem;
+  padding: 0.8rem 1rem;
   border-color: var(--cl-border);
   vertical-align: middle;
-  font-size: 0.82rem;
+  font-size: 0.9rem;
 }
 
 .leaderboard-table thead th {
-  padding-block: 0.58rem;
-  color: var(--cl-muted);
+  padding-block: 0.75rem;
+  color: #ffffff;
   border-top: 0;
-  background: color-mix(in srgb, var(--cl-panel) 72%, var(--cl-surface));
-  font-size: 0.7rem;
-  font-weight: 650;
-  letter-spacing: 0.01em;
+  background: var(--cl-header-bg);
+  border-bottom-color: #000000;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0;
   text-transform: none;
 }
 
@@ -424,9 +440,9 @@
 
 /* Gold, silver and bronze medals for the podium. */
 .leaderboard-row[data-podium-rank] .rank-mark {
-  color: #1c1405;
-  border-color: transparent;
-  box-shadow: 0 2px 0 rgb(0 0 0 / 0.18);
+  color: #000000;
+  border: 2px solid #000000;
+  box-shadow: 2px 2px 0 #000000;
 }
 
 .leaderboard-row[data-podium-rank="1"] .rank-mark {
@@ -447,7 +463,7 @@
   overflow: hidden;
   color: var(--cl-ink);
   font-family: var(--cl-font-heading);
-  font-size: 0.88rem;
+  font-size: 0.95rem;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -457,7 +473,7 @@
   display: block;
   margin-top: 0.12rem;
   color: var(--cl-muted);
-  font-size: 0.69rem;
+  font-size: 0.74rem;
   font-weight: 400;
 }
 
@@ -476,7 +492,17 @@
 .leaderboard-table td:nth-child(3),
 .leaderboard-table time {
   color: var(--cl-muted);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
+}
+
+.local-time {
+  cursor: help;
+}
+
+/* Keep the UTC tooltip above the link that covers the rest of each row. */
+.leaderboard-table .local-time {
+  position: relative;
+  z-index: 1;
 }
 
 .trophy-cell {
@@ -485,7 +511,7 @@
 
 .trophy-cell strong {
   color: var(--cl-ink);
-  font-size: 0.9rem;
+  font-size: 1rem;
   font-weight: 700;
 }
 
@@ -507,7 +533,7 @@
 /* Full rankings */
 .rankings-header {
   padding: 0.8rem 0 1.6rem;
-  border-bottom: 1px solid var(--cl-border);
+  border-bottom: 3px solid var(--cl-outline);
 }
 
 .rankings-heading {
@@ -544,8 +570,8 @@
   flex: 0 0 auto;
   gap: 0.2rem;
   padding: 0.25rem;
-  border: 1px solid var(--cl-border);
-  border-radius: 0.65rem;
+  border: 2px solid var(--cl-outline);
+  border-radius: 0;
   background: var(--cl-panel);
 }
 
@@ -553,8 +579,8 @@
   min-width: 5.2rem;
   min-height: 2.75rem;
   padding: 0.55rem 0.9rem;
-  border: 0;
-  border-radius: 0.42rem;
+  border: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
   font-size: 0.82rem;
 }
@@ -562,15 +588,17 @@
 .leaderboard-view-switch .button[aria-current="page"] {
   color: var(--cl-on-action);
   background: var(--cl-action);
-  box-shadow: 0 0.2rem 0.7rem color-mix(in srgb, var(--cl-action) 25%, transparent);
+  border-color: #000000;
+  box-shadow: 2px 2px 0 #000000;
 }
 
 .standings-board {
   overflow: hidden;
   margin-top: 1.5rem;
-  border: 1px solid var(--cl-border);
-  border-radius: 0.8rem;
+  border: 2px solid var(--cl-outline);
+  border-radius: 0;
   background: var(--cl-surface);
+  box-shadow: var(--cl-shadow);
 }
 
 .standings-toolbar {
@@ -597,8 +625,8 @@
   flex: 0 0 auto;
   margin: 0;
   padding: 0.4rem 0.65rem;
-  border: 1px solid var(--cl-border);
-  border-radius: 999px;
+  border: 1px solid var(--cl-outline);
+  border-radius: 0;
   background: var(--cl-panel);
 }
 
@@ -606,7 +634,7 @@
   max-block-size: 70vh;
   overflow: auto;
   border: 0;
-  border-block: 1px solid var(--cl-border);
+  border-bottom: 1px solid var(--cl-border);
   border-radius: 0;
 }
 
@@ -668,18 +696,18 @@
   padding: 0.5rem 0.75rem;
   color: var(--cl-action-text);
   border: 1px solid var(--cl-action-border);
-  border-radius: 0.5rem;
+  border-radius: 0;
   background: var(--cl-surface);
   font-size: 0.8rem;
 }
 
-/* Player pages retain their established behavior with neutral product tokens. */
+/* Player controls share the same colour and outline rules. */
 .player-header {
   max-width: none;
   align-items: center;
   padding: 1.5rem;
   border: 1px solid var(--cl-border);
-  border-radius: 0.65rem;
+  border-radius: 0;
   background: var(--cl-surface);
 }
 
@@ -716,14 +744,16 @@
 
 .player-refresh-form button {
   color: var(--cl-ink);
-  border-color: var(--cl-border);
+  border-color: var(--cl-outline);
   background: var(--cl-surface);
 }
 
-.player-refresh-form button:hover {
-  color: var(--cl-action-text);
-  border-color: var(--cl-action-border);
-  background: var(--cl-action-soft);
+@media (hover: hover) and (pointer: fine) {
+  .player-refresh-form button:hover {
+    color: var(--cl-action-text);
+    border-color: var(--cl-action-border);
+    background: var(--cl-action-soft);
+  }
 }
 
 .metric-label {
@@ -749,9 +779,11 @@
   transform: rotate(45deg);
 }
 
-.legend-day > summary:hover,
-.legend-day[open] > summary:hover {
-  background: var(--cl-panel);
+@media (hover: hover) and (pointer: fine) {
+  .legend-day > summary:hover,
+  .legend-day[open] > summary:hover {
+    background: var(--cl-panel);
+  }
 }
 
 .legend-day > summary:focus-visible {
@@ -765,18 +797,19 @@
 }
 
 .battle-slot {
-  border-radius: 0.45rem;
+  border-radius: 0;
 }
 
-.battle-slot:has(.battle-profile-link:hover) {
-  border-color: var(--cl-action-border);
-  background: var(--cl-action-soft);
-}
-
-.battle-army:hover,
-.season-list a:hover {
-  border-color: var(--cl-action-border);
-  background: var(--cl-action-soft);
+@media (hover: hover) and (pointer: fine) {
+  .battle-slot:has(.battle-profile-link:hover) {
+    border-color: var(--cl-action-border);
+    background: var(--cl-action-soft);
+  }
+  .battle-army:hover,
+  .season-list a:hover {
+    border-color: var(--cl-action-border);
+    background: var(--cl-action-soft);
+  }
 }
 
 .battle-disagreement {
@@ -784,12 +817,23 @@
   color: var(--cl-muted);
 }
 
-.season-list [aria-current="page"]:hover {
-  color: var(--cl-action-text);
-  background: var(--cl-action-soft);
+@media (hover: hover) and (pointer: fine) {
+  .season-list [aria-current="page"]:hover {
+    color: var(--cl-action-text);
+    background: var(--cl-action-soft);
+  }
 }
 
-/* Army analytics remains dense and neutral. */
+/* Army filters use bold controls around a plain results table. */
+.sample-data-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+  margin-bottom: 1rem;
+}
+
 .analytics-page .hero {
   max-width: 46rem;
 }
@@ -800,8 +844,8 @@
 
 .analytics-filters {
   padding: 1.5rem;
-  border: 1px solid var(--cl-border);
-  border-radius: 0.65rem;
+  border: 2px solid var(--cl-outline);
+  border-radius: 0;
   background: var(--cl-surface);
   box-shadow: none;
 }
@@ -828,8 +872,8 @@
   min-width: 0;
   margin: 0;
   padding: 0.25rem;
-  border: 0;
-  border-radius: 0.5rem;
+  border: 2px solid var(--cl-outline);
+  border-radius: 0;
   background: var(--cl-panel);
 }
 
@@ -843,7 +887,7 @@
   min-height: 2.75rem;
   padding: 0.7rem 1.3rem;
   color: var(--cl-muted);
-  border-radius: 0.38rem;
+  border-radius: 0;
   font-size: 0.875rem;
   font-weight: 600;
 }
@@ -878,8 +922,8 @@
   min-height: 3rem;
   padding: 0.65rem 0.8rem;
   color: var(--cl-ink);
-  border: 1px solid var(--cl-border);
-  border-radius: 0.45rem;
+  border: 2px solid var(--cl-outline);
+  border-radius: 0;
   background: var(--cl-surface);
   font: inherit;
   font-size: 1rem;
@@ -933,8 +977,8 @@
   display: grid;
   justify-items: center;
   padding: 2rem 1.5rem;
-  border: 1px solid var(--cl-border);
-  border-radius: 0.65rem;
+  border: 2px solid var(--cl-outline);
+  border-radius: 0;
   background: var(--cl-surface);
   text-align: center;
 }
@@ -964,7 +1008,7 @@
 .empty-chart span {
   width: 0.85rem;
   height: 40%;
-  border-radius: 0.2rem;
+  border-radius: 0;
   background: var(--cl-border);
 }
 
@@ -1139,6 +1183,7 @@
   /* Phones: keep rank, player and trophies in view without sideways scrolling. */
   .leaderboard-table {
     min-width: 0;
+    table-layout: fixed;
   }
 
   .leaderboard-table :is(th, td):is(:nth-child(3), :nth-child(5)) {
@@ -1147,6 +1192,7 @@
 
   .leaderboard-table th:nth-child(4),
   .leaderboard-table td:nth-child(4) {
+    width: 6rem;
     padding-right: 0.75rem;
   }
 
@@ -1157,6 +1203,7 @@
 
   .leaderboard-table th:first-child,
   .leaderboard-table td:first-child {
+    width: 3.5rem;
     padding-left: 0.75rem;
   }
 

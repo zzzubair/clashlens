@@ -23,7 +23,7 @@ export interface VerifyPlayerActionData {
   verificationRequestId: string | null;
   fieldErrors: { tag?: string; token?: string };
   generalError: WebsiteErrorResponse | null;
-  /** The submitted tag only. The one-time token never appears in returned data. */
+  /** The submitted tag only. The API token never appears in returned data. */
   values: { tag: string };
 }
 
@@ -31,7 +31,7 @@ const STATUS_MESSAGES: Record<VerificationStatus, string> = {
   linked: "The player was verified and linked to your account.",
   already_linked: "This player is already linked to your account.",
   invalid_token:
-    "The one-time token is invalid or expired. Generate a new token in Clash of Clans and try again.",
+    "The API token is invalid or expired. Check the token in Clash of Clans for this player and try again.",
   verification_unavailable:
     "Player verification is temporarily unavailable. Try again later.",
   support_required:
@@ -40,7 +40,7 @@ const STATUS_MESSAGES: Record<VerificationStatus, string> = {
 };
 
 /**
- * GET /account/verify-player — the one-time official player-token form.
+ * GET /account/verify-player — link a player with their in-game API token.
  * The loader carries only a fresh idempotency key; no token state exists
  * server-side before or after submission.
  */
@@ -54,7 +54,7 @@ export async function loader({
 }
 
 /**
- * POST /account/verify-player — submit a player tag and one-time token to the
+ * POST /account/verify-player — submit a player tag and API token to the
  * private Python API. The token travels only inside the same-origin request
  * body, is never returned, stored, cached, or logged, and the response
  * carries only safe status outcomes. A failed attempt returns a fresh
@@ -83,7 +83,7 @@ export async function action({ request }: Route.ActionArgs) {
   const tag = normalizeSubmittedPlayerTag(rawTag);
   if (tag === null) fieldErrors.tag = "Enter a valid player tag.";
   if (!isBoundedToken(token)) {
-    fieldErrors.token = "Enter the one-time verification token from Clash of Clans.";
+    fieldErrors.token = "Enter the API token from Clash of Clans.";
   }
   if (fieldErrors.tag || fieldErrors.token) {
     return data<VerifyPlayerActionData>(
@@ -106,6 +106,9 @@ export async function action({ request }: Route.ActionArgs) {
       token,
       idempotencyKey,
     );
+    if (result.status === "linked" || result.status === "already_linked") {
+      return redirect("/account", { status: 303, headers: NO_STORE });
+    }
     return data<VerifyPlayerActionData>(
       {
         idempotencyKey: actions.freshIdempotencyKey(),
@@ -179,7 +182,7 @@ export default function VerifyPlayerRoute() {
   const actionData = useActionData<VerifyPlayerActionData>();
   const [token, setToken] = useState("");
 
-  // The one-time token is cleared after every submission attempt so it is
+  // The API token is cleared after every submission attempt so it is
   // never left in the page after the request completes.
   useEffect(() => {
     setToken("");
@@ -191,10 +194,9 @@ export default function VerifyPlayerRoute() {
   return (
     <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="verify-title">
-        <h1 id="verify-title">Verify a player</h1>
+        <h1 id="verify-title">Link account</h1>
         <p className="lede">
-          Verification proves you own a player. Your account becomes the verified owner of
-          the player link.
+          Link a Clash of Clans account you own to your Clash Lens profile.
         </p>
       </section>
 
@@ -213,13 +215,8 @@ export default function VerifyPlayerRoute() {
         </div>
       ) : null}
 
-      <section className="form-panel" aria-label="Player verification form">
-        <h2>Enter the one-time token</h2>
-        <p className="section-note">
-          In Clash of Clans, generate a one-time verification token for the player and
-          enter it here. The token works once, is never stored by Clash Lens, and is never
-          shown again after this page.
-        </p>
+      <section className="form-panel" aria-label="Link account form">
+        <h2>Enter your player tag and API token</h2>
         <form method="post" className="stack-form" noValidate>
           <input
             type="hidden"
@@ -250,7 +247,13 @@ export default function VerifyPlayerRoute() {
             )}
           </div>
           <div className="form-field">
-            <label htmlFor="verify-token">One-time verification token</label>
+            <label htmlFor="verify-token">API token</label>
+            <p id="verify-token-help" className="form-help">
+              Open Clash of Clans and go to{" "}
+              <strong>Settings → More Settings → API token → Show</strong>. Copy the token
+              and paste it below. Linking another account? Switch to that account in the
+              game first.
+            </p>
             <input
               id="verify-token"
               name="token"
@@ -261,7 +264,9 @@ export default function VerifyPlayerRoute() {
               value={token}
               aria-invalid={actionData?.fieldErrors?.token ? true : undefined}
               aria-describedby={
-                actionData?.fieldErrors?.token ? "verify-token-error" : undefined
+                actionData?.fieldErrors?.token
+                  ? "verify-token-help verify-token-privacy verify-token-error"
+                  : "verify-token-help verify-token-privacy"
               }
               onChange={(event) => setToken(event.currentTarget.value)}
             />
@@ -269,14 +274,14 @@ export default function VerifyPlayerRoute() {
               <p id="verify-token-error" className="field-error" role="alert">
                 {actionData.fieldErrors.token}
               </p>
-            ) : (
-              <p className="form-help">
-                Printed once inside Clash of Clans. Do not share it.
-              </p>
-            )}
+            ) : null}
+            <p id="verify-token-privacy" className="form-help">
+              Clash Lens uses this token to confirm you own the account and never stores
+              it.
+            </p>
           </div>
           <button type="submit" className="button button-primary">
-            Verify player
+            Link account
           </button>
         </form>
       </section>
