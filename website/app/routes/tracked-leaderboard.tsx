@@ -198,7 +198,11 @@ export default function TrackedLeaderboardRoute() {
                       <span className="rank-mark">{entry.rank}</span>
                     </td>
                     <th scope="row" data-label="Player">
-                      <Link className="player-name" to={canonicalPlayerPath(entry.tag)}>
+                      <Link
+                        className="player-name"
+                        to={canonicalPlayerPath(entry.tag)}
+                        reloadDocument
+                      >
                         {entry.name}
                       </Link>
                       <span className="player-tag">{entry.tag}</span>

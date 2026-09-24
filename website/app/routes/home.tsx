@@ -299,6 +299,7 @@ function SearchSuggestions({
                 className="search-suggestion"
                 data-testid="search-suggestion"
                 to={canonicalPlayerPath(result.tag)}
+                reloadDocument
               >
                 <span className="search-suggestion-player">
                   <strong>{result.name}</strong>
@@ -316,6 +317,7 @@ function SearchSuggestions({
                 className="search-suggestion"
                 data-testid="search-suggestion"
                 to={canonicalPlayerPath(unknownExactTag)}
+                reloadDocument
               >
                 <span className="search-suggestion-player">
                   <strong>Open {unknownExactTag}</strong>
@@ -384,6 +386,7 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
           <Link
             className="button button-secondary"
             to={canonicalPlayerPath(search.exactTag)}
+            reloadDocument
           >
             Open player profile
           </Link>
@@ -423,7 +426,7 @@ function SearchResult({ result }: { result: SearchResponse["results"][number] })
   return (
     <div className="search-result">
       <div>
-        <Link className="player-name" to={canonicalPlayerPath(result.tag)}>
+        <Link className="player-name" to={canonicalPlayerPath(result.tag)} reloadDocument>
           {result.name}
         </Link>
         <span className="player-tag">{result.tag}</span>
@@ -462,7 +465,11 @@ function LeaderboardTable({ entries }: { entries: TrackedPlayerEntry[] }) {
                 <span className="rank-mark">{entry.rank}</span>
               </td>
               <th scope="row" data-label="Player">
-                <Link className="player-name" to={canonicalPlayerPath(entry.tag)}>
+                <Link
+                  className="player-name"
+                  to={canonicalPlayerPath(entry.tag)}
+                  reloadDocument
+                >
                   {entry.name}
                 </Link>
                 <span className="player-tag">{entry.tag}</span>

@@ -34,7 +34,7 @@ test("player search uses saved backend data", async ({ page }) => {
   await expect(page.getByText("#2PP", { exact: true }).first()).toBeVisible();
 });
 
-test("search and player links navigate without rebuilding the document", async ({
+test("search navigates without rebuilding the document and opens a matching player", async ({
   page,
 }) => {
   await page.goto("/");
@@ -68,13 +68,6 @@ test("search and player links navigate without rebuilding the document", async (
   await expect(
     page.getByRole("heading", { name: "Synthetic Clasher 001" }),
   ).toBeVisible();
-  expect(
-    await page.evaluate(
-      () =>
-        (window as Window & { clashLensNavigationMarker?: boolean })
-          .clashLensNavigationMarker,
-    ),
-  ).toBe(true);
 });
 
 test("new search does not show suggestions from the previous query", async ({ page }) => {
