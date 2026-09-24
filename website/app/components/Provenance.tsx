@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { DataProvenance, Freshness } from "../lib/contracts";
 import { StateBadge } from "./StateBadge";
 
@@ -62,7 +63,45 @@ export function formatAge(seconds: number): string {
 }
 
 export function formatTimestamp(value: string): string {
-  return value.replace("T", " ").replace("Z", " UTC");
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Unknown";
+  return `${new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  }).format(date)} UTC`;
+}
+
+export function LocalTimestamp({ value }: { value: string }) {
+  const [localTime, setLocalTime] = useState<string | null>(null);
+  const utcTime = formatTimestamp(value);
+
+  // The browser knows the viewer's timezone. Keep the first render identical
+  // to the server's UTC text, then switch after the page becomes interactive.
+  useEffect(() => {
+    const date = new Date(value);
+    setLocalTime(
+      Number.isNaN(date.getTime())
+        ? "Unknown"
+        : new Intl.DateTimeFormat(undefined, {
+            day: "numeric",
+            month: "short",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZoneName: "short",
+          }).format(date),
+    );
+  }, [value]);
+
+  return (
+    <time className="local-time" dateTime={value} title={utcTime}>
+      {localTime ?? utcTime}
+    </time>
+  );
 }
 
 function capitalize(value: string): string {

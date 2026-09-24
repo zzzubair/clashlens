@@ -1,8 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page } from "@playwright/test";
 
-import { websiteOrigin } from "../../fixtures/test-values";
-
 /** Collect browser failures so a page cannot appear healthy while JavaScript failed. */
 export function trackPageErrors(page: Page): string[] {
   const errors: string[] = [];
@@ -43,14 +41,14 @@ export function expectNoPortRequests(
 export async function signIn(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByRole("link", { name: "Continue with Google" }).click();
-  await expect(page).toHaveURL(/\/account(\/setup)?$/);
+  await expect(page).toHaveURL(/\/(?:account\/setup|users\/[a-z][a-z0-9_]+)$/);
 }
 
 /** Complete the local Discord sign-in flow against the loopback provider. */
 export async function signInDiscord(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByRole("link", { name: "Continue with Discord" }).click();
-  await expect(page).toHaveURL(/\/account(\/setup)?$/);
+  await expect(page).toHaveURL(/\/(?:account\/setup|users\/[a-z][a-z0-9_]+)$/);
 }
 
 /** Create the account only when this identity has not already been used. */
@@ -64,8 +62,10 @@ export async function ensureAccount(
     await page.getByLabel("Display name").fill(displayName);
     await page.getByRole("button", { name: "Create account" }).click();
   }
-  await expect(page).toHaveURL(`${websiteOrigin}/account`);
-  await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
+  await expect(page).toHaveURL(/\/users\/[a-z][a-z0-9_]+$/);
+  await expect(
+    page.getByRole("heading", { name: "Linked accounts", exact: true }),
+  ).toBeVisible();
 }
 
 export async function expectNoSeriousAccessibilityViolations(page: Page): Promise<void> {

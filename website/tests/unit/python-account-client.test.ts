@@ -48,6 +48,67 @@ describe("server-only Python account client", () => {
     }
   });
 
+  it("returns public profile search results without provider or private account data", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          query: "nova",
+          known_only: true,
+          results: [],
+          users: [
+            {
+              username: "nova88",
+              display_name: "Nova",
+              linked_player_count: 2,
+              provider_subject: "private-subject",
+              preferences: { timezone: "UTC" },
+              saved_tags: ["#2PP"],
+            },
+          ],
+        }),
+      ),
+    );
+    const client = await importClient();
+    const result = await client.searchPlayers("nova");
+    expect(result.users).toEqual([
+      { username: "nova88", displayName: "Nova", linkedPlayerCount: 2 },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("private-subject");
+    expect(JSON.stringify(result)).not.toContain("saved_tags");
+  });
+
+  it("rejects malformed public profile search results", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          query: "nova",
+          known_only: true,
+          results: [],
+          users: [
+            { username: "../private", display_name: "Nova", linked_player_count: -1 },
+          ],
+        }),
+      ),
+    );
+    const client = await importClient();
+    await expect(client.searchPlayers("nova")).rejects.toMatchObject({ status: 502 });
+  });
+
+  it("rejects search responses without public profile results", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse({ query: "nova", known_only: true, results: [] }),
+        ),
+    );
+    const client = await importClient();
+    await expect(client.searchPlayers("nova")).rejects.toMatchObject({ status: 502 });
+  });
+
   it("creates an account with the exact body, Google identity, and idempotency request ID", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse(

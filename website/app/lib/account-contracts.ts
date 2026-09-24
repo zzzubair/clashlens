@@ -53,6 +53,35 @@ export interface PublicUser {
   verifiedPlayers: VerifiedPlayer[];
 }
 
+export interface PublicUserResult {
+  username: string;
+  displayName: string;
+  linkedPlayerCount: number;
+}
+
+export function mapPublicUserResults(value: unknown): PublicUserResult[] | null {
+  if (!Array.isArray(value)) return null;
+  const users: PublicUserResult[] = [];
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      !isString(item.username) ||
+      !/^[a-z][a-z0-9_]{2,31}$/.test(item.username) ||
+      !isString(item.display_name) ||
+      item.display_name.length === 0 ||
+      !Number.isSafeInteger(item.linked_player_count) ||
+      (item.linked_player_count as number) < 0
+    )
+      return null;
+    users.push({
+      username: item.username,
+      displayName: item.display_name,
+      linkedPlayerCount: item.linked_player_count as number,
+    });
+  }
+  return users;
+}
+
 export type VerificationStatus =
   | "linked"
   | "already_linked"

@@ -34,7 +34,10 @@ import {
 import { loadWebsiteConfig, type WebsiteConfig } from "../../app/server/config.server";
 import { PythonApiError, type PythonClient } from "../../app/services/python.server";
 import { loader as accountLoader } from "../../app/routes/account";
-import { action as providersAction } from "../../app/routes/account.providers";
+import {
+  action as providersAction,
+  loader as providersLoader,
+} from "../../app/routes/account.providers";
 import {
   action as groupsAction,
   loader as groupsLoader,
@@ -183,6 +186,45 @@ describe("account routes", () => {
   });
 
   describe("account.providers", () => {
+    it.each([403, 404])(
+      "redirects a new sign-in to account setup when the account service returns %s",
+      async (status) => {
+        client.getAccount = vi.fn(async () => {
+          throw new PythonApiError(status, { error: "account_not_found" });
+        });
+        await expect(
+          providersLoader({
+            request: new Request(`${ORIGIN}/account/providers`),
+          } as never),
+        ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
+      },
+    );
+
+    it("shows connected providers for an account that has completed setup", async () => {
+      const result = await providersLoader({
+        request: new Request(`${ORIGIN}/account/providers`),
+      } as never);
+      expect(result.providers).toEqual(["google"]);
+      expect(result.error).toBeNull();
+    });
+
+    it.each([
+      { status: 503, code: "unavailable" },
+      { status: 403, code: "forbidden" },
+      { status: 404, code: "missing" },
+    ])(
+      "keeps a $status service error visible instead of sending the user to setup",
+      async ({ status, code }) => {
+        client.getAccount = vi.fn(async () => {
+          throw new PythonApiError(status, { error: code });
+        });
+        const result = await providersLoader({
+          request: new Request(`${ORIGIN}/account/providers`),
+        } as never);
+        expect(result.error?.error.code).toBe(code);
+      },
+    );
+
     it("starts privileged OAuth only from a same-origin POST bound to the login session", async () => {
       const loginCookie = createLoginCookieValue(
         IDENTITY,
@@ -463,6 +505,24 @@ describe("account routes", () => {
         { username: "nova88", displayName: "Nova Nova", preferences: {} },
         IDEMPOTENCY_KEY,
       );
+    });
+
+    it("rejects a forged username change without changing the profile", async () => {
+      const result = await profileAction({
+        request: formRequest("/account/profile", {
+          idempotencyKey: IDEMPOTENCY_KEY,
+          username: "anothername",
+          displayName: "Nova Nova",
+        }),
+      } as never);
+      const response = dataOf<{
+        fieldErrors: { username?: string };
+        values: { username: string };
+      }>(result);
+      expect(response.status).toBe(400);
+      expect(response.data.fieldErrors.username).toBeTruthy();
+      expect(response.data.values.username).toBe("nova88");
+      expect(client.updateAccount).not.toHaveBeenCalled();
     });
 
     it("redirects an unresolved account to setup from the action too", async () => {
@@ -911,36 +971,59 @@ describe("account routes", () => {
       assertNoProviderData(result);
     });
 
-    it("returns safe status data and never echoes the one-time token", async () => {
-      const result = await verifyPlayerAction({
-        request: formRequest("/account/verify-player", {
-          idempotencyKey: IDEMPOTENCY_KEY,
-          tag: TAG.toLowerCase(),
-          token: "SECRET-TOKEN-123",
-        }),
-      } as never);
-      const { data, status, headers } = dataOf<{
-        status: string;
-        verificationRequestId: string | null;
-        values: Record<string, string>;
-        fieldErrors: Record<string, string>;
-      }>(result);
-      expect(status).toBe(200);
-      expect(data.status).toBe("linked");
-      expect(data.verificationRequestId).toBeNull();
-      expect(data.values).toEqual({ tag: TAG });
-      expect(data.fieldErrors).toEqual({});
-      assertNoStoreHeaders(headers);
-      const serialized = JSON.stringify(data);
-      expect(serialized).not.toContain("SECRET-TOKEN-123");
-      expect(serialized).not.toContain("token");
-      assertNoProviderData(data);
-      expect(client.verifyPlayerToken).toHaveBeenCalledWith(
-        TAG,
-        "SECRET-TOKEN-123",
-        IDEMPOTENCY_KEY,
-      );
-    });
+    it.each(["linked", "already_linked"] as const)(
+      "returns to the account overview after %s without exposing the token",
+      async (status) => {
+        client.verifyPlayerToken = vi.fn(async () => ({ status, tag: TAG }));
+        const result = await verifyPlayerAction({
+          request: formRequest("/account/verify-player", {
+            idempotencyKey: IDEMPOTENCY_KEY,
+            tag: TAG.toLowerCase(),
+            token: "SECRET-TOKEN-123",
+          }),
+        } as never);
+        expect(result).toBeInstanceOf(Response);
+        const response = result as Response;
+        expect(response.status).toBe(303);
+        expect(response.headers.get("Location")).toBe("/account");
+        expect(response.headers.get("Cache-Control")).toBe("no-store");
+        const serialized =
+          JSON.stringify([...response.headers]) + (await response.text());
+        expect(serialized).not.toContain("SECRET-TOKEN-123");
+        expect(serialized).not.toContain("token");
+        assertNoProviderData(serialized);
+        expect(client.verifyPlayerToken).toHaveBeenCalledWith(
+          TAG,
+          "SECRET-TOKEN-123",
+          IDEMPOTENCY_KEY,
+        );
+      },
+    );
+
+    it.each(["invalid_token", "verification_unavailable", "in_progress"] as const)(
+      "keeps the form available after %s without exposing the token",
+      async (status) => {
+        client.verifyPlayerToken = vi.fn(async () => ({ status, tag: TAG }));
+        const result = await verifyPlayerAction({
+          request: formRequest("/account/verify-player", {
+            idempotencyKey: IDEMPOTENCY_KEY,
+            tag: TAG,
+            token: "SECRET-TOKEN-123",
+          }),
+        } as never);
+        const response = dataOf<{
+          status: string;
+          idempotencyKey: string;
+          values: { tag: string };
+        }>(result);
+        expect(response.data.status).toBe(status);
+        expect(response.data.idempotencyKey).not.toBe(IDEMPOTENCY_KEY);
+        expect(response.data.values).toEqual({ tag: TAG });
+        expect(JSON.stringify(response.data)).not.toContain("SECRET-TOKEN-123");
+        assertNoStoreHeaders(response.headers);
+        assertNoProviderData(response.data);
+      },
+    );
 
     it("safely includes the support request reference for support_required outcomes", async () => {
       client.verifyPlayerToken = vi.fn(async () => ({
@@ -1057,43 +1140,37 @@ describe("account routes", () => {
   });
 
   describe("account overview", () => {
-    it("loads summary, saved players, and groups together", async () => {
+    it("opens the public profile even when saved players and groups are unavailable", async () => {
       client.getAccountSummary = vi.fn(async () => ({
         ...SUMMARY,
         verifiedPlayers: [{ tag: TAG, name: "Alpha" }],
       }));
-      client.listSavedTags = vi.fn(async () => [{ tag: TAG2, name: null }]);
-      client.listGroups = vi.fn(async () => [
-        { groupId: GROUP_ID, name: "Clanmates", tags: [TAG] },
-      ]);
-      const result = await accountLoader({
-        request: new Request(`${ORIGIN}/account`),
-      } as never);
-      expect(result.summary?.verifiedPlayers).toHaveLength(1);
-      expect(result.savedPlayers).toHaveLength(1);
-      expect(result.groups).toHaveLength(1);
-      expect(result.error).toBeNull();
-      assertNoProviderData(result);
-    });
-
-    it("does not swallow the unresolved-account redirect to setup", async () => {
-      client.getAccountSummary = vi.fn(async () => {
-        throw new PythonApiError(403, { error: "account_not_found" });
+      client.listSavedTags = vi.fn(async () => {
+        throw new PythonApiError(503, { error: "unavailable" });
       });
-      await expect(
-        accountLoader({ request: new Request(`${ORIGIN}/account`) } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
-
-      client.getAccountSummary = vi.fn(async () => ({ ...SUMMARY }));
       client.listGroups = vi.fn(async () => {
-        throw new PythonApiError(404, { error: "account_not_found" });
+        throw new PythonApiError(503, { error: "unavailable" });
       });
       await expect(
-        accountLoader({ request: new Request(`${ORIGIN}/account`) } as never),
-      ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
+        accountLoader({
+          request: new Request(`${ORIGIN}/account`),
+        } as never),
+      ).rejects.toSatisfy(expectRedirectTo("/users/nova88"));
     });
 
-    it("keeps partial data and a safe error when one call fails for another reason", async () => {
+    it.each([403, 404])(
+      "redirects a missing account to setup after %s",
+      async (status) => {
+        client.getAccountSummary = vi.fn(async () => {
+          throw new PythonApiError(status, { error: "account_not_found" });
+        });
+        await expect(
+          accountLoader({ request: new Request(`${ORIGIN}/account`) } as never),
+        ).rejects.toSatisfy(expectRedirectTo("/account/setup"));
+      },
+    );
+
+    it("shows a safe error when the account service is unavailable", async () => {
       client.getAccountSummary = vi.fn(async () => {
         throw new PythonApiError(503, { error: "unavailable" });
       });
@@ -1102,8 +1179,6 @@ describe("account routes", () => {
       } as never);
       expect(result.summary).toBeNull();
       expect(result.error?.error.code).toBe("unavailable");
-      expect(result.savedPlayers).toEqual([]);
-      expect(result.groups).toEqual([]);
       assertNoProviderData(result);
     });
 

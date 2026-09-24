@@ -418,6 +418,7 @@ start_application() {
     --env CLASHLENS_PYTHON_HMAC_KEY_ID=current \
     --env CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/clashlens-dev/hmac-key \
     --env CLASHLENS_TRUST_PROXY=true --env CLASHLENS_LOGIN_ENABLED=true \
+    --env CLASHLENS_ARMY_PREVIEW=true \
     --env CLASHLENS_PUBLIC_ORIGIN="http://127.0.0.1:$WEBSITE_PORT" \
     --env CLASHLENS_GOOGLE_ISSUER_URL="http://127.0.0.1:$OIDC_PORT" \
     --env CLASHLENS_GOOGLE_CLIENT_ID=clashlens-browser-test \

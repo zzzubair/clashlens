@@ -20,9 +20,9 @@ test("Discord completes a local sign-in without cloud credentials", async ({ pag
   await page.goto("/login");
   await page.getByRole("link", { name: "Continue with Discord" }).click();
 
-  await expect(page).toHaveURL(/\/account(\/setup)?$/);
+  await expect(page).toHaveURL(/\/(?:account\/setup|users\/[a-z][a-z0-9_]+)$/);
   await expect(
-    page.getByRole("heading", { name: /Create your account|Your account/ }),
+    page.getByRole("heading", { name: /Create your account|Linked accounts/ }),
   ).toBeVisible();
 });
 

@@ -59,7 +59,7 @@ export async function loader({ request }: Route.LoaderArgs): Promise<ProfileLoad
 }
 
 /**
- * POST /account/profile — update the username and display name through the
+ * POST /account/profile — update the display name through the
  * existing Python rules, passing the stored preferences through unchanged.
  */
 export async function action({ request }: Route.ActionArgs) {
@@ -98,9 +98,20 @@ export async function action({ request }: Route.ActionArgs) {
     const { createPythonClient } = await import("../services/python.server");
     const client = createPythonClient(identity);
     const account = await client.getAccount();
+    if (validation.username !== account.username) {
+      return data<ProfileActionData>(
+        {
+          idempotencyKey: actions.freshIdempotencyKey(),
+          fieldErrors: { username: "To request a username change, contact support." },
+          generalError: null,
+          values: { ...values, username: account.username },
+        },
+        { status: 400, headers: NO_STORE },
+      );
+    }
     await client.updateAccount(
       {
-        username: validation.username as string,
+        username: account.username,
         displayName: validation.displayName as string,
         preferences: account.preferences,
       },
@@ -210,11 +221,11 @@ export default function AccountProfileRoute() {
   }
 
   return (
-    <main className="page-shell narrow-shell">
+    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="profile-title">
         <h1 id="profile-title">Edit profile</h1>
         <p className="lede">
-          Your username must stay unique; your display name can change freely.
+          Update the display name shown on your public profile. Your username is fixed.
         </p>
       </section>
 
@@ -237,26 +248,24 @@ export default function AccountProfileRoute() {
               autoComplete="off"
               autoCapitalize="none"
               spellCheck={false}
-              value={values.username}
+              value={loaderData.username}
+              readOnly
               aria-invalid={usernameError ? true : undefined}
-              aria-describedby={usernameError ? "profile-username-error" : undefined}
-              onChange={(event) => {
-                const username = event.currentTarget.value;
-                setValues((current) => ({
-                  ...current,
-                  username,
-                }));
-              }}
+              aria-describedby={
+                usernameError
+                  ? "profile-username-help profile-username-error"
+                  : "profile-username-help"
+              }
             />
             {usernameError ? (
               <p id="profile-username-error" className="field-error" role="alert">
                 {usernameError}
               </p>
-            ) : (
-              <p className="form-help">
-                Lowercase letters, numbers, and underscores. Starts with a letter.
-              </p>
-            )}
+            ) : null}
+            <p id="profile-username-help" className="form-help">
+              Your username is your unique Clash Lens address. To request a username
+              change, contact support.
+            </p>
           </div>
           <div className="form-field">
             <label htmlFor="profile-display-name">Display name</label>

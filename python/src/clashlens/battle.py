@@ -270,20 +270,18 @@ def _parse_opponent(
 
 
 def _battle_timestamp_value(source: dict[str, Any], parser_version: str) -> Any:
-    # The real battle-log field is battleTime. battleTimestamp only remains
-    # because observations archived before this parser ran carry that name.
-    # The timestamp never comes from opponentTownHallLevel or any other field.
+    # Live responses use battleTimestamp for the date and battleTime for the
+    # battle's duration in seconds. Older archived shapes used battleTime alone.
     if parser_version == LIVE_SOURCE_PARSER_VERSION:
-        value = source.get("battleTime")
+        value = source.get("battleTimestamp")
         if value is None:
-            value = source.get("battleTimestamp")
+            value = source.get("battleTime")
         return value
     return source.get("battleTimestamp")
 
 
 def _parse_battle_timestamp(value: Any, parser_version: str) -> datetime:
-    # The recorded real response carries battleTime as epoch seconds; the
-    # string forms below cover battleTimestamp and compact battleTime text.
+    # Accept the live timestamp text and dates from older archived shapes.
     if isinstance(value, bool):
         raise BattleLogParseError(
             "invalid_battle_timestamp", "battleTime must be seconds or text"

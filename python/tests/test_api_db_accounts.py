@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from test_api_db_organization import account_binding, create_owner
+from test_api_db_public_ops import NOW, seed_profile
+from test_api_db_verification import verification_binding
 from test_api_migration import migrated_production_database
 
-from clashlens import api_accounts
+from clashlens import api_accounts, api_verification
 from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens.verification import VerificationOutcome
 
 
 def binding(
@@ -127,5 +131,79 @@ def test_username_and_google_provider_uniqueness_fail_safely(
             assert same_username.payload == {"error": "username_unavailable"}
             assert same_provider.payload == {"error": "provider_identity_conflict"}
             assert database.scalar("SELECT count(*) FROM clash_lens_accounts") == 1
+        finally:
+            database.close()
+
+
+def test_username_is_fixed_but_display_name_can_change(database_url: str) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            account_id = create_owner(database)
+            for username, expected_status in [("changedowner", 409), ("groupowner", 200)]:
+                result = api_accounts.update_account(
+                    database,
+                    account_binding(account_id, "account.update", "/v1/account",
+                                    {"username": username, "display_name": "New display name"},
+                                    method="PATCH"),
+                    username=username, normalized_username=username,
+                    display_name="New display name", preferences={"timezone": "UTC"},
+                )
+                assert result.status_code == expected_status
+                account = api_accounts.get_account(database, account_id)
+                assert account["username"] == "groupowner"
+                if expected_status == 409:
+                    assert result.payload == {"error": "username_locked"}
+                    assert account["display_name"] == "Group Owner"
+                    assert account["preferences"] == {}
+                else:
+                    assert account["display_name"] == "New display name"
+                    assert account["preferences"] == {"timezone": "UTC"}
+            assert api_accounts.get_public_user(database, "changedowner") is None
+            assert api_accounts.get_public_user(database, "groupowner")["display_name"] == "New display name"
+        finally:
+            database.close()
+
+
+def test_public_search_finds_linked_players_without_exposing_private_lists(database_url: str) -> None:
+    with migrated_production_database(database_url, include_compact_collector=True) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            owner_id = create_owner(database)
+            for tag in ("#2PP", "#8PY", "#P0LQ"):
+                seed_profile(database, tag, 6000)
+            for tag in ("#2PP", "#8PY"):
+                request = verification_binding(owner_id, "group-owner-subject", tag)
+                api_verification.reserve_verification(database, request, normalized_tag=tag)
+                api_verification.complete_verification(
+                    database, request, normalized_tag=tag,
+                    outcome=VerificationOutcome.VERIFIED,
+                    account_id=owner_id, completed_at=NOW,
+                )
+            api_accounts.add_saved_player(
+                database,
+                account_binding(owner_id, "saved_tags.add", "/v1/account/saved-tags", {"tag": "#P0LQ"}),
+                normalized_tag="#P0LQ",
+            )
+            expected = [{"username": "groupowner", "display_name": "Group Owner", "linked_player_count": 2}]
+            for query in ("GROUPOWNER", "@GroupOwner", "Group Owner", "Player #2PP", "#8PY", "Player"):
+                assert api_accounts.search_public_users(database, query) == expected
+            for query in ("#P0LQ", "Player #P0LQ", "group-owner-subject", "%", "_", "@"):
+                assert api_accounts.search_public_users(database, query) == []
+            # A validated player identity remains useful when its Legend stats
+            # cannot be published, such as a linked account in another league.
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE player_profile_versions SET source_contract_state = 'conflict' WHERE normalized_tag = '#2PP'"
+                )
+                connection.execute(
+                    "UPDATE players SET current_profile_version_id = NULL WHERE normalized_tag = '#2PP'"
+                )
+            assert api_accounts.search_public_users(database, "Player #2PP") == expected
+            public = api_accounts.get_public_user(database, "groupowner")
+            assert public["verified_players"] == [
+                {"tag": "#2PP", "name": "Player #2PP"},
+                {"tag": "#8PY", "name": "Player #8PY"},
+            ]
         finally:
             database.close()

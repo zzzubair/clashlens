@@ -184,10 +184,8 @@ def test_live_parser_keeps_opponent_validation_and_identity_conflicts(
     ["20260804T120000.000Z", "20260804T120000Z", 1785844800, "1785844800"],
 )
 def test_live_parser_accepts_compact_battle_timestamps(timestamp: object) -> None:
-    # The recorded real API shape carries battleTime as epoch seconds; the
-    # string forms cover battleTimestamp-style text.
     payload = json.loads(FIXTURE.read_bytes())
-    payload["items"][0]["battleTime"] = timestamp
+    payload["items"][0]["battleTimestamp"] = timestamp
 
     parsed = parse_battle_log(
         json.dumps(payload).encode(),
@@ -206,7 +204,7 @@ def test_live_parser_marks_unusable_battle_times_as_gaps(
     timestamp: object,
 ) -> None:
     payload = json.loads(FIXTURE.read_bytes())
-    payload["items"][0]["battleTime"] = timestamp
+    payload["items"][0]["battleTimestamp"] = timestamp
 
     parsed = parse_battle_log(
         json.dumps(payload).encode(),
@@ -219,10 +217,26 @@ def test_live_parser_marks_unusable_battle_times_as_gaps(
     assert parsed.rows[0].failure_category == "invalid_battle_timestamp"
 
 
-def test_live_parser_reads_battle_timestamp_when_battle_time_is_absent() -> None:
+def test_live_parser_prefers_battle_timestamp() -> None:
     payload = json.loads(FIXTURE.read_bytes())
-    del payload["items"][0]["battleTime"]
     payload["items"][0]["battleTimestamp"] = "2026-08-04T12:30:00Z"
+
+    parsed = parse_battle_log(
+        json.dumps(payload).encode(),
+        expected_tag="#2PP",
+        observed_at=datetime(2026, 8, 4, 12, 5, tzinfo=UTC),
+        parser_version=SOURCE_PARSER_VERSION,
+    )
+
+    battle = parsed.rows[0].battle
+    assert battle is not None
+    assert battle.battle_timestamp == datetime(2026, 8, 4, 12, 30, tzinfo=UTC)
+
+
+def test_live_parser_falls_back_to_legacy_battle_time() -> None:
+    payload = json.loads(FIXTURE.read_bytes())
+    del payload["items"][0]["battleTimestamp"]
+    payload["items"][0]["battleTime"] = 1785846600
 
     parsed = parse_battle_log(
         json.dumps(payload).encode(),

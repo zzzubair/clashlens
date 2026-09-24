@@ -44,7 +44,7 @@ export default function LoginRoute() {
   const googleUrl = `/auth/google?returnPath=${returnPathParameter}`;
   const discordUrl = `/auth/discord?returnPath=${returnPathParameter}`;
   return (
-    <main className="page-shell narrow-shell">
+    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="login-title">
         <h1 id="login-title">Sign in</h1>
         <p className="lede">

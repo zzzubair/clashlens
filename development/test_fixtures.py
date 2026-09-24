@@ -98,7 +98,9 @@ def test_clash_fixture_serves_rankings_profiles_and_verification() -> None:
             method="POST",
         )
         with urllib.request.urlopen(verification_request) as response:
-            assert json.load(response) == {"status": "ok"}
+            assert json.load(response) == {
+                "tag": "#2PP", "token": "VERIFY-2PP", "status": "ok"
+            }
     finally:
         server.shutdown()
         thread.join(timeout=2)

@@ -146,20 +146,25 @@ def get_player_page(
                    attack_count, attack_three_star_count, attack_gain,
                    defense_count, defense_three_star_count, defense_loss,
                    net_trophy_change, adjustments, battles, partial_reasons,
-                   published_at
+                   start_trophies, published_at
             FROM (
-                SELECT DISTINCT ON (ranked_day_start)
-                       ranked_day_start, ranked_day_end, official_season_id,
-                       season_day_number, version, state, coverage, confidence,
-                       attack_count, attack_three_star_count, attack_gain,
-                       defense_count, defense_three_star_count, defense_loss,
-                       net_trophy_change, adjustments, battles, partial_reasons,
-                       published_at
-                FROM api_player_daily_logs
-                WHERE player_id = (
+                SELECT DISTINCT ON (daily.ranked_day_start)
+                       daily.ranked_day_start, daily.ranked_day_end,
+                       daily.official_season_id, daily.season_day_number,
+                       daily.version, daily.state, daily.coverage, daily.confidence,
+                       daily.attack_count, daily.attack_three_star_count,
+                       daily.attack_gain, daily.defense_count,
+                       daily.defense_three_star_count, daily.defense_loss,
+                       daily.net_trophy_change, daily.adjustments, daily.battles,
+                       daily.partial_reasons, ranked_day.start_trophies,
+                       daily.published_at
+                FROM api_player_daily_logs AS daily
+                LEFT JOIN ranked_day_versions AS ranked_day
+                    ON ranked_day.id = daily.ranked_day_version_id
+                WHERE daily.player_id = (
                     SELECT id FROM players WHERE normalized_tag = %s
                 )
-                ORDER BY ranked_day_start DESC, version DESC
+                ORDER BY daily.ranked_day_start DESC, daily.version DESC
             ) AS current_days
             ORDER BY ranked_day_start DESC
             LIMIT 28
@@ -242,7 +247,7 @@ def get_player_page(
                 "start": season_start,
                 "end": season_start + SEASON_DURATION,
                 "anchor_source": "daily_publication",
-                "anchor_observed_at": current_day_raw[18].astimezone(UTC),
+                "anchor_observed_at": current_day_raw[19].astimezone(UTC),
             }
         season_rows = []
         if season_context is not None and not season_anchor_conflict:
@@ -256,21 +261,28 @@ def get_player_page(
                        season_day_number, version, state, coverage, confidence,
                        attack_count, attack_three_star_count, attack_gain,
                        defense_count, defense_three_star_count, defense_loss,
-                       net_trophy_change, adjustments, battles, partial_reasons
+                       net_trophy_change, adjustments, battles, partial_reasons,
+                       start_trophies
                 FROM (
-                    SELECT DISTINCT ON (ranked_day_start)
-                           ranked_day_start, ranked_day_end, official_season_id,
-                           season_day_number, version, state, coverage, confidence,
-                           attack_count, attack_three_star_count, attack_gain,
-                           defense_count, defense_three_star_count, defense_loss,
-                           net_trophy_change, adjustments, battles, partial_reasons
-                    FROM api_player_daily_logs
-                    WHERE player_id = (
+                    SELECT DISTINCT ON (daily.ranked_day_start)
+                           daily.ranked_day_start, daily.ranked_day_end,
+                           daily.official_season_id, daily.season_day_number,
+                           daily.version, daily.state, daily.coverage,
+                           daily.confidence, daily.attack_count,
+                           daily.attack_three_star_count, daily.attack_gain,
+                           daily.defense_count, daily.defense_three_star_count,
+                           daily.defense_loss, daily.net_trophy_change,
+                           daily.adjustments, daily.battles, daily.partial_reasons,
+                           ranked_day.start_trophies
+                    FROM api_player_daily_logs AS daily
+                    LEFT JOIN ranked_day_versions AS ranked_day
+                        ON ranked_day.id = daily.ranked_day_version_id
+                    WHERE daily.player_id = (
                         SELECT id FROM players WHERE normalized_tag = %s
                     )
-                      AND ranked_day_start >= %s
-                      AND ranked_day_start < %s
-                    ORDER BY ranked_day_start DESC, version DESC
+                      AND daily.ranked_day_start >= %s
+                      AND daily.ranked_day_start < %s
+                    ORDER BY daily.ranked_day_start DESC, daily.version DESC
                 ) AS latest_days
                 WHERE official_season_id = %s
                 ORDER BY season_day_number DESC NULLS LAST,

@@ -3,6 +3,7 @@ import type {
   HistoricalSeasonSummary,
   PlayerPage,
   RankedBattleEvent,
+  RankedDaySummary,
   SummarizedSeasonRef,
 } from "../lib/contracts";
 import {
@@ -328,6 +329,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       trophyChange: value.trophy_change,
       perspectiveDisagreement: value.perspective_disagreement === true,
       army: mapBattleArmy(value.army ?? null),
+      armyShareCode: isString(value.army_share_code) ? value.army_share_code : null,
     };
   };
   const mapDay = (value: unknown) => {
@@ -347,6 +349,10 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
       !Array.isArray(value.uncertainty_reasons) ||
       !value.uncertainty_reasons.every(isString) ||
       !(value.season_day_number === null || isInteger(value.season_day_number)) ||
+      !(
+        value.start_trophies == null ||
+        (isInteger(value.start_trophies) && value.start_trophies >= 0)
+      ) ||
       !Array.isArray(value.offense_events) ||
       value.offense_events.length > 8 ||
       !Array.isArray(value.defense_events) ||
@@ -370,6 +376,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
         ? `${value.ranked_day_start} – ${value.ranked_day_end}`
         : value.ranked_day_start,
       state: value.state,
+      startTrophies: (value.start_trophies as number | null | undefined) ?? null,
       offense: {
         attacks: value.attack_count as number | null,
         threeStars: value.attack_three_star_count as number | null,
@@ -394,7 +401,7 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
     mapDay(screen.current_day);
   if (!Array.isArray(screen.recent_days) || !Array.isArray(screen.season_days))
     malformed();
-  return {
+  const player: PlayerPage = {
     kind: "player-page",
     tag: payload.tag,
     profile: {
@@ -429,6 +436,77 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
     dataQuality: mapDataQuality(screen.data_quality),
     provenance: mapSnakeProvenanceRequired(screen.provenance),
   };
+  calculateStartingTrophies(player.seasonDays, player.profile);
+  calculateStartingTrophies(player.recentDays, player.profile);
+  if (player.currentDay) calculateStartingTrophies([player.currentDay], player.profile);
+  return player;
+}
+
+function calculateStartingTrophies(
+  days: RankedDaySummary[],
+  profile: PlayerPage["profile"],
+) {
+  const observedAt = Date.parse(profile.freshness.observedAt);
+  const bounds = (day: RankedDaySummary) => day.period.split(" – ").map(Date.parse);
+  const ordered = [...days].sort((a, b) => bounds(b)[0] - bounds(a)[0]);
+  let nextDay: RankedDaySummary | undefined;
+  for (const day of ordered) {
+    const [start, end] = bounds(day);
+    const next = nextDay;
+    nextDay = day;
+    if (day.startTrophies != null || !Number.isFinite(start) || !Number.isFinite(end))
+      continue;
+    const events = [...day.offenseEvents, ...day.defenseEvents];
+    // Only subtract the displayed change when every included battle agrees
+    // with the totals. A profile from another day is never a daily end total.
+    if (
+      day.offense.trophyGain === null ||
+      day.defense.trophyLoss === null ||
+      day.offense.attacks !== day.offenseEvents.length ||
+      day.defense.defenses !== day.defenseEvents.length ||
+      day.offenseEvents.reduce((sum, event) => sum + event.trophyChange, 0) !==
+        day.offense.trophyGain ||
+      -day.defenseEvents.reduce((sum, event) => sum + event.trophyChange, 0) !==
+        day.defense.trophyLoss ||
+      events.some(
+        (event) =>
+          event.perspectiveDisagreement ||
+          Date.parse(event.battleTimestamp) < start ||
+          Date.parse(event.battleTimestamp) >= end,
+      )
+    )
+      continue;
+    const netChange = day.trophyChange ?? day.offense.trophyGain - day.defense.trophyLoss;
+    let trophies: number | undefined;
+    if (
+      observedAt >= start &&
+      observedAt < end &&
+      (day.completeness.state === "complete" ||
+        (day.offense.attacks === 8 && day.defense.defenses === 8)) &&
+      events.every((event) => Date.parse(event.battleTimestamp) <= observedAt)
+    ) {
+      trophies = profile.trophies;
+    } else if (
+      next?.startTrophies != null &&
+      bounds(next)[0] === end &&
+      day.dayNumber !== null &&
+      next.dayNumber === day.dayNumber + 1 &&
+      (day.completeness.state === "complete" ||
+        (day.offense.attacks === 8 && day.defense.defenses === 8))
+    ) {
+      // Work backwards only across adjacent days in the same season. Eight
+      // attacks and defenses avoid guessing unobserved reset deductions.
+      trophies = next.startTrophies;
+    }
+    if (
+      trophies === undefined ||
+      !Number.isSafeInteger(trophies - netChange) ||
+      trophies - netChange < 0
+    )
+      continue;
+    day.startTrophies = trophies - netChange;
+    day.startTrophiesCalculation = { trophies, netChange };
+  }
 }
 
 function isSnakeProvenance(value: unknown): value is Record<string, unknown> {

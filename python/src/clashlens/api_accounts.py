@@ -138,28 +138,30 @@ def update_account(
             existing = api_db._reserve_request(database, connection, binding)
             if existing is not None:
                 return existing
-            try:
-                with connection.transaction():
-                    updated = connection.execute(
-                        """
-                        UPDATE clash_lens_accounts
-                        SET username = %s, normalized_username = %s,
-                            display_name = %s, preferences = %s,
-                            updated_at = clock_timestamp()
-                        WHERE id = %s
-                        """,
-                        (
-                            username,
-                            normalized_username,
-                            display_name,
-                            Jsonb(preferences),
-                            binding.account_id,
-                        ),
-                    )
-            except psycopg.errors.UniqueViolation:
-                result = OperationResult(409, {"error": "username_unavailable"})
+            account = connection.execute(
+                "SELECT normalized_username FROM clash_lens_accounts WHERE id = %s FOR UPDATE",
+                (binding.account_id,),
+            ).fetchone()
+            if account is None:
+                result = OperationResult(404, {"error": "account_not_found"})
                 api_db._complete_request(connection, binding.request_id, result)
                 return result
+            if (
+                normalized_username != _text(account[0])
+                or username.lower() != normalized_username
+            ):
+                result = OperationResult(409, {"error": "username_locked"})
+                api_db._complete_request(connection, binding.request_id, result)
+                return result
+            updated = connection.execute(
+                """
+                UPDATE clash_lens_accounts
+                SET display_name = %s, preferences = %s,
+                    updated_at = clock_timestamp()
+                WHERE id = %s
+                """,
+                (display_name, Jsonb(preferences), binding.account_id),
+            )
             if updated.rowcount != 1:
                 result = OperationResult(404, {"error": "account_not_found"})
             else:
@@ -898,6 +900,53 @@ def list_groups(database: ApiDatabase, account_id: int) -> list[dict[str, Any]]:
         return list(groups.values())
 
 
+def search_public_users(
+    database: ApiDatabase, query: str, *, limit: int = 50
+) -> list[dict[str, Any]]:
+    if not 1 <= limit <= 50:
+        raise ValueError("public user search limit is outside the supported range")
+    query = query.strip().removeprefix("@")
+    if not query:
+        return []
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
+    with database.pool.connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT account.normalized_username, account.display_name,
+                   (SELECT count(*) FROM verified_player_links
+                    WHERE account_id = account.id)
+            FROM clash_lens_accounts AS account
+            WHERE account.normalized_username ILIKE %s ESCAPE '\\'
+               OR account.display_name ILIKE %s ESCAPE '\\'
+               OR EXISTS (
+                   SELECT 1 FROM verified_player_links AS link
+                   JOIN players AS player ON player.id = link.player_id
+                   LEFT JOIN LATERAL (
+                       SELECT name FROM player_profile_versions
+                       WHERE player_id = player.id
+                       ORDER BY observed_at DESC, id DESC LIMIT 1
+                   ) AS profile ON true
+                   WHERE link.account_id = account.id
+                     AND (player.normalized_tag = %s OR
+                          profile.name ILIKE %s ESCAPE '\\')
+               )
+            ORDER BY (account.normalized_username = lower(%s)) DESC,
+                     account.normalized_username
+            LIMIT %s
+            """,
+            (pattern, pattern, query.upper(), pattern, query, limit),
+        ).fetchall()
+    return [
+        {
+            "username": _text(row[0]),
+            "display_name": _text(row[1]),
+            "linked_player_count": int(row[2]),
+        }
+        for row in rows
+    ]
+
+
 def get_public_user(database: ApiDatabase, normalized_username: str) -> dict[str, Any] | None:
     with database.pool.connection() as connection:
         account = connection.execute(
@@ -958,13 +1007,18 @@ def _replace_group_players(
 
 
 def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:
+    # Profile parsing validates the player tag and name separately from Legend
+    # season/tier evidence. Linking a non-Legend account still exposes its name.
     rows = connection.execute(
         """
         SELECT player.normalized_tag, profile.name
         FROM verified_player_links AS link
         JOIN players AS player ON player.id = link.player_id
-        LEFT JOIN player_profile_versions AS profile
-            ON profile.id = player.current_profile_version_id
+        LEFT JOIN LATERAL (
+            SELECT name FROM player_profile_versions
+            WHERE player_id = player.id
+            ORDER BY observed_at DESC, id DESC LIMIT 1
+        ) AS profile ON true
         WHERE link.account_id = %s
         ORDER BY player.normalized_tag
         LIMIT 500
@@ -975,5 +1029,3 @@ def _verified_players(connection: Any, account_id: int) -> list[dict[str, Any]]:
         {"tag": _text(row[0]), "name": None if row[1] is None else _text(row[1])}
         for row in rows
     ]
-
-

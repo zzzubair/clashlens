@@ -23,19 +23,19 @@ def test_account_update_frozen_leaderboard_and_export_scaffold(
                     "account.update",
                     "/v1/account",
                     {
-                        "username": "renamedowner",
+                        "username": "groupowner",
                         "display_name": "Renamed Owner",
                         "preferences": {"timezone": "UTC"},
                     },
                     method="PATCH",
                 ),
-                username="renamedowner",
-                normalized_username="renamedowner",
+                username="groupowner",
+                normalized_username="groupowner",
                 display_name="Renamed Owner",
                 preferences={"timezone": "UTC"},
             )
             assert updated.payload == {
-                "username": "renamedowner",
+                "username": "groupowner",
                 "display_name": "Renamed Owner",
                 "preferences": {"timezone": "UTC"},
                 "providers": ["google"],

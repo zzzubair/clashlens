@@ -123,7 +123,29 @@ class OfficialVerificationClient:
             ).encode("utf-8"),
             timeout_seconds=self._timeout_seconds,
         )
-        return self._transport(request)
+        response = self._transport(request)
+        if response.http_status == 200:
+            try:
+                decoded = json.loads(response.body)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                decoded = None
+            # Supercell echoes the tag and private player token. Bind those
+            # echoes to this request, then remove them before classification.
+            if (
+                not isinstance(decoded, dict)
+                or set(decoded) != {"tag", "token", "status"}
+                or decoded["tag"] != normalized_tag
+                or decoded["token"] != player_token
+                or decoded["status"] not in ("ok", "invalid")
+            ):
+                raise VerificationTransportError(
+                    "official verification response did not match the request"
+                )
+            return OfficialVerificationResponse(
+                200,
+                json.dumps({"status": decoded["status"]}, separators=(",", ":")).encode(),
+            )
+        return response
 
 
 _VALID_BODY: Final = {"status": "ok"}

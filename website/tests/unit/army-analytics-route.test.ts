@@ -26,6 +26,28 @@ function requestFor(query: string) {
   return new Request(`https://clashlens.example/analytics/armies?${query}`);
 }
 
+async function renderArmyRoute(query: string) {
+  const handler = createStaticHandler([
+    { path: "/analytics/armies", Component: ArmyRoute, loader: armyLoader },
+  ]);
+  const context = await handler.query(requestFor(query));
+  if (context instanceof Response) throw new Error("unexpected response");
+  return renderToString(
+    createElement(StaticRouterProvider, {
+      router: createStaticRouter(handler.dataRoutes, context),
+      context,
+    }),
+  );
+}
+
+function renderedText(html: string) {
+  return html
+    .replaceAll("<!-- -->", "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 describe("army analytics route historical reads", () => {
   beforeEach(() => {
     mocks.createPythonClient.mockReset();
@@ -119,25 +141,16 @@ describe("army analytics route historical reads", () => {
       getArmySeasonSummary,
       getArmyAnalytics: vi.fn(),
     });
-    const handler = createStaticHandler([
-      { path: "/analytics/armies", Component: ArmyRoute, loader: armyLoader },
-    ]);
-    const context = await handler.query(requestFor(`season=${SEASON}`));
-    if (context instanceof Response) throw new Error("unexpected response");
-    const html = renderToString(
-      createElement(StaticRouterProvider, {
-        router: createStaticRouter(handler.dataRoutes, context),
-        context,
-      }),
-    );
-    expect(html).toContain("<th>Quantity</th>");
-    expect(html).toContain("<th>1★</th>");
-    expect(html).toContain("<th>2★</th>");
-    expect(html).toContain("<th>3★</th>");
-    expect(html).toContain("Ice Golem");
-    expect(html.replaceAll("<!-- -->", "")).toContain("5 / 10");
-    expect(html).toContain("50.0%");
-    expect(html).not.toContain("attacks missing battle-time trophy evidence");
+    const text = renderedText(await renderArmyRoute(`season=${SEASON}`));
+    expect(text).toContain("Quantity");
+    expect(text).toContain("1-star");
+    expect(text).toContain("2-star");
+    expect(text).toContain("3-star");
+    expect(text).toContain("Ice Golem");
+    expect(text).toContain("5 / 10");
+    expect(text).toContain("50.0%");
+    expect(text).toContain("1 battle");
+    expect(text).toContain("2 battles");
   });
 
   it("reports unavailable when historical detail exists but its summary is missing", async () => {
@@ -210,43 +223,86 @@ describe("army analytics route historical reads", () => {
     expect(query.get("population")).toBe("band-51-100");
     expect(data).toMatchObject({ error: null, seasonEmpty: null });
   });
-});
 
-it("keeps a resolved current season on the live path when Apply is submitted", async () => {
-  const getArmySeasonSummary = vi.fn();
-  const getArmyAnalytics = vi.fn().mockResolvedValue({
-    selection: {
-      season: SEASON,
-      lens: "offense",
-      startDay: 1,
-      endDay: 28,
-      population: "top-100",
-      category: "troops",
-      sort: "usage-rate",
-    },
-    rows: [],
-    armyStates: {},
-    cohortEvidence: {},
-    collectionCoverage: {},
-    freshness: {},
-    reproducibility: { snapshotVersions: [] },
-    versions: {},
+  it("uses captured-preview defaults only when filters are absent", async () => {
+    const defaults = await armyLoader({
+      request: requestFor("recent=1"),
+      params: {},
+    } as never);
+    expect(defaults).toMatchObject({
+      analytics: {
+        selection: {
+          lens: "offense",
+          population: "top-100",
+          category: "troops",
+          sort: "usage-rate",
+        },
+      },
+      error: null,
+    });
+
+    const selected = await armyLoader({
+      request: requestFor(
+        "recent=1&lens=defense&population=top-50&category=spells&sort=usage-count",
+      ),
+      params: {},
+    } as never);
+    expect(selected).toMatchObject({
+      analytics: {
+        selection: {
+          lens: "defense",
+          population: "top-50",
+          category: "spells",
+          sort: "usage-count",
+        },
+      },
+      error: null,
+    });
   });
-  mocks.createPythonClient.mockReturnValue({ getArmyAnalytics, getArmySeasonSummary });
-  const handler = createStaticHandler([
-    { path: "/analytics/armies", Component: ArmyRoute, loader: armyLoader },
-  ]);
-  const context = await handler.query(requestFor("season=current"));
-  if (context instanceof Response) throw new Error("unexpected response");
-  const html = renderToString(
-    createElement(StaticRouterProvider, {
-      router: createStaticRouter(handler.dataRoutes, context),
-      context,
-    }),
-  );
-  const season = html.match(/<input[^>]*name="season"[^>]*value="([^"]+)"/)?.[1];
-  expect(season).toBe("current");
-  await armyLoader({ request: requestFor(`season=${season}`), params: {} } as never);
-  expect(getArmyAnalytics).toHaveBeenCalledTimes(2);
-  expect(getArmySeasonSummary).not.toHaveBeenCalled();
+
+  it.each([
+    "lens=sideways",
+    "population=top-99",
+    "category=unknown",
+    "sort=alphabetical",
+    "sample=0",
+    "sample=no",
+    "sample=",
+  ])("rejects an invalid captured-preview filter: %s", async (filter) => {
+    const result = await armyLoader({
+      request: requestFor(`recent=1&${filter}`),
+      params: {},
+    } as never);
+    expect(result).toMatchObject({
+      init: { status: 422 },
+      data: {
+        analytics: null,
+        error: { error: { code: "invalid_input" } },
+      },
+    });
+  });
+
+  it("redirects the original sample link to the captured preview", async () => {
+    const result = await armyLoader({
+      request: requestFor(
+        "sample=1&season=current&start_day=1&end_day=7&category=spells",
+      ),
+      params: {},
+    } as never);
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(302);
+    expect((result as Response).headers.get("location")).toBe(
+      "?category=spells&recent=1",
+    );
+  });
+
+  it("reconciles recorded, included and excluded captured defense records", async () => {
+    const text = renderedText(
+      await renderArmyRoute("recent=1&lens=defense&population=top-100"),
+    );
+    expect(text).toContain("Battle records 1,593 Recorded in this selection");
+    expect(text).toContain("Records included 1,591");
+    expect(text).toContain("Records excluded 2");
+    expect(text).toContain("1 other battle record had no opponent and was excluded");
+  });
 });

@@ -819,8 +819,13 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                         "trophy_equation_mismatch",
                         "ranked_day_state:Inconsistent",
                     ],
+                    "start_trophies": 6000,
                 }
             ]
+            assert (
+                player_page["screen_ready"]["recent_days"][0]["start_trophies"]
+                == 6000
+            )
         finally:
             database.close()
 

@@ -242,6 +242,7 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
                     "adjustments": [],
                     "battles": [],
                     "partial_reasons": ["active_day"],
+                    "start_trophies": None,
                 }
             ]
             assert [entry["tag"] for entry in live["entries"]] == ["#8PY", "#2PP"]

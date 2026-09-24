@@ -607,6 +607,8 @@ def _screen_event(
         "trophy_change": trophy_change,
         "perspective_disagreement": battle.get("disagreement") is True,
     }
+    if isinstance(battle.get("army_share_code"), str):
+        event["army_share_code"] = battle["army_share_code"]
     if isinstance(battle.get("army"), Mapping):
         event["army"] = battle["army"]
     return lens, battle_id, timestamp, event
@@ -673,6 +675,7 @@ def _daily_log(day: Any) -> dict[str, Any]:
         "adjustments": _json_array(day[15]),
         "battles": _json_array(day[16]),
         "partial_reasons": _json_array(day[17]),
+        "start_trophies": None if day[18] is None else int(day[18]),
     }
 
 

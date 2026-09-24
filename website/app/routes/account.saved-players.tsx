@@ -177,7 +177,7 @@ export default function SavedPlayersRoute() {
       : loaderData.addIdempotencyKey;
 
   return (
-    <main className="page-shell narrow-shell">
+    <main id="main-content" tabIndex={-1} className="page-shell narrow-shell">
       <section className="hero" aria-labelledby="saved-title">
         <h1 id="saved-title">Saved players</h1>
         <p className="lede">

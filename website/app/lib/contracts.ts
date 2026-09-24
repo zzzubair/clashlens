@@ -113,6 +113,7 @@ export interface SearchResponse {
   query: string;
   exactTag: string | null;
   results: KnownPlayerResult[];
+  users: import("./account-contracts").PublicUserResult[];
   knownOnly: boolean;
 }
 
@@ -213,6 +214,7 @@ export interface RankedBattleEvent {
   trophyChange: number;
   perspectiveDisagreement: boolean;
   army: BattleArmy | null;
+  armyShareCode?: string | null;
 }
 
 export interface RankedDaySummary {
@@ -220,6 +222,8 @@ export interface RankedDaySummary {
   label: string;
   period: string;
   state: "Live" | "Complete" | "Partial" | "Uncertain";
+  startTrophies?: number | null;
+  startTrophiesCalculation?: { trophies: number; netChange: number };
   offense: {
     attacks: number | null;
     threeStars: number | null;

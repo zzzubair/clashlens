@@ -399,7 +399,12 @@ class ClashHandler(QuietHandler):
             return
         expected = VERIFY_TOKEN_PREFIX + tag[1:]
         self.send_json(
-            200, {"status": "ok" if body.get("token") == expected else "invalid"}
+            200,
+            {
+                "tag": tag,
+                "token": body.get("token"),
+                "status": "ok" if body.get("token") == expected else "invalid",
+            },
         )
 
 
