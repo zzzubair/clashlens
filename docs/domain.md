@@ -74,12 +74,15 @@ A domain change is complete only when every affected source observation, derived
 - Discover clan members when a clan is first encountered and check its member
   list daily thereafter. Keep duplicate work bounded without dropping new tags.
   Starting collection from supplied lists does not wait for clan discovery.
-- Check every previously unknown tag against the current official
-  profile and add it to active tracking immediately after confirming that the
-  player is in Legend I.
+- Start the official existence/eligibility check immediately when a previously
+  unknown tag is encountered. Add it to active tracking immediately after
+  confirming that the player is in Legend I.
 - When newer valid eligibility evidence shows that an actively tracked player left Legend I, retain the tag and history but remove the player from active Legend I tracking.
-- Re-evaluate inactive known players once a week during the Monday promotion
-  and demotion transition. Repeated submissions, overlapping imports, visits
+- Recheck already-known players every Monday after Reset at 05:00 UTC, using
+  post-Reset profile evidence. Fresh post-Reset profiles from active collection
+  can satisfy that check; inactive players need the weekly eligibility pass.
+  This is a Monday boundary, not seven days after each player's last check.
+  Repeated submissions, overlapping imports, visits
   and daily clan membership checks reuse that week's result. They do not each
   start a new eligibility check. This supersedes the earlier every-rediscovery
   recheck rule. Initial checks for new tags and bounded retries of unfinished

@@ -13,9 +13,10 @@ merely by consolidation. Update this map when decisions or status change.
 
 1. **Tracking from October 5 at 05:00 UTC, 06:00 UK time.** Plan for **12,500
    live-tracked players** within the **22,157-tag total known-player pool** from
-   the four supplied lists. Check known-player eligibility once a week, at the
-   Monday transition; active players already supply fresh profiles through
-   normal collection. The two counts are not added together. Include the
+   the four supplied lists. Check known-player eligibility every Monday after
+   the 05:00 UTC Reset; active players can supply that check through fresh
+   post-Reset profiles from normal collection. Check new tags immediately on
+   first encounter. The two counts are not added together. Include the
    September 30 list and add the October 6 list while collection continues.
    Normalize/deduplicate every source and count supplied, confirmed-real and
    eligible players separately. Zubair corrected the earlier interpretation
@@ -52,10 +53,12 @@ deletion still require their specific approvals.
 | Discord and support | Public discussion/feedback, Discord-only private tickets through an existing bot, and a separate private operator-alert channel using an incoming webhook. No custom bot or email fallback. Setup and delivery are unproven. | [#138](https://github.com/zzzubair/clashlens/issues/138), [#124](https://github.com/zzzubair/clashlens/issues/124) |
 | Release and operation | Tracking and public website have separate readiness records. Keep exact revisions, usable data checks, restore/reboot/upgrade evidence, costs and an operating guide. | [#131](https://github.com/zzzubair/clashlens/issues/131) |
 
-For already-known inactive players, routine eligibility rechecks are weekly.
+For already-known players, routine eligibility rechecks run every Monday after
+the 05:00 UTC Reset, using post-Reset evidence rather than a rolling seven days
+since the last check. Active players can reuse their post-Reset live profiles.
 Repeated lists, visits and daily clan membership checks reuse the current
 week's result rather than trigger additional eligibility fetches. A genuinely
-new tag still needs its first existence/eligibility check. Continue to apply
+new tag starts its first existence/eligibility check immediately. Continue to apply
 fresh eligibility evidence from normal live tracking. Weekly scheduling and
 fresh-result reuse remain unverified; the manual-import proof predates this
 cadence clarification. See [the domain rules](domain.md#identity-and-eligibility).
@@ -190,9 +193,11 @@ details and their historical evidence:
 - Eligibility: malformed and nonexistent tags differ from temporary failures.
   Recognized entry/exit changes collection and ranking; missing/unknown tier
   evidence preserves the last confirmed state. Re-entry reuses the same player.
-  New tags receive an initial check. Known inactive tags are checked once per
-  week; repeated lists/visits/clan scans within that week reuse the result.
-  Verify the next Monday's check, including interrupted work and bounded retries.
+  New tags receive an immediate initial check. Known players are rechecked
+  every Monday after the 05:00 UTC Reset; repeated lists/visits/clan scans reuse
+  that week's result. A Sunday check does not replace Monday's post-Reset check.
+  A new tag first checked after Monday Reset needs no duplicate weekly check.
+  Verify those boundaries, interrupted work and bounded retries.
   Earlier days for a late arrival remain missing rather than invented.
 - Discovery and search: anonymous exact-tag visits begin automatically with
   useful progress/failure/retry. Name results contain tracked/historical players
