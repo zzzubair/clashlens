@@ -7,6 +7,10 @@ versioned calculations for Legend I. It does not define current product scope
 or implementation status. Report a conflict with code, tests, migrations, or a
 live GitHub issue; do not choose silently.
 
+The [dated product map](product-status.md) identifies requirements not yet
+implemented. In particular, automatic entry from all tag sources and the new
+completed-season views below are agreed behavior, not claims of deployed support.
+
 Use this order when you implement or review a domain change:
 
 1. Preserve the official source observations and their evidence boundaries.
@@ -53,15 +57,41 @@ A domain change is complete only when every affected source observation, derived
   confirmed eligibility state, mark it stale or conflicting, and do not
   activate or deactivate from that evidence.
 - An **inactive known player** is retained with all existing history but does not receive regular Legend I battle collection.
-- Accept valid player tags submitted by users.
+- Confirm that a submitted tag represents a real player using official evidence;
+  valid spelling alone does not establish existence. Retain confirmed tags
+  regardless of Town Hall or league, then check Legend I eligibility.
 - Discover additional tags only through official Clash of Clans API sources, including official leaderboards, clan data, and opponents present in official battle logs.
 - Normalize and deduplicate a tag before adding it to the known-player registry.
+- Apply this same identity rule to overlapping imported lists, exact-tag searches
+  and player visits, saved/group/verification inputs, and official discoveries.
+  Repeated input reuses the existing identity and history. A saved/group entry
+  does not prove ownership or bypass eligibility.
+- Discovery and eligible tracking are automatic; no separate Start tracking
+  button or sign-in is required for a public tag lookup. Name search covers
+  actively tracked players and players with recorded history. Other known tags
+  remain directly accessible. A non-Legend-I page shows the eligibility
+  explanation and any history, without a full current profile section.
+- Discover clan members when a clan is first encountered and check its member
+  list daily thereafter. Keep duplicate work bounded without dropping new tags.
+  Starting collection from supplied lists does not wait for clan discovery.
 - Check every newly discovered or submitted tag against the current official
   profile and add it to active tracking immediately after confirming that the
   player is in Legend I.
 - When newer valid eligibility evidence shows that an actively tracked player left Legend I, retain the tag and history but remove the player from active Legend I tracking.
 - Re-evaluate inactive known players during the Monday promotion and demotion transition and whenever a tag is rediscovered or submitted.
 - Retaining inactive tags must allow later ranked-tournament support without re-creating player identity or losing history.
+
+### Completed-season player history
+
+- Retain each day's EOD, attack gain, defense loss and change from the previous
+  Legend day's EOD. Day 1 uses 5,000 as its comparison baseline; Day 28 EOD is
+  the season-ending trophy count. EOD 5,050 then 4,950 means a change of -100.
+- Missing EOD evidence stays unknown. Keep this movement separate from battle
+  results and reset adjustments; do not fold a boundary reset into attack gain
+  or defense loss. Preserve the evidence that explains a difference.
+- Public completed-season rank means final Clash Lens position among tracked
+  players only. Official rank remains supporting evidence. Unknown final
+  Clash Lens position must not fall back to official rank.
 
 ### Live Leaderboard ordering
 
@@ -204,6 +234,10 @@ A domain change is complete only when every affected source observation, derived
 
 ### Population filters and lenses
 
+The following day-range filters describe current-season analytics. Army
+percentages use completed Legend days and update after Reset, not from the
+unfinished live day. Completed-season scope is defined separately below.
+
 - For a trophy-range filter, the **defense lens** groups attacks by the defender's trophies at battle time.
 - For a trophy-range filter, the **offense lens** groups attacks by the attacker's trophies at battle time.
 - For a frozen leaderboard-cohort or rank-band filter, the defense lens includes attacks whose defenders belong to the selected snapshot population.
@@ -217,6 +251,21 @@ A domain change is complete only when every affected source observation, derived
 - A **rank streak** is available only for a Top-N preset and contains players in that Top-N cohort in every frozen daily snapshot of the selected inclusive range. A stale, missing, or uncertain membership cannot establish a confirmed streak; report excluded membership and shielded-day evidence.
 - A trophy range is an arbitrary inclusive minimum and maximum, with minimum at least 5,000 and maximum not lower than minimum. Use the lens-specific battle-time trophy value; missing battle-time evidence is an exclusion, never a substituted observation.
 - Exactly one trophy range, frozen Top-N cohort, frozen rank band, or Top-N rank streak applies at a time.
+
+### Completed-season army statistics
+
+- Keep all-tracked and final-season Top 100 views across the whole season.
+  Top 100 uses the final Clash Lens ranking and those players' recorded battles
+  from the entire season; it is not official rank or changing daily membership.
+- Attacks are BY the selected players; defenses are AGAINST them. The Clan
+  Castle toggle switches regular troop usage to individual Clan Castle troop
+  usage. Combinations do not replace individual usage.
+- Preserve unit IDs, quantities, using-battle counts, outcomes, denominators
+  and unknown-unit evidence for both views. Measure their storage cost and
+  bring an unaffordable result back before dropping an agreed view.
+- Historical day ranges, arbitrary trophy filters and battle drilldown remain
+  outside this scope. See [history-retention.md](history-retention.md) for the
+  implemented format, missing additions and correction/cleanup requirements.
 
 ### Aggregate evidence
 

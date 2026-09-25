@@ -1,5 +1,31 @@
 # Fedora operation
 
+## Launch order agreed on September 25
+
+The [product map](product-status.md) and [#119](https://github.com/zzzubair/clashlens/issues/119)
+separate collection readiness from public website launch. Target collection
+from the October 5 05:00 UTC season boundary using about 22,000 supplied tags
+plus the September 30 list. Add the October 6 list during collection, with one
+identity per tag across all inputs. Plan any approved warm-up before that
+boundary; starting a cold import at 05:00 is not proof of complete Day 1 data.
+
+Before real traffic: prove backups/restores, delivered private Discord alerts,
+repeated imports, accuracy and revised-population capacity. #128 owns the bounded
+real rehearsal; its resulting cost/storage evidence must be accepted before
+ongoing collection. The complete public website and clan discovery need not
+delay starting from supplied lists. Public release separately needs the real
+domain/logins, full feature checks, invited testing and #131 handover.
+
+Current commands below describe implemented behavior. The importer caps at
+20,000 tags, rejects duplicate input and later new imports. `./dev trial` caps
+at 12,500, and `./ops` loads exactly four regular API keys. The collector's key
+pool supports more keys, but the production wiring does not yet expose them.
+Zubair can supply more; #125/#128 must fix and measure these limits before
+claiming readiness for the supplied population. Do not weaken safeguards or
+advertise an unsupported 22,000-player command.
+
+## Existing service lifecycle
+
 `./ops` runs Clash Lens as rootless Podman containers managed by the user's
 systemd service manager. The tracked files under `deploy/quadlet/` are
 Quadlets: Podman turns them into ordinary system services. PostgreSQL, the
@@ -257,13 +283,15 @@ until they age out; failed uploads can leave partial objects requiring separatel
 reviewed cleanup. Real traffic must be measured before accepting the €60 total
 monthly envelope. Do not silently let failed pruning or WAL uploads accumulate.
 
-The existing raw expiry rule conflicts with complete point-in-time recovery near
-expiry: yesterday's restored catalogue can reference a response deleted today.
-A seven-day physical-deletion delay plus restore-time allowance would address
-that, but would change the agreed 56-day rule. Seven extra days add about 10% to
-the modeled 70-day average raw lifetime, roughly €0.40–€2/month using #120's
-€4–€20 raw-storage range. No expiry rule changes here. Zubair must resolve this
-before production expiry is enabled; step 3 cannot close while it is unresolved.
+On September 25 Zubair chose to preserve raw responses for the entire promised
+seven-day recovery window, including time to restore. The current season-end
+plus 56-day expiry code does not yet enforce this protection: a restored
+catalogue could reference a response deleted later. #122 owns implementation
+and restore proof; #129 must use that protection in scheduled cleanup. Do not
+enable production expiry until it is proven. Seven extra days add about 10%
+to the older modeled 70-day average raw lifetime, roughly €0.40–€2/month using
+#120's €4–€20 range. This is an earlier pricing model, not a measured bill or a
+final restore allowance; reprice it for the revised population and growth.
 
 Validation on 2026-09-19 used a separate PostgreSQL cluster with all 34 migrations
 and synthetic records, under R2 prefix `validation-20260919`. A full backup took
@@ -277,11 +305,14 @@ R2 key fetched the backup and WAL; direct write/delete attempts were denied.
 These tiny-database timings do not establish production recovery time or worst-case
 data loss. The earlier target was minutes old, **not seven days old**.
 
-Before closing #122: approve and perform deployment, prove scheduled uploads,
-measure worst-case data loss and restore time at the priced size, verify restored
-raw references, resolve expiry, restore a genuine seven-day-old point, and check
-service restart and host reboot. Keep real collection disabled until backups and
-step-5 alerts are proven. This PR does not deploy or close #122.
+The backup sorting fix #134 was merged and deployed; its scheduled service was
+also invoked successfully, as recorded in #122. Before closing #122, prove a
+natural timer firing, measure data loss and restore time at the revised size,
+verify restored raw references across protected expiry, restore a genuine
+seven-day-old point, and verify host reboot. Earlier small restores and service
+checks do not prove those remaining gates. Keep real collection disabled until
+backups and #124 alerts are proven. This documentation update does not deploy
+or close #122.
 
 ## Status and logs
 
@@ -326,6 +357,14 @@ policy and are not manually requeued.
 
 ## Support recovery
 
+The agreed support entry point is private tickets in the Clash Lens Discord
+community, using an existing ticket bot. Public discussion/feedback and the
+private operator-alert channel are separate. Provider, permissions, transcript
+retention, identifiers and cost remain setup work in
+[#138](https://github.com/zzzubair/clashlens/issues/138). Website support links
+must work without a Clash Lens login. A ticket is not ownership proof; tokens
+must use the existing protected verification flow, never ticket messages.
+
 The existing restricted host wrapper remains supported. Configure its entry
 point as `DEPLOY_SCRIPT=/srv/clashlens/ops`; the internal
 `support-recovery-exec` command enters the existing private API container and
@@ -342,7 +381,7 @@ spool and fixture archive use explicit persistent paths. The 16 GiB spool cap
 bounds temporary raw-response storage. Database and remote archive retention
 remain governed by the product rules and are not made size-bounded by Quadlet.
 
-This setup proves service lifecycle against fixtures. Before going live,
-separately authorize and prove backups/restoration, production OAuth, one real
-Legend day with agreed keys and costs, and alerts. Do not infer launch readiness
-from the fixture or reboot checks, and do not touch old GCS/B2 buckets.
+Fixture lifecycle evidence does not prove launch readiness. Apply the separate
+tracking and public-website gates at the top of this document; real traffic,
+spending, deployment and deletion still require their specific approvals.
+Leave old GCS/B2 buckets untouched.

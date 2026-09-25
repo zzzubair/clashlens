@@ -9,6 +9,8 @@ defines product behavior, and open GitHub issues record agreed requirements.
 [`domain.md`](domain.md) defines game meanings and evidence rules. The
 deployment runbook defines host operations. Report disagreements between
 requirements, documentation, and code rather than silently choosing one.
+The [dated product map](product-status.md) links agreed changes to their current
+implementation gaps and launch issues.
 
 ## Runtime ownership
 
@@ -43,9 +45,12 @@ to that backend. Neither the browser nor TypeScript may access PostgreSQL or
 the raw archive directly, or reimplement Python-owned domain calculations,
 confidence rules, rankings, or cohort membership.
 
-Discord and future integrations use the private API rather than reading the
-database or archive. They remain separate processes where their availability
-or resource use requires isolation.
+Integrations needing Clash Lens data use the private API rather than reading
+the database or archive. The agreed Discord setup uses a private incoming
+webhook for operator alerts and an existing ticket bot for support. Neither
+needs access to the product database or archive. No custom product bot is part
+of this launch. Isolate future integrations only where availability or measured
+resource use requires it.
 
 ## Durable seams
 

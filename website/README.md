@@ -3,6 +3,13 @@
 This directory contains the self-hosted TypeScript SSR website. It talks to
 the private Python API through one server-only client boundary.
 
+The [September 25 product map](../docs/product-status.md) distinguishes agreed
+website changes from current behavior: automatic new-tag discovery, search
+restricted to tracked/historical players, non-Legend-I explanation/history,
+Clash Lens season rank, expanded army history and working Discord support links.
+Those additions remain in #125, #127, #138 and #139; this README is not their
+implementation evidence.
+
 ## Requirements and setup
 
 - Node.js 24 LTS and npm with the committed `package-lock.json`; and
@@ -55,8 +62,9 @@ operator configuration.
 
 ## Preview on Rogue
 
-`https://preview.clashlens.net` runs the current UI with real Google and Discord
-sign-in against the saved preview database. The main `clashlens.net` site still
+`https://preview.clashlens.net` is configured for real Google and Discord
+sign-in against the saved preview database; completed-provider proof is listed
+below. The main `clashlens.net` site still
 serves the coming-soon page. Google and Discord use the same application
 credentials, with additional `/auth/google/callback` and
 `/auth/discord/callback` redirects on the preview origin.
@@ -91,15 +99,25 @@ on Rogue's already-allowlisted outbound connection. No player token is retained.
 Container request logging is disabled to avoid retaining sign-in callback codes.
 Check service status and the website's `/healthz` endpoint for availability.
 
-The HTTPS preview serves a production build from
-`/home/zubair/development/clashlens-preview/https/build-20260922-provider-copy`.
-The previous `https/build-20260922-public-profile` remains available for rollback.
+[PR #137](https://github.com/zzzubair/clashlens/pull/137) records the September 25
+preview deployment of merged `8107609`, built at
+`/home/zubair/development/clashlens-preview/https/build-20260925-performance-8107609`.
+Its API source is `https/api-src-20260925-performance-8107609`; four changed
+Python files match the merge, while five existing preview-specific files were
+preserved. The preview API is therefore not claimed to be identical to main.
+Earlier September 22 build paths are historical, not the current-build reference.
 Future updates need a
 fresh build directory and a restart of only the preview website service after
 its build mount is updated; never replace a build while it is serving requests.
 Start the dependent preview proxy and tunnel again after that restart if needed.
 The existing Tailscale preview on port 5173 still watches source changes.
 Do not run the main stack's `ops up` to update this preview.
+
+The preview's "Recent real battles" army view remains a fixed September 22
+capture, not a growing live dataset. #137 records improved downloads and selected
+query/render costs, along with remaining 390-to-980-pixel overflow in the opened
+army breakdown, heavy-view stalls and untested physical devices/Safari/Firefox.
+Carry these into #127/#130; do not treat preview checks as full-population proof.
 
 Setup checks (22 September 2026): production build and browser-secret scan
 passed; 93 login/account tests passed. Twelve page checks across phone, tablet

@@ -11,11 +11,14 @@ can make evidence-led decisions.
 - `website/` — the public TypeScript website and browser tests.
 - `deploy/` — migrations, service definitions, and deployment scripts.
 - [`docs/domain.md`](docs/domain.md) — durable Legend I game and evidence rules.
+- [`docs/product-status.md`](docs/product-status.md) — September 25 product decisions,
+  implementation gaps and the tracking/website launch order, linked to open issues.
 - [`AGENTS.md`](AGENTS.md) — contribution rules and source authority.
 
 The code, migrations, fixtures, and tests are authoritative for implemented
 behavior. Live GitHub issues are authoritative for current scope and status.
-The retained documentation records durable contracts; it is not a backlog.
+The domain and operations documents record durable contracts. The dated product
+map links those contracts to the live issue backlog; it does not replace it.
 
 ## Local development
 
@@ -28,7 +31,10 @@ With rootless Podman installed, start the whole product from a fresh checkout:
 This starts PostgreSQL 18, the collector, Python API and worker, website, and
 loopback-only Clash, archive, Google, and Discord fixtures. It uses 200
 synthetic Clashers by default; use `./dev up --players 12500` for the capacity
-population. No cloud credentials are needed, and the ready message reports
+population supported by the current tool. The October plan starts with about
+22,000 supplied tags plus later lists; the trial currently caps at 12,500 and
+must be extended and rerun before claiming that capacity. No cloud credentials
+are needed, and the ready message reports
 the measured startup time.
 
 ```sh

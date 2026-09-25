@@ -3,8 +3,10 @@
 ## Contract
 
 [Compact history and retention](history-retention.md#unit-quantity-and-outcome-summaries-issue-126)
-owns the current stored, public, deletion and availability rules. This file
-records the behavioral and storage evidence for that contract. This change did
+records the stored format delivered by #126/#135. This file preserves that
+behavioral and storage evidence; it does not prove the later Top 100, Clan
+Castle or EOD/rank additions in [#139](https://github.com/zzzubair/clashlens/issues/139).
+This change did
 not run a production migration, deployment, deletion or archive-retention
 operation.
 

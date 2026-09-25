@@ -1,5 +1,49 @@
 # Compact history and retention
 
+## Agreed changes, 2026-09-25
+
+These requirements extend the delivered #126 format; they are not yet runtime
+behavior. [#139](https://github.com/zzzubair/clashlens/issues/139) owns the new
+history views, [#129](https://github.com/zzzubair/clashlens/issues/129) owns
+scheduled cleanup, and [#122](https://github.com/zzzubair/clashlens/issues/122)
+owns backup-compatible raw retention. See [product-status.md](product-status.md)
+for deadlines and the full product map.
+
+- Keep daily EOD, attack gain, defense loss and EOD change from the previous
+  Legend day. Day 1 uses 5,000; Day 28 EOD supplies the season-ending trophies.
+  EOD 5,050 followed by 4,950 means -100. Missing EOD stays unknown. This is
+  distinct from the existing stored battle-result `net_change`.
+- Show final Clash Lens rank among tracked players on completed-season pages.
+  The current summary reads official-rank evidence; that must not substitute
+  for the new public rank. Keep official evidence and existing integrity fields.
+- Keep both all-tracked and final-season Top 100 army statistics. Fix Top 100
+  membership from final Clash Lens standings and include those players' recorded
+  battles across the whole season, not changing daily membership.
+- Preserve individual Clan Castle troop usage in both populations. The toggle
+  changes regular troops to individual Clan Castle troops; keep BY/AGAINST
+  views, unit identities, quantities, outcomes and denominators distinct.
+- Measure the added summary bytes and six-month cost. An unaffordable result
+  requires a decision; do not silently drop an agreed population or troop view.
+- New history views must be ready before the first tracked season ends,
+  November 2 at 05:00 UTC if tracking starts October 5. They do not block an
+  earlier tracking or website launch. Protect their required detail until ready.
+- Allow corrections for seven days after season end. Summaries can be visible
+  and updated during that window. Finalization and eligible detail retirement
+  must wait for the window, required summaries, verified coverage and existing
+  safety checks. Failed or unfinished work blocks cleanup. Keeping raw bytes
+  does not make a finalized season reopenable in the current code.
+- Keep raw responses available for every restore promised by the seven-day
+  backup window, including time to perform the restore. This is separate from
+  the seven-day season-correction window. Physical expiry enforcement and its
+  measured allowance/cost are still outstanding in #122 and #129.
+
+No existing counters, coverage evidence, unknown-unit history or kept production
+data are authorised for deletion by this documentation change. Historical day
+ranges, arbitrary trophy filters, battle drilldown, destruction, combinations
+and army-type classification remain outside the new history scope.
+
+## Implemented finalization and detail retirement
+
 Migration 0021 adds the durable completed-season detail-retirement
 record: one `season_detail_retirements` row per season storing the
 established boundaries, player/army summary digests, and retirement
@@ -95,8 +139,9 @@ python -m clashlens.cli materialize-army-season-summaries --season-id 1785714000
 The default is preview only. A season is completed under the same gate as
 the player summaries (confirmed anchor timing or a completed day-28
 publication); anything else, including a live season, is left untouched.
-Historical army reads cover Legend days 1–28 with the whole-season sample
-only: no day ranges, no population filters, no per-battle drilldown. Late
+The implemented v3 army reads cover Legend days 1–28 for all tracked players
+only: no day ranges, no population filters, no per-battle drilldown. The agreed
+Top 100 and Clan Castle additions above still need implementation. Late
 corrections refresh already-summarized seasons atomically with the day's
 facts; unchanged categories are a no-op.
 
@@ -197,16 +242,23 @@ Normal PostgreSQL vacuum makes deleted space reusable; deletion does not shrink
 relation files or imply that retained WAL/backups have expired. Do not run
 `VACUUM FULL` on production as part of routine cleanup.
 
-## Raw archive: 56 days after the season ends
+## Implemented raw expiry and required recovery protection
 
-Do **not** configure an upload-age lifecycle on the evidence namespace. A response
-retires 56 days after the 28-day season containing its latest sighting ends:
+Do **not** configure an upload-age lifecycle on the evidence namespace. The
+current code makes a response eligible for retirement 56 days after the 28-day
+season containing its latest sighting ends:
 the season boundary starts the clock, not each response's individual age. A body
 still returned in a later season keeps that season's later deadline; an earlier
 sighting never shortens it. The deadline derives from the response's own
 completion time, not the upload's: a season response uploaded after the season
 boundary still retires with its season. Existing catalogue entries are dated
 by their first verification time.
+
+That eligibility deadline alone does not meet the newly agreed recovery rule.
+Before enabling production expiry, #122/#129 must prove that no still-promised
+restore can reference bytes already deleted, including the restore allowance.
+The command below is the existing interface, not approval to apply its current
+physical-deletion timing in production.
 
 Run on the collector host, mounting the **exact same spool and lock directory**
 and using its archive instance/bucket/marker configuration. Supply separate
@@ -329,7 +381,8 @@ close those gates based on unit-test results alone.
 
 ## Unit, quantity and outcome summaries (issue 126)
 
-This section owns the current retained army-history contract. Migration 0035
+This section records the format delivered by #126/#135. The agreed additions
+at the top of this document are tracked separately in #139. Migration 0035
 and projection `army-unit-usage-v3` replace the earlier outcome
 and composition contract for newly built historical army summaries. They retain
 one whole-season usage count per namespace-qualified unit ID and quantity, using
@@ -339,8 +392,8 @@ records quantity five and one use. Battle-time trophy values and all clan-castle
 contributions are excluded.
 Player trophy summaries and current/live analytics are unchanged.
 
-Historical reads do not offer destruction, combinations, day ranges or population
-cohorts. Missing or legacy summaries without unit/quantity evidence
+The implemented v3 reads do not offer destruction, combinations, day ranges or
+population cohorts. Missing or legacy summaries without unit/quantity evidence
 return unavailable; there is no website fallback to partial battle detail.
 Unknown units have deterministic labels such as `Unknown spell (ID 900)`.
 Unclassified troop IDs appear in both troop and siege views as
