@@ -211,6 +211,30 @@ const filterLabels: Record<string, string> = {
   "cc-composition": "Clan Castle army",
 };
 const topPlayers = [5, 10, 20, 50, 100, 200, 500, 1000];
+const usageLabels: Record<string, string> = {
+  troops: "Troop",
+  spells: "Spell",
+  siege: "Siege machine",
+  heroes: "Hero",
+  pets: "Hero pet",
+  equipment: "Hero equipment",
+  "equipment-for-hero": "Equipment",
+  "cc-troops": "Clan Castle troop",
+  "hero-pet": "Hero and pet",
+  "hero-equipment": "Hero and equipment",
+  "cc-composition": "Clan Castle army",
+};
+
+function populationDescription(population: string) {
+  const [kind, start, end] = population.split("-");
+  if (kind === "all") return "all players";
+  if (kind === "top") return `top-${start} players`;
+  if (kind === "streak") return `players in the top ${end} on every selected day`;
+  if (kind === "band") return `players ranked ${start} to ${end}`;
+  if (kind === "trophies")
+    return `players with ${start} to ${end} trophies at battle time`;
+  return "the selected players";
+}
 
 type ArmyRow = ArmyAnalytics["rows"][number];
 const sortColumns = {
@@ -763,6 +787,11 @@ export default function ArmyAnalyticsRoute() {
           aria-label="Army statistics"
           aria-busy={navigation.state !== "idle"}
         >
+          <p className="section-note analytics-coverage-note" id="army-selection-help">
+            {usageLabels[category]} usage in attacks{" "}
+            <strong>{lens === "defense" ? "against" : "by"}</strong>{" "}
+            {populationDescription(population)}.
+          </p>
           <div className="analytics-kpis" aria-label="Battle coverage">
             <article className="analytics-kpi analytics-kpi-primary">
               <span>Battle records</span>
@@ -796,9 +825,6 @@ export default function ArmyAnalyticsRoute() {
             </span>
           </div>
           <p className="section-note analytics-coverage-note" id="army-rate-help">
-            {lens === "defense"
-              ? "Results are the attacking army’s stars against the selected players. "
-              : ""}
             Star rates show how often battles using each component ended with that result.
             Each battle counts once per component.
           </p>
@@ -811,7 +837,7 @@ export default function ArmyAnalyticsRoute() {
             <table
               className="data-table analytics-table"
               aria-label="Army analytics results"
-              aria-describedby="army-rate-help"
+              aria-describedby="army-selection-help army-rate-help"
             >
               <thead>
                 <tr>
