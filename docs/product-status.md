@@ -11,9 +11,9 @@ merely by consolidation. Update this map when decisions or status change.
 
 ## Launch order
 
-1. **Tracking from October 5 at 05:00 UTC, 06:00 UK time.** Start from about
-   22,000 supplied tags plus the September 30 list. Add the October 6 list while
-   collection continues. Normalize and deduplicate within/across lists and every
+1. **Tracking from October 5 at 05:00 UTC, 06:00 UK time.** Start from the
+   22,157 unique tags in four supplied lists plus the September 30 list. Add the
+   October 6 list while collection continues. Normalize and deduplicate within/across lists and every
    discovery source. Count supplied tags, distinct real players and eligible
    Legend I players separately. This replaces the old 12,500-player target.
 2. **Public website launch can follow mid-season.** It requires the real domain
@@ -59,8 +59,9 @@ deletion still require their specific approvals.
   Old 12,500-player evidence remains valid only for its measured workload.
 - The collector supports multiple keys, but `./ops` wires four regular keys
   and one separate interactive key. Each regular key has a configured allowance
-  of 30 starts/second. At 22,000 active players, two requests every five minutes
-  require about 146.7 starts/second before discovery, retries and Reset work;
+  of 30 starts/second. If all 22,157 supplied tags are active players, two requests
+  every five minutes require about 147.7 starts/second before discovery, retries
+  and Reset work;
   four keys allow at most 120. This is arithmetic, not measured throughput or a
   claim about the provider's actual limits. Zubair can supply additional keys.
 - Measure collection, processing, imports, clan growth, disk, database, archive,
@@ -71,6 +72,34 @@ deletion still require their specific approvals.
 - Aim around the existing EUR 50–60/month guide, not a hard cap. Flag an overrun
   with measured rates and six-month storage headroom. No upgrade, subscription
   or narrower retained history has been approved by this checkpoint.
+
+## Supplied lists checked September 25
+
+Zubair supplied these four text files. Counts below come from downloaded file
+contents, with whitespace trimmed and tags normalized to uppercase. Source
+digests identify the exact bytes inspected; they are SHA-256 file fingerprints.
+
+| Source | Tags | SHA-256 |
+| --- | ---: | --- |
+| [July 29](https://files.zubairshaik.net/public/clash_players/legend-player-tags-2026-07-29.txt) | 12,370 | `eff0111acfae3e29a8104145b0921bc257ac92e9a7d7518be6ea0c511f3909b4` |
+| [August 5](https://files.zubairshaik.net/public/clash_players/legend-player-tags-2026-08-05.txt) | 12,505 | `8faf740100635ef0b518998444fdc745a63914ea1830aed77b73a92cbcc33c67` |
+| [September 8](https://files.zubairshaik.net/public/clash_players/legend-player-tags-2026-09-08.txt) | 12,857 | `558979624d7e8475cd536871c62fc3e04298cec23dbfc35fc63e7148d1933e10` |
+| [September 22](https://files.zubairshaik.net/public/clash_players/legend-player-tags-2026-09-22.txt) | 13,098 | `e4a6c23a67ffcac758f6eedda24fbccb70ef9039ead093e313472444ca8ec83a` |
+
+- 50,830 source rows contain **22,157 unique tags**; combining the files removes
+  28,673 repeated entries. Each individual file has no duplicates or blank rows.
+- Older lists add 9,059 tags absent from the September 22 list. Keep their tags
+  and check present eligibility instead of discarding them because of list age.
+- All tags match the current tag-character rule after decoding. July 29 has an
+  invisible encoding header which the current importer would treat as part of
+  its first tag. Accept or remove that header before validation.
+- The normalized combined file sorts tags, uses one tag per line with a final
+  newline and no encoding header. Its fingerprint is
+  `5e4054acbeb67099641310f59761262b14184be9c669e050d3a6dc20d1de3b6c`.
+  Rebuild it from these sources rather than relying on a temporary local copy.
+- This was a file-content check only. No tags were imported into Clash Lens,
+  and real-player existence or current Legend I eligibility was not checked.
+  Source lists and combined tag contents are not stored in this repository.
 
 ## Evidence and status corrections
 
@@ -102,10 +131,9 @@ deletion still require their specific approvals.
 
 ## Open decisions and inputs
 
-- The current 22,000-tag list location/delivery. The old issue path
-  `/home/zubair/clash_players` did not exist on ser5ver during the review.
-  September 30 and October 6 lists are future inputs, not imported populations.
-- Actual distinct/real/eligible counts, needed key count, measured growth capacity
+- The initial four list locations and their 22,157 distinct tags are confirmed
+  above. September 30 and October 6 lists remain future inputs.
+- Actual confirmed-real/eligible counts, needed key count, measured growth capacity
   and cost. Establish the operational discovery budget and how daily clan checks
   reuse recent eligibility evidence without losing Monday/rediscovery checks.
 - Added storage for both historical populations and Clan Castle units; measured
