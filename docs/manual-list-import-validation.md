@@ -5,7 +5,22 @@ imports for launch instead of extending the old bootstrap command or building
 a reusable import feature. This verifies the manual database operation and
 existing eligibility processing; it does not authorize or prove a live import.
 
-## Procedure verified
+## Later clarification of the workload
+
+Zubair clarified after this test that the launch target is 12,500 live players
+within 22,157 total known tags. Already-known inactive players need a routine
+eligibility check once a week, at the Monday transition. Repeat inputs within
+that week reuse their result; new tags still need an initial check. Live
+players continue supplying eligibility evidence through regular collection.
+
+The test below verifies initial load, unfinished-work reuse, history retention
+and eligibility processing. It does **not** prove weekly scheduling or reuse
+of completed checks within a week. Before a later manual load, select only new
+or weekly-due candidates, as well as unfinished work needing its existing
+retry. Do not automatically recheck every known inactive tag in a repeated
+list. Keep this new requirement distinct from the measured results below.
+
+## Procedure verified before the cadence clarification
 
 Use the existing database connection tools and functions. No new script,
 command, dependency, migration or application change was added.
@@ -38,8 +53,10 @@ command, dependency, migration or application change was added.
 
 The database helper alone is insufficient for a manual retry: its duplicate
 work key includes a five-minute cycle. Step 4 prevents a later retry from
-adding a second unfinished check. A later submission may legitimately recheck
-an inactive player whose previous check finished. Keep the normal collector
+adding a second unfinished check. The tested operation can recheck an inactive
+player whose previous check finished; the later weekly rule requires excluding
+players not yet due before this operation. That exclusion was not tested here.
+Keep the normal collector
 startup and Reset handling; the import must not bypass them.
 
 The legacy `bootstrap-population` command still rejects more than 20,000 tags,

@@ -4,13 +4,17 @@
 
 The [product map](product-status.md) and [#119](https://github.com/zzzubair/clashlens/issues/119)
 separate collection readiness from public website launch. Target collection
-from the October 5 05:00 UTC season boundary using about 22,000 supplied tags
-plus the September 30 list. Add the October 6 list during collection, with one
-identity per tag across all inputs. Plan any approved warm-up before that
+from the October 5 05:00 UTC season boundary with 12,500 live players within a
+total known pool of 22,157 supplied tags. Check known-player eligibility weekly
+at the Monday transition, reusing fresh live profiles and that week's completed
+checks. Include the September 30 list and add the October 6 list during
+collection, with one identity per tag. New tags need their first check. Plan
+any approved warm-up before that
 boundary; starting a cold import at 05:00 is not proof of complete Day 1 data.
 
 Before real traffic: prove backups/restores, delivered private Discord alerts,
-repeated imports, accuracy and revised-population capacity. #128 owns the bounded
+repeated imports, accuracy and capacity for 12,500 live players plus weekly
+known-player checks. #128 owns the bounded
 real rehearsal; its resulting cost/storage evidence must be accepted before
 ongoing collection. The complete public website and clan discovery need not
 delay starting from supplied lists. Public release separately needs the real
@@ -20,12 +24,13 @@ Current commands below describe implemented behavior. The old bootstrap command
 caps at 20,000 tags and rejects duplicate input and later new imports. Launch
 lists will use the [verified manual operator procedure](manual-list-import-validation.md),
 which preserves existing identities and queues checks through existing functions.
-No reusable import feature is needed. Live import is still pending. `./dev trial` caps
-at 12,500, and `./ops` loads exactly four regular API keys. The collector's key
-pool supports more keys, but the production wiring does not yet expose them.
-Zubair can supply more; #128 must extend and measure the trial/key limits before
-claiming readiness for the supplied population. Do not weaken safeguards or
-advertise an unsupported 22,000-player command.
+No reusable import feature is needed. Live import and weekly scheduling/reuse
+remain pending. `./dev trial` supports the 12,500 active-player target, and
+`./ops` loads four regular API keys. #128 must measure that active workload
+alongside the 22,157-tag known pool and weekly checks. Raising the live-player
+trial limit or adding keys is not required merely because the known pool is
+larger. The collector supports more keys and Zubair can supply them if measured
+demand requires additional production wiring. Keep existing safeguards.
 
 ## Existing service lifecycle
 
@@ -294,7 +299,8 @@ and restore proof; #129 must use that protection in scheduled cleanup. Do not
 enable production expiry until it is proven. Seven extra days add about 10%
 to the older modeled 70-day average raw lifetime, roughly €0.40–€2/month using
 #120's €4–€20 range. This is an earlier pricing model, not a measured bill or a
-final restore allowance; reprice it for the revised population and growth.
+final restore allowance; reprice it for 12,500 live players, weekly checks of
+the 22,157-tag known pool and measured growth.
 
 Validation on 2026-09-19 used a separate PostgreSQL cluster with all 34 migrations
 and synthetic records, under R2 prefix `validation-20260919`. A full backup took

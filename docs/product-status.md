@@ -11,11 +11,15 @@ merely by consolidation. Update this map when decisions or status change.
 
 ## Launch order
 
-1. **Tracking from October 5 at 05:00 UTC, 06:00 UK time.** Start from the
-   22,157 unique tags in four supplied lists plus the September 30 list. Add the
-   October 6 list while collection continues. Normalize and deduplicate within/across lists and every
-   discovery source. Count supplied tags, distinct real players and eligible
-   Legend I players separately. This replaces the old 12,500-player target.
+1. **Tracking from October 5 at 05:00 UTC, 06:00 UK time.** Plan for **12,500
+   live-tracked players** within the **22,157-tag total known-player pool** from
+   the four supplied lists. Check known-player eligibility once a week, at the
+   Monday transition; active players already supply fresh profiles through
+   normal collection. The two counts are not added together. Include the
+   September 30 list and add the October 6 list while collection continues.
+   Normalize/deduplicate every source and count supplied, confirmed-real and
+   eligible players separately. Zubair corrected the earlier interpretation
+   that all 22,157 tags would be live-tracked; the 12,500 active target stands.
 2. **Public website launch can follow mid-season.** It requires the real domain
    and logins, complete feature checks, community/private support, invited
    testing and final operating handover. Clan discovery must be ready for this
@@ -39,7 +43,7 @@ deletion still require their specific approvals.
 | Collection and discovery | Keep every confirmed real tag regardless of Town Hall or league. Automatically track eligible Legend I players, without a Start tracking button or public-lookup login. Manual list imports are locally verified using existing database/eligibility functions; no reusable import feature is required for launch. Production automatic discovery is disabled and clan fetching is missing. | [#125](https://github.com/zzzubair/clashlens/issues/125), [manual verification](manual-list-import-validation.md) |
 | Clan discovery | Fetch a clan on first encounter and its member list daily. Reuse identities across lists, opponents, user input and clans. Size automatic growth before enabling it; a permanent newcomer waiting list is not the chosen product. | #125, [#128](https://github.com/zzzubair/clashlens/issues/128) |
 | Search and player pages | Name search includes currently tracked players or players with recorded history. Other known tags remain directly accessible with an eligibility explanation and any history, without a full current profile. Current search/page behavior needs changing. | #125, [#127](https://github.com/zzzubair/clashlens/issues/127) |
-| Accuracy, Reset and rankings | Preserve evidence, honest missing/partial results, one battle across duplicate reports, 05:00 UTC Legend days and 28-day seasons. Public rank is among Clash Lens tracked players. A full real Legend day at the revised population is still unproven. | [Domain contract](domain.md), #128 |
+| Accuracy, Reset and rankings | Preserve evidence, honest missing/partial results, one battle across duplicate reports, 05:00 UTC Legend days and 28-day seasons. Public rank is among Clash Lens tracked players. A full real Legend day at 12,500 active players, plus weekly known-player checks, is still unproven. | [Domain contract](domain.md), #128 |
 | Player history | Keep daily EOD, gain, loss and EOD difference from the previous day; Day 1 uses 5,000 and Day 28 supplies season-ending trophies. Show only Clash Lens final rank. Existing summaries have daily entries, but stored battle net and official final rank are not these new meanings. | [#139](https://github.com/zzzubair/clashlens/issues/139) |
 | Army analytics | Percentages use completed Legend days after Reset. Attacks are BY selected players; defenses AGAINST them. Historical all-player and final-season Top 100 views must retain individual Clan Castle usage. Current history has all-player unit/quantity/star summaries only. | #139, [Retention contract](history-retention.md) |
 | Accounts, saved players and groups | Usernames are fixed; display names remain editable. Verified ownership is public, saved lists/groups private, and membership proves no ownership. New tag inputs share discovery rules. No export product. Real-provider completion and whole-product privacy checks remain. | [#123](https://github.com/zzzubair/clashlens/issues/123), #127 |
@@ -47,6 +51,14 @@ deletion still require their specific approvals.
 | Recovery and retention | Prove seven-day recovery with required raw bytes still available during restore. Allow season corrections for seven days, then checked finalization and bounded cleanup. These are separate windows. Scheduling and physical-expiry protection are not finished. | [#122](https://github.com/zzzubair/clashlens/issues/122), [#129](https://github.com/zzzubair/clashlens/issues/129) |
 | Discord and support | Public discussion/feedback, Discord-only private tickets through an existing bot, and a separate private operator-alert channel using an incoming webhook. No custom bot or email fallback. Setup and delivery are unproven. | [#138](https://github.com/zzzubair/clashlens/issues/138), [#124](https://github.com/zzzubair/clashlens/issues/124) |
 | Release and operation | Tracking and public website have separate readiness records. Keep exact revisions, usable data checks, restore/reboot/upgrade evidence, costs and an operating guide. | [#131](https://github.com/zzzubair/clashlens/issues/131) |
+
+For already-known inactive players, routine eligibility rechecks are weekly.
+Repeated lists, visits and daily clan membership checks reuse the current
+week's result rather than trigger additional eligibility fetches. A genuinely
+new tag still needs its first existence/eligibility check. Continue to apply
+fresh eligibility evidence from normal live tracking. Weekly scheduling and
+fresh-result reuse remain unverified; the manual-import proof predates this
+cadence clarification. See [the domain rules](domain.md#identity-and-eligibility).
 
 ## Capacity and implementation limits
 
@@ -57,15 +69,19 @@ deletion still require their specific approvals.
   at 22,157 synthetic tags, including overlaps and interruptions. The old
   command remains unchanged; no reusable import feature is needed for launch.
 - `./dev up` supports 200 or 12,500 fake players; `./dev trial` caps at 12,500.
-  The existing tools and their reported projections need the revised population.
-  Old 12,500-player evidence remains valid only for its measured workload.
+  That matches the active launch target; raising the live-player limit to
+  22,157 is not required. Measure 12,500 live players alongside a 22,157-tag
+  known pool and its weekly eligibility work. Prior 12,500-player evidence is
+  a relevant baseline, with its original revision and workload limits intact.
 - The collector supports multiple keys, but `./ops` wires four regular keys
   and one separate interactive key. Each regular key has a configured allowance
-  of 30 starts/second. If all 22,157 supplied tags are active players, two requests
-  every five minutes require about 147.7 starts/second before discovery, retries
-  and Reset work;
-  four keys allow at most 120. This is arithmetic, not measured throughput or a
-  claim about the provider's actual limits. Zubair can supply additional keys.
+  of 30 starts/second. At 12,500 active players, two requests every five minutes
+  require about 83.3 starts/second before first-time/weekly checks, retries,
+  league-history reads and Reset work; four keys allow at most 120. This is
+  arithmetic, not measured throughput or a provider-limit guarantee. The earlier
+  147.7 figure assumed every supplied tag was active and is not the launch
+  workload. Measure the existing setup first; additional keys and wiring are
+  needed only if measured demand requires them. Zubair can supply more keys.
 - Measure collection, processing, imports, clan growth, disk, database, archive,
   backups and restore load together. Keep swap out of the capacity budget.
   Report known-tag/clan growth and eligibility-check cost as well as active
@@ -141,9 +157,10 @@ existing eligibility processing locally; live import and capacity are pending.
 
 - The initial four list locations and their 22,157 distinct tags are confirmed
   above. September 30 and October 6 lists remain future inputs.
-- Actual confirmed-real/eligible counts, needed key count, measured growth capacity
-  and cost. Establish the operational discovery budget and how daily clan checks
-  reuse recent eligibility evidence without losing Monday/rediscovery checks.
+- Actual confirmed-real/eligible counts against the 12,500 active planning target,
+  needed key count, measured growth capacity and cost. Prove the weekly Monday
+  eligibility pass and reuse of that week's result across repeat inputs and
+  daily clan checks. The 22,157 known count is not a measured active count.
 - Added storage for both historical populations and Clan Castle units; measured
   raw-deletion restore allowance and the revised six-month projection.
 - Discord server/invite/channel identifiers, ticket provider/plan, permissions,
@@ -173,6 +190,9 @@ details and their historical evidence:
 - Eligibility: malformed and nonexistent tags differ from temporary failures.
   Recognized entry/exit changes collection and ranking; missing/unknown tier
   evidence preserves the last confirmed state. Re-entry reuses the same player.
+  New tags receive an initial check. Known inactive tags are checked once per
+  week; repeated lists/visits/clan scans within that week reuse the result.
+  Verify the next Monday's check, including interrupted work and bounded retries.
   Earlier days for a late arrival remain missing rather than invented.
 - Discovery and search: anonymous exact-tag visits begin automatically with
   useful progress/failure/retry. Name results contain tracked/historical players

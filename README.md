@@ -30,12 +30,13 @@ With rootless Podman installed, start the whole product from a fresh checkout:
 
 This starts PostgreSQL 18, the collector, Python API and worker, website, and
 loopback-only Clash, archive, Google, and Discord fixtures. It uses 200
-synthetic Clashers by default; use `./dev up --players 12500` for the capacity
-population supported by the current tool. The October plan starts with about
-22,000 supplied tags plus later lists; the trial currently caps at 12,500 and
-must be extended and rerun before claiming that capacity. No cloud credentials
-are needed, and the ready message reports
-the measured startup time.
+synthetic Clashers by default; use `./dev up --players 12500` for the launch
+live-tracking population. The four supplied lists contain 22,157 unique tags
+in the total known-player pool, including the live-tracked players. Known-player
+eligibility is checked weekly; it is not a 22,157-player continuous collection
+load. Verify weekly checks alongside 12,500 live players using the existing
+tools. No cloud credentials are needed, and the ready message reports the
+measured startup time.
 
 ```sh
 ./dev status

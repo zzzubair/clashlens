@@ -74,11 +74,21 @@ A domain change is complete only when every affected source observation, derived
 - Discover clan members when a clan is first encountered and check its member
   list daily thereafter. Keep duplicate work bounded without dropping new tags.
   Starting collection from supplied lists does not wait for clan discovery.
-- Check every newly discovered or submitted tag against the current official
+- Check every previously unknown tag against the current official
   profile and add it to active tracking immediately after confirming that the
   player is in Legend I.
 - When newer valid eligibility evidence shows that an actively tracked player left Legend I, retain the tag and history but remove the player from active Legend I tracking.
-- Re-evaluate inactive known players during the Monday promotion and demotion transition and whenever a tag is rediscovered or submitted.
+- Re-evaluate inactive known players once a week during the Monday promotion
+  and demotion transition. Repeated submissions, overlapping imports, visits
+  and daily clan membership checks reuse that week's result. They do not each
+  start a new eligibility check. This supersedes the earlier every-rediscovery
+  recheck rule. Initial checks for new tags and bounded retries of unfinished
+  or failed work are separate from another routine weekly pass.
+- Active players continue supplying current eligibility evidence through their
+  normal profile collection; the weekly known-player check does not replace or
+  slow their live collection. The launch planning target is 12,500 active players
+  within a total pool initially containing 22,157 supplied tags, not 22,157
+  continuously tracked players. Actual existence/eligibility remains to be checked.
 - Retaining inactive tags must allow later ranked-tournament support without re-creating player identity or losing history.
 
 ### Completed-season player history

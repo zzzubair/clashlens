@@ -5,8 +5,12 @@ players. Five minutes is the minimum revisit interval, not a batch deadline.
 
 ## Agreed discovery and population changes, 2026-09-25
 
-The [launch map](product-status.md) targets October 5 collection from about
-22,000 supplied tags, plus a September 30 list, with another import on October 6.
+The [launch map](product-status.md) targets October 5 collection for 12,500 live
+players within a total known pool of 22,157 supplied tags. Add the September 30
+list and import another on October 6. Known-player eligibility is checked once
+per week at the Monday transition; reuse fresh profiles from live collection.
+Repeated inputs and daily clan scans reuse that week's result for known players.
+First-time tags need an initial existence/eligibility check.
 Normalize and deduplicate within/across lists and all other tag sources. Retain
 every confirmed real player regardless of Town Hall or league; regularly collect
 only eligible Legend I players. New public tag lookups need no Start tracking
@@ -18,11 +22,13 @@ through existing database/eligibility functions. No reusable import feature is
 required. The legacy `bootstrap-population` command caps input at 20,000,
 rejects duplicate lines and refuses a later new import; it remains unchanged.
 Automatic discovery requirements remain in [#125](https://github.com/zzzubair/clashlens/issues/125).
-Production still rejects
-the discovery-enabled flag. The current trial caps at 12,500; production loads
-four regular keys and one separate interactive key. Extra keys are available
-from Zubair, but deployment wiring and measured collection, processing, storage
-and cost must support the revised population before claiming readiness.
+Production still rejects the discovery-enabled flag. The current trial's
+12,500-player size matches the active target; add the known pool and weekly
+check workload to verification without treating all known tags as live players.
+Production loads four regular keys and one separate interactive key. Measure
+collection, weekly checks, processing, storage and cost before deciding whether
+additional keys or wiring changes are necessary. Weekly scheduling and reuse of
+finished checks have not been verified by the manual-import test.
 
 The runtime behavior described below is the implementation at `01f746f`.
 
