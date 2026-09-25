@@ -36,7 +36,7 @@ deletion still require their specific approvals.
 
 | Area | Agreed behavior and implementation gap | Supporting detail |
 | --- | --- | --- |
-| Collection and discovery | Keep every confirmed real tag regardless of Town Hall or league. Automatically track eligible Legend I players, without a Start tracking button or public-lookup login. Existing opponent/ranking paths retain identities, but production discovery is disabled; repeat imports and clan fetching are missing. | [#125](https://github.com/zzzubair/clashlens/issues/125) |
+| Collection and discovery | Keep every confirmed real tag regardless of Town Hall or league. Automatically track eligible Legend I players, without a Start tracking button or public-lookup login. Manual list imports are locally verified using existing database/eligibility functions; no reusable import feature is required for launch. Production automatic discovery is disabled and clan fetching is missing. | [#125](https://github.com/zzzubair/clashlens/issues/125), [manual verification](manual-list-import-validation.md) |
 | Clan discovery | Fetch a clan on first encounter and its member list daily. Reuse identities across lists, opponents, user input and clans. Size automatic growth before enabling it; a permanent newcomer waiting list is not the chosen product. | #125, [#128](https://github.com/zzzubair/clashlens/issues/128) |
 | Search and player pages | Name search includes currently tracked players or players with recorded history. Other known tags remain directly accessible with an eligibility explanation and any history, without a full current profile. Current search/page behavior needs changing. | #125, [#127](https://github.com/zzzubair/clashlens/issues/127) |
 | Accuracy, Reset and rankings | Preserve evidence, honest missing/partial results, one battle across duplicate reports, 05:00 UTC Legend days and 28-day seasons. Public rank is among Clash Lens tracked players. A full real Legend day at the revised population is still unproven. | [Domain contract](domain.md), #128 |
@@ -52,8 +52,10 @@ deletion still require their specific approvals.
 
 - `bootstrap-population` in `python/src/clashlens/bootstrap.py` accepts at most
   20,000 tags, rejects duplicates within the input and refuses a later new
-  import. Reuse/extend the existing path for overlapping lists and interrupted
-  imports; do not create a parallel import framework.
+  import. Zubair chose manual operator imports using the existing database and
+  eligibility functions. [Verification](manual-list-import-validation.md) passed
+  at 22,157 synthetic tags, including overlaps and interruptions. The old
+  command remains unchanged; no reusable import feature is needed for launch.
 - `./dev up` supports 200 or 12,500 fake players; `./dev trial` caps at 12,500.
   The existing tools and their reported projections need the revised population.
   Old 12,500-player evidence remains valid only for its measured workload.
@@ -101,6 +103,10 @@ digests identify the exact bytes inspected; they are SHA-256 file fingerprints.
   and real-player existence or current Legend I eligibility was not checked.
   Source lists and combined tag contents are not stored in this repository.
 
+The later [manual-import verification](manual-list-import-validation.md) used
+synthetic players, not these real tags. It proved the operator procedure and
+existing eligibility processing locally; live import and capacity are pending.
+
 ## Evidence and status corrections
 
 - #120 provider choice and #121 storage wiring are closed. #126 was delivered
@@ -125,9 +131,11 @@ digests identify the exact bytes inspected; they are SHA-256 file fingerprints.
   active players, a 15,292,095-byte database and 22 successful change-log uploads
   with zero recorded failures. The backup timer was active, with three listed
   backups. This proves neither a seven-day restore nor full-load readiness.
-- Source/docs/GitHub were inspected for this checkpoint. No product tests,
-  real API collection, imports, restore drills or deployment were run. Existing
-  validation documents retain their original dates, revisions and limitations.
+- The initial documentation checkpoint inspected source/docs/GitHub without
+  runtime work. Later manual-import verification ran isolated database checks
+  and 21 existing tests; see the linked evidence. No real API collection, live
+  import, restore drill or deployment was run. Earlier validation documents
+  retain their original dates, revisions and limitations.
 
 ## Open decisions and inputs
 

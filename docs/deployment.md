@@ -16,11 +16,14 @@ ongoing collection. The complete public website and clan discovery need not
 delay starting from supplied lists. Public release separately needs the real
 domain/logins, full feature checks, invited testing and #131 handover.
 
-Current commands below describe implemented behavior. The importer caps at
-20,000 tags, rejects duplicate input and later new imports. `./dev trial` caps
+Current commands below describe implemented behavior. The old bootstrap command
+caps at 20,000 tags and rejects duplicate input and later new imports. Launch
+lists will use the [verified manual operator procedure](manual-list-import-validation.md),
+which preserves existing identities and queues checks through existing functions.
+No reusable import feature is needed. Live import is still pending. `./dev trial` caps
 at 12,500, and `./ops` loads exactly four regular API keys. The collector's key
 pool supports more keys, but the production wiring does not yet expose them.
-Zubair can supply more; #125/#128 must fix and measure these limits before
+Zubair can supply more; #128 must extend and measure the trial/key limits before
 claiming readiness for the supplied population. Do not weaken safeguards or
 advertise an unsupported 22,000-player command.
 

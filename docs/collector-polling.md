@@ -13,9 +13,12 @@ only eligible Legend I players. New public tag lookups need no Start tracking
 button. Clan discovery adds first-seen and daily member-list checks, but does
 not block starting from supplied lists.
 
-These are requirements in [#125](https://github.com/zzzubair/clashlens/issues/125),
-not implemented import commands: `bootstrap-population` caps input at 20,000,
-rejects duplicate lines and refuses a later new import. Production still rejects
+Launch lists will use [verified manual operator imports](manual-list-import-validation.md)
+through existing database/eligibility functions. No reusable import feature is
+required. The legacy `bootstrap-population` command caps input at 20,000,
+rejects duplicate lines and refuses a later new import; it remains unchanged.
+Automatic discovery requirements remain in [#125](https://github.com/zzzubair/clashlens/issues/125).
+Production still rejects
 the discovery-enabled flag. The current trial caps at 12,500; production loads
 four regular keys and one separate interactive key. Extra keys are available
 from Zubair, but deployment wiring and measured collection, processing, storage
