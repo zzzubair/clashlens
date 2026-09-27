@@ -52,6 +52,7 @@ These are what the words in this repo mean. Use the plain version when you talk 
 - **Fixture**: a fake version of an outside service (Clash API, Google login, storage) that runs locally so nothing needs real credentials.
 - **Trial**: a timed run of the whole system against fake players to see if it keeps up.
 - **Reconciliation**: working out a player's real daily result when their battles and profile snapshots don't line up.
+- **Webhook**: a secret Discord URL the alert check posts messages to.
 - **Quadlet**: Podman's text-file way of running a container as a system service.
 
 If you introduce a new term, add it here in the same PR. One plain sentence.

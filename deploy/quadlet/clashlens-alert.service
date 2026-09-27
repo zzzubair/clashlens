@@ -1,0 +1,9 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens private Discord alert check
+PartOf=clashlens.target
+
+[Service]
+Type=oneshot
+ExecStart=@@ROOT@@/ops alert-check
+TimeoutStartSec=4min

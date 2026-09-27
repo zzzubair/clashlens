@@ -31,6 +31,7 @@ Usage: ./ops build [--fixture]
        ./ops queue-status
        ./ops backup
        ./ops backup-status
+       ./ops alert-check
        ./ops backup-prune [--apply]
        ./ops failed-items [--limit N|--work-id N|--upload-hash SHA256] [--apply]
        ./ops support-recovery-exec <arguments>
@@ -62,7 +63,7 @@ finish() {
   trap - EXIT HUP INT TERM
   cleanup_admin_secret || result=1
   if (( result != 0 )) && [[ "$UP_IN_PROGRESS" == true ]]; then
-    "$SYSTEMCTL_BIN" --user stop clashlens-backup.timer clashlens-backup.service >/dev/null 2>&1 || true
+    "$SYSTEMCTL_BIN" --user stop clashlens-backup.timer clashlens-backup.service clashlens-alert.timer clashlens-alert.service >/dev/null 2>&1 || true
     "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
     local unit
     for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume; do
@@ -377,6 +378,8 @@ guard_generated_units() {
   managed_unit_file "$USER_UNIT_DIR/clashlens.target"
   managed_unit_file "$USER_UNIT_DIR/clashlens-backup.service"
   managed_unit_file "$USER_UNIT_DIR/clashlens-backup.timer"
+  managed_unit_file "$USER_UNIT_DIR/clashlens-alert.service"
+  managed_unit_file "$USER_UNIT_DIR/clashlens-alert.timer"
 }
 
 managed_label() {
@@ -465,7 +468,7 @@ guard_systemd_units() {
   done
   fragment=$($SYSTEMCTL_BIN --user show clashlens.target --property=FragmentPath --value 2>/dev/null || true)
   [[ -z "$fragment" || "$fragment" == "$USER_UNIT_DIR/clashlens.target" ]] || die "refusing unmanaged systemd unit clashlens.target"
-  for unit in clashlens-backup.service clashlens-backup.timer; do
+  for unit in clashlens-backup.service clashlens-backup.timer clashlens-alert.service clashlens-alert.timer; do
     fragment=$($SYSTEMCTL_BIN --user show "$unit" --property=FragmentPath --value 2>/dev/null || true)
     [[ -z "$fragment" || "$fragment" == "$USER_UNIT_DIR/$unit" ]] || die "refusing unmanaged systemd unit $unit"
   done
@@ -652,7 +655,7 @@ render() {
 
 render_units() {
   mkdir -p "$QUADLET_DIR" "$USER_UNIT_DIR"
-  local template base fixture_requires fixture_ports backup_secret= archive_args= backup_requires=
+  local template base fixture_requires fixture_ports backup_secret= archive_args= backup_requires= alert_requires=
   fixture_requires=
   fixture_ports=
   [[ "$MODE" != fixture ]] || fixture_requires='Requires=clashlens-archive.service clashlens-clash-api.service clashlens-login.service'
@@ -689,7 +692,13 @@ render_units() {
   if [[ "$MODE" != fixture ]]; then
     rm -f "$QUADLET_DIR/clashlens-archive.container" "$QUADLET_DIR/clashlens-clash-api.container" "$QUADLET_DIR/clashlens-login.container"
   fi
-  render "$TEMPLATE_DIR/clashlens.target" "$USER_UNIT_DIR/clashlens.target" FIXTURE_REQUIRES "$fixture_requires" BACKUP_REQUIRES "$backup_requires"
+  if [[ "$MODE" == production ]]; then
+    [[ "$ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "alert service requires a checkout path without spaces or systemd specifiers"
+    alert_requires='Wants=clashlens-alert.timer'
+    render "$TEMPLATE_DIR/clashlens-alert.service" "$USER_UNIT_DIR/clashlens-alert.service" ROOT "$ROOT"
+    render "$TEMPLATE_DIR/clashlens-alert.timer" "$USER_UNIT_DIR/clashlens-alert.timer"
+  fi
+  render "$TEMPLATE_DIR/clashlens.target" "$USER_UNIT_DIR/clashlens.target" FIXTURE_REQUIRES "$fixture_requires" BACKUP_REQUIRES "$backup_requires" ALERT_REQUIRES "$alert_requires"
   if backup_enabled; then
     [[ "$ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "backup service requires a checkout path without spaces or systemd specifiers"
     render "$TEMPLATE_DIR/clashlens-backup.service" "$USER_UNIT_DIR/clashlens-backup.service" ROOT "$ROOT"
@@ -1015,7 +1024,7 @@ ensure_linger() {
 }
 
 stop_units() {
-  "$SYSTEMCTL_BIN" --user stop clashlens-backup.timer clashlens-backup.service >/dev/null 2>&1 || true
+  "$SYSTEMCTL_BIN" --user stop clashlens-backup.timer clashlens-backup.service clashlens-alert.timer clashlens-alert.service >/dev/null 2>&1 || true
   "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
   local unit state
   for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
@@ -1088,6 +1097,7 @@ up_stack() {
   migrate_legacy_units
   guard_systemd_units
   UP_IN_PROGRESS=true
+  write_alert_intent stopped
   stop_units
   mkdir -p "$STATE_DIR"
   local mode_file
@@ -1120,6 +1130,7 @@ up_stack() {
     die "the healthy stack could not be enabled for reboot"
   fi
   promote_active_release
+  write_alert_intent running
   UP_IN_PROGRESS=false
   printf 'Clash Lens %s is ready at http://127.0.0.1:%s and is enabled after reboot.\n' "$MODE" "$WEBSITE_PORT"
 }
@@ -1318,6 +1329,24 @@ if candidates:
   wal_g delete before "$anchor" --use-sentinel-time ${apply:+"$apply"}
 }
 
+write_alert_intent() {
+  local temporary
+  temporary=$(mktemp "$STATE_DIR/alert-intent.XXXXXX")
+  chmod 600 "$temporary"
+  printf '%s\n' "$1" > "$temporary"
+  mv -f "$temporary" "$STATE_DIR/alert-intent"
+}
+
+alert_check() {
+  [[ "$(current_prefix)" == clashlens ]] || die "alert-check is unavailable in fixture mode"
+  validate_directory_ancestry "$STATE_DIR"
+  load_kv_file "$ENV_FILE" CONFIG
+  python3 "$ROOT/python/src/clashlens/alerts.py" "$STATE_DIR" "$ROOT" \
+    "$(setting CLASHLENS_DISCORD_ALERT_WEBHOOK_FILE "$(setting CLASHLENS_API_KEY_HOST_DIR /srv/clashlens-secrets)/clashlens-discord-alert-webhook")" \
+    "$(setting CLASHLENS_HEALTH_PORT 8081)" "$(setting CLASHLENS_SPOOL_ROOT /srv/clashlens-data/spool)" \
+    "$(setting CLASHLENS_SPOOL_MAX_BYTES 17179869184)" "$(setting CLASHLENS_SPOOL_MAX_OBJECTS 1000000)"
+}
+
 command=${1:-}
 [[ -n "$command" ]] || { usage; exit 2; }
 shift
@@ -1330,6 +1359,7 @@ case "$command" in
     require_host
     validate_directory_ancestry "$STATE_DIR"; validate_directory_ancestry "$QUADLET_DIR"; validate_directory_ancestry "$USER_UNIT_DIR"
     guard_generated_units; guard_existing_resources; cleanup_stale_admin_state; migrate_legacy_units; guard_systemd_units
+    write_alert_intent stopped
     stop_units; "$SYSTEMCTL_BIN" --user daemon-reload
     printf 'Clash Lens is disabled and stopped; database, spool and fixture archive data were kept.\n'
     ;;
@@ -1345,6 +1375,7 @@ case "$command" in
     acquire_mutation_lock "$wait_for_lock"
     backup
     ;;
+  alert-check) (($# == 0)) || die "alert-check takes no arguments"; alert_check ;;
   backup-status) (($# == 0)) || die "backup-status takes no arguments"; backup_status ;;
   backup-prune) acquire_mutation_lock; backup_prune "$@" ;;
   failed-items)
