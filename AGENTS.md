@@ -9,6 +9,7 @@ I'm Zubair. I own this product. I can follow Python and TypeScript, I can't read
 ## How to talk to me
 
 - Plain English. Define every technical term or abbreviation the first time you use it, in the same sentence—even in findings and proposed requirements.
+- Before sending any reply, scan for unexplained jargon, including in status updates and review findings. Replace internal labels with plain descriptions of the behavior or result, such as "checks on this exact version of the code" for "exact-head checks".
 - Answer first, detail after. If you need a decision from me, put that in the first line.
 - Options: max three, tell me which one you'd pick and why, and what I lose with each. Don't hand me a list and make me choose blind.
 - Numbers, not adjectives. "Deletes 4,200 lines", not "simplifies a lot".
@@ -62,9 +63,8 @@ If you introduce a new term, add it here in the same PR. One plain sentence.
 - Smallest change that does the job. Reuse what's there. No abstractions for things that don't exist yet.
 - Delete before you add. Any PR adding more than 300 lines says what it deletes, or why nothing can go.
 - No new scripts, harnesses or checkers without asking me. There are already too many.
-- Test what a user or I would notice if it broke. Don't test spelling of a string, order of function calls, or the shape a private helper returns. If an existing test like that blocks you, tell me and propose deleting it.
-- Never edit a test to make it match the code. Either the code is wrong or the test protects nothing.
 - A file over 1,500 lines, tests included, is something you report, not somewhere you add more.
+- Check line counts before editing source or test files. If a target is over 1,500 lines, report its path and count and propose a way to make the change without growing it.
 - Use `gh` for issues, PRs and checks.
 
 ## Reporting
@@ -77,7 +77,11 @@ End every piece of work with:
 4. Anything out of scope I should know about.
 5. What you need me to decide, if anything.
 
+For failed, skipped, blocked or unrun checks, name the behavior left unverified and why. Keep unresolved failures visible even when narrower checks pass; distinguish reading code from running it.
+
 Short. I'll ask if I want more.
+
+Default to 2–4 short sentences or at most 3 short bullets, under 80 words. Cover the five reporting points together and link detailed evidence when needed. Expand when I ask for detail or need it to decide.
 
 ## The server
 
