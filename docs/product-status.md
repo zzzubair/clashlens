@@ -1,36 +1,40 @@
 # Product decisions and launch map
 
-Agreed with Zubair on September 25, 2026. Source inspected at `01f746f` on
-`main`. This is a documentation checkpoint, not a release or new runtime proof.
-Zubair defines intended behavior. [#119](https://github.com/zzzubair/clashlens/issues/119)
-is the one working launch checklist; this document and the contracts below hold
-the detail. Supporting issues preserve requirements and evidence, rather than
-acting as separate work queues. Their closure as consolidated is pending because
-the approved checkpoint excluded issue closures. Nothing is marked implemented
-merely by consolidation. Update this map when decisions or status change.
+Agreed with Zubair on September 25, 2026 and updated on September 27. Zubair
+defines intended behavior. [#140](https://github.com/zzzubair/clashlens/issues/140)
+is the only launch issue and holds the ordered to-do list;
+[#141](https://github.com/zzzubair/clashlens/issues/141) holds later ideas and
+cleanup. All other issues linked below are closed and kept as detailed
+reference; closing them did not mark their work done. This document and the
+contracts below hold the detail. Update this map when decisions or status change.
 
 ## Launch order
 
-1. **Tracking from October 5 at 05:00 UTC, 06:00 UK time.** Plan for **12,500
-   live-tracked players** within the **22,157-tag total known-player pool** from
-   the four supplied lists. Check known-player eligibility every Monday after
-   the 05:00 UTC Reset; active players can supply that check through fresh
-   post-Reset profiles from normal collection. Check new tags immediately on
-   first encounter. The two counts are not added together. Include the
-   September 30 list and add the October 6 list while collection continues.
-   Normalize/deduplicate every source and count supplied, confirmed-real and
-   eligible players separately. Zubair corrected the earlier interpretation
-   that all 22,157 tags would be live-tracked; the 12,500 active target stands.
-2. **Public website launch can follow mid-season.** It requires the real domain
-   and logins, complete feature checks, community/private support, invited
-   testing and final operating handover. Clan discovery must be ready for this
-   release but must not delay starting collection from supplied lists.
-3. **Expanded history before the first tracked season ends.** If October 5 is
-   the first complete season, that is November 2 at 05:00 UTC. Protect required
-   detail until the new views are ready and verified, even if cleanup is delayed.
-4. **Later:** private group comparison and the Jev army-classification experiment.
+1. **Tracking complete by October 5 at 05:00 UTC, 06:00 UK time.** Real tracking
+   targets a Wednesday September 30 start so a full real Legend day is checked
+   before the season begins. Plan for **12,500 live-tracked players** within the
+   **22,157-tag total known-player pool** from the four supplied lists. Every
+   imported tag gets one eligibility check at import. After the October 5
+   promotions, known non-Legend players are rechecked once by hand and the
+   October 5 list is imported. The automatic Monday check after the 05:00 UTC
+   Reset must work by the October 12 Reset; active players can supply that
+   check through fresh post-Reset profiles. The two counts are not added
+   together. Normalize/deduplicate every source and count supplied,
+   confirmed-real and eligible players separately.
+2. **Friends testing with real data, about a week.** preview.clashlens.net
+   serves the production website and database; the separate preview copy is
+   retired. Real Google and Discord sign-in work on that domain. Zubair and
+   invited friends use the real product and findings are fixed.
+3. **Public launch mid-season, date decided by Zubair.** In order: website on
+   clashlens.net with community/private support and clan discovery, then a
+   Clash Lens Discord bot (features not decided; ideas include player season
+   data, lookups, daily summaries and user alerts), then a one-off Google
+   Sheets export.
+4. **Expanded history by November 2 at 05:00 UTC at the latest, ideally during
+   October.** Protect required detail until the new views are ready and
+   verified, even if cleanup is delayed.
+5. **Later:** private group comparison and the Jev army-classification experiment.
 
-[#119](https://github.com/zzzubair/clashlens/issues/119) is the dated overview.
 The start date does not waive accuracy, delivered alerts, backup/restore proof,
 capacity or cost checks. Smaller runs are tests, not a reduced launch population.
 Plan approved warm-up before Reset; a cold import at 05:00 does not establish
@@ -47,10 +51,10 @@ deletion still require their specific approvals.
 | Accuracy, Reset and rankings | Preserve evidence, honest missing/partial results, one battle across duplicate reports, 05:00 UTC Legend days and 28-day seasons. Public rank is among Clash Lens tracked players. A full real Legend day at 12,500 active players, plus weekly known-player checks, is still unproven. | [Domain contract](domain.md), #128 |
 | Player history | Keep daily EOD, gain, loss and EOD difference from the previous day; Day 1 uses 5,000 and Day 28 supplies season-ending trophies. Show only Clash Lens final rank. Existing summaries have daily entries, but stored battle net and official final rank are not these new meanings. | [#139](https://github.com/zzzubair/clashlens/issues/139) |
 | Army analytics | Percentages use completed Legend days after Reset. Attacks are BY selected players; defenses AGAINST them. Historical all-player and final-season Top 100 views must retain individual Clan Castle usage. Current history has all-player unit/quantity/star summaries only. | #139, [Retention contract](history-retention.md) |
-| Accounts, saved players and groups | Usernames are fixed; display names remain editable. Verified ownership is public, saved lists/groups private, and membership proves no ownership. New tag inputs share discovery rules. No export product. Real-provider completion and whole-product privacy checks remain. | [#123](https://github.com/zzzubair/clashlens/issues/123), #127 |
+| Accounts, saved players and groups | Usernames are fixed; display names remain editable. Verified ownership is public, saved lists/groups private, and membership proves no ownership. New tag inputs share discovery rules. A one-off Google Sheets export is planned after the website and Discord bot; it is not designed yet. Real-provider completion and whole-product privacy checks remain. | [#123](https://github.com/zzzubair/clashlens/issues/123), #127 |
 | Website and performance | Preserve desktop controls/detail and usable phone, tablet, older-device and slow-network behavior. #137 improved measured Chromium cases and the current-season Clan Castle toggle. Physical-device/browser breadth and full production load remain unproven. | #127, [#130](https://github.com/zzzubair/clashlens/issues/130) |
 | Recovery and retention | Prove seven-day recovery with required raw bytes still available during restore. Allow season corrections for seven days, then checked finalization and bounded cleanup. These are separate windows. Scheduling and physical-expiry protection are not finished. | [#122](https://github.com/zzzubair/clashlens/issues/122), [#129](https://github.com/zzzubair/clashlens/issues/129) |
-| Discord and support | Public discussion/feedback, Discord-only private tickets through an existing bot, and a separate private operator-alert channel using an incoming webhook. No custom bot or email fallback. Setup and delivery are unproven. | [#138](https://github.com/zzzubair/clashlens/issues/138), [#124](https://github.com/zzzubair/clashlens/issues/124) |
+| Discord and support | Public discussion/feedback, Discord-only private tickets through an existing bot, and a separate private operator-alert channel using an incoming webhook. No custom ticket bot or email fallback. The alert channel and webhook exist and a real test alert was delivered on September 27. A separate Clash Lens Discord bot for Clashers is planned after the website; its features are not decided. | [#138](https://github.com/zzzubair/clashlens/issues/138), [#124](https://github.com/zzzubair/clashlens/issues/124) |
 | Release and operation | Tracking and public website have separate readiness records. Keep exact revisions, usable data checks, restore/reboot/upgrade evidence, costs and an operating guide. | [#131](https://github.com/zzzubair/clashlens/issues/131) |
 
 For already-known players, routine eligibility rechecks run every Monday after
@@ -159,7 +163,8 @@ existing eligibility processing locally; live import and capacity are pending.
 ## Open decisions and inputs
 
 - The initial four list locations and their 22,157 distinct tags are confirmed
-  above. September 30 and October 6 lists remain future inputs.
+  above. Any new list before tracking starts and the October 5 list remain
+  future inputs.
 - Actual confirmed-real/eligible counts against the 12,500 active planning target,
   needed key count, measured growth capacity and cost. Prove the weekly Monday
   eligibility pass and reuse of that week's result across repeat inputs and
@@ -182,7 +187,7 @@ existing eligibility processing locally; live import and capacity are pending.
 
 ## Acceptance to carry into implementation
 
-Follow #119 for order. Supporting issue descriptions retain these acceptance
+Follow #140 for order. The closed supporting issues retain these acceptance
 details and their historical evidence:
 
 - Imports: more than 22,000 tags; duplicates within/across lists and other
@@ -217,8 +222,9 @@ details and their historical evidence:
 - Website/accounts: both real providers, fixed usernames/editable display
   names, private saved lists/groups, public ownership disclosure, shared URLs,
   keyboard/no-JavaScript operation and honest empty/partial/failure states.
-  Unsupported exports enqueue nothing. Check phones/tablets/older devices and
-  slow connections while collection runs; preserve desktop controls and detail.
+  Until the Sheets export is built, export requests enqueue nothing. Check
+  phones/tablets/older devices and slow connections while collection runs;
+  preserve desktop controls and detail.
 - Support: two test members cannot read one another's ticket or transcript;
   support can respond; ordinary members cannot see operator alerts. Test direct
   links and signed-out website entry. A ticket does not itself prove ownership.
