@@ -5,10 +5,11 @@ players. Five minutes is the minimum revisit interval, not a batch deadline.
 
 ## Agreed discovery and population changes, 2026-09-25
 
-The [launch map](product-status.md) targets October 5 collection for 12,500 live
-players within a total known pool of 22,157 supplied tags. Add the September 30
-list and import another on October 6. Known-player eligibility is checked once
-per week at the Monday transition; reuse fresh profiles from live collection.
+The [launch map](product-status.md) targets complete collection by October 5 for
+12,500 live players within a total known pool of 22,157 supplied tags. Add any
+new list before tracking starts and import another on October 5. Known-player
+eligibility is checked once per week at the Monday transition, automatically
+from the October 12 Reset; reuse fresh profiles from live collection.
 Repeated inputs and daily clan scans reuse that week's result for known players.
 First-time tags need an initial existence/eligibility check.
 Normalize and deduplicate within/across lists and all other tag sources. Retain

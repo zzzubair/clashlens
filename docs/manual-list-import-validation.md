@@ -104,6 +104,6 @@ edited. The temporary database container and connection were removed afterward.
 - Live collection throughput, API-key capacity, raw storage or six-month cost.
   The database insertion timing is not a full-population collection trial.
 - Recovery, delivered alerts or production readiness. Apply the launch gates
-  in [#119](https://github.com/zzzubair/clashlens/issues/119) before real traffic.
+  in [#140](https://github.com/zzzubair/clashlens/issues/140) before real traffic.
 - Automatic public tag lookup, clan discovery or scheduled Monday eligibility
   rechecks. Those remain separate requirements; manual lists do not replace them.

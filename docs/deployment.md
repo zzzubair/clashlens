@@ -1,16 +1,17 @@
 # Fedora operation
 
-## Launch order agreed on September 25
+## Launch order agreed on September 27
 
-The [product map](product-status.md) and [#119](https://github.com/zzzubair/clashlens/issues/119)
-separate collection readiness from public website launch. Target collection
-from the October 5 05:00 UTC season boundary with 12,500 live players within a
-total known pool of 22,157 supplied tags. Check known-player eligibility weekly
-at the Monday transition, reusing fresh live profiles and that week's completed
-checks. Include the September 30 list and add the October 6 list during
-collection, with one identity per tag. New tags need their first check. Plan
-any approved warm-up before that
-boundary; starting a cold import at 05:00 is not proof of complete Day 1 data.
+The [product map](product-status.md) and [#140](https://github.com/zzzubair/clashlens/issues/140)
+separate collection readiness from public website launch. Tracking must be
+complete before the October 5 05:00 UTC season boundary, targeting a September 30
+start, with 12,500 live players within a total known pool of 22,157 supplied
+tags. Check known-player eligibility weekly at the Monday transition,
+automatically from the October 12 Reset, reusing fresh live profiles and that
+week's completed checks. Add any new list before tracking starts and the
+October 5 list during collection, with one identity per tag. New tags need
+their first check. Starting a cold import at 05:00 is not proof of complete
+Day 1 data.
 
 Before real traffic: prove backups/restores, delivered private Discord alerts,
 repeated imports, accuracy and capacity for 12,500 live players plus weekly
@@ -242,7 +243,7 @@ after upgrading this check; do not edit a saved fingerprint or bypass the guard.
 `backup-status` exits unsuccessfully for a failed service, inactive timer,
 missing/unreachable remote backups, a full backup older than eight days, disabled
 archiving, or completed WAL files waiting over ten minutes. No WAL activity during
-an idle period is not itself failure. Step 5 of #119 should alert on this command
+an idle period is not itself failure. `./ops alert-check` alerts on this command
 and disk space: PostgreSQL retains unarchived WAL locally during a storage outage
 and that queue is not capped by `max_wal_size`. Never delete unarchived WAL to
 free space.
@@ -272,8 +273,8 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
    object referenced by the sample and verify its hash. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.
 5. Repeat for the seven-day-old boundary, using a full backup from before it.
-   Repeat affected checks after steps 7 and 10 of #119 change stored data or
-   maintenance.
+   Repeat affected checks after the season history and cleanup work in #140
+   changes stored data or maintenance.
 
 ### Targets, cost and remaining rollout checks
 
