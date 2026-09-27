@@ -5,6 +5,7 @@ Requires=clashlens-pod.service clashlens-postgres.service clashlens-collector.se
 After=clashlens-postgres.service
 @@FIXTURE_REQUIRES@@
 @@BACKUP_REQUIRES@@
+@@ALERT_REQUIRES@@
 
 [Install]
 WantedBy=default.target

@@ -578,7 +578,7 @@ class CollectorDatabase:
                         WHERE state = 'failed' AND next_attempt_at = 'infinity'::timestamptz),
                        (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline'),
                        (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline' AND status IN ('complete', 'failed', 'cancelled')),
-                       (SELECT greatest(0, extract(epoch FROM clock_timestamp() - max(last_success_at)))
+                       (SELECT CASE WHEN max(last_success_at) IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM clock_timestamp() - max(last_success_at))) END
                         FROM collector_response_state)"""
             ).fetchone()
         assert row is not None

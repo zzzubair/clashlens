@@ -339,6 +339,92 @@ any required container is absent, stopped, or unhealthy. Logs come from the user
 journal, which includes both container output and systemd lifecycle failures
 without printing configuration files.
 
+## Private Discord alerts
+
+`./ops alert-check` checks the five launch conditions and posts changes to the
+private operator channel through an incoming webhook. Create the service-owned
+mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
+Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
+`CLASHLENS_DISCORD_ALERT_WEBHOOK_FILE` overrides the full path. Store only the URL
+in that file. Never put it in `app.env`, command arguments, logs or documentation.
+A missing, unreadable, wrongly owned or non-600 file fails the check loudly.
+
+A subsequently approved production `./ops up` installs `clashlens-alert.service`
+and `clashlens-alert.timer`. The enabled `clashlens.target` starts the timer on
+reboot, using the same installation path as the backup timer. It checks every
+minute with `Persistent=true`, so a missed calendar check runs after reboot.
+Both units use `PartOf=clashlens.target`. The service has no dependency on a
+healthy collector or API, so failed processes cannot prevent the check starting.
+Fixture mode does not install or start Discord alerts. `./ops down` records an
+intentional stop and stops the timer; manual checks also stay quiet until a
+successful `./ops up`. Checks also stay quiet while `up` starts the stack.
+Time deliberately stopped does not count as a fetch gap.
+
+The thresholds and first response steps are:
+
+- No successful official API fetch for **600 seconds**, excluding time within
+  **04:55–05:00 UTC**. This uses the collector's persisted last-success age.
+  With no success yet, the clock starts at the first check. Missing metrics
+  continue that clock and fail the check. Reset collection after 05:00 must
+  still progress; an unfinished Reset sweep does not suppress alerts forever.
+  Start with `./ops logs collector`.
+- Spool bytes above **80% of `CLASHLENS_SPOOL_MAX_BYTES`**, spool objects above
+  **80% of `CLASHLENS_SPOOL_MAX_OBJECTS`**, or either filesystem holding the spool
+  or PostgreSQL volume above **80% used**. Exactly 80% does not trigger.
+  Start with `./ops queue-status`, then inspect filesystem usage. Do not delete
+  kept responses to clear the alert.
+- **More than three automatic restarts of any one Clash Lens service in the
+  preceding hour**, counted from systemd's structured restart journal events.
+  Counter resets and checker restarts do not erase this history. Keep at least
+  one hour of user journal history. Start with `./ops logs`.
+- **Any failure of `./ops backup-status`**, including an inactive backup timer,
+  a failed backup service, no completed backup, a newest backup older than
+  **691,200 seconds / eight days**, or a pending database recovery-log upload
+  older than **ten minutes**. The alert check invokes that existing command;
+  it does not duplicate the backup policy. Start with `./ops backup-status`.
+- **A failed private player-data read**, including when process readiness says
+  healthy. The check enters the private API container, checks `/readyz`, and
+  signs a `/v1/players/search` read limited to one result. Keys stay inside the
+  container and response data is discarded. An empty search result is valid.
+  Start with `./ops logs api`.
+
+Messages give the condition, its first observed UTC time and one next step.
+There is one alert and one recovery per condition; unchanged checks stay quiet.
+Missing disk measurements or restart history never clear an existing alert.
+`alerts.json` and `alerts.lock` live under the existing private ops state
+folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
+replaced with mode 600 and contains five condition records with at most one
+pending transition each, normally under 4 KiB. It keeps no growing event history,
+keys, URLs, player lists or account data.
+
+Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
+responses fail the command and leave the transition pending for the next run.
+A saved alert is retried even if the condition has since recovered, followed by
+its recovery. A lost HTTP acknowledgement or a crash after Discord accepts a
+message but before state is saved can cause one duplicate on retry. During
+extended delivery failure the bounded state preserves pending transitions and
+the latest condition, rather than accumulating every intervening change.
+
+Use these commands to discover problems with the alert mechanism itself:
+
+```sh
+systemctl --user status clashlens-alert.timer clashlens-alert.service
+journalctl --user -u clashlens-alert.service --since today
+./ops alert-check
+```
+
+The journal reports failed delivery or unavailable measurements without printing
+HTTP response bodies or exception details. Slow failed probes may delay the next
+check; the service times out after four minutes. This local checker cannot notify
+Discord while the host, user service manager or network is unavailable, or after
+an out-of-band stop of `clashlens.target`. Confirm recovery after those outages.
+A real test alert was delivered and Zubair confirmed channel visibility; see
+[the delivery evidence](discord-alert-validation.md#owner-requested-live-delivery-test).
+Real recovery delivery, channel privacy and reboot behaviour still require a
+separately approved rehearsal.
+Job/upload stalls, missed Reset publication and capacity budgets remain deferred
+under #140; this command adds none of those policies.
+
 ## Failed work
 
 Listing and previewing are the default; a retry needs both one exact item and

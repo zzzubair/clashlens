@@ -92,3 +92,14 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
         assert after["pending_uploads"] == 1
         assert after["failed_uploads"] == 1
         assert after["last_success_age_seconds"] >= before["last_success_age_seconds"]
+
+
+def test_no_successful_fetch_does_not_report_a_fresh_success(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database = CollectorDatabase(connection_info)
+        try:
+            metrics = database.health_metrics()
+            assert "active_players" in metrics
+            assert "last_success_age_seconds" not in metrics
+        finally:
+            database.close()
