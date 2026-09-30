@@ -1,5 +1,8 @@
 # Fedora operation
 
+For daily health checks, responses to each alert and the restore entry point,
+see [Operating Clash Lens on rogue](operating.md).
+
 ## Launch order agreed on September 27
 
 The [product map](product-status.md) and [#140](https://github.com/zzzubair/clashlens/issues/140)
@@ -316,8 +319,9 @@ These tiny-database timings do not establish production recovery time or worst-c
 data loss. The earlier target was minutes old, **not seven days old**.
 
 The backup sorting fix #134 was merged and deployed; its scheduled service was
-also invoked successfully, as recorded in #122. Before closing #122, prove a
-natural timer firing, measure data loss and restore time at the revised size,
+also invoked successfully, as recorded in #122. The September 27 03:00 UTC backup
+fired naturally, as recorded in [#140](https://github.com/zzzubair/clashlens/issues/140).
+Before closing #122, measure data loss and restore time at the revised size,
 verify restored raw references across protected expiry, restore a genuine
 seven-day-old point, and verify host reboot. Earlier small restores and service
 checks do not prove those remaining gates. Keep real collection disabled until
