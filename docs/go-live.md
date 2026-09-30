@@ -323,10 +323,18 @@ SQL
 CREATE TEMP TABLE launch_evidence ON COMMIT DROP AS
 WITH latest_work AS MATERIALIZED (
   SELECT DISTINCT ON (w.player_id) w.player_id, w.status, w.failure_category,
-    w.battle_log_status, w.league_history_status
+    w.battle_log_status, w.league_history_status,
+    w.battle_log_observation_id, w.league_history_observation_id
   FROM collector_work w JOIN players p ON p.id = w.player_id
   JOIN launch_tags t ON t.tag = p.normalized_tag
+  LEFT JOIN collector_response_state current_profile ON current_profile.player_id = p.id
+    AND current_profile.endpoint = 'profile'
   WHERE w.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
+  AND (p.active OR w.status IN ('pending', 'waiting_retry')
+    OR ((w.profile_observation_id = current_profile.last_observation_id
+      OR w.profile_observation_id IS NULL)
+      AND (current_profile.last_seen_at IS NULL
+        OR w.updated_at >= current_profile.last_seen_at)))
   ORDER BY w.player_id, w.created_at DESC, w.id DESC
 )
 SELECT t.tag, p.active,
@@ -341,12 +349,14 @@ SELECT t.tag, p.active,
 FROM launch_tags t LEFT JOIN players p ON p.normalized_tag = t.tag
 LEFT JOIN latest_work w ON w.player_id = p.id
 CROSS JOIN LATERAL (VALUES
-  ('profile', true),
-  ('battle_log', coalesce(p.active OR w.battle_log_status = 'observed', false)),
-  ('league_history', coalesce(p.active OR w.league_history_status = 'observed', false))
-) ep(endpoint, required)
+  ('profile', true, NULL),
+  ('battle_log', coalesce(p.active OR w.battle_log_status = 'observed', false), w.battle_log_observation_id),
+  ('league_history', coalesce(p.active OR w.league_history_status = 'observed', false), w.league_history_observation_id)
+) ep(endpoint, required, work_observation_id)
 LEFT JOIN collector_response_state r ON r.player_id = p.id AND r.endpoint = ep.endpoint
-LEFT JOIN collector_observations o ON o.id = r.last_observation_id
+LEFT JOIN collector_observations o ON o.id = CASE
+  WHEN p.active OR ep.endpoint = 'profile' THEN r.last_observation_id
+  ELSE ep.work_observation_id END
 LEFT JOIN LATERAL (
   SELECT id, outcome, failure_category FROM observation_processing_outcomes
   WHERE observation_id = o.id ORDER BY created_at DESC, id DESC LIMIT 1
@@ -417,10 +427,10 @@ proves a real player even when its league tier or season data is uncertain;
 eligibility stays pending. A timeout does not prove nonexistence
 or non-Legend status. A not-found response stays unconfirmed and counts as
 failed, even when collection work says complete. Completion means the response
-was saved, not that the player exists. The report checks the latest saved profile,
-battle-log and league-history responses and their processing results. It links
-eligibility to the applied profile response, including one that reused an older
-stored profile. An unknown tier cannot borrow the previous accepted profile's
+was saved, not that the player exists. The report checks the current profile and
+required saved battle-log and league-history responses and their processing
+results. It links eligibility to the applied profile response, including one
+that reused an older stored profile. An unknown tier cannot borrow the previous accepted profile's
 eligibility. Missing processing, partial results and conflicting evidence stay
 pending. Report failure and uncertainty categories without publishing tags or
 profile bodies; their counts describe endpoint problems and need not equal the
@@ -428,10 +438,13 @@ number of failed players.
 
 An inactive player's trusted non-Legend profile can cancel discovery before
 league history arrives. Unfetched league history is then unnecessary for that
-player. History is required for active players and when the relevant work fetched
-it. Older history from another check does not change a newly confirmed inactive
-player's result. Recent successful profile and battle reads cannot hide a failed
-history response for an active player.
+player. History is required for active players and when work supplying an
+inactive player's current profile fetched it. Inactive players' battle reads and
+work failures use that same association, excluding older work after a newer
+ordinary profile read. Unfinished checks and newer failed attempts remain
+unresolved. Older history from another check does not change a newly confirmed
+inactive player's result. Recent successful profile and battle reads cannot hide
+a failed history response for an active player.
 
 Completion requires every tag accounted for, zero unresolved initial checks,
 and every intended Legend player active with both recent, successfully processed
@@ -580,7 +593,8 @@ The review corrections to weekly reuse and the shared outcome report above have
 not been executed against PostgreSQL. The earlier rehearsal did not cover a
 reused stored profile after changed experience level, a saved league-history
 error, an unknown tier preserving older eligibility, a response crossing Monday
-Reset, or a cancelled non-Legend check following an older history error. The
+Reset, a cancelled non-Legend check following an older history error, or an
+ordinary profile confirming departure after failed discovery history. The
 saved Monday pool, including an omitted inactive player who becomes active
 before reporting, has not been exercised against PostgreSQL either. The
 revised report's runtime for 22,157 tags is also unmeasured. Rehearse these cases
