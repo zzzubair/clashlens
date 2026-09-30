@@ -321,7 +321,9 @@ SQL
   cat <<'SQL'
 CREATE TEMP TABLE launch_evidence ON COMMIT DROP AS
 WITH latest_work AS MATERIALIZED (
-  SELECT DISTINCT ON (w.player_id) w.player_id, w.status, w.failure_category,
+  SELECT DISTINCT ON (w.player_id, (w.kind = 'reset_baseline'))
+    w.player_id, w.kind, w.status, w.failure_category, w.profile_status,
+    w.profile_observation_id,
     w.battle_log_status, w.league_history_status,
     w.battle_log_observation_id, w.league_history_observation_id
   FROM collector_work w JOIN players p ON p.id = w.player_id
@@ -332,14 +334,17 @@ WITH latest_work AS MATERIALIZED (
     OR ((w.profile_observation_id = current_profile.last_observation_id
       OR w.profile_observation_id IS NULL)
       AND (current_profile.last_seen_at IS NULL
+        OR (w.kind = 'reset_baseline'
+          AND w.profile_observation_id = current_profile.last_observation_id)
         OR w.updated_at >= current_profile.last_seen_at)))
-  ORDER BY w.player_id, w.created_at DESC, w.id DESC
+  ORDER BY w.player_id, (w.kind = 'reset_baseline'), w.created_at DESC, w.id DESC
 )
 SELECT t.tag, p.active,
   w.status AS work_status, w.failure_category AS work_failure,
-  ep.endpoint, ep.required, r.last_success_at, o.http_status,
+  ep.endpoint, ep.required, ep.reset_read, r.last_success_at, o.http_status,
   processing.outcome, processing.failure_category, job.status AS processing_status,
   coalesce(ep.endpoint = 'profile' AND v.source_contract_state = 'accepted'
+    AND o.id = r.last_observation_id
     AND e.profile_version_id = p.current_profile_version_id
     AND v.eligibility_state = p.eligibility_state
     AND v.eligibility_state IN ('eligible', 'ineligible')
@@ -347,12 +352,16 @@ SELECT t.tag, p.active,
 FROM launch_tags t LEFT JOIN players p ON p.normalized_tag = t.tag
 LEFT JOIN latest_work w ON w.player_id = p.id
 CROSS JOIN LATERAL (VALUES
-  ('profile', true, NULL),
-  ('battle_log', coalesce(p.active OR w.battle_log_status = 'observed', false), w.battle_log_observation_id),
-  ('league_history', coalesce(p.active OR w.league_history_status = 'observed', false), w.league_history_observation_id)
-) ep(endpoint, required, work_observation_id)
+  ('profile', true, NULL, false),
+  ('battle_log', coalesce(p.active OR w.battle_log_status = 'observed', false), w.battle_log_observation_id, false),
+  ('league_history', coalesce(p.active OR w.league_history_status = 'observed', false), w.league_history_observation_id, false),
+  ('profile', w.profile_status <> 'not_applicable', w.profile_observation_id, true),
+  ('battle_log', w.battle_log_status <> 'not_applicable', w.battle_log_observation_id, true),
+  ('league_history', w.league_history_status <> 'not_applicable', w.league_history_observation_id, true)
+) ep(endpoint, required, work_observation_id, reset_read)
 LEFT JOIN collector_response_state r ON r.player_id = p.id AND r.endpoint = ep.endpoint
 LEFT JOIN collector_observations o ON o.id = CASE
+  WHEN ep.reset_read THEN ep.work_observation_id
   WHEN p.active OR ep.endpoint = 'profile' THEN r.last_observation_id
   ELSE ep.work_observation_id END
 LEFT JOIN LATERAL (
@@ -367,7 +376,8 @@ LEFT JOIN LATERAL (
 LEFT JOIN player_profile_effects e ON ep.endpoint = 'profile'
   AND e.observation_id = o.id AND e.processing_outcome_id = processing.id
   AND e.effect_kind = 'current_profile'
-LEFT JOIN player_profile_versions v ON v.id = e.profile_version_id;
+LEFT JOIN player_profile_versions v ON v.id = e.profile_version_id
+WHERE NOT ep.reset_read OR w.kind = 'reset_baseline';
 CREATE TEMP TABLE launch_states ON COMMIT DROP AS
 SELECT tag, active,
   bool_or(coalesce(endpoint = 'profile' AND http_status = 200
@@ -397,17 +407,17 @@ SELECT endpoint, category, count(*) FROM (
   SELECT DISTINCT tag, 'work' AS endpoint, coalesce(work_failure, work_status) AS category
   FROM launch_evidence WHERE work_status IN ('failed', 'waiting_retry')
   UNION ALL
-  SELECT tag, endpoint, CASE
+  SELECT DISTINCT tag, endpoint, CASE
     WHEN http_status NOT BETWEEN 200 AND 299 THEN 'http_' || http_status::text
     WHEN failure_category IS NOT NULL THEN failure_category
     WHEN outcome IS DISTINCT FROM 'processed' THEN coalesce(outcome, processing_status, 'awaiting_processing')
-    WHEN endpoint = 'profile' AND NOT resolved_profile
+    WHEN endpoint = 'profile' AND NOT reset_read AND NOT resolved_profile
       THEN 'uncertain_profile'
     ELSE processing_status END
   FROM launch_evidence WHERE required AND (
     http_status NOT BETWEEN 200 AND 299 OR failure_category IS NOT NULL
     OR outcome IS DISTINCT FROM 'processed' OR processing_status = 'failed'
-    OR (endpoint = 'profile' AND NOT resolved_profile))
+    OR (endpoint = 'profile' AND NOT reset_read AND NOT resolved_profile))
 ) failures GROUP BY 1, 2 ORDER BY 1, 2;
 SELECT count(*) AS active_in_pool,
   count(*) FILTER (WHERE result <> 'legend' OR NOT fresh_initial_reads)
@@ -440,11 +450,16 @@ player. History is required for active players and when work supplying an
 inactive player's current profile fetched it. Inactive players' battle reads and
 work failures use that same association, excluding older work after a newer
 ordinary profile read. Unfinished checks and newer failed attempts remain
-unresolved. All player checks, including Reset checks, use this selection. A
-failed or unfinished Reset check stays unresolved even after its profile confirms
-departure from Legend. Older history from another check does not change a newly
-confirmed inactive player's result. Recent successful profile and battle reads
-cannot hide a failed history response for an active player.
+unresolved. The latest relevant Reset check is retained separately from the
+latest other player check, including its required profile, battle and history
+responses. A later Refresh cannot hide a failed or unfinished Reset check.
+For an inactive player, a finished Reset check must still match the current
+profile evidence; an unchanged response reusing that observation preserves the
+association. A newer different profile excludes unrelated older work. Eligibility
+comes only from the current profile observation. Older history from another check
+does not change a newly confirmed inactive player's result. Recent successful
+profile and battle reads cannot hide a failed history response for an active
+player.
 
 Completion requires every tag accounted for, zero unresolved initial checks,
 and every intended Legend player active with both recent, successfully processed
@@ -596,7 +611,8 @@ error, an unknown tier preserving older eligibility, a response crossing Monday
 Reset, a cancelled non-Legend check following an older history error, or an
 ordinary profile confirming departure after failed discovery history. The
 report also remains untested against PostgreSQL for failed or unfinished Reset
-checks, including failures after a profile confirms departure. The
+checks followed by a newer Refresh, including unchanged responses and departures
+from Legend. The
 saved Monday pool, including an omitted inactive player who becomes active
 before reporting, has not been exercised against PostgreSQL either. The
 revised report's runtime for 22,157 tags is also unmeasured. Rehearse these cases
