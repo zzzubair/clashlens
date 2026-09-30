@@ -92,7 +92,7 @@ fedora:/actual/launch/directory/sources/new-list.txt`, substituting the recorded
 directory. Run the following only when all five files exist.
 
 This accepts the invisible UTF-8 encoding header, trims whitespace, uppercases
-tags and adds a missing `#`. It rejects empty files, blank lines, invalid
+tags and requires a leading `#`. It rejects empty files, blank lines, invalid
 characters and invalid encoding before writing the combined list. Sources
 remain untouched. On rejection, correct the input and use a fresh directory.
 
@@ -118,8 +118,6 @@ for index, path in enumerate(paths):
     tags = set()
     for number, line in enumerate(lines, 1):
         tag = line.strip().upper()
-        if tag and not tag.startswith("#"):
-            tag = "#" + tag
         if not re.fullmatch(r"#[0289PYLQGRJCUV]+", tag):
             raise SystemExit(f"Invalid tag: {path.name}, line {number}")
         tags.add(tag)
