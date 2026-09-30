@@ -101,6 +101,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     collector.add_argument(
+        "--official-proxy-url",
+        default=os.environ.get("CLASHLENS_OFFICIAL_API_PROXY_URL", ""),
+    )
+    collector.add_argument(
         "--allow-insecure-official-origin",
         action="store_true",
         default=os.environ.get("CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN") == "true",
@@ -752,6 +756,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         archive=archive_reader.archive,
         client=OfficialApiClient(
             arguments.official_origin,
+            proxy_url=arguments.official_proxy_url,
             allow_insecure_test_origin=arguments.allow_insecure_official_origin,
             max_body_bytes=arguments.archive_max_body_bytes,
             max_connections=len(regular_keys) * concurrency + concurrency,

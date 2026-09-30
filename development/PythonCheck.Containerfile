@@ -12,6 +12,7 @@ COPY python/src ./src
 COPY python/tests ./tests
 COPY python/testdata ./testdata
 COPY ops /workspace/ops
+COPY app.env.example /workspace/app.env.example
 COPY .github /workspace/.github
 COPY website/package.json /workspace/website/package.json
 COPY deploy /workspace/deploy

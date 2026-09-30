@@ -331,6 +331,15 @@ class _DeadlinePoolManager(urllib3.PoolManager):
         }
 
 
+class _DeadlineProxyManager(urllib3.ProxyManager):
+    def __init__(self, proxy_url: str, **connection_pool_kw: object) -> None:
+        super().__init__(proxy_url, **connection_pool_kw)
+        self.pool_classes_by_scheme = {
+            "http": _DeadlineHTTPConnectionPool,
+            "https": _DeadlineHTTPSConnectionPool,
+        }
+
+
 class KeyPool:
     """Fair key rotation with independent start rates and concurrency caps."""
 
@@ -467,6 +476,7 @@ class OfficialApiClient:
         self,
         origin: str,
         *,
+        proxy_url: str = "",
         allow_insecure_test_origin: bool = False,
         max_body_bytes: int = 4 << 20,
         connection_timeout_seconds: float = 5.0,
@@ -489,6 +499,21 @@ class OfficialApiClient:
             and parsed.hostname in {"127.0.0.1", "localhost"}
         ):
             raise ValueError("official API origin must use HTTPS")
+        if proxy_url:
+            proxy = urlsplit(proxy_url)
+            if (
+                proxy.scheme not in {"http", "https"}
+                or not proxy.hostname
+                or proxy.username is not None
+                or proxy.password is not None
+                or proxy.path not in {"", "/"}
+                or proxy.query
+                or proxy.fragment
+                or proxy.port == 0
+            ):
+                raise ValueError("official API proxy must be an HTTP(S) origin without credentials")
+            if parsed.scheme != "https":
+                raise ValueError("proxied official API origin must use HTTPS")
         if max_body_bytes < 1 or max_body_bytes > 4 << 20:
             raise ValueError("raw response limit must be between 1 byte and 4 MiB")
         if any(
@@ -509,17 +534,22 @@ class OfficialApiClient:
             max_workers=max_connections, thread_name_prefix="official-api"
         )
         self._executor_slots = asyncio.Semaphore(max_connections)
-        self._http = _DeadlinePoolManager(
-            maxsize=max_connections,
-            block=True,
-            cert_reqs="CERT_REQUIRED",
-            ca_certs=certifi.where(),
-            retries=False,
-            timeout=urllib3.Timeout(
+        pool_options = {
+            "maxsize": max_connections,
+            "block": True,
+            "cert_reqs": "CERT_REQUIRED",
+            "ca_certs": certifi.where(),
+            "retries": False,
+            "timeout": urllib3.Timeout(
                 total=total_timeout_seconds,
                 connect=connection_timeout_seconds,
                 read=response_timeout_seconds,
             ),
+        }
+        self._http = (
+            _DeadlineProxyManager(proxy_url, **pool_options)
+            if proxy_url
+            else _DeadlinePoolManager(**pool_options)
         )
 
     async def fetch_player(

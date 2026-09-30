@@ -43,14 +43,14 @@ Port $PROXY_PORT
 Listen $PROXY_LISTEN_IP
 Timeout 60
 LogFile "/dev/stderr"
-LogLevel Info
+LogLevel Warning
 PidFile "/tmp/tinyproxy.pid"
 MaxClients 50
 Allow $PROXY_CLIENT_IP
 ConnectPort 443
 Filter "/etc/tinyproxy/filter"
 FilterDefaultDeny Yes
-FilterURLs Off
+FilterURLs On
 DisableViaHeader Yes
 EOF
   # This file contains only network policy. The unprivileged container user
@@ -76,6 +76,9 @@ up() {
     --security-opt no-new-privileges \
     --pids-limit 100 \
     --memory 64m \
+    --log-driver local \
+    --log-opt max-size=10m \
+    --log-opt max-file=3 \
     --restart unless-stopped \
     "$IMAGE" >/dev/null
   printf 'egress proxy is listening on %s:%s for client %s\n' "$PROXY_LISTEN_IP" "$PROXY_PORT" "$PROXY_CLIENT_IP"

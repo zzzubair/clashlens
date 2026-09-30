@@ -73,9 +73,15 @@ grep -q '^ConnectPort 443$' "$WORK_DIR/tinyproxy.conf" || {
   printf 'proxy configuration is not readable by the unprivileged container user\n' >&2
   exit 1
 }
-grep -Fxq '^api\.clashofclans\.com$' "$ROOT_DIR/filter" || {
-  printf 'proxy host allowlist is missing\n' >&2
+grep -Eqf "$ROOT_DIR/filter" <<< 'api.clashofclans.com:443' || {
+  printf 'proxy filter rejects the official API CONNECT destination\n' >&2
   exit 1
 }
+for rejected in 'http://api.clashofclans.com/' 'api.clashofclans.com:80' 'example.com:443' 'api.clashofclans.com.evil:443'; do
+  if grep -Eqf "$ROOT_DIR/filter" <<< "$rejected"; then
+    printf 'proxy filter permits forbidden destination %s\n' "$rejected" >&2
+    exit 1
+  fi
+done
 
 printf 'ok: egress proxy is restricted and hardened\n'
