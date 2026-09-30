@@ -97,6 +97,7 @@ characters and invalid encoding before writing the combined list. Sources
 remain untouched. On rejection, correct the input and use a fresh directory.
 
 ```sh
+POOL_TAGS="$LAUNCH_DIR/combined.txt"
 python3 - "$LAUNCH_DIR" <<'PY'
 import hashlib
 import json
@@ -206,6 +207,8 @@ time, including the latest unchanged response, to decide the week.
 A Sunday profile does not satisfy Monday's check just because its league history
 finishes on Monday. A failed check with no profile is reused only if queued this
 week. Monday starts at 05:00 UTC, not midnight.
+Use `$POOL_TAGS` as the import and report input. Step 3 sets it to the supplied
+combined list; the October 5 procedure below selects a wider, saved pool.
 
 ```sh
 set -o pipefail
@@ -218,7 +221,7 @@ SELECT pg_advisory_xact_lock(hashtextextended('manual-list-import', 0));
 CREATE TEMP TABLE launch_tags (tag text PRIMARY KEY) ON COMMIT DROP;
 \copy launch_tags(tag) FROM STDIN
 SQL
-  cat "$LAUNCH_DIR/combined.txt"
+  cat "$POOL_TAGS"
   printf '\\.\n'
   cat <<'SQL'
 CREATE TEMP TABLE launch_new ON COMMIT DROP AS
@@ -260,7 +263,7 @@ AND NOT EXISTS (
 );
 SELECT coalesce(sum(clashlens_enqueue_discovery_profiles(ids)), 0) AS checks_queued
 FROM (SELECT array_agg(id ORDER BY id) AS ids FROM launch_due GROUP BY (n - 1) / 500) b;
-SELECT (SELECT count(*) FROM launch_tags) AS supplied_unique,
+SELECT (SELECT count(*) FROM launch_tags) AS pool_unique,
        (SELECT count(*) FROM launch_new) AS new_identities,
        (SELECT count(*) FROM launch_tags) - (SELECT count(*) FROM launch_new) AS existing_identities;
 COMMIT;
@@ -269,9 +272,10 @@ SQL
 ```
 
 Expect `COPY N`, `checks_queued`, new/existing counts adding to `N`, and final
-`COMMIT`. An empty database gets `N` identities and checks. Repeating the same
-input adds zero identities. It adds zero checks while work is unfinished or this
-week's result is reusable, including an applied non-Legend result that cancelled
+`COMMIT`. `N` is the number of tags in `$POOL_TAGS`; the October 5 pool can be
+larger than the supplied list. An empty database gets `N` identities and checks.
+Repeating the same input adds zero identities. It adds zero checks while work is
+unfinished or this week's result is reusable, including an applied non-Legend result that cancelled
 discovery before league history finished. Old inactive results become due after
 Monday Reset. Printed counts before `COMMIT` are not proof of a durable import.
 
@@ -304,8 +308,8 @@ use step 9; never bypass release-fingerprint or migration guards.
 
 ## 7. Report outcomes and verify warm-up
 
-Run this read-only report for the combined pool, including the new file. Repeat
-while checks finish; save the final receipt. Pending includes processing and
+Run this read-only report for the saved `$POOL_TAGS` pool, including the new file.
+Repeat while checks finish; save the final receipt. Pending includes processing and
 uncertain evidence, so zero failed alone is not completion.
 
 ```sh
@@ -315,7 +319,7 @@ BEGIN;
 CREATE TEMP TABLE launch_tags (tag text PRIMARY KEY) ON COMMIT DROP;
 \copy launch_tags(tag) FROM STDIN
 SQL
-  cat "$LAUNCH_DIR/combined.txt"
+  cat "$POOL_TAGS"
   printf '\\.\n'
   cat <<'SQL'
 CREATE TEMP TABLE launch_evidence ON COMMIT DROP AS
@@ -377,7 +381,7 @@ SELECT tag, active,
   bool_and(coalesce(last_success_at >= clock_timestamp() - interval '10 minutes', false))
     FILTER (WHERE endpoint IN ('profile', 'battle_log')) AS fresh_initial_reads
 FROM launch_evidence GROUP BY tag, active;
-SELECT count(*) AS supplied_unique, count(*) FILTER (WHERE real) AS confirmed_real,
+SELECT count(*) AS pool_unique, count(*) FILTER (WHERE real) AS confirmed_real,
   count(*) FILTER (WHERE result = 'legend') AS legend,
   count(*) FILTER (WHERE result = 'not_legend') AS not_legend,
   count(*) FILTER (WHERE result = 'failed') AS failed,
@@ -408,7 +412,7 @@ SQL
 } | db | tee "$LAUNCH_DIR/counts-$(date -u +%Y%m%dT%H%M%S%N).txt"
 ```
 
-`legend + not_legend + failed + pending_or_uncertain = supplied_unique`.
+`legend + not_legend + failed + pending_or_uncertain = pool_unique`.
 Confirmed-real is separate evidence, not an extra population: a real player can
 still have a failed league-history check. A successfully processed profile
 proves a real player even when its league tier or season data is uncertain;
@@ -442,12 +446,49 @@ after Reset. These reads alone do not prove a complete accurate real Legend day.
 For another list during tracking, use a new private directory, copy the original
 sources plus updated additional file there, and repeat steps 3, 5 and 7 with
 approval. Use the same applied-response and profile-time selection in step 5;
-the database supplies the existing pool and healthy tracking need not restart.
-On October 5 repeat after promotions and the Monday Reset, making old non-Legend
-results due. Unfinished checks are still reused, but a pre-Reset profile completed
-after Reset does not satisfy that week. Repeat step 5 after those checks finish
-to queue any still due, then step 7. Automatic Monday scheduling remains
-separate work due by October 12.
+step 3 resets `$POOL_TAGS` to the new combined list, so ordinary additional-list
+imports stay limited to their supplied tags. Healthy tracking need not restart.
+
+On October 5, after promotions and the Monday Reset, prepare the updated sources
+with step 3. With approval for rechecking all stored inactive players, run this
+read-only selection once before step 5. It saves the union of supplied tags and
+all stored inactive players, including players absent from the newest list.
+
+```sh
+(
+  set -o pipefail
+  set -o noclobber
+  {
+    cat <<'SQL'
+BEGIN;
+CREATE TEMP TABLE launch_tags (tag text PRIMARY KEY) ON COMMIT DROP;
+\copy launch_tags(tag) FROM STDIN
+SQL
+    cat "$LAUNCH_DIR/combined.txt"
+    printf '\\.\n'
+    cat <<'SQL'
+INSERT INTO launch_tags (tag)
+SELECT normalized_tag FROM players WHERE NOT active
+ON CONFLICT (tag) DO NOTHING;
+SELECT tag FROM launch_tags ORDER BY tag;
+ROLLBACK;
+SQL
+  } | db -qAt > "$LAUNCH_DIR/monday-pool.txt"
+) || { echo 'Monday pool creation failed; stop and review'; exit 1; }
+test -s "$LAUNCH_DIR/monday-pool.txt" || exit 1
+POOL_TAGS="$LAUNCH_DIR/monday-pool.txt"
+wc -l "$POOL_TAGS"
+```
+
+Expect one tag per line and a count at least as large as `supplied_unique` in
+`sources.json`. Keep the source receipt and combined list unchanged. Run steps
+5 and 7 with this same saved pool. Do not recreate it between imports or reports;
+players promoted by these checks must remain included after becoming active.
+Unfinished checks are still reused, but a pre-Reset profile completed after Reset
+does not satisfy that week. Repeat step 5 after those checks finish to queue any
+still due, then step 7, retaining `$POOL_TAGS` as `monday-pool.txt`. In a new
+operator session, restore that path before resuming. Automatic Monday scheduling
+remains separate work due by October 12.
 
 ## 8. Approval: observe a problem alert and recovery
 
@@ -542,6 +583,8 @@ not been executed against PostgreSQL. The earlier rehearsal did not cover a
 reused stored profile after changed experience level, a saved league-history
 error, an unknown tier preserving older eligibility, a response crossing Monday
 Reset, or a cancelled non-Legend check following an older history error. The
+saved Monday pool, including an omitted inactive player who becomes active
+before reporting, has not been exercised against PostgreSQL either. The
 revised report's runtime for 22,157 tags is also unmeasured. Rehearse these cases
 with fake data before using the revised queries in production; the earlier
 counts do not validate these corrections.
