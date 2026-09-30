@@ -78,12 +78,76 @@ jobs:
       - name: Test
         working-directory: website
         run: npm test
-      - name: Verify production build
-        working-directory: website
-        run: npm run build:verify
       - name: Install rootless Podman
         working-directory: website
         run: sudo apt-get update && sudo apt-get install -y podman
-      - name: Development stack acceptance
+      - name: Install Chromium
+        working-directory: website
+        run: npx playwright install --with-deps chromium
+      - name: Production build and development stack browser tests
+        working-directory: website
+        run: npm run test:e2e
+      - name: Clean up browser test stack
+        if: always()
+        # Playwright normally sends SIGTERM to dev e2e-server. Also remove
+        # this job's stack if startup or runner cancellation interrupted it.
+        run: |
+          command -v podman >/dev/null || exit 0
+          repo_key=$(printf '%s' "$GITHUB_WORKSPACE" | sha256sum | cut -c1-10)
+          project="clashlens-dev-$repo_key-e2e"
+          if podman pod exists "$project"; then
+            podman pod rm --force "$project"
+          fi
+          for suffix in postgres-data archive-data spool; do
+            if podman volume exists "$project-$suffix"; then
+              podman volume rm "$project-$suffix"
+            fi
+          done
+
+  containers:
+    name: Container packaging and runtime checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select full container coverage
+        id: coverage
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          full_check=false
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            full_check=true
+          else
+            changed_paths=$(mktemp)
+            trap 'rm -f "$changed_paths"' EXIT
+            git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$changed_paths"
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                *Containerfile*|*Dockerfile*|*/uv.lock|*/package-lock.json|*/pyproject.toml|*/package.json|*.containerignore|*.dockerignore)
+                  full_check=true
+                  ;;
+                dev|ops|deploy/*|development/*|.github/workflows/*|website/playwright.config.ts)
+                  full_check=true
+                  ;;
+                python/src/clashlens/cli.py|python/src/clashlens/operating.py|python/src/clashlens/db.py|website/app/server/config.server.ts)
+                  full_check=true
+                  ;;
+              esac
+            done < "$changed_paths"
+          fi
+          echo "full_check=$full_check" >> "$GITHUB_OUTPUT"
+      - name: Install rootless Podman
+        run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Build Python check container
+        run: podman build --file development/PythonCheck.Containerfile --tag clashlens-python-check:ci .
+      - name: Verify packaged operations and support wrappers
+        run: |
+          podman run --rm --tmpfs /tmp:rw,mode=1777 clashlens-python-check:ci \
+            uv run --locked pytest -q tests/test_ops_backup.py tests/test_support_wrapper.py
+      - name: Full development container checks
+        if: steps.coverage.outputs.full_check == 'true'
         working-directory: website
         run: ../dev check

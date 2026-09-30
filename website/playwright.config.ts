@@ -27,6 +27,8 @@ export default defineConfig({
           url: websiteHealthUrl,
           reuseExistingServer: false,
           timeout: 300_000,
+          // Let dev's trap stop the pod and remove its disposable volumes.
+          gracefulShutdown: { signal: "SIGTERM", timeout: 60_000 },
         },
       ],
 });
