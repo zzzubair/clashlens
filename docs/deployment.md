@@ -117,7 +117,8 @@ written to a unit, environment file, or process argument. The API receives
 only the interactive key as a mounted file.
 
 Set `CLASHLENS_OFFICIAL_API_PROXY_URL` to the fixed-address relay's HTTP origin
-on Tailscale, reachable from inside the pod. `ops` supplies this setting to
+on Tailscale, reachable from inside the pod. Use an origin without credentials,
+a path, query or fragment. `ops` supplies this setting to
 both collection and private player-token verification. The standalone collector
 defaults to direct access when this setting is empty; `--official-proxy-url`
 overrides it. Explicit proxy settings ignore ambient `NO_PROXY`, and a relay
