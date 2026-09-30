@@ -12,8 +12,9 @@ import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation, text
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
+from test_collector import _Client, _Spool
+from test_collector import _collector as _fake_collector
 from test_collector_db_postgres import _handoff
-from test_collector import _Client, _Spool, _collector as _fake_collector
 from test_domain_processing_postgres import _processor
 
 from clashlens.collector_db import CollectorDatabase
