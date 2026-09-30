@@ -67,6 +67,8 @@ implemented behind a switch that defaults to off; see the
 Database validation of the final response-reuse and restart corrections remains
 pending. Combined live-player capacity and production scheduling remain
 unverified; the September 25 manual-import proof predates this change.
+The revised manual commands and their verification limits belong in
+[the go-live runbook](go-live.md#practice-evidence-and-limits).
 
 ## Capacity and implementation limits
 

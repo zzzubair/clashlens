@@ -514,7 +514,9 @@ Unfinished checks are still reused, but a pre-Reset profile completed after Rese
 does not satisfy that week. Repeat step 5 after those checks finish to queue any
 still due, then step 7, retaining `$POOL_TAGS` as `monday-pool.txt`. In a new
 operator session, restore that path before resuming. Automatic Monday scheduling
-remains separate work due by October 12.
+is implemented behind a switch that defaults to off. Production approval and
+validation remain separate work due by October 12; see the
+[weekly eligibility switch](collector-polling.md#weekly-eligibility-switch).
 
 ## 8. Approval: observe a problem alert and recovery
 
@@ -604,17 +606,18 @@ delivery, real Reset coverage and reboot were not tested here. The command/timin
 record above retains these limits and the exact corrections. No product code
 changed. Production approval and launch evidence remain required.
 
-The review corrections to weekly reuse and the shared outcome report above have
-not been executed against PostgreSQL. The earlier rehearsal did not cover a
-reused stored profile after changed experience level, a saved league-history
-error, an unknown tier preserving older eligibility, a response crossing Monday
-Reset, a cancelled non-Legend check following an older history error, or an
-ordinary profile confirming departure after failed discovery history. The
-report also remains untested against PostgreSQL for failed or unfinished Reset
-checks followed by a newer Refresh, including unchanged responses and departures
-from Legend. The
-saved Monday pool, including an omitted inactive player who becomes active
-before reporting, has not been exercised against PostgreSQL either. The
-revised report's runtime for 22,157 tags is also unmeasured. Rehearse these cases
-with fake data before using the revised queries in production; the earlier
-counts do not validate these corrections.
+The later pipeline test-phase result reports supplemental checks of the revised
+commands. Normalization ran on synthetic files; import, repeat import,
+additional-list import and rollback commands ran against an isolated database
+with the actual migrations and enqueue function. PostgreSQL models exercised
+failed and unfinished Reset work followed by Refresh, outcome counts, failure
+categories and warm-up blocking. They also covered unchanged and different
+profile evidence, departures, weekly boundaries and reused profile versions.
+The saved Monday pool ran against the actual isolated schema too.
+
+These command and model checks do not establish collection and processing
+working together through the revised cases. The earlier rehearsal limits above
+remain; its counts do not validate the corrected queries. The revised report's
+runtime for 22,157 tags is still unmeasured. Production operations, real traffic,
+Discord delivery, real Reset coverage and reboot remain unverified by these
+checks and require the separate launch evidence and approvals.
