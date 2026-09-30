@@ -81,6 +81,15 @@ def test_sunday_check_does_not_satisfy_monday_but_repeats_reuse_it(database_url,
             assert first is not None and first.eligibility_recheck
             assert next_check(database, MONDAY + timedelta(seconds=2), schedule=True).work_id == first.work_id
             _profile(info, archive_server, at=MONDAY + timedelta(seconds=3))
+            remaining = next_check(database, MONDAY + timedelta(minutes=1), schedule=True)
+            assert remaining is not None and remaining.work_id == first.work_id
+            assert not remaining.profile_required and remaining.league_history_required
+            spool = _Spool()
+            client = _Client(spool)
+            collector = _fake_collector(spool, database, client)
+            assert asyncio.run(collector.collect_intent(remaining)) == "complete"
+            assert client.fetch_count == 1
+            assert "fetch:league_history" in spool.events and "fetch:profile" not in spool.events
             assert next_check(database, MONDAY + timedelta(minutes=1), schedule=True) is None
             with psycopg.connect(info) as connection:
                 assert connection.execute(

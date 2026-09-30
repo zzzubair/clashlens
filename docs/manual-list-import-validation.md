@@ -5,25 +5,22 @@ imports for launch instead of extending the old bootstrap command or building
 a reusable import feature. This verifies the manual database operation and
 existing eligibility processing; it does not authorize or prove a live import.
 
-Migration 0037 now makes the shared enqueue function enforce weekly reuse and
-reuse unfinished work across cycles. See the [weekly switch and scheduling
-contract](collector-polling.md#weekly-eligibility-switch). The procedure and
-measurements below describe the September 25 implementation, before that change.
+For current enqueue and response-reuse behavior, see the [weekly switch and
+scheduling contract](collector-polling.md#weekly-eligibility-switch). The
+procedure and measurements below describe the September 25 implementation,
+before migration 0037.
 
 ## Later clarification of the workload
 
-Zubair clarified after this test that the launch target is 12,500 live players
-within 22,157 total known tags. Already-known inactive players need a routine
-eligibility check once a week, at the Monday transition. Repeat inputs within
-that week reuse their result; new tags still need an initial check. Live
-players continue supplying eligibility evidence through regular collection.
+The [launch target](product-status.md#launch-order) and
+[eligibility cadence](domain.md#identity-and-eligibility) were clarified after
+this test.
 
 The test below verifies initial load, unfinished-work reuse, history retention
 and eligibility processing. It does **not** prove weekly scheduling or reuse
-of completed checks within a week. Before a later manual load, select only new
-or weekly-due candidates, as well as unfinished work needing its existing
-retry. Do not automatically recheck every known inactive tag in a repeated
-list. Keep this new requirement distinct from the measured results below.
+of completed checks within a week. Follow the current enqueue contract linked
+above for later loads; keep its guarantees distinct from the historical
+procedure and measured results below.
 
 ## Procedure verified before the cadence clarification
 

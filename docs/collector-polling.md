@@ -48,10 +48,19 @@ reused, and terminal routine attempts do not restart on every repeat sighting.
 Weekly work retries transport/server failures at most three times per endpoint.
 A failed or unrecognized response never becomes proof of eligibility.
 
-Each week starts Monday at 05:00 UTC. Sunday's evidence cannot satisfy Monday's
-check. Recognized post-Reset profiles count even when their relevant content is
-unchanged, or their separate season-anchor evidence conflicts. Actively tracked
-players continue through normal collection without a second weekly request.
+Successful profile fetches completed since Monday's 05:00 UTC Reset prevent
+another routine profile request, even while processing is pending or after a
+later fetch fails. This reuse applies both before enqueueing and when admitting
+already-queued ordinary discovery or weekly work. Unchanged responses also
+count when the successful fetch advances freshness but retains an older
+observation awaiting processing. Reuse does not confirm eligibility; only
+processing recognized tier evidence does that.
+
+A fetch completed before Monday Reset cannot satisfy the new week's check
+merely because its processing finishes after Reset. Recognized post-Reset
+profiles count even when their relevant content is unchanged, or their
+separate season-anchor evidence conflicts. Actively tracked players continue
+through normal collection without a second weekly request.
 The existing profile processing activates a newly promoted player and makes
 that player due for battle collection using the same identity and history.
 
@@ -62,9 +71,13 @@ cutoff, unfinished Reset work, or when any live player is more than two minutes
 past its normal five-minute due time. A backlog does not trigger a catch-up
 burst. Turning the switch off also leaves queued weekly work paused.
 
-Previously successful league-history collection is reused; a player without it
-gets that endpoint alongside the profile. The target pool has 9,657 inactive
-players, so a successful pass needs 9,657 additional profile requests, plus any
+Weekly checks reuse previously successful league-history collection; a player
+without it gets that endpoint alongside the profile. Ordinary discovery and
+weekly work both resume unfinished required league history without refetching
+an already-recorded successful or not-found profile. A reused successful profile
+also leaves required league history pending, even after processing activates
+the player. The target pool has 9,657 inactive players, so a successful pass
+needs 9,657 additional profile requests, plus any
 missing initial league histories. At the configured admission ceiling that is
 at least 5 hours 22 minutes, with collection delays extending the pass. The
 10-minute live-refresh requirement remains the capacity acceptance limit.
@@ -103,10 +116,15 @@ The existing container check runner's `/tmp` temporary-memory mount is required
 on Rogue; its ordinary container filesystem cannot prove free-file capacity and
 the collector correctly refuses it.
 
-The focused tests cover the Monday boundary, cross-week pending work, concurrent
-repeat sightings, ordinary and unchanged post-Reset evidence, promotion, delayed
-pre-Reset processing, restart recovery, the disabled switch, bounded retries,
-queue pacing, regular-key limits and pausing when live collection is late.
+The focused tests in `python/tests/test_weekly_eligibility*.py` include the
+Monday boundary, cross-week pending work, concurrent repeat sightings, ordinary
+and unchanged post-Reset evidence, success followed by failure, and ordinary
+discovery and weekly restarts with unfinished league history before and after
+eligible-profile processing. They also include promotion, delayed pre-Reset
+processing, the disabled switch, bounded retries, queue pacing, regular-key
+limits and pausing when live collection is late. The database cases require
+PostgreSQL execution; skipped cases do not validate these behaviors. The
+request measurement above predates the response-reuse and restart corrections.
 The measurement does **not** poll the 12,500 active players or run the processing
 and archive services. The combined stack's 10-minute live-refresh limit, Reset
 timing and complete storage cost still require the population timing trial.
