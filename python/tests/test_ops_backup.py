@@ -105,6 +105,86 @@ def run_ops(runtime, rows, *args, upload_exit=0):
     )
 
 
+@pytest.mark.parametrize("proxy_ip", [None, "", "127.0.0.1", "::1", "::ffff:127.0.0.1"])
+@pytest.mark.parametrize(
+    ("mode", "login_enabled"),
+    [("production", False), ("production", True), ("fixture", True)],
+)
+def test_website_environment_omits_empty_proxy_and_preserves_explicit_address(
+    tmp_path, proxy_ip, mode, login_enabled
+):
+    environment_file = tmp_path / "state" / "clashlens" / "env" / "website.env"
+    environment_file.parent.mkdir(parents=True)
+    environment_file.write_text("CLASHLENS_TRUSTED_PROXY_IP=192.0.2.1\n")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            r"""
+source "$1" help >/dev/null
+MODE=$TEST_MODE
+POSTGRES_DB=clashlens
+POSTGRES_USER=clashlens
+SPOOL_ROOT=$TEST_ROOT/spool
+ARCHIVE_ROOT=$TEST_ROOT/archive
+CONFIG=(
+  [CLASHLENS_ARCHIVE_ENDPOINT]=storage.example
+  [CLASHLENS_ARCHIVE_REGION]=test-region
+  [CLASHLENS_ARCHIVE_BUCKET]=evidence
+  [CLASHLENS_ARCHIVE_INSTANCE_ID]=test-instance
+  [CLASHLENS_ARCHIVE_MARKER_KEY]=archive-instance.json
+  [CLASHLENS_ARCHIVE_MARKER_HASH]=test-hash
+  [CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION]=v1
+  [CLASHLENS_OFFICIAL_API_ORIGIN]=https://api.example
+)
+if [[ "$TEST_PROXY_SET" == true ]]; then
+  CONFIG[CLASHLENS_TRUSTED_PROXY_IP]=$TEST_PROXY_IP
+fi
+if [[ "$TEST_LOGIN_ENABLED" == true ]]; then
+  CONFIG[CLASHLENS_PUBLIC_ORIGIN]=https://clashlens.example
+  CONFIG[CLASHLENS_LOGIN_SECRET_FILE]=/run/secrets/login
+  CONFIG[CLASHLENS_GOOGLE_CLIENT_ID]=test-google-client
+  CONFIG[CLASHLENS_GOOGLE_CLIENT_SECRET_FILE]=/run/secrets/google
+  CONFIG[CLASHLENS_DISCORD_CLIENT_ID]=12345678901234567
+  CONFIG[CLASHLENS_DISCORD_CLIENT_SECRET_FILE]=/run/secrets/discord
+fi
+write_environment
+""",
+            "environment-generation-test",
+            str(OPS),
+        ],
+        env=dict(
+            os.environ,
+            XDG_STATE_HOME=str(tmp_path / "state"),
+            XDG_CONFIG_HOME=str(tmp_path / "config"),
+            PODMAN_BIN="forbidden-service-operation",
+            SYSTEMCTL_BIN="forbidden-service-operation",
+            LOGINCTL_BIN="forbidden-service-operation",
+            TEST_ROOT=str(tmp_path),
+            TEST_MODE=mode,
+            TEST_LOGIN_ENABLED=str(login_enabled).lower(),
+            TEST_PROXY_SET=str(proxy_ip is not None).lower(),
+            TEST_PROXY_IP=proxy_ip or "",
+        ),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    environment = dict(
+        line.split("=", 1) for line in environment_file.read_text().splitlines()
+    )
+    if mode == "production" and proxy_ip:
+        assert environment["CLASHLENS_TRUSTED_PROXY_IP"] == proxy_ip
+    else:
+        assert "CLASHLENS_TRUSTED_PROXY_IP" not in environment
+    assert environment["NODE_ENV"] == ("test" if mode == "fixture" else "production")
+    assert environment["CLASHLENS_LOGIN_ENABLED"] == str(login_enabled).lower()
+    assert environment["CLASHLENS_PYTHON_API_URL"] == "http://127.0.0.1:8000"
+    assert environment_file.stat().st_mode & 0o777 == 0o600
+
+
 def test_extra_manual_backups_do_not_shorten_recovery_window(runtime):
     rows = [backup_row(i, days) for i, days in enumerate((21, 14, 6, 1, 0.1), 1)]
     result = run_ops(runtime, rows, "backup-prune", "--apply")
