@@ -16,7 +16,7 @@ from uuid import uuid4
 import psycopg
 from psycopg_pool import PoolTimeout
 
-from . import collector_uploads
+from . import collector_uploads, weekly_eligibility
 from .archive import ArchiveReadError, S3ArchiveReader
 from .collector_db import (
     CollectorDatabase,
@@ -72,6 +72,7 @@ class Collector:
         collector_version: str,
         max_body_bytes: int,
         interactive_fingerprint: str | None = None,
+        weekly_eligibility_enabled: bool = False,
     ) -> None:
         self.database = database
         self.spool = spool
@@ -83,6 +84,7 @@ class Collector:
         self.collector_version = collector_version
         self.max_body_bytes = max_body_bytes
         self.interactive_fingerprint = interactive_fingerprint
+        self.weekly_eligibility_enabled = weekly_eligibility_enabled
         self.outcomes: dict[str, int] = {}
         self.endpoint_outcomes: dict[tuple[str, str, str], int] = {}
         self.latency_seconds: dict[tuple[str, str], float] = {}
@@ -247,9 +249,10 @@ class Collector:
                 intent.normalized_tag,
                 intent.due_at or intent.cycle_at,
                 collector_work_id=intent.work_id,
+                eligibility_recheck=intent.eligibility_recheck,
             )
             endpoints = (
-                ["profile"]
+                (["profile"] if intent.profile_required else [])
                 if intent.kind == "discovery_profile"
                 else ["profile", "battle_log"]
             )
@@ -298,6 +301,7 @@ class Collector:
     ) -> str:
         important = (
             lane in {"interactive", "reset"} or endpoint == "global_player_rankings"
+            or work.eligibility_recheck
         )
         attempts = 3 if important else 1
         pool_name = "interactive" if pool is self.interactive_keys else "regular"
@@ -705,6 +709,8 @@ class Collector:
             ),
             asyncio.create_task(self._upload_loop(stop_requested, idle_seconds)),
         ]
+        if self.weekly_eligibility_enabled:
+            tasks.append(asyncio.create_task(weekly_eligibility.run(self, stop_requested)))
         stop_task = asyncio.create_task(stop_requested.wait())
         try:
             done, _pending = await asyncio.wait(

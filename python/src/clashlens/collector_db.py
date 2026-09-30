@@ -44,6 +44,7 @@ class CollectorWork:
     collector_work_id: int | None = None
     profile_fresh_until: datetime | None = None
     first_battle_pending: bool = False
+    eligibility_recheck: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,8 @@ class CollectorIntent:
     status: str | None = None
     sweep_id: int | None = None
     league_history_required: bool = False
+    eligibility_recheck: bool = False
+    profile_required: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -543,7 +546,7 @@ class CollectorDatabase:
         with self._connection() as connection:
             with connection.transaction():
                 rows = connection.execute(
-                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status FROM collector_work AS work WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
+                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status FROM collector_work AS work WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
                     (intent_time, interactive, interactive, interactive, limit),
                 ).fetchall()
                 intents = [

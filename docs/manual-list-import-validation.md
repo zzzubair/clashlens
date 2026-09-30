@@ -5,6 +5,11 @@ imports for launch instead of extending the old bootstrap command or building
 a reusable import feature. This verifies the manual database operation and
 existing eligibility processing; it does not authorize or prove a live import.
 
+Migration 0037 now makes the shared enqueue function enforce weekly reuse and
+reuse unfinished work across cycles. See the [weekly switch and scheduling
+contract](collector-polling.md#weekly-eligibility-switch). The procedure and
+measurements below describe the September 25 implementation, before that change.
+
 ## Later clarification of the workload
 
 Zubair clarified after this test that the launch target is 12,500 live players

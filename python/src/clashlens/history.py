@@ -20,6 +20,8 @@ WHERE work.status = 'complete'
       'discovery_profile'
   )
   AND work.updated_at < clock_timestamp() - make_interval(hours => %s)
+  AND (work.kind <> 'discovery_profile'
+       OR work.due_at < clashlens_eligibility_week(clock_timestamp()))
   AND (%s::bigint[] IS NULL OR work.id = ANY(%s::bigint[]))
   AND NOT EXISTS (
       SELECT 1 FROM collector_observations AS o
