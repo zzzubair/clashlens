@@ -49,6 +49,9 @@ GitHub runs the Python suite in two parallel groups, each with its own PostgreSQ
 service. `CLASHLENS_TEST_GROUP=1` or `2` selects a group; leave it unset to run the
 whole suite locally. Do not run both groups against the same database, because
 some tests also change database roles.
+Each group runs with `pytest --durations=30`, reporting its 30 slowest setup,
+test, and cleanup phases. The separate fake-service tests in
+`development/test_fixtures.py` run once, after group 1's Python tests.
 
 `tests/ci_test_durations.json` records per-file totals from a complete
 `pytest --durations=0 --durations-min=0` run against isolated PostgreSQL 18 on
