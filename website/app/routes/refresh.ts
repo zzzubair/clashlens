@@ -99,7 +99,7 @@ async function readIdempotencyKey(request: Request): Promise<string | null> {
   return values.length === 1 ? values[0] : null;
 }
 
-export async function action({ request, params }: Route.ActionArgs) {
+export async function action({ request, params, context }: Route.ActionArgs) {
   const { isSameOrigin } = await import("../server/actions.server");
   const { getWebsiteConfig } = await import("../server/config.server");
   if (
@@ -117,11 +117,11 @@ export async function action({ request, params }: Route.ActionArgs) {
     return safeErrorResponse({ status: 400, payload: { error: "invalid_input" } });
   }
 
-  const forwardedFor =
-    process.env.CLASHLENS_TRUST_PROXY === "true"
-      ? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-      : undefined;
-  const identity = forwardedFor || "local-public-client";
+  const { clientAddressContext } = await import("../server/client-address.server");
+  const identity = context?.get(clientAddressContext);
+  if (!identity) {
+    return safeErrorResponse({ status: 503, payload: { error: "service_unavailable" } });
+  }
   const { allowPublicRefresh } = await import("../server/abuse.server");
   if (!allowPublicRefresh(identity)) {
     return safeErrorResponse({

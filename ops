@@ -766,7 +766,7 @@ write_environment() {
   if [[ "$MODE" == fixture ]]; then
     write_env website.env NODE_ENV=test PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
       "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
-      CLASHLENS_TRUST_PROXY=true CLASHLENS_LOGIN_ENABLED=true CLASHLENS_PUBLIC_ORIGIN=http://127.0.0.1:15174 \
+      CLASHLENS_LOGIN_ENABLED=true CLASHLENS_PUBLIC_ORIGIN=http://127.0.0.1:15174 \
       CLASHLENS_GOOGLE_ISSUER_URL=http://127.0.0.1:8011 CLASHLENS_GOOGLE_CLIENT_ID=clashlens-browser-test \
       CLASHLENS_GOOGLE_CLIENT_SECRET_FILE=/run/secrets/clashlens-google-client-secret CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret \
       CLASHLENS_DISCORD_API_BASE_URL=http://127.0.0.1:8012 CLASHLENS_DISCORD_CLIENT_ID=1234567890123456789 \
@@ -780,9 +780,13 @@ write_environment() {
       for name in CLASHLENS_PUBLIC_ORIGIN CLASHLENS_LOGIN_SECRET_FILE CLASHLENS_GOOGLE_CLIENT_ID CLASHLENS_GOOGLE_CLIENT_SECRET_FILE CLASHLENS_DISCORD_CLIENT_ID CLASHLENS_DISCORD_CLIENT_SECRET_FILE; do require_setting "$name"; done
       login_enabled=true; public_origin=$(setting CLASHLENS_PUBLIC_ORIGIN); google_id=$(setting CLASHLENS_GOOGLE_CLIENT_ID); discord_id=$(setting CLASHLENS_DISCORD_CLIENT_ID)
     fi
+    local trusted_proxy_ip website_environment=()
+    trusted_proxy_ip=$(setting CLASHLENS_TRUSTED_PROXY_IP)
+    [[ -z "$trusted_proxy_ip" ]] || website_environment+=("CLASHLENS_TRUSTED_PROXY_IP=$trusted_proxy_ip")
     write_env website.env NODE_ENV=production PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
       "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
-      CLASHLENS_TRUST_PROXY=true "CLASHLENS_LOGIN_ENABLED=$login_enabled" "CLASHLENS_PUBLIC_ORIGIN=$public_origin" "CLASHLENS_GOOGLE_CLIENT_ID=$google_id" \
+      "${website_environment[@]}" \
+      "CLASHLENS_LOGIN_ENABLED=$login_enabled" "CLASHLENS_PUBLIC_ORIGIN=$public_origin" "CLASHLENS_GOOGLE_CLIENT_ID=$google_id" \
       CLASHLENS_GOOGLE_CLIENT_SECRET_FILE=/run/secrets/clashlens-google-client-secret CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret \
       "CLASHLENS_DISCORD_CLIENT_ID=$discord_id" CLASHLENS_DISCORD_CLIENT_SECRET_FILE=/run/secrets/clashlens-discord-client-secret
   fi

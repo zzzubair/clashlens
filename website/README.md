@@ -62,6 +62,45 @@ operator configuration.
 
 ## Preview on Rogue
 
+### Refresh address boundary
+
+The intended production path is Cloudflare Tunnel → a local proxy → the website.
+`npm start` and the website image run `server.ts`, which passes the real socket
+peer to React Router. Refresh allows six requests per address per minute in this
+website process. Cookies, form fields, URL parameters and forwarding chains do
+not choose that address. Restarting the process resets its in-memory counters.
+Without a valid connection address, Refresh returns `503 service_unavailable`
+without requesting collection.
+
+`CLASHLENS_TRUSTED_PROXY_IP` defaults to empty, meaning no header is trusted.
+Set it to exactly the local proxy's socket address **as observed inside the
+website container**, not a subnet or a number of hops. IPv4-mapped IPv6 is
+normalized. Only Cloudflare's `CF-Connecting-IP` header supplies the visitor
+address. Missing, duplicate, chained or malformed addresses fall back to the
+socket peer. `CLASHLENS_TRUST_PROXY` is obsolete and ignored. The root `ops`
+passes the trusted proxy setting from `app.env`; no trusted address is enabled by default.
+
+Before enabling proxy trust, the ingress operator must:
+
+- Restrict the local proxy to the Cloudflare Tunnel connection, and restrict the
+  website to that proxy. Never trust an address shared with untrusted connections.
+- Forward exactly Cloudflare's `CF-Connecting-IP`, for example nginx
+  `proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;`. Strip `Forwarded`,
+  `X-Forwarded-For`, `X-Real-IP` and `True-Client-IP`, and pin the public host.
+  Those headers never supply the Refresh identity.
+- Verify the actual socket peer and header replacement through the deployed
+  tunnel. Do not enable transforms or Workers that rewrite the visitor address.
+
+Cloudflare documents the visitor-header behavior in its
+[HTTP header reference](https://developers.cloudflare.com/fundamentals/reference/http-headers/).
+The production tunnel/proxy configuration is outside this repository and still
+needs that deployment verification. These changes do not alter it. The plain
+`react-router dev`/`react-router-serve` adapters do not supply socket context;
+Refresh returns that 503 response there. Use the built website with `npm start`
+or `./dev up`.
+
+### Existing preview
+
 `https://preview.clashlens.net` is configured for real Google and Discord
 sign-in against the saved preview database; completed-provider proof is listed
 below. The main `clashlens.net` site still

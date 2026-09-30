@@ -47,6 +47,7 @@ import { loader as loginLoader } from "../../app/routes/login";
 import { action as logoutAction, loader as logoutLoader } from "../../app/routes/logout";
 import { action as refreshAction } from "../../app/routes/refresh";
 import { clearPublicRefreshLimits } from "../../app/server/abuse.server";
+import { createClientAddressContext } from "../../app/server/client-address.server";
 
 const TEST_SECRET = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const IDENTITY = { provider: "google", providerSubject: "11223344556677889900" } as const;
@@ -157,6 +158,9 @@ describe("refresh behind the public HTTPS address", () => {
           body: new URLSearchParams({ idempotencyKey: IDEMPOTENCY_KEY }),
         }),
         params: { tag: "#2PP" },
+        context: createClientAddressContext({})(new Request(ORIGIN), {
+          address: "127.0.0.1",
+        }),
       } as never);
       expect(dataOf(result)).toMatchObject({ status: 202, data: work });
     },

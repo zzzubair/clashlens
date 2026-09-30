@@ -103,6 +103,9 @@ cp app.env.example app.env
 chmod 600 app.env
 ```
 
+Before enabling visitor-address trust, follow the website's
+[Refresh address boundary](../website/README.md#refresh-address-boundary).
+
 Create the configured spool as a dedicated directory owned by the service
 account with mode 700. Keep it outside the account's home, checkout, ops state
 and unit directories, and secret directory; `up` refuses overlapping paths
