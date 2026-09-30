@@ -24,7 +24,7 @@ def _workflow() -> dict:
 def _python_job() -> dict:
     jobs = _workflow()["jobs"]
     assert isinstance(jobs, dict)
-    python_job = jobs.get("python")
+    python_job = jobs.get("python-tests")
     assert isinstance(python_job, dict)
     return python_job
 
@@ -48,7 +48,8 @@ def command_workspace(tmp_path):
         "with open(os.environ['COMMAND_LOG'], 'a') as log:\n"
         "    log.write(json.dumps({'command': command, 'args': args, "
         "'cwd': os.getcwd(), 'environment': {key: os.environ.get(key) for key in "
-        "('UV_PROJECT_ENVIRONMENT', 'CLASHLENS_TEST_DATABASE_URL', 'PYTHONPATH')}}) + '\\n')\n"
+        "('UV_PROJECT_ENVIRONMENT', 'CLASHLENS_TEST_DATABASE_URL', 'PYTHONPATH', "
+        "'CLASHLENS_TEST_GROUP')}}) + '\\n')\n"
         "if [command, *args] == json.loads(os.environ['FAIL_COMMAND']):\n"
         "    sys.exit(23)\n"
         "if command == 'npm' and (args[:1] == ['run'] or args == ['test']):\n"
@@ -91,10 +92,17 @@ def command_workspace(tmp_path):
 
 def _run_step(step, command_workspace, job_environment=None):
     workspace, environment = command_workspace
+    step_environment = {
+        key: value.replace(
+            "${{ matrix.group }}",
+            (job_environment or {}).get("CLASHLENS_TEST_GROUP", "1"),
+        )
+        for key, value in step.get("env", {}).items()
+    }
     return subprocess.run(
         ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
         cwd=workspace / step.get("working-directory", "."),
-        env={**environment, **(job_environment or {}), **step.get("env", {})},
+        env={**environment, **(job_environment or {}), **step_environment},
         capture_output=True,
         text=True,
         check=False,
@@ -111,9 +119,13 @@ def _calls(command_workspace):
     )
 
 
-def test_python_job_runs_the_complete_suite_against_postgresql(command_workspace) -> None:
+@pytest.mark.parametrize("group", ["1", "2"])
+def test_python_groups_have_independent_postgresql_and_run_development_tests_once(
+    command_workspace, group
+) -> None:
     job = _python_job()
     assert "if" not in job
+    assert job["strategy"] == {"fail-fast": False, "matrix": {"group": [1, 2]}}
     assert job["env"]["CLASHLENS_TEST_DATABASE_URL"] == TEST_DATABASE_URL
     assert job["services"]["postgres"] == {
         "image": "postgres:18",
@@ -130,32 +142,114 @@ def test_python_job_runs_the_complete_suite_against_postgresql(command_workspace
     }
     for step in job["steps"]:
         if "run" in step:
-            assert "if" not in step
-            result = _run_step(step, command_workspace, job["env"])
+            if "if" in step:
+                assert step["name"] == "Development service tests"
+                assert step["if"] == "matrix.group == 1"
+                if group == "2":
+                    continue
+            result = _run_step(
+                step, command_workspace, {**job["env"], "CLASHLENS_TEST_GROUP": group}
+            )
             assert result.returncode == 0, result.stderr
     calls = _calls(command_workspace)
     assert [(call["command"], call["args"]) for call in calls] == [
         ("uv", ["sync", "--locked"]),
         ("uv", ["run", "ruff", "check", ".", "../development/test_fixtures.py"]),
         ("uv", ["run", "python", "-m", "compileall", "-q", "src"]),
-        ("uv", ["run", "pytest", "-q"]),
-        ("uv", ["run", "pytest", "-q", "../development/test_fixtures.py"]),
+        ("uv", ["run", "pytest", "-q", "--durations=30"]),
+        *(
+            [("uv", ["run", "pytest", "-q", "../development/test_fixtures.py"])]
+            if group == "1"
+            else []
+        ),
     ]
     for call in calls:
         assert call["cwd"] == str(command_workspace[0] / "python")
         assert call["environment"]["UV_PROJECT_ENVIRONMENT"] == LOCKED_ENVIRONMENT
         assert call["environment"]["CLASHLENS_TEST_DATABASE_URL"] == TEST_DATABASE_URL
-    assert calls[-1]["environment"]["PYTHONPATH"] == ".."
+    assert calls[3]["environment"]["CLASHLENS_TEST_GROUP"] == group
+    if group == "1":
+        assert calls[-1]["environment"]["PYTHONPATH"] == ".."
 
 
-def test_native_python_failure_stops_before_development_tests(command_workspace) -> None:
+def test_native_python_failure_stops_before_development_tests(
+    command_workspace,
+) -> None:
     step = next(step for step in _python_job()["steps"] if step.get("name") == "Tests")
-    command_workspace[1]["FAIL_COMMAND"] = json.dumps(["uv", "run", "pytest", "-q"])
+    command_workspace[1]["FAIL_COMMAND"] = json.dumps(
+        ["uv", "run", "pytest", "-q", "--durations=30"]
+    )
     result = _run_step(step, command_workspace, _python_job()["env"])
     assert result.returncode == 23
     assert [(call["command"], call["args"]) for call in _calls(command_workspace)] == [
-        ("uv", ["run", "pytest", "-q"]),
+        ("uv", ["run", "pytest", "-q", "--durations=30"]),
     ]
+
+
+@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped"])
+def test_required_python_result_rejects_failed_cancelled_or_skipped_groups(
+    command_workspace, result
+) -> None:
+    job = _workflow()["jobs"]["python"]
+    assert job["name"] == "Python lint, compile, and PostgreSQL tests"
+    assert job["needs"] == "python-tests"
+    assert job["if"] == "always()"
+    step = job["steps"][0]
+    assert step["env"]["RESULT"] == "${{ needs.python-tests.result }}"
+    step = {**step, "env": {"RESULT": result}}
+    completed = _run_step(step, command_workspace)
+    assert (completed.returncode == 0) == (result == "success")
+
+
+def test_python_groups_collect_every_test_once() -> None:
+    directory = CI_WORKFLOW.parents[2] / "python"
+    environment = dict(os.environ)
+    environment.pop("CLASHLENS_TEST_GROUP", None)
+
+    def collect(group=None):
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q"],
+            cwd=directory,
+            env={**environment, **({"CLASHLENS_TEST_GROUP": group} if group else {})},
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        return [
+            line
+            for line in result.stdout.splitlines()
+            if line.startswith("tests/") and "::" in line
+        ]
+
+    full, first, second = collect(), collect("1"), collect("2")
+    assert full and first and second
+    assert len(full) == len(set(full))
+    assert len(first + second) == len(set(first + second))
+    assert set(first).isdisjoint(second)
+    assert sorted(first + second) == sorted(full)
+    durations = json.loads((directory / "tests" / "ci_test_durations.json").read_text())
+    totals = [
+        sum(
+            durations.get(file.removeprefix("tests/"), 1.0)
+            for file in {node.split("::", 1)[0] for node in nodes}
+        )
+        for nodes in (first, second)
+    ]
+    assert max(totals) / min(totals) < 1.10
+
+
+def test_invalid_python_group_fails_instead_of_silently_omitting_tests() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q"],
+        cwd=CI_WORKFLOW.parents[2] / "python",
+        env={**os.environ, "CLASHLENS_TEST_GROUP": "3"},
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == pytest.ExitCode.USAGE_ERROR
 
 
 @pytest.mark.parametrize(
@@ -218,9 +312,7 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
     for call in calls:
         if call["command"] != "podman":
             assert call["cwd"] == str(command_workspace[0] / "website")
-    project = (
-        f"clashlens-dev-{hashlib.sha256(str(command_workspace[0]).encode()).hexdigest()[:10]}-e2e"
-    )
+    project = f"clashlens-dev-{hashlib.sha256(str(command_workspace[0]).encode()).hexdigest()[:10]}-e2e"
     assert [call["args"] for call in calls if call["command"] == "podman"] == [
         ["pod", "exists", project],
         ["pod", "rm", "--force", project],
@@ -235,61 +327,66 @@ def test_website_job_uses_node_24_lockfile_and_browser_acceptance_gate(
     ]
 
 
-@pytest.mark.parametrize("full_check", [False, True])
-def test_container_packaging_is_always_run_with_conditional_full_coverage(
-    command_workspace, full_check
+def test_pr_packaging_builds_only_python_and_runs_packaged_tests(
+    command_workspace,
 ) -> None:
     job = _workflow()["jobs"]["containers"]
+    assert job["name"] == "Container packaging and runtime checks"
     assert "if" not in job
-    packaging = next(
-        step for step in job["steps"] if "Verify packaged" in step.get("name", "")
-    )
-    assert "if" not in packaging
-    full = next(
-        step for step in job["steps"]
-        if step.get("name") == "Full development container checks"
-    )
-    assert full["if"] == "steps.coverage.outputs.full_check == 'true'"
     for step in job["steps"]:
-        if "run" not in step or step.get("id") == "coverage":
+        if "run" not in step:
             continue
-        if step.get("if"):
-            assert step is full
-            if not full_check:
-                continue
-        result = _run_step(step, command_workspace)
-        assert result.returncode == 0, result.stderr
-    calls = _calls(command_workspace)
-    operations = [(call["command"], call["args"]) for call in calls]
-    assert operations[2:] == [
+        assert "if" not in step
+        completed = _run_step(step, command_workspace)
+        assert completed.returncode == 0, completed.stderr
+    operations = [(call["command"], call["args"]) for call in _calls(command_workspace)]
+    assert not any(command == "dev" for command, _ in operations)
+    builds = [
+        args
+        for command, args in operations
+        if command == "podman" and args[0] == "build"
+    ]
+    assert builds == [
+        [
+            "build",
+            "--file",
+            "development/PythonCheck.Containerfile",
+            "--tag",
+            "clashlens-python-check:ci",
+            ".",
+        ]
+    ]
+    assert operations[-2:] == [
         (
             "podman",
             [
-                "build", "--file", "development/PythonCheck.Containerfile",
-                "--tag", "clashlens-python-check:ci", ".",
-            ],
-        ),
-        (
-            "podman",
-            [
-                "run", "--rm", "--tmpfs", "/tmp:rw,mode=1777",
-                "clashlens-python-check:ci", "uv", "run", "--locked", "pytest",
-                "-q", "tests/test_ops_backup.py", "tests/test_support_wrapper.py",
+                "run",
+                "--rm",
+                "--tmpfs",
+                "/tmp:rw,mode=1777",
+                "clashlens-python-check:ci",
+                "uv",
+                "run",
+                "--locked",
+                "pytest",
+                "-q",
+                "tests/test_ops_backup.py",
+                "tests/test_support_wrapper.py",
             ],
         ),
         (
             "uv",
             [
-                "run", "--locked", "pytest", "-q",
-                "tests/test_ops_backup.py", "tests/test_support_wrapper.py",
+                "run",
+                "--locked",
+                "pytest",
+                "-q",
+                "tests/test_ops_backup.py",
+                "tests/test_support_wrapper.py",
             ],
         ),
-        *([("dev", ["check"])] if full_check else []),
     ]
-    assert calls[-1]["cwd"] == str(
-        command_workspace[0] / ("website" if full_check else "python")
-    )
-    assert _python_job()["name"] == "Python lint, compile, and PostgreSQL tests"
+    assert _calls(command_workspace)[-1]["cwd"] == str(command_workspace[0] / "python")
     assert (
         _workflow()["jobs"]["website"]["name"]
         == "Website Node 24 checks and Chromium E2E"
@@ -298,114 +395,54 @@ def test_container_packaging_is_always_run_with_conditional_full_coverage(
 
 def test_packaging_test_failure_fails_the_container_step(command_workspace) -> None:
     step = next(
-        step for step in _workflow()["jobs"]["containers"]["steps"]
+        step
+        for step in _workflow()["jobs"]["containers"]["steps"]
         if "Verify packaged" in step.get("name", "")
     )
     command_workspace[1]["FAIL_COMMAND"] = json.dumps(
-        ["uv", "run", "--locked", "pytest", "-q", "tests/test_ops_backup.py", "tests/test_support_wrapper.py"]
+        [
+            "uv",
+            "run",
+            "--locked",
+            "pytest",
+            "-q",
+            "tests/test_ops_backup.py",
+            "tests/test_support_wrapper.py",
+        ]
     )
     result = _run_step(step, command_workspace)
     assert result.returncode == 23
     assert [call["command"] for call in _calls(command_workspace)] == ["podman", "uv"]
 
 
-@pytest.mark.parametrize(
-    ("event", "path", "operation", "expected"),
-    [
-        ("push", "docs/architecture.md", "modify", True),
-        ("pull_request", "python/src/clashlens/profile.py", "modify", False),
-        ("pull_request", "website/app/routes/home.tsx", "modify", False),
-        ("pull_request", "docs/architecture.md", "modify", False),
-        *[
-            ("pull_request", path, "modify", True)
-            for path in (
-                "Containerfile",
-                "python/Containerfile",
-                "development/PythonCheck.Containerfile",
-                "website/Containerfile",
-                "python/uv.lock",
-                "website/package-lock.json",
-                "python/pyproject.toml",
-                "website/package.json",
-                ".containerignore",
-                "website/.dockerignore",
-                "dev",
-                "ops",
-                "deploy/postgres/Containerfile",
-                "deploy/migrations/0042_example.sql",
-                "development/fixtures.py",
-                ".github/workflows/ci.yml",
-                "website/playwright.config.ts",
-                "python/src/clashlens/cli.py",
-                "python/src/clashlens/operating.py",
-                "python/src/clashlens/db.py",
-                "website/app/server/config.server.ts",
-            )
-        ],
-        ("pull_request", "website/Containerfile", "rename", True),
-        ("pull_request", "website/Containerfile", "delete", True),
-    ],
-)
-def test_full_container_coverage_selection(
-    tmp_path, event, path, operation, expected
+@pytest.mark.parametrize("event", ["pull_request", "push"])
+def test_full_container_runtime_runs_only_on_main_pushes(
+    command_workspace, event
 ) -> None:
-    # The test container needs no Git installation. Simulate its NUL-separated
-    # diff, including both sides of a rename as --no-renames requests.
-    changed = [path, "renamed-file"] if operation == "rename" else [path]
-    body = b"\0".join(value.encode() for value in changed) + b"\0"
-    git = tmp_path / "git"
-    git.write_text(
-        f"#!{sys.executable}\nimport sys\n"
-        "assert sys.argv[1:] == ['diff', '--no-renames', '--name-only', '-z', 'base...head']\n"
-        f"sys.stdout.buffer.write({body!r})\n"
+    workflow = _workflow()
+    # PyYAML's YAML 1.1 parser treats the GitHub Actions key "on" as True.
+    assert workflow[True] == {"push": {"branches": ["main"]}, "pull_request": None}
+    job = workflow["jobs"]["container-runtime"]
+    assert job["if"] == "github.event_name == 'push'"
+    assert "needs" not in job
+    condition = job["if"].replace("github.event_name", '"$GITHUB_EVENT_NAME"')
+    selected = (
+        subprocess.run(
+            ["bash", "-c", f"[[ {condition} ]]"],
+            env={**os.environ, "GITHUB_EVENT_NAME": event},
+            check=False,
+        ).returncode
+        == 0
     )
-    git.chmod(0o700)
-    step = next(
-        step
-        for step in _workflow()["jobs"]["containers"]["steps"]
-        if step.get("id") == "coverage"
-    )
-    output = tmp_path / "output"
-    subprocess.run(
-        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-        cwd=tmp_path,
-        check=True,
-        env=dict(
-            os.environ,
-            PATH=f"{tmp_path}:{os.environ['PATH']}",
-            BASE_SHA="base",
-            HEAD_SHA="head",
-            GITHUB_EVENT_NAME=event,
-            GITHUB_OUTPUT=str(output),
-        ),
-    )
-    assert output.read_text().strip() == f"full_check={str(expected).lower()}"
-
-
-def test_full_coverage_selection_fails_when_the_diff_cannot_be_read(tmp_path) -> None:
-    git = tmp_path / "git"
-    git.write_text("#!/bin/sh\nexit 1\n")
-    git.chmod(0o700)
-    step = next(
-        step
-        for step in _workflow()["jobs"]["containers"]["steps"]
-        if step.get("id") == "coverage"
-    )
-    output = tmp_path / "output"
-    result = subprocess.run(
-        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-        check=False,
-        env=dict(
-            os.environ,
-            PATH=f"{tmp_path}:{os.environ['PATH']}",
-            BASE_SHA="bad",
-            HEAD_SHA="head",
-            GITHUB_EVENT_NAME="pull_request",
-            GITHUB_OUTPUT=str(output),
-        ),
-    )
-    assert result.returncode != 0
-    assert not output.exists()
+    assert selected == (event == "push")
+    if selected:
+        for step in job["steps"]:
+            if "run" in step:
+                assert _run_step(step, command_workspace).returncode == 0
+        assert _calls(command_workspace)[-1]["command"] == "dev"
+        assert _calls(command_workspace)[-1]["args"] == ["check"]
+    else:
+        assert _calls(command_workspace) == []
 
 
 @pytest.mark.parametrize("exists", [True, False])

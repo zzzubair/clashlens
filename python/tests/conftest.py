@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,6 +11,34 @@ from typing import ClassVar
 import pytest
 
 FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
+
+
+def pytest_collection_modifyitems(config, items) -> None:
+    group = os.environ.get("CLASHLENS_TEST_GROUP")
+    if group is None:
+        return
+    if group not in ("1", "2"):
+        raise pytest.UsageError("CLASHLENS_TEST_GROUP must be 1 or 2")
+
+    # Keep each file together. Assign the longest measured files first to
+    # whichever group currently has less work. New files still run once.
+    test_directory = Path(__file__).parent
+    durations = json.loads(
+        (test_directory / "ci_test_durations.json").read_text(encoding="utf-8")
+    )
+    files = {item.path.relative_to(test_directory).as_posix() for item in items}
+    totals = [0.0, 0.0]
+    assignments = {}
+    for file in sorted(files, key=lambda file: (-durations.get(file, 1.0), file)):
+        target = min(range(2), key=lambda index: totals[index])
+        assignments[file] = str(target + 1)
+        totals[target] += durations.get(file, 1.0)
+    selected, deselected = [], []
+    for item in items:
+        file = item.path.relative_to(test_directory).as_posix()
+        (selected if assignments[file] == group else deselected).append(item)
+    items[:] = selected
+    config.hook.pytest_deselected(items=deselected)
 
 
 class _FixtureS3Handler(BaseHTTPRequestHandler):

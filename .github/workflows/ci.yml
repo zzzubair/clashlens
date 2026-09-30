@@ -13,9 +13,13 @@ permissions:
   contents: read
 
 jobs:
-  python:
-    name: Python lint, compile, and PostgreSQL tests
+  python-tests:
+    name: Python PostgreSQL tests, group ${{ matrix.group }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2]
     # One locked environment for every uv step in this job: sync, Ruff,
     # compile, and the tests must all resolve the same environment.
     env:
@@ -51,9 +55,25 @@ jobs:
         run: uv run python -m compileall -q src
       - name: Tests
         working-directory: python
+        env:
+          CLASHLENS_TEST_GROUP: ${{ matrix.group }}
+        run: uv run pytest -q --durations=30
+      - name: Development service tests
+        if: matrix.group == 1
+        working-directory: python
         run: |
-          uv run pytest -q
           PYTHONPATH=.. uv run pytest -q ../development/test_fixtures.py
+
+  python:
+    name: Python lint, compile, and PostgreSQL tests
+    if: always()
+    needs: python-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both Python test groups to pass
+        env:
+          RESULT: ${{ needs.python-tests.result }}
+        run: test "$RESULT" = success
 
   website:
     name: Website Node 24 checks and Chromium E2E
@@ -109,36 +129,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Select full container coverage
-        id: coverage
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          full_check=false
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            full_check=true
-          else
-            changed_paths=$(mktemp)
-            trap 'rm -f "$changed_paths"' EXIT
-            git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$changed_paths"
-            while IFS= read -r -d '' path; do
-              case "$path" in
-                *Containerfile*|*Dockerfile*|*/uv.lock|*/package-lock.json|*/pyproject.toml|*/package.json|*.containerignore|*.dockerignore)
-                  full_check=true
-                  ;;
-                dev|ops|deploy/*|development/*|.github/workflows/*|website/playwright.config.ts)
-                  full_check=true
-                  ;;
-                python/src/clashlens/cli.py|python/src/clashlens/operating.py|python/src/clashlens/db.py|website/app/server/config.server.ts)
-                  full_check=true
-                  ;;
-              esac
-            done < "$changed_paths"
-          fi
-          echo "full_check=$full_check" >> "$GITHUB_OUTPUT"
       - name: Install rootless Podman
         run: sudo apt-get update && sudo apt-get install -y podman
       - name: Build Python check container
@@ -147,7 +137,14 @@ jobs:
         run: |
           podman run --rm --tmpfs /tmp:rw,mode=1777 clashlens-python-check:ci \
             uv run --locked pytest -q tests/test_ops_backup.py tests/test_support_wrapper.py
+
+  container-runtime:
+    name: Full development container checks
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rootless Podman
+        run: sudo apt-get update && sudo apt-get install -y podman
       - name: Full development container checks
-        if: steps.coverage.outputs.full_check == 'true'
-        working-directory: website
-        run: ../dev check
+        run: ./dev check
