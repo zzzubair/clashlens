@@ -319,24 +319,25 @@ SQL
   printf '\\.\n'
   cat <<'SQL'
 CREATE TEMP TABLE launch_evidence ON COMMIT DROP AS
+WITH latest_work AS MATERIALIZED (
+  SELECT DISTINCT ON (w.player_id) w.player_id, w.status, w.failure_category,
+    w.battle_log_status, w.league_history_status
+  FROM collector_work w JOIN players p ON p.id = w.player_id
+  JOIN launch_tags t ON t.tag = p.normalized_tag
+  WHERE w.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
+  ORDER BY w.player_id, w.created_at DESC, w.id DESC
+)
 SELECT t.tag, p.active,
   w.status AS work_status, w.failure_category AS work_failure,
-  ep.endpoint, ep.required OR (ep.endpoint = 'league_history'
-    AND r.last_observation_id IS NOT NULL) AS required, r.last_success_at, o.http_status,
+  ep.endpoint, ep.required, r.last_success_at, o.http_status,
   processing.outcome, processing.failure_category, job.status AS processing_status,
-  v.source_contract_state,
   coalesce(ep.endpoint = 'profile' AND v.source_contract_state = 'accepted'
     AND e.profile_version_id = p.current_profile_version_id
     AND v.eligibility_state = p.eligibility_state
     AND v.eligibility_state IN ('eligible', 'ineligible')
     AND p.active = (v.eligibility_state = 'eligible'), false) AS resolved_profile
 FROM launch_tags t LEFT JOIN players p ON p.normalized_tag = t.tag
-LEFT JOIN LATERAL (
-    SELECT status, failure_category, battle_log_status, league_history_status
-    FROM collector_work WHERE player_id = p.id
-    AND kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
-    ORDER BY created_at DESC, id DESC LIMIT 1
-) w ON true
+LEFT JOIN latest_work w ON w.player_id = p.id
 CROSS JOIN LATERAL (VALUES
   ('profile', true),
   ('battle_log', coalesce(p.active OR w.battle_log_status = 'observed', false)),
@@ -359,8 +360,8 @@ LEFT JOIN player_profile_effects e ON ep.endpoint = 'profile'
 LEFT JOIN player_profile_versions v ON v.id = e.profile_version_id;
 CREATE TEMP TABLE launch_states ON COMMIT DROP AS
 SELECT tag, active,
-  bool_or(coalesce(endpoint = 'profile' AND http_status = 200 AND outcome = 'processed'
-    AND source_contract_state = 'accepted', false)) AS real,
+  bool_or(coalesce(endpoint = 'profile' AND http_status = 200
+    AND outcome = 'processed', false)) AS real,
   CASE
     WHEN bool_or(work_status = 'failed' OR (required AND (
       http_status NOT BETWEEN 200 AND 299
@@ -409,7 +410,9 @@ SQL
 
 `legend + not_legend + failed + pending_or_uncertain = supplied_unique`.
 Confirmed-real is separate evidence, not an extra population: a real player can
-still have a failed league-history check. A timeout does not prove nonexistence
+still have a failed league-history check. A successfully processed profile
+proves a real player even when its league tier or season data is uncertain;
+eligibility stays pending. A timeout does not prove nonexistence
 or non-Legend status. A not-found response stays unconfirmed and counts as
 failed, even when collection work says complete. Completion means the response
 was saved, not that the player exists. The report checks the latest saved profile,
@@ -423,8 +426,10 @@ number of failed players.
 
 An inactive player's trusted non-Legend profile can cancel discovery before
 league history arrives. Unfetched league history is then unnecessary for that
-player. A saved failed history response still counts as failed; recent successful
-profile and battle reads cannot hide it for an active player.
+player. History is required for active players and when the relevant work fetched
+it. Older history from another check does not change a newly confirmed inactive
+player's result. Recent successful profile and battle reads cannot hide a failed
+history response for an active player.
 
 Completion requires every tag accounted for, zero unresolved initial checks,
 and every intended Legend player active with both recent, successfully processed
@@ -535,6 +540,8 @@ changed. Production approval and launch evidence remain required.
 The review corrections to weekly reuse and the shared outcome report above have
 not been executed against PostgreSQL. The earlier rehearsal did not cover a
 reused stored profile after changed experience level, a saved league-history
-error, an unknown tier preserving older eligibility, or a response crossing
-Monday Reset. Rehearse these cases with fake data before using the revised
-queries in production; the earlier counts do not validate these corrections.
+error, an unknown tier preserving older eligibility, a response crossing Monday
+Reset, or a cancelled non-Legend check following an older history error. The
+revised report's runtime for 22,157 tags is also unmeasured. Rehearse these cases
+with fake data before using the revised queries in production; the earlier
+counts do not validate these corrections.
