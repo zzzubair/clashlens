@@ -64,3 +64,42 @@ test("account pages redirect anonymous users to login", async ({ page }) => {
   await page.goto("/account");
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
+
+test("account setup accepts names entered before the page JavaScript loads", async ({
+  page,
+}) => {
+  const username = "earlyscout";
+  await page.route("**/authorize?*", async (route) => {
+    const url = new URL(route.request().url());
+    url.searchParams.set("login_hint", "fixture-google-subject-2003");
+    await route.continue({ url: url.href });
+  });
+  await signIn(page);
+  await expect(page).toHaveURL(/\/account\/setup$/);
+
+  let releaseScripts!: () => void;
+  const scriptsReleased = new Promise<void>((resolve) => {
+    releaseScripts = resolve;
+  });
+  await page.route("**/assets/*.js", async (route) => {
+    await scriptsReleased;
+    await route.continue();
+  });
+  try {
+    await page.reload({ waitUntil: "commit" });
+    await page.getByLabel("Username").fill(username);
+    await page.getByLabel("Display name").fill("Early Scout");
+    releaseScripts();
+    await page.waitForLoadState("networkidle");
+    // This control only works once the page JavaScript handles user input.
+    await page.getByRole("button", { name: "Dark mode" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(page.getByLabel("Username")).toHaveValue(username);
+    await expect(page.getByLabel("Display name")).toHaveValue("Early Scout");
+    await page.getByRole("button", { name: "Create account" }).click();
+    await expect(page).toHaveURL(new RegExp(`/users/${username}$`));
+    await expect(page.getByRole("heading", { name: "Early Scout" })).toBeVisible();
+  } finally {
+    releaseScripts();
+  }
+});

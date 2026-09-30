@@ -151,9 +151,7 @@ export function headers() {
 export default function AccountSetupRoute() {
   const loaderData = useLoaderData<typeof loader>();
   const actionData = useActionData<SetupActionData>();
-  const [values, setValues] = useState(
-    actionData?.values ?? { username: "", displayName: "" },
-  );
+  const initialValues = actionData?.values ?? { username: "", displayName: "" };
   const [clientErrors, setClientErrors] = useState<{
     username?: string;
     displayName?: string;
@@ -164,6 +162,12 @@ export default function AccountSetupRoute() {
   const displayNameError = serverErrors.displayName ?? clientErrors.displayName;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    // Read the browser's values, including names typed before JavaScript loads.
+    const form = new FormData(event.currentTarget);
+    const values = {
+      username: String(form.get("username") ?? ""),
+      displayName: String(form.get("displayName") ?? ""),
+    };
     const errors: { username?: string; displayName?: string } = {};
     if (normalizeUsername(values.username) === null) {
       errors.username =
@@ -209,16 +213,9 @@ export default function AccountSetupRoute() {
               autoComplete="off"
               autoCapitalize="none"
               spellCheck={false}
-              value={values.username}
+              defaultValue={initialValues.username}
               aria-invalid={usernameError ? true : undefined}
               aria-describedby={usernameError ? "setup-username-error" : undefined}
-              onChange={(event) => {
-                const username = event.currentTarget.value;
-                setValues((current) => ({
-                  ...current,
-                  username,
-                }));
-              }}
             />
             {usernameError ? (
               <p id="setup-username-error" className="field-error" role="alert">
@@ -237,16 +234,9 @@ export default function AccountSetupRoute() {
               name="displayName"
               type="text"
               autoComplete="nickname"
-              value={values.displayName}
+              defaultValue={initialValues.displayName}
               aria-invalid={displayNameError ? true : undefined}
               aria-describedby={displayNameError ? "setup-display-name-error" : undefined}
-              onChange={(event) => {
-                const displayName = event.currentTarget.value;
-                setValues((current) => ({
-                  ...current,
-                  displayName,
-                }));
-              }}
             />
             {displayNameError ? (
               <p id="setup-display-name-error" className="field-error" role="alert">
