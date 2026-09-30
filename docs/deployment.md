@@ -5,6 +5,9 @@ see [Operating Clash Lens on rogue](operating.md).
 
 ## Launch order agreed on September 27
 
+Use [the go-live runbook](go-live.md) for approval points, exact manual-import
+commands, simultaneous alerts and tracking startup, warm-up and safe stop.
+
 The [product map](product-status.md) and [#140](https://github.com/zzzubair/clashlens/issues/140)
 separate collection readiness from public website launch. Tracking must be
 complete before the October 5 05:00 UTC season boundary, targeting a September 30
