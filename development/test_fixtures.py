@@ -6,6 +6,7 @@ import threading
 import urllib.error
 import urllib.request
 from email.utils import parsedate_to_datetime
+from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
@@ -141,6 +142,51 @@ def test_disk_archive_persists_bytes_and_refuses_an_overwrite(tmp_path: Path) ->
         with urllib.request.urlopen(url) as response:
             assert response.read() == body
     finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+
+@pytest.mark.parametrize("duplicate_body", [b"", b"different"])
+@pytest.mark.parametrize("headers", [{}, {"If-None-Match": "*"}])
+def test_refused_archive_upload_keeps_connection_usable(
+    tmp_path: Path, duplicate_body: bytes, headers: dict[str, str]
+) -> None:
+    handler = type("TestArchiveHandler", (ArchiveHandler,), {"root": tmp_path})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = HTTPConnection("127.0.0.1", server.server_port, timeout=2)
+    original = b'{"synthetic":true}'
+    try:
+        connection.request("PUT", "/evidence/original", body=original)
+        response = connection.getresponse()
+        assert response.status == 200
+        response.read()
+        socket = connection.sock
+
+        connection.request(
+            "PUT", "/evidence/original", body=duplicate_body, headers=headers
+        )
+        response = connection.getresponse()
+        assert response.status == 412
+        response.read()
+        assert connection.sock is socket
+
+        connection.request("GET", "/evidence/original")
+        response = connection.getresponse()
+        assert response.status == 200, response.reason
+        assert response.read() == original
+        assert connection.sock is socket
+
+        connection.request("PUT", "/evidence/next", body=b"next upload")
+        response = connection.getresponse()
+        assert response.status == 200
+        response.read()
+        assert (tmp_path / "next").read_bytes() == b"next upload"
+        assert connection.sock is socket
+    finally:
+        connection.close()
         server.shutdown()
         thread.join(timeout=2)
         server.server_close()
