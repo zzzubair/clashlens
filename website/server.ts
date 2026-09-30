@@ -1,13 +1,29 @@
 import { createReadStream } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { createServer } from "node:http";
+import type { IncomingMessage, RequestListener, ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import { extname, join, relative, resolve } from "node:path";
 import { pipeline } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { createGzip } from "node:zlib";
+import { constants } from "node:zlib";
 import { createRequestListener } from "@react-router/node";
 import type { RequestListenerOptions } from "@react-router/node";
 import type { ServerBuild } from "react-router";
+
+const serverRequire = createRequire(
+  import.meta.resolve("@react-router/serve/package.json"),
+);
+const compression = serverRequire("compression") as (options: {
+  threshold: number;
+  flush: number;
+  brotli: { flush: number };
+}) => (request: IncomingMessage, response: ServerResponse, next: () => void) => void;
+const compress = compression({
+  threshold: 0,
+  flush: constants.Z_SYNC_FLUSH,
+  brotli: { flush: constants.BROTLI_OPERATION_FLUSH },
+});
 
 const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css",
@@ -46,7 +62,7 @@ export async function createWebsiteServer(build: ServerBuild, clientDirectory: s
   if (typeof entry.getLoadContext !== "function")
     throw new Error("Missing socket context adapter");
   const listener = createRequestListener({ build, getLoadContext: entry.getLoadContext });
-  return createServer(async (request, response) => {
+  const handleRequest: RequestListener = async (request, response) => {
     let pathname: string;
     try {
       pathname = decodeURIComponent(
@@ -74,21 +90,11 @@ export async function createWebsiteServer(build: ServerBuild, clientDirectory: s
           : "public, max-age=3600",
       );
       response.setHeader("ETag", etag);
-      response.setHeader("Vary", "Accept-Encoding");
+      response.setHeader("Content-Length", metadata.size);
       if (request.headers["if-none-match"] === etag) {
         response.writeHead(304).end();
         return;
       }
-      const acceptedGzip =
-        /(?:^|,)\s*gzip\s*(?:;\s*q=(0(?:\.\d+)?|1(?:\.0+)?))?\s*(?:,|$)/i.exec(
-          request.headers["accept-encoding"] ?? "",
-        );
-      const gzip =
-        acceptedGzip !== null &&
-        Number(acceptedGzip[1] ?? 1) > 0 &&
-        /^(text\/|application\/json|image\/svg)/.test(contentType);
-      if (gzip) response.setHeader("Content-Encoding", "gzip");
-      else response.setHeader("Content-Length", metadata.size);
       if (request.method === "HEAD") {
         response.end();
         return;
@@ -96,12 +102,14 @@ export async function createWebsiteServer(build: ServerBuild, clientDirectory: s
       const onError = (error: NodeJS.ErrnoException | null) => {
         if (error) response.destroy();
       };
-      if (gzip) pipeline(createReadStream(file), createGzip(), response, onError);
-      else pipeline(createReadStream(file), response, onError);
+      pipeline(createReadStream(file), response, onError);
     } catch {
       response.writeHead(500).end();
     }
-  });
+  };
+  return createServer((request, response) =>
+    compress(request, response, () => handleRequest(request, response)),
+  );
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

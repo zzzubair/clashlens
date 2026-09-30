@@ -110,7 +110,7 @@ describe("Refresh address trust", () => {
     }
   });
 
-  it("trusts no headers by default and supports an explicitly replaced custom header", async () => {
+  it("trusts no headers by default", async () => {
     for (let index = 0; index < 7; index++) {
       expect(
         await refresh(
@@ -120,11 +120,36 @@ describe("Refresh address trust", () => {
         ),
       ).toBe(index < 6 ? 202 : 429);
     }
-    const custom = createClientAddressContext({
-      CLASHLENS_TRUSTED_PROXY_IP: PROXY,
-      CLASHLENS_CLIENT_IP_HEADER: "X-Verified-Visitor",
-    });
-    expect(await refresh({ "X-Verified-Visitor": VISITOR }, PROXY, custom)).toBe(202);
+  });
+
+  it.each(["X-Verified-Visitor", "True-Client-IP", "X-Real-IP", "X-Forwarded-For"])(
+    "does not use %s from the trusted proxy as a visitor address",
+    async (header) => {
+      for (let index = 0; index < 7; index++) {
+        expect(await refresh({ [header]: `203.0.113.${index + 1}` }, PROXY)).toBe(
+          index < 6 ? 202 : 429,
+        );
+      }
+      expect(mocks.requestRefresh).toHaveBeenCalledTimes(6);
+    },
+  );
+
+  it("uses only Cloudflare's visitor header even with a legacy custom header setting", async () => {
+    vi.stubEnv("CLASHLENS_TRUSTED_PROXY_IP", PROXY);
+    vi.stubEnv("CLASHLENS_CLIENT_IP_HEADER", "X-Verified-Visitor");
+    const getContext = createClientAddressContext();
+    for (let index = 0; index < 7; index++) {
+      expect(
+        await refresh(
+          {
+            "CF-Connecting-IP": VISITOR,
+            "X-Verified-Visitor": `203.0.113.${index + 1}`,
+          },
+          PROXY,
+          getContext,
+        ),
+      ).toBe(index < 6 ? 202 : 429);
+    }
   });
 
   it("keeps equivalent IPv6 and mapped IPv4 addresses in one bucket", async () => {
@@ -141,7 +166,6 @@ describe("Refresh address trust", () => {
   it.each([
     { CLASHLENS_TRUSTED_PROXY_IP: "*" },
     { CLASHLENS_TRUSTED_PROXY_IP: "127.0.0.0/8" },
-    { CLASHLENS_CLIENT_IP_HEADER: "bad header" },
   ])("rejects unsafe configuration before listening", (env) => {
     expect(() => createClientAddressContext(env)).toThrow("Invalid trusted proxy");
   });

@@ -19,15 +19,13 @@ export function createClientAddressContext(
 ) {
   const rawProxy = env.CLASHLENS_TRUSTED_PROXY_IP;
   const proxy = rawProxy ? normalizeAddress(rawProxy) : undefined;
-  const header = env.CLASHLENS_CLIENT_IP_HEADER ?? "CF-Connecting-IP";
-  if ((rawProxy && !proxy) || !/^[!#$%&'*+.^_`|~\w-]+$/.test(header)) {
-    throw new Error(
-      "Invalid trusted proxy address or client address header configuration",
-    );
+  if (rawProxy && !proxy) {
+    throw new Error("Invalid trusted proxy address configuration");
   }
   return (request: Request, client: { address: string }) => {
     const peer = normalizeAddress(client.address);
-    const forwarded = proxy && peer === proxy ? request.headers.get(header) : null;
+    const forwarded =
+      proxy && peer === proxy ? request.headers.get("CF-Connecting-IP") : null;
     // Accept one literal address, never a forwarding chain, port, or hostname.
     const address = (forwarded && normalizeAddress(forwarded)) || peer;
     const context = new RouterContextProvider();

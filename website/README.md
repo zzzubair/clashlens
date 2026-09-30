@@ -73,11 +73,10 @@ not choose that address. Restarting the process resets its in-memory counters.
 `CLASHLENS_TRUSTED_PROXY_IP` defaults to empty, meaning no header is trusted.
 Set it to exactly the local proxy's socket address **as observed inside the
 website container**, not a subnet or a number of hops. IPv4-mapped IPv6 is
-normalized. `CLASHLENS_CLIENT_IP_HEADER` defaults to `CF-Connecting-IP`; use a
-different name only if the proxy replaces that header with the verified Cloudflare
+normalized. Only Cloudflare's `CF-Connecting-IP` header supplies the visitor
 address. Missing, duplicate, chained or malformed addresses fall back to the
 socket peer. `CLASHLENS_TRUST_PROXY` is obsolete and ignored. The root `ops`
-passes the two new settings from `app.env`; no trusted address is enabled by default.
+passes the trusted proxy setting from `app.env`; no trusted address is enabled by default.
 
 Before enabling proxy trust, the ingress operator must:
 
