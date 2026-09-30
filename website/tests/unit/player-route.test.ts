@@ -9,6 +9,25 @@ import {
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
+  getPlayerLookup: vi.fn(),
+  startPlayerLookup: vi.fn(),
+  lookupTimedOut: false,
+}));
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return {
+    ...actual,
+    useState: (initialState: unknown) => {
+      const state = actual.useState(initialState);
+      return initialState === false && mocks.lookupTimedOut ? [true, state[1]] : state;
+    },
+  };
+});
+
+vi.mock("../../app/services/player-lookup.server", () => ({
+  getPlayerLookup: mocks.getPlayerLookup,
+  startPlayerLookup: mocks.startPlayerLookup,
 }));
 
 vi.mock("../../app/services/python.server", async (importOriginal) => {
@@ -26,6 +45,8 @@ import type {
 } from "../../app/lib/contracts";
 import { PythonApiError } from "../../app/services/python.server";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
+import { isRefreshStatusPayload } from "../../app/lib/validation";
+import { createClientAddressContext } from "../../app/server/client-address.server";
 
 const TAG = "#2PP";
 const SEASON = "1785714000";
@@ -72,6 +93,7 @@ const SEASONS: SummarizedSeasonRef[] = [
 const PLAYER = {
   kind: "player-page",
   tag: TAG,
+  trackingState: "tracking",
   profile: {
     tag: TAG,
     name: "Nova",
@@ -97,6 +119,33 @@ const PLAYER = {
   },
 } satisfies PlayerPage;
 
+const SAVED_DAY: RankedDaySummary = {
+  dayNumber: null,
+  label: "Ranked day",
+  period: "2026-09-07T05:00:00Z – 2026-09-08T05:00:00Z",
+  state: "Complete",
+  startTrophies: 6000,
+  offense: { attacks: 1, threeStars: 1, trophyGain: 40 },
+  defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
+  trophyChange: 40,
+  offenseEvents: [
+    {
+      battleId: "saved-attack",
+      battleTimestamp: "2026-09-07T13:00:00Z",
+      opponent: { tag: "#2PY", name: "Saved opponent" },
+      destructionPercentage: 100,
+      stars: 3,
+      trophyChange: 40,
+      perspectiveDisagreement: false,
+      army: null,
+      armyShareCode: null,
+    },
+  ],
+  defenseEvents: [],
+  completeness: { state: "complete", reason: "Complete" },
+  uncertainty: ["player_not_eligible"],
+};
+
 const REFRESH_STATUS: RefreshStatus = {
   kind: "refresh-status",
   workId: "work_1",
@@ -108,12 +157,15 @@ const REFRESH_STATUS: RefreshStatus = {
   player: PLAYER,
 };
 
-async function renderRoute(data: Awaited<ReturnType<typeof playerLoader>>) {
+async function renderRoute(
+  data: Awaited<ReturnType<typeof playerLoader>>,
+  search = "?season=missing",
+) {
   const handler = createStaticHandler([
     { path: "/players/:tag", Component: PlayerRoute, loader: () => data },
   ]);
   const context = await handler.query(
-    new Request("https://clashlens.example/players/%232PP?season=missing"),
+    new Request(`https://clashlens.example/players/%232PP${search}`),
   );
   if (context instanceof Response) throw new Error("unexpected route response");
   const router = createStaticRouter(handler.dataRoutes, context);
@@ -128,6 +180,8 @@ function requestFor(season: string | null) {
 describe("player route historical independence", () => {
   beforeEach(() => {
     mocks.createPythonClient.mockReset();
+    mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
+    mocks.startPlayerLookup.mockReset();
   });
 
   it("returns the compact season even when the current profile is unavailable", async () => {
@@ -258,6 +312,8 @@ describe("player route historical independence", () => {
       refreshStatus: null,
       refreshError: null,
       noJsIdempotencyKey: "test-idempotency-key",
+      lookup: { tag: TAG, state: "tracking" },
+      lookupError: null,
       seasons: SEASONS,
       selectedSeason: "missing",
       historical: null,
@@ -310,6 +366,8 @@ describe("player route historical independence", () => {
       refreshStatus: null,
       refreshError: null,
       noJsIdempotencyKey: "test-idempotency-key",
+      lookup: { tag: TAG, state: "tracking" },
+      lookupError: null,
       seasons: [],
       selectedSeason: null,
       historical: null,
@@ -342,4 +400,345 @@ describe("player route historical independence", () => {
       expect(getPlayerSeason).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("automatic tag lookup", () => {
+  beforeEach(() => {
+    mocks.lookupTimedOut = false;
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi.fn().mockRejectedValue(new PythonApiError(404, {})),
+      getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+      getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+    });
+    mocks.startPlayerLookup
+      .mockReset()
+      .mockResolvedValue({ tag: TAG, state: "checking" });
+  });
+
+  it("starts a new tag during server rendering without a button or account", async () => {
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "unknown" });
+    const request = requestFor(null);
+    const result = await playerLoader({
+      request,
+      params: { tag: TAG },
+      context: createClientAddressContext({})(request, { address: "198.51.100.9" }),
+    } as never);
+    expect(result.lookup?.state).toBe("checking");
+    expect(mocks.startPlayerLookup).toHaveBeenCalledExactlyOnceWith("198.51.100.9", TAG);
+    const html = await renderRoute(result);
+    expect(html).toContain("Checking this tag");
+    expect(html).not.toContain("Start tracking");
+    expect(html).toContain("Check progress");
+  });
+
+  it.each([
+    ["not_found", "Player not found"],
+    ["not_in_legend", "not in Legend I"],
+    ["uncertain", "could not confirm"],
+    ["failed", "could not finish checking"],
+  ])(
+    "shows %s honestly and preserves saved seasons without another lookup",
+    async (state, message) => {
+      mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state });
+      const result = await playerLoader({
+        request: requestFor(SEASON),
+        params: { tag: TAG },
+      } as never);
+      const html = await renderRoute(result);
+      expect(html).toContain(message);
+      expect(html).toContain("Historical seasons");
+      expect(html).not.toContain("Current trophies");
+      expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
+    },
+  );
+
+  it("hides the old current profile when newer evidence says the player left Legend I", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi.fn().mockResolvedValue({ ...PLAYER, trackingState: "not_in_legend" }),
+      getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+      getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+    });
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "not_in_legend" });
+    const result = await playerLoader({
+      request: requestFor(SEASON),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain("not in Legend I");
+    expect(html).not.toContain("Current trophies");
+    expect(html).not.toContain('class="player-refresh-form"');
+    expect(html).toContain("Historical seasons");
+  });
+
+  it.each([null, SEASON])(
+    "keeps history and hides the profile when lookup fails for season %s",
+    async (season) => {
+      mocks.createPythonClient.mockReturnValue({
+        getPlayer: vi.fn().mockResolvedValue({
+          ...PLAYER,
+          trackingState: "uncertain",
+          seasonDays: [SAVED_DAY],
+        }),
+        getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+        getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+      });
+      mocks.getPlayerLookup.mockRejectedValue(new PythonApiError(503, {}));
+      const result = await playerLoader({
+        request: requestFor(season),
+        params: { tag: TAG },
+      } as never);
+      const html = await renderRoute(result);
+      expect(html).toContain(result.lookupError!.error.message);
+      expect(html).toContain("could not confirm their Legend I eligibility");
+      expect(html).toContain("Historical seasons");
+      expect(html).toContain(
+        season === null ? "Saved Legend history" : "Daily trophy totals",
+      );
+      expect(html).not.toContain("Current trophies");
+      expect(html).not.toContain("player-refresh-form");
+    },
+  );
+
+  it.each(["profile", "refresh"])(
+    "uses the %s response when an older lookup still says tracking",
+    async (source) => {
+      const departed = { ...PLAYER, trackingState: "not_in_legend" };
+      mocks.createPythonClient.mockReturnValue({
+        getPlayer: vi.fn().mockResolvedValue(source === "profile" ? departed : PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+        getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+        getRefreshStatus: vi
+          .fn()
+          .mockResolvedValue({ ...REFRESH_STATUS, player: departed }),
+      });
+      mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "tracking" });
+      const result = await playerLoader({
+        request: new Request(
+          `${requestFor(null).url}${source === "refresh" ? "?refresh=work_1" : ""}`,
+        ),
+        params: { tag: TAG },
+      } as never);
+      const html = await renderRoute(result);
+      expect(html).toContain("not in Legend I");
+      expect(html).not.toContain("Now tracking");
+      expect(html).not.toContain("Current trophies");
+      expect(html).not.toContain("player-refresh-form");
+    },
+  );
+
+  it("shows a confirmed tracked profile despite an unavailable lookup", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi.fn().mockResolvedValue(PLAYER),
+      getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+      getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+    });
+    mocks.getPlayerLookup.mockRejectedValue(new PythonApiError(503, {}));
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain("Current trophies");
+    expect(html).toContain("player-refresh-form");
+    expect(html).toContain(result.lookupError!.error.message);
+  });
+
+  it.each(
+    ["recent", "current", "both"].flatMap((source) =>
+      [false, true].map((lookupFailed) => ({ source, lookupFailed })),
+    ),
+  )(
+    "keeps $source dated history when lookup failure is $lookupFailed",
+    async ({ source, lookupFailed }) => {
+      mocks.createPythonClient.mockReturnValue({
+        getPlayer: vi.fn().mockResolvedValue({
+          ...PLAYER,
+          trackingState: "not_in_legend",
+          season: null,
+          seasonDays: [],
+          currentDay: source === "recent" ? null : SAVED_DAY,
+          recentDays: source === "current" ? [] : [SAVED_DAY],
+        }),
+        getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+        getPlayerSeason: vi.fn(),
+      });
+      if (lookupFailed)
+        mocks.getPlayerLookup.mockRejectedValue(new PythonApiError(503, {}));
+      else mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "tracking" });
+      const result = await playerLoader({
+        request: requestFor(null),
+        params: { tag: TAG },
+      } as never);
+      const html = await renderRoute(result);
+      expect(html).toContain("Saved Legend history");
+      expect(html).toContain("?day=2026-09-07#battle-saved-attack");
+      expect(html.match(/id="battle-saved-attack"/g)).toHaveLength(1);
+      expect(html).toContain("Saved opponent");
+      expect(html).not.toContain("Current trophies");
+      expect(html).not.toContain("player-refresh-form");
+      expect(result.player?.season).toBeNull();
+      expect(
+        (result.player?.currentDay ?? result.player?.recentDays[0])?.dayNumber,
+      ).toBeNull();
+      if (lookupFailed) expect(html).toContain(result.lookupError!.error.message);
+    },
+  );
+
+  it("keeps dated history on tracked pages without a confirmed season", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi
+        .fn()
+        .mockResolvedValue({ ...PLAYER, currentDay: SAVED_DAY, recentDays: [SAVED_DAY] }),
+      getPlayerSeasons: vi.fn().mockResolvedValue([]),
+    });
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "tracking" });
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain("Current trophies");
+    expect(html.match(/id="battle-saved-attack"/g)).toHaveLength(1);
+    expect(result.player?.season).toBeNull();
+  });
+
+  it.each(
+    (["tracking", "not_in_legend"] as const).flatMap((trackingState) =>
+      [false, true].flatMap((lookupFailed) =>
+        ["profile", "refresh"].flatMap((response) =>
+          ["recent", "current", "both"].map((source) => ({
+            trackingState,
+            lookupFailed,
+            response,
+            source,
+          })),
+        ),
+      ),
+    ),
+  )(
+    "keeps mixed season history for $trackingState, $response, $source, lookup failure $lookupFailed",
+    async ({ trackingState, lookupFailed, response, source }) => {
+      const confirmedDay: RankedDaySummary = {
+        ...SAVED_DAY,
+        dayNumber: 2,
+        period: "2026-09-08T05:00:00Z – 2026-09-09T05:00:00Z",
+        uncertainty: [],
+        offenseEvents: SAVED_DAY.offenseEvents.map((event) => ({
+          ...event,
+          battleId: "confirmed-attack",
+          battleTimestamp: "2026-09-08T13:00:00Z",
+          opponent: { ...event.opponent, name: "Confirmed opponent" },
+        })),
+      };
+      const datedDay = { ...SAVED_DAY, dayNumber: 17 };
+      const displayed: PlayerPage = {
+        ...PLAYER,
+        trackingState,
+        season: {
+          id: SEASON,
+          anchor: "2026-09-07T05:00:00Z",
+          currentDayNumber: 2,
+          dayCount: 28,
+          anchorSource: "official_league_history",
+          anchorObservedAt: "2026-09-08T13:00:00Z",
+        },
+        seasonDays: [confirmedDay],
+        recentDays: [
+          { ...confirmedDay, period: "2026-09-08T05:00:00+00:00" },
+          ...(source === "current" ? [] : [datedDay]),
+        ],
+        currentDay:
+          source === "recent"
+            ? null
+            : {
+                ...datedDay,
+                period: "2026-09-07T05:00:00+00:00 – 2026-09-08T05:00:00+00:00",
+              },
+      };
+      mocks.createPythonClient.mockReturnValue({
+        getPlayer: vi.fn().mockResolvedValue(response === "profile" ? displayed : PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+        getRefreshStatus: vi
+          .fn()
+          .mockResolvedValue({ ...REFRESH_STATUS, player: displayed }),
+      });
+      if (lookupFailed)
+        mocks.getPlayerLookup.mockRejectedValue(new PythonApiError(503, {}));
+      else mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "tracking" });
+      const result = await playerLoader({
+        request: new Request(
+          `${requestFor(null).url}${response === "refresh" ? "?refresh=work_1" : ""}`,
+        ),
+        params: { tag: TAG },
+      } as never);
+      const markup = (await renderRoute(result, "?day=2026-09-07")).split("<script>")[0];
+      expect(markup.match(/id="battle-saved-attack"/g)).toHaveLength(1);
+      expect(markup.match(/id="battle-confirmed-attack"/g)).toHaveLength(1);
+      expect(markup).toContain("?day=2026-09-07#battle-saved-attack");
+      expect(markup).toContain("?day=2026-09-08#battle-confirmed-attack");
+      expect(markup).not.toContain("No saved Legend log");
+      const text = markup.replace(/<[^>]*>/g, "");
+      expect(text).toContain("Day 2");
+      expect(text).toContain("Date only");
+      expect(text).not.toContain("Day 17");
+      expect(displayed.seasonDays).toEqual([confirmedDay]);
+      if (trackingState === "tracking") {
+        expect(markup).toContain("Current trophies");
+        expect(markup).toContain("player-refresh-form");
+      } else {
+        expect(markup).toContain("not in Legend I");
+        expect(markup).not.toContain("Current trophies");
+        expect(markup).not.toContain("player-refresh-form");
+      }
+      if (lookupFailed) expect(markup).toContain(result.lookupError!.error.message);
+    },
+  );
+
+  it.each([
+    ["tracking", true],
+    ["not_in_legend", true],
+    ["uncertain", true],
+    [undefined, false],
+    [true, false],
+    ["unknown", false],
+  ])("validates tracking state %s in Refresh results", (trackingState, accepted) => {
+    expect(
+      isRefreshStatusPayload({ ...REFRESH_STATUS, player: { ...PLAYER, trackingState } }),
+    ).toBe(accepted);
+  });
+
+  it.each([
+    ["checking", "It may still be running"],
+    ["tracking", "It may still be running"],
+    ["not_found", "Player not found"],
+    ["not_in_legend", "not in Legend I"],
+    ["uncertain", "could not confirm"],
+    ["failed", "could not finish checking"],
+  ])("shows %s correctly after the polling timeout", async (state, message) => {
+    mocks.lookupTimedOut = true;
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state });
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain(message);
+    if (state !== "checking" && state !== "tracking") {
+      expect(html).not.toContain("It may still be running");
+    }
+  });
+
+  it("shows a limit refusal without claiming the check started", async () => {
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "unknown" });
+    mocks.startPlayerLookup.mockRejectedValue(
+      new PythonApiError(429, { error: "rate_limited" }),
+    );
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    expect(result.lookup?.state).toBe("unknown");
+    expect(result.lookupError?.error.code).toBe("rate_limited");
+    expect(await renderRoute(result)).toContain("Waiting to check");
+  });
 });

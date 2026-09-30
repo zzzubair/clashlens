@@ -3,12 +3,29 @@
 This directory contains the self-hosted TypeScript SSR website. It talks to
 the private Python API through one server-only client boundary.
 
-The [September 25 product map](../docs/product-status.md) distinguishes agreed
-website changes from current behavior: automatic new-tag discovery, search
-restricted to tracked/historical players, non-Legend-I explanation/history,
-Clash Lens season rank, expanded army history and working Discord support links.
-Those additions remain in #125, #127, #138 and #139; this README is not their
-implementation evidence.
+Exact-tag search opens the player page and starts an unknown tag's first check
+without a button or sign-in. The existing interactive collector retains the
+profile, battle log and league history; existing profile processing activates
+eligible Legend I players. Progress waits for processed evidence. Official
+not-found, temporary failure and uncertain eligibility have distinct messages.
+Known real players reuse their eligibility result on visits. Failed checks and
+tags reported as not found offer a retry with the existing 30-second minimum
+interval. Starting a check shares Refresh's six-per-minute allowance and unchanged
+address handling. With JavaScript enabled, the page checks progress once a second
+for up to 60 seconds, then explains that the check may still be running. A result
+that arrives after that limit still replaces the waiting message. The Check
+progress link also works without JavaScript.
+
+Name results include active players or players with recorded history. Empty
+day records marked `player_not_eligible` do not count as history unless they
+contain battles. A full current profile and Refresh appear only when the displayed
+player response itself confirms active tracking, including after Refresh. Other
+pages show the eligibility explanation or lookup error and any saved history.
+Saved daily history combines available season, recent and current-day records
+without duplicate dates. Records with unconfirmed season membership show Date
+only instead of a season day number. This adds no weekly recheck or clan discovery
+and does not enable production discovery. The [product map](../docs/product-status.md)
+tracks the remaining launch work.
 
 ## Requirements and setup
 
@@ -40,6 +57,22 @@ npm run format
 npm run test:unit
 npm run test:e2e
 ```
+
+Tag-lookup verification on September 30, 2026: all 377 website unit tests,
+type checking, lint, formatting and the production build passed. The isolated
+Rogue database run passed 47 Python checks across `test_player_lookup_postgres`,
+`test_api_db_public_ops` and `test_collector_db_postgres`. After the browser run
+exposed empty noneligible day records appearing in name search, the corrected
+lookup tests passed all 16 cases and `tests/e2e/player.spec.ts` passed all seven
+cases against 200 synthetic players. These cover automatic anonymous tracking,
+progress, not-found, uncertain eligibility, non-Legend pages and name exclusion,
+temporary failure, retries and the no-JavaScript path. A Chrome check of the
+non-Legend page at 375 pixels found no horizontal overflow or console errors.
+
+Local commands used Node 22 and locked Python 3.12; the browser fixture stack
+used the repository's Node 24 container. No real Clash requests or production
+changes were made. The full website browser suite, real providers, weekly
+rechecks, clan discovery and production load were not checked by this task.
 
 `check:browser-assets` fails if server-only client or secret markers enter the
 browser bundle. End-to-end tests start the root development stack and exercise

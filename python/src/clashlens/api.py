@@ -18,6 +18,7 @@ from . import (
     api_accounts,
     api_analytics,
     api_leaderboard,
+    api_player_lookup,
     api_players,
     api_verification,
 )
@@ -344,6 +345,29 @@ def create_app(
         if result is None:
             raise ApiError(404, "player_not_found")
         return JSONResponse(status_code=200, content=_json_safe(result))
+
+    @app.get("/v1/players/{tag}/lookup")
+    def player_lookup(tag: str, request: Request) -> JSONResponse:
+        _authorize(request, "player.read", production_database)
+        return JSONResponse(content=api_player_lookup.get_lookup(
+            production_database, _safe_tag(tag)
+        ))
+
+    @app.post("/v1/players/{tag}/lookup")
+    async def start_player_lookup(tag: str, request: Request) -> JSONResponse:
+        context = await asyncio.to_thread(
+            _authorize, request, "refresh.submit", production_database
+        )
+        if await request.body():
+            raise ApiError(422, "invalid_request")
+        normalized_tag = _safe_tag(tag)
+        result = await asyncio.to_thread(
+            api_player_lookup.submit_lookup,
+            production_database,
+            _binding(request, context, "refresh.submit", {"tag": normalized_tag}),
+            normalized_tag=normalized_tag,
+        )
+        return _operation_response(result)
 
     @app.get("/v1/players/{tag}/seasons")
     def player_seasons(tag: str, request: Request) -> JSONResponse:

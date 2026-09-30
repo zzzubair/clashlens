@@ -547,6 +547,15 @@ def search_known_players(
                 ON profile.id = player.current_profile_version_id
             WHERE profile.name ILIKE %s ESCAPE '\\'
               AND profile.source_contract_state = 'accepted'
+              AND (player.active
+                   OR EXISTS (SELECT 1 FROM api_player_daily_logs AS history
+                              WHERE history.player_id = player.id
+                                AND (NOT history.partial_reasons @> '["player_not_eligible"]'::jsonb
+                                     OR jsonb_array_length(history.battles) > 0))
+                   OR EXISTS (SELECT 1 FROM player_season_summaries AS history
+                              WHERE history.player_id = player.id)
+                   OR EXISTS (SELECT 1 FROM player_league_history_entries AS history
+                              WHERE history.player_id = player.id))
             ORDER BY lower(profile.name), player.normalized_tag
             LIMIT %s
             """,

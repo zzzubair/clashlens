@@ -16,6 +16,7 @@ import type {
   HistoricalSeasonDayEntry,
   HistoricalSeasonSummary,
   PlayerPage,
+  PlayerLookup,
   RankedBattleEvent,
   RankedDaySummary,
   RefreshError,
@@ -37,11 +38,14 @@ export interface PlayerLoaderData {
   selectedSeason: string | null;
   historical: HistoricalSeasonSummary | null;
   historicalError: WebsiteErrorResponse | null;
+  lookup: PlayerLookup | null;
+  lookupError: WebsiteErrorResponse | null;
 }
 
 export async function loader({
   request,
   params,
+  context,
 }: LoaderFunctionArgs): Promise<PlayerLoaderData> {
   const noJsIdempotencyKey = globalThis.crypto.randomUUID();
   const rawTag = params.tag ?? "";
@@ -63,6 +67,8 @@ export async function loader({
       selectedSeason: null,
       historical: null,
       historicalError: null,
+      lookup: null,
+      lookupError: null,
     };
   }
   const canonicalPath = canonicalPlayerPath(normalizedTag);
@@ -81,7 +87,8 @@ export async function loader({
   const client = import("../services/python.server").then(({ createPythonClient }) =>
     createPythonClient(),
   );
-  const [playerResult, seasonsResult, historicalResult, refreshResult] =
+  const lookupClient = import("../services/player-lookup.server");
+  const [playerResult, seasonsResult, historicalResult, refreshResult, lookupResult] =
     await Promise.allSettled([
       client.then((api) => api.getPlayer(normalizedTag)),
       client.then((api) => api.getPlayerSeasons(normalizedTag)),
@@ -91,7 +98,39 @@ export async function loader({
       validWorkId
         ? client.then((api) => api.getRefreshStatus(workId, normalizedTag))
         : Promise.resolve(null),
+      lookupClient.then(async (api) => {
+        let lookup = await api.getPlayerLookup(normalizedTag);
+        let error: WebsiteErrorResponse | null = null;
+        if (
+          lookup?.state === "unknown" ||
+          (url.searchParams.has("retry") &&
+            ["failed", "not_found"].includes(lookup?.state ?? ""))
+        ) {
+          try {
+            const { clientAddressContext } =
+              await import("../server/client-address.server");
+            lookup = await api.startPlayerLookup(
+              context?.get(clientAddressContext),
+              normalizedTag,
+            );
+          } catch (cause) {
+            error = await safeError(cause);
+          }
+        }
+        return { lookup, error };
+      }),
     ]);
+  const lookup = lookupResult.status === "fulfilled" ? lookupResult.value.lookup : null;
+  const lookupError =
+    lookupResult.status === "fulfilled"
+      ? lookupResult.value.error
+      : await safeError(lookupResult.reason);
+  if (url.searchParams.has("retry") && lookupError === null) {
+    url.searchParams.delete("retry");
+    throw redirect(`${canonicalPath}${url.search}`, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
   const player = playerResult.status === "fulfilled" ? playerResult.value : null;
   const error =
     playerResult.status === "rejected" ? await safeError(playerResult.reason) : null;
@@ -120,6 +159,8 @@ export async function loader({
     selectedSeason,
     historical,
     historicalError,
+    lookup,
+    lookupError,
   };
 }
 
@@ -157,7 +198,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const [workId, setWorkId] = useState<string | null>(null);
   const [lastStatus, setLastStatus] = useState<RefreshStatus | RefreshWork | null>(null);
   const [pollingError, setPollingError] = useState<WebsiteErrorResponse | null>(null);
-
+  const [lookupTimedOut, setLookupTimedOut] = useState(false);
+  const lookupStartedAt = useRef(Date.now());
   useEffect(() => {
     const status = data.refreshStatus;
     if (status && status.tag === data.requestedTag) {
@@ -182,11 +224,29 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     lastStatus?.state === "failed" ||
     lastStatus?.state === "unavailable" ||
     pollingError !== null;
+  const visibleStatus =
+    lastStatus ??
+    (data.refreshStatus?.tag === data.requestedTag ? data.refreshStatus : null);
   const refreshedPlayer =
-    lastStatus && "player" in lastStatus && lastStatus.tag === data.requestedTag
-      ? lastStatus.player
+    visibleStatus && "player" in visibleStatus && visibleStatus.tag === data.requestedTag
+      ? (visibleStatus as RefreshStatus).player
       : null;
   const player = refreshedPlayer ?? data.player;
+  const trackedPlayer = player?.trackingState === "tracking" ? player : null;
+  const lookup: PlayerLookup | null = player
+    ? { tag: player.tag, state: player.trackingState }
+    : data.lookup;
+  const history = selectPlayerHistory(player);
+  const isChecking =
+    lookup?.state === "checking" || (lookup?.state === "tracking" && player === null);
+  useEffect(() => {
+    if (!isChecking || lookupTimedOut) return;
+    const timer = setInterval(() => {
+      if (Date.now() - lookupStartedAt.current >= 60_000) setLookupTimedOut(true);
+      else if (revalidator.state === "idle") revalidator.revalidate();
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isChecking, lookupTimedOut, revalidator]);
   const refreshResourcePath = player
     ? `/resources/players/${encodeURIComponent(player.tag)}/refresh`
     : null;
@@ -244,17 +304,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     if (
       navigation?.type !== "reload" ||
       new URL(navigation.name).pathname !== window.location.pathname ||
-      data.player === null
+      trackedPlayer === null
     )
       return;
     refreshFetcher.submit(
       { idempotencyKey: data.noJsIdempotencyKey },
       {
         method: "post",
-        action: `/resources/players/${encodeURIComponent(data.player.tag)}/refresh`,
+        action: `/resources/players/${encodeURIComponent(trackedPlayer.tag)}/refresh`,
       },
     );
-  }, [data.player, data.noJsIdempotencyKey, refreshFetcher]);
+  }, [trackedPlayer, data.noJsIdempotencyKey, refreshFetcher]);
 
   useEffect(() => {
     if (!workId || terminalState || refreshResourcePath === null) return;
@@ -326,56 +386,51 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     };
   }, [player?.tag, refreshResourcePath, revalidator, terminalState, workId]);
 
-  if (player === null) {
-    if (data.selectedSeason !== null && data.historical !== null) {
+  if (trackedPlayer === null) {
+    if (data.requestedTag === null) {
       return (
-        <main id="main-content" tabIndex={-1} className="page-shell player-page">
-          <header className="player-header">
-            <div>
-              <h1>{data.historical.tag}</h1>
-              <p className="player-identity">
-                <span className="player-tag prominent">{data.historical.tag}</span>
-              </p>
-            </div>
-          </header>
+        <main id="main-content" tabIndex={-1} className="page-shell narrow-page">
+          <h1>Player data unavailable</h1>
+          {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
           {data.error ? <ErrorNotice error={data.error} /> : null}
-          <p className="section-note">
-            Showing saved season results. The current profile is unavailable.
-          </p>
-          <SeasonNav
-            tag={data.historical.tag}
-            seasons={data.seasons}
-            selectedSeason={data.selectedSeason}
-            currentAvailable={false}
-          />
-          <HistoricalSeasonPanel summary={data.historical} />
-        </main>
-      );
-    }
-    if (data.requestedTag !== null && data.seasons.length > 0) {
-      return (
-        <main id="main-content" tabIndex={-1} className="page-shell player-page">
-          <h1>Player history</h1>
-          {data.error ? <ErrorNotice error={data.error} /> : null}
-          <p className="section-note">
-            Current profile data is unavailable. Saved historical seasons remain
-            available.
-          </p>
-          <SeasonNav
-            tag={data.requestedTag}
-            seasons={data.seasons}
-            selectedSeason={data.selectedSeason}
-            currentAvailable={false}
-          />
-          {data.historicalError ? <ErrorNotice error={data.historicalError} /> : null}
+          <p>Try refreshing the page in a moment.</p>
         </main>
       );
     }
     return (
-      <main id="main-content" tabIndex={-1} className="page-shell narrow-page">
-        <h1>Player data unavailable</h1>
+      <main id="main-content" tabIndex={-1} className="page-shell player-page">
+        <h1>{data.requestedTag}</h1>
+        {lookup ? (
+          <LookupNotice lookup={lookup} timedOut={lookupTimedOut} />
+        ) : (
+          <p className="section-note">
+            We could not confirm whether this player is currently tracked. Any saved
+            history is still available.
+          </p>
+        )}
+        {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
         {data.error ? <ErrorNotice error={data.error} /> : null}
-        <p>Try refreshing the page in a moment.</p>
+        <SeasonNav
+          tag={data.requestedTag}
+          seasons={data.seasons}
+          selectedSeason={data.selectedSeason}
+          currentAvailable={player !== null}
+        />
+        {data.historicalError ? <ErrorNotice error={data.historicalError} /> : null}
+        {data.historical ? <HistoricalSeasonPanel summary={data.historical} /> : null}
+        {data.selectedSeason === null && history.length > 0 ? (
+          <section className="data-section" aria-label="Saved Legend history">
+            <h2>Saved Legend history</h2>
+            {history.map(({ day, inSeason }) => (
+              <LegendDay
+                key={legendDayKey(day.period)}
+                day={day}
+                inSeason={inSeason}
+                selectedDay={selectedDay}
+              />
+            ))}
+          </section>
+        ) : null}
       </main>
     );
   }
@@ -384,19 +439,16 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     refreshFetcher.data && "error" in refreshFetcher.data ? refreshFetcher.data : null;
   const refreshError = data.refreshError;
   const visibleRefreshError = actionError ?? pollingError ?? refreshError;
-  const visibleStatus =
-    lastStatus ??
-    (data.refreshStatus?.tag === data.requestedTag ? data.refreshStatus : null);
-  const refreshActionPath = `/resources/players/${encodeURIComponent(player.tag)}/refresh`;
+  const refreshActionPath = `/resources/players/${encodeURIComponent(trackedPlayer.tag)}/refresh`;
 
   return (
     <main id="main-content" tabIndex={-1} className="page-shell player-page">
       <header className="player-header">
         <div className="player-profile">
-          <h1>{player.profile.name}</h1>
+          <h1>{trackedPlayer.profile.name}</h1>
           <p className="player-identity">
-            <span className="player-tag prominent">{player.tag}</span>
-            <span className="player-clan">{player.profile.clan}</span>
+            <span className="player-tag prominent">{trackedPlayer.tag}</span>
+            <span className="player-clan">{trackedPlayer.profile.clan}</span>
           </p>
         </div>
         <div className="player-summary">
@@ -405,16 +457,16 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               <span className="metric-label">Current trophies</span>
               <strong className="player-trophy-count">
                 <span className="trophy-mark" aria-hidden="true" />
-                {player.profile.trophies.toLocaleString()}
+                {trackedPlayer.profile.trophies.toLocaleString()}
               </strong>
             </div>
             <p className="player-freshness">
               <span>Updated</span>{" "}
               <time
                 className="player-updated"
-                dateTime={player.profile.freshness.observedAt}
+                dateTime={trackedPlayer.profile.freshness.observedAt}
               >
-                {formatPlayerTimestamp(player.profile.freshness.observedAt)}
+                {formatPlayerTimestamp(trackedPlayer.profile.freshness.observedAt)}
               </time>
             </p>
           </div>
@@ -449,9 +501,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       </header>
 
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
+      {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
       {visibleStatus ? <RefreshProgress status={visibleStatus} /> : null}
+      <p role="status">Now tracking in Legend I.</p>
       <SeasonNav
-        tag={player.tag}
+        tag={trackedPlayer.tag}
         seasons={data.seasons}
         selectedSeason={data.selectedSeason}
       />
@@ -476,19 +530,19 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         <section className="data-section" aria-labelledby="season-days-title">
           <h2 id="season-days-title">Daily Legend log</h2>
           {selectedDay &&
-          !player.seasonDays.some((day) => legendDayKey(day.period) === selectedDay) ? (
+          !history.some(({ day }) => legendDayKey(day.period) === selectedDay) ? (
             <p className="section-note" role="status">
               No saved Legend log for {legendDayDate(selectedDay)}.
             </p>
           ) : null}
-          {player.dataQuality.length > 0 ? (
+          {trackedPlayer.dataQuality.length > 0 ? (
             <p className="section-note">
               Recent battles from Clash of Clans. Some daily totals are unavailable
               because tracking started partway through the season.
             </p>
           ) : null}
-          {player.seasonDays.some(
-            (day) => day.startTrophiesCalculation || day.startTrophies == null,
+          {history.some(
+            ({ day }) => day.startTrophiesCalculation || day.startTrophies == null,
           ) ? (
             <p className="section-note">
               Calculated totals use saved trophies minus recorded changes. Unavailable
@@ -496,10 +550,11 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             </p>
           ) : null}
           <div className="legend-days">
-            {player.seasonDays.map((day) => (
+            {history.map(({ day, inSeason }) => (
               <LegendDay
-                key={`${day.period}-${day.dayNumber ?? "unknown"}`}
+                key={legendDayKey(day.period)}
                 day={day}
+                inSeason={inSeason}
                 selectedDay={selectedDay}
               />
             ))}
@@ -507,6 +562,39 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         </section>
       )}
     </main>
+  );
+}
+
+function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: boolean }) {
+  const messages: Record<PlayerLookup["state"], string> = {
+    unknown: "Waiting to check this tag with Clash of Clans.",
+    checking:
+      "Checking this tag with Clash of Clans. Legend I players start tracking automatically.",
+    tracking: "Now tracking in Legend I. The first results are being prepared.",
+    not_found:
+      "Player not found. Clash of Clans did not find this tag. Check the tag and try again.",
+    not_in_legend:
+      "This player is not in Legend I. We have kept the tag and any saved history.",
+    uncertain:
+      "This player exists, but we could not confirm their Legend I eligibility. Any saved history is still available.",
+    failed:
+      "We could not finish checking this tag. This does not mean the player is missing or outside Legend I.",
+  };
+  return (
+    <section aria-label="Player lookup" aria-live="polite">
+      <p>
+        {timedOut && (lookup.state === "checking" || lookup.state === "tracking")
+          ? "The check is taking longer than expected. It may still be running."
+          : messages[lookup.state]}
+      </p>
+      {lookup.state === "checking" || lookup.state === "tracking" ? (
+        <a href={canonicalPlayerPath(lookup.tag)}>Check progress</a>
+      ) : lookup.state === "failed" ||
+        lookup.state === "not_found" ||
+        lookup.state === "unknown" ? (
+        <a href={`${canonicalPlayerPath(lookup.tag)}?retry=1`}>Try again</a>
+      ) : null}
+    </section>
   );
 }
 
@@ -731,11 +819,41 @@ function legendDayKey(period: string): string {
   return period.split(" – ")[0].slice(0, 10);
 }
 
+function selectPlayerHistory(player: PlayerPage | null) {
+  const seasonDays = player?.seasonDays ?? [];
+  const days = [
+    ...seasonDays,
+    ...(player?.currentDay ? [player.currentDay] : []),
+    ...(player?.recentDays ?? []),
+  ].filter(
+    (day) =>
+      !day.uncertainty.includes("player_not_eligible") ||
+      day.offenseEvents.length > 0 ||
+      day.defenseEvents.length > 0,
+  );
+  return days
+    .filter(
+      (day, index) =>
+        days.findIndex(
+          (saved) => legendDayKey(saved.period) === legendDayKey(day.period),
+        ) === index,
+    )
+    .sort((a, b) => legendDayKey(b.period).localeCompare(legendDayKey(a.period)))
+    .map((day) => ({
+      day,
+      inSeason: seasonDays.some(
+        (saved) => legendDayKey(saved.period) === legendDayKey(day.period),
+      ),
+    }));
+}
+
 function LegendDay({
   day,
+  inSeason,
   selectedDay,
 }: {
   day: RankedDaySummary;
+  inSeason: boolean;
   selectedDay: string | null;
 }) {
   const dayKey = legendDayKey(day.period);
@@ -750,7 +868,7 @@ function LegendDay({
         <span className="legend-day-date">
           <strong>{dayLabel}</strong>
           <span className="legend-day-meta">
-            <small>Day {day.dayNumber ?? "—"}</small>
+            <small>{inSeason ? <>Day {day.dayNumber ?? "—"}</> : "Date only"}</small>
             {day.state === "Live" ? <LiveBadge /> : null}
           </span>
         </span>
