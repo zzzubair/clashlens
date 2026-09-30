@@ -200,9 +200,12 @@ The transaction below saves all changes together or none of them. It keeps
 existing identities and history and serializes
 manual imports with a database lock and queues at most 500 IDs per call.
 Unfinished checks are reused across all five-minute cycles. Applied profile
-results and finished checks from this week are reused, including failed checks
-which need separate review. Use the completion/update time so a check begun
-Sunday but finished Monday is reused. Monday starts at 05:00 UTC, not midnight.
+results and finished checks with profile responses from this week are reused,
+including failed checks which need separate review. Use the profile response
+time, including the latest unchanged response, to decide the week.
+A Sunday profile does not satisfy Monday's check just because its league history
+finishes on Monday. A failed check with no profile is reused only if queued this
+week. Monday starts at 05:00 UTC, not midnight.
 
 ```sh
 set -o pipefail
@@ -233,17 +236,25 @@ SELECT p.id, row_number() OVER (ORDER BY p.id) AS n
 FROM launch_tags t JOIN players p ON p.normalized_tag = t.tag CROSS JOIN cutoff c
 WHERE NOT (p.active AND p.eligibility_state = 'eligible')
 AND NOT EXISTS (
-  SELECT 1 FROM collector_work w WHERE w.player_id = p.id
+  SELECT 1 FROM collector_work w
+  LEFT JOIN collector_observations o ON o.id = w.profile_observation_id
+  LEFT JOIN collector_response_state r ON r.player_id = w.player_id
+    AND r.endpoint = 'profile' AND r.last_observation_id = w.profile_observation_id
+  WHERE w.player_id = p.id
   AND w.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
   AND (w.status IN ('pending', 'waiting_retry')
        OR (w.status IN ('complete', 'failed')
-           AND coalesce(w.completed_at, w.updated_at) >= c.since))
+           AND greatest(o.response_completed_at, r.last_seen_at) >= c.since)
+       OR (w.status = 'failed' AND w.profile_observation_id IS NULL
+           AND w.created_at >= c.since))
 )
 AND NOT EXISTS (
   SELECT 1 FROM collector_response_state r
-  JOIN player_profile_versions v ON v.id = p.current_profile_version_id
+  JOIN player_profile_effects e ON e.observation_id = r.last_observation_id
+    AND e.effect_kind = 'current_profile'
+  JOIN player_profile_versions v ON v.id = e.profile_version_id
   WHERE r.player_id = p.id AND r.endpoint = 'profile'
-  AND r.last_observation_id = v.observation_id
+  AND v.id = p.current_profile_version_id AND e.source_http_status = 200
   AND r.last_success_at >= c.since AND v.source_contract_state = 'accepted'
   AND v.eligibility_state IN ('eligible', 'ineligible')
 );
@@ -259,8 +270,10 @@ SQL
 
 Expect `COPY N`, `checks_queued`, new/existing counts adding to `N`, and final
 `COMMIT`. An empty database gets `N` identities and checks. Repeating the same
-input before collection finishes adds zero identities and zero checks. Printed
-counts before `COMMIT` are not proof of a durable import.
+input adds zero identities. It adds zero checks while work is unfinished or this
+week's result is reusable, including an applied non-Legend result that cancelled
+discovery before league history finished. Old inactive results become due after
+Monday Reset. Printed counts before `COMMIT` are not proof of a durable import.
 
 Before commit, Ctrl-C and close the database session to roll back the whole
 transaction. Practise abandonment by replacing only final `COMMIT;` with
@@ -305,47 +318,90 @@ SQL
   cat "$LAUNCH_DIR/combined.txt"
   printf '\\.\n'
   cat <<'SQL'
-WITH states AS (
-  SELECT p.id, v.source_contract_state = 'accepted' AND v.source_http_status = 200 AS real,
-    CASE
-      WHEN w.status = 'failed' OR (w.status = 'complete' AND o.http_status >= 400) THEN 'failed'
-      WHEN w.status IN ('pending', 'waiting_retry') THEN 'pending'
-      WHEN v.source_contract_state = 'accepted' AND p.active
-           AND p.eligibility_state = 'eligible' THEN 'legend'
-      WHEN v.source_contract_state = 'accepted' AND NOT p.active
-           AND p.eligibility_state = 'ineligible' THEN 'not_legend'
-      ELSE 'pending'
-    END AS result
-  FROM launch_tags t LEFT JOIN players p ON p.normalized_tag = t.tag
-  LEFT JOIN player_profile_versions v ON v.id = p.current_profile_version_id
-  LEFT JOIN LATERAL (
-    SELECT status, profile_observation_id FROM collector_work WHERE player_id = p.id
+CREATE TEMP TABLE launch_evidence ON COMMIT DROP AS
+SELECT t.tag, p.active,
+  w.status AS work_status, w.failure_category AS work_failure,
+  ep.endpoint, ep.required OR (ep.endpoint = 'league_history'
+    AND r.last_observation_id IS NOT NULL) AS required, r.last_success_at, o.http_status,
+  processing.outcome, processing.failure_category, job.status AS processing_status,
+  v.source_contract_state,
+  coalesce(ep.endpoint = 'profile' AND v.source_contract_state = 'accepted'
+    AND e.profile_version_id = p.current_profile_version_id
+    AND v.eligibility_state = p.eligibility_state
+    AND v.eligibility_state IN ('eligible', 'ineligible')
+    AND p.active = (v.eligibility_state = 'eligible'), false) AS resolved_profile
+FROM launch_tags t LEFT JOIN players p ON p.normalized_tag = t.tag
+LEFT JOIN LATERAL (
+    SELECT status, failure_category, battle_log_status, league_history_status
+    FROM collector_work WHERE player_id = p.id
     AND kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
     ORDER BY created_at DESC, id DESC LIMIT 1
-  ) w ON true
-  LEFT JOIN collector_observations o ON o.id = w.profile_observation_id
-)
+) w ON true
+CROSS JOIN LATERAL (VALUES
+  ('profile', true),
+  ('battle_log', coalesce(p.active OR w.battle_log_status = 'observed', false)),
+  ('league_history', coalesce(p.active OR w.league_history_status = 'observed', false))
+) ep(endpoint, required)
+LEFT JOIN collector_response_state r ON r.player_id = p.id AND r.endpoint = ep.endpoint
+LEFT JOIN collector_observations o ON o.id = r.last_observation_id
+LEFT JOIN LATERAL (
+  SELECT id, outcome, failure_category FROM observation_processing_outcomes
+  WHERE observation_id = o.id ORDER BY created_at DESC, id DESC LIMIT 1
+) processing ON true
+LEFT JOIN LATERAL (
+  SELECT status FROM python_processing_jobs
+  WHERE observation_id = o.id AND work_type = 'process_observation'
+  ORDER BY id DESC LIMIT 1
+) job ON true
+LEFT JOIN player_profile_effects e ON ep.endpoint = 'profile'
+  AND e.observation_id = o.id AND e.processing_outcome_id = processing.id
+  AND e.effect_kind = 'current_profile'
+LEFT JOIN player_profile_versions v ON v.id = e.profile_version_id;
+CREATE TEMP TABLE launch_states ON COMMIT DROP AS
+SELECT tag, active,
+  bool_or(coalesce(endpoint = 'profile' AND http_status = 200 AND outcome = 'processed'
+    AND source_contract_state = 'accepted', false)) AS real,
+  CASE
+    WHEN bool_or(work_status = 'failed' OR (required AND (
+      http_status NOT BETWEEN 200 AND 299
+      OR outcome IN ('non_success', 'malformed', 'unsupported', 'integrity_failure')
+      OR processing_status = 'failed'))) THEN 'failed'
+    WHEN bool_or(work_status IN ('pending', 'waiting_retry') OR (required AND (
+      http_status IS NULL OR outcome IS DISTINCT FROM 'processed'
+      OR failure_category IS NOT NULL))) THEN 'pending'
+    WHEN bool_or(resolved_profile)
+      THEN CASE WHEN active THEN 'legend' ELSE 'not_legend' END
+    ELSE 'pending'
+  END AS result,
+  bool_and(coalesce(last_success_at >= clock_timestamp() - interval '10 minutes', false))
+    FILTER (WHERE endpoint IN ('profile', 'battle_log')) AS fresh_initial_reads
+FROM launch_evidence GROUP BY tag, active;
 SELECT count(*) AS supplied_unique, count(*) FILTER (WHERE real) AS confirmed_real,
   count(*) FILTER (WHERE result = 'legend') AS legend,
   count(*) FILTER (WHERE result = 'not_legend') AS not_legend,
   count(*) FILTER (WHERE result = 'failed') AS failed,
   count(*) FILTER (WHERE result = 'pending') AS pending_or_uncertain
-FROM states;
-SELECT w.status, coalesce(w.failure_category, 'http_' || o.http_status::text, 'none') AS category, count(*)
-FROM collector_work w JOIN players p ON p.id = w.player_id
-JOIN launch_tags t ON t.tag = p.normalized_tag
-LEFT JOIN collector_observations o ON o.id = w.profile_observation_id
-WHERE w.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
-AND (w.status IN ('failed', 'waiting_retry') OR (w.status = 'complete' AND o.http_status >= 400))
-GROUP BY 1, 2 ORDER BY 1, 2;
+FROM launch_states;
+SELECT endpoint, category, count(*) FROM (
+  SELECT DISTINCT tag, 'work' AS endpoint, coalesce(work_failure, work_status) AS category
+  FROM launch_evidence WHERE work_status IN ('failed', 'waiting_retry')
+  UNION ALL
+  SELECT tag, endpoint, CASE
+    WHEN http_status NOT BETWEEN 200 AND 299 THEN 'http_' || http_status::text
+    WHEN failure_category IS NOT NULL THEN failure_category
+    WHEN outcome IS DISTINCT FROM 'processed' THEN coalesce(outcome, processing_status, 'awaiting_processing')
+    WHEN endpoint = 'profile' AND NOT resolved_profile
+      THEN 'uncertain_profile'
+    ELSE processing_status END
+  FROM launch_evidence WHERE required AND (
+    http_status NOT BETWEEN 200 AND 299 OR failure_category IS NOT NULL
+    OR outcome IS DISTINCT FROM 'processed' OR processing_status = 'failed'
+    OR (endpoint = 'profile' AND NOT resolved_profile))
+) failures GROUP BY 1, 2 ORDER BY 1, 2;
 SELECT count(*) AS active_in_pool,
-  count(*) FILTER (WHERE pr.last_success_at IS NULL OR br.last_success_at IS NULL
-    OR pr.last_success_at < clock_timestamp() - interval '10 minutes'
-    OR br.last_success_at < clock_timestamp() - interval '10 minutes') AS missing_or_stale_initial_reads
-FROM launch_tags t JOIN players p ON p.normalized_tag = t.tag
-LEFT JOIN collector_response_state pr ON pr.player_id = p.id AND pr.endpoint = 'profile'
-LEFT JOIN collector_response_state br ON br.player_id = p.id AND br.endpoint = 'battle_log'
-WHERE p.active;
+  count(*) FILTER (WHERE result <> 'legend' OR NOT fresh_initial_reads)
+    AS unresolved_or_stale_initial_reads
+FROM launch_states WHERE active;
 COMMIT;
 SQL
 } | db | tee "$LAUNCH_DIR/counts-$(date -u +%Y%m%dT%H%M%S%N).txt"
@@ -356,11 +412,23 @@ Confirmed-real is separate evidence, not an extra population: a real player can
 still have a failed league-history check. A timeout does not prove nonexistence
 or non-Legend status. A not-found response stays unconfirmed and counts as
 failed, even when collection work says complete. Completion means the response
-was saved, not that the player exists. Report failure categories without
-publishing tags or profile bodies.
+was saved, not that the player exists. The report checks the latest saved profile,
+battle-log and league-history responses and their processing results. It links
+eligibility to the applied profile response, including one that reused an older
+stored profile. An unknown tier cannot borrow the previous accepted profile's
+eligibility. Missing processing, partial results and conflicting evidence stay
+pending. Report failure and uncertainty categories without publishing tags or
+profile bodies; their counts describe endpoint problems and need not equal the
+number of failed players.
+
+An inactive player's trusted non-Legend profile can cancel discovery before
+league history arrives. Unfetched league history is then unnecessary for that
+player. A saved failed history response still counts as failed; recent successful
+profile and battle reads cannot hide it for an active player.
 
 Completion requires every tag accounted for, zero unresolved initial checks,
-and every intended Legend player active with both initial reads. Report actual
+and every intended Legend player active with both recent, successfully processed
+initial reads and successful, processed league history. Report actual
 counts against the 12,500 active planning target; never force that count.
 Firstmate must resolve the launch impact of outstanding failures before claiming
 all players checked successfully. Recheck initial reads before 04:55 UTC and
@@ -368,10 +436,13 @@ after Reset. These reads alone do not prove a complete accurate real Legend day.
 
 For another list during tracking, use a new private directory, copy the original
 sources plus updated additional file there, and repeat steps 3, 5 and 7 with
-approval. The database supplies the existing pool; healthy tracking need not
-restart. On October 5 repeat after promotions and the Monday Reset, making old
-non-Legend results due. Automatic Monday scheduling remains separate work due
-by October 12.
+approval. Use the same applied-response and profile-time selection in step 5;
+the database supplies the existing pool and healthy tracking need not restart.
+On October 5 repeat after promotions and the Monday Reset, making old non-Legend
+results due. Unfinished checks are still reused, but a pre-Reset profile completed
+after Reset does not satisfy that week. Repeat step 5 after those checks finish
+to queue any still due, then step 7. Automatic Monday scheduling remains
+separate work due by October 12.
 
 ## 8. Approval: observe a problem alert and recovery
 
@@ -460,3 +531,10 @@ non-Legend case, a check crossing Monday Reset, real-list downloads, Discord
 delivery, real Reset coverage and reboot were not tested here. The command/timing
 record above retains these limits and the exact corrections. No product code
 changed. Production approval and launch evidence remain required.
+
+The review corrections to weekly reuse and the shared outcome report above have
+not been executed against PostgreSQL. The earlier rehearsal did not cover a
+reused stored profile after changed experience level, a saved league-history
+error, an unknown tier preserving older eligibility, or a response crossing
+Monday Reset. Rehearse these cases with fake data before using the revised
+queries in production; the earlier counts do not validate these corrections.
