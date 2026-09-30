@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -11,6 +12,7 @@ import pytest
 from domain_test_support import domain_database, store_observation, text
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_collector_db_postgres import _handoff
+from test_collector import _Client, _Spool, _collector as _fake_collector
 from test_domain_processing_postgres import _processor
 
 from clashlens.collector_db import CollectorDatabase
@@ -95,8 +97,9 @@ def test_sunday_check_does_not_satisfy_monday_but_repeats_reuse_it(database_url,
 @pytest.mark.parametrize("unchanged,own_failure", [(True, False), (False, False), (False, True)])
 @pytest.mark.parametrize("after_reset", [False, True])
 @pytest.mark.parametrize("queued_status", ["pending", "waiting_retry"])
+@pytest.mark.parametrize("later_failure", [False, True])
 def test_queued_weekly_check_reuses_refresh_awaiting_processing(
-    database_url, unchanged, own_failure, after_reset, queued_status,
+    database_url, unchanged, own_failure, after_reset, queued_status, later_failure,
 ):
     with domain_database(database_url) as info:
         player = _player(info)
@@ -105,6 +108,11 @@ def test_queued_weekly_check_reuses_refresh_awaiting_processing(
             original = database.record_response(_handoff(
                 occurrence_key="old-profile", response_hash="a" * 64,
                 player_id=player, completed_at=MONDAY - timedelta(days=1),
+            ))
+            database.record_response(_handoff(
+                occurrence_key="old-history", response_hash="d" * 64,
+                player_id=player, endpoint="league_history",
+                completed_at=MONDAY - timedelta(days=1),
             ))
             database.begin_reset(MONDAY, local_regular_inflight=0)
             queued = next_check(database, MONDAY, schedule=True)
@@ -135,6 +143,12 @@ def test_queued_weekly_check_reuses_refresh_awaiting_processing(
                 completed_at=MONDAY + timedelta(seconds=11 if after_reset else -1),
             ))
             assert response.changed is not unchanged
+            if later_failure:
+                database.record_response(_handoff(
+                    occurrence_key="later-refresh-error", response_hash="e" * 64,
+                    player_id=player, completed_at=MONDAY + timedelta(seconds=41),
+                    http_status=503,
+                ))
             admitted = next_check(database, MONDAY + timedelta(seconds=58), schedule=False)
             if after_reset:
                 assert admitted is None
@@ -157,6 +171,129 @@ def test_queued_weekly_check_reuses_refresh_awaiting_processing(
                     "SELECT status FROM python_processing_jobs WHERE id = %s", (job,),
                 ).fetchone()[0]) == "pending"
                 assert connection.execute("SELECT count(*) FROM collector_work").fetchone()[0] == 2
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("scheduled", [False, True])
+def test_successful_fetch_survives_failure_before_enqueue(database_url, scheduled):
+    with domain_database(database_url) as info:
+        player = _player(info)
+        database = _collector(info)
+        try:
+            database.record_response(_handoff(
+                occurrence_key="successful-refresh", response_hash="a" * 64,
+                player_id=player, completed_at=MONDAY + timedelta(seconds=1),
+            ))
+            database.record_response(_handoff(
+                occurrence_key="failed-refresh", response_hash="b" * 64,
+                player_id=player, completed_at=MONDAY + timedelta(seconds=32), http_status=503,
+            ))
+            with psycopg.connect(info) as connection:
+                assert connection.execute(
+                    "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
+                    (None if scheduled else [player], MONDAY + timedelta(seconds=58), scheduled),
+                ).fetchone()[0] == 0
+                assert connection.execute("SELECT count(*) FROM collector_work").fetchone()[0] == 0
+                assert text(connection.execute("SELECT eligibility_state FROM players").fetchone()[0]) == "unknown"
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("weekly", [False, True])
+@pytest.mark.parametrize("unchanged", [False, True])
+@pytest.mark.parametrize("after_reset", [False, True])
+def test_discovery_admission_reuses_external_profile_and_finishes_history(
+    database_url, weekly, unchanged, after_reset,
+):
+    with domain_database(database_url) as info:
+        player = _player(info)
+        database = _collector(info)
+        try:
+            database.record_response(_handoff(
+                occurrence_key="old-profile", response_hash="a" * 64,
+                player_id=player, completed_at=MONDAY - timedelta(days=1),
+            ))
+            database.begin_reset(MONDAY, local_regular_inflight=0)
+            with psycopg.connect(info) as connection:
+                assert connection.execute(
+                    "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
+                    (None if weekly else [player], MONDAY, weekly),
+                ).fetchone()[0] == 1
+            response = database.record_response(_handoff(
+                occurrence_key="refresh", response_hash=("a" if unchanged else "b") * 64,
+                player_id=player, completed_at=MONDAY + timedelta(seconds=1 if after_reset else -1),
+            ))
+            assert response.changed is not unchanged
+            database.record_response(_handoff(
+                occurrence_key="refresh-error", response_hash="c" * 64,
+                player_id=player, completed_at=MONDAY + timedelta(seconds=32), http_status=503,
+            ))
+            now = MONDAY + timedelta(seconds=58)
+            admitted = (next_check(database, now, schedule=False) if weekly else
+                        database.pending_intents(limit=1, now=now, interactive=False)[0])
+            assert admitted is not None and admitted.league_history_required
+            assert admitted.profile_required is not after_reset
+            if after_reset:
+                assert not database.complete_intent(admitted.work_id)
+                spool = _Spool()
+                client = _Client(spool)
+                collector = _fake_collector(spool, database, client)
+                assert asyncio.run(collector.collect_intent(admitted)) == "complete"
+                assert client.fetch_count == 1
+                assert "fetch:league_history" in spool.events
+                assert "fetch:profile" not in spool.events
+            with psycopg.connect(info) as connection:
+                assert text(connection.execute("SELECT eligibility_state FROM players").fetchone()[0]) == "unknown"
+                assert connection.execute(
+                    "SELECT clashlens_eligibility_checked_since(%s, %s, %s)",
+                    (player, MONDAY, now),
+                ).fetchone()[0] is False
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("weekly", [False, True])
+@pytest.mark.parametrize("history_recorded", [False, True])
+def test_discovery_restart_fetches_only_unfinished_endpoints(database_url, weekly, history_recorded):
+    with domain_database(database_url) as info:
+        player = _player(info)
+        database = _collector(info)
+        try:
+            database.begin_reset(MONDAY, local_regular_inflight=0)
+            with psycopg.connect(info) as connection:
+                assert connection.execute(
+                    "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
+                    (None if weekly else [player], MONDAY, weekly),
+                ).fetchone()[0] == 1
+                work = connection.execute("SELECT id FROM collector_work").fetchone()[0]
+            now = MONDAY + timedelta(seconds=1)
+            first = (next_check(database, now, schedule=False) if weekly else
+                     database.pending_intents(limit=1, now=now, interactive=False)[0])
+            assert first is not None and first.profile_required and first.league_history_required
+            database.record_response(_handoff(
+                occurrence_key="own-profile", response_hash="a" * 64,
+                player_id=player, collector_work_id=work, completed_at=now,
+            ))
+            if history_recorded:
+                database.record_response(_handoff(
+                    occurrence_key="own-history", response_hash="b" * 64,
+                    player_id=player, collector_work_id=work, endpoint="league_history",
+                    completed_at=now,
+                ))
+            database.close()
+            database = _collector(info)
+            resumed = (next_check(database, now, schedule=False) if weekly else
+                       database.pending_intents(limit=1, now=now, interactive=False)[0])
+            assert resumed is not None and resumed.work_id == work
+            assert not resumed.profile_required
+            assert resumed.league_history_required is not history_recorded
+            spool = _Spool()
+            client = _Client(spool)
+            collector = _fake_collector(spool, database, client)
+            assert asyncio.run(collector.collect_intent(resumed)) == "complete"
+            assert client.fetch_count == (0 if history_recorded else 1)
+            assert "fetch:profile" not in spool.events
         finally:
             database.close()
 

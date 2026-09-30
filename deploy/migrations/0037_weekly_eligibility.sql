@@ -60,9 +60,8 @@ AS $$
         JOIN collector_response_state AS state
           ON state.scope = 'player' AND state.identity_key = player.normalized_tag
          AND state.endpoint = 'profile'
-        WHERE player.id = requested_player_id AND state.last_observation_id IS NOT NULL
+        WHERE player.id = requested_player_id
           AND state.last_success_at >= boundary_at AND state.last_success_at <= instant
-          AND state.last_seen_at = state.last_success_at
     );
 $$;
 
@@ -92,6 +91,41 @@ AS $$
           AND state.last_seen_at = state.last_success_at
           AND version.eligibility_state IN ('eligible', 'ineligible')
     );
+$$;
+
+CREATE FUNCTION clashlens_admit_discovery_profiles(instant timestamptz)
+RETURNS void LANGUAGE sql SECURITY DEFINER
+AS $$
+    UPDATE collector_work AS work
+    SET status = 'cancelled', updated_at = clock_timestamp()
+    FROM players AS player
+    WHERE work.player_id = player.id AND work.kind = 'discovery_profile'
+      AND work.status IN ('pending', 'waiting_retry')
+      AND ((work.eligibility_recheck AND player.active) OR clashlens_eligibility_checked_since(
+          player.id, clashlens_eligibility_week(instant), instant));
+
+    UPDATE collector_work AS work
+    SET profile_status = 'observed', profile_observation_id = fresh.id,
+        status = CASE WHEN work.league_history_status = 'pending'
+                      THEN work.status ELSE 'cancelled' END,
+        updated_at = clock_timestamp()
+    FROM players AS player
+    CROSS JOIN LATERAL (
+        SELECT observation.id FROM collector_observations AS observation
+        WHERE observation.player_id = player.id AND observation.endpoint = 'profile'
+          AND observation.http_status BETWEEN 200 AND 299
+          AND observation.response_completed_at <= instant
+        ORDER BY observation.response_completed_at DESC, observation.id DESC LIMIT 1
+    ) AS fresh
+    WHERE work.player_id = player.id AND work.kind = 'discovery_profile'
+      AND work.status IN ('pending', 'waiting_retry')
+      AND clashlens_eligibility_fetched_since(
+          player.id, clashlens_eligibility_week(instant), instant)
+      AND NOT EXISTS (
+          SELECT 1 FROM collector_observations AS observation
+          WHERE observation.id = work.profile_observation_id
+            AND (observation.http_status BETWEEN 200 AND 299 OR observation.http_status = 404)
+      );
 $$;
 
 -- An old profile replay must not cancel Monday's still-unfetched check.
@@ -214,6 +248,7 @@ BEGIN
         'clashlens_eligibility_week(timestamptz)',
         'clashlens_eligibility_fetched_since(bigint,timestamptz,timestamptz)',
         'clashlens_eligibility_checked_since(bigint,timestamptz,timestamptz)',
+        'clashlens_admit_discovery_profiles(timestamptz)',
         'clashlens_cancel_inactive_discovery_work(bigint)',
         'clashlens_enqueue_eligibility_profiles(bigint[],timestamptz,boolean)',
         'clashlens_enqueue_discovery_profiles(bigint[])',
@@ -226,6 +261,7 @@ END $$;
 REVOKE ALL ON FUNCTION clashlens_eligibility_week(timestamptz),
     clashlens_eligibility_fetched_since(bigint,timestamptz,timestamptz),
     clashlens_eligibility_checked_since(bigint,timestamptz,timestamptz),
+    clashlens_admit_discovery_profiles(timestamptz),
     clashlens_enqueue_eligibility_profiles(bigint[],timestamptz,boolean),
     clashlens_enqueue_discovery_profiles(bigint[]),
     clashlens_enqueue_weekly_eligibility(timestamptz)
@@ -235,6 +271,7 @@ GRANT EXECUTE ON FUNCTION clashlens_enqueue_discovery_profiles(bigint[])
 GRANT EXECUTE ON FUNCTION clashlens_eligibility_week(timestamptz),
     clashlens_eligibility_fetched_since(bigint,timestamptz,timestamptz),
     clashlens_eligibility_checked_since(bigint,timestamptz,timestamptz),
+    clashlens_admit_discovery_profiles(timestamptz),
     clashlens_enqueue_weekly_eligibility(timestamptz)
     TO clashlens_collector;
 
