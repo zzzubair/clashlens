@@ -490,17 +490,18 @@ class ArchiveHandler(QuietHandler):
         if target is None or target == self.root:
             s3_error(self, 400, "InvalidURI")
             return
-        # Raw responses are evidence. The local archive therefore has the same
-        # write-once behavior even when a client omits the conditional header.
-        if target.exists():
-            s3_error(self, 412, "PreconditionFailed")
-            return
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             s3_error(self, 400, "InvalidRequest")
             return
         body = self.rfile.read(length)
+        # Consume the upload before refusing it so the next request on this
+        # connection does not start with unread bytes from this body.
+        # Raw responses stay write-once even without the conditional header.
+        if target.exists():
+            s3_error(self, 412, "PreconditionFailed")
+            return
         content_md5 = self.headers.get("Content-MD5")
         if content_md5 and content_md5 != base64.b64encode(
             hashlib.md5(body).digest()
