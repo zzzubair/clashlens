@@ -9,45 +9,61 @@ from .api_db import ApiDatabase, OperationResult, RequestBinding, _text
 def _lookup(connection: Any, tag: str) -> dict[str, Any]:
     row = connection.execute(
         """
-        SELECT player.active, player.eligibility_state,
+        SELECT player.id, player.active, player.eligibility_state,
                EXISTS (SELECT 1 FROM player_profile_versions AS profile
-                       WHERE profile.player_id = player.id),
-               work.status, work.failure_category, processing.status
+                       WHERE profile.player_id = player.id)
         FROM players AS player
-        LEFT JOIN LATERAL (
-            SELECT status, failure_category, profile_observation_id
-            FROM collector_work
-            WHERE player_id = player.id
-              AND kind IN ('initial_collection', 'live_refresh', 'discovery_profile')
-            ORDER BY id DESC LIMIT 1
-        ) AS work ON true
-        LEFT JOIN LATERAL (
-            SELECT status FROM python_processing_jobs
-            WHERE observation_id = work.profile_observation_id
-              AND work_type = 'process_observation'
-            ORDER BY id DESC LIMIT 1
-        ) AS processing ON true
         WHERE player.normalized_tag = %s
         """,
         (tag,),
     ).fetchone()
     state = "unknown"
     if row is not None:
-        active, eligibility, confirmed, work, failure, processing = row
+        player_id, active, eligibility, confirmed = row
         if active:
             state = "tracking"
         elif confirmed:
             state = (
                 "not_in_legend" if _text(eligibility) == "ineligible" else "uncertain"
             )
-        elif work in ("pending", "waiting_retry"):
-            state = "checking"
-        elif failure == "player_not_found":
-            state = "not_found"
-        elif work in ("failed", "cancelled") or processing in ("failed", "complete"):
-            state = "failed"
-        elif work == "complete":
-            state = "checking"
+        else:
+            work_row = connection.execute(
+                """
+                SELECT work.status, work.failure_category, processing.status
+                FROM (
+                    SELECT status, failure_category, profile_observation_id
+                    FROM collector_work
+                    WHERE player_id = %s
+                      AND kind IN ('initial_collection', 'live_refresh', 'discovery_profile')
+                    ORDER BY id DESC LIMIT 1
+                ) AS work
+                LEFT JOIN LATERAL (
+                    SELECT status FROM python_processing_jobs
+                    WHERE observation_id = work.profile_observation_id
+                      AND work_type = 'process_observation'
+                    ORDER BY id DESC LIMIT 1
+                ) AS processing ON true
+                """,
+                (player_id,),
+            ).fetchone()
+            if work_row is not None:
+                work, failure, processing = work_row
+                if failure == "player_not_found":
+                    state = "not_found"
+                elif work in ("pending", "waiting_retry") or processing in (
+                    "pending",
+                    "leased",
+                    "waiting_retry",
+                    "waiting_dependency",
+                ):
+                    state = "checking"
+                elif work in ("failed", "cancelled") or processing in (
+                    "failed",
+                    "complete",
+                ):
+                    state = "failed"
+                elif work == "complete":
+                    state = "checking"
     return {"tag": tag, "state": state}
 
 

@@ -11,7 +11,19 @@ const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
   getPlayerLookup: vi.fn(),
   startPlayerLookup: vi.fn(),
+  lookupTimedOut: false,
 }));
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  return {
+    ...actual,
+    useState: (initialState: unknown) => {
+      const state = actual.useState(initialState);
+      return initialState === false && mocks.lookupTimedOut ? [true, state[1]] : state;
+    },
+  };
+});
 
 vi.mock("../../app/services/player-lookup.server", () => ({
   getPlayerLookup: mocks.getPlayerLookup,
@@ -135,7 +147,7 @@ function requestFor(season: string | null) {
 describe("player route historical independence", () => {
   beforeEach(() => {
     mocks.createPythonClient.mockReset();
-    mocks.getPlayerLookup.mockReset().mockResolvedValue(null);
+    mocks.getPlayerLookup.mockReset().mockResolvedValue({ tag: TAG, state: "tracking" });
     mocks.startPlayerLookup.mockReset();
   });
 
@@ -267,7 +279,7 @@ describe("player route historical independence", () => {
       refreshStatus: null,
       refreshError: null,
       noJsIdempotencyKey: "test-idempotency-key",
-      lookup: null,
+      lookup: { tag: TAG, state: "tracking" },
       lookupError: null,
       seasons: SEASONS,
       selectedSeason: "missing",
@@ -321,7 +333,7 @@ describe("player route historical independence", () => {
       refreshStatus: null,
       refreshError: null,
       noJsIdempotencyKey: "test-idempotency-key",
-      lookup: null,
+      lookup: { tag: TAG, state: "tracking" },
       lookupError: null,
       seasons: [],
       selectedSeason: null,
@@ -359,6 +371,7 @@ describe("player route historical independence", () => {
 
 describe("automatic tag lookup", () => {
   beforeEach(() => {
+    mocks.lookupTimedOut = false;
     mocks.createPythonClient.mockReturnValue({
       getPlayer: vi.fn().mockRejectedValue(new PythonApiError(404, {})),
       getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
@@ -420,6 +433,68 @@ describe("automatic tag lookup", () => {
     expect(html).not.toContain("Current trophies");
     expect(html).not.toContain('class="player-refresh-form"');
     expect(html).toContain("Historical seasons");
+  });
+
+  it.each([null, SEASON])(
+    "keeps history and hides the profile when lookup fails for season %s",
+    async (season) => {
+      const day: RankedDaySummary = {
+        dayNumber: 1,
+        label: "Day 1",
+        period: "2026-09-07T05:00:00Z – 2026-09-08T05:00:00Z",
+        state: "Complete",
+        startTrophies: 6000,
+        offense: { attacks: 0, threeStars: 0, trophyGain: 0 },
+        defense: { defenses: 0, threeStarsAgainst: 0, trophyLoss: 0 },
+        trophyChange: 0,
+        offenseEvents: [],
+        defenseEvents: [],
+        completeness: { state: "complete", reason: "Complete" },
+        uncertainty: [],
+      };
+      mocks.createPythonClient.mockReturnValue({
+        getPlayer: vi.fn().mockResolvedValue({ ...PLAYER, seasonDays: [day] }),
+        getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+        getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+      });
+      mocks.getPlayerLookup.mockRejectedValue(new PythonApiError(503, {}));
+      const result = await playerLoader({
+        request: requestFor(season),
+        params: { tag: TAG },
+      } as never);
+      const html = await renderRoute(result);
+      expect(html).toContain(result.lookupError!.error.message);
+      expect(html).toContain(
+        "could not confirm whether this player is currently tracked",
+      );
+      expect(html).toContain("Historical seasons");
+      expect(html).toContain(
+        season === null ? "Saved Legend history" : "Daily trophy totals",
+      );
+      expect(html).not.toContain("Current trophies");
+      expect(html).not.toContain("player-refresh-form");
+    },
+  );
+
+  it.each([
+    ["checking", "It may still be running"],
+    ["tracking", "It may still be running"],
+    ["not_found", "Player not found"],
+    ["not_in_legend", "not in Legend I"],
+    ["uncertain", "could not confirm"],
+    ["failed", "could not finish checking"],
+  ])("shows %s correctly after the polling timeout", async (state, message) => {
+    mocks.lookupTimedOut = true;
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state });
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain(message);
+    if (state !== "checking" && state !== "tracking") {
+      expect(html).not.toContain("It may still be running");
+    }
   });
 
   it("shows a limit refusal without claiming the check started", async () => {

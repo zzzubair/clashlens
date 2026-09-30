@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +14,59 @@ from clashlens import api_player_lookup
 from clashlens.api import create_app
 from clashlens.api_db import OperationResult
 from clashlens.collector_db import CollectorIntent
+
+
+def lookup_database(*rows):
+    database = MagicMock()
+    connection = database.pool.connection.return_value.__enter__.return_value
+    connection.execute.side_effect = [
+        MagicMock(fetchone=MagicMock(return_value=row)) for row in rows
+    ]
+    return database
+
+
+@pytest.mark.parametrize(
+    ("active", "eligibility", "confirmed", "state"),
+    [
+        (True, "eligible", False, "tracking"),
+        (True, "eligible", True, "tracking"),
+        (False, "ineligible", True, "not_in_legend"),
+        (False, "uncertain", True, "uncertain"),
+    ],
+)
+def test_confirmed_player_lookup_needs_no_collection_history(
+    active, eligibility, confirmed, state
+):
+    database = lookup_database((1, active, eligibility, confirmed))
+    assert api_player_lookup.get_lookup(database, "#2PP") == {
+        "tag": "#2PP",
+        "state": state,
+    }
+
+
+@pytest.mark.parametrize("work", ["failed", "cancelled"])
+@pytest.mark.parametrize(
+    "processing", ["pending", "leased", "waiting_retry", "waiting_dependency"]
+)
+def test_profile_processing_keeps_lookup_checking_after_collection_failure(
+    work, processing
+):
+    database = lookup_database(
+        (1, False, "uncertain", False), (work, "provider_failure", processing)
+    )
+    assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "checking"
+
+
+@pytest.mark.parametrize(
+    "processing", ["pending", "leased", "waiting_retry", "waiting_dependency"]
+)
+def test_explicit_not_found_remains_terminal_while_profile_processing_is_outstanding(
+    processing,
+):
+    database = lookup_database(
+        (1, False, "uncertain", False), ("failed", "player_not_found", processing)
+    )
+    assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "not_found"
 
 
 def test_initial_collection_uses_interactive_key_for_profile_battles_and_history():

@@ -198,3 +198,65 @@ def test_name_results_only_include_active_or_historical_players(database_url):
             assert database.scalar("SELECT count(*) FROM collector_work") == 3
         finally:
             database.close()
+
+
+@pytest.mark.parametrize(
+    "processing", ["pending", "leased", "waiting_retry", "waiting_dependency"]
+)
+@pytest.mark.parametrize("endpoint", ["battle_log", "league_history"])
+def test_ancillary_failure_waits_for_profile_processing_without_recollecting(
+    database_url, processing, endpoint
+):
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        collector = CollectorDatabase(info)
+        try:
+            assert submit(database)["state"] == "checking"
+            with database.pool.connection() as connection:
+                work_id, player_id = connection.execute(
+                    "SELECT id, player_id FROM collector_work"
+                ).fetchone()
+            collector.record_response(
+                _handoff(
+                    occurrence_key="lookup-profile",
+                    response_hash=_hash("lookup-profile"),
+                    player_id=player_id,
+                    collector_work_id=work_id,
+                )
+            )
+            assert collector.fail_intent(work_id, category=f"{endpoint}_failure")
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE python_processing_jobs SET status = %s,
+                        lease_owner = CASE WHEN %s = 'leased' THEN 'lookup-test' END,
+                        lease_token = CASE WHEN %s = 'leased' THEN gen_random_uuid() END,
+                        lease_expires_at = CASE WHEN %s = 'leased'
+                            THEN clock_timestamp() + interval '60 seconds' END
+                    WHERE observation_id = (
+                        SELECT profile_observation_id FROM collector_work WHERE id = %s
+                    ) AND work_type = 'process_observation'
+                    """,
+                    (processing, processing, processing, processing, work_id),
+                )
+                connection.execute(
+                    "UPDATE collector_work SET updated_at = clock_timestamp() - interval '31 seconds' WHERE id = %s",
+                    (work_id,),
+                )
+            assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "checking"
+            assert submit(database)["state"] == "checking"
+            assert database.scalar("SELECT count(*) FROM collector_work") == 1
+            with database.pool.connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE python_processing_jobs SET status = 'failed',
+                        lease_owner = NULL, lease_token = NULL, lease_expires_at = NULL
+                    WHERE work_type = 'process_observation'
+                    """
+                )
+            assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "failed"
+        finally:
+            collector.close()
+            database.close()

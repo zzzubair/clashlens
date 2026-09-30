@@ -375,7 +375,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     };
   }, [player?.tag, refreshResourcePath, revalidator, terminalState, workId]);
 
-  if (data.lookup && (data.lookup.state !== "tracking" || player === null)) {
+  if (
+    data.requestedTag !== null &&
+    (data.lookup?.state !== "tracking" || player === null)
+  ) {
     const savedDays =
       player?.seasonDays.filter(
         (day) =>
@@ -386,10 +389,18 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell player-page">
         <h1>{data.requestedTag}</h1>
-        <LookupNotice lookup={data.lookup} timedOut={lookupTimedOut} />
+        {data.lookup ? (
+          <LookupNotice lookup={data.lookup} timedOut={lookupTimedOut} />
+        ) : (
+          <p className="section-note">
+            We could not confirm whether this player is currently tracked. Any saved
+            history is still available.
+          </p>
+        )}
         {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
+        {data.error ? <ErrorNotice error={data.error} /> : null}
         <SeasonNav
-          tag={data.lookup.tag}
+          tag={data.requestedTag}
           seasons={data.seasons}
           selectedSeason={data.selectedSeason}
           currentAvailable={player !== null}
@@ -409,50 +420,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   }
 
   if (player === null) {
-    if (data.selectedSeason !== null && data.historical !== null) {
-      return (
-        <main id="main-content" tabIndex={-1} className="page-shell player-page">
-          <header className="player-header">
-            <div>
-              <h1>{data.historical.tag}</h1>
-              <p className="player-identity">
-                <span className="player-tag prominent">{data.historical.tag}</span>
-              </p>
-            </div>
-          </header>
-          {data.error ? <ErrorNotice error={data.error} /> : null}
-          <p className="section-note">
-            Showing saved season results. The current profile is unavailable.
-          </p>
-          <SeasonNav
-            tag={data.historical.tag}
-            seasons={data.seasons}
-            selectedSeason={data.selectedSeason}
-            currentAvailable={false}
-          />
-          <HistoricalSeasonPanel summary={data.historical} />
-        </main>
-      );
-    }
-    if (data.requestedTag !== null && data.seasons.length > 0) {
-      return (
-        <main id="main-content" tabIndex={-1} className="page-shell player-page">
-          <h1>Player history</h1>
-          {data.error ? <ErrorNotice error={data.error} /> : null}
-          <p className="section-note">
-            Current profile data is unavailable. Saved historical seasons remain
-            available.
-          </p>
-          <SeasonNav
-            tag={data.requestedTag}
-            seasons={data.seasons}
-            selectedSeason={data.selectedSeason}
-            currentAvailable={false}
-          />
-          {data.historicalError ? <ErrorNotice error={data.historicalError} /> : null}
-        </main>
-      );
-    }
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-page">
         <h1>Player data unavailable</h1>
@@ -614,7 +581,7 @@ function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: bo
   return (
     <section aria-label="Player lookup" aria-live="polite">
       <p>
-        {timedOut
+        {timedOut && (lookup.state === "checking" || lookup.state === "tracking")
           ? "The check is taking longer than expected. It may still be running."
           : messages[lookup.state]}
       </p>
