@@ -1,6 +1,6 @@
 # Product decisions and launch map
 
-Agreed with Zubair on September 25, 2026 and updated on September 27. Zubair
+Agreed with Zubair on September 25, 2026 and updated on September 30. Zubair
 defines intended behavior. [#140](https://github.com/zzzubair/clashlens/issues/140)
 is the only launch issue and holds the ordered to-do list;
 [#141](https://github.com/zzzubair/clashlens/issues/141) holds later ideas and
@@ -57,15 +57,13 @@ deletion still require their specific approvals.
 | Discord and support | Public discussion/feedback, Discord-only private tickets through an existing bot, and a separate private operator-alert channel using an incoming webhook. No custom ticket bot or email fallback. The alert channel and webhook exist and a real test alert was delivered on September 27. A separate Clash Lens Discord bot for Clashers is planned after the website; its features are not decided. | [#138](https://github.com/zzzubair/clashlens/issues/138), [#124](https://github.com/zzzubair/clashlens/issues/124) |
 | Release and operation | Tracking and public website have separate readiness records. Keep exact revisions, usable data checks, restore/reboot/upgrade evidence, costs and an operating guide. | [#131](https://github.com/zzzubair/clashlens/issues/131) |
 
-For already-known players, routine eligibility rechecks run every Monday after
-the 05:00 UTC Reset, using post-Reset evidence rather than a rolling seven days
-since the last check. Active players can reuse their post-Reset live profiles.
-Repeated lists, visits and daily clan membership checks reuse the current
-week's result rather than trigger additional eligibility fetches. A genuinely
-new tag starts its first existence/eligibility check immediately. Continue to apply
-fresh eligibility evidence from normal live tracking. Weekly scheduling and
-fresh-result reuse remain unverified; the manual-import proof predates this
-cadence clarification. See [the domain rules](domain.md#identity-and-eligibility).
+The [domain rules](domain.md#identity-and-eligibility) own the agreed eligibility
+cadence and evidence requirements. Weekly scheduling and response reuse are
+implemented behind a switch that defaults to off; see the
+[runtime contract and isolated request measurement](collector-polling.md#weekly-eligibility-switch).
+Database validation of the final response-reuse and restart corrections remains
+pending. Combined live-player capacity and production scheduling remain
+unverified; the September 25 manual-import proof predates this change.
 
 ## Capacity and implementation limits
 

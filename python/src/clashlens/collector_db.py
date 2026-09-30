@@ -44,6 +44,7 @@ class CollectorWork:
     collector_work_id: int | None = None
     profile_fresh_until: datetime | None = None
     first_battle_pending: bool = False
+    eligibility_recheck: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,8 @@ class CollectorIntent:
     status: str | None = None
     sweep_id: int | None = None
     league_history_required: bool = False
+    eligibility_recheck: bool = False
+    profile_required: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,8 +545,9 @@ class CollectorDatabase:
         intent_time = now or datetime.now(UTC)
         with self._connection() as connection:
             with connection.transaction():
+                connection.execute("SELECT clashlens_admit_discovery_profiles(%s)", (intent_time,))
                 rows = connection.execute(
-                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status FROM collector_work AS work WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
+                    """SELECT work.id, work.kind, work.due_at, work.player_id, work.normalized_tag, work.sweep_id, work.status, work.league_history_status, work.kind <> 'discovery_profile' OR NOT EXISTS (SELECT 1 FROM collector_observations AS observation WHERE observation.id = work.profile_observation_id AND (observation.http_status BETWEEN 200 AND 299 OR observation.http_status = 404)) FROM collector_work AS work WHERE work.kind IN ('initial_collection', 'live_refresh', 'reset_baseline', 'discovery_profile', 'global_player_rankings') AND NOT work.eligibility_recheck AND work.status IN ('pending', 'waiting_retry') AND work.due_at <= %s AND (%s::boolean IS NULL OR (%s = true AND work.kind IN ('initial_collection', 'live_refresh')) OR (%s = false AND work.kind NOT IN ('initial_collection', 'live_refresh'))) ORDER BY CASE WHEN work.lane = 'reset' THEN 0 WHEN work.lane = 'interactive' THEN 1 ELSE 2 END, work.due_at, work.id LIMIT %s""",
                     (intent_time, interactive, interactive, interactive, limit),
                 ).fetchall()
                 intents = [
@@ -557,6 +561,7 @@ class CollectorDatabase:
                         status=str(row[6]),
                         sweep_id=None if row[5] is None else int(row[5]),
                         league_history_required=str(row[7]) == "pending",
+                        profile_required=bool(row[8]),
                     )
                     for row in rows
                 ]

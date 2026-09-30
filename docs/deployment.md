@@ -28,8 +28,11 @@ Current commands below describe implemented behavior. The old bootstrap command
 caps at 20,000 tags and rejects duplicate input and later new imports. Launch
 lists will use the [verified manual operator procedure](manual-list-import-validation.md),
 which preserves existing identities and queues checks through existing functions.
-No reusable import feature is needed. Live import and weekly scheduling/reuse
-remain pending. `./dev trial` supports the 12,500 active-player target, and
+No reusable import feature is needed. Live import remains pending. Weekly
+scheduling and reuse are implemented behind the
+[default-off switch](collector-polling.md#weekly-eligibility-switch); production
+verification remains pending. `./dev trial` supports the 12,500 active-player
+target, and
 `./ops` loads four regular API keys. #128 must measure that active workload
 alongside the 22,157-tag known pool and weekly checks. Raising the live-player
 trial limit or adding keys is not required merely because the known pool is

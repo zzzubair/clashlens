@@ -137,6 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=os.environ.get("CLASHLENS_ENABLE_GLOBAL_RANKINGS", "true") != "true",
     )
+    collector.add_argument(
+        "--enable-weekly-eligibility",
+        action="store_true",
+        default=os.environ.get("CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY") == "true",
+        help="recheck known inactive players after Monday Reset (off by default)",
+    )
 
     worker = subparsers.add_parser(
         "worker", help="claim and process production observations"
@@ -765,6 +771,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         collector_version="clashlens-python-collector-v1",
         max_body_bytes=arguments.archive_max_body_bytes,
         interactive_fingerprint=interactive_fingerprint,
+        weekly_eligibility_enabled=arguments.enable_weekly_eligibility,
     )
 
     async def serve() -> None:

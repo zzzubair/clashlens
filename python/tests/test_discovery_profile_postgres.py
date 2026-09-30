@@ -174,7 +174,7 @@ def test_contract_changed_rankings_enqueue_more_than_500_valid_discoveries(
             database.close()
 
 
-def test_enqueue_cycle_coalescing_terminal_rediscovery_inputs_and_privileges(
+def test_enqueue_weekly_reuse_terminal_rediscovery_inputs_and_privileges(
     database_url: str,
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -221,13 +221,23 @@ def test_enqueue_cycle_coalescing_terminal_rediscovery_inputs_and_privileges(
                    FROM players WHERE id = %s""",
                 (terminal,),
             )
+            # The agreed weekly rule also covers completed legacy checks.
+            assert connection.execute(
+                "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
+                ([terminal],),
+            ).fetchone()[0] == 0
+            assert connection.execute(
+                "SELECT count(*) FROM collector_work WHERE player_id = %s", (terminal,)
+            ).fetchone()[0] == 1
+            connection.execute(
+                """UPDATE collector_work SET due_at =
+                       clashlens_eligibility_week(clock_timestamp()) - interval '1 second'
+                   WHERE player_id = %s""", (terminal,),
+            )
             assert connection.execute(
                 "SELECT clashlens_enqueue_discovery_profiles(%s::bigint[])",
                 ([terminal],),
             ).fetchone()[0] == 1
-            assert connection.execute(
-                "SELECT count(*) FROM collector_work WHERE player_id = %s", (terminal,)
-            ).fetchone()[0] == 2
             connection.commit()
             for invalid in (None, [0], [999999999], list(range(1, 502))):
                 with pytest.raises(psycopg.Error):
@@ -412,8 +422,9 @@ def test_ineligible_profile_cancels_only_ordinary_discovery_and_keeps_evidence(
                 unknown_discovery_id: "pending",
             }
             assert retained_observation == observation_id
-            assert reentry_count == 1
-            assert discovery_states == ["cancelled", "pending"]
+            # The unfinished Refresh already supplies the next profile.
+            assert reentry_count == 0
+            assert discovery_states == ["cancelled"]
         finally:
             database.close()
 
