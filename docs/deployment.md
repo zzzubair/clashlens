@@ -116,10 +116,13 @@ secret because its current CLI accepts `label=value` key pools; they are not
 written to a unit, environment file, or process argument. The API receives
 only the interactive key as a mounted file.
 
-The private API also requires `CLASHLENS_OFFICIAL_API_PROXY_URL` for its
-one-player token verification calls. Configure the fixed-egress proxy at an
-HTTP(S) origin reachable from inside the pod. The collector does not use this
-setting; its regular collection calls connect directly from the Fedora host.
+Set `CLASHLENS_OFFICIAL_API_PROXY_URL` to the fixed-address relay's HTTP origin
+on Tailscale, reachable from inside the pod. `ops` supplies this setting to
+both collection and private player-token verification. The standalone collector
+defaults to direct access when this setting is empty; `--official-proxy-url`
+overrides it. Explicit proxy settings ignore ambient `NO_PROXY`, and a relay
+failure never falls back to a direct connection. Token verification retains its
+existing requirement for a proxy outside local tests.
 
 The archive credentials have separate duties. The collector credential creates
 immutable raw responses and may read back the marker or one exact object to
@@ -128,6 +131,157 @@ may list, overwrite, delete, or broadly browse archive objects.
 The database also has separate collector, worker, and API roles. The admin
 database URL exists only as a short-lived Podman secret during fixture
 bootstrap or while an operator explicitly handles a failed item.
+
+### Paris fixed-address relay
+
+`clashlens-egress-paris` is a Scaleway DEV1-S in `fr-par-1`: two processor cores,
+2 GiB memory, a 10 GB local boot disk and a 200 Mbps connection. Its server ID
+is `11bee593-3b31-40c0-80b1-28e24614c9ec`. The reserved public IPv4 is
+**163.172.188.40**, allocation `38ccd5b5-6185-46f9-8312-cd1720688832`.
+Scaleway reports the allocation as non-dynamic; keep it allocated when rebuilding
+the server. This address is what all five Clash API keys must allow.
+
+The September 30 quote totals **EUR 10.56/month before tax** at 730 hours:
+EUR 6.55 compute, EUR 3.65 IPv4 and EUR 0.36 for the 10 GB local disk. This fits
+the approved EUR 11–15/month budget. Outgoing instance
+traffic is included. At 83.3 requests/second, response sizes of 10, 25 or 50 KB
+mean approximately 2.7, 6.75 or 13.5 TB/month with a 25% traffic allowance.
+These are sizing assumptions, not measured successful response sizes.
+See [instance pricing](https://www.scaleway.com/en/pricing/virtual-instances/)
+and [the June 2026 IPv4 price update](https://www.scaleway.com/en/blog/a-transparent-update-on-scaleway-pricing/).
+The [public product catalog](https://www.scaleway.com/en/developers/api/product-catalog/public-catalog)
+quotes local disk product `/instance/volume/l_ssd/fr-par-1` at EUR 0.000049/GB/hour.
+
+The private relay address is **100.122.10.22**, named
+`clashlens-egress-paris.tail54c4a2.ts.net`, with tailnet tag `tag:clashlens-egress`.
+The server runs Ubuntu 24.04, Docker and Tailscale. The relay code is in
+`/opt/clashlens/egress-proxy`; generated configuration is in
+`/root/.local/share/clashlens-egress-proxy`. `deploy/egress-proxy/deploy.sh`
+runs Tinyproxy without root privileges, with a read-only filesystem, a 64 MiB
+memory limit, at most 50 connections, and warning logs capped at three 10 MB
+files. It holds no API keys or response archive. Thirty collector connections
+plus token-verification traffic fit below that connection limit.
+
+The filter allows only `CONNECT api.clashofclans.com:443`, an encrypted tunnel
+whose API certificate the caller still checks. Ordinary HTTP requests, other
+hosts and other ports are rejected. The proxy binds only its private Tailscale
+address on port 3128 and accepts only rogue's Tailscale address `100.115.149.49`.
+The cloud firewall denies inbound traffic except UDP 41641 for Tailscale and
+the restricted SSH administration rule. Password login is disabled. Tailscale's
+host firewall chain accepts private-interface traffic before UFW rules;
+Tinyproxy's client allowlist enforces rogue-only proxy access. A request from
+another tailnet machine was rejected with proxy status 403.
+
+The collector keeps its existing reusable connection pool, request-start limits,
+certificate checks, request deadlines and cancellation behavior through the
+relay. A failed connection does not quarantine a key. A genuine API 401/403
+still does. An outage makes requests fail or time out; the existing stopped
+tracker alert takes about 10–11 minutes without successful fetches. A relay
+does not remove the dependency on rogue's home connection.
+
+For recovery, connect from rogue with
+`ssh -o HostKeyAlias=163.172.188.40 ubuntu@100.122.10.22`. The alias checks
+the same SSH host key already verified at the public address. On the relay, inspect `systemctl status tailscaled docker`, `sudo docker logs
+clashlens-egress-proxy`, and `sudo ss -lntp`. Restart only the relay container
+after diagnosing it. Docker and Tailscale start on boot, and the container has
+`unless-stopped` restart behavior. If the machine must be rebuilt, retain the
+IPv4 allocation above, attach it to the replacement in the same zone, install
+Docker and Tailscale, authorize the new Tailscale machine, and copy this checkout's
+`deploy/egress-proxy` directory to `/opt/clashlens/egress-proxy`. Then run:
+
+```sh
+sudo env PROXY_LISTEN_IP=100.122.10.22 PROXY_CLIENT_IP=100.115.149.49 \
+  /opt/clashlens/egress-proxy/deploy.sh up
+```
+
+For a replacement, substitute its actual Tailscale address and repeat the connectivity,
+destination-filter and latency checks before changing callers. Never release
+the public IPv4 as part of routine recovery. A replacement private address
+requires updating both callers through `CLASHLENS_OFFICIAL_API_PROXY_URL`.
+
+#### Measured relay behavior
+
+On September 30, 2026, after rogue's temporary network outage ended, paired
+HTTP/1.1 requests from rogue measured the following times in milliseconds.
+The warm rows exclude the first connection; each run reused one connection for
+all 300 measured requests. The cold runs opened 100 connections each and disabled
+TLS session reuse. Median is the middle sample; p95 and p99 are the times within
+which 95% and 99% of samples finished, using nearest-rank percentiles.
+
+| Path | Samples | Mean ms | Median ms | p95 ms | p99 ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Direct, reused connection | 300 | 80.837 | 80.767 | 82.694 | 87.690 |
+| Paris relay, reused connection | 300 | 93.590 | 93.492 | 95.504 | 99.727 |
+| Direct, new connection | 100 | 242.892 | 240.870 | 246.028 | 324.346 |
+| Paris relay, new connection | 100 | 348.790 | 378.425 | 387.203 | 388.355 |
+
+The warm mean added **12.753 ms**, inside the proposed 60 ms allowance. New
+connections added **105.898 ms** on average, so retaining connection reuse is
+essential. Runs started at 19:56:26 UTC for warm requests and 19:57:27 for cold
+requests, paced at five starts/second per path. All 802 requests completed
+without network errors and returned the expected unauthenticated HTTP 403 with
+a 59-byte `Missing authorization` response. Cold totals include connection and
+encryption setup; they do not meet the 200 ms warm full-response target.
+
+Separate 30-second runs used 24 warmed client slots with a shared ceiling of
+120 request starts/second. The direct path completed 3,530 requests, 117.67
+starts/second, with mean 80.645 ms and p95/p99 82.692/89.913 ms. The relay
+completed 3,552 requests, 118.40 starts/second, with mean 92.935 ms and p95/p99
+95.139/99.033 ms. All responses had the same expected 403 and 59-byte body;
+there were no transport failures. Each path also made 24 warm-up requests.
+The relay's observed container use during that run was 3.527 MiB of its 64 MiB
+limit and 2.48% CPU, with 24 established proxy connections. These are one-time
+resource samples, not long-term maxima.
+
+A separate relay-to-rogue transfer sent 2 GiB in **81.842 seconds**, averaging
+**209.91 Mbps** over Tailscale and SSH with compression disabled. An earlier
+768 MiB transfer took 22.756 seconds, 283.12 Mbps, showing a short burst above
+the advertised rate. Budget against the advertised 200 Mbps rather than the
+burst result. This checks the private network's capacity, not transfer of real
+API response bodies through Tinyproxy. Both transfers generated bytes from
+`/dev/zero` and discarded them on rogue, without writing large files.
+
+Rogue's `tailscale ping` and active peer address confirmed direct traffic to
+`163.172.188.40:41641`, with 10–14 ms round-trip delay. The DERP fallback path
+was not forced or benchmarked. Actual private-address binding, rejection of
+another tailnet client, rejection of other destinations/ports and plain HTTP,
+and automatic recovery of the proxy and Tailscale after reboot were verified.
+The reserved public IPv4 remained unchanged across both provisioning reboots.
+
+The load check measures transport of small unauthenticated responses, using
+Python's standard HTTPS client with CONNECT tunneling and certificate checking;
+it is not a successful collector workload. The collector's own connection reuse,
+certificate rejection, proxy-down behavior, request pacing, timeout and
+cancellation are covered by local tests with a real HTTPS origin and CONNECT
+relay. Successful profile/battle response sizes, provider processing time,
+day-long loss, full collection/storage load, Reset gaps and outage alerts remain
+unverified. Do not treat the unauthenticated rate as proof of launch capacity.
+
+#### Production switch-over, separate approval required
+
+1. Confirm `tailscale ping clashlens-egress-paris` from rogue reports a direct
+   connection. A result using DERP, Tailscale's public fallback relay, needs a
+   new latency/throughput check. Verify an unauthenticated request through
+   `http://100.122.10.22:3128` returns the official API's missing-authorization
+   response with certificate checks enabled.
+2. Add **163.172.188.40/32** to each of the four regular keys and the interactive
+   key in the Clash developer portal. If this requires replacement key values,
+   put them in the existing five private key files. Do not print them or put
+   them in a command line, this document or the relay.
+3. Deploy the reviewed release to rogue through the existing release procedure.
+   Set `CLASHLENS_OFFICIAL_API_PROXY_URL=http://100.122.10.22:3128` in its
+   private `app.env`, then run `./ops build` and `./ops up`. This is the production
+   restart step and has not been authorized or performed by the relay task.
+4. Confirm successful collection and private token verification, healthy keys,
+   and the relay's direct connection mode from inside the running pod's network.
+   Measure full successful profile/battle responses under the intended workload:
+   aim for at most 60 ms extra relay delay and 200 ms mean request time. Check
+   per-player gaps across Reset separately. Unauthenticated probes do not prove
+   these behaviors.
+5. If checks fail, stop the switch and diagnose it. A return to direct collection
+   requires a working home address on the keys and a separately agreed route
+   for token verification; removing the proxy setting alone is not a recovery
+   plan. Never allow an automatic direct fallback to an unapproved address.
 
 ### Production archive: Scaleway Object Storage
 

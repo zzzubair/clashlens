@@ -209,6 +209,17 @@ def load_official_api_key_file(path: str | Path) -> bytes:
     return raw
 
 
+class _ExplicitProxyHandler(urllib.request.ProxyHandler):
+    def proxy_open(self, request, proxy_url, _type):
+        # Apply to every request, including redirects, without NO_PROXY bypass.
+        proxy = urlsplit(proxy_url)
+        original_type = request.type
+        request.set_proxy(proxy.netloc, proxy.scheme)
+        if original_type != proxy.scheme and original_type != "https":
+            return self.parent.open(request, timeout=request.timeout)
+        return None
+
+
 def _urllib_transport(
     request: OfficialVerificationRequest,
 ) -> OfficialVerificationResponse:
@@ -217,8 +228,7 @@ def _urllib_transport(
         if request.proxy_url
         else {}
     )
-    proxy = urllib.request.ProxyHandler(proxies)
-    opener = urllib.request.build_opener(proxy)
+    opener = urllib.request.build_opener(_ExplicitProxyHandler(proxies))
     http_request = urllib.request.Request(
         request.url,
         data=request.body,
