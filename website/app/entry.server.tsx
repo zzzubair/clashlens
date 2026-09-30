@@ -8,6 +8,10 @@ import { ServerRouter } from "react-router";
 import { isbot } from "isbot";
 
 import { getWebsiteConfig, isWebsiteLoginEnabled } from "./server/config.server";
+import { createClientAddressContext } from "./server/client-address.server";
+
+// The HTTP adapter supplies the socket peer, never a browser-controlled header.
+export const getLoadContext = createClientAddressContext();
 
 // The production server imports this module before it opens a listening socket.
 // Validate login configuration here so an enabled but unsafe login cannot start.

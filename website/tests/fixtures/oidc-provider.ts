@@ -178,6 +178,13 @@ function handleAuthorize(response: ServerResponse, rawUrl: string): void {
   }
   const url = new URL(rawUrl, ISSUER);
   const parameters = url.searchParams;
+  // Tests can sign in separate synthetic accounts through the complete flow.
+  // This provider is loopback-only and is never used by production login.
+  const subject = parameters.get("login_hint") ?? DEFAULT_SUBJECT;
+  if (!SUBJECT_PATTERN.test(subject)) {
+    errorPage(response, "invalid fixture subject");
+    return;
+  }
 
   const clientId = parameters.get("client_id") ?? "";
   if (clientId !== CLIENT_ID) {
@@ -227,7 +234,7 @@ function handleAuthorize(response: ServerResponse, rawUrl: string): void {
     redirectUri,
     codeChallenge,
     nonce,
-    subject: DEFAULT_SUBJECT,
+    subject,
     state,
     createdAtMs: Date.now(),
   });

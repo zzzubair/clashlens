@@ -766,7 +766,7 @@ write_environment() {
   if [[ "$MODE" == fixture ]]; then
     write_env website.env NODE_ENV=test PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
       "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
-      CLASHLENS_TRUST_PROXY=true CLASHLENS_LOGIN_ENABLED=true CLASHLENS_PUBLIC_ORIGIN=http://127.0.0.1:15174 \
+      CLASHLENS_LOGIN_ENABLED=true CLASHLENS_PUBLIC_ORIGIN=http://127.0.0.1:15174 \
       CLASHLENS_GOOGLE_ISSUER_URL=http://127.0.0.1:8011 CLASHLENS_GOOGLE_CLIENT_ID=clashlens-browser-test \
       CLASHLENS_GOOGLE_CLIENT_SECRET_FILE=/run/secrets/clashlens-google-client-secret CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret \
       CLASHLENS_DISCORD_API_BASE_URL=http://127.0.0.1:8012 CLASHLENS_DISCORD_CLIENT_ID=1234567890123456789 \
@@ -782,7 +782,8 @@ write_environment() {
     fi
     write_env website.env NODE_ENV=production PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
       "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
-      CLASHLENS_TRUST_PROXY=true "CLASHLENS_LOGIN_ENABLED=$login_enabled" "CLASHLENS_PUBLIC_ORIGIN=$public_origin" "CLASHLENS_GOOGLE_CLIENT_ID=$google_id" \
+      "CLASHLENS_TRUSTED_PROXY_IP=$(setting CLASHLENS_TRUSTED_PROXY_IP)" "CLASHLENS_CLIENT_IP_HEADER=$(setting CLASHLENS_CLIENT_IP_HEADER CF-Connecting-IP)" \
+      "CLASHLENS_LOGIN_ENABLED=$login_enabled" "CLASHLENS_PUBLIC_ORIGIN=$public_origin" "CLASHLENS_GOOGLE_CLIENT_ID=$google_id" \
       CLASHLENS_GOOGLE_CLIENT_SECRET_FILE=/run/secrets/clashlens-google-client-secret CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/clashlens-login-secret \
       "CLASHLENS_DISCORD_CLIENT_ID=$discord_id" CLASHLENS_DISCORD_CLIENT_SECRET_FILE=/run/secrets/clashlens-discord-client-secret
   fi

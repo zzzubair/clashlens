@@ -10,7 +10,7 @@
     "dev": "react-router dev",
     "build": "react-router build",
     "build:verify": "npm run build && npm run check:browser-assets",
-    "start": "react-router-serve ./build/server/index.js",
+    "start": "node server.ts",
     "typecheck": "react-router typegen && tsc --noEmit",
     "lint": "eslint app tests scripts *.ts *.js --max-warnings=0",
     "format": "prettier --check app tests scripts *.ts *.js *.json *.md",
