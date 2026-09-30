@@ -47,6 +47,11 @@ the real Python application against loopback-only Clash, archive, Google, and
 Discord fixtures. They never call Google, Discord, Supercell, production data,
 or cloud storage.
 
+When the browser tests start their own stack, Playwright sends SIGTERM on
+shutdown so `dev` can remove that stack and its disposable database, archive,
+and spool volumes. With `CLASHLENS_E2E_EXTERNAL_STACK=1`, the caller owns stack
+startup and cleanup instead.
+
 ## Runtime interface
 
 The root deployment starts and recovers the website as part of `./ops up`.
