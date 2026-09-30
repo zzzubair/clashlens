@@ -156,12 +156,15 @@ const REFRESH_STATUS: RefreshStatus = {
   player: PLAYER,
 };
 
-async function renderRoute(data: Awaited<ReturnType<typeof playerLoader>>) {
+async function renderRoute(
+  data: Awaited<ReturnType<typeof playerLoader>>,
+  search = "?season=missing",
+) {
   const handler = createStaticHandler([
     { path: "/players/:tag", Component: PlayerRoute, loader: () => data },
   ]);
   const context = await handler.query(
-    new Request("https://clashlens.example/players/%232PP?season=missing"),
+    new Request(`https://clashlens.example/players/%232PP${search}`),
   );
   if (context instanceof Response) throw new Error("unexpected route response");
   const router = createStaticRouter(handler.dataRoutes, context);
@@ -595,6 +598,98 @@ describe("automatic tag lookup", () => {
     expect(html.match(/id="battle-saved-attack"/g)).toHaveLength(1);
     expect(result.player?.season).toBeNull();
   });
+
+  it.each(
+    (["tracking", "not_in_legend"] as const).flatMap((trackingState) =>
+      [false, true].flatMap((lookupFailed) =>
+        ["profile", "refresh"].flatMap((response) =>
+          ["recent", "current", "both"].map((source) => ({
+            trackingState,
+            lookupFailed,
+            response,
+            source,
+          })),
+        ),
+      ),
+    ),
+  )(
+    "keeps mixed season history for $trackingState, $response, $source, lookup failure $lookupFailed",
+    async ({ trackingState, lookupFailed, response, source }) => {
+      const confirmedDay: RankedDaySummary = {
+        ...SAVED_DAY,
+        dayNumber: 2,
+        period: "2026-09-08T05:00:00Z – 2026-09-09T05:00:00Z",
+        uncertainty: [],
+        offenseEvents: SAVED_DAY.offenseEvents.map((event) => ({
+          ...event,
+          battleId: "confirmed-attack",
+          battleTimestamp: "2026-09-08T13:00:00Z",
+          opponent: { ...event.opponent, name: "Confirmed opponent" },
+        })),
+      };
+      const datedDay = { ...SAVED_DAY, dayNumber: 17 };
+      const displayed: PlayerPage = {
+        ...PLAYER,
+        trackingState,
+        season: {
+          id: SEASON,
+          anchor: "2026-09-07T05:00:00Z",
+          currentDayNumber: 2,
+          dayCount: 28,
+          anchorSource: "official_league_history",
+          anchorObservedAt: "2026-09-08T13:00:00Z",
+        },
+        seasonDays: [confirmedDay],
+        recentDays: [
+          { ...confirmedDay, period: "2026-09-08T05:00:00+00:00" },
+          ...(source === "current" ? [] : [datedDay]),
+        ],
+        currentDay:
+          source === "recent"
+            ? null
+            : {
+                ...datedDay,
+                period: "2026-09-07T05:00:00+00:00 – 2026-09-08T05:00:00+00:00",
+              },
+      };
+      mocks.createPythonClient.mockReturnValue({
+        getPlayer: vi.fn().mockResolvedValue(response === "profile" ? displayed : PLAYER),
+        getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+        getRefreshStatus: vi
+          .fn()
+          .mockResolvedValue({ ...REFRESH_STATUS, player: displayed }),
+      });
+      if (lookupFailed)
+        mocks.getPlayerLookup.mockRejectedValue(new PythonApiError(503, {}));
+      else mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "tracking" });
+      const result = await playerLoader({
+        request: new Request(
+          `${requestFor(null).url}${response === "refresh" ? "?refresh=work_1" : ""}`,
+        ),
+        params: { tag: TAG },
+      } as never);
+      const markup = (await renderRoute(result, "?day=2026-09-07")).split("<script>")[0];
+      expect(markup.match(/id="battle-saved-attack"/g)).toHaveLength(1);
+      expect(markup.match(/id="battle-confirmed-attack"/g)).toHaveLength(1);
+      expect(markup).toContain("?day=2026-09-07#battle-saved-attack");
+      expect(markup).toContain("?day=2026-09-08#battle-confirmed-attack");
+      expect(markup).not.toContain("No saved Legend log");
+      const text = markup.replace(/<[^>]*>/g, "");
+      expect(text).toContain("Day 2");
+      expect(text).toContain("Date only");
+      expect(text).not.toContain("Day 17");
+      expect(displayed.seasonDays).toEqual([confirmedDay]);
+      if (trackingState === "tracking") {
+        expect(markup).toContain("Current trophies");
+        expect(markup).toContain("player-refresh-form");
+      } else {
+        expect(markup).toContain("not in Legend I");
+        expect(markup).not.toContain("Current trophies");
+        expect(markup).not.toContain("player-refresh-form");
+      }
+      if (lookupFailed) expect(markup).toContain(result.lookupError!.error.message);
+    },
+  );
 
   it.each([
     ["tracking", true],
