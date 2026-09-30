@@ -101,6 +101,7 @@ AS $$
     FROM players AS player
     WHERE work.player_id = player.id AND work.kind = 'discovery_profile'
       AND work.status IN ('pending', 'waiting_retry')
+      AND work.league_history_status <> 'pending'
       AND ((work.eligibility_recheck AND player.active) OR clashlens_eligibility_checked_since(
           player.id, clashlens_eligibility_week(instant), instant));
 
@@ -119,8 +120,10 @@ AS $$
     ) AS fresh
     WHERE work.player_id = player.id AND work.kind = 'discovery_profile'
       AND work.status IN ('pending', 'waiting_retry')
-      AND clashlens_eligibility_fetched_since(
+      AND (clashlens_eligibility_fetched_since(
           player.id, clashlens_eligibility_week(instant), instant)
+          OR clashlens_eligibility_checked_since(
+              player.id, clashlens_eligibility_week(instant), instant))
       AND NOT EXISTS (
           SELECT 1 FROM collector_observations AS observation
           WHERE observation.id = work.profile_observation_id

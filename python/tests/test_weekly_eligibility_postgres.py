@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -17,6 +18,7 @@ from test_domain_processing_postgres import _processor
 
 from clashlens.collector_db import CollectorDatabase
 from clashlens.history import prune_completed_history
+from clashlens.profile import PROFILE_PARSER_VERSION
 from clashlens.weekly_eligibility import next_check
 
 MONDAY = datetime(2026, 10, 12, 5, tzinfo=UTC)
@@ -298,6 +300,81 @@ def test_discovery_restart_fetches_only_unfinished_endpoints(database_url, weekl
             database.close()
 
 
+@pytest.mark.parametrize("weekly", [False, True])
+@pytest.mark.parametrize("own_profile", [False, True])
+@pytest.mark.parametrize("queued_status", ["pending", "waiting_retry"])
+def test_processed_eligible_profile_preserves_history_across_restart(
+    database_url, archive_server, weekly, own_profile, queued_status,
+):
+    with domain_database(database_url) as info:
+        player = _player(info)
+        database = _collector(info)
+        try:
+            database.begin_reset(MONDAY, local_regular_inflight=0)
+            with psycopg.connect(info) as connection:
+                assert connection.execute(
+                    "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, %s)",
+                    (None if weekly else [player], MONDAY, weekly),
+                ).fetchone()[0] == 1
+                work = connection.execute("SELECT id FROM collector_work").fetchone()[0]
+                connection.execute(
+                    "UPDATE collector_work SET status = %s WHERE id = %s", (queued_status, work),
+                )
+            at = MONDAY + timedelta(seconds=1)
+            payload = json.loads(PROFILE.read_bytes())
+            payload["tag"] = "#2PP"
+            payload["currentLeagueSeasonId"] = int(datetime(2026, 10, 5, 5, tzinfo=UTC).timestamp())
+            body = json.dumps(payload).encode()
+            observation, job = store_observation(
+                info, archive_server, occurrence_key="processed-discovery-profile",
+                endpoint="profile", body=body, observed_at=at, normalized_tag="#2PP",
+                deduplication_key="process-response:processed-discovery-profile",
+                parser_version=PROFILE_PARSER_VERSION,
+            )
+            response = database.record_response(replace(_handoff(
+                occurrence_key="processed-discovery-profile",
+                response_hash=hashlib.sha256(body).hexdigest(), player_id=player,
+                collector_work_id=work if own_profile else None, completed_at=at,
+            ), byte_size=len(body)))
+            assert response.observation_id == observation and response.processing_job_id == job
+            worker_database, processor = _processor(info, archive_server)
+            try:
+                result = processor.process_job(job, owner="processed-discovery-restart")
+                assert result is not None and result.outcome == "processed"
+            finally:
+                worker_database.close()
+            with psycopg.connect(info) as connection:
+                active, eligibility = connection.execute(
+                    "SELECT active, eligibility_state FROM players WHERE id = %s", (player,),
+                ).fetchone()
+                assert active and text(eligibility) == "eligible"
+                connection.execute("UPDATE players SET next_due_at = %s WHERE id = %s", (at, player))
+            due = database.claim_due_players(limit=1, now=at)
+            assert len(due) == 1 and due[0].player_id == player
+            database.close()
+            database = _collector(info)
+            resumed = (next_check(database, at, schedule=False) if weekly else
+                       database.pending_intents(limit=1, now=at, interactive=False)[0])
+            assert resumed is not None and resumed.work_id == work
+            assert not resumed.profile_required and resumed.league_history_required
+            assert not database.complete_intent(work)
+            spool = _Spool()
+            client = _Client(spool)
+            collector = _fake_collector(spool, database, client)
+            assert asyncio.run(collector.collect_intent(resumed)) == "complete"
+            assert client.fetch_count == 1
+            assert "fetch:league_history" in spool.events and "fetch:profile" not in spool.events
+            with psycopg.connect(info) as connection:
+                status, history, retained = connection.execute(
+                    "SELECT status, league_history_status, profile_observation_id FROM collector_work WHERE id = %s",
+                    (work,),
+                ).fetchone()
+                assert text(status) == "complete" and text(history) == "observed"
+                assert retained == observation
+        finally:
+            database.close()
+
+
 def test_first_time_discovery_is_immediate_and_concurrent_repeats_share_work(database_url):
     with domain_database(database_url) as info:
         player = _player(info)
@@ -332,6 +409,15 @@ def test_promotion_reuses_identity_and_starts_regular_battle_collection(database
             due = database.claim_due_players(limit=10, now=MONDAY + timedelta(seconds=6))
             assert len(due) == 1 and due[0].player_id == check.player_id
             assert due[0].first_battle_pending
+            remaining = next_check(database, MONDAY + timedelta(minutes=1), schedule=True)
+            assert remaining is not None and remaining.work_id == check.work_id
+            assert not remaining.profile_required and remaining.league_history_required
+            spool = _Spool()
+            client = _Client(spool)
+            collector = _fake_collector(spool, database, client)
+            assert asyncio.run(collector.collect_intent(remaining)) == "complete"
+            assert client.fetch_count == 1
+            assert "fetch:league_history" in spool.events and "fetch:profile" not in spool.events
             assert next_check(database, MONDAY + timedelta(minutes=1), schedule=True) is None
             with psycopg.connect(info) as connection:
                 row = connection.execute("SELECT active, eligibility_state FROM players WHERE id = %s", (check.player_id,)).fetchone()
