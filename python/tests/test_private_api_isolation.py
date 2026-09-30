@@ -15,7 +15,9 @@ from clashlens.api_db import ApiDatabase
 @pytest.fixture(params=[("google", "google"), ("google", "discord")])
 def accounts(database_url, request):
     """Two independently authenticated subjects, backed by the real schema/API."""
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         app = create_app(
             database=database,
