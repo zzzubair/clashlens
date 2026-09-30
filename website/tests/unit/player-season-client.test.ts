@@ -132,6 +132,70 @@ describe("historical player-season client boundary", () => {
     }
   });
 
+  it.each([
+    [true, "eligible", "tracking"],
+    [false, "ineligible", "not_in_legend"],
+    [false, "eligible", "uncertain"],
+    [false, "uncertain", "uncertain"],
+    [undefined, "eligible", "uncertain"],
+    ["true", "eligible", "uncertain"],
+  ])(
+    "carries active=%s and eligibility=%s through profile and Refresh responses",
+    async (active, eligibility, trackingState) => {
+      const payload = {
+        tag: "#2PP",
+        name: "Nova",
+        trophies: 6000,
+        active,
+        eligibility,
+        observed_at: "2026-08-06T12:00:00Z",
+        screen_ready: {
+          current_day: null,
+          recent_days: [],
+          season_days: [],
+          season: null,
+          data_quality: [],
+          provenance: {
+            source: "test",
+            observed_at: "2026-08-06T12:00:00Z",
+            freshness: "fresh",
+            confidence: "partial",
+            coverage: "partial",
+            version: "test",
+          },
+        },
+      };
+      const workId = "00000000-0000-4000-8000-000000000001";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async (input: string | URL) =>
+            new Response(
+              JSON.stringify(
+                String(input).includes("/refreshes/")
+                  ? {
+                      refresh_id: workId,
+                      tag: "#2PP",
+                      status: "complete",
+                      outcome: "Complete",
+                    }
+                  : payload,
+              ),
+              { status: 200 },
+            ),
+        ),
+      );
+      process.env.NODE_ENV = "test";
+      process.env.CLASHLENS_PYTHON_HMAC_SECRET_B64 = TEST_SECRET;
+      const { createPythonClient } = await import("../../app/services/python.server");
+      const client = createPythonClient();
+      expect((await client.getPlayer("#2PP")).trackingState).toBe(trackingState);
+      expect((await client.getRefreshStatus(workId, "#2PP")).player?.trackingState).toBe(
+        trackingState,
+      );
+    },
+  );
+
   it("maps summarized seasons and one compact season without battle drilldown", async () => {
     const fetchMock = vi
       .fn()

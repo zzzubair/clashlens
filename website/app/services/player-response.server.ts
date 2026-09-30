@@ -404,6 +404,12 @@ export function mapPlayerPage(payload: unknown): PlayerPage {
   const player: PlayerPage = {
     kind: "player-page",
     tag: payload.tag,
+    trackingState:
+      payload.active === true
+        ? "tracking"
+        : payload.eligibility === "ineligible"
+          ? "not_in_legend"
+          : "uncertain",
     profile: {
       tag: payload.tag,
       name: payload.name,

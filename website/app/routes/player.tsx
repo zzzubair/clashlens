@@ -194,18 +194,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const [pollingError, setPollingError] = useState<WebsiteErrorResponse | null>(null);
   const [lookupTimedOut, setLookupTimedOut] = useState(false);
   const lookupStartedAt = useRef(Date.now());
-  const isChecking =
-    data.lookup?.state === "checking" ||
-    (data.lookup?.state === "tracking" && data.player === null);
-  useEffect(() => {
-    if (!isChecking || lookupTimedOut) return;
-    const timer = setInterval(() => {
-      if (Date.now() - lookupStartedAt.current >= 60_000) setLookupTimedOut(true);
-      else if (revalidator.state === "idle") revalidator.revalidate();
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [isChecking, lookupTimedOut, revalidator]);
-
   useEffect(() => {
     const status = data.refreshStatus;
     if (status && status.tag === data.requestedTag) {
@@ -230,11 +218,37 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     lastStatus?.state === "failed" ||
     lastStatus?.state === "unavailable" ||
     pollingError !== null;
+  const visibleStatus =
+    lastStatus ??
+    (data.refreshStatus?.tag === data.requestedTag ? data.refreshStatus : null);
   const refreshedPlayer =
-    lastStatus && "player" in lastStatus && lastStatus.tag === data.requestedTag
-      ? lastStatus.player
+    visibleStatus && "player" in visibleStatus && visibleStatus.tag === data.requestedTag
+      ? visibleStatus.player
       : null;
   const player = refreshedPlayer ?? data.player;
+  const lookup: PlayerLookup | null = player
+    ? { tag: player.tag, state: player.trackingState }
+    : data.lookup;
+  const displayDays =
+    player && player.seasonDays.length > 0
+      ? player.seasonDays
+      : [
+          ...(player?.currentDay ? [player.currentDay] : []),
+          ...(player?.recentDays ?? []),
+        ].filter(
+          (day, index, days) =>
+            days.findIndex((saved) => saved.period === day.period) === index,
+        );
+  const isChecking =
+    lookup?.state === "checking" || (lookup?.state === "tracking" && player === null);
+  useEffect(() => {
+    if (!isChecking || lookupTimedOut) return;
+    const timer = setInterval(() => {
+      if (Date.now() - lookupStartedAt.current >= 60_000) setLookupTimedOut(true);
+      else if (revalidator.state === "idle") revalidator.revalidate();
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isChecking, lookupTimedOut, revalidator]);
   const refreshResourcePath = player
     ? `/resources/players/${encodeURIComponent(player.tag)}/refresh`
     : null;
@@ -292,18 +306,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     if (
       navigation?.type !== "reload" ||
       new URL(navigation.name).pathname !== window.location.pathname ||
-      data.player === null ||
-      data.lookup?.state !== "tracking"
+      player?.trackingState !== "tracking"
     )
       return;
     refreshFetcher.submit(
       { idempotencyKey: data.noJsIdempotencyKey },
       {
         method: "post",
-        action: `/resources/players/${encodeURIComponent(data.player.tag)}/refresh`,
+        action: `/resources/players/${encodeURIComponent(player.tag)}/refresh`,
       },
     );
-  }, [data.player, data.noJsIdempotencyKey, refreshFetcher]);
+  }, [player, data.noJsIdempotencyKey, refreshFetcher]);
 
   useEffect(() => {
     if (!workId || terminalState || refreshResourcePath === null) return;
@@ -375,22 +388,18 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     };
   }, [player?.tag, refreshResourcePath, revalidator, terminalState, workId]);
 
-  if (
-    data.requestedTag !== null &&
-    (data.lookup?.state !== "tracking" || player === null)
-  ) {
-    const savedDays =
-      player?.seasonDays.filter(
-        (day) =>
-          !day.uncertainty.includes("player_not_eligible") ||
-          day.offenseEvents.length > 0 ||
-          day.defenseEvents.length > 0,
-      ) ?? [];
+  if (data.requestedTag !== null && player?.trackingState !== "tracking") {
+    const savedDays = displayDays.filter(
+      (day) =>
+        !day.uncertainty.includes("player_not_eligible") ||
+        day.offenseEvents.length > 0 ||
+        day.defenseEvents.length > 0,
+    );
     return (
       <main id="main-content" tabIndex={-1} className="page-shell player-page">
         <h1>{data.requestedTag}</h1>
-        {data.lookup ? (
-          <LookupNotice lookup={data.lookup} timedOut={lookupTimedOut} />
+        {lookup ? (
+          <LookupNotice lookup={lookup} timedOut={lookupTimedOut} />
         ) : (
           <p className="section-note">
             We could not confirm whether this player is currently tracked. Any saved
@@ -434,9 +443,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     refreshFetcher.data && "error" in refreshFetcher.data ? refreshFetcher.data : null;
   const refreshError = data.refreshError;
   const visibleRefreshError = actionError ?? pollingError ?? refreshError;
-  const visibleStatus =
-    lastStatus ??
-    (data.refreshStatus?.tag === data.requestedTag ? data.refreshStatus : null);
   const refreshActionPath = `/resources/players/${encodeURIComponent(player.tag)}/refresh`;
 
   return (
@@ -499,10 +505,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       </header>
 
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
+      {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
       {visibleStatus ? <RefreshProgress status={visibleStatus} /> : null}
-      {data.lookup?.state === "tracking" ? (
-        <p role="status">Now tracking in Legend I.</p>
-      ) : null}
+      <p role="status">Now tracking in Legend I.</p>
       <SeasonNav
         tag={player.tag}
         seasons={data.seasons}
@@ -529,7 +534,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         <section className="data-section" aria-labelledby="season-days-title">
           <h2 id="season-days-title">Daily Legend log</h2>
           {selectedDay &&
-          !player.seasonDays.some((day) => legendDayKey(day.period) === selectedDay) ? (
+          !displayDays.some((day) => legendDayKey(day.period) === selectedDay) ? (
             <p className="section-note" role="status">
               No saved Legend log for {legendDayDate(selectedDay)}.
             </p>
@@ -540,7 +545,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
               because tracking started partway through the season.
             </p>
           ) : null}
-          {player.seasonDays.some(
+          {displayDays.some(
             (day) => day.startTrophiesCalculation || day.startTrophies == null,
           ) ? (
             <p className="section-note">
@@ -549,7 +554,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
             </p>
           ) : null}
           <div className="legend-days">
-            {player.seasonDays.map((day) => (
+            {displayDays.map((day) => (
               <LegendDay
                 key={`${day.period}-${day.dayNumber ?? "unknown"}`}
                 day={day}

@@ -259,6 +259,7 @@ export interface PlayerLookup {
 export interface PlayerPage {
   kind: "player-page";
   tag: string;
+  trackingState: "tracking" | "not_in_legend" | "uncertain";
   profile: PlayerProfile;
   season: {
     id: string;

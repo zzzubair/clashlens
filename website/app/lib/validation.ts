@@ -43,6 +43,10 @@ export function isRefreshStatusPayload(value: unknown): value is RefreshStatus {
     typeof value.message === "string" &&
     (typeof value.publishedAt === "string" || value.publishedAt === null) &&
     "player" in value &&
-    (value.player === null || isRecord(value.player))
+    (value.player === null ||
+      (isRecord(value.player) &&
+        ["tracking", "not_in_legend", "uncertain"].includes(
+          value.player.trackingState as string,
+        )))
   );
 }
