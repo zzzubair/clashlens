@@ -309,3 +309,81 @@ def test_finished_initial_and_refresh_checks_are_reused_before_processing(databa
                 assert connection.execute("SELECT count(*) FROM collector_work").fetchone()[0] == 2
         finally:
             database.close()
+
+
+@pytest.mark.parametrize("kind", ["discovery_profile", "initial_collection", "live_refresh"])
+@pytest.mark.parametrize("scheduled", [False, True])
+@pytest.mark.parametrize("after_reset", [False, True])
+def test_unchanged_pending_profile_reuse_depends_on_fetch_completion(
+    database_url, kind, scheduled, after_reset,
+):
+    with domain_database(database_url) as info:
+        player = _player(info)
+        database = _collector(info)
+        try:
+            old = MONDAY - timedelta(days=1)
+            original = database.record_response(_handoff(
+                occurrence_key="old-pending-profile", response_hash="a" * 64,
+                player_id=player, completed_at=old,
+            ))
+            completed_at = MONDAY + timedelta(seconds=1 if after_reset else -1)
+            with psycopg.connect(info) as connection:
+                work = connection.execute(
+                    """INSERT INTO collector_work (
+                           kind, lane, scope, player_id, normalized_tag, due_at,
+                           coalescing_key, battle_log_status, league_history_status)
+                       VALUES (%s, %s, 'player', %s, '#2PP', %s, %s, %s, %s)
+                       RETURNING id""",
+                    (kind, "ordinary" if kind == "discovery_profile" else "interactive",
+                     player, MONDAY - timedelta(seconds=2), kind,
+                     "not_applicable" if kind == "discovery_profile" else "pending",
+                     "pending" if kind == "initial_collection" else "not_applicable"),
+                ).fetchone()[0]
+            result = database.record_response(replace(_handoff(
+                occurrence_key="unchanged-pending-profile", response_hash="a" * 64,
+                player_id=player, collector_work_id=work, completed_at=completed_at,
+            ), request_started_at=MONDAY - timedelta(seconds=2)))
+            assert not result.changed and result.observation_id is None
+            endpoints = []
+            if kind != "discovery_profile":
+                endpoints.append("battle_log")
+            if kind == "initial_collection":
+                endpoints.append("league_history")
+            for endpoint in endpoints:
+                database.record_response(_handoff(
+                    occurrence_key=endpoint, response_hash="b" * 64,
+                    player_id=player, endpoint=endpoint, collector_work_id=work,
+                    completed_at=completed_at,
+                ))
+            assert database.complete_intent(work)
+            instant = MONDAY + timedelta(seconds=2)
+            with psycopg.connect(info) as connection:
+                assert connection.execute(
+                    "SELECT clashlens_eligibility_checked_since(%s, %s, %s)",
+                    (player, MONDAY, instant),
+                ).fetchone()[0] is False
+                if scheduled:
+                    created = connection.execute(
+                        "SELECT clashlens_enqueue_weekly_eligibility(%s)", (instant,),
+                    ).fetchone()[0]
+                else:
+                    created = connection.execute(
+                        "SELECT clashlens_enqueue_eligibility_profiles(%s, %s, false)",
+                        ([player], instant),
+                    ).fetchone()[0]
+                assert created == (0 if after_reset else 1)
+                assert connection.execute(
+                    "SELECT count(*) FROM collector_work WHERE id <> %s", (work,),
+                ).fetchone()[0] == created
+                assert text(connection.execute(
+                    "SELECT eligibility_state FROM players WHERE id = %s", (player,),
+                ).fetchone()[0]) == "unknown"
+                assert text(connection.execute(
+                    "SELECT status FROM python_processing_jobs WHERE id = %s",
+                    (original.processing_job_id,),
+                ).fetchone()[0]) == "pending"
+                assert connection.execute(
+                    "SELECT profile_observation_id FROM collector_work WHERE id = %s", (work,),
+                ).fetchone()[0] == original.observation_id
+        finally:
+            database.close()

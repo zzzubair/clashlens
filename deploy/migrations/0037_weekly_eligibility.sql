@@ -138,6 +138,13 @@ BEGIN
           AND (scheduled OR player.id = ANY(requested_player_ids))
           AND NOT clashlens_eligibility_checked_since(player.id, boundary_at, instant)
           AND NOT EXISTS (
+              SELECT 1 FROM collector_response_state AS state
+              WHERE state.scope = 'player' AND state.identity_key = player.normalized_tag
+                AND state.endpoint = 'profile' AND state.last_observation_id IS NOT NULL
+                AND state.last_success_at >= boundary_at AND state.last_success_at <= instant
+                AND state.last_seen_at = state.last_success_at
+          )
+          AND NOT EXISTS (
               SELECT 1 FROM collector_work AS work
               WHERE work.player_id = player.id
                 AND work.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
