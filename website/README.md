@@ -69,6 +69,8 @@ The intended production path is Cloudflare Tunnel → a local proxy → the webs
 peer to React Router. Refresh allows six requests per address per minute in this
 website process. Cookies, form fields, URL parameters and forwarding chains do
 not choose that address. Restarting the process resets its in-memory counters.
+Without a valid connection address, Refresh returns `503 service_unavailable`
+without requesting collection.
 
 `CLASHLENS_TRUSTED_PROXY_IP` defaults to empty, meaning no header is trusted.
 Set it to exactly the local proxy's socket address **as observed inside the
@@ -94,7 +96,8 @@ Cloudflare documents the visitor-header behavior in its
 The production tunnel/proxy configuration is outside this repository and still
 needs that deployment verification. These changes do not alter it. The plain
 `react-router dev`/`react-router-serve` adapters do not supply socket context;
-Refresh fails closed there. Use the built website with `npm start` or `./dev up`.
+Refresh returns that 503 response there. Use the built website with `npm start`
+or `./dev up`.
 
 ### Existing preview
 
