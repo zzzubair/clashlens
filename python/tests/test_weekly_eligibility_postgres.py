@@ -92,6 +92,75 @@ def test_sunday_check_does_not_satisfy_monday_but_repeats_reuse_it(database_url,
             database.close()
 
 
+@pytest.mark.parametrize("unchanged,own_failure", [(True, False), (False, False), (False, True)])
+@pytest.mark.parametrize("after_reset", [False, True])
+@pytest.mark.parametrize("queued_status", ["pending", "waiting_retry"])
+def test_queued_weekly_check_reuses_refresh_awaiting_processing(
+    database_url, unchanged, own_failure, after_reset, queued_status,
+):
+    with domain_database(database_url) as info:
+        player = _player(info)
+        database = _collector(info)
+        try:
+            original = database.record_response(_handoff(
+                occurrence_key="old-profile", response_hash="a" * 64,
+                player_id=player, completed_at=MONDAY - timedelta(days=1),
+            ))
+            database.begin_reset(MONDAY, local_regular_inflight=0)
+            queued = next_check(database, MONDAY, schedule=True)
+            assert queued is not None and queued.profile_required
+            if own_failure:
+                database.record_response(_handoff(
+                    occurrence_key="failed-weekly-profile", response_hash="c" * 64,
+                    player_id=player, collector_work_id=queued.work_id,
+                    completed_at=MONDAY + timedelta(seconds=1), http_status=503,
+                ))
+            with psycopg.connect(info) as connection:
+                connection.execute(
+                    "UPDATE collector_work SET due_at = %s, status = %s WHERE id = %s",
+                    (MONDAY + timedelta(seconds=58), queued_status, queued.work_id),
+                )
+                refresh = connection.execute(
+                    """INSERT INTO collector_work (
+                           kind, lane, scope, player_id, normalized_tag, due_at,
+                           coalescing_key, league_history_status)
+                       VALUES ('live_refresh', 'interactive', 'player', %s, '#2PP',
+                               %s, 'intervening-refresh', 'not_applicable') RETURNING id""",
+                    (player, MONDAY - timedelta(seconds=2)),
+                ).fetchone()[0]
+            response = database.record_response(_handoff(
+                occurrence_key="intervening-profile",
+                response_hash=("a" if unchanged else "b") * 64,
+                player_id=player, collector_work_id=refresh,
+                completed_at=MONDAY + timedelta(seconds=11 if after_reset else -1),
+            ))
+            assert response.changed is not unchanged
+            admitted = next_check(database, MONDAY + timedelta(seconds=58), schedule=False)
+            if after_reset:
+                assert admitted is None
+            else:
+                assert admitted is not None and admitted.work_id == queued.work_id
+                assert admitted.profile_required
+            with psycopg.connect(info) as connection:
+                assert text(connection.execute(
+                    "SELECT status FROM collector_work WHERE id = %s", (queued.work_id,),
+                ).fetchone()[0]) == ("cancelled" if after_reset else queued_status)
+                assert text(connection.execute(
+                    "SELECT eligibility_state FROM players WHERE id = %s", (player,),
+                ).fetchone()[0]) == "unknown"
+                assert connection.execute(
+                    "SELECT clashlens_eligibility_checked_since(%s, %s, %s)",
+                    (player, MONDAY, MONDAY + timedelta(seconds=58)),
+                ).fetchone()[0] is False
+                job = original.processing_job_id if unchanged else response.processing_job_id
+                assert text(connection.execute(
+                    "SELECT status FROM python_processing_jobs WHERE id = %s", (job,),
+                ).fetchone()[0]) == "pending"
+                assert connection.execute("SELECT count(*) FROM collector_work").fetchone()[0] == 2
+        finally:
+            database.close()
+
+
 def test_first_time_discovery_is_immediate_and_concurrent_repeats_share_work(database_url):
     with domain_database(database_url) as info:
         player = _player(info)

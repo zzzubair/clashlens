@@ -50,6 +50,22 @@ CREATE FUNCTION clashlens_eligibility_week(instant timestamptz)
 RETURNS timestamptz LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 RETURN date_bin(interval '7 days', instant, timestamptz '2000-01-03 05:00:00+00');
 
+CREATE FUNCTION clashlens_eligibility_fetched_since(
+    requested_player_id bigint, boundary_at timestamptz, instant timestamptz
+)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM players AS player
+        JOIN collector_response_state AS state
+          ON state.scope = 'player' AND state.identity_key = player.normalized_tag
+         AND state.endpoint = 'profile'
+        WHERE player.id = requested_player_id AND state.last_observation_id IS NOT NULL
+          AND state.last_success_at >= boundary_at AND state.last_success_at <= instant
+          AND state.last_seen_at = state.last_success_at
+    );
+$$;
+
 CREATE FUNCTION clashlens_eligibility_checked_since(
     requested_player_id bigint, boundary_at timestamptz, instant timestamptz
 )
@@ -137,13 +153,7 @@ BEGIN
         WHERE (NOT player.active OR (NOT scheduled AND player.eligibility_state <> 'eligible'))
           AND (scheduled OR player.id = ANY(requested_player_ids))
           AND NOT clashlens_eligibility_checked_since(player.id, boundary_at, instant)
-          AND NOT EXISTS (
-              SELECT 1 FROM collector_response_state AS state
-              WHERE state.scope = 'player' AND state.identity_key = player.normalized_tag
-                AND state.endpoint = 'profile' AND state.last_observation_id IS NOT NULL
-                AND state.last_success_at >= boundary_at AND state.last_success_at <= instant
-                AND state.last_seen_at = state.last_success_at
-          )
+          AND NOT clashlens_eligibility_fetched_since(player.id, boundary_at, instant)
           AND NOT EXISTS (
               SELECT 1 FROM collector_work AS work
               WHERE work.player_id = player.id
@@ -202,6 +212,7 @@ DECLARE signature text;
 BEGIN
     FOREACH signature IN ARRAY ARRAY[
         'clashlens_eligibility_week(timestamptz)',
+        'clashlens_eligibility_fetched_since(bigint,timestamptz,timestamptz)',
         'clashlens_eligibility_checked_since(bigint,timestamptz,timestamptz)',
         'clashlens_cancel_inactive_discovery_work(bigint)',
         'clashlens_enqueue_eligibility_profiles(bigint[],timestamptz,boolean)',
@@ -213,6 +224,7 @@ BEGIN
     END LOOP;
 END $$;
 REVOKE ALL ON FUNCTION clashlens_eligibility_week(timestamptz),
+    clashlens_eligibility_fetched_since(bigint,timestamptz,timestamptz),
     clashlens_eligibility_checked_since(bigint,timestamptz,timestamptz),
     clashlens_enqueue_eligibility_profiles(bigint[],timestamptz,boolean),
     clashlens_enqueue_discovery_profiles(bigint[]),
@@ -221,6 +233,7 @@ REVOKE ALL ON FUNCTION clashlens_eligibility_week(timestamptz),
 GRANT EXECUTE ON FUNCTION clashlens_enqueue_discovery_profiles(bigint[])
     TO clashlens_python_worker;
 GRANT EXECUTE ON FUNCTION clashlens_eligibility_week(timestamptz),
+    clashlens_eligibility_fetched_since(bigint,timestamptz,timestamptz),
     clashlens_eligibility_checked_since(bigint,timestamptz,timestamptz),
     clashlens_enqueue_weekly_eligibility(timestamptz)
     TO clashlens_collector;

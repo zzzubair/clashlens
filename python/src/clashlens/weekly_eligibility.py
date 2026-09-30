@@ -44,8 +44,15 @@ def next_check(
                    WHERE work.player_id = player.id AND work.eligibility_recheck
                      AND work.status IN ('pending', 'waiting_retry')
                      AND (player.active OR clashlens_eligibility_checked_since(
-                         player.id, clashlens_eligibility_week(%s), %s))""",
-                (now, now),
+                         player.id, clashlens_eligibility_week(%s), %s)
+                         OR (clashlens_eligibility_fetched_since(
+                             player.id, clashlens_eligibility_week(%s), %s)
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM collector_observations AS observation
+                                 WHERE observation.id = work.profile_observation_id
+                                   AND (observation.http_status BETWEEN 200 AND 299
+                                        OR observation.http_status = 404))))""",
+                (now, now, now, now),
             )
             row = connection.execute(
                 """SELECT work.id, work.player_id, work.normalized_tag, work.due_at,
