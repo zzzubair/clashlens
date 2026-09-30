@@ -1,5 +1,9 @@
 # Manual player-list import verification
 
+The [go-live runbook](go-live.md) supplies the operator commands, additional-list
+normalization, outcome counts, approval points and rollback steps. This page
+keeps the earlier verification evidence and its limits.
+
 Verified September 25, 2026 against `3836c1d`. Zubair chose operator-run manual
 imports for launch instead of extending the old bootstrap command or building
 a reusable import feature. This verifies the manual database operation and

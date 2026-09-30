@@ -10,6 +10,9 @@ contracts below hold the detail. Update this map when decisions or status change
 
 ## Launch order
 
+The [go-live runbook](go-live.md) covers importing all supplied lists plus new
+arrivals, deploying alerts with tracking, warm-up before Reset and safe stop.
+
 1. **Tracking complete by October 5 at 05:00 UTC, 06:00 UK time.** Real tracking
    targets a Wednesday September 30 start so a full real Legend day is checked
    before the season begins. Plan for **12,500 live-tracked players** within the
@@ -64,6 +67,8 @@ implemented behind a switch that defaults to off; see the
 Database validation of the final response-reuse and restart corrections remains
 pending. Combined live-player capacity and production scheduling remain
 unverified; the September 25 manual-import proof predates this change.
+The revised manual commands and their verification limits belong in
+[the go-live runbook](go-live.md#practice-evidence-and-limits).
 
 ## Capacity and implementation limits
 
