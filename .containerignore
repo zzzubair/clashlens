@@ -1,6 +1,7 @@
 .git
 .gitignore
 app.env*
+!app.env.example
 secrets/
 deploy/secrets/
 bin/
