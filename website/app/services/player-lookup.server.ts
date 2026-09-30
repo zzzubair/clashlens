@@ -1,5 +1,5 @@
 import type { PlayerLookup } from "../lib/contracts";
-import { allowPublicPlayerRequest } from "../server/abuse.server";
+import { allowPublicRefresh } from "../server/abuse.server";
 import { PythonApiError, requestJson } from "./python.server";
 
 export async function getPlayerLookup(tag: string): Promise<PlayerLookup> {
@@ -7,10 +7,13 @@ export async function getPlayerLookup(tag: string): Promise<PlayerLookup> {
 }
 
 export async function startPlayerLookup(
-  request: Request,
+  identity: string | undefined,
   tag: string,
 ): Promise<PlayerLookup> {
-  if (!allowPublicPlayerRequest(request)) {
+  if (!identity) {
+    throw new PythonApiError(503, { error: "service_unavailable" });
+  }
+  if (!allowPublicRefresh(identity)) {
     throw new PythonApiError(429, { error: "rate_limited", retry_after_seconds: 60 });
   }
   return lookupRequest(tag, "POST");

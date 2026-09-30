@@ -46,6 +46,7 @@ import type {
 import { PythonApiError } from "../../app/services/python.server";
 import PlayerRoute, { loader as playerLoader } from "../../app/routes/player";
 import { isRefreshStatusPayload } from "../../app/lib/validation";
+import { createClientAddressContext } from "../../app/server/client-address.server";
 
 const TAG = "#2PP";
 const SEASON = "1785714000";
@@ -416,12 +417,14 @@ describe("automatic tag lookup", () => {
 
   it("starts a new tag during server rendering without a button or account", async () => {
     mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "unknown" });
+    const request = requestFor(null);
     const result = await playerLoader({
-      request: requestFor(null),
+      request,
       params: { tag: TAG },
+      context: createClientAddressContext({})(request, { address: "198.51.100.9" }),
     } as never);
     expect(result.lookup?.state).toBe("checking");
-    expect(mocks.startPlayerLookup).toHaveBeenCalledOnce();
+    expect(mocks.startPlayerLookup).toHaveBeenCalledExactlyOnceWith("198.51.100.9", TAG);
     const html = await renderRoute(result);
     expect(html).toContain("Checking this tag");
     expect(html).not.toContain("Start tracking");

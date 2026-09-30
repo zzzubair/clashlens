@@ -45,6 +45,7 @@ export interface PlayerLoaderData {
 export async function loader({
   request,
   params,
+  context,
 }: LoaderFunctionArgs): Promise<PlayerLoaderData> {
   const noJsIdempotencyKey = globalThis.crypto.randomUUID();
   const rawTag = params.tag ?? "";
@@ -106,7 +107,12 @@ export async function loader({
             ["failed", "not_found"].includes(lookup?.state ?? ""))
         ) {
           try {
-            lookup = await api.startPlayerLookup(request, normalizedTag);
+            const { clientAddressContext } =
+              await import("../server/client-address.server");
+            lookup = await api.startPlayerLookup(
+              context?.get(clientAddressContext),
+              normalizedTag,
+            );
           } catch (cause) {
             error = await safeError(cause);
           }
