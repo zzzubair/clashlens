@@ -29,18 +29,16 @@ Healthy looks like this:
 - `status` shows stack and pod `active`, and postgres, collector, api, worker
   and website `healthy`. Website `/healthz` returns `{"status":"ok"}`; it does
   not prove player data can be read.
-- During active tracking, successful fetches keep advancing. The alert counts
-  gaps of 600 seconds after subtracting the Reset pause, 04:55 to 05:00 UTC.
-  Spool bytes and object count stay below 80% of their configured caps; both
-  data filesystems stay below 80%.
+- During active tracking, successful fetches keep advancing. Compare fetch age,
+  spool bytes, object count and filesystem usage with the
+  [alert conditions](deployment.md#alert-conditions).
 - Queue `failed` is zero, or every existing failure has an investigated cause.
   `oldest_due_seconds` is the age of the oldest overdue job, or `null` if none.
   If the queue grows, repeat the check after a minute: counts and age should
   show work progressing. One snapshot or an empty queue does not prove collection.
-- `backup-status` succeeds, reports a completed remote backup no older than
-  eight days, and reports no overdue WAL upload. WAL is PostgreSQL's change log.
-  Its timer has a next run on Sunday at 03:00 UTC. An idle database need not
-  produce new WAL; a historical `failed_count` alone does not prove a current failure.
+- `backup-status` succeeds and its timer has a next run matching the
+  [backup schedule](deployment.md#postgresql-backups-and-recovery).
+  A historical `failed_count` alone does not prove a current failure.
   A warming-up seven-day window is not full recovery coverage.
 
 After alert deployment, also run:
@@ -51,10 +49,11 @@ systemctl --user status clashlens-alert.timer clashlens-alert.service --no-pager
 journalctl --user -u clashlens-alert.service --since '10 minutes ago' -n 30 --no-pager
 ```
 
-The probe silently succeeds only after checking readiness and reading stored
-player-search data; an empty result is valid. It prints no keys or player data.
-The alert timer should be active with a check every minute and recent successful
-runs. The alert and backup services run once per timer firing, so `inactive (dead)`
+The private probe should exit successfully; its
+[private-read condition](deployment.md#alert-conditions) explains what it checks.
+The alert timer should be active with recent successful runs matching the
+[configured schedule](deployment.md#private-discord-alerts).
+The alert and backup services run once per timer firing, so `inactive (dead)`
 between successful runs is normal. `failed`, missing units, delivery failures or
 unavailable measurements need investigation.
 
@@ -67,18 +66,17 @@ Repairs that restart services, deploy, delete data or change spending need
 Zubair's approval. Use the [existing service lifecycle](deployment.md#existing-service-lifecycle)
 for an approved stop or restart; do not keep restarting a broken service.
 
-Once the condition clears, the next scheduled check sends one recovery message.
-Confirm both the measurements below and that message in the private operator
-channel. No repeated alert does not mean recovery: unchanged incidents stay quiet.
-`./ops alert-check` can run the check immediately, but **sends real Discord messages**
-and saves alert state. A successful exit means the check and delivery worked,
-not that all five conditions are healthy.
+Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
+to interpret messages. Confirm both the measurements below and the recovery
+message in the private operator channel. `./ops alert-check` can run the check
+immediately, but **sends real Discord messages** and saves alert state.
+A successful exit means the check and delivery worked, not that all five
+conditions are healthy.
 
 ### Tracker stopped
 
-**Meaning:** no successful official fetch for 600 seconds, excluding the
-04:55 to 05:00 UTC Reset pause. With no success yet, the clock starts at the
-first check; unavailable metrics do not stop it.
+Use the [fetch-gap condition](deployment.md#alert-conditions), which accounts
+for the Reset pause and a tracker that has never fetched successfully.
 
 **First checks:** `./ops logs collector --since '15 minutes ago' --no-pager`,
 then the daily status, fetch-age and queue checks. Look for stopped services,
@@ -88,14 +86,13 @@ connection or authentication failures, or a full spool.
 Check database and worker logs if their failures block collection. Escalate a
 continued gap after 05:00 UTC; Reset does not excuse an indefinite outage.
 
-**Recovered:** fetch age drops below 600 seconds and keeps refreshing as
-tracking runs, followed by the Discord recovery message.
+**Recovered:** successful fetches resume and keep advancing, followed by the
+Discord recovery message. Interpret fetch age using the linked Reset rule.
 
 ### Disk or spool over 80%
 
-**Meaning:** spool bytes or object count exceeds 80% of its configured cap,
-or the filesystem containing the spool or PostgreSQL data exceeds 80% used.
-Exactly 80% does not trigger.
+Compare all four measurements with the
+[capacity condition](deployment.md#alert-conditions).
 
 **First checks:** repeat the daily metrics, `df` and `./ops queue-status`;
 read `./ops logs collector --since '1 hour ago' --no-pager` and
@@ -107,15 +104,14 @@ escalate for an approved collection pause or extra space before the disk fills.
 Never delete retained raw responses, spool files or unarchived WAL to silence it.
 Use [failed-work inspection and approved retries](deployment.md#failed-work).
 
-**Recovered:** both spool measures and both filesystem measures are at or below
-80% and remain stable or fall. Missing measurements cannot clear this alert.
+**Recovered:** all four measurements are within the linked limits and remain
+stable or fall, followed by the Discord recovery message.
 
 ### Service restart loop
 
-**Meaning:** any one `clashlens-*.service` has more than three automatic
-restarts in the preceding hour. This also matches preview units such as
-`clashlens-preview-api.service`; identify the unit before treating it as a
-production failure:
+The [restart condition](deployment.md#alert-conditions) also matches preview
+units such as `clashlens-preview-api.service`; identify the unit before treating
+it as a production failure:
 
 ```sh
 journalctl --user --user-unit='clashlens-*.service' --since '1 hour ago' \
@@ -130,16 +126,15 @@ with the affected production service. For a preview unit, use `journalctl --user
 Repair its reported configuration, resource or dependency failure before an
 approved restart. Do not clear journal history.
 
-**Recovered:** the service stays healthy and no service has more than three
-automatic restarts in the rolling hour. Recovery can wait for old events to
-leave that window even after the cause is fixed.
+**Recovered:** the service stays healthy and restart counts return within the
+linked limit, followed by the Discord recovery message. Recovery can wait for
+old events to leave that window even after the cause is fixed.
 
 ### Backup failed or stale
 
-**Meaning:** `./ops backup-status` failed. Causes include a failed backup
-service, inactive timer, missing or unreachable backups, newest backup older
-than eight days, disabled WAL archiving, or completed WAL awaiting upload for
-more than ten minutes.
+**Meaning:** `./ops backup-status` failed. Use the
+[backup failure conditions](deployment.md#postgresql-backups-and-recovery)
+to interpret its error. WAL is PostgreSQL's change log.
 
 **First checks:** `./ops backup-status`,
 `./ops logs backup --since '8 days ago' --no-pager`, and
@@ -152,14 +147,13 @@ A failed scheduled service must also be recovered, not just hidden by a manual
 backup. A changed-release refusal needs an approved release repair; never bypass
 the check or edit its saved fingerprint. Follow [backup operations](deployment.md#postgresql-backups-and-recovery).
 
-**Recovered:** `backup-status` succeeds with a fresh remote backup, active timer,
-no failed backup service and no overdue WAL. A backup listing does not prove restore.
+**Recovered:** `backup-status` succeeds and the Discord recovery arrives.
+A backup listing does not prove restore.
 
 ### Data reads failing
 
-**Meaning:** readiness or an actual private player-search read failed, including
-when the processes themselves look healthy. This check does not cover every
-player page or army analytics query.
+Use the [private-read condition](deployment.md#alert-conditions). This check
+does not cover every player page or army analytics query.
 
 **First checks:** repeat the daily private probe, then
 `./ops logs api --since '15 minutes ago' --no-pager` and
@@ -174,14 +168,12 @@ Discord recovery arrives. Website `/healthz` alone is insufficient.
 
 ### When alerts themselves fail
 
-Use the daily timer status and alert journal commands. Delivery errors remain
-pending and retry on later runs. Check connectivity and the secret file's owner
-and permissions through the [alert configuration guide](deployment.md#private-discord-alerts),
-without displaying its contents. Never delete alert state to force a recovery.
-The checker cannot notify while rogue, its service manager or network is down.
-An intentional `./ops down` suppresses checks until a successful `./ops up`;
-stopping the target directly also stops its timer. After an outage, confirm
-services, timers, measurements and any pending recovery delivery.
+Use the daily timer status and alert journal commands. Check connectivity and
+the secret file's owner and permissions through the
+[alert configuration guide](deployment.md#private-discord-alerts), without
+displaying its contents. Follow its delivery and outage rules; never delete
+alert state to force a recovery. After an outage, confirm services, timers,
+measurements and any pending recovery delivery.
 
 ## Restore
 

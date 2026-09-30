@@ -365,33 +365,30 @@ intentional stop and stops the timer; manual checks also stay quiet until a
 successful `./ops up`. Checks also stay quiet while `up` starts the stack.
 Time deliberately stopped does not count as a fetch gap.
 
-The thresholds and first response steps are:
+### Alert conditions
+
+The thresholds below define when alerts fire. For investigation and recovery,
+use the [operating notes](operating.md#respond-to-alerts).
 
 - No successful official API fetch for **600 seconds**, excluding time within
   **04:55–05:00 UTC**. This uses the collector's persisted last-success age.
   With no success yet, the clock starts at the first check. Missing metrics
   continue that clock and fail the check. Reset collection after 05:00 must
   still progress; an unfinished Reset sweep does not suppress alerts forever.
-  Start with `./ops logs collector`.
 - Spool bytes above **80% of `CLASHLENS_SPOOL_MAX_BYTES`**, spool objects above
   **80% of `CLASHLENS_SPOOL_MAX_OBJECTS`**, or either filesystem holding the spool
   or PostgreSQL volume above **80% used**. Exactly 80% does not trigger.
-  Start with `./ops queue-status`, then inspect filesystem usage. Do not delete
-  kept responses to clear the alert.
 - **More than three automatic restarts of any one Clash Lens service in the
   preceding hour**, counted from systemd's structured restart journal events.
   Counter resets and checker restarts do not erase this history. Keep at least
-  one hour of user journal history. Start with `./ops logs`.
-- **Any failure of `./ops backup-status`**, including an inactive backup timer,
-  a failed backup service, no completed backup, a newest backup older than
-  **691,200 seconds / eight days**, or a pending database recovery-log upload
-  older than **ten minutes**. The alert check invokes that existing command;
-  it does not duplicate the backup policy. Start with `./ops backup-status`.
+  one hour of user journal history.
+- **Any failure of `./ops backup-status`**. The alert check invokes the existing
+  command; [backup operations](#postgresql-backups-and-recovery) documents its failure
+  conditions and freshness limits.
 - **A failed private player-data read**, including when process readiness says
   healthy. The check enters the private API container, checks `/readyz`, and
   signs a `/v1/players/search` read limited to one result. Keys stay inside the
   container and response data is discarded. An empty search result is valid.
-  Start with `./ops logs api`.
 
 Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.
