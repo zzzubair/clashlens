@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-import { websiteHealthUrl, websiteOrigin } from "./tests/fixtures/test-values";
+import { websiteOrigin } from "./tests/fixtures/test-values";
 
 const externalStack = process.env.CLASHLENS_E2E_EXTERNAL_STACK === "1";
 
@@ -24,7 +24,8 @@ export default defineConfig({
         {
           command: "../dev e2e-server",
           cwd: ".",
-          url: websiteHealthUrl,
+          // The health page responds before the first player and login fixtures are ready.
+          wait: { stdout: /Clash Lens is ready at / },
           reuseExistingServer: false,
           timeout: 300_000,
           // Let dev's trap stop the pod and remove its disposable volumes.

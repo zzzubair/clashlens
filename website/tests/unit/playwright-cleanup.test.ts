@@ -11,7 +11,7 @@ const require = createRequire(import.meta.url);
 const playwright = require.resolve("@playwright/test");
 const cli = join(dirname(require.resolve("@playwright/test/package.json")), "cli.js");
 
-it.each(["failure", "cancellation"])(
+it.each(["failure", "cancellation", "readiness"])(
   "lets the development server clean up after browser-test %s",
   async (outcome) => {
     vi.stubEnv("CLASHLENS_E2E_EXTERNAL_STACK", "0");
@@ -25,6 +25,7 @@ it.each(["failure", "cancellation"])(
     const directory = mkdtempSync(join(tmpdir(), "clashlens-e2e-cleanup-"));
     const started = join(directory, "test-started");
     const stopped = join(directory, "server-stopped");
+    const ready = join(directory, "player-ready");
     const listener = createServer();
     await new Promise<void>((resolve) => listener.listen(0, "127.0.0.1", resolve));
     const address = listener.address();
@@ -39,6 +40,10 @@ it.each(["failure", "cancellation"])(
       `const fs = require('node:fs');
        const server = require('node:http').createServer((_, response) => response.end('ok'));
        server.listen(${port}, '127.0.0.1');
+       setTimeout(() => {
+         fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
+         console.log('Clash Lens is ready at http://127.0.0.1:${port}');
+       }, 2000);
        process.on('SIGTERM', () => {
          fs.writeFileSync(${JSON.stringify(stopped)}, 'SIGTERM');
          server.close(() => process.exit(0));
@@ -48,8 +53,9 @@ it.each(["failure", "cancellation"])(
       join(directory, "cleanup.spec.cjs"),
       `const { test } = require(${JSON.stringify(playwright)});
        test('cleanup probe', async () => {
-         require('node:fs').writeFileSync(${JSON.stringify(started)}, 'started');
-         ${outcome === "failure" ? "throw new Error('Expected test failure');" : "await new Promise(() => {});"}
+         const fs = require('node:fs');
+         fs.writeFileSync(${JSON.stringify(started)}, fs.existsSync(${JSON.stringify(ready)}) ? 'ready' : 'early');
+         ${outcome === "failure" ? "throw new Error('Expected test failure');" : outcome === "cancellation" ? "await new Promise(() => {});" : ""}
        });`,
     );
     const configFile = join(directory, "playwright.config.cjs");
@@ -62,9 +68,10 @@ it.each(["failure", "cancellation"])(
           ...webServer,
           command: `"${process.execPath}" "${server}"`,
           cwd: directory,
-          url: `http://127.0.0.1:${port}`,
+          ...(webServer?.url ? { url: `http://127.0.0.1:${port}` } : {}),
         },
-      })};`,
+      })};
+      ${webServer?.wait?.stdout ? `module.exports.webServer.wait = { stdout: new RegExp(${JSON.stringify(webServer.wait.stdout.source)}) };` : ""}`,
     );
     const child = spawn(process.execPath, [cli, "test", "--config", configFile], {
       cwd: directory,
@@ -83,7 +90,10 @@ it.each(["failure", "cancellation"])(
         expect(existsSync(started)).toBe(true);
         child.kill("SIGINT");
       }
-      expect(await closed).not.toBe(0);
+      const code = await closed;
+      if (outcome === "readiness") expect(code).toBe(0);
+      else expect(code).not.toBe(0);
+      expect(readFileSync(started, "utf8")).toBe("ready");
       expect(readFileSync(stopped, "utf8")).toBe("SIGTERM");
     } finally {
       if (child.exitCode === null) {

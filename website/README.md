@@ -80,10 +80,12 @@ the real Python application against loopback-only Clash, archive, Google, and
 Discord fixtures. They never call Google, Discord, Supercell, production data,
 or cloud storage.
 
-When the browser tests start their own stack, Playwright sends SIGTERM on
-shutdown so `dev` can remove that stack and its disposable database, archive,
-and spool volumes. With `CLASHLENS_E2E_EXTERNAL_STACK=1`, the caller owns stack
-startup and cleanup instead.
+When the browser tests start their own stack, Playwright waits for `dev` to print
+`Clash Lens is ready at`, after the first player page and both login fixtures are
+ready. The website health page alone does not prove those are ready. Playwright
+sends SIGTERM on shutdown so `dev` can remove that stack and its disposable
+database, archive, and spool volumes. With `CLASHLENS_E2E_EXTERNAL_STACK=1`, the
+caller owns stack startup and cleanup instead.
 
 ## Runtime interface
 
@@ -223,7 +225,9 @@ The linking form includes the in-game API token instructions.
 
 Usernames are fixed after signup. Both the website action and private API reject
 rename attempts; display-name edits still work. The form directs username-change
-requests to support. Search accepts Clash Lens usernames (with or without `@`),
+requests to support. Account setup preserves names typed before the page's
+JavaScript loads and validates the current form values when submitted.
+Search accepts Clash Lens usernames (with or without `@`),
 display names and linked Clash of Clans player names. Results expose only public
 names, usernames and linked-account counts, never saved players or private groups.
 
