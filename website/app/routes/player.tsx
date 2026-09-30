@@ -223,7 +223,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     (data.refreshStatus?.tag === data.requestedTag ? data.refreshStatus : null);
   const refreshedPlayer =
     visibleStatus && "player" in visibleStatus && visibleStatus.tag === data.requestedTag
-      ? visibleStatus.player
+      ? (visibleStatus as RefreshStatus).player
       : null;
   const player = refreshedPlayer ?? data.player;
   const trackedPlayer = player?.trackingState === "tracking" ? player : null;

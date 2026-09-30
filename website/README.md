@@ -8,14 +8,22 @@ without a button or sign-in. The existing interactive collector retains the
 profile, battle log and league history; existing profile processing activates
 eligible Legend I players. Progress waits for processed evidence. Official
 not-found, temporary failure and uncertain eligibility have distinct messages.
-Known real players reuse their eligibility result on visits. Failed or negative
-checks offer a retry with the existing 30-second minimum interval, and admission
-shares Refresh's six-per-minute allowance and unchanged address handling.
+Known real players reuse their eligibility result on visits. Failed checks and
+tags reported as not found offer a retry with the existing 30-second minimum
+interval. Starting a check shares Refresh's six-per-minute allowance and unchanged
+address handling. With JavaScript enabled, the page checks progress once a second
+for up to 60 seconds, then explains that the check may still be running. A result
+that arrives after that limit still replaces the waiting message. The Check
+progress link also works without JavaScript.
 
 Name results include active players or players with recorded history. Empty
 day records marked `player_not_eligible` do not count as history unless they
-contain battles. Non-Legend-I pages show the explanation and saved history,
-without current-profile controls. This adds no weekly recheck or clan discovery
+contain battles. A full current profile and Refresh appear only when the displayed
+player response itself confirms active tracking, including after Refresh. Other
+pages show the eligibility explanation or lookup error and any saved history.
+Saved daily history combines available season, recent and current-day records
+without duplicate dates. Records with unconfirmed season membership show Date
+only instead of a season day number. This adds no weekly recheck or clan discovery
 and does not enable production discovery. The [product map](../docs/product-status.md)
 tracks the remaining launch work.
 
