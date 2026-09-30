@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import pairwise
 from pathlib import Path
 from statistics import median
-from time import monotonic
+from time import monotonic, sleep
 from typing import ClassVar
 from urllib.parse import unquote, urlsplit
 
@@ -26,6 +26,7 @@ ARCHIVE_BUCKET = "evidence"
 ARCHIVE_MARKER_KEY = "clashlens/archive-instance.json"
 ARCHIVE_MARKER_BODY = b'{"fixture":"clashlens-dev-archive-v1"}\n'
 VERIFY_TOKEN_PREFIX = "VERIFY-"
+LOOKUP_TAGS = {"#LQQP": "eligible", "#LQQY": "ineligible", "#LQQG": "uncertain", "#LQQJ": "failed"}
 
 
 def tag_for(index: int) -> str:
@@ -286,6 +287,24 @@ class ClashHandler(QuietHandler):
             else suffix[: -len("/leaguehistory")] if league_history else suffix
         )
         index = self.tag_indexes.get(tag.upper())
+        lookup = LOOKUP_TAGS.get(tag.upper())
+        if lookup is not None:
+            if battle_log or league_history:
+                self.send_json(200, {"items": [], "paging": {"cursors": {}}})
+            else:
+                sleep(2)  # Keep first-lookup progress observable in browser checks.
+                if lookup == "failed":
+                    self.send_json(503, {"reason": "maintenance"})
+                else:
+                    payload = profile_payload(tag.upper(), 0)
+                    payload["name"] = f"Lookup {lookup} Clasher"
+                    payload["townHallLevel"] = 1
+                    if lookup == "ineligible":
+                        payload["leagueTier"] = {"id": 105000035, "name": "Legend II"}
+                    elif lookup == "uncertain":
+                        payload.pop("leagueTier")
+                    self.send_json(200, payload)
+            return
         if index is None:
             self.send_json(404, {"reason": "notFound"})
         elif battle_log:

@@ -244,6 +244,18 @@ export interface RankedDaySummary {
   uncertainty: string[];
 }
 
+export interface PlayerLookup {
+  tag: string;
+  state:
+    | "unknown"
+    | "checking"
+    | "tracking"
+    | "not_found"
+    | "not_in_legend"
+    | "uncertain"
+    | "failed";
+}
+
 export interface PlayerPage {
   kind: "player-page";
   tag: string;

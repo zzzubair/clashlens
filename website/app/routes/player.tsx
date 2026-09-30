@@ -16,6 +16,7 @@ import type {
   HistoricalSeasonDayEntry,
   HistoricalSeasonSummary,
   PlayerPage,
+  PlayerLookup,
   RankedBattleEvent,
   RankedDaySummary,
   RefreshError,
@@ -37,6 +38,8 @@ export interface PlayerLoaderData {
   selectedSeason: string | null;
   historical: HistoricalSeasonSummary | null;
   historicalError: WebsiteErrorResponse | null;
+  lookup: PlayerLookup | null;
+  lookupError: WebsiteErrorResponse | null;
 }
 
 export async function loader({
@@ -63,6 +66,8 @@ export async function loader({
       selectedSeason: null,
       historical: null,
       historicalError: null,
+      lookup: null,
+      lookupError: null,
     };
   }
   const canonicalPath = canonicalPlayerPath(normalizedTag);
@@ -81,7 +86,8 @@ export async function loader({
   const client = import("../services/python.server").then(({ createPythonClient }) =>
     createPythonClient(),
   );
-  const [playerResult, seasonsResult, historicalResult, refreshResult] =
+  const lookupClient = import("../services/player-lookup.server");
+  const [playerResult, seasonsResult, historicalResult, refreshResult, lookupResult] =
     await Promise.allSettled([
       client.then((api) => api.getPlayer(normalizedTag)),
       client.then((api) => api.getPlayerSeasons(normalizedTag)),
@@ -91,7 +97,34 @@ export async function loader({
       validWorkId
         ? client.then((api) => api.getRefreshStatus(workId, normalizedTag))
         : Promise.resolve(null),
+      lookupClient.then(async (api) => {
+        let lookup = await api.getPlayerLookup(normalizedTag);
+        let error: WebsiteErrorResponse | null = null;
+        if (
+          lookup?.state === "unknown" ||
+          (url.searchParams.has("retry") &&
+            ["failed", "not_found"].includes(lookup?.state ?? ""))
+        ) {
+          try {
+            lookup = await api.startPlayerLookup(request, normalizedTag);
+          } catch (cause) {
+            error = await safeError(cause);
+          }
+        }
+        return { lookup, error };
+      }),
     ]);
+  const lookup = lookupResult.status === "fulfilled" ? lookupResult.value.lookup : null;
+  const lookupError =
+    lookupResult.status === "fulfilled"
+      ? lookupResult.value.error
+      : await safeError(lookupResult.reason);
+  if (url.searchParams.has("retry") && lookupError === null) {
+    url.searchParams.delete("retry");
+    throw redirect(`${canonicalPath}${url.search}`, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
   const player = playerResult.status === "fulfilled" ? playerResult.value : null;
   const error =
     playerResult.status === "rejected" ? await safeError(playerResult.reason) : null;
@@ -120,6 +153,8 @@ export async function loader({
     selectedSeason,
     historical,
     historicalError,
+    lookup,
+    lookupError,
   };
 }
 
@@ -157,6 +192,19 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const [workId, setWorkId] = useState<string | null>(null);
   const [lastStatus, setLastStatus] = useState<RefreshStatus | RefreshWork | null>(null);
   const [pollingError, setPollingError] = useState<WebsiteErrorResponse | null>(null);
+  const [lookupTimedOut, setLookupTimedOut] = useState(false);
+  const lookupStartedAt = useRef(Date.now());
+  const isChecking =
+    data.lookup?.state === "checking" ||
+    (data.lookup?.state === "tracking" && data.player === null);
+  useEffect(() => {
+    if (!isChecking || lookupTimedOut) return;
+    const timer = setInterval(() => {
+      if (Date.now() - lookupStartedAt.current >= 60_000) setLookupTimedOut(true);
+      else if (revalidator.state === "idle") revalidator.revalidate();
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isChecking, lookupTimedOut, revalidator]);
 
   useEffect(() => {
     const status = data.refreshStatus;
@@ -244,7 +292,8 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     if (
       navigation?.type !== "reload" ||
       new URL(navigation.name).pathname !== window.location.pathname ||
-      data.player === null
+      data.player === null ||
+      data.lookup?.state !== "tracking"
     )
       return;
     refreshFetcher.submit(
@@ -326,6 +375,39 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     };
   }, [player?.tag, refreshResourcePath, revalidator, terminalState, workId]);
 
+  if (data.lookup && (data.lookup.state !== "tracking" || player === null)) {
+    const savedDays =
+      player?.seasonDays.filter(
+        (day) =>
+          !day.uncertainty.includes("player_not_eligible") ||
+          day.offenseEvents.length > 0 ||
+          day.defenseEvents.length > 0,
+      ) ?? [];
+    return (
+      <main id="main-content" tabIndex={-1} className="page-shell player-page">
+        <h1>{data.requestedTag}</h1>
+        <LookupNotice lookup={data.lookup} timedOut={lookupTimedOut} />
+        {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
+        <SeasonNav
+          tag={data.lookup.tag}
+          seasons={data.seasons}
+          selectedSeason={data.selectedSeason}
+          currentAvailable={player !== null}
+        />
+        {data.historicalError ? <ErrorNotice error={data.historicalError} /> : null}
+        {data.historical ? <HistoricalSeasonPanel summary={data.historical} /> : null}
+        {data.selectedSeason === null && savedDays.length > 0 ? (
+          <section className="data-section" aria-label="Saved Legend history">
+            <h2>Saved Legend history</h2>
+            {savedDays.map((day) => (
+              <LegendDay key={day.period} day={day} selectedDay={selectedDay} />
+            ))}
+          </section>
+        ) : null}
+      </main>
+    );
+  }
+
   if (player === null) {
     if (data.selectedSeason !== null && data.historical !== null) {
       return (
@@ -374,6 +456,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     return (
       <main id="main-content" tabIndex={-1} className="page-shell narrow-page">
         <h1>Player data unavailable</h1>
+        {data.lookupError ? <ErrorNotice error={data.lookupError} /> : null}
         {data.error ? <ErrorNotice error={data.error} /> : null}
         <p>Try refreshing the page in a moment.</p>
       </main>
@@ -450,6 +533,9 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
 
       {visibleRefreshError ? <ErrorNotice error={visibleRefreshError} /> : null}
       {visibleStatus ? <RefreshProgress status={visibleStatus} /> : null}
+      {data.lookup?.state === "tracking" ? (
+        <p role="status">Now tracking in Legend I.</p>
+      ) : null}
       <SeasonNav
         tag={player.tag}
         seasons={data.seasons}
@@ -507,6 +593,39 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         </section>
       )}
     </main>
+  );
+}
+
+function LookupNotice({ lookup, timedOut }: { lookup: PlayerLookup; timedOut: boolean }) {
+  const messages: Record<PlayerLookup["state"], string> = {
+    unknown: "Waiting to check this tag with Clash of Clans.",
+    checking:
+      "Checking this tag with Clash of Clans. Legend I players start tracking automatically.",
+    tracking: "Now tracking in Legend I. The first results are being prepared.",
+    not_found:
+      "Player not found. Clash of Clans did not find this tag. Check the tag and try again.",
+    not_in_legend:
+      "This player is not in Legend I. We have kept the tag and any saved history.",
+    uncertain:
+      "This player exists, but we could not confirm their Legend I eligibility. Any saved history is still available.",
+    failed:
+      "We could not finish checking this tag. This does not mean the player is missing or outside Legend I.",
+  };
+  return (
+    <section aria-label="Player lookup" aria-live="polite">
+      <p>
+        {timedOut
+          ? "The check is taking longer than expected. It may still be running."
+          : messages[lookup.state]}
+      </p>
+      {lookup.state === "checking" || lookup.state === "tracking" ? (
+        <a href={canonicalPlayerPath(lookup.tag)}>Check progress</a>
+      ) : lookup.state === "failed" ||
+        lookup.state === "not_found" ||
+        lookup.state === "unknown" ? (
+        <a href={`${canonicalPlayerPath(lookup.tag)}?retry=1`}>Try again</a>
+      ) : null}
+    </section>
   );
 }
 

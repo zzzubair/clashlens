@@ -124,3 +124,18 @@ describe("home search loading", () => {
     expect(result.error?.error.code).toBe("unavailable");
   });
 });
+
+it("submitting a normalized exact tag opens its automatic lookup page", async () => {
+  await expect(
+    homeLoader({
+      request: new Request("https://clashlens.example/?q=%20%23lqqp%20"),
+    } as never),
+  ).rejects.toMatchObject({ status: 302 });
+  try {
+    await homeLoader({
+      request: new Request("https://clashlens.example/?q=%23lqqp"),
+    } as never);
+  } catch (response) {
+    expect((response as Response).headers.get("Location")).toBe("/players/%23LQQP");
+  }
+});

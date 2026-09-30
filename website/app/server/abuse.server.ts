@@ -4,6 +4,15 @@ const MAX_TRACKED_IDENTITIES = 10_000;
 
 const attempts = new Map<string, { count: number; resetAt: number }>();
 
+export function allowPublicPlayerRequest(request: Request): boolean {
+  const forwardedFor =
+    process.env.CLASHLENS_TRUST_PROXY === "true"
+      ? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+      : undefined;
+  const identity = forwardedFor || "local-public-client";
+  return allowPublicRefresh(identity);
+}
+
 export function allowPublicRefresh(identity: string, now = Date.now()): boolean {
   for (const [key, value] of attempts) {
     if (value.resetAt <= now) attempts.delete(key);

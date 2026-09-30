@@ -1340,10 +1340,16 @@ class CollectorDatabase:
             UPDATE collector_work
             SET {status_column} = 'observed',
                 {observation_column} = %s,
+                status = CASE WHEN kind = 'initial_collection' AND %s
+                              THEN 'failed' ELSE status END,
+                failure_category = CASE WHEN kind = 'initial_collection' AND %s
+                                        THEN 'player_not_found' ELSE failure_category END,
                 updated_at = clock_timestamp()
             WHERE id = %s
             """,
-            (observation_id, handoff.collector_work_id),
+            (observation_id, handoff.endpoint == 'profile' and handoff.http_status == 404,
+             handoff.endpoint == 'profile' and handoff.http_status == 404,
+             handoff.collector_work_id),
         )
 
     def record_transport_failure(self, failure: TransportFailure) -> int:

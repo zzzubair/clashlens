@@ -9,6 +9,13 @@ import {
 
 const mocks = vi.hoisted(() => ({
   createPythonClient: vi.fn(),
+  getPlayerLookup: vi.fn(),
+  startPlayerLookup: vi.fn(),
+}));
+
+vi.mock("../../app/services/player-lookup.server", () => ({
+  getPlayerLookup: mocks.getPlayerLookup,
+  startPlayerLookup: mocks.startPlayerLookup,
 }));
 
 vi.mock("../../app/services/python.server", async (importOriginal) => {
@@ -128,6 +135,8 @@ function requestFor(season: string | null) {
 describe("player route historical independence", () => {
   beforeEach(() => {
     mocks.createPythonClient.mockReset();
+    mocks.getPlayerLookup.mockReset().mockResolvedValue(null);
+    mocks.startPlayerLookup.mockReset();
   });
 
   it("returns the compact season even when the current profile is unavailable", async () => {
@@ -258,6 +267,8 @@ describe("player route historical independence", () => {
       refreshStatus: null,
       refreshError: null,
       noJsIdempotencyKey: "test-idempotency-key",
+      lookup: null,
+      lookupError: null,
       seasons: SEASONS,
       selectedSeason: "missing",
       historical: null,
@@ -310,6 +321,8 @@ describe("player route historical independence", () => {
       refreshStatus: null,
       refreshError: null,
       noJsIdempotencyKey: "test-idempotency-key",
+      lookup: null,
+      lookupError: null,
       seasons: [],
       selectedSeason: null,
       historical: null,
@@ -342,4 +355,84 @@ describe("player route historical independence", () => {
       expect(getPlayerSeason).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("automatic tag lookup", () => {
+  beforeEach(() => {
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi.fn().mockRejectedValue(new PythonApiError(404, {})),
+      getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+      getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+    });
+    mocks.startPlayerLookup
+      .mockReset()
+      .mockResolvedValue({ tag: TAG, state: "checking" });
+  });
+
+  it("starts a new tag during server rendering without a button or account", async () => {
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "unknown" });
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    expect(result.lookup?.state).toBe("checking");
+    expect(mocks.startPlayerLookup).toHaveBeenCalledOnce();
+    const html = await renderRoute(result);
+    expect(html).toContain("Checking this tag");
+    expect(html).not.toContain("Start tracking");
+    expect(html).toContain("Check progress");
+  });
+
+  it.each([
+    ["not_found", "Player not found"],
+    ["not_in_legend", "not in Legend I"],
+    ["uncertain", "could not confirm"],
+    ["failed", "could not finish checking"],
+  ])(
+    "shows %s honestly and preserves saved seasons without another lookup",
+    async (state, message) => {
+      mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state });
+      const result = await playerLoader({
+        request: requestFor(SEASON),
+        params: { tag: TAG },
+      } as never);
+      const html = await renderRoute(result);
+      expect(html).toContain(message);
+      expect(html).toContain("Historical seasons");
+      expect(html).not.toContain("Current trophies");
+      expect(mocks.startPlayerLookup).not.toHaveBeenCalled();
+    },
+  );
+
+  it("hides the old current profile when newer evidence says the player left Legend I", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi.fn().mockResolvedValue(PLAYER),
+      getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
+      getPlayerSeason: vi.fn().mockResolvedValue(SUMMARY),
+    });
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "not_in_legend" });
+    const result = await playerLoader({
+      request: requestFor(SEASON),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain("not in Legend I");
+    expect(html).not.toContain("Current trophies");
+    expect(html).not.toContain('class="player-refresh-form"');
+    expect(html).toContain("Historical seasons");
+  });
+
+  it("shows a limit refusal without claiming the check started", async () => {
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "unknown" });
+    mocks.startPlayerLookup.mockRejectedValue(
+      new PythonApiError(429, { error: "rate_limited" }),
+    );
+    const result = await playerLoader({
+      request: requestFor(null),
+      params: { tag: TAG },
+    } as never);
+    expect(result.lookup?.state).toBe("unknown");
+    expect(result.lookupError?.error.code).toBe("rate_limited");
+    expect(await renderRoute(result)).toContain("Waiting to check");
+  });
 });

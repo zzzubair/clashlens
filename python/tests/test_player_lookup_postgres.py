@@ -1,0 +1,200 @@
+from __future__ import annotations
+
+import json
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import psycopg
+import pytest
+from domain_test_support import store_observation
+from psycopg.conninfo import make_conninfo
+from test_api_db_public_ops import NOW, anonymous_binding, seed_profile
+from test_api_migration import migrated_production_database
+from test_collector_db_postgres import _handoff, _hash
+from test_domain_processing_postgres import _processor
+
+from clashlens import api_player_lookup, api_players
+from clashlens.api_db import ApiDatabase
+from clashlens.collector_db import CollectorDatabase
+from clashlens.profile import PROFILE_PARSER_VERSION
+
+
+def submit(database: ApiDatabase, tag: str = "#2PP"):
+    return api_player_lookup.submit_lookup(
+        database,
+        anonymous_binding("refresh.submit", f"/v1/players/{tag}/lookup", tag),
+        normalized_tag=tag,
+    ).payload
+
+
+def test_concurrent_anonymous_lookups_schedule_one_immediate_interactive_first_collection(
+    database_url,
+):
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        # Run admission with the deployed API role, not migration-owner powers.
+        with psycopg.connect(info) as connection:
+            schema = connection.execute("SELECT current_schema()").fetchone()[0]
+        database = ApiDatabase(
+            make_conninfo(
+                info, options=f"-c search_path={schema} -c role=clashlens_python_api"
+            )
+        )
+        try:
+            assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "unknown"
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                results = list(pool.map(lambda _: submit(database), range(8)))
+            assert all(
+                result == {"tag": "#2PP", "state": "checking"} for result in results
+            )
+            assert database.scalar("SELECT count(*) FROM players") == 1
+            assert database.scalar("SELECT count(*) FROM collector_work") == 1
+            with database.pool.connection() as connection:
+                row = connection.execute(
+                    "SELECT kind, lane, due_at <= clock_timestamp(), league_history_status FROM collector_work"
+                ).fetchone()
+                assert row == ("initial_collection", "interactive", True, "pending")
+            collector = CollectorDatabase(info)
+            try:
+                assert len(collector.pending_intents(10, interactive=True)) == 1
+                assert collector.pending_intents(10, interactive=False) == []
+            finally:
+                collector.close()
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize(
+    ("tier", "state", "active"),
+    [
+        ({"id": 105000036, "name": "Legend I"}, "tracking", True),
+        ({"id": 105000035, "name": "Legend II"}, "not_in_legend", False),
+        (None, "uncertain", False),
+        ({"id": 123, "name": "Unknown tier"}, "uncertain", False),
+    ],
+)
+def test_first_profile_retains_real_identity_and_uses_existing_eligibility(
+    database_url, archive_server, tier, state, active
+):
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        worker, processor = _processor(info, archive_server)
+        try:
+            assert submit(database)["state"] == "checking"
+            body = json.loads(
+                (
+                    Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json"
+                ).read_bytes()
+            )
+            body["leagueTier"] = tier
+            body["townHallLevel"] = 1
+            store_observation(
+                info,
+                archive_server,
+                occurrence_key="lookup-profile",
+                endpoint="profile",
+                body=json.dumps(body).encode(),
+                observed_at=NOW,
+                normalized_tag="#2PP",
+                parser_version=PROFILE_PARSER_VERSION,
+            )
+            result = processor.process_once(owner="lookup-test")
+            assert result is not None and result.outcome == "processed"
+            assert api_player_lookup.get_lookup(database, "#2PP")["state"] == state
+            assert (
+                database.scalar(
+                    "SELECT active FROM players WHERE normalized_tag = '#2PP'"
+                )
+                is active
+            )
+            assert database.scalar("SELECT count(*) FROM players") == 1
+            assert submit(database)["state"] == state
+            assert (
+                database.scalar(
+                    "SELECT count(*) FROM collector_work WHERE kind = 'initial_collection'"
+                )
+                == 1
+            )
+        finally:
+            worker.close()
+            database.close()
+
+
+def test_official_not_found_is_distinct_from_transport_failure_and_retries_are_bounded(
+    database_url,
+):
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        collector = CollectorDatabase(info)
+        try:
+            assert submit(database)["state"] == "checking"
+            with database.pool.connection() as connection:
+                work_id, player_id = connection.execute(
+                    "SELECT id, player_id FROM collector_work"
+                ).fetchone()
+            collector.record_response(
+                _handoff(
+                    occurrence_key="lookup-404",
+                    response_hash=_hash("lookup-404"),
+                    player_id=player_id,
+                    collector_work_id=work_id,
+                    http_status=404,
+                )
+            )
+            assert (
+                api_player_lookup.get_lookup(database, "#2PP")["state"] == "not_found"
+            )
+            assert collector.complete_intent(work_id) is False
+            assert submit(database)["state"] == "not_found"
+            assert database.scalar("SELECT count(*) FROM collector_work") == 1
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE collector_work SET updated_at = clock_timestamp() - interval '31 seconds'"
+                )
+            assert submit(database)["state"] == "checking"
+            assert database.scalar("SELECT count(*) FROM collector_work") == 2
+            work_id = database.scalar("SELECT max(id) FROM collector_work")
+            collector.fail_intent(work_id, category="provider_failure")
+            assert api_player_lookup.get_lookup(database, "#2PP")["state"] == "failed"
+            assert database.scalar("SELECT active FROM players") is False
+            assert database.scalar("SELECT count(*) FROM player_profile_versions") == 0
+        finally:
+            collector.close()
+            database.close()
+
+
+def test_name_results_only_include_active_or_historical_players(database_url):
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        try:
+            for tag in ("#2PP", "#8PY", "#2PY"):
+                seed_profile(database, tag, 6000)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE players SET active = false, eligibility_state = 'ineligible' WHERE normalized_tag IN ('#8PY', '#2PY')"
+                )
+                connection.execute(
+                    "DELETE FROM api_player_daily_logs WHERE player_id = (SELECT id FROM players WHERE normalized_tag = '#2PP')"
+                )
+                connection.execute(
+                    "UPDATE api_player_daily_logs SET partial_reasons = '[\"player_not_eligible\"]'::jsonb WHERE player_id = (SELECT id FROM players WHERE normalized_tag = '#2PY')"
+                )
+            results = api_players.search_known_players(
+                database, "Player", now=NOW, freshness_seconds=900
+            )
+            assert {result["tag"] for result in results} == {"#2PP", "#8PY"}
+            assert (
+                api_player_lookup.get_lookup(database, "#2PY")["state"]
+                == "not_in_legend"
+            )
+            assert submit(database, "#2PY")["state"] == "not_in_legend"
+            assert database.scalar("SELECT count(*) FROM collector_work") == 3
+        finally:
+            database.close()

@@ -354,7 +354,7 @@ async function getRefreshStatus(workId: string, tag: string): Promise<RefreshSta
   return status;
 }
 
-async function requestJson<T>(
+export async function requestJson<T>(
   target: string,
   method: "GET" | "POST" | "PATCH" | "DELETE",
   body: Buffer | undefined,

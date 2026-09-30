@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Form,
   Link,
+  redirect,
   useFetcher,
   useLoaderData,
   type LoaderFunctionArgs,
@@ -10,7 +11,7 @@ import {
 import { ErrorNotice } from "../components/ErrorNotice";
 import { TrophyMark, latestObservation } from "../components/LeaderboardShared";
 import { LocalTimestamp } from "../components/Provenance";
-import { canonicalPlayerPath } from "../lib/player-tag";
+import { canonicalPlayerPath, normalizePlayerTag } from "../lib/player-tag";
 import { MAX_SEARCH_QUERY_LENGTH } from "../lib/validation";
 import type {
   SearchResponse,
@@ -33,6 +34,8 @@ export async function loader({ request }: LoaderFunctionArgs): Promise<HomeLoade
   const rawQuery = new URL(request.url).searchParams.get("q") ?? "";
   const query = rawQuery.trim();
   const invalidQuery = rawQuery.length > MAX_SEARCH_QUERY_LENGTH;
+  const exactTag = invalidQuery ? null : normalizePlayerTag(query);
+  if (exactTag) throw redirect(canonicalPlayerPath(exactTag));
   const client = import("../services/python.server").then(({ createPythonClient }) =>
     createPythonClient(),
   );
@@ -375,7 +378,7 @@ function PlayerSearchResults({ search }: { search: SearchResponse }) {
     const result = search.results.find((entry) => entry.tag === search.exactTag);
     return (
       <section>
-        <h3>Player found</h3>
+        <h3>Player tag</h3>
         {result ? (
           <SearchResult result={result} />
         ) : (
