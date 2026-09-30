@@ -242,7 +242,6 @@ AND NOT EXISTS (
   LEFT JOIN collector_response_state r ON r.player_id = w.player_id
     AND r.endpoint = 'profile' AND r.last_observation_id = w.profile_observation_id
   WHERE w.player_id = p.id
-  AND w.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
   AND (w.status IN ('pending', 'waiting_retry')
        OR (w.status IN ('complete', 'failed')
            AND greatest(o.response_completed_at, r.last_seen_at) >= c.since)
@@ -329,8 +328,7 @@ WITH latest_work AS MATERIALIZED (
   JOIN launch_tags t ON t.tag = p.normalized_tag
   LEFT JOIN collector_response_state current_profile ON current_profile.player_id = p.id
     AND current_profile.endpoint = 'profile'
-  WHERE w.kind IN ('discovery_profile', 'initial_collection', 'live_refresh')
-  AND (p.active OR w.status IN ('pending', 'waiting_retry')
+  WHERE (p.active OR w.status IN ('pending', 'waiting_retry')
     OR ((w.profile_observation_id = current_profile.last_observation_id
       OR w.profile_observation_id IS NULL)
       AND (current_profile.last_seen_at IS NULL
@@ -442,9 +440,11 @@ player. History is required for active players and when work supplying an
 inactive player's current profile fetched it. Inactive players' battle reads and
 work failures use that same association, excluding older work after a newer
 ordinary profile read. Unfinished checks and newer failed attempts remain
-unresolved. Older history from another check does not change a newly confirmed
-inactive player's result. Recent successful profile and battle reads cannot hide
-a failed history response for an active player.
+unresolved. All player checks, including Reset checks, use this selection. A
+failed or unfinished Reset check stays unresolved even after its profile confirms
+departure from Legend. Older history from another check does not change a newly
+confirmed inactive player's result. Recent successful profile and battle reads
+cannot hide a failed history response for an active player.
 
 Completion requires every tag accounted for, zero unresolved initial checks,
 and every intended Legend player active with both recent, successfully processed
@@ -595,6 +595,8 @@ reused stored profile after changed experience level, a saved league-history
 error, an unknown tier preserving older eligibility, a response crossing Monday
 Reset, a cancelled non-Legend check following an older history error, or an
 ordinary profile confirming departure after failed discovery history. The
+report also remains untested against PostgreSQL for failed or unfinished Reset
+checks, including failures after a profile confirms departure. The
 saved Monday pool, including an omitted inactive player who becomes active
 before reporting, has not been exercised against PostgreSQL either. The
 revised report's runtime for 22,157 tags is also unmeasured. Rehearse these cases
