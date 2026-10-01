@@ -41,8 +41,8 @@ def tag_for(index: int) -> str:
 
 
 def tags_for(count: int) -> tuple[str, ...]:
-    if count < 1 or count > 12_500:
-        raise ValueError("synthetic population must be between 1 and 12500 players")
+    if count < 1 or count > 13_500:
+        raise ValueError("synthetic population must be between 1 and 13500 players")
     return tuple(tag_for(index) for index in range(count))
 
 
@@ -58,6 +58,80 @@ def completed_legend_battle_time(now: datetime | None = None) -> datetime:
     if observed < reset:
         reset -= timedelta(days=1)
     return reset - timedelta(hours=17)
+
+
+# Live responses carry many fields Clash Lens ignores. Padding with them keeps
+# trial parsing, hashing and disk costs near live traffic, which on 2026-10-01
+# averaged about 23 KB per profile and 74 KB per battle log.
+_RESOURCES = ("Gold", "Elixir", "DarkElixir", "Gold2", "Elixir2", "Medals")
+PROFILE_PADDING = {
+    "achievements": [
+        {
+            "name": f"Synthetic Achievement {index}",
+            "stars": 3,
+            "value": 1_000 + index,
+            "target": 1_000,
+            "info": "Synthetic achievement description of typical length",
+            "completionInfo": f"Synthetic progress record {index}",
+            "village": "home",
+        }
+        for index in range(62)
+    ],
+    "troops": [
+        {
+            "name": f"Synthetic Troop {index}",
+            "level": 10,
+            "maxLevel": 12,
+            "village": "home",
+        }
+        for index in range(82)
+    ],
+    "heroEquipment": [
+        {
+            "name": f"Synthetic Gear {index}",
+            "level": 20,
+            "maxLevel": 27,
+            "village": "home",
+        }
+        for index in range(42)
+    ],
+    "spells": [
+        {
+            "name": f"Synthetic Spell {index}",
+            "level": 11,
+            "maxLevel": 13,
+            "village": "home",
+        }
+        for index in range(18)
+    ],
+}
+NON_LEGEND_BATTLES = [
+    {
+        "battleType": "homeVillage",
+        "attack": index % 2 == 0,
+        "armyShareCode": "h0p9e14_32-1p16e17_48u2x28-2x58-5x80s5x35-2x2",
+        "opponentPlayerTag": "#2PP",
+        "opponentName": "Synthetic Opponent",
+        "opponentTownHallLevel": 17,
+        "stars": 2,
+        "destructionPercentage": 58,
+        "lootedResources": [
+            {"name": name, "amount": 10_000 + index} for name in _RESOURCES[:3]
+        ],
+        "extraLootedResources": [
+            {"name": name, "amount": 0} for name in _RESOURCES[:3]
+        ],
+        "availableLoot": [
+            {"name": f"{name}{suffix}", "amount": 0}
+            for suffix in ("", "Banked", "Event", "Ore", "Crafting")
+            for name in _RESOURCES
+        ],
+        "battleTime": BOOTSTRAP_SEASON_START - index * 3_600,
+        "battleTimestamp": "20260101T000000.000Z",
+    }
+    # Live logs hold at most 50 entries; trial mutations insert one more.
+    for index in range(48)
+]
 
 
 def ranking_payload(tags: tuple[str, ...]) -> dict[str, object]:
@@ -95,6 +169,7 @@ def profile_payload(tag: str, index: int) -> dict[str, object]:
             "legendTrophies": 200 + index % 500,
             "currentSeason": {"trophies": 7_000 - index % 1_500},
         },
+        **PROFILE_PADDING,
     }
 
 
@@ -129,7 +204,8 @@ def battle_log_payload(
                     {"resource": "darkElixir", "amount": 8_000},
                 ],
                 "armyShareCode": "u1x0-2x1",
-            }
+            },
+            *NON_LEGEND_BATTLES,
         ]
     }
 

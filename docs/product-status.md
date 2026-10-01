@@ -78,11 +78,11 @@ The revised manual commands and their verification limits belong in
   eligibility functions. [Verification](manual-list-import-validation.md) passed
   at 22,157 synthetic tags, including overlaps and interruptions. The old
   command remains unchanged; no reusable import feature is needed for launch.
-- `./dev up` supports 200 or 12,500 fake players; `./dev trial` caps at 12,500.
-  That matches the active launch target; raising the live-player limit to
-  22,157 is not required. Measure 12,500 live players alongside a 22,157-tag
-  known pool and its weekly eligibility work. Prior 12,500-player evidence is
-  a relevant baseline, with its original revision and workload limits intact.
+- [Local development](../README.md#local-development) owns fake-player sizes,
+  trial commands and response-workload limits. Measure the actual live-player
+  population alongside the 22,157-tag known pool and its weekly eligibility
+  work. Prior 12,500-player evidence remains a historical baseline with its
+  original revision and workload limits intact.
 - The collector supports multiple keys, but `./ops` wires four regular keys
   and one separate interactive key. Each regular key has a configured allowance
   of 30 starts/second. At 12,500 active players, two requests every five minutes

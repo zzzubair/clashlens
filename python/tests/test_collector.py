@@ -197,12 +197,11 @@ class _Store:
     def deletable_hashes(self, **_kwargs: object) -> list[str]:
         return self.deletable
 
-    def delete_spool_if_deletable(self, digest: str, delete: Any) -> bool:
+    def delete_spool_if_deletable(self, digests: list[str], delete: Any) -> int:
         self.spool.events.append("locked")
-        if not delete(digest):
-            return False
-        self.marked.append(digest)
-        return True
+        deleted = [digest for digest in digests if delete(digest)]
+        self.marked.extend(deleted)
+        return len(deleted)
 
     def referenced_spool_hashes(self) -> set[str]:
         return self.referenced

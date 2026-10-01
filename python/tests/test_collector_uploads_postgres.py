@@ -86,6 +86,50 @@ def _handoff(
     )
 
 
+def test_cleanup_batch_marks_only_deleted_eligible_copies(database_url: str) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _archive_instance(connection_info)
+        database = CollectorDatabase(connection_info)
+        hashes = [_hash(letter) for letter in "abc"]
+        observations = {}
+        for index, response_hash in enumerate(hashes):
+            tag = f"#2P{'PYL'[index]}"
+            observations[response_hash] = database.record_response(
+                _handoff(
+                    occurrence_key=f"batch-{index}",
+                    response_hash=response_hash,
+                    player_id=_player(connection_info, tag),
+                    tag=tag,
+                )
+            ).observation_id
+            claim = claim_upload(database, owner="uploader", now=NOW)
+            assert claim is not None
+            complete_upload(
+                database,
+                claim,
+                archive_reference=f"s3://evidence/{index}",
+                archive_instance_id="fixture-instance",
+            )
+        deletable, protected, processing = hashes
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s"
+                " WHERE observation_id = ANY(%s)",
+                (NOW, [observations[deletable], observations[protected]]),
+            )
+        attempted: list[str] = []
+
+        def delete(candidate: str) -> bool:
+            attempted.append(candidate)
+            return candidate != protected
+
+        assert database.delete_spool_if_deletable(hashes, delete) == 1
+        assert sorted(attempted) == sorted([deletable, protected])
+        assert database.deletable_hashes(limit=10) == [protected]
+        assert deletable not in database.referenced_spool_hashes()
+        assert processing in database.referenced_spool_hashes()
+
+
 def test_upload_claim_is_fenced_and_cleanup_waits_for_processing(
     database_url: str,
 ) -> None:
@@ -141,11 +185,9 @@ def test_upload_claim_is_fenced_and_cleanup_waits_for_processing(
                 (NOW,),
             )
         assert database.deletable_hashes(limit=10) == [response_hash]
-        assert (
-            database.delete_spool_if_deletable(response_hash, lambda _: False) is False
-        )
+        assert database.delete_spool_if_deletable([response_hash], lambda _: False) == 0
         assert database.deletable_hashes(limit=10) == [response_hash]
-        assert database.delete_spool_if_deletable(response_hash, lambda _: True) is True
+        assert database.delete_spool_if_deletable([response_hash], lambda _: True) == 1
         assert database.deletable_hashes(limit=10) == []
         republished = database.record_response(
             _handoff(
@@ -812,7 +854,7 @@ def test_hash_reuse_attaches_existing_archive_without_second_upload(
                 "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s",
                 (NOW,),
             )
-        database.delete_spool_if_deletable(hash_a, lambda _: True)
+        database.delete_spool_if_deletable([hash_a], lambda _: True)
         database.record_response(
             _handoff(
                 occurrence_key="b-1",
@@ -834,7 +876,7 @@ def test_hash_reuse_attaches_existing_archive_without_second_upload(
                 "UPDATE python_processing_jobs SET status = 'complete', completed_at = %s",
                 (NOW + timedelta(minutes=5),),
             )
-        database.delete_spool_if_deletable(hash_b, lambda _: True)
+        database.delete_spool_if_deletable([hash_b], lambda _: True)
         reused = database.record_response(
             _handoff(
                 occurrence_key="a-2",
