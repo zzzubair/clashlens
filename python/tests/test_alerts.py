@@ -37,6 +37,7 @@ def runtime(tmp_path, monkeypatch):
         restarts=[],
         journal_failed=False,
         backup_failed=False,
+        backup_timeout=False,
         reads_failed=False,
         disk_used=10,
         volume_failed=False,
@@ -117,6 +118,8 @@ def runtime(tmp_path, monkeypatch):
         if "volume" in args:
             code, output = int(rt.volume_failed), str(tmp_path)
         elif "backup-status" in args:
+            if rt.backup_timeout:
+                raise subprocess.TimeoutExpired(args, timeout)
             code, output = int(rt.backup_failed), "private backup output"
         elif "--probe" in args:
             code, output = int(rt.reads_failed), "private account output"
@@ -174,7 +177,6 @@ def trigger(rt, condition, value=True):
         "spool_objects",
         "filesystem",
         "restarts",
-        "backup",
         "reads",
     ],
 )
@@ -209,13 +211,13 @@ def test_alert_and_recovery_once_across_separate_runs(runtime, condition, capsys
 @pytest.mark.parametrize("status", [302, 429, 500])
 def test_retry_keeps_original_incident_even_if_it_recovers(runtime, status, capsys):
     rt = runtime
-    trigger(rt, "backup")
+    trigger(rt, "reads")
     rt.post_status = status
     assert rt.run() == 1
     assert not rt.posts
     first = rt.attempts[0]
     rt.now += 60
-    trigger(rt, "backup", False)
+    trigger(rt, "reads", False)
     rt.post_status = 204
     assert rt.run() == 0
     assert rt.posts[0] == first
@@ -390,7 +392,7 @@ def test_network_failure_keeps_pending_and_other_conditions_still_deliver(
 ):
     rt = runtime
     trigger(rt, "tracker")
-    trigger(rt, "backup")
+    trigger(rt, "reads")
     original = alerts.request
 
     def fail_first(url, **kwargs):
@@ -409,7 +411,7 @@ def test_network_failure_keeps_pending_and_other_conditions_still_deliver(
 
 def test_concurrent_check_does_not_duplicate_pending_delivery(runtime):
     rt = runtime
-    trigger(rt, "backup")
+    trigger(rt, "reads")
     rt.state_dir.mkdir()
     with (rt.state_dir / "alerts.lock").open("w") as lock:
         alerts.fcntl.flock(lock, alerts.fcntl.LOCK_EX)
@@ -487,6 +489,37 @@ def test_timed_out_checks_do_not_leave_host_children_running(tmp_path):
 
 def test_delivery_when_discord_rejects_default_python_client(runtime):
     runtime.reject_default_client = True
-    trigger(runtime, "backup")
+    trigger(runtime, "reads")
     assert runtime.run() == 0
     assert len(runtime.posts) == 1
+
+
+def test_one_timed_out_backup_check_does_not_alert(runtime, capsys):
+    # A collector restart stalled Podman, so backup-status timed out for a few
+    # minutes and Discord got a false backup alert and recovery each time.
+    rt = runtime
+    rt.backup_timeout = True
+    assert rt.run() == 1
+    assert "Backup check timed out" in capsys.readouterr().err
+    rt.now += 60
+    rt.backup_timeout = False
+    assert rt.run() == 0
+    assert not rt.posts
+
+
+def test_backup_failing_for_fifteen_minutes_alerts_once_then_recovers(runtime):
+    rt = runtime
+    rt.backup_failed = True
+    for minute in range(15):
+        rt.backup_timeout = minute % 2 == 1
+        rt.run()
+        rt.now += 60
+    assert not rt.posts
+    rt.run()
+    assert len(rt.posts) == 1
+    assert "backup check failed" in rt.posts[0]["content"]
+    rt.now += 60
+    rt.backup_failed = rt.backup_timeout = False
+    assert rt.run() == 0
+    assert len(rt.posts) == 2
+    assert "recovered" in rt.posts[1]["content"]

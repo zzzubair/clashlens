@@ -560,9 +560,12 @@ use the [operating notes](operating.md#respond-to-alerts).
   events. Preview units (`clashlens-preview-*`) are not counted.
   Counter resets and checker restarts do not erase this history. Keep at least
   one hour of user journal history.
-- **Any failure of `./ops backup-status`**. The alert check invokes the existing
-  command; [backup operations](#postgresql-backups-and-recovery) documents its failure
-  conditions and freshness limits.
+- **`./ops backup-status` failing or timing out for 15 minutes in a row**. The
+  alert check invokes the existing command with a 25-second limit;
+  [backup operations](#postgresql-backups-and-recovery) documents its failure
+  conditions and freshness limits. A shorter failure is logged to the alert
+  service journal but not posted, because a service restart can briefly stall
+  Podman and so this command, while backups go stale only over days.
 - **A failed private player-data read**, including when process readiness says
   healthy. The check enters the private API container, checks `/readyz`, and
   signs a `/v1/players/search` read limited to one result. Keys stay inside the
@@ -574,7 +577,8 @@ Missing disk measurements or restart history never clear an existing alert.
 `alerts.json` and `alerts.lock` live under the existing private ops state
 folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
 replaced with mode 600 and contains five condition records with at most one
-pending transition each, normally under 4 KiB. It keeps no growing event history,
+pending transition each, plus when the current backup check failure began,
+normally under 4 KiB. It keeps no growing event history,
 keys, URLs, player lists or account data.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other

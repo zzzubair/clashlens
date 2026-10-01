@@ -1072,11 +1072,13 @@ class Collector:
                 ready, reason = False, "spool_io_failure"
         regular = self.regular_keys.health()
         interactive = self.interactive_keys.health()
-        try:
-            database_metrics = await asyncio.to_thread(self.database.health_metrics)
-        except psycopg.Error:
-            return 503, "text/plain", b"database_unavailable\n"
         if path == "/readyz":
+            # Only a reachable database. The /metrics counts took over 3 s on a
+            # busy database, so the health check killed the collector.
+            try:
+                await asyncio.to_thread(self._ping_database)
+            except psycopg.Error:
+                return 503, "text/plain", b"database_unavailable\n"
             healthy = ready and regular["healthy"] > 0 and interactive["healthy"] > 0
             if not ready:
                 state = reason
@@ -1088,6 +1090,10 @@ class Collector:
                 state = "ready"
             body = state.encode() + b"\n"
             return (200 if healthy else 503), "text/plain", body
+        try:
+            database_metrics = await asyncio.to_thread(self.database.health_metrics)
+        except psycopg.Error:
+            return 503, "text/plain", b"database_unavailable\n"
         stats = None
         if not self._spool_io_failed:
             try:
@@ -1150,6 +1156,11 @@ class Collector:
         for name, value in sorted(database_metrics.items()):
             lines.append(f"clashlens_collector_{name} {value}")
         return 200, "text/plain; version=0.0.4", ("\n".join(lines) + "\n").encode()
+
+    def _ping_database(self) -> None:
+        # PoolTimeout is a psycopg.Error, so a pool stuck for 2 s is unready.
+        with self.database.pool.connection(timeout=2.0) as connection:
+            connection.execute("SELECT 1")
 
     def _count(self, outcome: str) -> None:
         self.outcomes[outcome] = self.outcomes.get(outcome, 0) + 1

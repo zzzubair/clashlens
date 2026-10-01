@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Self
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -160,6 +161,7 @@ class _Store:
         self.referenced: set[str] = set()
         self.failures: list[Any] = []
         self.cooldowns: list[tuple[str, int]] = []
+        self.pool = MagicMock()
 
     def record_response(self, handoff: Any) -> object:
         assert handoff.occurrence_key in self.spool.handoffs

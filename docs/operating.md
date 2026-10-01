@@ -134,7 +134,8 @@ old events to leave that window even after the cause is fixed.
 
 ### Backup failed or stale
 
-**Meaning:** `./ops backup-status` failed. Use the
+**Meaning:** `./ops backup-status` has failed or timed out for 15 minutes in a
+row. Shorter failures appear only in `journalctl --user -u clashlens-alert.service`. Use the
 [backup failure conditions](deployment.md#postgresql-backups-and-recovery)
 to interpret its error. WAL is PostgreSQL's change log.
 

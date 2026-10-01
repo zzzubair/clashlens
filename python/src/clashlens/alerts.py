@@ -333,26 +333,40 @@ def observe(
     except (OSError, ValueError, subprocess.SubprocessError):
         errors.append("Restart history unavailable; run ./ops logs")
 
-    for name, args, timeout in (
-        ("backup", [str(root / "ops"), "backup-status"], 25),
-        (
-            "reads",
-            [
-                podman,
-                "exec",
-                "clashlens-python-api",
-                "python",
-                "-m",
-                "clashlens.alerts",
-                "--probe",
-            ],
-            25,
-        ),
-    ):
-        try:
-            findings[name] = command(args, timeout).returncode != 0
-        except (OSError, subprocess.SubprocessError):
-            findings[name] = True
+    try:
+        backup_failed = (
+            command([str(root / "ops"), "backup-status"], 25).returncode != 0
+        )
+    except subprocess.TimeoutExpired:
+        backup_failed = True
+        errors.append(
+            "Backup check timed out after 25 seconds; run ./ops backup-status"
+        )
+    except (OSError, subprocess.SubprocessError):
+        backup_failed = True
+    # Backups go stale over days. A collector restart can stall Podman, and so
+    # backup-status, for minutes; alert only on a failure lasting 15 minutes.
+    if backup_failed:
+        since = state.setdefault("backup_failing_since", now)
+        failing = now - max(since, state.get("resumed_at", 0)) >= 900
+        findings["backup"] = True if failing else None
+    else:
+        state.pop("backup_failing_since", None)
+        findings["backup"] = False
+
+    probe = [
+        podman,
+        "exec",
+        "clashlens-python-api",
+        "python",
+        "-m",
+        "clashlens.alerts",
+        "--probe",
+    ]
+    try:
+        findings["reads"] = command(probe, 25).returncode != 0
+    except (OSError, subprocess.SubprocessError):
+        findings["reads"] = True
     return findings, errors
 
 
