@@ -542,7 +542,7 @@ def test_verification_request_replay_never_binds_or_persists_a_new_token(
                     "SELECT total_budget FROM shared_api_credentials WHERE credential_fingerprint = %s",
                     (fingerprint,),
                 )
-                == 30
+                == 25
             )
         finally:
             database.close()

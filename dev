@@ -386,7 +386,7 @@ start_collector() {
     --env CLASHLENS_NORMAL_API_KEYS="$normal_api_keys" \
     --env CLASHLENS_INTERACTIVE_API_KEYS=interactive-1=dev-interactive-key \
     --env CLASHLENS_ENABLE_GLOBAL_RANKINGS=true \
-    --env CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=30 \
+    --env CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=25 \
     --env CLASHLENS_CONCURRENCY_PER_KEY=6 \
     --env CLASHLENS_HEALTH_LISTEN=127.0.0.1:8081 \
     --volume "$SPOOL_VOLUME:/spool:z" \
