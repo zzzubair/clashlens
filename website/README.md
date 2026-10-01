@@ -122,6 +122,12 @@ gives the production pod the fixed address `10.89.14.2`, which is where every
 connection to the loopback-published website port appears from, and trusts that
 address when `app.env` leaves the setting unset. An empty value trusts nothing.
 
+When upgrading, set `CLASHLENS_TRUSTED_PROXY_IP=10.89.14.2` or remove the line
+instead of keeping an old `10.89.*` pod address. `./ops up` refuses stale pod
+addresses before stopping any service. If an older example left the setting
+empty, make the same update to enable per-visitor Refresh allowances; an
+explicit empty value is preserved.
+
 Before enabling proxy trust, the ingress operator must:
 
 - Restrict the local proxy to the Cloudflare Tunnel connection, and restrict the

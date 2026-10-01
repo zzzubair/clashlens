@@ -416,6 +416,17 @@ guard_network_subnet() {
     die "network $NETWORK_NAME uses $subnets, not $NETWORK_SUBNET; run ./ops down and podman network rm $NETWORK_NAME"
 }
 
+guard_trusted_proxy_ip() {
+  [[ "$MODE" == production ]] || return 0
+  local proxy
+  proxy=$(setting CLASHLENS_TRUSTED_PROXY_IP)
+  [[ -n "$proxy" ]] || return 0
+  proxy=$(python3 -c 'import ipaddress, sys; address = ipaddress.ip_address(sys.argv[1]); print(getattr(address, "ipv4_mapped", None) or address)' "$proxy") || \
+    die "cannot validate CLASHLENS_TRUSTED_PROXY_IP; it must be a literal IP address and python3 must be available"
+  [[ "$proxy" != 10.89.* || "$proxy" == "$POD_IP" ]] || \
+    die "CLASHLENS_TRUSTED_PROXY_IP points to an old pod address; set CLASHLENS_TRUSTED_PROXY_IP=$POD_IP in app.env or remove the line"
+}
+
 guard_existing_resources() {
   local prefix resource
   for prefix in clashlens clashlens-ops-fixture; do
@@ -1116,6 +1127,7 @@ up_stack() {
   fi
   guard_generated_units
   guard_existing_resources
+  guard_trusted_proxy_ip
   guard_network_subnet
   cleanup_stale_admin_state
   ensure_linger
