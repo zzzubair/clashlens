@@ -46,8 +46,8 @@ def _upsert_army_decodes(database: Database, connection: Any, battle_ids: list[i
         """,
         (battle_ids,),
     ).fetchall()
+    decoded_rows = []
     for battle_id, evidence_id, perspective, raw_code, source_json in rows:
-        perspective = _text_value(perspective)
         source_code = (
             source_json.get("armyShareCode")
             if isinstance(source_json, dict)
@@ -73,6 +73,13 @@ def _upsert_army_decodes(database: Database, connection: Any, battle_ids: list[i
                 CATALOG_VERSION,
                 CATALOG_HASH,
             )
+        decoded_rows.append(
+            (battle_id, evidence_id, _text_value(perspective), raw_code, decoded)
+        )
+    # Write shared exact_armies rows in one fixed order so two battle logs that
+    # share armies cannot each hold one and wait for the other (deadlock).
+    decoded_rows.sort(key=lambda row: getattr(row[4], "identity_hash", None) or "")
+    for battle_id, evidence_id, perspective, raw_code, decoded in decoded_rows:
         is_decoded = isinstance(decoded, DecodedArmy)
         if is_decoded:
             exact_army_id = None
@@ -285,7 +292,8 @@ def _upsert_army_decodes(database: Database, connection: Any, battle_ids: list[i
                 ),
             )
     day_rows = connection.execute(
-        "SELECT DISTINCT ranked_day_start FROM legend_battles WHERE id = ANY(%s::bigint[])",
+        # Oldest day first: concurrent jobs must take the boundary locks in one order.
+        "SELECT DISTINCT ranked_day_start FROM legend_battles WHERE id = ANY(%s::bigint[]) ORDER BY 1",
         (battle_ids,),
     ).fetchall()
     for (day_start,) in day_rows:
