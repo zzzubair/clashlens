@@ -34,8 +34,8 @@ never calls the official API or changes the original observation.
 
 The private API and background workers may run as separate processes from the
 same Python codebase. A worker or integration failure must not take the API
-offline. The private API is also the only process allowed to make the
-separately scoped player-token verification request.
+offline. Player-token verification runs in the private API and the
+maintainer-only Discord recovery command.
 
 ### TypeScript website and browser
 

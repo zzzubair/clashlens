@@ -216,6 +216,7 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 class _ExplicitProxyHandler(urllib.request.ProxyHandler):
     def proxy_open(self, request, proxy_url, _type):
+        # Keep verification on the explicit proxy, regardless of NO_PROXY.
         proxy = urlsplit(proxy_url)
         original_type = request.type
         request.set_proxy(proxy.netloc, proxy.scheme)
