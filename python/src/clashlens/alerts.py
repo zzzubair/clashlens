@@ -209,7 +209,14 @@ def deliver(
                 if active is None or active == incident["active"]:
                     break
                 if active:
-                    incident["since"] = now
+                    incident["since"] = (
+                        max(
+                            state.get("backup_failing_since", now),
+                            state.get("resumed_at", 0),
+                        )
+                        if name == "backup"
+                        else now
+                    )
                 incident["pending"] = {"active": active, "at": now}
                 save_state(path, state)
             pending = incident["pending"]
@@ -337,22 +344,21 @@ def observe(
         backup_failed = (
             command([str(root / "ops"), "backup-status"], 25).returncode != 0
         )
-    except subprocess.TimeoutExpired:
-        backup_failed = True
+    except (OSError, subprocess.SubprocessError) as error:
         errors.append(
             "Backup check timed out after 25 seconds; run ./ops backup-status"
+            if isinstance(error, subprocess.TimeoutExpired)
+            else "Backup check could not run; run ./ops backup-status"
         )
-    except (OSError, subprocess.SubprocessError):
-        backup_failed = True
-    # Backups go stale over days. A collector restart can stall Podman, and so
-    # backup-status, for minutes; alert only on a failure lasting 15 minutes.
-    if backup_failed:
         since = state.setdefault("backup_failing_since", now)
         failing = now - max(since, state.get("resumed_at", 0)) >= 900
         findings["backup"] = True if failing else None
     else:
-        state.pop("backup_failing_since", None)
-        findings["backup"] = False
+        findings["backup"] = backup_failed
+        if backup_failed:
+            errors.append("Backup check failed; run ./ops backup-status")
+        else:
+            state.pop("backup_failing_since", None)
 
     probe = [
         podman,
