@@ -12,6 +12,7 @@ from unittest.mock import Mock
 
 import pytest
 from domain_test_support import (
+    as_api_role,
     domain_database,
     enable_direct_army_fixture,
     store_observation,
@@ -1696,7 +1697,7 @@ def test_streak_evidence_reports_exclusions_and_shielded_member_days(
             observed_at=ts2 + timedelta(minutes=1), normalized_tag="#2PP",
         )
         database, processor = _processor(ci, archive_server, monkeypatch)
-        api = ApiDatabase(ci, army_cache_capacity=2)
+        api = ApiDatabase(as_api_role(ci), army_cache_capacity=2)
         try:
             for index, job in enumerate((j1, j2)):
                 assert processor.process_job(job, owner=f"ingest-{index}").outcome in (

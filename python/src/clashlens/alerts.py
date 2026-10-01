@@ -326,7 +326,8 @@ def observe(
         counts: dict[str, int] = {}
         for line in result.stdout.splitlines():
             unit = json.loads(line).get("USER_UNIT", "")
-            if re.fullmatch(r"clashlens-[a-z0-9-]+\.service", unit):
+            # Preview units share the prefix but are not production services.
+            if re.fullmatch(r"clashlens-(?!preview-)[a-z0-9-]+\.service", unit):
                 counts[unit] = counts.get(unit, 0) + 1
         findings["restarts"] = any(count > 3 for count in counts.values())
     except (OSError, ValueError, subprocess.SubprocessError):

@@ -542,8 +542,9 @@ use the [operating notes](operating.md#respond-to-alerts).
 - Spool bytes above **80% of `CLASHLENS_SPOOL_MAX_BYTES`**, spool objects above
   **80% of `CLASHLENS_SPOOL_MAX_OBJECTS`**, or either filesystem holding the spool
   or PostgreSQL volume above **80% used**. Exactly 80% does not trigger.
-- **More than three automatic restarts of any one Clash Lens service in the
-  preceding hour**, counted from systemd's structured restart journal events.
+- **More than three automatic restarts of any one production Clash Lens service
+  in the preceding hour**, counted from systemd's structured restart journal
+  events. Preview units (`clashlens-preview-*`) are not counted.
   Counter resets and checker restarts do not erase this history. Keep at least
   one hour of user journal history.
 - **Any failure of `./ops backup-status`**. The alert check invokes the existing

@@ -10,7 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 import psycopg
-from psycopg.conninfo import make_conninfo
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.types.json import Jsonb
 
 from clashlens import army_ingestion, boundary_publication
@@ -97,6 +97,14 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
 
     monkeypatch.setattr(boundary_publication, "_enqueue_army_analytics", enqueue)
     monkeypatch.setattr(army_ingestion, "complete_army_analytics", complete)
+
+
+def as_api_role(connection_info: str) -> str:
+    """Connect as the production data-service role, not the test owner."""
+    options = conninfo_to_dict(connection_info).get("options", "")
+    return make_conninfo(
+        connection_info, options=f"{options} -c role=clashlens_python_api".strip()
+    )
 
 
 @contextmanager
