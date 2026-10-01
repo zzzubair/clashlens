@@ -6,7 +6,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import as_api_role, domain_database, store_observation, text
 from test_discovery_history_prune_postgres import _attach_complete_work
 from test_domain_processing_postgres import _processor
 
@@ -453,6 +453,110 @@ def test_public_profile_uses_latest_occurrence_metadata_and_freshness(
             assert page["observed_at"] == second_at.isoformat()
             assert page["freshness"] == "fresh"
             assert first_observation != second_observation
+        finally:
+            api.close()
+            database.close()
+
+
+def test_player_page_freshness_follows_the_collectors_last_successful_check(
+    database_url: str, archive_server
+) -> None:
+    body = PROFILE_FIXTURE.read_bytes()
+    checked_at = NOW + timedelta(hours=2)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        applied, job = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="freshness-applied",
+            endpoint="profile",
+            body=body,
+            observed_at=NOW,
+            normalized_tag="#2PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        api = ApiDatabase(as_api_role(connection_info))
+
+        def collector_checked(observation_id: int, last_success_at: datetime) -> None:
+            # Unchanged responses only move this row; no new profile is saved.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO collector_response_state (
+                        scope, identity_key, endpoint, player_id, normalized_tag,
+                        last_response_hash, last_content_fingerprint,
+                        last_occurrence_key, last_applied_occurrence_key,
+                        last_seen_at, last_observation_id, last_success_at
+                    )
+                    SELECT 'player', '#2PP', 'profile', player_id, '#2PP',
+                           response_hash, response_hash, occurrence_key,
+                           occurrence_key, response_completed_at, id, %s
+                    FROM collector_observations WHERE id = %s
+                    ON CONFLICT (scope, identity_key, endpoint) DO UPDATE
+                    SET last_observation_id = EXCLUDED.last_observation_id,
+                        last_seen_at = EXCLUDED.last_seen_at,
+                        last_success_at = EXCLUDED.last_success_at
+                    """,
+                    (last_success_at, observation_id),
+                )
+
+        def page(now: datetime) -> tuple[str, str, list[str]]:
+            result = api_players.get_player_page(
+                api, "#2PP", now=now, freshness_seconds=900
+            )
+            assert result is not None
+            return (
+                result["freshness"],
+                result["observed_at"],
+                [item["code"] for item in result["screen_ready"]["data_quality"]],
+            )
+
+        try:
+            assert processor.process_job(job, owner="freshness-applied") is not None
+            collector_checked(applied, checked_at)
+
+            fresh = page(checked_at + timedelta(minutes=1))
+            assert fresh[:2] == ("fresh", checked_at.isoformat())
+            assert "stale" not in fresh[2]
+
+            # Checks overdue or failing: the last success stops moving.
+            overdue = page(checked_at + timedelta(minutes=16))
+            assert overdue[:2] == ("stale", checked_at.isoformat())
+            assert "stale" in overdue[2]
+
+            failed, _job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="freshness-failed",
+                endpoint="profile",
+                body=b'{"reason": "inMaintenance"}',
+                observed_at=checked_at + timedelta(minutes=5),
+                normalized_tag="#2PP",
+                http_status=503,
+            )
+            collector_checked(failed, checked_at + timedelta(minutes=10))
+            assert page(checked_at + timedelta(minutes=11))[:2] == (
+                "stale",
+                NOW.isoformat(),
+            )
+
+            # A changed profile the worker has not applied yet is not shown,
+            # so its check cannot vouch for the saved one.
+            changed = json.loads(body)
+            changed["trophies"] += 30
+            pending, _job = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key="freshness-pending",
+                endpoint="profile",
+                body=json.dumps(changed).encode(),
+                observed_at=checked_at + timedelta(minutes=12),
+                normalized_tag="#2PP",
+            )
+            collector_checked(pending, checked_at + timedelta(minutes=12))
+            assert page(checked_at + timedelta(minutes=13))[:2] == (
+                "stale",
+                NOW.isoformat(),
+            )
         finally:
             api.close()
             database.close()

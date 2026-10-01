@@ -125,11 +125,25 @@ def get_player_page(
                    profile.name, profile.trophies,
                    player.current_observed_at,
                    {metadata_columns},
-                   profile.profile_json -> 'clan' ->> 'name'
+                   profile.profile_json -> 'clan' ->> 'name',
+                   checked.last_success_at
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
             {metadata_join}
+            -- Unchanged profile responses only move the collector's check
+            -- time. A check confirms the saved profile only once the latest
+            -- stored response has been applied to it; a newer changed or
+            -- failed response that is not yet shown confirms nothing.
+            LEFT JOIN collector_response_state AS checked
+                ON checked.scope = 'player'
+               AND checked.identity_key = player.normalized_tag
+               AND checked.endpoint = 'profile'
+               AND EXISTS (
+                   SELECT 1 FROM player_profile_effects AS applied
+                   WHERE applied.observation_id = checked.last_observation_id
+                     AND applied.observed_at <= player.current_observed_at
+               )
             WHERE player.normalized_tag = %s
               AND profile.source_contract_state = 'accepted'
             """,
@@ -137,7 +151,7 @@ def get_player_page(
         ).fetchone()
         if row is None:
             return None
-        observed_at = row[5].astimezone(UTC)
+        observed_at = max(row[5], row[11] or row[5]).astimezone(UTC)
         age_seconds = max(0, int((now.astimezone(UTC) - observed_at).total_seconds()))
         daily_rows = connection.execute(
             """
@@ -317,7 +331,7 @@ def get_player_page(
                 {
                     "code": "stale",
                     "label": "Stale saved profile",
-                    "detail": "The accepted player profile is older than the current freshness limit.",
+                    "detail": "The collector has not confirmed this player profile within the current freshness limit.",
                 }
             )
         if current_day is None:
