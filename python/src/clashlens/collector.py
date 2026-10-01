@@ -124,7 +124,9 @@ class Collector:
         self, operation: Any, *args: Any, **kwargs: Any
     ) -> Any:
         async with self._upload_database_slots:
-            return await self._database_call(operation, *args, **kwargs)
+            return await _drain_awaitable(
+                self._database_call(operation, *args, **kwargs)
+            )
 
     async def collect_player(
         self,
