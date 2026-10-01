@@ -648,3 +648,36 @@ def test_public_army_migration_cancels_leased_v1_job_and_clears_lease(
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
             admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def test_each_migration_prefix_is_unique() -> None:
+    names: dict[int, str] = {}
+    for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
+        version = int(migration.name.split("_", 1)[0])
+        assert version not in names, f"{migration.name} reuses {names[version]}"
+        names[version] = migration.name
+
+
+def test_each_migration_records_exactly_its_filename_version(database_url: str) -> None:
+    schema = f"python_api_migration_versions_{uuid4().hex}"
+    with psycopg.connect(database_url, autocommit=True) as admin:
+        admin.execute(f'CREATE SCHEMA "{schema}"')
+    connection_info = make_conninfo(database_url, options=f"-c search_path={schema}")
+    try:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            versions: set[int] = set()
+            for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
+                version = int(migration.name.split("_", 1)[0])
+                assert version not in versions, migration.name
+                connection.execute(migration.read_text(encoding="utf-8"))
+                recorded_versions = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT version FROM clash_lens_schema_migrations"
+                    )
+                }
+                assert recorded_versions == versions | {version}, migration.name
+                versions = recorded_versions
+    finally:
+        with psycopg.connect(database_url, autocommit=True) as admin:
+            admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

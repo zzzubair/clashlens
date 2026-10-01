@@ -16,6 +16,6 @@ CREATE INDEX collector_response_uploads_claim_order
     ON collector_response_uploads (next_attempt_at, created_at, response_hash)
     WHERE state IN ('pending', 'failed');
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (41)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (42)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;
