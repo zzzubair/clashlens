@@ -134,16 +134,14 @@ old events to leave that window even after the cause is fixed.
 
 ### Backup failed or stale
 
-**Meaning:** a completed `./ops backup-status` run returned a non-zero exit,
-which alerts immediately, or timeouts or errors running the command persisted for
-15 minutes. Each failed check appears in
-`journalctl --user -u clashlens-alert.service` without private command output
-or exception details. A successful run clears the grace clock. Delayed alerts
-and recoveries keep the first-observed time, or the last intentional resume if later. Use the
+Use the [backup alert condition](deployment.md#alert-conditions) for immediate
+failures, the grace period for unavailable checks, journal diagnostics and incident
+times. Use the
 [backup failure conditions](deployment.md#postgresql-backups-and-recovery)
-to interpret its error. WAL is PostgreSQL's change log.
+to interpret `backup-status` errors. WAL is PostgreSQL's change log.
 
 **First checks:** `./ops backup-status`,
+`journalctl --user -u clashlens-alert.service --since '30 minutes ago' --no-pager`,
 `./ops logs backup --since '8 days ago' --no-pager`, and
 `./ops logs postgres --since '1 hour ago' --no-pager`.
 

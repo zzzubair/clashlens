@@ -565,10 +565,12 @@ use the [operating notes](operating.md#respond-to-alerts).
   [backup operations](#postgresql-backups-and-recovery) documents its failure
   conditions and freshness limits. Only timeouts and errors running the command
   get a 15-minute grace period, because a service restart can briefly stall Podman.
-  Every failed check is logged to the alert service journal without command
-  output or exception details. A completed successful run clears the grace
-  clock and any active alert. Delayed alerts and their recoveries report when
-  the timeouts or errors first began, or the last intentional resume if later.
+  Every failed check makes `alert-check` exit unsuccessfully and logs a fixed
+  diagnostic to the alert service journal, including during the grace period.
+  Command output and exception details stay private. A completed successful
+  run clears the grace clock and any active alert. Delayed alerts and their
+  recoveries report when the timeouts or errors first began, or the last
+  intentional resume if later.
 - **A failed private player-data read**, including when process readiness says
   healthy. The check enters the private API container, checks `/readyz`, and
   signs a `/v1/players/search` read limited to one result. Keys stay inside the
@@ -581,8 +583,8 @@ Missing disk measurements or restart history never clear an existing alert.
 folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
 replaced with mode 600 and contains five condition records with at most one
 pending transition each, plus when backup check timeouts or errors began,
-normally under 4 KiB. It keeps no growing event history,
-keys, URLs, player lists or account data.
+normally under 4 KiB. It keeps no growing event history, keys, URLs, player lists
+or account data.
 
 Only a Discord **2xx response** confirms delivery. Redirects, timeouts and other
 responses fail the command and leave the transition pending for the next run.

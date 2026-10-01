@@ -178,9 +178,7 @@ class Collector:
                 for task in tasks:
                     if not task.done():
                         task.cancel()
-                await _drain_awaitable(
-                    asyncio.gather(*tasks, return_exceptions=True)
-                )
+                await _drain_awaitable(asyncio.gather(*tasks, return_exceptions=True))
                 raise
             finally:
                 await _drain_to_thread(stack.close)
@@ -205,7 +203,9 @@ class Collector:
     async def _reserve_endpoints_safely(
         self, endpoints: tuple[str, ...]
     ) -> tuple[ExitStack, list[Any]]:
-        task = asyncio.create_task(asyncio.to_thread(self._reserve_endpoints, endpoints))
+        task = asyncio.create_task(
+            asyncio.to_thread(self._reserve_endpoints, endpoints)
+        )
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -300,7 +300,8 @@ class Collector:
         reservation: Any | None = None,
     ) -> str:
         important = (
-            lane in {"interactive", "reset"} or endpoint == "global_player_rankings"
+            lane in {"interactive", "reset"}
+            or endpoint == "global_player_rankings"
             or work.eligibility_recheck
         )
         attempts = 3 if important else 1
@@ -393,9 +394,7 @@ class Collector:
                         )
                         published = True
                         await _drain_awaitable(
-                            self._database_call(
-                                self.database.record_response, handoff
-                            )
+                            self._database_call(self.database.record_response, handoff)
                         )
                         await _drain_to_thread(self.spool.remove_handoff, name)
                     except BaseException as error:
@@ -538,9 +537,7 @@ class Collector:
             handoff, serialized = self._deserialize_handoff(payload)
             if self.spool.verify(handoff.response_hash, handoff.byte_size) is None:
                 raise SpoolError("handoff raw response is missing or corrupt")
-            self.database.record_recovered_response(
-                handoff, serialized=serialized
-            )
+            self.database.record_recovered_response(handoff, serialized=serialized)
             self.spool.remove_handoff(name)
             recovered += 1
         self.spool.remove_unreferenced(self.database.referenced_spool_hashes)
@@ -706,7 +703,9 @@ class Collector:
             asyncio.create_task(self._upload_loop(stop_requested, idle_seconds)),
         ]
         if self.weekly_eligibility_enabled:
-            tasks.append(asyncio.create_task(weekly_eligibility.run(self, stop_requested)))
+            tasks.append(
+                asyncio.create_task(weekly_eligibility.run(self, stop_requested))
+            )
         stop_task = asyncio.create_task(stop_requested.wait())
         try:
             done, _pending = await asyncio.wait(
@@ -727,6 +726,7 @@ class Collector:
                 self.database.referenced_spool_hashes,
             )
         finally:
+
             async def finish() -> None:
                 stop_task.cancel()
                 for task in tasks:
@@ -776,6 +776,7 @@ class Collector:
                     continue
                 work: list[CollectorWork] = []
                 async with self._regular_admission_lock:
+
                     def admit(
                         items: list[CollectorWork], total: list[CollectorWork] = work
                     ) -> None:
@@ -837,8 +838,7 @@ class Collector:
             )
             pending_results = results[1:]
             self.regular_inflight -= sum(
-                isinstance(outcomes, list)
-                and "capacity_paused" not in outcomes
+                isinstance(outcomes, list) and "capacity_paused" not in outcomes
                 for outcomes in pending_results
             )
             if graceful:
@@ -887,7 +887,8 @@ class Collector:
                         await task
                         del active[job_id]
                 for is_interactive, limit in (
-                    (True, 6), (False, _ORDINARY_INTENT_PARALLELISM)
+                    (True, 6),
+                    (False, _ORDINARY_INTENT_PARALLELISM),
                 ):
                     used = sum(
                         kind == is_interactive for kind, _task in active.values()
@@ -996,9 +997,7 @@ class Collector:
                 )
             await asyncio.gather(*owner_tasks.values())
             try:
-                await _drain_to_thread(
-                    self.cleanup_uploaded, limit=_UPLOAD_CONCURRENCY
-                )
+                await _drain_to_thread(self.cleanup_uploaded, limit=_UPLOAD_CONCURRENCY)
             except (OSError, SpoolError) as error:
                 self._record_spool_failure(error)
             graceful = True
@@ -1073,8 +1072,8 @@ class Collector:
         regular = self.regular_keys.health()
         interactive = self.interactive_keys.health()
         if path == "/readyz":
-            # Only a reachable database. The /metrics counts took over 3 s on a
-            # busy database, so the health check killed the collector.
+            # Keep /metrics row counts out of readiness: they can exceed the
+            # container health-check deadline even when collection can continue.
             try:
                 await asyncio.to_thread(self._ping_database)
             except psycopg.Error:
