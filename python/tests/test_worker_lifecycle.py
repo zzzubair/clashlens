@@ -10,9 +10,10 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from psycopg.errors import DeadlockDetected, SerializationFailure
 
 from clashlens import cli, ingestion, job_outcomes, reconciliation_db
-from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
+from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION, LeaseLost
 from clashlens.domain import DomainRuleError
 from clashlens.league_history import (
     LEAGUE_HISTORY_ENDPOINT_VERSION,
@@ -21,7 +22,12 @@ from clashlens.league_history import (
     ParsedLeagueHistory,
 )
 from clashlens.operating import WorkerMetrics
-from clashlens.worker import ObservationProcessor, ProcessResult, StageMetrics
+from clashlens.worker import (
+    ObservationProcessor,
+    ProcessResult,
+    StageMetrics,
+    process_concurrently,
+)
 
 
 class NoClaimDatabase:
@@ -31,6 +37,94 @@ class NoClaimDatabase:
     def claim_job(self, **_kwargs: object) -> None:
         self.claim_calls += 1
         raise AssertionError("shutdown must stop before claiming another job")
+
+
+@pytest.mark.parametrize("conflict", [DeadlockDetected, SerializationFailure])
+@pytest.mark.parametrize("spent_attempts", [0, 2])
+@pytest.mark.parametrize(
+    ("refund_conflicts", "lose_lease"), [(0, False), (2, False), (3, False), (3, True)]
+)
+def test_failure_write_conflict_keeps_worker_processing(
+    conflict, spent_attempts, refund_conflicts, lose_lease, monkeypatch
+) -> None:
+    claims = [
+        SimpleNamespace(
+            job_id=job_id,
+            work_type="reconcile_ranked_day",
+            processing_version=PROCESSING_VERSION,
+            domain_rule_version=DOMAIN_RULE_VERSION,
+            attempt_count=spent_attempts if job_id == 17 else 0,
+            max_attempts=3,
+        )
+        for job_id in (17, 18)
+    ]
+    conflicted_claim = claims[0]
+
+    class Database:
+        def __init__(self):
+            self.spent_attempts = spent_attempts
+            self.refund_conflicts = refund_conflicts
+
+        def claim_job(self, **_kwargs):
+            if not claims:
+                return None
+            claim = claims.pop(0)
+            if claim.job_id == 17:
+                self.spent_attempts += 1
+            return claim
+
+        def renew_claim(self, _claim, **_kwargs):
+            pass
+
+        def refund_claim_attempt(self, claim):
+            if self.refund_conflicts:
+                self.refund_conflicts -= 1
+                raise conflict()
+            if lose_lease:
+                raise LeaseLost("job lease expired during recovery")
+            self.spent_attempts = claim.attempt_count
+
+        def expire_lease(self):
+            if self.spent_attempts < conflicted_claim.max_attempts:
+                claims.append(conflicted_claim)
+
+    reject_transactions = True
+
+    def complete_reconciliation(_database, claim):
+        if claim.job_id == 17 and reject_transactions:
+            raise conflict()
+
+    def fail_claim(*_args, **_kwargs):
+        raise conflict()
+
+    monkeypatch.setattr(
+        reconciliation_db, "complete_reconciliation", complete_reconciliation
+    )
+    monkeypatch.setattr(job_outcomes, "fail_claim", fail_claim)
+    database = Database()
+    processor = ObservationProcessor(database, archive=object())
+    results = process_concurrently(
+        processor,
+        concurrency=1,
+        owner="failure-conflict",
+        max_jobs=2,
+    )
+
+    assert results == [
+        ProcessResult(17, "lease_lost")
+        if lose_lease
+        else ProcessResult(17, "retrying", "database_deadlock"),
+        ProcessResult(18, "processed"),
+    ]
+    if lose_lease:
+        assert database.spent_attempts == spent_attempts + 1
+        return
+    reject_transactions = False
+    database.expire_lease()
+    assert processor.process_once(owner="failure-conflict") == ProcessResult(
+        17, "processed"
+    )
+    assert database.spent_attempts == spent_attempts + 1
 
 
 def test_stage_metrics_report_bounded_histogram_percentiles() -> None:

@@ -21,7 +21,36 @@ from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError
 
 
-def _upsert_army_decodes(database: Database, connection: Any, battle_ids: list[int]) -> None:
+def _upsert_army_decodes(
+    database: Database,
+    connection: Any,
+    battle_ids: list[int],
+    *,
+    extra_boundary_at: datetime | None = None,
+) -> None:
+    # Take the complete boundary lock set oldest-first before any army writes.
+    # Otherwise a re-decode can hold an army row while a battle log holds its
+    # Reset lock, and each waits for the other. Include a Reset even when no
+    # battles changed; later publication calls safely reacquire these locks.
+    day_rows = (
+        connection.execute(
+            "SELECT DISTINCT ranked_day_start FROM legend_battles WHERE id = ANY(%s::bigint[]) ORDER BY 1",
+            (battle_ids,),
+        ).fetchall()
+        if battle_ids
+        else []
+    )
+    boundaries = {
+        day_start.astimezone(UTC) + timedelta(days=1)
+        for (day_start,) in day_rows
+    }
+    if extra_boundary_at is not None:
+        boundaries.add(extra_boundary_at.astimezone(UTC))
+    for boundary_at in sorted(boundaries):
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"boundary-publication:{boundary_at.isoformat()}",),
+        )
     if not battle_ids:
         return
     exists = connection.execute(
@@ -46,8 +75,8 @@ def _upsert_army_decodes(database: Database, connection: Any, battle_ids: list[i
         """,
         (battle_ids,),
     ).fetchall()
+    decoded_rows = []
     for battle_id, evidence_id, perspective, raw_code, source_json in rows:
-        perspective = _text_value(perspective)
         source_code = (
             source_json.get("armyShareCode")
             if isinstance(source_json, dict)
@@ -73,6 +102,13 @@ def _upsert_army_decodes(database: Database, connection: Any, battle_ids: list[i
                 CATALOG_VERSION,
                 CATALOG_HASH,
             )
+        decoded_rows.append(
+            (battle_id, evidence_id, _text_value(perspective), raw_code, decoded)
+        )
+    # Write shared exact_armies rows in one fixed order so two battle logs that
+    # share armies cannot each hold one and wait for the other (deadlock).
+    decoded_rows.sort(key=lambda row: getattr(row[4], "identity_hash", None) or "")
+    for battle_id, evidence_id, perspective, raw_code, decoded in decoded_rows:
         is_decoded = isinstance(decoded, DecodedArmy)
         if is_decoded:
             exact_army_id = None
@@ -284,10 +320,6 @@ def _upsert_army_decodes(database: Database, connection: Any, battle_ids: list[i
                     supersedes,
                 ),
             )
-    day_rows = connection.execute(
-        "SELECT DISTINCT ranked_day_start FROM legend_battles WHERE id = ANY(%s::bigint[])",
-        (battle_ids,),
-    ).fetchall()
     for (day_start,) in day_rows:
         boundary_publication._enqueue_army_analytics(database, connection, ranked_day_start=day_start)
 
@@ -1163,5 +1195,4 @@ def complete_army_redecode(database: Database, claim: Claim) -> None:
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
-
 

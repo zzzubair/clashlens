@@ -6,6 +6,8 @@ from threading import Event, Lock
 from time import monotonic
 from typing import Any
 
+from psycopg.errors import DeadlockDetected, SerializationFailure
+
 from . import (
     army_ingestion,
     battle_ingestion,
@@ -43,6 +45,7 @@ from .rankings import (
 from .source_observation_contract import validate_source_observation_contract
 
 MAX_CONCURRENCY = 32
+DATABASE_CONFLICT_RETRIES = 3
 STAGE_DURATION_BUCKETS_SECONDS = (
     0.0001,
     0.00025,
@@ -274,6 +277,33 @@ class ObservationProcessor:
         return self._process_claim(claim, lease_seconds=lease_seconds)
 
     def _process_claim(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:
+        # PostgreSQL rolls back only one side of a deadlock. Rerun that job under
+        # the same claim so it neither stops the worker nor uses up an attempt.
+        for _ in range(DATABASE_CONFLICT_RETRIES):
+            try:
+                return self._process_claim_once(claim, lease_seconds=lease_seconds)
+            except (DeadlockDetected, SerializationFailure):
+                continue
+        try:
+            return self._fail(claim, "database_deadlock", retryable=True)
+        except (DeadlockDetected, SerializationFailure):
+            # The failed transaction recorded no outcome. Restore its retry
+            # slot before expiry so queue maintenance can recover it later.
+            # Only report retrying once the refund commits. If conflicts persist
+            # until lease loss, an exhausted job can still fail during recovery.
+            while True:
+                try:
+                    self.database.refund_claim_attempt(claim)
+                    break
+                except LeaseLost:
+                    return ProcessResult(claim.job_id, "lease_lost")
+                except (DeadlockDetected, SerializationFailure):
+                    continue
+            return ProcessResult(claim.job_id, "retrying", "database_deadlock")
+
+    def _process_claim_once(
+        self, claim: Claim, *, lease_seconds: int
+    ) -> ProcessResult:
         if claim.work_type == "reconcile_ranked_day":
             if claim.processing_version != PROCESSING_VERSION:
                 return self._fail(

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+import threading
 from datetime import UTC, datetime, timedelta
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, store_observation, text
 
+from clashlens import (
+    army_ingestion,
+    battle_ingestion,
+    boundary_publication,
+    reset_baselines,
+)
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
@@ -480,3 +488,258 @@ def test_partial_decode_persists_known_and_unknown_facts_per_perspective(
             ]
         finally:
             database.close()
+
+
+def _pause_both_jobs_after_call(
+    monkeypatch, module, name: str, call_number: int, *, barrier=None
+):
+    """Hold each job at a lock-taking step until both arrive, which forces the overlap."""
+    original = getattr(module, name)
+    if barrier is None:
+        barrier = threading.Barrier(2, timeout=3)
+    calls = threading.local()
+
+    def paused(*args, **kwargs):
+        calls.count = getattr(calls, "count", 0) + 1
+        if calls.count == call_number:
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                pass  # the other job is waiting on a lock this one holds
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, paused)
+
+
+def _process_battle_logs_concurrently(ci: str, archive_server, jobs: list[int]):
+    db, proc = _processor(ci, archive_server)
+    results: dict[int, object] = {}
+
+    def run(job_id: int) -> None:
+        try:
+            results[job_id] = proc.process_job(job_id, owner=f"lane-{job_id}").outcome
+        except Exception as error:  # noqa: BLE001 - reported by the assertion
+            results[job_id] = repr(error)
+
+    threads = [threading.Thread(target=run, args=(job_id,)) for job_id in jobs]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=60)
+    finally:
+        db.close()
+    return results
+
+
+@pytest.mark.parametrize("reset_boundary", [False, True])
+def test_concurrent_battle_logs_spanning_shared_days_both_complete(
+    database_url: str, archive_server, monkeypatch, reset_boundary: bool
+) -> None:
+    # One battle log spans two Legend days, the other three. Production's
+    # 2026-10-01 deadlocks took the next-Reset locks for those days in
+    # opposite orders when PostgreSQL returned the days unsorted.
+    with domain_database(database_url) as ci:
+        days = [datetime(2026, 9, day, 12, tzinfo=UTC) for day in (28, 29, 30)]
+        if reset_boundary:
+            days = [
+                datetime(2026, 9, 30, 12, tzinfo=UTC),
+                datetime(2026, 10, 1, 12, tzinfo=UTC),
+            ]
+        jobs = []
+        observations = []
+        for player, opponents, battle_days in (
+            ("#2PP", ("#8PP", "#9PP"), days[-1:] if reset_boundary else days[1:]),
+            ("#2PQ", ("#8PQ", "#9PQ", "#8QQ"), days),
+        ):
+            rows = [
+                _live_row(True, opponent, None, ts)
+                for opponent, ts in zip(opponents, battle_days)
+            ]
+            observation_id, job_id = store_observation(
+                ci,
+                archive_server,
+                occurrence_key=f"days-{player}",
+                endpoint="battle_log",
+                body=json.dumps({"items": rows}).encode(),
+                observed_at=days[-1] + timedelta(hours=1),
+                normalized_tag=player,
+            )
+            jobs.append(job_id)
+            observations.append(observation_id)
+        if reset_boundary:
+            boundary_at = days[-1].replace(hour=5)
+            with psycopg.connect(ci) as connection:
+                sweep_id = connection.execute(
+                    """
+                    INSERT INTO collector_reset_sweeps
+                        (boundary_at, member_ids, membership_captured_at)
+                    SELECT %s, ARRAY[player_id], clock_timestamp()
+                    FROM collector_observations WHERE id = %s
+                    RETURNING id
+                    """,
+                    (boundary_at, observations[0]),
+                ).fetchone()[0]
+                connection.execute(
+                    """
+                    INSERT INTO collector_work (
+                        kind, lane, scope, player_id, normalized_tag, sweep_id,
+                        due_at, coalescing_key, status, profile_status,
+                        battle_log_status, battle_log_observation_id
+                    )
+                    SELECT 'reset_baseline', 'reset', 'player', player_id,
+                           normalized_tag, %s, %s, 'delayed-reset', 'failed',
+                           'failed', 'observed', id
+                    FROM collector_observations WHERE id = %s
+                    """,
+                    (sweep_id, boundary_at, observations[0]),
+                )
+            monkeypatch.setattr(
+                ObservationProcessor,
+                "_process_claim",
+                ObservationProcessor._process_claim_once,
+            )
+        # Without ORDER BY, PostgreSQL's hash method returns the days unsorted.
+        options = psycopg.conninfo.conninfo_to_dict(ci)["options"]
+        unsorted_ci = psycopg.conninfo.make_conninfo(
+            ci, options=f"{options} -c enable_sort=off"
+        )
+        barrier = threading.Barrier(2, timeout=3)
+        _pause_both_jobs_after_call(
+            monkeypatch,
+            boundary_publication,
+            "_enqueue_army_analytics",
+            2,
+            barrier=barrier,
+        )
+        if reset_boundary:
+            _pause_both_jobs_after_call(
+                monkeypatch,
+                reset_baselines,
+                "_refresh_reset_baseline_evidence",
+                1,
+                barrier=barrier,
+            )
+
+        results = _process_battle_logs_concurrently(unsorted_ci, archive_server, jobs)
+
+    assert results == {job_id: "processed" for job_id in jobs}
+
+
+def test_concurrent_battle_logs_sharing_armies_both_complete(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # Two battle logs use the same two armies in opposite order; the
+    # 2026-10-01 01:03 UTC deadlock was on these shared exact_armies rows.
+    with domain_database(database_url) as ci:
+        army_a = "h0p9e14_32d1x53u2x58-1x97s2x2"
+        army_b = "h0p9e14_32d1x53u1x58-1x97s2x2"
+        ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        jobs = []
+        for player, opponents, codes in (
+            ("#2PP", ("#8PP", "#9PP"), (army_a, army_b)),
+            ("#2PQ", ("#8PQ", "#9PQ"), (army_b, army_a)),
+        ):
+            rows = [
+                _live_row(True, opponent, code, ts + timedelta(minutes=index))
+                for index, (opponent, code) in enumerate(zip(opponents, codes))
+            ]
+            _, job_id = store_observation(
+                ci,
+                archive_server,
+                occurrence_key=f"armies-{player}",
+                endpoint="battle_log",
+                body=json.dumps({"items": rows}).encode(),
+                observed_at=ts + timedelta(hours=1),
+                normalized_tag=player,
+            )
+            jobs.append(job_id)
+        _pause_both_jobs_after_call(
+            monkeypatch, army_ingestion, "decode_army_share_code", 2
+        )
+
+        results = _process_battle_logs_concurrently(ci, archive_server, jobs)
+
+    assert results == {job_id: "processed" for job_id in jobs}
+
+
+def test_shared_army_decode_holds_boundary_lock_while_decoding(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        _, job_id = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="shared-decode-lock",
+            endpoint="battle_log",
+            body=json.dumps({"items": [_live_row(True, "#8PP", None, ts)]}).encode(),
+            observed_at=ts + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        db, proc = _processor(ci, archive_server)
+        original_decode = army_ingestion.decode_army_share_code
+        lock_available = []
+
+        def decode(raw_code):
+            with psycopg.connect(ci) as observer:
+                lock_available.append(
+                    observer.execute(
+                        "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
+                        ("boundary-publication:2026-08-05T05:00:00+00:00",),
+                    ).fetchone()[0]
+                )
+            return original_decode(raw_code)
+
+        try:
+            assert proc.process_job(job_id, owner="seed").outcome == "processed"
+            monkeypatch.setattr(army_ingestion, "decode_army_share_code", decode)
+            with db.pool.connection() as connection:
+                battle_ids = [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT id FROM legend_battles"
+                    ).fetchall()
+                ]
+                army_ingestion._upsert_army_decodes(db, connection, battle_ids)
+            assert lock_available and not any(lock_available)
+        finally:
+            db.close()
+
+
+def test_deadlocked_battle_log_is_retried_without_using_an_attempt(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        _, job_id = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="deadlock-retry",
+            endpoint="battle_log",
+            body=json.dumps({"items": [_live_row(True, "#8PP", None, ts)]}).encode(),
+            observed_at=ts + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        original = battle_ingestion.complete_battle_log
+        deadlocks = [psycopg.errors.DeadlockDetected("deadlock detected")]
+
+        def deadlock_once(*args, **kwargs):
+            if deadlocks:
+                raise deadlocks.pop()
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(battle_ingestion, "complete_battle_log", deadlock_once)
+        db, proc = _processor(ci, archive_server)
+        try:
+            result = proc.process_job(job_id, owner="deadlock")
+            with db.pool.connection() as conn:
+                job = conn.execute(
+                    "SELECT status, attempt_count FROM python_processing_jobs WHERE id = %s",
+                    (job_id,),
+                ).fetchone()
+        finally:
+            db.close()
+
+    assert result.outcome == "processed"
+    assert (text(job[0]), job[1]) == ("complete", 1)

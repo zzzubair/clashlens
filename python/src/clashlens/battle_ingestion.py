@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -11,6 +11,15 @@ from . import army_ingestion, job_outcomes, reconciliation_db, reset_baselines
 from .battle import ParsedBattleLog
 from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, ranked_day_for
+
+
+def _battle_log_reset_boundary(connection: Any, claim: Claim) -> datetime | None:
+    if claim.observation_id is None:
+        return None
+    context = reset_baselines._load_reset_baseline_context(
+        connection, claim.observation_id
+    )
+    return None if context is None else context[4]
 
 
 def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBattleLog) -> None:
@@ -373,7 +382,12 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
                     for battle_id, state in current_disagreement_states.items()
                     if previous_disagreement_states.get(battle_id) != state
                 )
-                army_ingestion._upsert_army_decodes(database, connection, sorted(affected_battle_ids))
+            army_ingestion._upsert_army_decodes(
+                database,
+                connection,
+                sorted(affected_battle_ids),
+                extra_boundary_at=_battle_log_reset_boundary(connection, claim),
+            )
 
             outcome = (
                 "processed_with_gaps" if battle_log.has_row_gap else "processed"
@@ -769,7 +783,12 @@ def _complete_battle_log_legacy(database: Database, claim: Claim, battle_log: Pa
                     for battle_id, state in current_disagreement_states.items()
                     if previous_disagreement_states.get(battle_id) != state
                 )
-                army_ingestion._upsert_army_decodes(database, connection, sorted(affected_battle_ids))
+            army_ingestion._upsert_army_decodes(
+                database,
+                connection,
+                sorted(affected_battle_ids),
+                extra_boundary_at=_battle_log_reset_boundary(connection, claim),
+            )
 
             job_outcomes._record_parsed_payload(
                 connection,

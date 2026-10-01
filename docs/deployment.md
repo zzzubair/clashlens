@@ -594,6 +594,23 @@ under #140; this command adds none of those policies.
 
 ## Failed work
 
+While processing a claimed job, the worker handles database deadlocks, where
+jobs wait on each other's locks, and serialization failures, where PostgreSQL
+rejects conflicting concurrent writes. These conflicts do not stop other jobs.
+The worker runs the same claimed job up to three times without consuming another
+queue attempt. If all three runs conflict, it records `database_deadlock` for
+either kind of conflict; the normal attempt limit decides whether the job
+retries or fails.
+
+If that failure write also conflicts, the worker keeps the lease and tries to
+restore an unused attempt before returning `retrying`. Queue maintenance can
+then recover the job after the lease expires. Restoration must succeed while
+the lease is still valid. If conflicts persist until expiry on the last allowed
+attempt, the job still fails as `lease_expired_max_attempts`. See
+[`ObservationProcessor._process_claim`](../python/src/clashlens/worker.py) and
+the recovery cases in
+[`test_claim_jobs_postgres.py`](../python/tests/test_claim_jobs_postgres.py).
+
 Listing and previewing are the default; a retry needs both one exact item and
 `--apply`:
 
@@ -607,9 +624,9 @@ Listing and previewing are the default; a retry needs both one exact item and
 
 This command starts an ephemeral copy of the pinned Python image with an
 init-only database secret, then removes the secret. The long-running worker
-never receives retry authority. Repair configuration or authentication before
-restarting the collector and retrying archive configuration failures. Archive
-checksum or catalogue contradictions return
+never receives this operator-only retry authority. Repair configuration or
+authentication before restarting the collector and retrying archive
+configuration failures. Archive checksum or catalogue contradictions return
 `archive_integrity_repair_required` and are never requeued automatically.
 Failed profile and battle-log observation processing is replayed only through
 the existing audited `deploy/replay-request --observation-id ID --reason REASON`
