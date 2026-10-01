@@ -420,6 +420,66 @@ def test_response_state_compacts_unchanged_and_enqueues_changed_response(
         assert state == (second_hash, NOW + timedelta(minutes=10))
 
 
+@pytest.mark.parametrize("endpoint", ["profile", "battle_log", "league_history"])
+def test_response_state_keeps_latest_profile_not_found_and_success_times(
+    database_url: str, endpoint: str,
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        options = conninfo_to_dict(connection_info)["options"]
+        database = CollectorDatabase(make_conninfo(
+            connection_info, options=options + " -c role=clashlens_collector"
+        ))
+
+        def check(occurrence, minutes, status, *, recovering=False):
+            handoff = _handoff(
+                occurrence_key=occurrence, response_hash=_hash(str(status)),
+                player_id=player_id, endpoint=endpoint, http_status=status,
+                completed_at=NOW + timedelta(minutes=minutes),
+            )
+            if recovering:
+                return database.record_recovered_response(handoff, serialized=True)
+            return database.record_response(handoff)
+
+        try:
+            check("success", 0, 200)
+            check("not-found", 5, 404)
+            assert check("not-found-again", 10, 404).changed is False
+            check("server-error", 15, 503)
+            with psycopg.connect(connection_info) as connection:
+                state = connection.execute(
+                    """SELECT last_not_found_at, last_success_at, last_seen_at
+                    FROM collector_response_state
+                    WHERE scope = 'player' AND identity_key = '#2PP' AND endpoint = %s""",
+                    (endpoint,),
+                ).fetchone()
+            not_found_at = NOW + timedelta(minutes=10) if endpoint == "profile" else None
+            assert state == (not_found_at, NOW, NOW + timedelta(minutes=15))
+
+            check("found", 20, 200, recovering=True)
+            check("older-not-found", 7, 404, recovering=True)
+            check("older-success", 3, 200)
+            with psycopg.connect(connection_info) as connection:
+                state = connection.execute(
+                    """SELECT last_not_found_at, last_success_at, last_seen_at
+                    FROM collector_response_state
+                    WHERE scope = 'player' AND identity_key = '#2PP' AND endpoint = %s""",
+                    (endpoint,),
+                ).fetchone()
+                request_count, observation_count = connection.execute(
+                    """SELECT request_count, (SELECT count(*) FROM collector_observations)
+                    FROM collector_response_state WHERE endpoint = %s""",
+                    (endpoint,),
+                ).fetchone()
+            assert state == (
+                not_found_at, NOW + timedelta(minutes=20), NOW + timedelta(minutes=20)
+            )
+            assert request_count == 7
+            assert observation_count == 5
+        finally:
+            database.close()
+
+
 def test_changed_response_upsert_is_idempotent_by_occurrence_key(
     database_url: str,
 ) -> None:

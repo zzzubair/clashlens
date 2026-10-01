@@ -37,6 +37,15 @@ def get_live_leaderboard(
                   ON profile.id = player.current_profile_version_id
                 WHERE player.active = true
                   AND profile.source_contract_state = 'accepted'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM collector_response_state AS checked
+                      WHERE checked.scope = 'player'
+                        AND checked.identity_key = player.normalized_tag
+                        AND checked.endpoint = 'profile'
+                        AND checked.last_not_found_at IS NOT NULL
+                        AND (checked.last_success_at IS NULL
+                             OR checked.last_not_found_at > checked.last_success_at)
+                  )
             ), stats AS (
                 SELECT count(*) AS total_entries,
                        count(*) FILTER (
