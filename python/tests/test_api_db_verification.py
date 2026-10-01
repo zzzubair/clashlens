@@ -99,8 +99,12 @@ def verification_binding(account_id: int, subject: str, tag: str) -> RequestBind
     )
 
 
+@pytest.mark.parametrize("configured_rate", [None, 1, 2, 25, 29])
+@pytest.mark.parametrize("verification_first", [False, True])
 def test_collector_and_verification_share_the_interactive_limit(
     database_url: str,
+    configured_rate: int | None,
+    verification_first: bool,
 ) -> None:
     with migrated_production_database(
         database_url, include_compact_collector=True
@@ -110,34 +114,54 @@ def test_collector_and_verification_share_the_interactive_limit(
         fingerprint = sha256(b"safe-synthetic-key").hexdigest()
         try:
             api_verification.register_official_credential(database, fingerprint)
+            rate = 25 if configured_rate is None else configured_rate
+            if configured_rate is not None:
+                collector_database.register_interactive_key(
+                    fingerprint, starts_per_second=rate
+                )
+            api_verification.register_official_credential(database, fingerprint)
+
+            def acquire_verification():
+                return api_verification.acquire_official_permit(
+                    database, fingerprint, request_id=str(uuid4())
+                )
+
+            python_first = acquire_verification() if verification_first else None
 
             def acquire_collector(_index: int):
                 return collector_database.acquire_collector_permit(fingerprint)
 
             with ThreadPoolExecutor(max_workers=12) as executor:
-                collector_results = list(executor.map(acquire_collector, range(30)))
+                collector_results = list(
+                    executor.map(acquire_collector, range(rate + 1))
+                )
+            if python_first is None:
+                python_first = acquire_verification()
+            python_second = acquire_verification()
 
-            python_first = api_verification.acquire_official_permit(database,
-                fingerprint,
-                request_id=str(uuid4()),
+            verification_granted = rate > 1 or verification_first
+            collector_granted = rate - int(verification_granted)
+            assert (
+                sum(result.granted for result in collector_results) == collector_granted
             )
-            python_second = api_verification.acquire_official_permit(database,
-                fingerprint,
-                request_id=str(uuid4()),
-            )
-
-            assert sum(result.granted for result in collector_results) == 29
             assert (
                 sum(
                     result.reason == "collector_budget_exhausted"
                     for result in collector_results
                 )
-                == 1
+                == rate + 1 - collector_granted
             )
-            assert python_first.granted is True
+            assert python_first.granted is verification_granted
             assert python_second.granted is False
-            assert python_second.reason == "python_budget_exhausted"
-            assert database.scalar("SELECT count(*) FROM shared_api_permits") == 30
+            assert python_second.reason == (
+                "python_budget_exhausted"
+                if verification_granted
+                else "combined_budget_exhausted"
+            )
+            assert database.scalar("SELECT count(*) FROM shared_api_permits") == rate
+            assert (
+                database.scalar("SELECT total_budget FROM shared_api_credentials") == rate
+            )
         finally:
             collector_database.close()
             database.close()
@@ -518,7 +542,7 @@ def test_verification_request_replay_never_binds_or_persists_a_new_token(
                     "SELECT total_budget FROM shared_api_credentials WHERE credential_fingerprint = %s",
                     (fingerprint,),
                 )
-                == 30
+                == 25
             )
         finally:
             database.close()

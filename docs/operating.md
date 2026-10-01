@@ -61,6 +61,60 @@ The alert and backup services run once per timer firing, so `inactive (dead)`
 between successful runs is normal. `failed`, missing units, delivery failures or
 unavailable measurements need investigation.
 
+## Clash API keys
+
+Clash Lens keeps to a budget of **8** Clash API keys. The Clash API allows up
+to 10 keys per address, and every key is tied to the Paris relay's address.
+
+| Slot | File in `CLASHLENS_API_KEY_HOST_DIR` | Used for |
+| --- | --- | --- |
+| `normal-1` to `normal-4` | `clashlens-normal-1` to `clashlens-normal-4` | Regular collection |
+| `extra-1`, `extra-2` | `clashlens-extra-1`, `clashlens-extra-2` | Regular collection |
+| `interactive-1` | `clashlens-interactive-1` | Refresh, first-time lookups and player verification |
+| 8th key | not created | Free; add it to regular collection when needed |
+
+Each configured slot needs a private mode-600 file containing only its key.
+
+`CLASHLENS_REGULAR_API_KEY_NAMES` in `app.env` lists the regular slots. Its
+default is the six names above. `./ops` accepts 4 to 7 names, so regular keys
+plus `interactive-1` never exceed the budget. To use an 8th key, create it in
+the developer portal for the relay address, save it as a mode-600 file named
+`clashlens-<name>`, add `<name>` to that list, and deploy through the approved
+release procedure. No code change is needed.
+
+`CLASHLENS_REQUESTS_PER_SECOND_PER_KEY` caps how many requests each key may
+start per second across all callers, the interactive key included. It accepts
+whole numbers from 1 to 29 and defaults to 25. `./ops`, the collector command
+and its request pacing refuse 30 or more. Six regular keys at the default allow
+at most 150 requests per second. This is arithmetic, not measured throughput
+or a provider-limit guarantee.
+
+The collector stores the interactive key's configured total in the shared
+database. Interactive collection, player verification and operator Discord
+recovery obtain permission from the same rolling one-second window.
+At the default, collection can use
+24 starts and verification one, for 25 combined. When the total is at least two,
+one start is reserved for verification; at a total of one, either caller can
+use the single start. API restarts preserve the collector's configured limit.
+Verification sends one request per permission and refuses redirects; collection
+obtains a new permission for each redirected request.
+
+Check each key from the collector's measurements:
+
+```sh
+curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8081/metrics \
+  | grep '^clashlens_collector_key_'
+```
+
+Each key has four lines, labelled by pool and slot name; key values never appear.
+`key_healthy` is 0 after the API refused that key (HTTP 401 or 403); it stays 0
+until the collector restarts. `key_paused` is 1 while the key waits after a rate
+refusal. `key_rate_limit_per_second` is the configured whole-key cap.
+`key_requests_started_total` counts collection requests, including redirected
+requests, since the collector started. It excludes player verification and
+operator recovery. Read it twice, 60 seconds apart, and divide the difference
+by 60 for the collection rate.
+
 ## Respond to alerts
 
 Start with the commands below in the same production checkout. Keep incident

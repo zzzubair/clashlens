@@ -27,7 +27,8 @@ Production still rejects the discovery-enabled flag.
 [Local development](../README.md#local-development) owns supported fake-player
 sizes and trial commands. Add the known pool and weekly check workload to
 verification without treating all known tags as live players.
-Production loads four regular keys and one separate interactive key. Measure
+For production key allocation, see
+[Clash API keys](operating.md#clash-api-keys). Measure
 collection, weekly checks, processing, storage and cost before deciding whether
 additional keys or wiring changes are necessary. Weekly scheduling and reuse of
 finished checks have not been verified by the manual-import test.
@@ -142,8 +143,8 @@ half without creating another observation or processing job.
 
 Refresh and initial collection use the separate interactive key. Refreshes
 coalesce while active, have a 30-second cooldown, and never change the regular
-due time. Player-token verification shares the same 30-start rolling limit: 29
-starts are reserved for collection and one for verification.
+due time. Player-token verification and interactive collection use the
+[shared key allowance](operating.md#clash-api-keys).
 
 At 04:55 UTC regular admission stops. At 05:00, after admitted work drains, the
 collector freezes active membership into one Reset sweep and creates one paired
@@ -189,9 +190,9 @@ including restore time; see [history-retention.md](history-retention.md).
 Retirement requires separate operator
 credentials and is never part of starting or stopping the stack.
 
-Each regular key limits starts to 30/second with six concurrent requests. The
-interactive key uses the shared database permit immediately before HTTP. It is
-never borrowed for regular work.
+Collection allows six concurrent requests per key. Request-start limits and
+shared permission rules belong in [Clash API keys](operating.md#clash-api-keys).
+The interactive key is never borrowed for regular work.
 
 ## Validation and live-run boundary
 

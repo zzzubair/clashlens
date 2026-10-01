@@ -124,8 +124,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     collector.add_argument(
         "--starts-per-second-per-key",
-        type=_bounded_int("request starts per second per key", 1, 30),
-        default=int(os.environ.get("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", "30")),
+        type=_bounded_int("request starts per second per key", 1, 29),
+        default=os.environ.get("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", "25"),
     )
     collector.add_argument(
         "--concurrency-per-key",
@@ -704,9 +704,9 @@ def _run_collector(arguments: argparse.Namespace) -> int:
     regular_keys = _parse_api_keys(arguments.regular_api_keys)
     interactive_keys = _parse_api_keys(arguments.interactive_api_keys)
     if not arguments.allow_reduced_key_pools and (
-        len(regular_keys) != 4 or len(interactive_keys) != 1
+        not 4 <= len(regular_keys) <= 7 or len(interactive_keys) != 1
     ):
-        raise ValueError("collector requires four regular keys and one interactive key")
+        raise ValueError("collector requires 4 to 7 regular keys and one interactive key")
     if not regular_keys or len(interactive_keys) != 1:
         raise ValueError("collector requires regular keys and one interactive key")
     host, separator, port_text = arguments.health_listen.rpartition(":")
@@ -722,7 +722,9 @@ def _run_collector(arguments: argparse.Namespace) -> int:
     except UnicodeEncodeError as error:
         raise ValueError("interactive API key must contain ASCII") from error
     interactive_fingerprint = hashlib.sha256(interactive_secret).hexdigest()
-    database.register_interactive_key(interactive_fingerprint)
+    database.register_interactive_key(
+        interactive_fingerprint, starts_per_second=arguments.starts_per_second_per_key
+    )
 
     async def acquire_interactive_permit() -> None:
         while True:
@@ -768,7 +770,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         ),
         interactive_keys=KeyPool(
             interactive_keys,
-            starts_per_second=30,
+            starts_per_second=arguments.starts_per_second_per_key,
             concurrency_per_key=concurrency,
             before_start=acquire_interactive_permit,
         ),
@@ -1365,8 +1367,7 @@ def _official_credential_fingerprint(key_bytes: bytes) -> str:
 
 
 def _run_recover_discord(arguments: argparse.Namespace) -> int:
-    """Maintainer-only recovery path; the token is request-only and is never
-    echoed, logged, or persisted."""
+    """Maintainer-only recovery; the token is never echoed, logged, or stored."""
     if not UUID_PATTERN.fullmatch(arguments.target_account_public_id):
         print(json.dumps({"status": "invalid_request"}))
         return 1
@@ -1403,19 +1404,27 @@ def _run_recover_discord(arguments: argparse.Namespace) -> int:
     if not 1 <= len(player_token) <= 512:
         print(json.dumps({"status": "invalid_token"}))
         return 1
-    try:
-        response = verification_client.verify(normalized_tag, player_token)
-        classification = classify_official_response(response.http_status, response.body)
-    except Exception:  # noqa: BLE001 - never disclose transport details.
-        print(json.dumps({"status": "verification_unavailable"}))
-        return 1
-    del player_token
-    if classification.outcome != VerificationOutcome.VERIFIED:
-        print(json.dumps({"status": classification.outcome.value}))
-        return 1
-
     database = ApiDatabase(_database_url(arguments))
     try:
+        try:
+            fingerprint = _official_credential_fingerprint(official_key)
+            api_verification.register_official_credential(database, fingerprint)
+            permit = api_verification.acquire_official_permit(
+                database, fingerprint, request_id=str(uuid4())
+            )
+            if not permit.granted:
+                print(json.dumps({"status": "verification_unavailable"}))
+                return 1
+            response = verification_client.verify(normalized_tag, player_token)
+            classification = classify_official_response(response.http_status, response.body)
+        except Exception:  # noqa: BLE001 - never disclose transport details.
+            print(json.dumps({"status": "verification_unavailable"}))
+            return 1
+        finally:
+            del player_token
+        if classification.outcome != VerificationOutcome.VERIFIED:
+            print(json.dumps({"status": classification.outcome.value}))
+            return 1
         status, detail = api_accounts.support_attach_discord_identity(
             database,
             account_public_id=arguments.target_account_public_id,

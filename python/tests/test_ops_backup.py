@@ -22,6 +22,21 @@ MODE=$TEST_MODE
 if [[ "$MODE" == fixture ]]; then load_fixture_config; else load_production_config; fi
 """
 
+REGULAR_KEYS = ["normal-1", "normal-2", "normal-3", "normal-4", "extra-1", "extra-2"]
+FAKE_SECRET_STORE = f"""#!{sys.executable}
+import os, shutil, sys
+from pathlib import Path
+args = sys.argv[1:]
+if args[:2] == ["secret", "create"]:
+    target = Path(os.environ["SECRET_STORE"]) / args[-2]
+    if args[-1] == "-":
+        target.write_bytes(sys.stdin.buffer.read())
+    else:
+        shutil.copyfile(args[-1], target)
+else:
+    sys.exit(1)
+"""
+
 
 @pytest.fixture
 def mode_config(tmp_path):
@@ -32,7 +47,7 @@ def mode_config(tmp_path):
     secrets = tmp_path / "secrets"
     secrets.mkdir()
     for name in (
-        *(f"clashlens-normal-{number}" for number in range(1, 5)),
+        *(f"clashlens-{label}" for label in REGULAR_KEYS),
         "clashlens-interactive-1",
         "clashlens-hmac-current",
         "login",
@@ -228,7 +243,96 @@ def test_website_environment_trusts_pod_unless_empty_or_explicit(
 
 
 @pytest.mark.parametrize("mode", ["production", "fixture"])
-def test_production_pod_address_is_pinned_inside_its_network(tmp_path, mode_config, mode):
+@pytest.mark.parametrize("rate", [1, 25, 29])
+def test_six_regular_keys_and_key_rate_reach_the_collector(tmp_path, mode_config, mode, rate):
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write(f"CLASHLENS_REQUESTS_PER_SECOND_PER_KEY={rate}\n")
+    secrets = Path(mode_config["OPS_ENV_FILE"]).parent.parent / "secrets"
+    for label in [*REGULAR_KEYS, "interactive-1"]:
+        (secrets / f"clashlens-{label}").write_text(f"fixture-{label}\n")
+    store = tmp_path / "podman-secrets"
+    store.mkdir()
+    podman = tmp_path / "podman"
+    podman.write_text(FAKE_SECRET_STORE)
+    podman.chmod(0o700)
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            MODE_CONFIG + "prepare_secrets\nwrite_environment\n",
+            "key-loading-test",
+            str(OPS),
+        ],
+        env=dict(
+            mode_config, TEST_MODE=mode, PODMAN_BIN=str(podman), SECRET_STORE=str(store)
+        ),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "fixture-" not in result.stdout + result.stderr
+    regular = dict(
+        entry.split("=", 1)
+        for entry in (store / "clashlens-normal-api-keys").read_text().split(",")
+    )
+    assert list(regular) == REGULAR_KEYS
+    interactive = (store / "clashlens-interactive-api-keys").read_text()
+    if mode == "production":
+        assert regular == {label: f"fixture-{label}" for label in REGULAR_KEYS}
+        assert interactive == "interactive-1=fixture-interactive-1"
+    collector_env = tmp_path / "state" / "clashlens" / "env" / "collector.env"
+    assert (
+        f"CLASHLENS_REQUESTS_PER_SECOND_PER_KEY={rate if mode == 'production' else 25}"
+        in collector_env.read_text().splitlines()
+    )
+
+
+@pytest.mark.parametrize(
+    ("setting", "message"),
+    [
+        ("CLASHLENS_REGULAR_API_KEY_NAMES=normal-1,normal-2,normal-3", "4 to 7"),
+        (
+            "CLASHLENS_REGULAR_API_KEY_NAMES="
+            + ",".join([*REGULAR_KEYS, "extra-3", "extra-4"]),
+            "4 to 7",
+        ),
+        (
+            "CLASHLENS_REGULAR_API_KEY_NAMES=normal-1,normal-2,normal-3,interactive-1",
+            "4 to 7",
+        ),
+        (
+            "CLASHLENS_REGULAR_API_KEY_NAMES=normal-1,normal-2,normal-3,normal-1",
+            "twice",
+        ),
+        (
+            "CLASHLENS_REGULAR_API_KEY_NAMES=normal-1,normal-2,normal-3,extra-3",
+            "extra-3",
+        ),
+        ("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=30", "1 to 29"),
+        ("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=0", "1 to 29"),
+    ],
+)
+def test_production_refuses_unsafe_key_settings(mode_config, setting, message):
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write(setting + "\n")
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG, "key-setting-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert message in result.stderr
+
+
+@pytest.mark.parametrize("mode", ["production", "fixture"])
+def test_production_pod_address_is_pinned_inside_its_network(
+    tmp_path, mode_config, mode
+):
     result = subprocess.run(
         [
             "bash",

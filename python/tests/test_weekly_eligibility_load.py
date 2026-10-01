@@ -67,8 +67,8 @@ def test_known_pool_weekly_request_load(database_url, tmp_path):
                 collector = Collector(
                     database=database, spool=spool, archive=None,
                     client=OfficialApiClient(f"http://127.0.0.1:{server.server_port}", allow_insecure_test_origin=True, max_body_bytes=4096),
-                    regular_keys=KeyPool([ApiKey(f"regular-{i}", "fixture") for i in range(4)], starts_per_second=30, concurrency_per_key=6),
-                    interactive_keys=KeyPool([ApiKey("interactive", "fixture")], starts_per_second=30, concurrency_per_key=6),
+                    regular_keys=KeyPool([ApiKey(f"regular-{i}", "fixture") for i in range(4)], starts_per_second=25, concurrency_per_key=6),
+                    interactive_keys=KeyPool([ApiKey("interactive", "fixture")], starts_per_second=25, concurrency_per_key=6),
                     archive_instance_id="fixture", collector_version="weekly-load-test", max_body_bytes=4096,
                 )
                 started = monotonic()

@@ -74,8 +74,8 @@ class ApiKey:
 
 class _StartLimiter:
     def __init__(self, starts_per_second: int) -> None:
-        if not 1 <= starts_per_second <= 30:
-            raise ValueError("request start rate must be between 1 and 30")
+        if not 1 <= starts_per_second <= 29:
+            raise ValueError("request start rate must be between 1 and 29")
         self._interval = 1.0 / starts_per_second
         self._next_start = 0.0
 
@@ -96,6 +96,7 @@ class _KeyState:
     start_lock: asyncio.Lock
     healthy: bool = True
     paused_until: float = 0.0
+    starts: int = 0
 
 
 T = TypeVar("T")
@@ -372,6 +373,7 @@ class KeyPool:
         self._cursor = 0
         self._selection_lock = asyncio.Lock()
         self._before_start = before_start
+        self.starts_per_second = starts_per_second
 
     async def run(
         self, request: Callable[[ApiKey, StartRequest], Awaitable[T]]
@@ -405,6 +407,7 @@ class KeyPool:
                         if not state.healthy or state.paused_until > monotonic():
                             continue
                         state.limiter.started()
+                        state.starts += 1
                         return
 
             return await request(state.key, start_request)
@@ -458,6 +461,14 @@ class KeyPool:
                 for state in self._states
             ),
         }
+
+    def key_health(self) -> list[tuple[str, bool, bool, int]]:
+        """Return each key's label, health, pause state and request starts."""
+        now = monotonic()
+        return [
+            (state.key.label, state.healthy, state.paused_until > now, state.starts)
+            for state in self._states
+        ]
 
 
 @dataclass(frozen=True, slots=True)

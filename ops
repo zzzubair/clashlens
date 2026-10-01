@@ -220,6 +220,17 @@ load_production_config() {
   POSTGRES_DB=$(setting POSTGRES_DB)
   POSTGRES_USER=$(setting POSTGRES_USER)
   [[ "$POSTGRES_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ && "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "PostgreSQL names are invalid"
+  # Each name is one Clash API key file, clashlens-<name>, in CLASHLENS_API_KEY_HOST_DIR.
+  REGULAR_KEY_NAMES=$(setting CLASHLENS_REGULAR_API_KEY_NAMES normal-1,normal-2,normal-3,normal-4,extra-1,extra-2)
+  [[ "$REGULAR_KEY_NAMES" =~ ^[a-z0-9][a-z0-9-]*(,[a-z0-9][a-z0-9-]*){3,6}$ && ",$REGULAR_KEY_NAMES," != *,interactive-1,* ]] || \
+    die "CLASHLENS_REGULAR_API_KEY_NAMES must list 4 to 7 comma-separated key names other than interactive-1"
+  local -A seen_keys=()
+  for name in ${REGULAR_KEY_NAMES//,/ }; do
+    [[ -z "${seen_keys[$name]-}" ]] || die "CLASHLENS_REGULAR_API_KEY_NAMES lists $name twice"
+    seen_keys[$name]=1
+  done
+  KEY_RATE=$(setting CLASHLENS_REQUESTS_PER_SECOND_PER_KEY 25)
+  [[ "$KEY_RATE" =~ ^([1-9]|[12][0-9])$ ]] || die "CLASHLENS_REQUESTS_PER_SECOND_PER_KEY must be a whole number from 1 to 29"
   validate_production_secret_files
   validate_backup_config
   PREFIX=clashlens
@@ -269,6 +280,8 @@ load_fixture_config() {
   HEALTH_PORT=18081
   POSTGRES_DB=clashlens
   POSTGRES_USER=clashlens
+  REGULAR_KEY_NAMES=normal-1,normal-2,normal-3,normal-4,extra-1,extra-2
+  KEY_RATE=25
   CONFIG[POSTGRES_PASSWORD]=fixture_admin_password_000000000001
   CONFIG[CLASHLENS_COLLECTOR_DB_PASSWORD]=fixture_collector_password_0000001
   CONFIG[CLASHLENS_WORKER_DB_PASSWORD]=fixture_worker_password_00000000001
@@ -780,7 +793,7 @@ write_environment() {
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key \
     "CLASHLENS_OFFICIAL_API_ORIGIN=$official_origin" "CLASHLENS_ENABLE_GLOBAL_RANKINGS=$(setting CLASHLENS_GLOBAL_RANKINGS_ENABLED false)" \
     "CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY=$(setting CLASHLENS_ENABLE_WEEKLY_ELIGIBILITY false)" \
-    CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081 "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=$([[ "$MODE" == fixture ]] && printf true || printf false)"
+    "CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=$KEY_RATE" CLASHLENS_HEALTH_LISTEN=0.0.0.0:8081 "CLASHLENS_ALLOW_INSECURE_TEST_ORIGIN=$([[ "$MODE" == fixture ]] && printf true || printf false)"
   write_env worker.env "${common[@]}" CLASHLENS_DATABASE_URL_FILE=/run/secrets/database-url \
     CLASHLENS_ARCHIVE_ACCESS_KEY_FILE=/run/secrets/archive-access-key CLASHLENS_ARCHIVE_SECRET_KEY_FILE=/run/secrets/archive-secret-key
   local hmac_caller hmac_key_id
@@ -849,8 +862,8 @@ read_secret_value() {
 validate_production_secret_files() {
   local secret_dir name file value
   secret_dir=$(setting CLASHLENS_API_KEY_HOST_DIR)
-  for name in clashlens-normal-1 clashlens-normal-2 clashlens-normal-3 clashlens-normal-4 clashlens-interactive-1; do
-    file="$secret_dir/$name"
+  for name in ${REGULAR_KEY_NAMES//,/ } interactive-1; do
+    file="$secret_dir/clashlens-$name"
     read_secret_value "$file"
     value=$SECRET_VALUE
     [[ -n "$value" && "$value" != *[[:space:],=]* ]] || die "$file contains an invalid API key"
@@ -896,7 +909,7 @@ prepare_secrets() {
     replace_secret clashlens-collector-archive-secret-key development
     replace_secret clashlens-worker-archive-access-key development
     replace_secret clashlens-worker-archive-secret-key development
-    replace_secret clashlens-normal-api-keys normal-1=dev-normal-key-1,normal-2=dev-normal-key-2,normal-3=dev-normal-key-3,normal-4=dev-normal-key-4
+    replace_secret clashlens-normal-api-keys normal-1=dev-normal-key-1,normal-2=dev-normal-key-2,normal-3=dev-normal-key-3,normal-4=dev-normal-key-4,extra-1=dev-extra-key-1,extra-2=dev-extra-key-2
     replace_secret clashlens-interactive-api-keys interactive-1=dev-interactive-key
     replace_secret clashlens-interactive-1 dev-interactive-key
     replace_secret clashlens-hmac-current AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8
@@ -911,11 +924,11 @@ prepare_secrets() {
     replace_secret clashlens-worker-archive-secret-key "$(setting CLASHLENS_WORKER_ARCHIVE_SECRET_KEY)"
     local secret_dir name key_value normal_keys= interactive_key
     secret_dir=$(setting CLASHLENS_API_KEY_HOST_DIR)
-    for name in clashlens-normal-1 clashlens-normal-2 clashlens-normal-3 clashlens-normal-4; do
-      IFS= read -r key_value < "$secret_dir/$name" || true
-      [[ -n "$key_value" && "$key_value" != *[[:space:],=]* ]] || die "$secret_dir/$name contains an invalid API key"
+    for name in ${REGULAR_KEY_NAMES//,/ }; do
+      IFS= read -r key_value < "$secret_dir/clashlens-$name" || true
+      [[ -n "$key_value" && "$key_value" != *[[:space:],=]* ]] || die "$secret_dir/clashlens-$name contains an invalid API key"
       [[ -z "$normal_keys" ]] || normal_keys+=,
-      normal_keys+="${name#clashlens-}=$key_value"
+      normal_keys+="$name=$key_value"
     done
     name=clashlens-interactive-1
     IFS= read -r interactive_key < "$secret_dir/$name" || true

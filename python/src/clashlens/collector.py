@@ -1117,6 +1117,21 @@ class Collector:
             ),
             f'clashlens_collector_archive_health{{state="{self.archive_health}"}} 1',
         ]
+        for pool_name, pool in (
+            ("regular", self.regular_keys),
+            ("interactive", self.interactive_keys),
+        ):
+            for label, healthy, paused, starts in pool.key_health():
+                key = f'{{pool="{pool_name}",key="{label}"}}'
+                lines += [
+                    f"clashlens_collector_key_healthy{key} {int(healthy)}",
+                    f"clashlens_collector_key_paused{key} {int(paused)}",
+                    (
+                        "clashlens_collector_key_rate_limit_per_second"
+                        f"{key} {pool.starts_per_second}"
+                    ),
+                    f"clashlens_collector_key_requests_started_total{key} {starts}",
+                ]
         if stats is not None:
             lines.extend(
                 [

@@ -948,7 +948,7 @@ def test_archive_instance_validation_and_interactive_permit_budget(
             connection.execute(
                 """
                 INSERT INTO shared_api_permits (credential_fingerprint, caller)
-                SELECT %s, 'collector' FROM generate_series(1, 28)
+                SELECT %s, 'collector' FROM generate_series(1, 23)
                 """,
                 (fingerprint,),
             )

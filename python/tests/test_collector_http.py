@@ -17,6 +17,16 @@ import pytest
 from clashlens.collector_http import ApiKey, KeyPool, OfficialApiClient, ProviderFailure
 
 
+@pytest.mark.parametrize("rate", [0, 30, 31])
+def test_key_pool_rejects_rates_outside_one_to_twenty_nine(rate: int) -> None:
+    with pytest.raises(ValueError, match="between 1 and 29"):
+        KeyPool(
+            [ApiKey("normal-1", "fixture")],
+            starts_per_second=rate,
+            concurrency_per_key=1,
+        )
+
+
 def test_regular_keys_limit_starts_and_concurrency_per_key() -> None:
     pool = KeyPool(
         [ApiKey("regular-1", "one"), ApiKey("regular-2", "two")],
@@ -46,6 +56,32 @@ def test_regular_keys_limit_starts_and_concurrency_per_key() -> None:
         assert all(later - earlier >= 0.04 for earlier, later in pairwise(key_starts))
 
 
+def test_six_keys_each_start_at_most_the_configured_rate() -> None:
+    labels = ["normal-1", "normal-2", "normal-3", "normal-4", "extra-1", "extra-2"]
+    pool = KeyPool(
+        [ApiKey(label, f"fixture-{label}") for label in labels],
+        starts_per_second=25,
+        concurrency_per_key=6,
+    )
+    starts: dict[str, list[float]] = defaultdict(list)
+
+    async def request(key: ApiKey, start_request) -> None:
+        await start_request()
+        starts[key.label].append(monotonic())
+
+    async def run_requests() -> None:
+        await asyncio.gather(*(pool.run(request) for _ in range(6 * 8)))
+
+    asyncio.run(run_requests())
+
+    assert pool.starts_per_second == 25
+    assert {label: len(times) for label, times in starts.items()} == dict.fromkeys(
+        labels, 8
+    )
+    for key_starts in starts.values():
+        assert all(later - earlier >= 0.039 for earlier, later in pairwise(key_starts))
+
+
 def test_shared_permit_is_taken_before_each_interactive_start() -> None:
     events: list[str] = []
 
@@ -54,7 +90,7 @@ def test_shared_permit_is_taken_before_each_interactive_start() -> None:
 
     pool = KeyPool(
         [ApiKey("interactive-1", "one")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
         before_start=permit,
     )
@@ -71,7 +107,7 @@ def test_shared_permit_is_taken_before_each_interactive_start() -> None:
 def test_paused_key_is_skipped_while_another_key_is_ready() -> None:
     pool = KeyPool(
         [ApiKey("regular-1", "one"), ApiKey("regular-2", "two")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
     )
     pool.pause("regular-1", 60)
@@ -90,7 +126,7 @@ def test_paused_key_is_skipped_while_another_key_is_ready() -> None:
 def test_key_state_is_rechecked_after_waiting_to_start(state_change: str) -> None:
     pool = KeyPool(
         [ApiKey("regular-1", "one")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=2,
     )
     starts: list[float] = []
@@ -257,7 +293,7 @@ def test_official_client_returns_exact_bytes_and_safe_request_proof(
     )
     pool = KeyPool(
         [ApiKey("regular-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
     )
 
@@ -289,7 +325,7 @@ def test_official_client_rejects_a_response_over_the_raw_response_limit(
     )
     pool = KeyPool(
         [ApiKey("regular-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
     )
 
@@ -310,7 +346,7 @@ def test_official_client_enforces_total_deadline_while_bytes_keep_arriving(
     )
     pool = KeyPool(
         [ApiKey("regular-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
     )
 
@@ -332,7 +368,7 @@ def test_redirects_share_one_total_deadline(official_server: str) -> None:
     )
     pool = KeyPool(
         [ApiKey("regular-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
     )
 
@@ -370,7 +406,7 @@ def test_redirect_hop_uses_another_rate_and_shared_permit(
     )
     pool = KeyPool(
         [ApiKey("interactive-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
         before_start=permit,
     )
@@ -379,7 +415,7 @@ def test_redirect_hop_uses_another_rate_and_shared_permit(
 
     assert response.body == b"ok"
     assert len(permit_times) == 2
-    assert permit_times[1] - permit_times[0] == pytest.approx(1 / 30)
+    assert permit_times[1] - permit_times[0] == pytest.approx(1 / 25)
 
 
 def test_unread_responses_do_not_poison_or_drain_single_connection_pool(
@@ -393,7 +429,7 @@ def test_unread_responses_do_not_poison_or_drain_single_connection_pool(
     )
     pool = KeyPool(
         [ApiKey("regular-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
     )
 
@@ -414,7 +450,7 @@ def test_official_client_keeps_content_encoded_response_bytes_exact(
     client = OfficialApiClient(official_server, allow_insecure_test_origin=True)
     pool = KeyPool(
         [ApiKey("regular-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
     )
 
@@ -434,7 +470,7 @@ def test_cancellation_keeps_key_permit_until_blocking_request_ends(
     )
     pool = KeyPool(
         [ApiKey("regular-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
     )
     original_request = client._request
@@ -484,7 +520,7 @@ def test_actual_network_starts_stay_limited_when_default_executor_is_busy(
     )
     pool = KeyPool(
         [ApiKey("regular-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=3,
     )
     blockers_started = 0
@@ -538,7 +574,7 @@ def test_shared_permits_are_serialized_next_to_actual_network_starts(
     )
     pool = KeyPool(
         [ApiKey("interactive-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=3,
         before_start=permit,
     )
@@ -569,7 +605,7 @@ def test_dns_past_deadline_cannot_start_network_and_keeps_capacity(
     )
     pool = KeyPool(
         [ApiKey("regular-1", "secret")],
-        starts_per_second=30,
+        starts_per_second=25,
         concurrency_per_key=1,
     )
     resolver_started = threading.Event()

@@ -36,11 +36,11 @@ scheduling and reuse are implemented behind the
 [default-off switch](collector-polling.md#weekly-eligibility-switch); production
 verification remains pending. For trial sizes and commands, see
 [local development](../README.md#local-development).
-`./ops` loads four regular API keys. #128 must measure the actual active workload
-alongside the 22,157-tag known pool and weekly checks. Raising the live-player
+For production key allocation and expansion, see
+[Clash API keys](operating.md#clash-api-keys). #128 must measure the actual active
+workload alongside the 22,157-tag known pool and weekly checks. Raising the live-player
 trial limit or adding keys is not required merely because the known pool is
-larger. The collector supports more keys and Zubair can supply them if measured
-demand requires additional production wiring. Keep existing safeguards.
+larger. Keep existing safeguards.
 
 ## Existing service lifecycle
 
@@ -127,10 +127,9 @@ Create the configured spool as a dedicated directory owned by the service
 account with mode 700. Keep it outside the account's home, checkout, ops state
 and unit directories, and secret directory; `up` refuses overlapping paths
 before stopping the current stack. Under
-`CLASHLENS_API_KEY_HOST_DIR`, create five mode-600 files named
-`clashlens-normal-1` through `clashlens-normal-4` and
-`clashlens-interactive-1`, plus the HMAC file named by
-`CLASHLENS_HMAC_SECRET_FILE`. `./ops` transfers their values into Podman's
+`CLASHLENS_API_KEY_HOST_DIR`, prepare the
+[private key files](operating.md#clash-api-keys), plus the mode-600 HMAC file named
+by `CLASHLENS_HMAC_SECRET_FILE`. `./ops` transfers their values into Podman's
 private secret store. API keys are supplied to the collector as an environment
 secret because its current CLI accepts `label=value` key pools; they are not
 written to a unit, environment file, or process argument. The API receives
@@ -160,7 +159,8 @@ bootstrap or while an operator explicitly handles a failed item.
 is `11bee593-3b31-40c0-80b1-28e24614c9ec`. The reserved public IPv4 is
 **163.172.188.40**, allocation `38ccd5b5-6185-46f9-8312-cd1720688832`.
 Scaleway reports the allocation as non-dynamic; keep it allocated when rebuilding
-the server. This address is what all five Clash API keys must allow.
+the server. This address is what every
+[configured Clash API key](operating.md#clash-api-keys) must allow.
 
 The September 30 quote totals **EUR 10.56/month before tax** at 730 hours:
 EUR 6.55 compute, EUR 3.65 IPv4 and EUR 0.36 for the 10 GB local disk. This fits
@@ -285,9 +285,9 @@ unverified. Do not treat the unauthenticated rate as proof of launch capacity.
    new latency/throughput check. Verify an unauthenticated request through
    `http://100.122.10.22:3128` returns the official API's missing-authorization
    response with certificate checks enabled.
-2. Add **163.172.188.40/32** to each of the four regular keys and the interactive
+2. Add **163.172.188.40/32** to each regular key and the interactive
    key in the Clash developer portal. If this requires replacement key values,
-   put them in the existing five private key files. Do not print them or put
+   put them in the existing private key files. Do not print them or put
    them in a command line, this document or the relay.
 3. Deploy the reviewed release to rogue through the existing release procedure.
    Set `CLASHLENS_OFFICIAL_API_PROXY_URL=http://100.122.10.22:3128` in its

@@ -83,15 +83,14 @@ The revised manual commands and their verification limits belong in
   population alongside the 22,157-tag known pool and its weekly eligibility
   work. Prior 12,500-player evidence remains a historical baseline with its
   original revision and workload limits intact.
-- The collector supports multiple keys, but `./ops` wires four regular keys
-  and one separate interactive key. Each regular key has a configured allowance
-  of 30 starts/second. At 12,500 active players, two requests every five minutes
+- For current key allocation, request limits and expansion, see
+  [Clash API keys](operating.md#clash-api-keys). At 12,500 active players, two
+  requests every five minutes
   require about 83.3 starts/second before first-time/weekly checks, retries,
-  league-history reads and Reset work; four keys allow at most 120. This is
+  league-history reads and Reset work. This is
   arithmetic, not measured throughput or a provider-limit guarantee. The earlier
   147.7 figure assumed every supplied tag was active and is not the launch
-  workload. Measure the existing setup first; additional keys and wiring are
-  needed only if measured demand requires them. Zubair can supply more keys.
+  workload.
 - Measure collection, processing, imports, clan growth, disk, database, archive,
   backups and restore load together. Keep swap out of the capacity budget.
   Report known-tag/clan growth and eligibility-check cost as well as active

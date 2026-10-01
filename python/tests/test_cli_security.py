@@ -13,6 +13,7 @@ from clashlens.cli import (
     _file_value,
     _load_hmac_keys,
     _parse_api_keys,
+    _run_collector,
     _run_ready,
     build_parser,
     main,
@@ -31,6 +32,49 @@ def test_collector_api_keys_require_non_secret_labels() -> None:
     ]
     with pytest.raises(ValueError, match="label=secret"):
         _parse_api_keys("unlabelled-secret")
+
+
+@pytest.mark.parametrize("source", ["argument", "environment"])
+@pytest.mark.parametrize("rate", ["0", "1", "25", "29", "30", "31", "1.5"])
+def test_collector_rate_stays_under_thirty(monkeypatch, source: str, rate: str) -> None:
+    monkeypatch.delenv("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", raising=False)
+    arguments = ["collector"]
+    if source == "environment":
+        monkeypatch.setenv("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", rate)
+    else:
+        arguments += ["--starts-per-second-per-key", rate]
+
+    if rate in {"1", "25", "29"}:
+        assert build_parser().parse_args(arguments).starts_per_second_per_key == int(rate)
+    else:
+        with pytest.raises(SystemExit) as error:
+            build_parser().parse_args(arguments)
+        assert error.value.code == 2
+
+
+@pytest.mark.parametrize("count", [3, 4, 6, 7, 8])
+def test_collector_loads_four_to_seven_regular_keys(monkeypatch, count: int) -> None:
+    labels = ["normal-1", "normal-2", "normal-3", "normal-4", "extra-1", "extra-2"]
+    labels += ["extra-3", "extra-4"]
+    arguments = build_parser().parse_args(["collector"])
+    arguments.regular_api_keys = ",".join(
+        f"{label}=fixture-{label}" for label in labels[:count]
+    )
+    arguments.interactive_api_keys = "interactive-1=fixture-interactive"
+
+    class KeysAccepted(Exception):
+        pass
+
+    def stop_after_key_checks(_database_url: str) -> None:
+        raise KeysAccepted
+
+    monkeypatch.setattr("clashlens.cli._database_url", lambda _arguments: "")
+    monkeypatch.setattr("clashlens.cli.CollectorDatabase", stop_after_key_checks)
+
+    assert arguments.starts_per_second_per_key == 25
+    expected = KeysAccepted if 4 <= count <= 7 else ValueError
+    with pytest.raises(expected):
+        _run_collector(arguments)
 
 
 def test_cli_loads_current_and_previous_hmac_keys_from_files(tmp_path: Path) -> None:

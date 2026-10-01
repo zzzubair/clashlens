@@ -90,6 +90,66 @@ def migrated_production_database(
             admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
+def test_shared_key_rate_upgrade_preserves_state_and_outstanding_permissions(
+    database_url: str,
+) -> None:
+    with migrated_production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
+                version = int(migration.name.split("_", 1)[0])
+                if 9 <= version <= 40:
+                    connection.execute(migration.read_text(encoding="utf-8"))
+            connection.execute(
+                """
+                INSERT INTO shared_api_credentials
+                    (credential_fingerprint, state, cooldown_until, quarantine_reason)
+                VALUES (repeat('a', 64), 'active', NULL, NULL),
+                       (repeat('b', 64), 'cooldown', clock_timestamp() + interval '1 minute', NULL),
+                       (repeat('c', 64), 'quarantined', NULL, 'fixture'),
+                       (repeat('d', 64), 'retired', NULL, NULL)
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO shared_api_permits (credential_fingerprint, caller)
+                SELECT repeat('a', 64), 'collector' FROM generate_series(1, 29)
+                UNION ALL SELECT repeat('a', 64), 'python'
+                """
+            )
+            connection.execute(
+                (ROOT / "deploy/migrations/0041_shared_api_key_rate.sql").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+            assert connection.execute(
+                "SELECT count(*) FROM shared_api_credentials WHERE collector_budget = 24 AND python_budget = 1 AND total_budget = 25"
+            ).fetchone() == (4,)
+            assert connection.execute(
+                "SELECT count(*) FROM shared_api_permits"
+            ).fetchone() == (30,)
+            for fingerprint, state in [
+                ("a", "active"),
+                ("b", "cooldown"),
+                ("c", "quarantined"),
+                ("d", "retired"),
+            ]:
+                assert connection.execute(
+                    "SELECT granted, credential_state = %s FROM clashlens_acquire_shared_api_permit(%s, 'python')",
+                    (state, fingerprint * 64),
+                ).fetchone() == (False, True)
+            with pytest.raises(psycopg.errors.CheckViolation):
+                connection.execute(
+                    "UPDATE shared_api_credentials SET total_budget = 30, collector_budget = 29"
+                )
+            connection.execute(
+                "INSERT INTO shared_api_credentials (credential_fingerprint) VALUES (repeat('e', 64))"
+            )
+            assert connection.execute(
+                "SELECT total_budget FROM shared_api_credentials WHERE credential_fingerprint = repeat('e', 64)"
+            ).fetchone() == (25,)
+
+
 def test_python_production_migration_is_reentrant_and_enforces_identity_uniqueness(
     database_url: str,
 ) -> None:
