@@ -766,6 +766,46 @@ class Database:
             config.marker_payload_version,
         )
 
+    def newest_job_plan(self, *, limit: int) -> list[int]:
+        """Each player's newest waiting profile and battle-log job, stalest first.
+
+        Profiles come before battle logs because they set the leaderboard.
+        Players are ordered by how old their leaderboard entry looks. The ids
+        are only suggestions: ``claim_job(job_id=...)`` still applies every
+        due, lease and supported-contract check.
+        """
+        with self._timed_connection() as connection:
+            rows = connection.execute(
+                f"""
+                WITH newest AS (
+                    SELECT DISTINCT ON (observation.player_id, job.endpoint)
+                           job.id, job.endpoint, observation.player_id,
+                           observation.response_observed_at
+                    FROM {self._jobs_relation} AS job
+                    JOIN collector_observations AS observation
+                      ON observation.id = job.observation_id
+                    WHERE job.state IN ('pending', 'waiting_retry')
+                      AND job.priority = %s
+                      AND job.due_at <= statement_timestamp()
+                      AND job.work_type = 'process_observation'
+                      AND job.endpoint IN ('profile', 'battle_log')
+                      AND job.attempt_count < job.max_attempts
+                    ORDER BY observation.player_id, job.endpoint,
+                             observation.response_observed_at DESC, job.id DESC
+                )
+                SELECT newest.id
+                FROM newest
+                JOIN players AS player ON player.id = newest.player_id
+                ORDER BY newest.endpoint = 'profile' DESC,
+                         greatest(player.current_observed_at,
+                                  player.current_profile_confirmed_at) NULLS FIRST,
+                         newest.response_observed_at DESC, newest.id DESC
+                LIMIT %s
+                """,
+                (PYTHON_LIVE_PRIORITY, limit),
+            ).fetchall()
+        return [int(row[0]) for row in rows]
+
     def queue_health(self) -> dict[str, bool | int | float | None]:
         with self.pool.connection() as connection:
             row = connection.execute(

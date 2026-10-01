@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from collections import deque
 from dataclasses import dataclass
 from threading import Event, Lock
 from time import monotonic
@@ -46,6 +47,14 @@ from .source_observation_contract import validate_source_observation_contract
 
 MAX_CONCURRENCY = 32
 DATABASE_CONFLICT_RETRIES = 3
+# Claims follow a plan of each player's newest waiting profile and battle log,
+# stalest players first, so a backlog never keeps the leaderboard behind. Every
+# fourth claim keeps the oldest-first order so daily results and other derived
+# work still move while a backlog drains.
+NEWEST_PLAN_SIZE = 5000
+NEWEST_PLAN_MAX_AGE_SECONDS = 30.0
+NEWEST_PLAN_EMPTY_RETRY_SECONDS = 1.0
+OLDEST_FIRST_CLAIM_EVERY = 4
 STAGE_DURATION_BUCKETS_SECONDS = (
     0.0001,
     0.00025,
@@ -245,6 +254,11 @@ class ObservationProcessor:
         self.archive = archive
         self.stage_metrics = stage_metrics
         self.database.stage_metrics = stage_metrics
+        self._plan: deque[int] = deque()
+        self._plan_lock = Lock()
+        self._plan_refreshed_at: float | None = None
+        self._plan_refreshing = False
+        self._claim_count = 0
 
     def _record_stage(self, stage: str, started_at: float) -> None:
         if self.stage_metrics is not None:
@@ -254,11 +268,54 @@ class ObservationProcessor:
         self, *, owner: str, lease_seconds: int = 30
     ) -> ProcessResult | None:
         started_at = monotonic()
-        claim = self.database.claim_job(owner=owner, lease_seconds=lease_seconds)
+        claim = self._claim_next(owner=owner, lease_seconds=lease_seconds)
         self._record_stage("python_claim", started_at)
         if claim is None:
             return None
         return self._process_claim(claim, lease_seconds=lease_seconds)
+
+    def _claim_next(self, *, owner: str, lease_seconds: int) -> Claim | None:
+        with self._plan_lock:
+            self._claim_count += 1
+            planned = self._claim_count % OLDEST_FIRST_CLAIM_EVERY != 0
+        while planned and (job_id := self._next_planned_job()) is not None:
+            claim = self.database.claim_job(
+                owner=owner, lease_seconds=lease_seconds, job_id=job_id
+            )
+            if claim is not None:
+                return claim
+        return self.database.claim_job(owner=owner, lease_seconds=lease_seconds)
+
+    def _next_planned_job(self) -> int | None:
+        plan_source = getattr(self.database, "newest_job_plan", None)
+        if plan_source is None:
+            return None
+        with self._plan_lock:
+            now = monotonic()
+            age = (
+                None
+                if self._plan_refreshed_at is None
+                else now - self._plan_refreshed_at
+            )
+            due = age is None or age >= (
+                NEWEST_PLAN_MAX_AGE_SECONDS
+                if self._plan
+                else NEWEST_PLAN_EMPTY_RETRY_SECONDS
+            )
+            # One lane refreshes; the others keep using the current plan, or
+            # the oldest-first order when it is empty.
+            if not due or self._plan_refreshing:
+                return self._plan.popleft() if self._plan else None
+            self._plan_refreshing = True
+        try:
+            plan = plan_source(limit=NEWEST_PLAN_SIZE)
+        finally:
+            with self._plan_lock:
+                self._plan_refreshing = False
+                self._plan_refreshed_at = monotonic()
+        with self._plan_lock:
+            self._plan = deque(plan)
+            return self._plan.popleft() if self._plan else None
 
     def process_job(
         self,
@@ -422,6 +479,17 @@ class ObservationProcessor:
         ):
             return self._fail(claim, "missing_archive_metadata", retryable=False)
 
+        if (
+            claim.endpoint == "profile"
+            and claim.http_status is not None
+            and 200 <= claim.http_status < 300
+        ):
+            try:
+                if ingestion.supersede_profile(self.database, claim):
+                    return ProcessResult(claim.job_id, "superseded")
+            except LeaseLost:
+                return ProcessResult(claim.job_id, "lease_lost")
+
         try:
             # Renew before the spool miss can enter a bounded remote fallback;
             # the second renewal below fences the result before parsing.
@@ -517,6 +585,10 @@ class ObservationProcessor:
                     parser_version=claim.parser_version,
                 )
                 self._record_stage("python_parse_battle_log", parse_started_at)
+                if battle_ingestion.supersede_battle_log(
+                    self.database, claim, battle_log
+                ):
+                    return ProcessResult(claim.job_id, "superseded")
                 domain_started_at = monotonic()
                 battle_ingestion.complete_battle_log(self.database, claim, battle_log)
                 self._record_stage("python_domain_battle_log", domain_started_at)

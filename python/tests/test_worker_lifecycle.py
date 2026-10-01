@@ -218,6 +218,7 @@ def test_new_observation_reads_only_the_local_spool() -> None:
     database = Database()
     claim = SimpleNamespace(
         job_id=41,
+        observation_id=None,
         work_type="process_observation",
         processing_version=PROCESSING_VERSION,
         domain_rule_version=DOMAIN_RULE_VERSION,
@@ -327,6 +328,7 @@ def test_missing_new_observation_is_not_repaired_from_archive() -> None:
 
     claim = SimpleNamespace(
         job_id=42,
+        observation_id=None,
         work_type="process_observation",
         processing_version=PROCESSING_VERSION,
         domain_rule_version=DOMAIN_RULE_VERSION,

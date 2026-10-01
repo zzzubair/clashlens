@@ -1216,10 +1216,12 @@ def test_completion_binds_coverage_chain_to_sweep_battle_log_observation_ids(
         )
         database, processor = _processor(connection_info, archive_server)
         try:
+            # The pre-start poll runs before the newer sweep log; after it, the
+            # poll would be skipped as superseded instead of processed.
             for job_id in (
+                pre_start_job,
                 start_profile_job,
                 start_battle_job,
-                pre_start_job,
                 middle_job,
                 end_profile_job,
                 end_battle_job,

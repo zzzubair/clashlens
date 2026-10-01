@@ -189,6 +189,10 @@ retrying, dependency-waiting and leased jobs, even when the next attempt is
 scheduled in the future. Rescheduling a retry does not reset its age; finished
 jobs are excluded. Jobs without a saved response use their own creation time,
 so delayed derived work also contributes to the processing wait.
+The worker handles each player's newest response first, so during a backlog
+this age can stay high while the Live Leaderboard is already current. Worker
+`job_result` lines with outcome `superseded` are older copies skipped because a
+newer response from the same Legend day already covers them.
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Escalate a wait that keeps growing; restarting services does not shrink it.
