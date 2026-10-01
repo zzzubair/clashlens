@@ -197,6 +197,7 @@ Escalate a wait that keeps growing; restarting services does not shrink it.
 **Recovered:** the overdue alert clears when Reset work is finished and the
 oldest overdue check falls under 10 minutes. The Live Leaderboard alert clears
 when no player is past 10 minutes. Confirm each condition's Discord recovery message.
+A valid empty Live Leaderboard also clears its freshness alert.
 
 ### When alerts themselves fail
 

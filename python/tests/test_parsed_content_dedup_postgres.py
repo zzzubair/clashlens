@@ -458,6 +458,65 @@ def test_public_profile_uses_latest_occurrence_metadata_and_freshness(
             database.close()
 
 
+def test_profile_confirmation_backfill_preserves_proven_checks(
+    database_url: str, archive_server
+) -> None:
+    from test_api_db_public_ops import NOW as accepted_at, seed_profile
+    from test_api_migration import ROOT, migrated_production_database
+
+    confirmed_at = accepted_at + timedelta(hours=2)
+    with migrated_production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
+                if 9 <= int(migration.name.split("_", 1)[0]) < 40:
+                    connection.execute(migration.read_text())
+        api = ApiDatabase(connection_info)
+        try:
+            for tag in ("#2PP", "#8PY", "#9PY"):
+                seed_profile(api, tag, 6000)
+            failed, _ = store_observation(
+                connection_info, archive_server, occurrence_key="backfill-failed",
+                endpoint="profile", body=b'{"reason":"inMaintenance"}',
+                observed_at=confirmed_at + timedelta(minutes=5),
+                normalized_tag="#2PP", http_status=503,
+            )
+            pending, _ = store_observation(
+                connection_info, archive_server, occurrence_key="backfill-pending",
+                endpoint="profile", body=b'{"trophies":6030}',
+                observed_at=confirmed_at, normalized_tag="#9PY",
+            )
+            with psycopg.connect(connection_info) as connection:
+                for observation_id in (failed, pending):
+                    connection.execute(
+                        """
+                        INSERT INTO collector_response_state (
+                            scope, identity_key, endpoint, player_id, normalized_tag,
+                            last_response_hash, last_content_fingerprint,
+                            last_occurrence_key, last_applied_occurrence_key,
+                            last_seen_at, last_observation_id, last_success_at
+                        )
+                        SELECT scope, normalized_tag, endpoint, player_id, normalized_tag,
+                               response_hash, response_hash, occurrence_key, occurrence_key,
+                               response_completed_at, id, %s
+                        FROM collector_observations WHERE id = %s
+                        """,
+                        (confirmed_at, observation_id),
+                    )
+                connection.commit()
+                connection.execute(
+                    (ROOT / "deploy/migrations/0040_profile_confirmation.sql").read_text()
+                )
+            for tag, expected in (
+                ("#2PP", confirmed_at), ("#8PY", accepted_at), ("#9PY", accepted_at)
+            ):
+                page = api_players.get_player_page(
+                    api, tag, now=confirmed_at + timedelta(minutes=6), freshness_seconds=900
+                )
+                assert page["observed_at"] == expected.isoformat()
+        finally:
+            api.close()
+
+
 def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
     database_url: str, archive_server, tmp_path, monkeypatch, capsys
 ) -> None:
@@ -476,8 +535,7 @@ def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
         database, processor = _processor(connection_info, archive_server)
         api = ApiDatabase(as_api_role(connection_info))
 
-        def collector_checked(observation_id: int, last_success_at: datetime) -> None:
-            # Unchanged responses only move this row; no new profile is saved.
+        def collector_checked(observation_id: int, check_time: datetime) -> None:
             with psycopg.connect(connection_info) as connection:
                 connection.execute(
                     """
@@ -489,14 +547,18 @@ def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
                     )
                     SELECT 'player', '#2PP', 'profile', player_id, '#2PP',
                            response_hash, response_hash, occurrence_key,
-                           occurrence_key, response_completed_at, id, %s
+                           occurrence_key, %s, id,
+                           CASE WHEN http_status BETWEEN 200 AND 299 THEN %s END
                     FROM collector_observations WHERE id = %s
                     ON CONFLICT (scope, identity_key, endpoint) DO UPDATE
                     SET last_observation_id = EXCLUDED.last_observation_id,
                         last_seen_at = EXCLUDED.last_seen_at,
-                        last_success_at = EXCLUDED.last_success_at
+                        last_response_hash = EXCLUDED.last_response_hash,
+                        last_content_fingerprint = EXCLUDED.last_content_fingerprint,
+                        last_success_at = GREATEST(collector_response_state.last_success_at,
+                                                   EXCLUDED.last_success_at)
                     """,
-                    (last_success_at, observation_id),
+                    (check_time, check_time, observation_id),
                 )
 
         def page(now: datetime) -> tuple[str, str, list[str]]:
@@ -558,8 +620,8 @@ def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
             )
             collector_checked(failed, checked_at + timedelta(minutes=10))
             assert page(checked_at + timedelta(minutes=11))[:2] == (
-                "stale",
-                NOW.isoformat(),
+                "fresh",
+                checked_at.isoformat(),
             )
 
             # A changed profile the worker has not applied yet is not shown,
@@ -577,8 +639,8 @@ def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
             )
             collector_checked(pending, checked_at + timedelta(minutes=12))
             assert page(checked_at + timedelta(minutes=13))[:2] == (
-                "stale",
-                NOW.isoformat(),
+                "fresh",
+                checked_at.isoformat(),
             )
         finally:
             api.close()

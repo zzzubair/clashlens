@@ -28,26 +28,13 @@ def get_live_leaderboard(
             WITH selected AS MATERIALIZED (
                 SELECT player.normalized_tag, profile.name, profile.trophies,
                        greatest(
-                           player.current_observed_at, checked.last_success_at
+                           player.current_observed_at, player.current_profile_confirmed_at
                        ) AS observed_at,
                        player.eligibility_state,
                        profile.profile_json -> 'clan' ->> 'name' AS clan
                 FROM players AS player
                 JOIN player_profile_versions AS profile
                   ON profile.id = player.current_profile_version_id
-                -- Same rule as the player page: an unchanged profile response
-                -- only moves the collector's check time, and that check
-                -- confirms the shown profile once the latest stored response
-                -- has been applied to it.
-                LEFT JOIN collector_response_state AS checked
-                  ON checked.scope = 'player'
-                 AND checked.identity_key = player.normalized_tag
-                 AND checked.endpoint = 'profile'
-                 AND EXISTS (
-                     SELECT 1 FROM player_profile_effects AS applied
-                     WHERE applied.observation_id = checked.last_observation_id
-                       AND applied.observed_at <= player.current_observed_at
-                 )
                 WHERE player.active = true
                   AND profile.source_contract_state = 'accepted'
             ), stats AS (

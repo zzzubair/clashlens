@@ -585,8 +585,14 @@ use the [operating notes](operating.md#respond-to-alerts).
 - **Any Live Leaderboard player last updated over 600 seconds ago.** The check
   enters the private API container and runs the Live Leaderboard's own query,
   printing only two counts. Its fresh/stale labels and population counts use the
-  same 600-second limit. A changed profile keeps its previous time until the
-  worker applies it; there is no percentage allowance or extra alert delay.
+  same 600-second limit. The retained confirmation advances on a successful
+  unchanged check or when a changed profile is applied. Failed checks and
+  pending changes preserve it, including across restarts. Migration 0040
+  backfills existing confirmations from accepted profiles and successful saved
+  responses. It retains one time and one content identifier per player, about
+  1 MiB for 13,000 players, with no growing check history. There is no percentage
+  allowance or extra alert delay. A valid empty leaderboard reports `0 0`, has
+  no freshness breach, and permits an existing freshness alert to recover.
   The collector's `oldest_pending_processing_age_seconds` measures the oldest
   outstanding saved response from `collector_observations.created_at` across
   pending, retrying, dependency-waiting and leased processing jobs. Rescheduling

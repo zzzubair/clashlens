@@ -10,6 +10,7 @@ from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, validate_season_anchor
 from .profile import PROFILE_PARSER_VERSION, ParsedProfile
 from .rankings import ParsedOfficialRankings
+from .response_fields import content_fingerprint
 
 
 def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -> None:
@@ -25,6 +26,10 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
         endpoint,
         schema_version,
     ) = job_outcomes._observation_source(claim)
+    fingerprint = content_fingerprint(
+        "profile", json.dumps(profile.profile_json).encode(),
+        http_status=http_status, response_hash=response_hash,
+    )
     with database._timed_connection() as connection:
         with connection.transaction():
             job = database._lock_live_claim(connection, claim)
@@ -155,11 +160,16 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 ),
             )
             connection.execute(
+                "SELECT id FROM players WHERE id = %s FOR UPDATE", (player[0],)
+            )
+            connection.execute(
                 """
                 WITH candidate AS (
                     SELECT effect.profile_version_id, effect.observed_at,
+                           %s::text AS content_fingerprint,
                            version.eligibility_state,
                            version.eligibility_state IN ('eligible', 'ineligible')
+                           AND effect.observed_at >= COALESCE(p.current_profile_confirmed_at, effect.observed_at)
                            AND NOT EXISTS (
                                SELECT 1
                                FROM player_profile_effects AS newer_effect
@@ -179,8 +189,8 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                            version.source_contract_state = 'accepted'
                            AND (
                                p.current_observed_at IS NULL
-                               OR p.current_observed_at < effect.observed_at
-                               OR (p.current_observed_at = effect.observed_at
+                               OR GREATEST(p.current_observed_at, p.current_profile_confirmed_at) < effect.observed_at
+                               OR (GREATEST(p.current_observed_at, p.current_profile_confirmed_at) = effect.observed_at
                                    AND effect.id > COALESCE((
                                        SELECT max(current_effect.id)
                                        FROM player_profile_effects AS current_effect
@@ -207,6 +217,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                     eligibility_state = CASE WHEN candidate.update_eligibility THEN candidate.eligibility_state ELSE p.eligibility_state END,
                     current_profile_version_id = CASE WHEN candidate.update_profile THEN candidate.profile_version_id ELSE p.current_profile_version_id END,
                     current_observed_at = CASE WHEN candidate.update_profile THEN candidate.observed_at ELSE p.current_observed_at END,
+                    current_profile_fingerprint = CASE WHEN candidate.update_profile THEN candidate.content_fingerprint ELSE p.current_profile_fingerprint END,
                     updated_at = CASE
                         WHEN candidate.update_eligibility
                           OR (candidate.update_profile
@@ -217,7 +228,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 FROM candidate
                 WHERE p.id = %s AND (candidate.update_eligibility OR candidate.update_profile)
                 """,
-                (player[0], observation_id, player[0]),
+                (fingerprint, player[0], observation_id, player[0]),
             )
             # A newly discovered player starts inactive while its first profile
             # is still unknown. Cancel ordinary discovery only after a trusted
@@ -1064,6 +1075,3 @@ def _profile_semantic_projection(profile: ParsedProfile) -> dict[str, Any]:
         "season_anchor_state": profile.season_anchor_state,
         "clan_name": clan_name,
     }
-
-
-

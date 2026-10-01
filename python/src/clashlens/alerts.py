@@ -165,8 +165,6 @@ def leaderboard_freshness_probe(now: datetime | None = None) -> None:
         )
     finally:
         database.close()
-    if board is None:
-        raise CheckError("Live Leaderboard is empty")
     print(board["source_observations"]["stale_count"], board["total_entries"])
 
 
@@ -418,8 +416,8 @@ def observe(
             ],
             25,
         )
-        stale, total = (int(value) for value in result.stdout.split())
-        if result.returncode or total < 1:
+        stale, _ = (int(value) for value in result.stdout.split())
+        if result.returncode:
             raise ValueError
         findings["leaderboard"] = stale > 0
     except (OSError, ValueError, subprocess.SubprocessError):
