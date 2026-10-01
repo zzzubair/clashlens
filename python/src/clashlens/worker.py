@@ -288,9 +288,9 @@ class ObservationProcessor:
             return self._fail(claim, "database_deadlock", retryable=True)
         except (DeadlockDetected, SerializationFailure):
             # The failed transaction recorded no outcome. Restore its retry
-            # slot before expiry so queue maintenance can recover it later.
-            # Only report retrying once the refund commits. If conflicts persist
-            # until lease loss, an exhausted job can still fail during recovery.
+            # slot so queue maintenance can recover it later, even if conflicts
+            # outlast the lease. Only report retrying once the refund commits;
+            # it is lost only if another worker or maintenance took the job.
             while True:
                 try:
                     self.database.refund_claim_attempt(claim)

@@ -971,7 +971,12 @@ class Database:
                 )
 
     def refund_claim_attempt(self, claim: Claim) -> None:
-        """Keep a conflicted failure write recoverable without releasing its lease."""
+        """Keep a conflicted failure write recoverable without releasing its lease.
+
+        The owner and token fence the refund even after the lease expires: any
+        new claim replaces the token and queue maintenance clears it, so an
+        expired worker can only refund a job nobody else has taken.
+        """
         with self._timed_connection() as connection:
             with connection.transaction():
                 refunded = connection.execute(
@@ -981,7 +986,6 @@ class Database:
                         updated_at = clock_timestamp()
                     WHERE id = %s AND state = 'leased'
                       AND lease_owner = %s AND lease_token = %s
-                      AND lease_expires_at > clock_timestamp()
                     """,
                     (
                         min(claim.attempt_count, claim.max_attempts - 1),
