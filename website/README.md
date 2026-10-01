@@ -112,15 +112,24 @@ not choose that address. Restarting the process resets its in-memory counters.
 Without a valid connection address, Refresh returns `503 service_unavailable`
 without requesting collection.
 
-`CLASHLENS_TRUSTED_PROXY_IP` defaults to empty, meaning no header is trusted.
-Set it to exactly the local proxy's socket address **as observed inside the
-website container**, not a subnet or a number of hops. IPv4-mapped IPv6 is
-normalized. Only Cloudflare's `CF-Connecting-IP` header supplies the visitor
+In the website itself, `CLASHLENS_TRUSTED_PROXY_IP` defaults to empty, meaning
+no header is trusted. Set it to exactly the local proxy's socket address **as
+observed inside the website container**, not a subnet or a number of hops.
+IPv4-mapped IPv6 is normalized. Only Cloudflare's `CF-Connecting-IP` header supplies the visitor
 address. Missing, duplicate, chained or malformed addresses fall back to the
 socket peer. `CLASHLENS_TRUST_PROXY` is obsolete and ignored. The root `ops`
-passes the trusted proxy setting from `app.env`; no trusted address is enabled by default.
+uses the [fixed production pod address](../docs/deployment.md#production-configuration),
+which is where every connection to the loopback-published website port appears
+from, and trusts that address when `app.env` leaves the setting unset. An empty
+value trusts nothing.
 
-Before enabling proxy trust, the ingress operator must:
+When upgrading, set `CLASHLENS_TRUSTED_PROXY_IP=10.89.14.2` or remove the line
+instead of keeping an old `10.89.*` pod address. `./ops up` refuses stale pod
+addresses before stopping any service. If an older example left the setting
+empty, make the same update to enable per-visitor Refresh allowances; an
+explicit empty value is preserved.
+
+Before starting production with proxy trust, the operator must:
 
 - Restrict the local proxy to the Cloudflare Tunnel connection, and restrict the
   website to that proxy. Never trust an address shared with untrusted connections.
@@ -139,13 +148,16 @@ needs that deployment verification. These changes do not alter it. The plain
 Refresh returns that 503 response there. Use the built website with `npm start`
 or `./dev up`.
 
-### Existing preview
+### September 25 preview deployment
 
-`https://preview.clashlens.net` is configured for real Google and Discord
-sign-in against the saved preview database; completed-provider proof is listed
-below. The main `clashlens.net` site still
-serves the coming-soon page. Google and Discord use the same application
-credentials, with additional `/auth/google/callback` and
+This section records the earlier separate preview. For current production
+operation, see [Operating Clash Lens on rogue](../docs/operating.md).
+
+On September 25, `https://preview.clashlens.net` was configured for real Google
+and Discord sign-in against the saved preview database; completed-provider
+proof is listed below. The main `clashlens.net` site served the coming-soon
+page. Google and Discord used the same application credentials, with
+additional `/auth/google/callback` and
 `/auth/discord/callback` redirects on the preview origin.
 
 The preview has a separate session-signing key. Credentials stay under
@@ -184,13 +196,6 @@ preview deployment of merged `8107609`, built at
 Its API source is `https/api-src-20260925-performance-8107609`; four changed
 Python files match the merge, while five existing preview-specific files were
 preserved. The preview API is therefore not claimed to be identical to main.
-Earlier September 22 build paths are historical, not the current-build reference.
-Future updates need a
-fresh build directory and a restart of only the preview website service after
-its build mount is updated; never replace a build while it is serving requests.
-Start the dependent preview proxy and tunnel again after that restart if needed.
-The existing Tailscale preview on port 5173 still watches source changes.
-Do not run the main stack's `ops up` to update this preview.
 
 The preview's "Recent real battles" army view remains a fixed September 22
 capture, not a growing live dataset. #137 records improved downloads and selected

@@ -109,8 +109,19 @@ cp app.env.example app.env
 chmod 600 app.env
 ```
 
-Before enabling visitor-address trust, follow the website's
-[Refresh address boundary](../website/README.md#refresh-address-boundary).
+Before starting production, follow the website's
+[Refresh address boundary](../website/README.md#refresh-address-boundary) for
+default proxy trust, upgrades from older settings, and required restrictions on
+incoming connections.
+
+Production uses the private network `clashlens-private` with address range
+`10.89.14.0/24` and fixed pod address `10.89.14.2`. Fixture mode leaves both for
+Podman to choose. `./ops up` refuses an existing network with a different range
+before stopping any service. If it reports that mismatch, run `./ops down`,
+remove only the network with `podman network rm clashlens-private`, then run
+`./ops up` again. This keeps the PostgreSQL volume, spool and archive. Python 3
+must be available on the host when a non-empty trusted proxy address is
+configured, so `up` can validate it before changing services.
 
 Create the configured spool as a dedicated directory owned by the service
 account with mode 700. Keep it outside the account's home, checkout, ops state
@@ -343,11 +354,13 @@ The website and collector health endpoints bind to `127.0.0.1`; PostgreSQL and
 the private API have no host port. Production discovery and the global Top-200
 request remain disabled until real collection is approved.
 
-`up` first disables and stops the whole target. It then starts PostgreSQL by
-itself, applies every missing numbered migration in order, verifies the fixed
-archive contract, rotates the admin and runtime-role passwords through standard
-input, and only then enables the application target. A failed migration leaves application
-services disabled for the next reboot. Re-running `up` applies only migrations
+`up` first checks configuration and existing resources without stopping services.
+Once those checks pass, it disables and stops the whole target. It then starts
+PostgreSQL by itself, applies every missing numbered migration in order,
+verifies the fixed archive contract, rotates the admin and runtime-role
+passwords through standard input, and only then enables the application target.
+A failed migration leaves application services disabled for the next reboot.
+Re-running `up` applies only migrations
 whose recorded version is absent.
 
 ## PostgreSQL backups and recovery

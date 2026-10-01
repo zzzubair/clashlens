@@ -1,8 +1,10 @@
 """Exercise the ops command boundary with a disposable container-manager substitute."""
 
+import configparser
 import datetime as dt
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 import shutil
@@ -14,6 +16,69 @@ from pathlib import Path
 import pytest
 
 OPS = Path(__file__).resolve().parents[2] / "ops"
+MODE_CONFIG = r"""
+source "$1" help >/dev/null
+MODE=$TEST_MODE
+if [[ "$MODE" == fixture ]]; then load_fixture_config; else load_production_config; fi
+"""
+
+
+@pytest.fixture
+def mode_config(tmp_path):
+    inputs = tmp_path / "inputs"
+    inputs.mkdir()
+    spool = tmp_path / "spool"
+    spool.mkdir(mode=0o700)
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    for name in (
+        *(f"clashlens-normal-{number}" for number in range(1, 5)),
+        "clashlens-interactive-1",
+        "clashlens-hmac-current",
+        "login",
+        "google",
+        "discord",
+    ):
+        secret = secrets / name
+        secret.write_text("a" * 43 + "\n")
+        secret.chmod(0o600)
+    settings = {
+        "POSTGRES_DB": "clashlens",
+        "POSTGRES_USER": "clashlens",
+        "POSTGRES_PASSWORD": "a" * 32,
+        "CLASHLENS_COLLECTOR_DB_PASSWORD": "a" * 32,
+        "CLASHLENS_WORKER_DB_PASSWORD": "a" * 32,
+        "CLASHLENS_API_DB_PASSWORD": "a" * 32,
+        "CLASHLENS_ARCHIVE_ENDPOINT": "storage.example",
+        "CLASHLENS_ARCHIVE_SECURE": "true",
+        "CLASHLENS_ARCHIVE_REGION": "test-region",
+        "CLASHLENS_ARCHIVE_BUCKET": "evidence",
+        "CLASHLENS_ARCHIVE_INSTANCE_ID": "test-instance",
+        "CLASHLENS_ARCHIVE_MARKER_KEY": "archive-instance.json",
+        "CLASHLENS_ARCHIVE_MARKER_HASH": "a" * 64,
+        "CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION": "v1",
+        "CLASHLENS_ARCHIVE_ACCESS_KEY": "test-access-key",
+        "CLASHLENS_ARCHIVE_SECRET_KEY": "test-secret-key",
+        "CLASHLENS_WORKER_ARCHIVE_ACCESS_KEY": "test-worker-access-key",
+        "CLASHLENS_WORKER_ARCHIVE_SECRET_KEY": "test-worker-secret-key",
+        "CLASHLENS_SPOOL_ROOT": str(spool),
+        "CLASHLENS_OFFICIAL_API_ORIGIN": "https://api.example",
+        "CLASHLENS_OFFICIAL_API_PROXY_URL": "http://proxy.example:3128",
+        "CLASHLENS_API_KEY_HOST_DIR": str(secrets),
+        "CLASHLENS_HMAC_SECRET_FILE": "/run/secrets/clashlens-hmac-current",
+    }
+    config = inputs / "app.env"
+    config.write_text("".join(f"{key}={value}\n" for key, value in settings.items()))
+    config.chmod(0o600)
+    return dict(
+        os.environ,
+        OPS_ENV_FILE=str(config),
+        XDG_STATE_HOME=str(tmp_path / "state"),
+        XDG_CONFIG_HOME=str(tmp_path / "config"),
+        PODMAN_BIN="forbidden-service-operation",
+        SYSTEMCTL_BIN="forbidden-service-operation",
+        LOGINCTL_BIN="forbidden-service-operation",
+    )
 
 
 @pytest.fixture
@@ -105,66 +170,42 @@ def run_ops(runtime, rows, *args, upload_exit=0):
     )
 
 
-@pytest.mark.parametrize("proxy_ip", [None, "", "127.0.0.1", "::1", "::ffff:127.0.0.1"])
+@pytest.mark.parametrize(
+    "proxy_ip", [None, "", "10.89.14.2", "127.0.0.1", "::1", "::ffff:127.0.0.1"]
+)
 @pytest.mark.parametrize(
     ("mode", "login_enabled"),
     [("production", False), ("production", True), ("fixture", True)],
 )
-def test_website_environment_omits_empty_proxy_and_preserves_explicit_address(
-    tmp_path, proxy_ip, mode, login_enabled
+def test_website_environment_trusts_pod_unless_empty_or_explicit(
+    tmp_path, mode_config, proxy_ip, mode, login_enabled
 ):
     environment_file = tmp_path / "state" / "clashlens" / "env" / "website.env"
     environment_file.parent.mkdir(parents=True)
     environment_file.write_text("CLASHLENS_TRUSTED_PROXY_IP=192.0.2.1\n")
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        if proxy_ip is not None:
+            config.write(f"CLASHLENS_TRUSTED_PROXY_IP={proxy_ip}\n")
+        if login_enabled:
+            config.write(
+                "CLASHLENS_PUBLIC_ORIGIN=https://clashlens.example\n"
+                "CLASHLENS_LOGIN_SECRET_FILE=/run/secrets/login\n"
+                "CLASHLENS_GOOGLE_CLIENT_ID=test-google-client\n"
+                "CLASHLENS_GOOGLE_CLIENT_SECRET_FILE=/run/secrets/google\n"
+                "CLASHLENS_DISCORD_CLIENT_ID=12345678901234567\n"
+                "CLASHLENS_DISCORD_CLIENT_SECRET_FILE=/run/secrets/discord\n"
+            )
     result = subprocess.run(
         [
             "bash",
             "-c",
-            r"""
-source "$1" help >/dev/null
-MODE=$TEST_MODE
-POSTGRES_DB=clashlens
-POSTGRES_USER=clashlens
-SPOOL_ROOT=$TEST_ROOT/spool
-ARCHIVE_ROOT=$TEST_ROOT/archive
-CONFIG=(
-  [CLASHLENS_ARCHIVE_ENDPOINT]=storage.example
-  [CLASHLENS_ARCHIVE_REGION]=test-region
-  [CLASHLENS_ARCHIVE_BUCKET]=evidence
-  [CLASHLENS_ARCHIVE_INSTANCE_ID]=test-instance
-  [CLASHLENS_ARCHIVE_MARKER_KEY]=archive-instance.json
-  [CLASHLENS_ARCHIVE_MARKER_HASH]=test-hash
-  [CLASHLENS_ARCHIVE_MARKER_PAYLOAD_VERSION]=v1
-  [CLASHLENS_OFFICIAL_API_ORIGIN]=https://api.example
-)
-if [[ "$TEST_PROXY_SET" == true ]]; then
-  CONFIG[CLASHLENS_TRUSTED_PROXY_IP]=$TEST_PROXY_IP
-fi
-if [[ "$TEST_LOGIN_ENABLED" == true ]]; then
-  CONFIG[CLASHLENS_PUBLIC_ORIGIN]=https://clashlens.example
-  CONFIG[CLASHLENS_LOGIN_SECRET_FILE]=/run/secrets/login
-  CONFIG[CLASHLENS_GOOGLE_CLIENT_ID]=test-google-client
-  CONFIG[CLASHLENS_GOOGLE_CLIENT_SECRET_FILE]=/run/secrets/google
-  CONFIG[CLASHLENS_DISCORD_CLIENT_ID]=12345678901234567
-  CONFIG[CLASHLENS_DISCORD_CLIENT_SECRET_FILE]=/run/secrets/discord
-fi
-write_environment
-""",
+            MODE_CONFIG + "write_environment\n",
             "environment-generation-test",
             str(OPS),
         ],
         env=dict(
-            os.environ,
-            XDG_STATE_HOME=str(tmp_path / "state"),
-            XDG_CONFIG_HOME=str(tmp_path / "config"),
-            PODMAN_BIN="forbidden-service-operation",
-            SYSTEMCTL_BIN="forbidden-service-operation",
-            LOGINCTL_BIN="forbidden-service-operation",
-            TEST_ROOT=str(tmp_path),
+            mode_config,
             TEST_MODE=mode,
-            TEST_LOGIN_ENABLED=str(login_enabled).lower(),
-            TEST_PROXY_SET=str(proxy_ip is not None).lower(),
-            TEST_PROXY_IP=proxy_ip or "",
         ),
         capture_output=True,
         text=True,
@@ -175,14 +216,153 @@ write_environment
     environment = dict(
         line.split("=", 1) for line in environment_file.read_text().splitlines()
     )
-    if mode == "production" and proxy_ip:
-        assert environment["CLASHLENS_TRUSTED_PROXY_IP"] == proxy_ip
+    expected_proxy = "10.89.14.2" if proxy_ip is None else proxy_ip
+    if mode == "production" and expected_proxy:
+        assert environment["CLASHLENS_TRUSTED_PROXY_IP"] == expected_proxy
     else:
         assert "CLASHLENS_TRUSTED_PROXY_IP" not in environment
     assert environment["NODE_ENV"] == ("test" if mode == "fixture" else "production")
     assert environment["CLASHLENS_LOGIN_ENABLED"] == str(login_enabled).lower()
     assert environment["CLASHLENS_PYTHON_API_URL"] == "http://127.0.0.1:8000"
     assert environment_file.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("mode", ["production", "fixture"])
+def test_production_pod_address_is_pinned_inside_its_network(tmp_path, mode_config, mode):
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            MODE_CONFIG
+            + r"""
+RELEASE=([POSTGRES_IMAGE]=postgres [COLLECTOR_IMAGE]=collector [PYTHON_IMAGE]=python [WEBSITE_IMAGE]=website)
+render_units
+""",
+            "unit-rendering-test",
+            str(OPS),
+        ],
+        env=dict(mode_config, TEST_MODE=mode),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    units = tmp_path / "config" / "containers" / "systemd"
+    network = configparser.ConfigParser(interpolation=None, strict=False)
+    pod = configparser.ConfigParser(interpolation=None, strict=False)
+    network.optionxform = pod.optionxform = str
+    network.read(units / "clashlens.network")
+    pod.read(units / "clashlens.pod")
+    assert pod["Pod"]["Network"] == "clashlens.network"
+    if mode == "fixture":
+        assert not network.has_option("Network", "Subnet")
+        assert not pod.has_option("Pod", "IP")
+        return
+    subnet = ipaddress.ip_network(network["Network"]["Subnet"])
+    address = ipaddress.ip_address(pod["Pod"]["IP"])
+    assert subnet == ipaddress.ip_network("10.89.14.0/24")
+    assert address == ipaddress.ip_address("10.89.14.2")
+    assert address in subnet
+    assert network["Network"]["NetworkName"] == "clashlens-private"
+
+
+@pytest.mark.parametrize(
+    ("subnets", "accepted"),
+    [("10.89.14.0/24 ", True), ("10.89.15.0/24 ", False), ("", False)],
+)
+def test_existing_network_with_another_subnet_is_refused(
+    tmp_path, mode_config, subnets, accepted
+):
+    podman = tmp_path / "podman"
+    podman.write_text(
+        '#!/usr/bin/env bash\n[[ "$2" == exists ]] || printf "%s\\n" "$TEST_SUBNETS"\n'
+    )
+    podman.chmod(0o700)
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            MODE_CONFIG + "guard_network_subnet\n",
+            "network-guard-test",
+            str(OPS),
+        ],
+        env=dict(
+            mode_config, PODMAN_BIN=str(podman), TEST_SUBNETS=subnets, TEST_MODE="production"
+        ),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted, result.stderr
+    if not accepted:
+        assert "podman network rm clashlens-private" in result.stderr
+
+
+@pytest.mark.parametrize("mode", ["production", "fixture"])
+@pytest.mark.parametrize(
+    ("proxy_ip", "accepted"),
+    [
+        (None, True),
+        ("", True),
+        ("10.89.14.2", True),
+        ("127.0.0.1", True),
+        ("::1", True),
+        ("::ffff:127.0.0.1", True),
+        ("192.0.2.1", True),
+        ("10.88.14.5", True),
+        ("10.90.14.5", True),
+        ("10.89.14.5", False),
+        ("10.89.14.7", False),
+        ("10.89.14.8", False),
+        ("10.89.0.1", False),
+        ("10.89.255.254", False),
+        ("::ffff:10.89.14.8", False),
+        ("::ffff:a59:e08", False),
+        ("0:0:0:0:0:ffff:0a59:0e08", False),
+        ("::ffff:10.89.14.2", True),
+        ("::ffff:a59:e02", True),
+        ("0:0:0:0:0:ffff:0a59:0e02", True),
+    ],
+)
+def test_up_refuses_stale_proxy_before_changing_services(
+    tmp_path, mode_config, mode, proxy_ip, accepted
+):
+    if proxy_ip is not None:
+        with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+            config.write(f"CLASHLENS_TRUSTED_PROXY_IP={proxy_ip}\n")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            r"""
+source "$1" help >/dev/null
+MODE=$TEST_MODE
+require_host() { :; }
+load_release() { :; }
+cleanup_stale_admin_state() { printf 'startup guards accepted\n'; exit 0; }
+up_stack
+""",
+            "startup-guard-test",
+            str(OPS),
+        ],
+        env=dict(mode_config, TEST_MODE=mode),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    accepted = accepted or mode == "fixture"
+    assert (result.returncode == 0) is accepted, result.stderr
+    if accepted:
+        assert result.stdout == "startup guards accepted\n"
+    else:
+        assert result.stdout == ""
+        assert "set CLASHLENS_TRUSTED_PROXY_IP=10.89.14.2" in result.stderr
+        assert "or remove the line" in result.stderr
+    assert not (tmp_path / "state" / "clashlens" / "mode").exists()
+    assert not (tmp_path / "state" / "clashlens" / "env").exists()
 
 
 def test_extra_manual_backups_do_not_shorten_recovery_window(runtime):

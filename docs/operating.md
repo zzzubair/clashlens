@@ -1,6 +1,10 @@
 # Operating Clash Lens on rogue
 
-Use the production checkout as `zubair`. Preview containers are separate.
+Use the production checkout as `zubair` for the
+[current friends-testing setup](product-status.md#launch-order). The separate
+[September 25 preview deployment](../website/README.md#september-25-preview-deployment)
+is historical.
+
 On 2026-09-30, the five production containers were healthy and the weekly
 backup timer was active. The Discord alert service and timer were **not installed**.
 The alert-specific checks below apply after their approved deployment.
