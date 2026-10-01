@@ -5,9 +5,15 @@ import threading
 from datetime import UTC, datetime, timedelta
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, store_observation, text
 
-from clashlens import army_ingestion, battle_ingestion, boundary_publication
+from clashlens import (
+    army_ingestion,
+    battle_ingestion,
+    boundary_publication,
+    reset_baselines,
+)
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
@@ -484,10 +490,13 @@ def test_partial_decode_persists_known_and_unknown_facts_per_perspective(
             database.close()
 
 
-def _pause_both_jobs_after_call(monkeypatch, module, name: str, call_number: int):
+def _pause_both_jobs_after_call(
+    monkeypatch, module, name: str, call_number: int, *, barrier=None
+):
     """Hold each job at a lock-taking step until both arrive, which forces the overlap."""
     original = getattr(module, name)
-    barrier = threading.Barrier(2, timeout=3)
+    if barrier is None:
+        barrier = threading.Barrier(2, timeout=3)
     calls = threading.local()
 
     def paused(*args, **kwargs):
@@ -523,24 +532,31 @@ def _process_battle_logs_concurrently(ci: str, archive_server, jobs: list[int]):
     return results
 
 
+@pytest.mark.parametrize("reset_boundary", [False, True])
 def test_concurrent_battle_logs_spanning_shared_days_both_complete(
-    database_url: str, archive_server, monkeypatch
+    database_url: str, archive_server, monkeypatch, reset_boundary: bool
 ) -> None:
     # One battle log spans two Legend days, the other three. Production's
     # 2026-10-01 deadlocks took the next-Reset locks for those days in
     # opposite orders when PostgreSQL returned the days unsorted.
     with domain_database(database_url) as ci:
         days = [datetime(2026, 9, day, 12, tzinfo=UTC) for day in (28, 29, 30)]
+        if reset_boundary:
+            days = [
+                datetime(2026, 9, 30, 12, tzinfo=UTC),
+                datetime(2026, 10, 1, 12, tzinfo=UTC),
+            ]
         jobs = []
+        observations = []
         for player, opponents, battle_days in (
-            ("#2PP", ("#8PP", "#9PP"), days[1:]),
+            ("#2PP", ("#8PP", "#9PP"), days[-1:] if reset_boundary else days[1:]),
             ("#2PQ", ("#8PQ", "#9PQ", "#8QQ"), days),
         ):
             rows = [
                 _live_row(True, opponent, None, ts)
                 for opponent, ts in zip(opponents, battle_days)
             ]
-            _, job_id = store_observation(
+            observation_id, job_id = store_observation(
                 ci,
                 archive_server,
                 occurrence_key=f"days-{player}",
@@ -550,14 +566,60 @@ def test_concurrent_battle_logs_spanning_shared_days_both_complete(
                 normalized_tag=player,
             )
             jobs.append(job_id)
+            observations.append(observation_id)
+        if reset_boundary:
+            boundary_at = days[-1].replace(hour=5)
+            with psycopg.connect(ci) as connection:
+                sweep_id = connection.execute(
+                    """
+                    INSERT INTO collector_reset_sweeps
+                        (boundary_at, member_ids, membership_captured_at)
+                    SELECT %s, ARRAY[player_id], clock_timestamp()
+                    FROM collector_observations WHERE id = %s
+                    RETURNING id
+                    """,
+                    (boundary_at, observations[0]),
+                ).fetchone()[0]
+                connection.execute(
+                    """
+                    INSERT INTO collector_work (
+                        kind, lane, scope, player_id, normalized_tag, sweep_id,
+                        due_at, coalescing_key, status, profile_status,
+                        battle_log_status, battle_log_observation_id
+                    )
+                    SELECT 'reset_baseline', 'reset', 'player', player_id,
+                           normalized_tag, %s, %s, 'delayed-reset', 'failed',
+                           'failed', 'observed', id
+                    FROM collector_observations WHERE id = %s
+                    """,
+                    (sweep_id, boundary_at, observations[0]),
+                )
+            monkeypatch.setattr(
+                ObservationProcessor,
+                "_process_claim",
+                ObservationProcessor._process_claim_once,
+            )
         # Without ORDER BY, PostgreSQL's hash method returns the days unsorted.
         options = psycopg.conninfo.conninfo_to_dict(ci)["options"]
         unsorted_ci = psycopg.conninfo.make_conninfo(
             ci, options=f"{options} -c enable_sort=off"
         )
+        barrier = threading.Barrier(2, timeout=3)
         _pause_both_jobs_after_call(
-            monkeypatch, boundary_publication, "_enqueue_army_analytics", 2
+            monkeypatch,
+            boundary_publication,
+            "_enqueue_army_analytics",
+            2,
+            barrier=barrier,
         )
+        if reset_boundary:
+            _pause_both_jobs_after_call(
+                monkeypatch,
+                reset_baselines,
+                "_refresh_reset_baseline_evidence",
+                1,
+                barrier=barrier,
+            )
 
         results = _process_battle_logs_concurrently(unsorted_ci, archive_server, jobs)
 

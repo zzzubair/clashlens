@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from psycopg.errors import DeadlockDetected, SerializationFailure
 
 from clashlens import cli, ingestion, job_outcomes, reconciliation_db
 from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
@@ -21,7 +22,12 @@ from clashlens.league_history import (
     ParsedLeagueHistory,
 )
 from clashlens.operating import WorkerMetrics
-from clashlens.worker import ObservationProcessor, ProcessResult, StageMetrics
+from clashlens.worker import (
+    ObservationProcessor,
+    ProcessResult,
+    StageMetrics,
+    process_concurrently,
+)
 
 
 class NoClaimDatabase:
@@ -31,6 +37,49 @@ class NoClaimDatabase:
     def claim_job(self, **_kwargs: object) -> None:
         self.claim_calls += 1
         raise AssertionError("shutdown must stop before claiming another job")
+
+
+@pytest.mark.parametrize("conflict", [DeadlockDetected, SerializationFailure])
+def test_failure_write_conflict_keeps_worker_processing(conflict, monkeypatch) -> None:
+    claims = [
+        SimpleNamespace(
+            job_id=job_id,
+            work_type="reconcile_ranked_day",
+            processing_version=PROCESSING_VERSION,
+            domain_rule_version=DOMAIN_RULE_VERSION,
+        )
+        for job_id in (17, 18)
+    ]
+
+    class Database:
+        def claim_job(self, **_kwargs):
+            return claims.pop(0)
+
+        def renew_claim(self, _claim, **_kwargs):
+            pass
+
+    def complete_reconciliation(_database, claim):
+        if claim.job_id == 17:
+            raise conflict()
+
+    def fail_claim(*_args, **_kwargs):
+        raise conflict()
+
+    monkeypatch.setattr(
+        reconciliation_db, "complete_reconciliation", complete_reconciliation
+    )
+    monkeypatch.setattr(job_outcomes, "fail_claim", fail_claim)
+    results = process_concurrently(
+        ObservationProcessor(Database(), archive=object()),
+        concurrency=1,
+        owner="failure-conflict",
+        max_jobs=2,
+    )
+
+    assert results == [
+        ProcessResult(17, "retrying", "database_deadlock"),
+        ProcessResult(18, "processed"),
+    ]
 
 
 def test_stage_metrics_report_bounded_histogram_percentiles() -> None:

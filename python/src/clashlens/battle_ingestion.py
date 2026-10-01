@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import timedelta
+from datetime import UTC, timedelta
 from typing import Any
 
 from psycopg.types.json import Jsonb
@@ -11,6 +11,29 @@ from . import army_ingestion, job_outcomes, reconciliation_db, reset_baselines
 from .battle import ParsedBattleLog
 from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, ranked_day_for
+
+
+def _lock_battle_log_boundaries(
+    connection: Any, claim: Claim, battle_ids: list[int]
+) -> None:
+    boundaries = {
+        day_start.astimezone(UTC) + timedelta(days=1)
+        for (day_start,) in connection.execute(
+            "SELECT DISTINCT ranked_day_start FROM legend_battles WHERE id = ANY(%s::bigint[])",
+            (battle_ids,),
+        ).fetchall()
+    }
+    if claim.observation_id is not None:
+        context = reset_baselines._load_reset_baseline_context(
+            connection, claim.observation_id
+        )
+        if context is not None:
+            boundaries.add(context[4].astimezone(UTC))
+    for boundary_at in sorted(boundaries):
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"boundary-publication:{boundary_at.isoformat()}",),
+        )
 
 
 def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBattleLog) -> None:
@@ -373,7 +396,10 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
                     for battle_id, state in current_disagreement_states.items()
                     if previous_disagreement_states.get(battle_id) != state
                 )
-                army_ingestion._upsert_army_decodes(database, connection, sorted(affected_battle_ids))
+            _lock_battle_log_boundaries(connection, claim, sorted(affected_battle_ids))
+            army_ingestion._upsert_army_decodes(
+                database, connection, sorted(affected_battle_ids)
+            )
 
             outcome = (
                 "processed_with_gaps" if battle_log.has_row_gap else "processed"
@@ -769,7 +795,10 @@ def _complete_battle_log_legacy(database: Database, claim: Claim, battle_log: Pa
                     for battle_id, state in current_disagreement_states.items()
                     if previous_disagreement_states.get(battle_id) != state
                 )
-                army_ingestion._upsert_army_decodes(database, connection, sorted(affected_battle_ids))
+            _lock_battle_log_boundaries(connection, claim, sorted(affected_battle_ids))
+            army_ingestion._upsert_army_decodes(
+                database, connection, sorted(affected_battle_ids)
+            )
 
             job_outcomes._record_parsed_payload(
                 connection,

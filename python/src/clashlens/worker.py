@@ -284,7 +284,10 @@ class ObservationProcessor:
                 return self._process_claim_once(claim, lease_seconds=lease_seconds)
             except (DeadlockDetected, SerializationFailure):
                 continue
-        return self._fail(claim, "database_deadlock", retryable=True)
+        try:
+            return self._fail(claim, "database_deadlock", retryable=True)
+        except (DeadlockDetected, SerializationFailure):
+            return ProcessResult(claim.job_id, "retrying", "database_deadlock")
 
     def _process_claim_once(
         self, claim: Claim, *, lease_seconds: int
