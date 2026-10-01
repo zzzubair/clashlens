@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -663,37 +664,113 @@ def test_concurrent_battle_logs_sharing_armies_both_complete(
     assert results == {job_id: "processed" for job_id in jobs}
 
 
-def test_shared_army_decode_holds_boundary_lock_while_decoding(
-    database_url: str, archive_server, monkeypatch
+@pytest.mark.parametrize("code", [None, "u1x58", "u1x58-1x9999", "invalid"])
+def test_battle_log_with_saved_decodes_does_not_wait_for_reset_lock(
+    database_url: str, archive_server, code: str | None
 ) -> None:
+    # After the 2026-10-01 Reset, battle logs that only repeated saved battles
+    # queued one at a time behind that day's Reset lock.
     with domain_database(database_url) as ci:
         ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
         _, job_id = store_observation(
             ci,
             archive_server,
-            occurrence_key="shared-decode-lock",
+            occurrence_key="saved-decodes",
             endpoint="battle_log",
-            body=json.dumps({"items": [_live_row(True, "#8PP", None, ts)]}).encode(),
+            body=json.dumps({"items": [_live_row(True, "#8PP", code, ts)]}).encode(),
             observed_at=ts + timedelta(minutes=1),
             normalized_tag="#2PP",
         )
         db, proc = _processor(ci, archive_server)
-        original_decode = army_ingestion.decode_army_share_code
-        lock_available = []
-
-        def decode(raw_code):
-            with psycopg.connect(ci) as observer:
-                lock_available.append(
-                    observer.execute(
-                        "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
-                        ("boundary-publication:2026-08-05T05:00:00+00:00",),
-                    ).fetchone()[0]
-                )
-            return original_decode(raw_code)
-
         try:
             assert proc.process_job(job_id, owner="seed").outcome == "processed"
-            monkeypatch.setattr(army_ingestion, "decode_army_share_code", decode)
+            with psycopg.connect(ci) as publisher:
+                publisher.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    ("boundary-publication:2026-08-05T05:00:00+00:00",),
+                )
+                with db.pool.connection() as connection:
+                    with connection.transaction():
+                        connection.execute("SET LOCAL lock_timeout = '2s'")
+                        battle_ids = [
+                            row[0]
+                            for row in connection.execute(
+                                "SELECT id FROM legend_battles"
+                            ).fetchall()
+                        ]
+                        army_ingestion._upsert_army_decodes(db, connection, battle_ids)
+        finally:
+            db.close()
+
+
+@pytest.mark.parametrize("attack", [True, False])
+@pytest.mark.parametrize(
+    ("old_code", "new_code", "expected_status"),
+    [
+        ("u1x58", "u2x58", "decoded"),
+        ("u1x58-1x9999", "u2x58-2x9999", "partial"),
+        ("invalid-old", "invalid-new", "failed"),
+        ("u1x58", "u1x58", "decoded"),
+    ],
+)
+def test_redecode_preserves_report_corrected_before_reset_lock(
+    database_url: str,
+    archive_server,
+    monkeypatch,
+    attack: bool,
+    old_code: str,
+    new_code: str,
+    expected_status: str,
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        jobs = []
+        for occurrence, code, minutes in (
+            ("before-correction", old_code, 1),
+            ("after-correction", new_code, 5),
+        ):
+            rows = [_live_row(attack, "#8PP", code, ts)]
+            if minutes == 1:
+                rows.append(
+                    _live_row(attack, "#9PP", "u3x58", ts + timedelta(seconds=30))
+                )
+            _, job_id = store_observation(
+                ci,
+                archive_server,
+                occurrence_key=occurrence,
+                endpoint="battle_log",
+                body=json.dumps({"items": rows}).encode(),
+                observed_at=ts + timedelta(minutes=minutes),
+                normalized_tag="#2PP",
+            )
+            jobs.append(job_id)
+        db, proc = _processor(ci, archive_server)
+        waiting = threading.Event()
+        resume = threading.Event()
+        results = []
+
+        def redecode() -> None:
+            try:
+                with db.pool.connection() as connection:
+                    with connection.transaction():
+                        army_ingestion._upsert_army_decodes(db, connection, battle_ids)
+                results.append("processed")
+            except Exception as error:  # noqa: BLE001 - reported by the assertion
+                results.append(repr(error))
+
+        thread = threading.Thread(target=redecode)
+        original_execute = psycopg.Connection.execute
+
+        def pause_before_reset_lock(connection, query, params=None, **kwargs):
+            if threading.current_thread() is thread and params == (
+                "boundary-publication:2026-08-05T05:00:00+00:00",
+            ):
+                waiting.set()
+                assert resume.wait(timeout=20), "correction never released the redecode"
+            return original_execute(connection, query, params, **kwargs)
+
+        try:
+            assert proc.process_job(jobs[0], owner="seed").outcome == "processed"
             with db.pool.connection() as connection:
                 battle_ids = [
                     row[0]
@@ -701,10 +778,161 @@ def test_shared_army_decode_holds_boundary_lock_while_decoding(
                         "SELECT id FROM legend_battles"
                     ).fetchall()
                 ]
-                army_ingestion._upsert_army_decodes(db, connection, battle_ids)
-            assert lock_available and not any(lock_available)
+                connection.execute(
+                    "UPDATE battle_army_decodes SET decoder_version = 'army-decoder-v1'"
+                )
+            monkeypatch.setattr(psycopg.Connection, "execute", pause_before_reset_lock)
+            thread.start()
+            assert waiting.wait(timeout=10), "redecode never reached its Reset lock"
+            assert proc.process_job(jobs[1], owner="correction").outcome == "processed"
+            with db.pool.connection() as connection:
+                corrected = connection.execute(
+                    """
+                    SELECT id, battle_id, evidence_id, raw_code, status
+                    FROM battle_army_decodes
+                    WHERE is_active AND decoder_version = %s
+                    """,
+                    (army_ingestion.DECODER_VERSION,),
+                ).fetchone()
+            assert (text(corrected[3]), text(corrected[4])) == (
+                new_code,
+                expected_status,
+            )
+            resume.set()
+            thread.join(timeout=20)
+            assert not thread.is_alive()
+            assert results == ["processed"]
+            with db.pool.connection() as connection:
+                active = connection.execute(
+                    """
+                    SELECT id, battle_id, evidence_id, raw_code, status
+                    FROM battle_army_decodes
+                    WHERE is_active AND decoder_version = %s
+                    ORDER BY battle_id
+                    """,
+                    (army_ingestion.DECODER_VERSION,),
+                ).fetchall()
+                assert corrected in active
+                assert len(active) == 2
+                unchanged = next(row for row in active if row[1] != corrected[1])
+                assert (text(unchanged[3]), text(unchanged[4])) == ("u3x58", "decoded")
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM battle_army_decodes WHERE battle_id = %s",
+                        (corrected[1],),
+                    ).fetchone()[0]
+                    == 2
+                )
+                assert not connection.execute(
+                    """
+                    SELECT 1 FROM battle_army_decodes AS decode
+                    JOIN battle_perspectives AS perspective
+                      ON perspective.battle_id = decode.battle_id
+                     AND perspective.perspective = decode.perspective
+                    WHERE decode.is_active AND decode.decoder_version = %s
+                      AND decode.evidence_id <> perspective.evidence_id
+                    """,
+                    (army_ingestion.DECODER_VERSION,),
+                ).fetchall()
         finally:
+            resume.set()
+            if thread.ident is not None:
+                thread.join(timeout=20)
             db.close()
+
+
+def test_reset_battle_log_and_baseline_writer_take_locks_in_one_order(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    # 2026-10-01 05:18 deadlocks: a Reset battle log held the Reset lock and
+    # waited for its baseline lock, while the job recording that baseline held
+    # the baseline lock and waited for the Reset lock.
+    with domain_database(database_url) as ci:
+        boundary_at = datetime(2026, 10, 1, 5, tzinfo=UTC)
+        observation_id, job_id = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="reset-lock-order",
+            endpoint="battle_log",
+            body=json.dumps(
+                {
+                    "items": [
+                        _live_row(True, "#8PP", None, boundary_at + timedelta(hours=1))
+                    ]
+                }
+            ).encode(),
+            observed_at=boundary_at + timedelta(hours=2),
+            normalized_tag="#2PP",
+        )
+        with psycopg.connect(ci) as connection:
+            work_id = connection.execute(
+                """
+                WITH sweep AS (
+                    INSERT INTO collector_reset_sweeps
+                        (boundary_at, member_ids, membership_captured_at)
+                    SELECT %s, ARRAY[player_id], clock_timestamp()
+                    FROM collector_observations WHERE id = %s
+                    RETURNING id
+                )
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, sweep_id,
+                    due_at, coalescing_key, status, profile_status,
+                    battle_log_status, battle_log_observation_id
+                )
+                SELECT 'reset_baseline', 'reset', 'player', player_id,
+                       normalized_tag, sweep.id, %s, 'delayed-reset', 'failed',
+                       'failed', 'observed', observation.id
+                FROM collector_observations AS observation, sweep
+                WHERE observation.id = %s
+                RETURNING id
+                """,
+                (boundary_at, observation_id, boundary_at, observation_id),
+            ).fetchone()[0]
+        monkeypatch.setattr(
+            ObservationProcessor,
+            "_process_claim",
+            ObservationProcessor._process_claim_once,
+        )
+        baseline_key = f"reset-baseline:{work_id}"
+        results: dict[int, object] = {}
+
+        def run() -> None:
+            db, proc = _processor(ci, archive_server)
+            try:
+                results[job_id] = proc.process_job(job_id, owner="reset").outcome
+            except Exception as error:  # noqa: BLE001 - reported by the assertion
+                results[job_id] = repr(error)
+            finally:
+                db.close()
+
+        thread = threading.Thread(target=run)
+        with psycopg.connect(ci) as baseline_writer:
+            baseline_writer.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (baseline_key,),
+            )
+            thread.start()
+            with psycopg.connect(ci, autocommit=True) as observer:
+                for _ in range(200):
+                    waiting = observer.execute(
+                        """
+                        SELECT count(*) FROM pg_locks
+                        WHERE locktype = 'advisory' AND NOT granted
+                          AND objid = (hashtextextended(%s, 0) & 4294967295)::oid
+                        """,
+                        (baseline_key,),
+                    ).fetchone()[0]
+                    if waiting:
+                        break
+                    time.sleep(0.05)
+            assert waiting, "battle log never reached its baseline lock"
+            baseline_writer.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                ("boundary-publication:2026-10-01T05:00:00+00:00",),
+            )
+        thread.join(timeout=60)
+
+    assert results == {job_id: "processed"}
 
 
 def test_deadlocked_battle_log_is_retried_without_using_an_attempt(

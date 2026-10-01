@@ -26,11 +26,18 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
     original_enqueue = boundary_publication._enqueue_army_analytics
 
     def enqueue(
-        target: Any, connection: Any, *, ranked_day_start: datetime
+        target: Any,
+        connection: Any,
+        *,
+        ranked_day_start: datetime,
+        player_ids: list[int] | None = None,
     ) -> None:
         if target is not database:
             return original_enqueue(
-                target, connection, ranked_day_start=ranked_day_start
+                target,
+                connection,
+                ranked_day_start=ranked_day_start,
+                player_ids=player_ids,
             )
         if getattr(database, "_suppress_fixture_enqueue", False):
             return

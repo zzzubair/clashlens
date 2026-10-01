@@ -13,16 +13,21 @@ from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, ranked_day_for
 
 
-def _battle_log_reset_boundary(connection: Any, claim: Claim) -> datetime | None:
+def _battle_log_reset_baseline(
+    connection: Any, claim: Claim
+) -> tuple[int, datetime] | None:
+    """The (collector work id, Reset) whose baseline this battle log records."""
     if claim.observation_id is None:
         return None
     context = reset_baselines._load_reset_baseline_context(
         connection, claim.observation_id
     )
-    return None if context is None else context[4]
+    return None if context is None else (int(context[0]), context[4])
 
 
-def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBattleLog) -> None:
+def complete_battle_log(
+    database: Database, claim: Claim, battle_log: ParsedBattleLog
+) -> None:
     compact = getattr(database, "_supports_compact_battles", False)
     if not getattr(database, "_supports_content_dedup", False):
         return _complete_battle_log_legacy(database, claim, battle_log)
@@ -37,6 +42,7 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
     with database._timed_connection() as connection:
         with connection.transaction():
             from .season_retirement import acquire_retirement_reader
+
             acquire_retirement_reader(connection)
             job = database._lock_live_claim(connection, claim)
             all_battle_rows = [row for row in battle_log.rows if row.battle is not None]
@@ -105,7 +111,11 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
             assert log_row is not None
             log_id = int(log_row[0])
             source_row_ids = _record_battle_sources(
-                connection, battle_log, parsed_payload_id, log_id, reporter_id,
+                connection,
+                battle_log,
+                parsed_payload_id,
+                log_id,
+                reporter_id,
                 compact=compact,
             )
             affected_battle_ids: set[int] = set()
@@ -222,7 +232,9 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
                                 )
                             ],
                             "source_row_id": source_row_ids[row.source_row_index],
-                            "observation_row_id": None if compact else observation_row_ids[row.source_row_index],
+                            "observation_row_id": None
+                            if compact
+                            else observation_row_ids[row.source_row_index],
                             "perspective": battle.perspective,
                             "battle_timestamp": battle.battle_timestamp.isoformat(),
                             "stars": battle.stars,
@@ -242,13 +254,14 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
                     "AND p.perspective = input.perspective "
                     "AND e.source_row_id = input.source_row_id "
                     "AND (e.source_observed_at, e.observation_id) <= (%s, %s))"
-                    if compact else ""
+                    if compact
+                    else ""
                 )
                 evidence_conflict = (
                     "(observation_id, source_row_id, parser_version) "
                     "WHERE observation_row_id IS NULL DO NOTHING"
-                    if compact else
-                    "(observation_row_id) DO UPDATE SET "
+                    if compact
+                    else "(observation_row_id) DO UPDATE SET "
                     "observation_row_id = EXCLUDED.observation_row_id"
                 )
                 evidence_rows = connection.execute(
@@ -288,7 +301,8 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
                         reporter_id,
                         battle_log.observed_at,
                         battle_log.parser_version,
-                    ) + ((battle_log.observed_at, observation_id) if compact else ()),
+                    )
+                    + ((battle_log.observed_at, observation_id) if compact else ()),
                 ).fetchall()
                 if compact:
                     evidence_rows = connection.execute(
@@ -302,9 +316,14 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
                           AND (e.observation_id = %s OR p.evidence_id IS NOT NULL)
                         ORDER BY e.source_row_id, e.id DESC
                         """,
-                        (battle_log.observed_at, [
-                            source_row_ids[row.source_row_index] for row in valid_rows
-                        ], observation_id),
+                        (
+                            battle_log.observed_at,
+                            [
+                                source_row_ids[row.source_row_index]
+                                for row in valid_rows
+                            ],
+                            observation_id,
+                        ),
                     ).fetchall()
                 perspectives = [
                     {
@@ -386,19 +405,20 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
                 database,
                 connection,
                 sorted(affected_battle_ids),
-                extra_boundary_at=_battle_log_reset_boundary(connection, claim),
+                reset_baseline=_battle_log_reset_baseline(connection, claim),
             )
 
-            outcome = (
-                "processed_with_gaps" if battle_log.has_row_gap else "processed"
-            )
-            job_outcomes._record_processing_outcome(database, 
+            outcome = "processed_with_gaps" if battle_log.has_row_gap else "processed"
+            job_outcomes._record_processing_outcome(
+                database,
                 connection,
                 claim,
                 outcome=outcome,
                 parsed_payload_id=parsed_payload_id,
             )
-            reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
+            reset_baselines._refresh_reset_baseline_evidence(
+                database, connection, claim
+            )
             ranked_day = ranked_day_for(battle_log.observed_at)
             live_player_ids = {reporter_id}
             if shared_state_changed_battle_ids:
@@ -446,7 +466,9 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
             )
 
 
-def _complete_battle_log_legacy(database: Database, claim: Claim, battle_log: ParsedBattleLog) -> None:
+def _complete_battle_log_legacy(
+    database: Database, claim: Claim, battle_log: ParsedBattleLog
+) -> None:
     (
         observation_id,
         _http_status,
@@ -458,11 +480,15 @@ def _complete_battle_log_legacy(database: Database, claim: Claim, battle_log: Pa
     with database._timed_connection() as connection:
         with connection.transaction():
             from .season_retirement import acquire_retirement_reader
+
             acquire_retirement_reader(connection)
             job = database._lock_live_claim(connection, claim)
             valid_rows = [row for row in battle_log.rows if row.battle is not None]
             valid_rows = _guard_battle_rows(connection, valid_rows)
-            if any(row.battle is not None for row in battle_log.rows) and not valid_rows:
+            if (
+                any(row.battle is not None for row in battle_log.rows)
+                and not valid_rows
+            ):
                 raise DomainRuleError(
                     "season_detail_retired",
                     "battle log contains only retired-season detail",
@@ -787,7 +813,7 @@ def _complete_battle_log_legacy(database: Database, claim: Claim, battle_log: Pa
                 database,
                 connection,
                 sorted(affected_battle_ids),
-                extra_boundary_at=_battle_log_reset_boundary(connection, claim),
+                reset_baseline=_battle_log_reset_baseline(connection, claim),
             )
 
             job_outcomes._record_parsed_payload(
@@ -801,11 +827,13 @@ def _complete_battle_log_legacy(database: Database, claim: Claim, battle_log: Pa
                 ),
                 parsed_json={"items": [row.source_json for row in battle_log.rows]},
             )
-            outcome = (
-                "processed_with_gaps" if battle_log.has_row_gap else "processed"
+            outcome = "processed_with_gaps" if battle_log.has_row_gap else "processed"
+            job_outcomes._record_processing_outcome(
+                database, connection, claim, outcome=outcome
             )
-            job_outcomes._record_processing_outcome(database, connection, claim, outcome=outcome)
-            reset_baselines._refresh_reset_baseline_evidence(database, connection, claim)
+            reset_baselines._refresh_reset_baseline_evidence(
+                database, connection, claim
+            )
             ranked_day = ranked_day_for(battle_log.observed_at)
             live_player_ids = {reporter_id}
             if shared_state_changed_battle_ids:
@@ -1040,33 +1068,54 @@ def _refresh_battle_disagreements(connection: Any, battle_ids: list[int]) -> Non
 
 
 def _record_battle_sources(
-    connection: Any, battle_log: ParsedBattleLog, payload_id: int,
-    log_id: int, reporter_id: int, *, compact: bool,
+    connection: Any,
+    battle_log: ParsedBattleLog,
+    payload_id: int,
+    log_id: int,
+    reporter_id: int,
+    *,
+    compact: bool,
 ) -> dict[int, int]:
     rows = []
     for row in battle_log.rows:
         # Position and poll time are not report identity. Reporter and parser
         # are: two perspectives or two interpretations must not overwrite.
         identity = json.dumps(
-            [battle_log.normalized_tag, battle_log.parser_version,
-             row.outcome, row.failure_category, row.source_json,
-             (row.battle.attacker_gain, row.battle.defender_loss, row.battle.trophy_rule_version)
-             if row.battle is not None else None],
-            sort_keys=True, separators=(",", ":"),
+            [
+                battle_log.normalized_tag,
+                battle_log.parser_version,
+                row.outcome,
+                row.failure_category,
+                row.source_json,
+                (
+                    row.battle.attacker_gain,
+                    row.battle.defender_loss,
+                    row.battle.trophy_rule_version,
+                )
+                if row.battle is not None
+                else None,
+            ],
+            sort_keys=True,
+            separators=(",", ":"),
         )
-        rows.append({
-            "source_row_index": row.source_row_index,
-            "outcome": row.outcome, "failure_category": row.failure_category,
-            "source_json": row.source_json,
-            "report_hash": hashlib.sha256(identity.encode()).hexdigest(),
-        })
+        rows.append(
+            {
+                "source_row_index": row.source_row_index,
+                "outcome": row.outcome,
+                "failure_category": row.failure_category,
+                "source_json": row.source_json,
+                "report_hash": hashlib.sha256(identity.encode()).hexdigest(),
+            }
+        )
     source_identity = (
-        "report_hash, source_row_index" if compact
+        "report_hash, source_row_index"
+        if compact
         else "parsed_payload_id, source_row_index"
     )
     source_projection = "report_hash, 0" if compact else "%s, source_row_index"
     conflict = (
-        "(report_hash) WHERE report_hash IS NOT NULL" if compact
+        "(report_hash) WHERE report_hash IS NOT NULL"
+        if compact
         else "(parsed_payload_id, source_row_index)"
     )
     connection.execute(
@@ -1118,16 +1167,22 @@ def _record_battle_sources(
             FROM battle_source_rows WHERE parsed_payload_id = %s
             ON CONFLICT (battle_log_observation_id, source_row_index) DO NOTHING
             """,
-            (log_id, reporter_id, battle_log.observed_at,
-             battle_log.parser_version, payload_id),
+            (
+                log_id,
+                reporter_id,
+                battle_log.observed_at,
+                battle_log.parser_version,
+                payload_id,
+            ),
         )
     return {
-        int(row[0]): int(row[1]) for row in connection.execute(
+        int(row[0]): int(row[1])
+        for row in connection.execute(
             """
             SELECT source_row_index, source_row_id
             FROM battle_log_observation_source_rows
             WHERE battle_log_observation_id = %s
-            """, (log_id,),
+            """,
+            (log_id,),
         ).fetchall()
     }
-

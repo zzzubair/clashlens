@@ -49,7 +49,8 @@ def reevaluate_boundary_publications(database) -> int:
                 """
             ).fetchall()
             for generation_id, boundary_at in generations:
-                boundary._try_enqueue_boundary_artifacts(database, 
+                boundary._try_enqueue_boundary_artifacts(
+                    database,
                     connection,
                     boundary_at=boundary_at,
                     generation_id=int(generation_id),
@@ -64,13 +65,15 @@ def reevaluate_boundary_publications(database) -> int:
                 """
             ).fetchall()
             for (source_generation_id,) in corrections:
-                _maybe_emit_boundary_signal(database, 
-                    connection, generation_id=int(source_generation_id)
+                _maybe_emit_boundary_signal(
+                    database, connection, generation_id=int(source_generation_id)
                 )
             return len(generations) + len(corrections)
 
 
-def _maybe_emit_boundary_signal(database: Database, connection: Any, generation_id: int) -> None:
+def _maybe_emit_boundary_signal(
+    database: Database, connection: Any, generation_id: int
+) -> None:
     boundary_row = connection.execute(
         "SELECT boundary_at FROM boundary_publication_generations WHERE id = %s",
         (generation_id,),
@@ -276,7 +279,8 @@ def _maybe_emit_boundary_signal(database: Database, connection: Any, generation_
                     ranked_day_version_id=int(pending_version),
                     boundary_at=row[0],
                 )
-                pending_army_status = boundary._boundary_army_status(database, 
+                pending_army_status = boundary._boundary_army_status(
+                    database,
                     connection,
                     player_id=int(pending["player_id"]),
                     ranked_day_version_id=int(pending_version),
@@ -339,8 +343,8 @@ def _maybe_emit_boundary_signal(database: Database, connection: Any, generation_
                 "UPDATE boundary_publication_corrections SET state = 'active', generation_id = %s, started_at = clock_timestamp() WHERE id = %s",
                 (new_id, queued[0]),
             )
-            boundary._try_enqueue_boundary_artifacts(database, 
-                connection, boundary_at=row[0], generation_id=new_id
+            boundary._try_enqueue_boundary_artifacts(
+                database, connection, boundary_at=row[0], generation_id=new_id
             )
 
 
@@ -405,9 +409,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 )
                 return
             if int(snapshot[2]) != snapshot_version:
-                raise ValueError(
-                    "analytics snapshot version does not match its input"
-                )
+                raise ValueError("analytics snapshot version does not match its input")
             if (
                 source_ranked_day_version_id is not None
                 and snapshot[5] is not None
@@ -444,8 +446,8 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                         "published frozen snapshot has incomplete analytics"
                     )
                 if boundary_generation is not None:
-                    _maybe_emit_boundary_signal(database, 
-                        connection, int(boundary_generation[0])
+                    _maybe_emit_boundary_signal(
+                        database, connection, int(boundary_generation[0])
                     )
                 database._finish_claim(
                     connection, claim, job, state="complete", outcome="processed"
@@ -505,9 +507,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                 fresh_count=int(snapshot[9]),
                 stale_count=int(snapshot[8]),
             )
-            prior_snapshot_id = (
-                int(snapshot[3]) if snapshot[3] is not None else None
-            )
+            prior_snapshot_id = int(snapshot[3]) if snapshot[3] is not None else None
             for lens, perspective in (
                 ("offense", "attacker"),
                 ("defense", "defender"),
@@ -627,9 +627,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                     "snapshot_version": snapshot_version,
                     "snapshot_input_hash": snapshot_input_hash,
                     **(
-                        {
-                            "source_ranked_day_version_id": source_ranked_day_version_id
-                        }
+                        {"source_ranked_day_version_id": source_ranked_day_version_id}
                         if source_ranked_day_version_id is not None
                         else {}
                     ),
@@ -754,9 +752,7 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                         )
                 summary_id = int(summary[0])
                 evidence_json = {
-                    "army_share_codes": [
-                        _text_value(row[3]) for row in sample_rows
-                    ],
+                    "army_share_codes": [_text_value(row[3]) for row in sample_rows],
                     "battle_ids": [int(row[0]) for row in sample_rows],
                     "evidence_ids": [int(row[4]) for row in sample_rows],
                     "source_row_ids": [int(row[5]) for row in sample_rows],
@@ -857,11 +853,9 @@ def complete_analytics(database: Database, claim: Claim) -> None:
                     ),
                 ).fetchone()
                 if published_generation is None:
-                    raise ValueError(
-                        "boundary publication generation fence was lost"
-                    )
-                _maybe_emit_boundary_signal(database, 
-                    connection, int(boundary_generation[0])
+                    raise ValueError("boundary publication generation fence was lost")
+                _maybe_emit_boundary_signal(
+                    database, connection, int(boundary_generation[0])
                 )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
@@ -979,11 +973,7 @@ def _queue_boundary_army_correction(
         """,
         (generation_id,),
     ).fetchone()
-    if (
-        current is None
-        or current[2] is None
-        or _text_value(current[1]) == "superseded"
-    ):
+    if current is None or current[2] is None or _text_value(current[1]) == "superseded":
         return
     if (
         _text_value(current[0]) == "published"
@@ -1009,7 +999,8 @@ def _queue_boundary_army_correction(
                 (generation_id,),
             ).fetchall()
         ]
-        new_id, _new_generation = boundary._create_boundary_generation(database, 
+        new_id, _new_generation = boundary._create_boundary_generation(
+            database,
             connection,
             boundary_at=boundary_at,
             sweep_id=int(
@@ -1062,8 +1053,17 @@ def _queue_boundary_army_correction(
 
 
 def _enqueue_army_analytics(
-    database, connection: Any, *, ranked_day_start: datetime
+    database,
+    connection: Any,
+    *,
+    ranked_day_start: datetime,
+    player_ids: list[int] | None = None,
 ) -> None:
+    """Refresh army readiness after decodes change for one Legend day.
+
+    ``player_ids`` limits the Reset member refresh to the players in the
+    changed battles; their status is the only one those decodes can change.
+    """
     ranked_day_start = ranked_day_start.astimezone(UTC)
     coordinator = None
     boundary_at = ranked_day_start + timedelta(days=1)
@@ -1093,15 +1093,18 @@ def _enqueue_army_analytics(
             SELECT player_id, ranked_day_version_id, snapshot_status
             FROM boundary_publication_generation_members
             WHERE generation_id = %s AND ranked_day_version_id IS NOT NULL
+              AND (%s::bigint[] IS NULL OR player_id = ANY(%s::bigint[]))
+            ORDER BY player_id
             FOR UPDATE
             """,
-            (generation_id,),
+            (generation_id, player_ids, player_ids),
         ).fetchall()
         from .season_retirement import (
             SEASON_DETAIL_RETIRED,
             acquire_season_lock_shared,
             is_season_detail_retired,
         )
+
         seasons = [
             _text_value(row[0])
             for row in connection.execute(
@@ -1111,8 +1114,9 @@ def _enqueue_army_analytics(
                 JOIN ranked_day_versions AS ranked
                   ON ranked.id = member.ranked_day_version_id
                 WHERE member.generation_id = %s
+                  AND (%s::bigint[] IS NULL OR member.player_id = ANY(%s::bigint[]))
                 """,
-                (generation_id,),
+                (generation_id, player_ids, player_ids),
             ).fetchall()
         ]
         for season_id in sorted(set(seasons)):
@@ -1123,7 +1127,8 @@ def _enqueue_army_analytics(
                     f"season {season_id} detail is retired",
                 )
         for player_id, version_id, snapshot_status in members:
-            army_status = boundary._boundary_army_status(database, 
+            army_status = boundary._boundary_army_status(
+                database,
                 connection,
                 player_id=int(player_id),
                 ranked_day_version_id=int(version_id),
@@ -1141,17 +1146,19 @@ def _enqueue_army_analytics(
             not getattr(database, "_disable_decode_corrections", False)
             and _text_value(coordinator[3]) in {"ready", "building", "published"}
             and coordinator[4] is not None
-            and _boundary_army_manifest_needs_correction(database, 
-                connection, manifest_id=int(coordinator[4])
+            and _boundary_army_manifest_needs_correction(
+                database, connection, manifest_id=int(coordinator[4])
             )
         ):
-            _queue_boundary_army_correction(database, 
+            _queue_boundary_army_correction(
+                database,
                 connection,
                 boundary_at=boundary_at,
                 generation_id=generation_id,
                 defer_inheritance=True,
             )
-        boundary._try_enqueue_boundary_artifacts(database, 
+        boundary._try_enqueue_boundary_artifacts(
+            database,
             connection,
             boundary_at=boundary_at,
             generation_id=generation_id,
@@ -1225,5 +1232,3 @@ def _enqueue_army_analytics(
             ARMY_ANALYTICS_RULE_VERSION,
         ),
     )
-
-
