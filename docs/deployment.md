@@ -617,9 +617,16 @@ retries or fails.
 
 If that failure write also conflicts, the worker keeps the lease and tries to
 restore an unused attempt before returning `retrying`. Queue maintenance can
-then recover the job after the lease expires. Restoration must succeed while
-the lease is still valid. If conflicts persist until expiry on the last allowed
-attempt, the job still fails as `lease_expired_max_attempts`. See
+then recover the job after the lease expires. Restoration can succeed after
+expiry while the job is still leased to the same owner with the same claim
+token. A new claim replaces that token, and queue maintenance clears it, so
+restoration cannot change a job another worker or maintenance has taken; the
+expired worker returns `lease_lost` instead.
+
+Production runs one worker process, whose queue maintenance runs between
+batches. If maintenance in another worker process reaches an expired job on
+its last allowed attempt before restoration succeeds, it still fails the job
+as `lease_expired_max_attempts`. See
 [`ObservationProcessor._process_claim`](../python/src/clashlens/worker.py) and
 the recovery cases in
 [`test_claim_jobs_postgres.py`](../python/tests/test_claim_jobs_postgres.py).

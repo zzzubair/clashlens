@@ -301,9 +301,7 @@ class ObservationProcessor:
                     continue
             return ProcessResult(claim.job_id, "retrying", "database_deadlock")
 
-    def _process_claim_once(
-        self, claim: Claim, *, lease_seconds: int
-    ) -> ProcessResult:
+    def _process_claim_once(self, claim: Claim, *, lease_seconds: int) -> ProcessResult:
         if claim.work_type == "reconcile_ranked_day":
             if claim.processing_version != PROCESSING_VERSION:
                 return self._fail(
@@ -435,6 +433,7 @@ class ObservationProcessor:
                 if uses_local_spool:
                     archived = self._read_local(claim)
                 else:
+
                     def renew_lease() -> None:
                         # Heartbeat from the reader: keeps the renewed lease window
                         # ahead of the bounded remote retry wall time. Lease loss
@@ -442,7 +441,9 @@ class ObservationProcessor:
                         self.database.renew_claim(claim, lease_seconds=lease_seconds)
 
                     archived = self.archive.read_verified(
-                        claim.archive_reference, claim.response_hash, heartbeat=renew_lease
+                        claim.archive_reference,
+                        claim.response_hash,
+                        heartbeat=renew_lease,
                     )
             finally:
                 self._record_stage(
@@ -517,9 +518,7 @@ class ObservationProcessor:
                 )
                 self._record_stage("python_parse_battle_log", parse_started_at)
                 domain_started_at = monotonic()
-                battle_ingestion.complete_battle_log(
-                    self.database, claim, battle_log
-                )
+                battle_ingestion.complete_battle_log(self.database, claim, battle_log)
                 self._record_stage("python_domain_battle_log", domain_started_at)
                 outcome = (
                     "processed_with_gaps" if battle_log.has_row_gap else "processed"
@@ -538,9 +537,7 @@ class ObservationProcessor:
                 domain_started_at = monotonic()
                 complete_league_history(self.database, claim, history)
                 self._record_stage("python_domain_league_history", domain_started_at)
-                outcome = (
-                    "processed_with_gaps" if history.has_row_gap else "processed"
-                )
+                outcome = "processed_with_gaps" if history.has_row_gap else "processed"
             else:
                 parse_started_at = monotonic()
                 rankings = parse_global_player_rankings(
@@ -588,9 +585,7 @@ class ObservationProcessor:
             sha256=claim.response_hash or "",
         )
 
-    def _complete_retired(
-        self, claim: Claim, error: DomainRuleError
-    ) -> ProcessResult:
+    def _complete_retired(self, claim: Claim, error: DomainRuleError) -> ProcessResult:
         if error.category != "season_detail_retired":
             raise error
         try:
