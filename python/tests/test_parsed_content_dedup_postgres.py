@@ -524,7 +524,8 @@ def test_concurrent_profiles_for_one_player_complete_without_retry(
 def test_profile_confirmation_backfill_preserves_proven_checks(
     database_url: str, archive_server
 ) -> None:
-    from test_api_db_public_ops import NOW as accepted_at, seed_profile
+    from test_api_db_public_ops import NOW as accepted_at
+    from test_api_db_public_ops import seed_profile
     from test_api_migration import ROOT, migrated_production_database
 
     confirmed_at = accepted_at + timedelta(hours=2)
@@ -588,6 +589,7 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
 
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
     from test_api_migration import ROOT, migrated_production_database
+
     from clashlens.collector_db import CollectorDatabase, ResponseHandoff
 
     body = PROFILE_FIXTURE.read_bytes()
