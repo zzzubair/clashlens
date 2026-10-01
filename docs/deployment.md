@@ -585,8 +585,13 @@ use the [operating notes](operating.md#respond-to-alerts).
 - **Any stale Live Leaderboard entry**, using the
   [Live Leaderboard freshness rule](domain.md#live-leaderboard-ordering). The check
   enters the private API container and runs the Live Leaderboard's own query,
-  printing only two counts, so players left off the Live Leaderboard because
-  their latest profile check returned 404 are also left out of this check.
+  printing only two counts. Players whose most recent not-found profile check
+  is newer than their last successful profile check, or who have no successful
+  check after a not-found response, are left out of both. Later timeouts and
+  server errors keep them excluded until a newer successful check. Migration
+  0042 adds the durable not-found time to the existing response state, fills it
+  from retained responses, and grants the private API read access. It adds no
+  index or per-response rows, and collection continues at the normal pace.
   If the query fails, the check fails and preserves
   the existing alert state. The displayed time follows the
   [player page confirmation rule](domain.md#player-page-freshness), including

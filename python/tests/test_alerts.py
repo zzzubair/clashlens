@@ -510,8 +510,11 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
             database.close()
 
 
+@pytest.mark.parametrize("later_status", [None, 503])
+@pytest.mark.parametrize("upgrade", [False, True])
 def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
-    runtime, database_url, archive_server, tmp_path, monkeypatch, capsys
+    runtime, database_url, archive_server, tmp_path, monkeypatch, capsys,
+    later_status, upgrade,
 ):
     import hashlib
     from datetime import timedelta
@@ -610,6 +613,32 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
             assert counts == "0 0"
             assert len(runtime.posts) == 2
             assert "recovered" in runtime.posts[-1]["content"]
+            if later_status is not None:
+                check(b'{"reason":"inMaintenance"}',
+                      accepted_at + timedelta(hours=3, minutes=7),
+                      "nf-still-failed", status=later_status)
+            collector.record_transport_failure(TransportFailure(
+                occurrence_key="nf-still-timeout", scope="player", identity_key="#2PP",
+                endpoint="profile", player_id=player_id, normalized_tag="#2PP",
+                request_started_at=accepted_at + timedelta(hours=3, minutes=8),
+                failed_at=accepted_at + timedelta(hours=3, minutes=8, seconds=30),
+                failure_category="timeout", retry_state="next_pass",
+                key_label="regular-a",
+            ))
+            if upgrade:
+                with psycopg.connect(connection_info) as connection:
+                    connection.execute(
+                        "ALTER TABLE collector_response_state DROP COLUMN last_not_found_at"
+                    )
+                    connection.commit()
+                    connection.execute(
+                        (ROOT / "deploy/migrations/0042_api_profile_not_found_read.sql").read_text()
+                    )
+            board, counts = alert_at(accepted_at + timedelta(hours=3, minutes=9))
+            assert board["entries"] == [] and board["total_entries"] == 0
+            assert board["tracked_population"] == 1
+            assert counts == "0 0"
+            assert len(runtime.posts) == 2
             # The next successful check brings the player straight back, fresh.
             found_at = accepted_at + timedelta(hours=3, minutes=10)
             check(body, found_at, "nf-found")

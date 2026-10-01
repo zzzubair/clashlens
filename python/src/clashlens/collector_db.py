@@ -1039,8 +1039,8 @@ class CollectorDatabase:
                 scope, identity_key, endpoint, player_id, normalized_tag,
                 last_response_hash, last_content_fingerprint,
                 last_occurrence_key, last_applied_occurrence_key,
-                last_seen_at, last_observation_id, last_success_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                last_seen_at, last_observation_id, last_success_at, last_not_found_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (scope, identity_key, endpoint) DO UPDATE
             SET request_count = collector_response_state.request_count + 1,
                 player_id = CASE WHEN EXCLUDED.last_seen_at >=
@@ -1071,14 +1071,10 @@ class CollectorDatabase:
                     collector_response_state.last_seen_at
                     THEN EXCLUDED.last_observation_id
                     ELSE collector_response_state.last_observation_id END,
-                last_success_at = CASE
-                    WHEN EXCLUDED.last_success_at IS NULL
-                    THEN collector_response_state.last_success_at
-                    WHEN collector_response_state.last_success_at IS NULL
-                    THEN EXCLUDED.last_success_at
-                    ELSE GREATEST(EXCLUDED.last_success_at,
-                                  collector_response_state.last_success_at)
-                END,
+                last_success_at = GREATEST(EXCLUDED.last_success_at,
+                                          collector_response_state.last_success_at),
+                last_not_found_at = GREATEST(EXCLUDED.last_not_found_at,
+                                            collector_response_state.last_not_found_at),
                 updated_at = clock_timestamp()
             """,
             (
@@ -1095,6 +1091,9 @@ class CollectorDatabase:
                 observation_id,
                 handoff.response_completed_at
                 if 200 <= handoff.http_status < 300
+                else None,
+                handoff.response_completed_at
+                if handoff.endpoint == "profile" and handoff.http_status == 404
                 else None,
             ),
         )
