@@ -12,7 +12,7 @@ from psycopg.conninfo import make_conninfo
 
 from clashlens import ingestion, reset_baselines
 from clashlens.archive import S3ArchiveReader
-from clashlens.db import Database
+from clashlens.db import Database, LeaseLost
 from clashlens.worker import ObservationProcessor, ProcessResult
 
 PARSER_VERSION = "supercell-source-parser-v1"
@@ -182,7 +182,10 @@ def _processor(database: Database, archive_server) -> ObservationProcessor:
 
 @pytest.mark.parametrize("sqlstate", ["40P01", "40001"])
 @pytest.mark.parametrize("reject_failure_write", [False, True])
-@pytest.mark.parametrize("refund_conflicts", [0, 2, 3])
+@pytest.mark.parametrize(
+    ("refund_conflicts", "refund_outlasts_lease"),
+    [(0, False), (2, False), (3, False), (3, True)],
+)
 def test_final_attempt_failure_write_conflict_recovers_after_expiry(
     database_url: str,
     archive_server,
@@ -190,10 +193,13 @@ def test_final_attempt_failure_write_conflict_recovers_after_expiry(
     sqlstate,
     reject_failure_write,
     refund_conflicts,
+    refund_outlasts_lease,
 ) -> None:
     from pathlib import Path
 
-    body = (Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json").read_bytes()
+    body = (
+        Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json"
+    ).read_bytes()
     with domain_database(database_url) as connection_info:
         _, job_id = store_observation(
             connection_info,
@@ -227,6 +233,9 @@ def test_final_attempt_failure_write_conflict_recovers_after_expiry(
                 nonlocal refund_conflicts
                 if refund_conflicts:
                     refund_conflicts -= 1
+                    if refund_outlasts_lease and not refund_conflicts:
+                        # Stand in for conflicts delayed past the 60 s lease.
+                        database.expire_lease(job_id)
                     reject_transaction()
                 refund_claim_attempt(claim)
 
@@ -261,28 +270,75 @@ def test_final_attempt_failure_write_conflict_recovers_after_expiry(
             recovered = processor.process_job(job_id, owner="recovery-worker")
             if reject_failure_write:
                 assert recovered == ProcessResult(job_id, "processed")
-                assert database.scalar(
-                    "SELECT status FROM python_processing_jobs WHERE id = %s",
-                    (job_id,),
-                ) == "complete"
-                assert database.scalar(
-                    "SELECT attempt_count FROM python_processing_jobs WHERE id = %s",
-                    (job_id,),
-                ) == 3
-                assert database.scalar(
-                    "SELECT count(*) FROM player_profile_versions"
-                ) == 1
-                assert database.scalar(
-                    "SELECT max(attempt_number) FROM python_processing_attempts "
-                    "WHERE job_id = %s",
-                    (job_id,),
-                ) == 4
+                assert (
+                    database.scalar(
+                        "SELECT status FROM python_processing_jobs WHERE id = %s",
+                        (job_id,),
+                    )
+                    == "complete"
+                )
+                assert (
+                    database.scalar(
+                        "SELECT attempt_count FROM python_processing_jobs WHERE id = %s",
+                        (job_id,),
+                    )
+                    == 3
+                )
+                assert (
+                    database.scalar("SELECT count(*) FROM player_profile_versions") == 1
+                )
+                assert (
+                    database.scalar(
+                        "SELECT max(attempt_number) FROM python_processing_attempts "
+                        "WHERE job_id = %s",
+                        (job_id,),
+                    )
+                    == 4
+                )
             else:
                 assert recovered is None
-                assert database.scalar(
-                    "SELECT failure_category FROM python_processing_jobs WHERE id = %s",
+                assert (
+                    database.scalar(
+                        "SELECT failure_category FROM python_processing_jobs WHERE id = %s",
+                        (job_id,),
+                    )
+                    == "database_deadlock"
+                )
+        finally:
+            database.close()
+
+
+def test_expired_refund_cannot_change_a_job_another_worker_took(
+    database_url: str,
+) -> None:
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info) as connection:
+            job_id = _insert_job(
+                connection,
+                work_type="build_analytics",
+                deduplication_key="expired-refund-fence",
+                input_json=CURRENT_ANALYTICS_INPUT,
+                max_attempts=3,
+            )
+        database = Database(connection_info)
+        try:
+            expired = database.claim_job(owner="expired-worker", job_id=job_id)
+            assert expired is not None
+            database.expire_lease(job_id)
+            assert database.claim_job(owner="next-worker", job_id=job_id)
+            with pytest.raises(LeaseLost):
+                database.refund_claim_attempt(expired)
+            database.expire_lease(job_id)
+            assert database.maintain_queue(max_jobs=1) == 1
+            with pytest.raises(LeaseLost):
+                database.refund_claim_attempt(expired)
+            assert (
+                database.scalar(
+                    "SELECT attempt_count FROM python_processing_jobs WHERE id = %s",
                     (job_id,),
-                ) == "database_deadlock"
+                )
+                == 2
+            )
         finally:
             database.close()
 

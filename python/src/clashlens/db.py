@@ -38,6 +38,7 @@ SUPPORTED_WORK_TYPES = (
     "redecode_army",
 )
 
+
 def _supported_job_filter(
     alias: str,
     *,
@@ -172,6 +173,7 @@ def _supported_job_filter(
         ],
     )
 
+
 def _supported_claim_filter(
     alias: str,
     observation_alias: str,
@@ -296,6 +298,7 @@ def _supported_claim_filter(
         },
     )
 
+
 # Claim probe candidate count per indexed range. The probes are refreshed on
 # every claim, so a candidate locked by another lane is simply skipped; the
 # next claim re-probes. Bounded like the collector claim statement.
@@ -308,7 +311,10 @@ _CLAIM_CANDIDATE_LIMIT = 32
 # indexed class so its probe stays bounded without sharing live work's class.
 # The catch-all still claims other operator priorities.
 _PYTHON_CLAIM_PRIORITIES = f"({PYTHON_BACKFILL_PRIORITY}), ({PYTHON_LIVE_PRIORITY})"
-_PYTHON_CLAIM_PRIORITY_EXCLUSIONS = f"{PYTHON_BACKFILL_PRIORITY}, {PYTHON_LIVE_PRIORITY}"
+_PYTHON_CLAIM_PRIORITY_EXCLUSIONS = (
+    f"{PYTHON_BACKFILL_PRIORITY}, {PYTHON_LIVE_PRIORITY}"
+)
+
 
 def _claim_select_statement(
     jobs_relation: str,
@@ -522,8 +528,10 @@ def _claim_select_statement(
         params,
     )
 
+
 class LeaseLost(RuntimeError):
     """The claim no longer has a live owner/token fence."""
+
 
 @dataclass(frozen=True, slots=True)
 class Claim:
@@ -557,6 +565,7 @@ class Claim:
     # True when this claim resumed waiting_dependency work: the run re-uses
     # its original ordinary slot instead of granting a new one.
     is_dependency_resume: bool = False
+
 
 class Database:
     def __init__(
@@ -713,7 +722,6 @@ class Database:
         self._dependency_support_probed = True
 
     @contextmanager
-
     def _timed_connection(self):
         started_at = monotonic()
         with self.pool.connection() as connection:
@@ -971,7 +979,12 @@ class Database:
                 )
 
     def refund_claim_attempt(self, claim: Claim) -> None:
-        """Keep a conflicted failure write recoverable without releasing its lease."""
+        """Keep a conflicted failure write recoverable without releasing its lease.
+
+        The owner and token fence the refund even after the lease expires: any
+        new claim replaces the token and queue maintenance clears it, so an
+        expired worker can only refund a job nobody else has taken.
+        """
         with self._timed_connection() as connection:
             with connection.transaction():
                 refunded = connection.execute(
@@ -981,7 +994,6 @@ class Database:
                         updated_at = clock_timestamp()
                     WHERE id = %s AND state = 'leased'
                       AND lease_owner = %s AND lease_token = %s
-                      AND lease_expires_at > clock_timestamp()
                     """,
                     (
                         min(claim.attempt_count, claim.max_attempts - 1),
@@ -1195,11 +1207,13 @@ class Database:
         if completed.rowcount != 1:
             raise LeaseLost("job completion fence was lost")
 
+
 def _positive_int_input(values: dict[str, Any], name: str) -> int:
     value = values.get(name)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
     return int(value)
+
 
 def _hash_input(value: Any, name: str) -> str:
     value = _text_value(value)
@@ -1211,6 +1225,7 @@ def _hash_input(value: Any, name: str) -> str:
         raise ValueError(f"{name} must be a lowercase SHA-256 hash")
     return value
 
+
 def _parse_utc(value: Any) -> datetime:
     if not isinstance(value, str):
         raise TypeError("analytics timestamps must be text")
@@ -1218,6 +1233,7 @@ def _parse_utc(value: Any) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("analytics timestamps must include an offset")
     return parsed.astimezone(UTC)
+
 
 def _snapshot_freshness(
     *, included_count: int, fresh_count: int, stale_count: int
@@ -1227,6 +1243,7 @@ def _snapshot_freshness(
     if fresh_count == 0:
         return "stale"
     return "mixed"
+
 
 def _text_value(value: Any) -> Any:
     if isinstance(value, bytes):
