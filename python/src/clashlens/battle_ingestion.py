@@ -13,13 +13,16 @@ from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, ranked_day_for
 
 
-def _battle_log_reset_boundary(connection: Any, claim: Claim) -> datetime | None:
+def _battle_log_reset_baseline(
+    connection: Any, claim: Claim
+) -> tuple[int, datetime] | None:
+    """The (collector work id, Reset) whose baseline this battle log records."""
     if claim.observation_id is None:
         return None
     context = reset_baselines._load_reset_baseline_context(
         connection, claim.observation_id
     )
-    return None if context is None else context[4]
+    return None if context is None else (int(context[0]), context[4])
 
 
 def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBattleLog) -> None:
@@ -386,7 +389,7 @@ def complete_battle_log(database: Database, claim: Claim, battle_log: ParsedBatt
                 database,
                 connection,
                 sorted(affected_battle_ids),
-                extra_boundary_at=_battle_log_reset_boundary(connection, claim),
+                reset_baseline=_battle_log_reset_baseline(connection, claim),
             )
 
             outcome = (
@@ -787,7 +790,7 @@ def _complete_battle_log_legacy(database: Database, claim: Claim, battle_log: Pa
                 database,
                 connection,
                 sorted(affected_battle_ids),
-                extra_boundary_at=_battle_log_reset_boundary(connection, claim),
+                reset_baseline=_battle_log_reset_baseline(connection, claim),
             )
 
             job_outcomes._record_parsed_payload(

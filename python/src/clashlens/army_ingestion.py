@@ -21,36 +21,33 @@ from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError
 
 
+def _decode_is_current(
+    active: Any, evidence_id: int, raw_code: Any, decoded: DecodedArmy | DecodeFailure
+) -> bool:
+    """Whether the active decode row (id, evidence_id, raw_code, identity_hash,
+    status, failure_category) already records this evidence's result."""
+    if active is None or int(active[1]) != int(evidence_id):
+        return False
+    if (active[2] is None) != (raw_code is None) or (
+        raw_code is not None and _text_value(active[2]) != _text_value(raw_code)
+    ):
+        return False
+    if isinstance(decoded, DecodedArmy):
+        return (
+            active[3] is None
+            if decoded.identity_hash is None
+            else _text_value(active[3]) == decoded.identity_hash
+        ) and _text_value(active[4]) == decoded.status
+    return _text_value(active[5]) == decoded.category
+
+
 def _upsert_army_decodes(
     database: Database,
     connection: Any,
     battle_ids: list[int],
     *,
-    extra_boundary_at: datetime | None = None,
+    reset_baseline: tuple[int, datetime] | None = None,
 ) -> None:
-    # Take the complete boundary lock set oldest-first before any army writes.
-    # Otherwise a re-decode can hold an army row while a battle log holds its
-    # Reset lock, and each waits for the other. Include a Reset even when no
-    # battles changed; later publication calls safely reacquire these locks.
-    day_rows = (
-        connection.execute(
-            "SELECT DISTINCT ranked_day_start FROM legend_battles WHERE id = ANY(%s::bigint[]) ORDER BY 1",
-            (battle_ids,),
-        ).fetchall()
-        if battle_ids
-        else []
-    )
-    boundaries = {
-        day_start.astimezone(UTC) + timedelta(days=1)
-        for (day_start,) in day_rows
-    }
-    if extra_boundary_at is not None:
-        boundaries.add(extra_boundary_at.astimezone(UTC))
-    for boundary_at in sorted(boundaries):
-        connection.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            (f"boundary-publication:{boundary_at.isoformat()}",),
-        )
     if not battle_ids:
         return
     exists = connection.execute(
@@ -105,10 +102,87 @@ def _upsert_army_decodes(
         decoded_rows.append(
             (battle_id, evidence_id, _text_value(perspective), raw_code, decoded)
         )
+    current = {
+        (int(row[0]), _text_value(row[1]), _text_value(row[2]), _text_value(row[3])): row[4:]
+        for row in connection.execute(
+            """
+            SELECT battle_id, perspective, decoder_version, catalog_version,
+                   id, evidence_id, raw_code, identity_hash, status, failure_category
+            FROM battle_army_decodes
+            WHERE battle_id = ANY(%s::bigint[]) AND is_active
+            """,
+            (battle_ids,),
+        ).fetchall()
+    }
+    decoded_rows = [
+        row
+        for row in decoded_rows
+        if not _decode_is_current(
+            current.get(
+                (row[0], row[2], row[4].decoder_version, row[4].catalog_version)
+            ),
+            row[1],
+            row[3],
+            row[4],
+        )
+    ]
+    # Most battle logs repeat battles whose decodes are already saved. Those
+    # change nothing a Reset publishes, so they skip the Reset locks below,
+    # which every battle log for the same Legend day would otherwise queue on.
+    if not decoded_rows:
+        return
+    players_by_day: dict[datetime, set[int]] = {}
+    for day_start, attacker_id, defender_id in connection.execute(
+        """
+        SELECT ranked_day_start, attacker_player_id, defender_player_id
+        FROM legend_battles WHERE id = ANY(%s::bigint[])
+        """,
+        (sorted({row[0] for row in decoded_rows}),),
+    ).fetchall():
+        players_by_day.setdefault(day_start.astimezone(UTC), set()).update(
+            (int(attacker_id), int(defender_id))
+        )
+    # Lock order everywhere: a Reset baseline's work lock, then Reset locks
+    # oldest first, then army rows. A Reset battle log records its baseline
+    # (work lock, then its Reset lock) after these army writes, so it takes
+    # both first; otherwise it could hold an army row another job needs while
+    # that job holds the Reset lock.
+    boundaries = {day_start + timedelta(days=1) for day_start in players_by_day}
+    if reset_baseline is not None:
+        work_id, boundary_at = reset_baseline
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"reset-baseline:{work_id}",),
+        )
+        boundaries.add(boundary_at.astimezone(UTC))
+    for boundary_at in sorted(boundaries):
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"boundary-publication:{boundary_at.isoformat()}",),
+        )
     # Write shared exact_armies rows in one fixed order so two battle logs that
     # share armies cannot each hold one and wait for the other (deadlock).
     decoded_rows.sort(key=lambda row: getattr(row[4], "identity_hash", None) or "")
     for battle_id, evidence_id, perspective, raw_code, decoded in decoded_rows:
+        # Recheck under the locks: the job that held them may have saved it.
+        active = connection.execute(
+            "SELECT id, evidence_id, raw_code, identity_hash, status, failure_category FROM battle_army_decodes WHERE battle_id = %s AND perspective = %s AND decoder_version = %s AND catalog_version = %s AND is_active = true",
+            (
+                battle_id,
+                perspective,
+                decoded.decoder_version,
+                decoded.catalog_version,
+            ),
+        ).fetchone()
+        if _decode_is_current(active, evidence_id, raw_code, decoded):
+            continue
+        supersedes = None
+        if active is not None:
+            connection.execute(
+                "UPDATE battle_army_decodes SET is_active = false WHERE id = %s",
+                (active[0],),
+            )
+            supersedes = int(active[0])
         is_decoded = isinstance(decoded, DecodedArmy)
         if is_decoded:
             exact_army_id = None
@@ -159,42 +233,6 @@ def _upsert_army_decodes(
                 exact_army_id = int(inserted[0])
             elif existing is not None:
                 exact_army_id = int(existing[0])
-            active = connection.execute(
-                "SELECT id, evidence_id, raw_code, identity_hash, status FROM battle_army_decodes WHERE battle_id = %s AND perspective = %s AND decoder_version = %s AND catalog_version = %s AND is_active = true",
-                (
-                    battle_id,
-                    perspective,
-                    decoded.decoder_version,
-                    decoded.catalog_version,
-                ),
-            ).fetchone()
-            raw_cmp_equal = False
-            if active is not None:
-                active_raw = active[2]
-                if (active_raw is None and raw_code is None) or (
-                    active_raw is not None
-                    and raw_code is not None
-                    and _text_value(active_raw) == _text_value(raw_code)
-                ):
-                    raw_cmp_equal = True
-                if (
-                    int(active[1]) == int(evidence_id)
-                    and raw_cmp_equal
-                    and (
-                        active[3] is None
-                        if decoded.identity_hash is None
-                        else _text_value(active[3]) == decoded.identity_hash
-                    )
-                    and _text_value(active[4]) == decoded.status
-                ):
-                    continue
-                connection.execute(
-                    "UPDATE battle_army_decodes SET is_active = false WHERE id = %s",
-                    (active[0],),
-                )
-                supersedes = int(active[0])
-            else:
-                supersedes = None
             connection.execute(
                 """
                 INSERT INTO battle_army_decodes (battle_id, evidence_id, perspective, raw_code, decoder_version, catalog_version, catalog_hash, status, exact_army_id, identity_hash, home_troops, spells, home_spells, cc_spells, siege, cc_troops, heroes, raw_m, unresolved_components, is_active, supersedes_id)
@@ -269,39 +307,6 @@ def _upsert_army_decodes(
             )
         else:
             failure: DecodeFailure = decoded  # type: ignore[assignment]
-            active = connection.execute(
-                "SELECT id, evidence_id, raw_code, failure_category FROM battle_army_decodes WHERE battle_id = %s AND perspective = %s AND decoder_version = %s AND catalog_version = %s AND is_active = true",
-                (
-                    battle_id,
-                    perspective,
-                    failure.decoder_version,
-                    failure.catalog_version,
-                ),
-            ).fetchone()
-            raw_cmp_equal = False
-            if active is not None:
-                active_raw = active[2]
-                if (active_raw is None and raw_code is None) or (
-                    active_raw is not None
-                    and raw_code is not None
-                    and _text_value(active_raw) == _text_value(raw_code)
-                ):
-                    raw_cmp_equal = True
-            if (
-                active is not None
-                and int(active[1]) == int(evidence_id)
-                and raw_cmp_equal
-                and _text_value(active[3]) == failure.category
-            ):
-                continue
-            if active is not None:
-                connection.execute(
-                    "UPDATE battle_army_decodes SET is_active = false WHERE id = %s",
-                    (active[0],),
-                )
-                supersedes = int(active[0])
-            else:
-                supersedes = None
             connection.execute(
                 """
                 INSERT INTO battle_army_decodes (battle_id, evidence_id, perspective, raw_code, decoder_version, catalog_version, catalog_hash, status, failure_category, failure_detail, is_active, supersedes_id)
@@ -320,8 +325,13 @@ def _upsert_army_decodes(
                     supersedes,
                 ),
             )
-    for (day_start,) in day_rows:
-        boundary_publication._enqueue_army_analytics(database, connection, ranked_day_start=day_start)
+    for day_start, player_ids in sorted(players_by_day.items()):
+        boundary_publication._enqueue_army_analytics(
+            database,
+            connection,
+            ranked_day_start=day_start,
+            player_ids=sorted(player_ids),
+        )
 
 
 def complete_army_analytics(database: Database, claim: Claim) -> None:

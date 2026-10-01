@@ -1062,8 +1062,17 @@ def _queue_boundary_army_correction(
 
 
 def _enqueue_army_analytics(
-    database, connection: Any, *, ranked_day_start: datetime
+    database,
+    connection: Any,
+    *,
+    ranked_day_start: datetime,
+    player_ids: list[int] | None = None,
 ) -> None:
+    """Refresh army readiness after decodes change for one Legend day.
+
+    ``player_ids`` limits the Reset member refresh to the players in the
+    changed battles; their status is the only one those decodes can change.
+    """
     ranked_day_start = ranked_day_start.astimezone(UTC)
     coordinator = None
     boundary_at = ranked_day_start + timedelta(days=1)
@@ -1093,9 +1102,11 @@ def _enqueue_army_analytics(
             SELECT player_id, ranked_day_version_id, snapshot_status
             FROM boundary_publication_generation_members
             WHERE generation_id = %s AND ranked_day_version_id IS NOT NULL
+              AND (%s::bigint[] IS NULL OR player_id = ANY(%s::bigint[]))
+            ORDER BY player_id
             FOR UPDATE
             """,
-            (generation_id,),
+            (generation_id, player_ids, player_ids),
         ).fetchall()
         from .season_retirement import (
             SEASON_DETAIL_RETIRED,
@@ -1111,8 +1122,9 @@ def _enqueue_army_analytics(
                 JOIN ranked_day_versions AS ranked
                   ON ranked.id = member.ranked_day_version_id
                 WHERE member.generation_id = %s
+                  AND (%s::bigint[] IS NULL OR member.player_id = ANY(%s::bigint[]))
                 """,
-                (generation_id,),
+                (generation_id, player_ids, player_ids),
             ).fetchall()
         ]
         for season_id in sorted(set(seasons)):
