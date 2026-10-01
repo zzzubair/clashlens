@@ -26,6 +26,19 @@ class UploadLeaseLost(RuntimeError):
     """The upload claim is stale, expired, or owned by another uploader."""
 
 
+# collector_response_uploads_claim_order matches this filter and order, so a
+# claim reads only the first due row it can lock, not the whole backlog.
+NEXT_DUE_UPLOAD_SQL = """
+    SELECT response_hash
+    FROM collector_response_uploads
+    WHERE state IN ('pending', 'failed')
+      AND next_attempt_at <= %s
+    ORDER BY next_attempt_at, created_at, response_hash
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+"""
+
+
 def claim_upload(
     database: Any,
     *,
@@ -59,18 +72,7 @@ def claim_upload(
                     """,
                     (claim_time,),
                 )
-            row = connection.execute(
-                """
-                SELECT response_hash
-                FROM collector_response_uploads
-                WHERE state IN ('pending', 'failed')
-                  AND next_attempt_at <= %s
-                ORDER BY next_attempt_at, created_at, response_hash
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-                """,
-                (claim_time,),
-            ).fetchone()
+            row = connection.execute(NEXT_DUE_UPLOAD_SQL, (claim_time,)).fetchone()
             if row is None:
                 return None
             claimed = connection.execute(

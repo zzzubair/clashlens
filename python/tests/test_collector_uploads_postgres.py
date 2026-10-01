@@ -9,6 +9,7 @@ from domain_test_support import domain_database
 
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff
 from clashlens.collector_uploads import (
+    NEXT_DUE_UPLOAD_SQL,
     UploadLeaseLost,
     claim_upload,
     complete_upload,
@@ -905,3 +906,55 @@ def test_hash_reuse_attaches_existing_archive_without_second_upload(
                 == 1
             )
         assert first.observation_id is not None
+
+
+def test_claim_reads_only_the_next_due_row_in_a_production_sized_backlog(
+    database_url: str,
+) -> None:
+    # Production on 2026-10-01 held about 456,000 complete and 57,600 due
+    # rows; the old claim read every due row's table page, then sorted them.
+    with domain_database(database_url) as connection_info:
+        _archive_instance(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO collector_response_uploads (
+                    response_hash, spool_key, byte_size, state,
+                    archive_reference, archive_instance_id, completed_at,
+                    next_attempt_at, created_at
+                )
+                SELECT encode(sha256(n::text::bytea), 'hex'), 'sha256/' || n, 1,
+                       kind.state,
+                       CASE WHEN kind.state = 'complete' THEN 's3://evidence/' || n END,
+                       CASE WHEN kind.state = 'complete' THEN 'fixture-instance' END,
+                       CASE WHEN kind.state = 'complete' THEN %(now)s::timestamptz END,
+                       CASE WHEN kind.state = 'failed'
+                            THEN %(now)s::timestamptz + interval '1 hour'
+                            ELSE %(now)s::timestamptz - n * interval '10 milliseconds'
+                       END,
+                       %(now)s::timestamptz - interval '1 day'
+                FROM generate_series(1, 200000) AS n
+                CROSS JOIN LATERAL (
+                    SELECT CASE n %% 8 WHEN 0 THEN 'pending'
+                                       WHEN 4 THEN 'failed'
+                                       ELSE 'complete' END AS state
+                ) AS kind
+                """,
+                {"now": NOW},
+            )
+            connection.execute("ANALYZE collector_response_uploads")
+        with psycopg.connect(connection_info) as connection:
+            with connection.transaction(force_rollback=True):
+                plan = connection.execute(
+                    "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + NEXT_DUE_UPLOAD_SQL,
+                    (NOW,),
+                ).fetchone()[0][0]["Plan"]
+        pages = plan["Shared Hit Blocks"] + plan["Shared Read Blocks"]
+        assert pages < 50, plan
+
+        database = CollectorDatabase(connection_info)
+        first = claim_upload(database, owner="uploader-a", now=NOW)
+        second = claim_upload(database, owner="uploader-b", now=NOW)
+        assert first is not None and second is not None
+        assert first.spool_key == "sha256/200000"
+        assert second.spool_key == "sha256/199992"
