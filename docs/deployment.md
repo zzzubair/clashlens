@@ -58,17 +58,21 @@ upload. Podman's default pod limit is 10 seconds.
 
 On reboot, the host's system manager also limits how long the service
 account's whole user service manager may take to stop. Fedora's
-`user@.service` sets 60 seconds, which can still cut PostgreSQL short, so the
-host needs a limit above the pod's 90 seconds. As the service account, run:
+`user@.service` sets 60 seconds, which can still cut PostgreSQL short. The
+services stop in order: the collector (up to 45 seconds), then the worker (its
+60-second lease plus 15, so up to 75 seconds), then PostgreSQL (up to 90
+seconds). That adds up to 210 seconds, so the host limit is 240 seconds with a
+30-second margin. If `CLASHLENS_WORKER_LEASE_SECONDS` is raised, raise this
+limit by the same amount. As the service account, run:
 
 ```sh
 sudo mkdir -p /etc/systemd/system/user@$(id -u).service.d
-printf '[Service]\nTimeoutStopSec=120\n' | sudo tee /etc/systemd/system/user@$(id -u).service.d/clashlens-stop.conf
+printf '[Service]\nTimeoutStopSec=240\n' | sudo tee /etc/systemd/system/user@$(id -u).service.d/clashlens-stop.conf
 sudo systemctl daemon-reload
 systemctl show user@$(id -u).service --property=TimeoutStopUSec
 ```
 
-The last command should print `TimeoutStopUSec=2min`.
+The last command should print `TimeoutStopUSec=4min`.
 
 Building and running are separate operations. `up` never builds or pulls an
 image. `build` records the exact image IDs and a fingerprint of every source,
