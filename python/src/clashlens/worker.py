@@ -287,6 +287,16 @@ class ObservationProcessor:
         try:
             return self._fail(claim, "database_deadlock", retryable=True)
         except (DeadlockDetected, SerializationFailure):
+            # The failed transaction recorded no outcome. Restore its retry
+            # slot so even a last-attempt lease can be recovered after expiry.
+            for _ in range(DATABASE_CONFLICT_RETRIES):
+                try:
+                    self.database.refund_claim_attempt(claim)
+                    break
+                except LeaseLost:
+                    return ProcessResult(claim.job_id, "lease_lost")
+                except (DeadlockDetected, SerializationFailure):
+                    continue
             return ProcessResult(claim.job_id, "retrying", "database_deadlock")
 
     def _process_claim_once(

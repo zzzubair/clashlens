@@ -10,9 +10,10 @@ import pytest
 from domain_test_support import domain_database, store_observation
 from psycopg.conninfo import make_conninfo
 
+from clashlens import ingestion, reset_baselines
 from clashlens.archive import S3ArchiveReader
 from clashlens.db import Database
-from clashlens.worker import ObservationProcessor
+from clashlens.worker import ObservationProcessor, ProcessResult
 
 PARSER_VERSION = "supercell-source-parser-v1"
 PROCESSING_VERSION = "clashlens-domain-processing-v1"
@@ -177,6 +178,97 @@ def _processor(database: Database, archive_server) -> ObservationProcessor:
             allow_insecure_test_origin=True,
         ),
     )
+
+
+@pytest.mark.parametrize("sqlstate", ["40P01", "40001"])
+@pytest.mark.parametrize("reject_failure_write", [False, True])
+def test_final_attempt_failure_write_conflict_recovers_after_expiry(
+    database_url: str, archive_server, monkeypatch, sqlstate, reject_failure_write
+) -> None:
+    from pathlib import Path
+
+    body = (Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json").read_bytes()
+    with domain_database(database_url) as connection_info:
+        _, job_id = store_observation(
+            connection_info,
+            archive_server,
+            occurrence_key="final-attempt-conflict",
+            endpoint="profile",
+            body=body,
+            observed_at=datetime(2026, 8, 3, 19, 35, 1, tzinfo=UTC),
+            normalized_tag="#2PP",
+            max_attempts=3,
+        )
+        database = Database(connection_info)
+        try:
+            # Spend two ordinary slots through real claims and lease recovery.
+            for _ in range(2):
+                assert database.claim_job(owner="previous-worker", job_id=job_id)
+                database.expire_lease(job_id)
+                assert database.maintain_queue(max_jobs=1) == 1
+
+            def reject_transaction(*_args, **_kwargs):
+                with database.pool.connection() as connection:
+                    connection.execute(
+                        "DO $$ BEGIN RAISE EXCEPTION 'forced database conflict' "
+                        f"USING ERRCODE = '{sqlstate}'; END $$"
+                    )
+
+            processor = _processor(database, archive_server)
+            with monkeypatch.context() as injected:
+                injected.setattr(ingestion, "complete_profile", reject_transaction)
+                if reject_failure_write:
+                    injected.setattr(
+                        reset_baselines,
+                        "_refresh_reset_baseline_evidence",
+                        reject_transaction,
+                    )
+                result = processor.process_job(job_id, owner="conflicted-worker")
+
+            assert result == ProcessResult(
+                job_id,
+                "retrying" if reject_failure_write else "failed",
+                "database_deadlock",
+            )
+            assert database.scalar(
+                "SELECT attempt_count FROM python_processing_jobs WHERE id = %s",
+                (job_id,),
+            ) == (2 if reject_failure_write else 3)
+            assert database.scalar(
+                "SELECT status FROM python_processing_jobs WHERE id = %s",
+                (job_id,),
+            ) == ("leased" if reject_failure_write else "failed")
+            assert database.scalar("SELECT count(*) FROM player_profile_versions") == 0
+
+            database.expire_lease(job_id)
+            assert database.maintain_queue(max_jobs=1) == int(reject_failure_write)
+            recovered = processor.process_job(job_id, owner="recovery-worker")
+            if reject_failure_write:
+                assert recovered == ProcessResult(job_id, "processed")
+                assert database.scalar(
+                    "SELECT status FROM python_processing_jobs WHERE id = %s",
+                    (job_id,),
+                ) == "complete"
+                assert database.scalar(
+                    "SELECT attempt_count FROM python_processing_jobs WHERE id = %s",
+                    (job_id,),
+                ) == 3
+                assert database.scalar(
+                    "SELECT count(*) FROM player_profile_versions"
+                ) == 1
+                assert database.scalar(
+                    "SELECT max(attempt_number) FROM python_processing_attempts "
+                    "WHERE job_id = %s",
+                    (job_id,),
+                ) == 4
+            else:
+                assert recovered is None
+                assert database.scalar(
+                    "SELECT failure_category FROM python_processing_jobs WHERE id = %s",
+                    (job_id,),
+                ) == "database_deadlock"
+        finally:
+            database.close()
 
 
 def test_queue_health_reports_an_empty_active_queue(

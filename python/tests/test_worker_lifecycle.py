@@ -40,26 +40,49 @@ class NoClaimDatabase:
 
 
 @pytest.mark.parametrize("conflict", [DeadlockDetected, SerializationFailure])
-def test_failure_write_conflict_keeps_worker_processing(conflict, monkeypatch) -> None:
+@pytest.mark.parametrize("spent_attempts", [0, 2])
+def test_failure_write_conflict_keeps_worker_processing(
+    conflict, spent_attempts, monkeypatch
+) -> None:
     claims = [
         SimpleNamespace(
             job_id=job_id,
             work_type="reconcile_ranked_day",
             processing_version=PROCESSING_VERSION,
             domain_rule_version=DOMAIN_RULE_VERSION,
+            attempt_count=spent_attempts if job_id == 17 else 0,
+            max_attempts=3,
         )
         for job_id in (17, 18)
     ]
+    conflicted_claim = claims[0]
 
     class Database:
+        def __init__(self):
+            self.spent_attempts = spent_attempts
+
         def claim_job(self, **_kwargs):
-            return claims.pop(0)
+            if not claims:
+                return None
+            claim = claims.pop(0)
+            if claim.job_id == 17:
+                self.spent_attempts += 1
+            return claim
 
         def renew_claim(self, _claim, **_kwargs):
             pass
 
+        def refund_claim_attempt(self, claim):
+            self.spent_attempts = claim.attempt_count
+
+        def expire_lease(self):
+            if self.spent_attempts < conflicted_claim.max_attempts:
+                claims.append(conflicted_claim)
+
+    reject_transactions = True
+
     def complete_reconciliation(_database, claim):
-        if claim.job_id == 17:
+        if claim.job_id == 17 and reject_transactions:
             raise conflict()
 
     def fail_claim(*_args, **_kwargs):
@@ -69,8 +92,10 @@ def test_failure_write_conflict_keeps_worker_processing(conflict, monkeypatch) -
         reconciliation_db, "complete_reconciliation", complete_reconciliation
     )
     monkeypatch.setattr(job_outcomes, "fail_claim", fail_claim)
+    database = Database()
+    processor = ObservationProcessor(database, archive=object())
     results = process_concurrently(
-        ObservationProcessor(Database(), archive=object()),
+        processor,
         concurrency=1,
         owner="failure-conflict",
         max_jobs=2,
@@ -80,6 +105,11 @@ def test_failure_write_conflict_keeps_worker_processing(conflict, monkeypatch) -
         ProcessResult(17, "retrying", "database_deadlock"),
         ProcessResult(18, "processed"),
     ]
+    reject_transactions = False
+    database.expire_lease()
+    assert processor.process_once(owner="failure-conflict") == ProcessResult(
+        17, "processed"
+    )
 
 
 def test_stage_metrics_report_bounded_histogram_percentiles() -> None:

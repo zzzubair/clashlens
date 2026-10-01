@@ -970,6 +970,29 @@ class Database:
                     max_attempts=int(data["max_attempts"]),
                 )
 
+    def refund_claim_attempt(self, claim: Claim) -> None:
+        """Keep a conflicted failure write recoverable without releasing its lease."""
+        with self._timed_connection() as connection:
+            with connection.transaction():
+                refunded = connection.execute(
+                    f"""
+                    UPDATE {self._jobs_relation}
+                    SET attempt_count = LEAST(attempt_count, %s),
+                        updated_at = clock_timestamp()
+                    WHERE id = %s AND state = 'leased'
+                      AND lease_owner = %s AND lease_token = %s
+                      AND lease_expires_at > clock_timestamp()
+                    """,
+                    (
+                        min(claim.attempt_count, claim.max_attempts - 1),
+                        claim.job_id,
+                        claim.lease_owner,
+                        claim.lease_token,
+                    ),
+                )
+                if refunded.rowcount != 1:
+                    raise LeaseLost("job lease was lost while refunding its attempt")
+
     def maintain_queue(self, *, max_jobs: int = 100) -> int:
         """Recover a bounded set of expired worker leases.
 
