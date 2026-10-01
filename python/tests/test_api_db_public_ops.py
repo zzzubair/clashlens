@@ -207,7 +207,7 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
                 database, "#2PP", now=NOW, freshness_seconds=900
             )
             live = api_leaderboard.get_live_leaderboard(
-                database, limit=100, now=NOW, freshness_seconds=900
+                database, limit=100, now=NOW
             )
             analytics = api_analytics.get_basic_analytics(
                 database, now=NOW, freshness_seconds=900
@@ -739,7 +739,7 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
                     """
                     WITH stale AS (
                         UPDATE player_profile_versions
-                        SET observed_at = %s - interval '900.5 seconds'
+                        SET observed_at = %s - interval '600.5 seconds'
                         WHERE player_id = (
                             SELECT id FROM players WHERE normalized_tag = %s
                         )
@@ -754,10 +754,10 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
                 )
                 connection.commit()
             first = api_leaderboard.get_live_leaderboard(
-                database, limit=100, offset=0, now=NOW, freshness_seconds=900
+                database, limit=100, offset=0, now=NOW
             )
             second = api_leaderboard.get_live_leaderboard(
-                database, limit=100, offset=100, now=NOW, freshness_seconds=900
+                database, limit=100, offset=100, now=NOW
             )
             assert first is not None and second is not None
             assert [entry["position"] for entry in first["entries"]] == list(
@@ -775,7 +775,7 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
             assert first["source_observations"]["stale_count"] == 1
             assert (
                 first["source_observations"]["oldest_observed_at"]
-                == "2026-08-06T11:44:59.500000+00:00"
+                == "2026-08-06T11:49:59.500000+00:00"
             )
             assert (
                 first["source_observations"]["newest_observed_at"]
@@ -790,11 +790,11 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
                 for entry in first["entries"] + second["entries"]
                 if entry["tag"] == tags[0]
             )
-            assert stale_entry["age_seconds"] == 900
+            assert stale_entry["age_seconds"] == 600
             assert stale_entry["freshness"] == "stale"
             assert (
                 api_leaderboard.get_live_leaderboard(
-                    database, limit=100, offset=200, now=NOW, freshness_seconds=900
+                    database, limit=100, offset=200, now=NOW
                 )
                 is None
             )
@@ -809,7 +809,7 @@ def test_live_leaderboard_reports_empty_population(database_url: str) -> None:
         database = ApiDatabase(connection_info)
         try:
             empty = api_leaderboard.get_live_leaderboard(
-                database, limit=25, now=NOW, freshness_seconds=900
+                database, limit=25, now=NOW
             )
             assert empty is not None
             assert empty["entries"] == []
@@ -824,7 +824,6 @@ def test_live_leaderboard_reports_empty_population(database_url: str) -> None:
             assert (
                 api_leaderboard.get_live_leaderboard(
                     database, limit=25, offset=25, now=NOW,
-                    freshness_seconds=900,
                 )
                 is None
             )

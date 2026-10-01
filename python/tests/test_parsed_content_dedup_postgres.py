@@ -506,14 +506,16 @@ def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
             assert result is not None
             # The Live Leaderboard's Last updated follows the same rule.
             board = api_leaderboard.get_live_leaderboard(
-                api, limit=50, now=now, freshness_seconds=900
+                api, limit=50, now=now
             )
             assert board is not None
             [entry] = [row for row in board["entries"] if row["tag"] == "#2PP"]
-            assert (entry["freshness"], entry["observed_at"]) == (
-                result["freshness"],
-                result["observed_at"],
-            )
+            assert entry["observed_at"] == result["observed_at"]
+            expected_stale = (
+                now - datetime.fromisoformat(result["observed_at"])
+            ).total_seconds() > 600
+            assert entry["freshness"] == ("stale" if expected_stale else "fresh")
+            assert board["source_observations"]["stale_count"] == int(expected_stale)
             return (
                 result["freshness"],
                 result["observed_at"],
@@ -533,10 +535,10 @@ def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
             url_file.write_text(as_api_role(connection_info))
             monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
             capsys.readouterr()
-            for minutes, expected in ((9, "0 1"), (11, "1 1")):
-                alerts.leaderboard_freshness_probe(
-                    checked_at + timedelta(minutes=minutes)
-                )
+            for seconds, expected in ((599, "0 1"), (600, "0 1"), (600.5, "1 1"), (720, "1 1")):
+                now = checked_at + timedelta(seconds=seconds)
+                assert page(now)[:2] == ("fresh", checked_at.isoformat())
+                alerts.leaderboard_freshness_probe(now)
                 assert capsys.readouterr().out.strip() == expected
 
             # Checks overdue or failing: the last success stops moving.

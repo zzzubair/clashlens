@@ -578,14 +578,19 @@ use the [operating notes](operating.md#respond-to-alerts).
 - **A player check more than 600 seconds overdue**, from the collector's
   `oldest_due_age_seconds`. This catches collection that slows down without
   stopping, such as a slow official API.
-  It is neither raised nor cleared during **05:00–05:30 UTC**, while the Reset
-  sweep holds regular checks, or while collector metrics are missing.
-- **More than 1% of Live Leaderboard players last updated over 600 seconds
-  ago.** The check enters the private API container and runs the Live
-  Leaderboard's own query, printing only two counts. A changed profile keeps its
-  previous time until the worker applies it, so a few players are always
-  briefly behind; the 1% margin covers that. The collector's
-  `oldest_pending_processing_age_seconds` shows whether processing is the cause.
+  It is neither raised nor cleared while Reset work is unfinished, measured by
+  `clashlens_collector_reset_total > clashlens_collector_reset_terminal`, or while
+  those metrics or the overdue age are missing. Checks resume as soon as Reset
+  work finishes, with no fixed clock window.
+- **Any Live Leaderboard player last updated over 600 seconds ago.** The check
+  enters the private API container and runs the Live Leaderboard's own query,
+  printing only two counts. Its fresh/stale labels and population counts use the
+  same 600-second limit. A changed profile keeps its previous time until the
+  worker applies it; there is no percentage allowance or extra alert delay.
+  The collector's `oldest_pending_processing_age_seconds` measures the oldest
+  outstanding saved response from `collector_observations.created_at` across
+  pending, retrying, dependency-waiting and leased processing jobs. Rescheduling
+  a retry does not reset its age; finished jobs do not contribute.
 
 Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.

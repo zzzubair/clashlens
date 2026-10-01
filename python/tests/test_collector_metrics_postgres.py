@@ -65,12 +65,41 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
         assert before["last_success_age_seconds"] >= 1
         assert before["oldest_pending_processing_age_seconds"] < 600
         with psycopg.connect(connection_info) as connection:
-            # Responses still waiting for the worker 20 minutes later.
             connection.execute(
-                "UPDATE python_processing_jobs SET due_at = due_at - interval '20 minutes'"
+                """
+                UPDATE collector_observations
+                SET created_at = created_at - CASE WHEN http_status = 200
+                    THEN interval '40 minutes' ELSE interval '20 minutes' END
+                """
             )
-        waiting = database.health_metrics()["oldest_pending_processing_age_seconds"]
-        assert waiting >= 1200
+        for status in ("pending", "waiting_retry", "waiting_dependency", "leased"):
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    """
+                    UPDATE python_processing_jobs
+                    SET status = %s, due_at = clock_timestamp() + interval '5 minutes',
+                        lease_owner = CASE WHEN %s THEN 'metrics-test' END,
+                        lease_token = CASE WHEN %s THEN 'metrics-token' END,
+                        lease_expires_at = CASE WHEN %s THEN clock_timestamp() + interval '1 minute' END
+                    """,
+                    (status, status == "leased", status == "leased", status == "leased"),
+                )
+            waiting = database.health_metrics()
+            assert waiting["pending_processing"] == 2
+            assert waiting["oldest_pending_processing_age_seconds"] >= 2400
+        for status in ("complete", "failed", "cancelled"):
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    """
+                    UPDATE python_processing_jobs
+                    SET status = %s, lease_owner = NULL, lease_token = NULL,
+                        lease_expires_at = NULL
+                    """,
+                    (status,),
+                )
+            finished = database.health_metrics()
+            assert finished["pending_processing"] == 0
+            assert finished["oldest_pending_processing_age_seconds"] == 0
 
         claim = claim_upload(database, owner="metrics-test")
         assert claim is not None
@@ -109,5 +138,6 @@ def test_no_successful_fetch_does_not_report_a_fresh_success(database_url: str) 
             metrics = database.health_metrics()
             assert "active_players" in metrics
             assert "last_success_age_seconds" not in metrics
+            assert metrics["oldest_pending_processing_age_seconds"] == 0
         finally:
             database.close()

@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import perf_counter
 from uuid import UUID, uuid4
 
@@ -76,6 +76,42 @@ def signed_headers(
 
 def json_body(value: object) -> bytes:
     return json.dumps(value, separators=(",", ":")).encode()
+
+
+def test_live_leaderboard_freshness_uses_ten_minutes(database_url: str) -> None:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
+        database = ApiDatabase(connection_info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            with database.pool.connection() as connection:
+                observed_at = connection.execute(
+                    "SELECT current_observed_at FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+            current = observed_at
+            app = create_app(
+                database,
+                keys={("typescript-website", "current"): TS_CURRENT},
+                clock=lambda: NOW_SECONDS,
+                now=lambda: current,
+            )
+            target = "/v1/leaderboards/live?limit=1"
+            with TestClient(app) as client:
+                for seconds in (599, 600, 600.5, 720, 900):
+                    current = observed_at + timedelta(seconds=seconds)
+                    response = client.get(target, headers=signed_headers(target))
+                    assert response.status_code == 200
+                    board = response.json()
+                    stale = seconds > 600
+                    [entry] = board["entries"]
+                    assert entry["observed_at"] == observed_at.isoformat()
+                    assert entry["age_seconds"] == int(seconds)
+                    assert entry["freshness"] == ("stale" if stale else "fresh")
+                    assert board["source_observations"]["stale_count"] == int(stale)
+                    assert board["provenance"]["freshness"] == entry["freshness"]
+        finally:
+            database.close()
 
 
 @dataclass

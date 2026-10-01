@@ -570,11 +570,17 @@ class CollectorDatabase:
     def health_metrics(self) -> dict[str, int | float]:
         with self._connection() as connection:
             row = connection.execute(
-                """WITH active_reset AS (SELECT sweep.id FROM collector_reset_sweeps AS sweep JOIN collector_work AS work ON work.sweep_id = sweep.id WHERE work.kind = 'reset_baseline' AND work.status NOT IN ('complete', 'failed', 'cancelled') ORDER BY sweep.boundary_at DESC, sweep.id DESC LIMIT 1)
+                """WITH active_reset AS (SELECT sweep.id FROM collector_reset_sweeps AS sweep JOIN collector_work AS work ON work.sweep_id = sweep.id WHERE work.kind = 'reset_baseline' AND work.status NOT IN ('complete', 'failed', 'cancelled') ORDER BY sweep.boundary_at DESC, sweep.id DESC LIMIT 1),
+                processing AS (
+                    SELECT count(*) AS pending_count,
+                           min((SELECT created_at FROM collector_observations WHERE id = job.observation_id)) AS oldest_saved_at
+                    FROM python_processing_jobs AS job
+                    WHERE job.status IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')
+                )
                 SELECT (SELECT count(*) FROM players WHERE active = true),
                        (SELECT count(*) FROM players WHERE active = true AND next_due_at <= clock_timestamp()),
                        COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - min(next_due_at))) FROM players WHERE active = true AND next_due_at <= clock_timestamp()), 0),
-                       (SELECT count(*) FROM python_processing_jobs WHERE status IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')),
+                       (SELECT pending_count FROM processing),
                        (SELECT count(*) FROM collector_response_uploads
                         WHERE state IN ('pending', 'leased')
                            OR (state = 'failed' AND next_attempt_at < 'infinity'::timestamptz)),
@@ -585,7 +591,7 @@ class CollectorDatabase:
                        (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline' AND status IN ('complete', 'failed', 'cancelled')),
                        (SELECT CASE WHEN max(last_success_at) IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM clock_timestamp() - max(last_success_at))) END
                         FROM collector_response_state),
-                       COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - min(due_at))) FROM python_processing_jobs WHERE status = 'pending' AND due_at <= clock_timestamp()), 0)"""
+                       COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - oldest_saved_at)) FROM processing), 0)"""
             ).fetchone()
         assert row is not None
         names = (

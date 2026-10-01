@@ -46,7 +46,7 @@ CONDITIONS = {
         "./ops logs collector",
     ),
     "leaderboard": (
-        "More than 1% of Live Leaderboard players were last updated over ten minutes ago",
+        "A Live Leaderboard player was last updated over ten minutes ago",
         "./ops queue-status",
     ),
 }
@@ -161,7 +161,7 @@ def leaderboard_freshness_probe(now: datetime | None = None) -> None:
     try:
         # The same query and Last updated rule the Live Leaderboard uses.
         board = api_leaderboard.get_live_leaderboard(
-            database, limit=1, now=now or datetime.now(UTC), freshness_seconds=600
+            database, limit=1, now=now or datetime.now(UTC)
         )
     finally:
         database.close()
@@ -302,11 +302,10 @@ def observe(
         )
     last = max(state.setdefault("last_success", now), state.get("resumed_at", 0))
     findings["tracker"] = elapsed_without_reset(last, now) >= 600
-    # The Reset sweep holds regular checks, so the half hour after Reset
-    # neither raises nor clears the overdue-check alert.
-    clock = datetime.fromtimestamp(now, UTC)
     overdue = metrics.get("clashlens_collector_oldest_due_age_seconds")
-    if overdue is not None and not (clock.hour == 5 and clock.minute < 30):
+    reset_total = metrics.get("clashlens_collector_reset_total")
+    reset_terminal = metrics.get("clashlens_collector_reset_terminal")
+    if overdue is not None and reset_total is not None and reset_terminal == reset_total:
         findings["collection"] = overdue >= 600
 
     names = (
@@ -422,9 +421,7 @@ def observe(
         stale, total = (int(value) for value in result.stdout.split())
         if result.returncode or total < 1:
             raise ValueError
-        # A changed profile shows its previous time until the worker applies
-        # it, so a few players are always briefly behind.
-        findings["leaderboard"] = stale * 100 > total
+        findings["leaderboard"] = stale > 0
     except (OSError, ValueError, subprocess.SubprocessError):
         errors.append("Live Leaderboard freshness unavailable; run ./ops logs api")
     return findings, errors

@@ -10,6 +10,8 @@ from .api_db import (
     _text,
 )
 
+_LIVE_FRESHNESS_SECONDS = 600
+
 
 def get_live_leaderboard(
     database: ApiDatabase,
@@ -17,7 +19,6 @@ def get_live_leaderboard(
     limit: int,
     offset: int = 0,
     now: datetime,
-    freshness_seconds: int,
 ) -> dict[str, Any] | None:
     if offset < 0 or offset % limit:
         raise ValueError("offset must be non-negative and aligned to limit")
@@ -79,7 +80,7 @@ def get_live_leaderboard(
             LEFT JOIN page ON true
             ORDER BY position NULLS LAST
             """,
-            (now, freshness_seconds, limit, offset, offset),
+            (now, _LIVE_FRESHNESS_SECONDS, limit, offset, offset),
         ).fetchall()
         total_entries = int(rows[0][7]) if rows else 0
         if offset and offset >= total_entries:
@@ -95,7 +96,7 @@ def get_live_leaderboard(
             observed_at = row[3].astimezone(UTC)
             age = max(0.0, (now.astimezone(UTC) - observed_at).total_seconds())
             age_seconds = int(age)
-            freshness = "fresh" if age <= freshness_seconds else "stale"
+            freshness = "fresh" if age <= _LIVE_FRESHNESS_SECONDS else "stale"
             entries.append(
                 {
                     "position": int(row[6]),

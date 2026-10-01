@@ -29,6 +29,8 @@ def runtime(tmp_path, monkeypatch):
             "clashlens_spool_bytes": 0,
             "clashlens_spool_objects": 0,
             "clashlens_collector_oldest_due_age_seconds": 120,
+            "clashlens_collector_reset_total": 0,
+            "clashlens_collector_reset_terminal": 0,
         },
         posts=[],
         attempts=[],
@@ -174,7 +176,7 @@ def trigger(rt, condition, value=True):
     elif condition == "collection":
         rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 600 if value else 599
     elif condition == "leaderboard":
-        rt.leaderboard = "131 13000" if value else "130 13000"
+        rt.leaderboard = "1 13000" if value else "0 13000"
 
 
 @pytest.mark.parametrize(
@@ -310,21 +312,54 @@ def test_reset_pause_is_excluded_but_stuck_reset_work_still_alerts(runtime):
     assert len(rt.posts) == 1
 
 
-def test_slow_collection_alerts_while_fetches_still_succeed_except_after_reset(
-    runtime,
-):
+def test_slow_collection_alerts_when_reset_finishes_before_half_past(runtime):
     rt = runtime
     rt.now = datetime(2026, 9, 27, 5, 1, tzinfo=UTC).timestamp()
     rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 1800
+    rt.metrics["clashlens_collector_reset_total"] = 200
+    rt.metrics["clashlens_collector_reset_terminal"] = 199
     assert rt.run() == 0
     assert not rt.posts
-    rt.now = datetime(2026, 9, 27, 5, 30, tzinfo=UTC).timestamp()
+    rt.now = datetime(2026, 9, 27, 5, 20, tzinfo=UTC).timestamp()
+    rt.metrics["clashlens_collector_reset_terminal"] = 200
     assert rt.run() == 0
     assert len(rt.posts) == 1
     assert "overdue" in rt.posts[0]["content"]
-    # The next Reset window neither repeats nor clears the open incident.
-    rt.now += 86400 - 25 * 60
+    rt.now += 86400 - 15 * 60
+    rt.metrics["clashlens_collector_reset_terminal"] = 0
     rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 1
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    rt.metrics["clashlens_collector_reset_terminal"] = 200
+    assert rt.run() == 0
+    assert len(rt.posts) == 2
+    assert "recovered" in rt.posts[-1]["content"]
+
+
+def test_unfinished_reset_holds_overdue_alert_after_half_past(runtime):
+    rt = runtime
+    rt.now = datetime(2026, 9, 27, 6, tzinfo=UTC).timestamp()
+    trigger(rt, "collection")
+    rt.metrics["clashlens_collector_reset_total"] = 200
+    rt.metrics["clashlens_collector_reset_terminal"] = 199
+    assert rt.run() == 0
+    assert not rt.posts
+    rt.metrics["clashlens_collector_reset_total"] = 0
+    rt.metrics["clashlens_collector_reset_terminal"] = 0
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+
+
+@pytest.mark.parametrize(
+    "metric",
+    ["clashlens_collector_reset_total", "clashlens_collector_reset_terminal"],
+)
+def test_missing_reset_progress_does_not_clear_overdue_alert(runtime, metric):
+    rt = runtime
+    trigger(rt, "collection")
+    assert rt.run() == 0
+    trigger(rt, "collection", False)
+    del rt.metrics[metric]
     assert rt.run() == 0
     assert len(rt.posts) == 1
 
