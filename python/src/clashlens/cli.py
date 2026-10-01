@@ -125,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
     collector.add_argument(
         "--starts-per-second-per-key",
         type=_bounded_int("request starts per second per key", 1, 30),
-        default=int(os.environ.get("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", "30")),
+        default=int(os.environ.get("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", "25")),
     )
     collector.add_argument(
         "--concurrency-per-key",
@@ -704,9 +704,9 @@ def _run_collector(arguments: argparse.Namespace) -> int:
     regular_keys = _parse_api_keys(arguments.regular_api_keys)
     interactive_keys = _parse_api_keys(arguments.interactive_api_keys)
     if not arguments.allow_reduced_key_pools and (
-        len(regular_keys) != 4 or len(interactive_keys) != 1
+        not 4 <= len(regular_keys) <= 7 or len(interactive_keys) != 1
     ):
-        raise ValueError("collector requires four regular keys and one interactive key")
+        raise ValueError("collector requires 4 to 7 regular keys and one interactive key")
     if not regular_keys or len(interactive_keys) != 1:
         raise ValueError("collector requires regular keys and one interactive key")
     host, separator, port_text = arguments.health_listen.rpartition(":")
@@ -768,7 +768,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         ),
         interactive_keys=KeyPool(
             interactive_keys,
-            starts_per_second=30,
+            starts_per_second=arguments.starts_per_second_per_key,
             concurrency_per_key=concurrency,
             before_start=acquire_interactive_permit,
         ),

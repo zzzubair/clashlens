@@ -27,7 +27,8 @@ Production still rejects the discovery-enabled flag.
 [Local development](../README.md#local-development) owns supported fake-player
 sizes and trial commands. Add the known pool and weekly check workload to
 verification without treating all known tags as live players.
-Production loads four regular keys and one separate interactive key. Measure
+Production loads six regular keys and one separate interactive key; see
+[Clash API keys](operating.md#clash-api-keys). Measure
 collection, weekly checks, processing, storage and cost before deciding whether
 additional keys or wiring changes are necessary. Weekly scheduling and reuse of
 finished checks have not been verified by the manual-import test.
@@ -184,7 +185,8 @@ including restore time; see [history-retention.md](history-retention.md).
 Retirement requires separate operator
 credentials and is never part of starting or stopping the stack.
 
-Each regular key limits starts to 30/second with six concurrent requests. The
+Each key limits starts to `CLASHLENS_REQUESTS_PER_SECOND_PER_KEY`, 25/second by
+default, with six concurrent requests. The
 interactive key uses the shared database permit immediately before HTTP. It is
 never borrowed for regular work.
 

@@ -46,6 +46,32 @@ def test_regular_keys_limit_starts_and_concurrency_per_key() -> None:
         assert all(later - earlier >= 0.04 for earlier, later in pairwise(key_starts))
 
 
+def test_six_keys_each_start_at_most_the_configured_rate() -> None:
+    labels = ["normal-1", "normal-2", "normal-3", "normal-4", "extra-1", "extra-2"]
+    pool = KeyPool(
+        [ApiKey(label, f"fixture-{label}") for label in labels],
+        starts_per_second=25,
+        concurrency_per_key=6,
+    )
+    starts: dict[str, list[float]] = defaultdict(list)
+
+    async def request(key: ApiKey, start_request) -> None:
+        await start_request()
+        starts[key.label].append(monotonic())
+
+    async def run_requests() -> None:
+        await asyncio.gather(*(pool.run(request) for _ in range(6 * 8)))
+
+    asyncio.run(run_requests())
+
+    assert pool.starts_per_second == 25
+    assert {label: len(times) for label, times in starts.items()} == dict.fromkeys(
+        labels, 8
+    )
+    for key_starts in starts.values():
+        assert all(later - earlier >= 0.039 for earlier, later in pairwise(key_starts))
+
+
 def test_shared_permit_is_taken_before_each_interactive_start() -> None:
     events: list[str] = []
 

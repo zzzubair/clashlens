@@ -36,11 +36,12 @@ scheduling and reuse are implemented behind the
 [default-off switch](collector-polling.md#weekly-eligibility-switch); production
 verification remains pending. For trial sizes and commands, see
 [local development](../README.md#local-development).
-`./ops` loads four regular API keys. #128 must measure the actual active workload
+`./ops` loads six regular API keys by default; see
+[Clash API keys](operating.md#clash-api-keys). #128 must measure the actual active workload
 alongside the 22,157-tag known pool and weekly checks. Raising the live-player
 trial limit or adding keys is not required merely because the known pool is
-larger. The collector supports more keys and Zubair can supply them if measured
-demand requires additional production wiring. Keep existing safeguards.
+larger. An 8th key fits the budget and needs only a settings change. Keep
+existing safeguards.
 
 ## Existing service lifecycle
 
@@ -127,9 +128,10 @@ Create the configured spool as a dedicated directory owned by the service
 account with mode 700. Keep it outside the account's home, checkout, ops state
 and unit directories, and secret directory; `up` refuses overlapping paths
 before stopping the current stack. Under
-`CLASHLENS_API_KEY_HOST_DIR`, create five mode-600 files named
-`clashlens-normal-1` through `clashlens-normal-4` and
-`clashlens-interactive-1`, plus the HMAC file named by
+`CLASHLENS_API_KEY_HOST_DIR`, create one mode-600 file per key slot named
+`clashlens-<slot>`: by default `clashlens-normal-1` through `clashlens-normal-4`,
+`clashlens-extra-1`, `clashlens-extra-2` and `clashlens-interactive-1`
+([key slots](operating.md#clash-api-keys)), plus the HMAC file named by
 `CLASHLENS_HMAC_SECRET_FILE`. `./ops` transfers their values into Podman's
 private secret store. API keys are supplied to the collector as an environment
 secret because its current CLI accepts `label=value` key pools; they are not
@@ -285,9 +287,9 @@ unverified. Do not treat the unauthenticated rate as proof of launch capacity.
    new latency/throughput check. Verify an unauthenticated request through
    `http://100.122.10.22:3128` returns the official API's missing-authorization
    response with certificate checks enabled.
-2. Add **163.172.188.40/32** to each of the four regular keys and the interactive
+2. Add **163.172.188.40/32** to each regular key and the interactive
    key in the Clash developer portal. If this requires replacement key values,
-   put them in the existing five private key files. Do not print them or put
+   put them in the existing private key files. Do not print them or put
    them in a command line, this document or the relay.
 3. Deploy the reviewed release to rogue through the existing release procedure.
    Set `CLASHLENS_OFFICIAL_API_PROXY_URL=http://100.122.10.22:3128` in its
