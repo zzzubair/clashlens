@@ -585,7 +585,9 @@ use the [operating notes](operating.md#respond-to-alerts).
 - **Any stale Live Leaderboard entry**, using the
   [Live Leaderboard freshness rule](domain.md#live-leaderboard-ordering). The check
   enters the private API container and runs the Live Leaderboard's own query,
-  printing only two counts. If the query fails, the check fails and preserves
+  printing only two counts, so players left off the Live Leaderboard because
+  their latest profile check returned 404 are also left out of this check.
+  If the query fails, the check fails and preserves
   the existing alert state. The displayed time follows the
   [player page confirmation rule](domain.md#player-page-freshness), including
   across restarts. Migration 0040

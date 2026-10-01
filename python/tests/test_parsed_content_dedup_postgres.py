@@ -658,9 +658,9 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
                     """
                 )
                 connection.commit()
-                connection.execute(
-                    (ROOT / "deploy/migrations/0040_profile_confirmation.sql").read_text()
-                )
+                for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
+                    if int(migration.name.split("_", 1)[0]) >= 40:
+                        connection.execute(migration.read_text())
                 fingerprint = connection.execute(
                     "SELECT current_profile_fingerprint FROM players WHERE normalized_tag = '#2PP'"
                 ).fetchone()[0]
