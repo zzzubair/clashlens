@@ -138,10 +138,16 @@ the profile and battle log concurrently.
 
 On 2026-10-01, 13,263 active players at two requests every three minutes need
 about 147 request starts/second, just under the 150 that six regular keys allow
-at 25 each. When keys, the 56 check slots or the database cannot keep up, players
-are checked later than three minutes, still oldest first. Per-key limits stay in
-force and regular work never uses the interactive key. This is arithmetic, not
-measured throughput.
+at 25 each. With 56 check slots, production reached only ~125 requests/s (one
+player every ~215 s): each check took ~0.9 s, of which the Clash API answered in
+~0.12 s and the rest was saving to the spool and database, including disk flushes.
+The collector now keeps up to 160 checks in flight with 256 save threads.
+160 slots ÷ 0.9 s ≈ 178 checks/s, well above the ~74 needed, so the keys are the
+limit unless each check slows past ~2.1 s. When keys, slots or the database cannot
+keep up, players are checked later than three minutes, still oldest first.
+Per-key limits stay in force and regular work never uses the interactive key.
+The 160-slot figure comes from a local timing run with simulated disk delay, not
+from production.
 
 Ordinary transport failures wait for the next pass. Interactive, Reset and
 ranking work gets bounded retries. Raw responses are published to the local

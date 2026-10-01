@@ -785,7 +785,7 @@ def _run_collector(arguments: argparse.Namespace) -> int:
         stop_requested = asyncio.Event()
         loop = asyncio.get_running_loop()
         loop.set_default_executor(
-            ThreadPoolExecutor(max_workers=96, thread_name_prefix="collector-io")
+            ThreadPoolExecutor(max_workers=256, thread_name_prefix="collector-io")
         )
         for shutdown_signal in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(shutdown_signal, stop_requested.set)
