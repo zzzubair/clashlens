@@ -28,6 +28,10 @@ def _upsert_army_decodes(
     *,
     extra_boundary_at: datetime | None = None,
 ) -> None:
+    # Take the complete boundary lock set oldest-first before any army writes.
+    # Otherwise a re-decode can hold an army row while a battle log holds its
+    # Reset lock, and each waits for the other. Include a Reset even when no
+    # battles changed; later publication calls safely reacquire these locks.
     day_rows = (
         connection.execute(
             "SELECT DISTINCT ranked_day_start FROM legend_battles WHERE id = ANY(%s::bigint[]) ORDER BY 1",
