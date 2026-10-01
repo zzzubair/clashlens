@@ -209,9 +209,13 @@ def load_official_api_key_file(path: str | Path) -> bytes:
     return raw
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
+
+
 class _ExplicitProxyHandler(urllib.request.ProxyHandler):
     def proxy_open(self, request, proxy_url, _type):
-        # Apply to every request, including redirects, without NO_PROXY bypass.
         proxy = urlsplit(proxy_url)
         original_type = request.type
         request.set_proxy(proxy.netloc, proxy.scheme)
@@ -228,7 +232,9 @@ def _urllib_transport(
         if request.proxy_url
         else {}
     )
-    opener = urllib.request.build_opener(_ExplicitProxyHandler(proxies))
+    opener = urllib.request.build_opener(
+        _ExplicitProxyHandler(proxies), _NoRedirectHandler()
+    )
     http_request = urllib.request.Request(
         request.url,
         data=request.body,

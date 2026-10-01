@@ -163,22 +163,25 @@ class CollectorDatabase:
             ).fetchone()
         return row is not None and tuple(row) == values[1:]
 
-    def register_interactive_key(self, fingerprint: str) -> None:
+    def register_interactive_key(
+        self, fingerprint: str, *, starts_per_second: int = 25
+    ) -> None:
         self._validate_hash(fingerprint)
+        if not 1 <= starts_per_second <= 29:
+            raise ValueError("request start rate must be between 1 and 29")
         with self._connection() as connection:
-            with connection.transaction():
-                connection.execute(
-                    "INSERT INTO shared_api_credentials (credential_fingerprint) VALUES (%s) ON CONFLICT (credential_fingerprint) DO NOTHING",
-                    (fingerprint,),
-                )
-                row = connection.execute(
-                    "SELECT collector_budget, python_budget, total_budget FROM shared_api_credentials WHERE credential_fingerprint = %s FOR UPDATE",
-                    (fingerprint,),
-                ).fetchone()
-                if row is None or tuple(map(int, row)) != (29, 1, 30):
-                    raise RuntimeError(
-                        "conflicting interactive credential registration"
-                    )
+            connection.execute(
+                """
+                INSERT INTO shared_api_credentials
+                    (credential_fingerprint, collector_budget, total_budget)
+                VALUES (%s, GREATEST(%s - 1, 1), %s)
+                ON CONFLICT (credential_fingerprint) DO UPDATE
+                SET collector_budget = EXCLUDED.collector_budget,
+                    total_budget = EXCLUDED.total_budget,
+                    updated_at = clock_timestamp()
+                """,
+                (fingerprint, starts_per_second, starts_per_second),
+            )
 
     def cooldown_interactive_key(self, fingerprint: str, cooldown_seconds: int) -> bool:
         self._validate_hash(fingerprint)

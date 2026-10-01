@@ -34,6 +34,24 @@ def test_collector_api_keys_require_non_secret_labels() -> None:
         _parse_api_keys("unlabelled-secret")
 
 
+@pytest.mark.parametrize("source", ["argument", "environment"])
+@pytest.mark.parametrize("rate", ["0", "1", "25", "29", "30", "31", "1.5"])
+def test_collector_rate_stays_under_thirty(monkeypatch, source: str, rate: str) -> None:
+    monkeypatch.delenv("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", raising=False)
+    arguments = ["collector"]
+    if source == "environment":
+        monkeypatch.setenv("CLASHLENS_REQUESTS_PER_SECOND_PER_KEY", rate)
+    else:
+        arguments += ["--starts-per-second-per-key", rate]
+
+    if rate in {"1", "25", "29"}:
+        assert build_parser().parse_args(arguments).starts_per_second_per_key == int(rate)
+    else:
+        with pytest.raises(SystemExit) as error:
+            build_parser().parse_args(arguments)
+        assert error.value.code == 2
+
+
 @pytest.mark.parametrize("count", [3, 4, 6, 7, 8])
 def test_collector_loads_four_to_seven_regular_keys(monkeypatch, count: int) -> None:
     labels = ["normal-1", "normal-2", "normal-3", "normal-4", "extra-1", "extra-2"]

@@ -217,7 +217,7 @@ def _collector(spool: _Spool, store: _Store, client: _Client) -> Collector:
         client=client,
         regular_keys=KeyPool(
             [ApiKey("regular-1", "secret")],
-            starts_per_second=30,
+            starts_per_second=25,
             concurrency_per_key=6,
         ),
         interactive_keys=KeyPool(

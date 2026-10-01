@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,57 @@ from clashlens.verification import (
 )
 
 FIXTURES = Path(__file__).parents[1] / "testdata" / "player_token_verification"
+
+
+@pytest.mark.parametrize("status", [200, 301, 302, 303, 307, 308])
+def test_verification_sends_one_request_even_when_redirected(status: int) -> None:
+    requests: list[tuple[str, str]] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args) -> None:
+            return
+
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            requests.append((self.command, self.path))
+            response_status = 200 if self.path == "/redirected" else status
+            body = (
+                b'{"tag":"#2PP","token":"fixture-token","status":"ok"}'
+                if response_status == 200
+                else b""
+            )
+            self.send_response(response_status)
+            self.send_header("Content-Length", str(len(body)))
+            if response_status != 200:
+                self.send_header("Location", "/redirected")
+            self.end_headers()
+            self.wfile.write(body)
+
+        do_GET = do_POST
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = OfficialVerificationClient(
+            api_key=b"fixture-key",
+            proxy_url="",
+            api_origin=f"http://127.0.0.1:{server.server_port}",
+            allow_insecure_test_origin=True,
+        )
+        response = client.verify("#2PP", "fixture-token")
+
+        assert response.http_status == status
+        assert requests == [("POST", "/v1/players/%232PP/verifytoken")]
+        assert classify_official_response(status, response.body).outcome is (
+            VerificationOutcome.VERIFIED
+            if status == 200
+            else VerificationOutcome.UNAVAILABLE
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
 
 
 @pytest.mark.parametrize(

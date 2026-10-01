@@ -74,8 +74,8 @@ class ApiKey:
 
 class _StartLimiter:
     def __init__(self, starts_per_second: int) -> None:
-        if not 1 <= starts_per_second <= 30:
-            raise ValueError("request start rate must be between 1 and 30")
+        if not 1 <= starts_per_second <= 29:
+            raise ValueError("request start rate must be between 1 and 29")
         self._interval = 1.0 / starts_per_second
         self._next_start = 0.0
 

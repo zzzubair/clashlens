@@ -7,8 +7,8 @@ import psycopg
 import pytest
 from test_api_migration import migrated_production_database
 
-from clashlens import api_accounts, cli
-from clashlens.api_db import ApiDatabase, RequestBinding
+from clashlens import api_accounts, api_verification, cli
+from clashlens.api_db import ApiDatabase, PermitResult, RequestBinding
 from clashlens.verification import OfficialVerificationResponse
 
 
@@ -124,6 +124,41 @@ def _run_recovery(
         ]
     )
     return code
+
+
+def test_recovery_does_not_contact_provider_without_shared_permission(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class Database:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    database = Database()
+    client = FakeVerificationClient(200, b'{"status":"ok"}')
+    monkeypatch.setattr(cli, "ApiDatabase", lambda _url: database)
+    monkeypatch.setattr(
+        api_verification, "register_official_credential", lambda *_args: None
+    )
+    monkeypatch.setattr(
+        api_verification,
+        "acquire_official_permit",
+        lambda *_args, **_kwargs: PermitResult(False, "combined_budget_exhausted"),
+    )
+
+    result = _run_recovery(
+        monkeypatch,
+        client,
+        "fixture-token",
+        account_public_id=str(uuid4()),
+        database_url="postgresql://fixture/unused",
+    )
+
+    assert result == 1
+    assert client.seen_tokens == []
+    assert json.loads(capsys.readouterr().out) == {"status": "verification_unavailable"}
+    assert database.closed is True
 
 
 def test_recovery_attaches_discord_after_token_verification(

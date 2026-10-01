@@ -81,9 +81,19 @@ the developer portal for the relay address, save it as a mode-600 file named
 release procedure. No code change is needed.
 
 `CLASHLENS_REQUESTS_PER_SECOND_PER_KEY` caps how many requests each key may
-start per second, the interactive key included. It defaults to 25. The Clash API
-tolerates roughly 30-40 per key, so `./ops` refuses 30 or more. Six regular keys
-at 25 allow at most 150 requests per second.
+start per second across all callers, the interactive key included. It defaults
+to 25; `./ops`, the collector command and its request pacing refuse 30 or more.
+Six regular keys at 25 allow at most 150 requests per second.
+
+The collector stores the interactive key's configured total in the shared
+database. Interactive collection, player verification and operator Discord
+recovery obtain permission from the same rolling one-second window.
+At the default, collection can use
+24 starts and verification one, for 25 combined. When the total is at least two,
+one start is reserved for verification; at a total of one, either caller can
+use the single start. API restarts preserve the collector's configured limit.
+Verification sends one request per permission and refuses redirects; collection
+obtains a new permission for each redirected request.
 
 Check each key from the collector's measurements:
 

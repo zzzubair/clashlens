@@ -243,7 +243,10 @@ def test_website_environment_trusts_pod_unless_empty_or_explicit(
 
 
 @pytest.mark.parametrize("mode", ["production", "fixture"])
-def test_six_regular_keys_and_key_rate_reach_the_collector(tmp_path, mode_config, mode):
+@pytest.mark.parametrize("rate", [1, 25, 29])
+def test_six_regular_keys_and_key_rate_reach_the_collector(tmp_path, mode_config, mode, rate):
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write(f"CLASHLENS_REQUESTS_PER_SECOND_PER_KEY={rate}\n")
     secrets = Path(mode_config["OPS_ENV_FILE"]).parent.parent / "secrets"
     for label in [*REGULAR_KEYS, "interactive-1"]:
         (secrets / f"clashlens-{label}").write_text(f"fixture-{label}\n")
@@ -281,7 +284,7 @@ def test_six_regular_keys_and_key_rate_reach_the_collector(tmp_path, mode_config
         assert interactive == "interactive-1=fixture-interactive-1"
     collector_env = tmp_path / "state" / "clashlens" / "env" / "collector.env"
     assert (
-        "CLASHLENS_REQUESTS_PER_SECOND_PER_KEY=25"
+        f"CLASHLENS_REQUESTS_PER_SECOND_PER_KEY={rate if mode == 'production' else 25}"
         in collector_env.read_text().splitlines()
     )
 

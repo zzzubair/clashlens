@@ -25,17 +25,6 @@ def register_official_credential(database: ApiDatabase, fingerprint: str) -> Non
                 """,
                 (fingerprint,),
             )
-            row = connection.execute(
-                """
-                SELECT collector_budget, python_budget, total_budget
-                FROM shared_api_credentials
-                WHERE credential_fingerprint = %s
-                FOR UPDATE
-                """,
-                (fingerprint,),
-            ).fetchone()
-            if row is None or tuple(map(int, row)) != (29, 1, 30):
-                raise RuntimeError("conflicting official credential registration")
 
 
 def acquire_official_permit(

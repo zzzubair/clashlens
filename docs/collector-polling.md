@@ -143,8 +143,10 @@ half without creating another observation or processing job.
 
 Refresh and initial collection use the separate interactive key. Refreshes
 coalesce while active, have a 30-second cooldown, and never change the regular
-due time. Player-token verification shares the same 30-start rolling limit: 29
-starts are reserved for collection and one for verification.
+due time. Player-token verification and interactive collection share the
+configured rolling one-second limit, 25 starts by default: 24 for collection
+and one for verification. A configured total of one lets either caller use the
+single start.
 
 At 04:55 UTC regular admission stops. At 05:00, after admitted work drains, the
 collector freezes active membership into one Reset sweep and creates one paired
@@ -186,8 +188,9 @@ Retirement requires separate operator
 credentials and is never part of starting or stopping the stack.
 
 Each key limits starts to `CLASHLENS_REQUESTS_PER_SECOND_PER_KEY`, 25/second by
-default, with six concurrent requests. The
-interactive key uses the shared database permit immediately before HTTP. It is
+default, across all callers, with six concurrent collection requests. The
+interactive key uses the shared database permit immediately before HTTP for
+both collection and verification. It is
 never borrowed for regular work.
 
 ## Validation and live-run boundary
