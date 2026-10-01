@@ -65,6 +65,7 @@ BEGIN
        OR NEW.last_success_at IS DISTINCT FROM NEW.last_seen_at THEN
         RETURN NEW;
     END IF;
+    PERFORM id FROM players WHERE id = NEW.player_id FOR NO KEY UPDATE;
     UPDATE players AS player
     SET current_profile_confirmed_at = GREATEST(
             player.current_profile_confirmed_at, NEW.last_success_at),

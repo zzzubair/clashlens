@@ -458,6 +458,68 @@ def test_public_profile_uses_latest_occurrence_metadata_and_freshness(
             database.close()
 
 
+def test_concurrent_profiles_for_one_player_complete_without_retry(
+    database_url: str, archive_server
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from unittest.mock import patch
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _, initial_job = store_observation(
+            connection_info, archive_server, occurrence_key="concurrent-profile-initial",
+            endpoint="profile", body=PROFILE_FIXTURE.read_bytes(),
+            observed_at=NOW, normalized_tag="#2PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_job(initial_job, owner="initial").outcome == "processed"
+            jobs = []
+            for index in (1, 2):
+                payload = json.loads(PROFILE_FIXTURE.read_bytes())
+                payload["trophies"] += index
+                _, job = store_observation(
+                    connection_info, archive_server,
+                    occurrence_key=f"concurrent-profile-{index}", endpoint="profile",
+                    body=json.dumps(payload).encode(),
+                    observed_at=NOW + timedelta(minutes=index), normalized_tag="#2PP",
+                )
+                jobs.append(job)
+            barrier = Barrier(2)
+            original_anchor = ingestion._record_season_anchor
+
+            def record_anchor(connection, profile_version_id, profile):
+                barrier.wait(timeout=10)
+                return original_anchor(connection, profile_version_id, profile)
+
+            with patch.object(ingestion, "_record_season_anchor", record_anchor):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [
+                        executor.submit(processor.process_job, job, owner=f"profile-{job}")
+                        for job in jobs
+                    ]
+                    results = [future.result(timeout=20) for future in futures]
+            assert [result.outcome for result in results] == ["processed", "processed"]
+            with database.pool.connection() as connection:
+                rows = connection.execute(
+                    "SELECT status, attempt_count FROM python_processing_jobs WHERE id = ANY(%s)",
+                    (jobs,),
+                ).fetchall()
+                assert [(text(status), attempts) for status, attempts in rows] == [
+                    ("complete", 1), ("complete", 1)
+                ]
+                assert connection.execute(
+                    """
+                    SELECT profile.trophies, player.current_profile_confirmed_at
+                    FROM players AS player JOIN player_profile_versions AS profile
+                      ON profile.id = player.current_profile_version_id
+                    WHERE player.normalized_tag = '#2PP'
+                    """
+                ).fetchone() == (payload["trophies"], NOW + timedelta(minutes=2))
+        finally:
+            database.close()
+
+
 def test_profile_confirmation_backfill_preserves_proven_checks(
     database_url: str, archive_server
 ) -> None:

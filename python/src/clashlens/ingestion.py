@@ -160,7 +160,7 @@ def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -
                 ),
             )
             connection.execute(
-                "SELECT id FROM players WHERE id = %s FOR UPDATE", (player[0],)
+                "SELECT id FROM players WHERE id = %s FOR NO KEY UPDATE", (player[0],)
             )
             connection.execute(
                 """
