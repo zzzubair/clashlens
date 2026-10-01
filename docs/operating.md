@@ -109,20 +109,18 @@ stable or fall, followed by the Discord recovery message.
 
 ### Service restart loop
 
-The [restart condition](deployment.md#alert-conditions) also matches preview
-units such as `clashlens-preview-api.service`; identify the unit before treating
-it as a production failure:
+Find the restarting unit and check it against the
+[restart condition](deployment.md#alert-conditions):
 
 ```sh
-journalctl --user --user-unit='clashlens-*.service' --since '1 hour ago' \
-  --no-pager MESSAGE_ID=5eb03494b6584870a536b337290809b3
+journalctl --user --since '1 hour ago' --no-pager \
+  MESSAGE_ID=5eb03494b6584870a536b337290809b3
 ./ops logs
 ```
 
 **Fix or escalate:** inspect the failing service's preceding error using
 `./ops logs collector --since '1 hour ago' --no-pager`, replacing `collector`
-with the affected production service. For a preview unit, use `journalctl --user
--u clashlens-preview-api.service --since '1 hour ago' --no-pager` with its name.
+with the affected production service.
 Repair its reported configuration, resource or dependency failure before an
 approved restart. Do not clear journal history.
 
