@@ -157,12 +157,20 @@ object. It writes private temporary bytes, hashes and syncs them, then atomicall
 publishes the hash-named file. Collection pauses when the spool cannot reserve
 capacity and resumes when cleanup frees it.
 
-One background uploader creates immutable archive objects. A local spool file is
-deletable only after its processing and upload both succeed. Identical bytes
-share one spool/archive object. The fields listed in `response_fields.py` decide
-whether an ordinary response changed. When those fields match the retained
-response, changes to ignored fields need no new observation, processing job,
-or archive upload. The profile's official season rank
+The background uploader creates immutable archive objects with up to 32 uploads
+at once. Those uploads share a limit of four database calls at once for claiming,
+archive configuration checks, renewing upload ownership, and recording completion
+or failure. The limit reduces competition with player collection for database
+connections. Archive writes run outside it.
+See [migration 0041](../deploy/migrations/0041_upload_claim_order.sql) for the
+ordered upload lookup and earlier automatic cleanup of obsolete database row
+versions.
+
+A local spool file is deletable only after its processing and upload both
+succeed. Identical bytes share one spool/archive object. The fields listed in
+`response_fields.py` decide whether an ordinary response changed. When those
+fields match the retained response, changes to ignored fields need no new
+observation, processing job, or archive upload. The profile's official season rank
 (`legendStatistics.currentSeason.rank`) is ignored: it moves whenever other
 players battle and nothing reads it, so a rank-only change counts as unchanged.
 A changed response is still stored in full, including the rank. Fingerprints

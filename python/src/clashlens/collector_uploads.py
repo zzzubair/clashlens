@@ -26,8 +26,8 @@ class UploadLeaseLost(RuntimeError):
     """The upload claim is stale, expired, or owned by another uploader."""
 
 
-# collector_response_uploads_claim_order matches this filter and order, so a
-# claim reads only the first due row it can lock, not the whole backlog.
+# collector_response_uploads_claim_order matches this filter and order, so
+# claims can stop at the first due row they can lock without sorting the backlog.
 NEXT_DUE_UPLOAD_SQL = """
     SELECT response_hash
     FROM collector_response_uploads

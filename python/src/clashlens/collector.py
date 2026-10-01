@@ -44,8 +44,8 @@ _GLOBAL_ARCHIVE_FAILURES = {
     "archive_unsupported",
 }
 _UPLOAD_CONCURRENCY = 32
-# Upload owners share these database slots, so archive writes still overlap
-# while player checks keep the rest of the 32 database connections.
+# Upload owners share these slots to limit competition with player checks.
+# Archive writes run outside the database limit and can still overlap.
 _UPLOAD_DATABASE_SLOTS = 4
 _UPLOAD_LEASE_SECONDS = 60
 _UPLOAD_RENEW_INTERVAL = 20.0
