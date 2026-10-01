@@ -160,6 +160,24 @@ def _upsert_army_decodes(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (f"boundary-publication:{boundary_at.isoformat()}",),
         )
+    current_evidence = {
+        (int(battle_id), _text_value(perspective)): int(evidence_id)
+        for battle_id, perspective, evidence_id in connection.execute(
+            """
+            SELECT battle_id, perspective, evidence_id
+            FROM battle_perspectives
+            WHERE battle_id = ANY(%s::bigint[])
+            """,
+            (sorted({row[0] for row in decoded_rows}),),
+        ).fetchall()
+    }
+    decoded_rows = [
+        row
+        for row in decoded_rows
+        if current_evidence.get((row[0], row[2])) == row[1]
+    ]
+    if not decoded_rows:
+        return
     # Write shared exact_armies rows in one fixed order so two battle logs that
     # share armies cannot each hold one and wait for the other (deadlock).
     decoded_rows.sort(key=lambda row: getattr(row[4], "identity_hash", None) or "")
