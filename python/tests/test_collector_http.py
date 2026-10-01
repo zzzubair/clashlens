@@ -344,11 +344,24 @@ def test_redirects_share_one_total_deadline(official_server: str) -> None:
 
 def test_redirect_hop_uses_another_rate_and_shared_permit(
     official_server: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    clock = 100.0
     permit_times: list[float] = []
+    real_sleep = asyncio.sleep
+
+    async def advance_clock(delay: float) -> None:
+        nonlocal clock
+        clock += delay
+        await real_sleep(0)
+
+    # Server arrival times also include thread scheduling and transport delays.
+    # Control the limiter's clock so each hop must spend its own rate interval.
+    monkeypatch.setattr("clashlens.collector_http.monotonic", lambda: clock)
+    monkeypatch.setattr("clashlens.collector_http.asyncio.sleep", advance_clock)
 
     async def permit() -> None:
-        permit_times.append(monotonic())
+        permit_times.append(clock)
 
     client = OfficialApiClient(
         official_server,
@@ -364,11 +377,9 @@ def test_redirect_hop_uses_another_rate_and_shared_permit(
 
     response = asyncio.run(client.fetch_player(pool, "#REDIRECT", "profile"))
 
-    redirect_started = _OfficialHandler.paths_started["/v1/players/%23REDIRECT"][0]
-    target_started = _OfficialHandler.paths_started["/v1/players/%23SMALL"][0]
     assert response.body == b"ok"
     assert len(permit_times) == 2
-    assert target_started - redirect_started >= 0.025
+    assert permit_times[1] - permit_times[0] == pytest.approx(1 / 30)
 
 
 def test_unread_responses_do_not_poison_or_drain_single_connection_pool(
