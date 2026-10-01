@@ -1,7 +1,7 @@
 # Continuous player polling
 
 The Python collector runs a continuous, fair loop through tracked Legend I
-players. Five minutes is the minimum revisit interval, not a batch deadline.
+players. Three minutes is the minimum revisit interval, not a batch deadline.
 
 ## Agreed discovery and population changes, 2026-09-25
 
@@ -69,7 +69,7 @@ The weekly scheduler queues at most 30 players at a time, with starts spaced by
 two seconds and one check in flight. It uses the existing regular keys and their
 configured request/concurrency limits. It pauses during the 04:55 admission
 cutoff, unfinished Reset work, or when any live player is more than two minutes
-past its normal five-minute due time. A backlog does not trigger a catch-up
+past its normal three-minute due time. A backlog does not trigger a catch-up
 burst. Turning the switch off also leaves queued weekly work paused.
 
 Weekly checks reuse previously successful league-history collection; a player
@@ -133,8 +133,15 @@ timing and complete storage cost still require the population timing trial.
 ## Queue behavior
 
 The collector selects `players.next_due_at` oldest first, breaking ties by player
-ID. Admission moves the player to admission time plus five minutes, then fetches
+ID. Admission moves the player to admission time plus three minutes, then fetches
 the profile and battle log concurrently.
+
+On 2026-10-01, 13,263 active players at two requests every three minutes need
+about 147 request starts/second, just under the 150 that six regular keys allow
+at 25 each. When keys, the 56 check slots or the database cannot keep up, players
+are checked later than three minutes, still oldest first. Per-key limits stay in
+force and regular work never uses the interactive key. This is arithmetic, not
+measured throughput.
 
 Ordinary transport failures wait for the next pass. Interactive, Reset and
 ranking work gets bounded retries. Raw responses are published to the local
