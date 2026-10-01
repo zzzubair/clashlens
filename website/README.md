@@ -112,13 +112,15 @@ not choose that address. Restarting the process resets its in-memory counters.
 Without a valid connection address, Refresh returns `503 service_unavailable`
 without requesting collection.
 
-`CLASHLENS_TRUSTED_PROXY_IP` defaults to empty, meaning no header is trusted.
-Set it to exactly the local proxy's socket address **as observed inside the
-website container**, not a subnet or a number of hops. IPv4-mapped IPv6 is
-normalized. Only Cloudflare's `CF-Connecting-IP` header supplies the visitor
+In the website itself, `CLASHLENS_TRUSTED_PROXY_IP` defaults to empty, meaning
+no header is trusted. Set it to exactly the local proxy's socket address **as
+observed inside the website container**, not a subnet or a number of hops.
+IPv4-mapped IPv6 is normalized. Only Cloudflare's `CF-Connecting-IP` header supplies the visitor
 address. Missing, duplicate, chained or malformed addresses fall back to the
 socket peer. `CLASHLENS_TRUST_PROXY` is obsolete and ignored. The root `ops`
-passes the trusted proxy setting from `app.env`; no trusted address is enabled by default.
+gives the production pod the fixed address `10.89.14.2`, which is where every
+connection to the loopback-published website port appears from, and trusts that
+address when `app.env` leaves the setting unset. An empty value trusts nothing.
 
 Before enabling proxy trust, the ingress operator must:
 

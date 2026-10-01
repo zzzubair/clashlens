@@ -224,6 +224,9 @@ load_production_config() {
   validate_backup_config
   PREFIX=clashlens
   NETWORK_NAME=clashlens-private
+  # Published-port traffic reaches the website from the pod's own address, so pin it.
+  NETWORK_SUBNET=10.89.14.0/24
+  POD_IP=10.89.14.2
   POSTGRES_VOLUME=clashlens-postgres-data
   SPOOL_ROOT=$(setting CLASHLENS_SPOOL_ROOT)
   ARCHIVE_ROOT=
@@ -257,6 +260,8 @@ load_production_config() {
 load_fixture_config() {
   PREFIX=clashlens-ops-fixture
   NETWORK_NAME=clashlens-ops-fixture-private
+  NETWORK_SUBNET=
+  POD_IP=
   POSTGRES_VOLUME=clashlens-ops-fixture-postgres-data
   SPOOL_ROOT="$STATE_DIR/fixture/spool"
   ARCHIVE_ROOT="$STATE_DIR/fixture/archive"
@@ -399,6 +404,16 @@ guard_resource() {
   local kind=$1 name=$2
   "$PODMAN_BIN" "$kind" exists "$name" >/dev/null 2>&1 || return 0
   [[ "$(managed_label "$kind" "$name")" == ops ]] || die "refusing to replace unmanaged Podman $kind $name"
+}
+
+guard_network_subnet() {
+  [[ -n "$NETWORK_SUBNET" ]] || return 0
+  "$PODMAN_BIN" network exists "$NETWORK_NAME" >/dev/null 2>&1 || return 0
+  local subnets
+  subnets=$($PODMAN_BIN network inspect --format '{{range .Subnets}}{{.Subnet}} {{end}}' "$NETWORK_NAME") || die "cannot inspect network $NETWORK_NAME"
+  subnets=$(trim "$subnets")
+  [[ "$subnets" == "$NETWORK_SUBNET" ]] || \
+    die "network $NETWORK_NAME uses $subnets, not $NETWORK_SUBNET; run ./ops down and podman network rm $NETWORK_NAME"
 }
 
 guard_existing_resources() {
@@ -675,7 +690,7 @@ render_units() {
     render "$template" "$QUADLET_DIR/$base" \
       PREFIX "$PREFIX" NETWORK_NAME "$NETWORK_NAME" POSTGRES_VOLUME "$POSTGRES_VOLUME" \
       BACKUP_SECRET "$backup_secret" POSTGRES_ARCHIVE_ARGS "$archive_args" \
-      FIXTURE_PORTS "$fixture_ports" \
+      FIXTURE_PORTS "$fixture_ports" NETWORK_SUBNET "${NETWORK_SUBNET:+Subnet=$NETWORK_SUBNET}" POD_ADDRESS "${POD_IP:+IP=$POD_IP}" \
       ENV_DIR "$STATE_DIR/env" SPOOL_ROOT "$SPOOL_ROOT" ARCHIVE_ROOT "$ARCHIVE_ROOT" \
       POSTGRES_IMAGE "${RELEASE[POSTGRES_IMAGE]}" COLLECTOR_IMAGE "${RELEASE[COLLECTOR_IMAGE]}" \
       PYTHON_IMAGE "${RELEASE[PYTHON_IMAGE]}" WEBSITE_IMAGE "${RELEASE[WEBSITE_IMAGE]}" \
@@ -786,7 +801,7 @@ write_environment() {
       login_enabled=true; public_origin=$(setting CLASHLENS_PUBLIC_ORIGIN); google_id=$(setting CLASHLENS_GOOGLE_CLIENT_ID); discord_id=$(setting CLASHLENS_DISCORD_CLIENT_ID)
     fi
     local trusted_proxy_ip website_environment=()
-    trusted_proxy_ip=$(setting CLASHLENS_TRUSTED_PROXY_IP)
+    trusted_proxy_ip=$(setting CLASHLENS_TRUSTED_PROXY_IP "$POD_IP")
     [[ -z "$trusted_proxy_ip" ]] || website_environment+=("CLASHLENS_TRUSTED_PROXY_IP=$trusted_proxy_ip")
     write_env website.env NODE_ENV=production PORT=3000 CLASHLENS_PYTHON_API_URL=http://127.0.0.1:8000 \
       "CLASHLENS_PYTHON_HMAC_CALLER=$hmac_caller" "CLASHLENS_PYTHON_HMAC_KEY_ID=$hmac_key_id" CLASHLENS_PYTHON_HMAC_SECRET_FILE=/run/secrets/clashlens-hmac-current \
@@ -1101,6 +1116,7 @@ up_stack() {
   fi
   guard_generated_units
   guard_existing_resources
+  guard_network_subnet
   cleanup_stale_admin_state
   ensure_linger
   migrate_legacy_units

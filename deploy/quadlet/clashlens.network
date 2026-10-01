@@ -2,3 +2,4 @@
 [Network]
 Label=org.clashlens.managed=ops
 NetworkName=@@NETWORK_NAME@@
+@@NETWORK_SUBNET@@

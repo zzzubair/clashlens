@@ -14,6 +14,9 @@ from pathlib import Path
 import pytest
 
 OPS = Path(__file__).resolve().parents[2] / "ops"
+# Take the pinned network values from the real mode config without its host checks.
+POD_NETWORK = r"""eval "$(declare -f "load_${MODE}_config" | grep -E '^ +(NETWORK_SUBNET|POD_IP)=')"
+"""
 
 
 @pytest.fixture
@@ -110,7 +113,7 @@ def run_ops(runtime, rows, *args, upload_exit=0):
     ("mode", "login_enabled"),
     [("production", False), ("production", True), ("fixture", True)],
 )
-def test_website_environment_omits_empty_proxy_and_preserves_explicit_address(
+def test_website_environment_trusts_pod_unless_empty_or_explicit(
     tmp_path, proxy_ip, mode, login_enabled
 ):
     environment_file = tmp_path / "state" / "clashlens" / "env" / "website.env"
@@ -123,6 +126,9 @@ def test_website_environment_omits_empty_proxy_and_preserves_explicit_address(
             r"""
 source "$1" help >/dev/null
 MODE=$TEST_MODE
+"""
+            + POD_NETWORK
+            + r"""
 POSTGRES_DB=clashlens
 POSTGRES_USER=clashlens
 SPOOL_ROOT=$TEST_ROOT/spool
@@ -175,14 +181,94 @@ write_environment
     environment = dict(
         line.split("=", 1) for line in environment_file.read_text().splitlines()
     )
-    if mode == "production" and proxy_ip:
-        assert environment["CLASHLENS_TRUSTED_PROXY_IP"] == proxy_ip
+    expected_proxy = "10.89.14.2" if proxy_ip is None else proxy_ip
+    if mode == "production" and expected_proxy:
+        assert environment["CLASHLENS_TRUSTED_PROXY_IP"] == expected_proxy
     else:
         assert "CLASHLENS_TRUSTED_PROXY_IP" not in environment
     assert environment["NODE_ENV"] == ("test" if mode == "fixture" else "production")
     assert environment["CLASHLENS_LOGIN_ENABLED"] == str(login_enabled).lower()
     assert environment["CLASHLENS_PYTHON_API_URL"] == "http://127.0.0.1:8000"
     assert environment_file.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("mode", ["production", "fixture"])
+def test_production_pod_address_is_pinned_inside_its_network(tmp_path, mode):
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            r"""
+source "$1" help >/dev/null
+MODE=$TEST_MODE
+load_fixture_config
+"""
+            + POD_NETWORK
+            + r"""
+RELEASE=([POSTGRES_IMAGE]=postgres [COLLECTOR_IMAGE]=collector [PYTHON_IMAGE]=python [WEBSITE_IMAGE]=website)
+render_units
+""",
+            "unit-rendering-test",
+            str(OPS),
+        ],
+        env=dict(
+            os.environ,
+            XDG_STATE_HOME=str(tmp_path / "state"),
+            XDG_CONFIG_HOME=str(tmp_path / "config"),
+            PODMAN_BIN="forbidden-service-operation",
+            SYSTEMCTL_BIN="forbidden-service-operation",
+            TEST_MODE=mode,
+        ),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    units = tmp_path / "config" / "containers" / "systemd"
+    network = (units / "clashlens.network").read_text().splitlines()
+    pod = (units / "clashlens.pod").read_text().splitlines()
+    if mode == "fixture":
+        assert not [line for line in network if line.startswith("Subnet=")]
+        assert not [line for line in pod if line.startswith("IP=")]
+        return
+    assert "Subnet=10.89.14.0/24" in network
+    assert "IP=10.89.14.2" in pod
+
+
+@pytest.mark.parametrize(
+    ("subnets", "accepted"),
+    [("10.89.14.0/24 ", True), ("10.89.15.0/24 ", False), ("", False)],
+)
+def test_existing_network_with_another_subnet_is_refused(tmp_path, subnets, accepted):
+    podman = tmp_path / "podman"
+    podman.write_text(
+        '#!/usr/bin/env bash\n[[ "$2" == exists ]] || printf "%s\\n" "$TEST_SUBNETS"\n'
+    )
+    podman.chmod(0o700)
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            r"""
+source "$1" help >/dev/null
+MODE=production
+NETWORK_NAME=clashlens-private
+"""
+            + POD_NETWORK
+            + "guard_network_subnet\n",
+            "network-guard-test",
+            str(OPS),
+        ],
+        env=dict(os.environ, PODMAN_BIN=str(podman), TEST_SUBNETS=subnets),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted, result.stderr
+    if not accepted:
+        assert "podman network rm clashlens-private" in result.stderr
 
 
 def test_extra_manual_backups_do_not_shorten_recovery_window(runtime):
