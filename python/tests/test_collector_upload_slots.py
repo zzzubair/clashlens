@@ -4,6 +4,7 @@ import asyncio
 import errno
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pytest
@@ -80,7 +81,13 @@ def test_uploads_use_at_most_four_database_connections(
     collector = _collector(spool, store, _Client(spool))
     collector.archive = Archive()  # type: ignore[assignment]
 
-    asyncio.run(asyncio.wait_for(collector._upload_loop(stop, 0.01), timeout=10))
+    async def scenario() -> None:
+        asyncio.get_running_loop().set_default_executor(
+            ThreadPoolExecutor(max_workers=96)
+        )
+        await asyncio.wait_for(collector._upload_loop(stop, 0.01), timeout=10)
+
+    asyncio.run(scenario())
 
     assert completed == 48
     assert peak["database"] <= 4
@@ -149,6 +156,9 @@ def test_spool_failure_keeps_database_slots_until_cancelled_renewals_finish(
     collector.archive = Archive()  # type: ignore[assignment]
 
     async def scenario() -> None:
+        asyncio.get_running_loop().set_default_executor(
+            ThreadPoolExecutor(max_workers=96)
+        )
         uploads = [
             asyncio.create_task(collector.upload_once(owner=str(index)))
             for index in range(4)
