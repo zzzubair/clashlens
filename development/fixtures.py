@@ -78,15 +78,30 @@ PROFILE_PADDING = {
         for index in range(62)
     ],
     "troops": [
-        {"name": f"Synthetic Troop {index}", "level": 10, "maxLevel": 12, "village": "home"}
+        {
+            "name": f"Synthetic Troop {index}",
+            "level": 10,
+            "maxLevel": 12,
+            "village": "home",
+        }
         for index in range(82)
     ],
     "heroEquipment": [
-        {"name": f"Synthetic Gear {index}", "level": 20, "maxLevel": 27, "village": "home"}
+        {
+            "name": f"Synthetic Gear {index}",
+            "level": 20,
+            "maxLevel": 27,
+            "village": "home",
+        }
         for index in range(42)
     ],
     "spells": [
-        {"name": f"Synthetic Spell {index}", "level": 11, "maxLevel": 13, "village": "home"}
+        {
+            "name": f"Synthetic Spell {index}",
+            "level": 11,
+            "maxLevel": 13,
+            "village": "home",
+        }
         for index in range(18)
     ],
 }
@@ -103,7 +118,9 @@ NON_LEGEND_BATTLES = [
         "lootedResources": [
             {"name": name, "amount": 10_000 + index} for name in _RESOURCES[:3]
         ],
-        "extraLootedResources": [{"name": name, "amount": 0} for name in _RESOURCES[:3]],
+        "extraLootedResources": [
+            {"name": name, "amount": 0} for name in _RESOURCES[:3]
+        ],
         "availableLoot": [
             {"name": f"{name}{suffix}", "amount": 0}
             for suffix in ("", "Banked", "Event", "Ore", "Crafting")

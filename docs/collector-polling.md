@@ -23,9 +23,10 @@ through existing database/eligibility functions. No reusable import feature is
 required. The legacy `bootstrap-population` command caps input at 20,000,
 rejects duplicate lines and refuses a later new import; it remains unchanged.
 Automatic discovery requirements remain in [#125](https://github.com/zzzubair/clashlens/issues/125).
-Production still rejects the discovery-enabled flag. The current trial's
-12,500-player size matches the active target; add the known pool and weekly
-check workload to verification without treating all known tags as live players.
+Production still rejects the discovery-enabled flag.
+[Local development](../README.md#local-development) owns supported fake-player
+sizes and trial commands. Add the known pool and weekly check workload to
+verification without treating all known tags as live players.
 Production loads four regular keys and one separate interactive key. Measure
 collection, weekly checks, processing, storage and cost before deciding whether
 additional keys or wiring changes are necessary. Weekly scheduling and reuse of
@@ -164,6 +165,14 @@ whether an ordinary response changed; changes to ignored fields update freshness
 without a new observation, processing job, or archive upload. A changed response
 is stored in full. Reset always stores paired boundary observations, including
 unchanged responses.
+
+Uploaded-copy cleanup holds one publication barrier and rechecks the bounded
+batch in one database transaction. Pending durable handoffs protect their raw
+bytes. The spool capacity lock covers file removal and capacity accounting;
+database work and directory flushes run outside it. Each removed file's directory
+is flushed to disk before the database records local deletion.
+The publication barrier prevents the same body from being republished meanwhile.
+Missing files still let cleanup finish a deletion interrupted by a crash.
 
 League history is collected initially and after each season-ending Reset. It
 is stored in full and parsed separately from profiles and battle logs. Raw

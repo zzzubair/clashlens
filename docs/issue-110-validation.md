@@ -60,12 +60,8 @@ authorize going live. The final PR records the tested commit and CI runs.
   publications enter. Previously, arriving writes could keep cleanup waiting
   while already-uploaded and processed local copies accumulated. The same
   database, raw-handoff, and spool checks still decide whether deletion is safe.
-  Uploaded-copy cleanup now takes that publication barrier once for its
-  existing bounded batch, instead of stopping new publications for each file.
-  The sidecar snapshot remains conservative throughout the batch. Each hash
-  still gets its own authoritative database check, transaction and directory
-  flush; the spool capacity lock is never held across database work. Missing
-  files still allow the database to finish a deletion interrupted by a crash.
+  The current cleanup batching and crash-safety contract belongs in
+  [collector polling](collector-polling.md#spool-archive-and-rate-enforcement).
   The running loop limits each turn to 16 files. A full successful turn yields
   briefly before continuing; partial or empty turns retain the one-second
   backoff. A measured 128-file turn held publication too long, despite fixing

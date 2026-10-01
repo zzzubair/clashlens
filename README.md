@@ -54,8 +54,11 @@ player profiles and battle logs on a five-minute cadence, writes exact raw
 responses to the bounded local spool, uploads them to the immutable archive,
 and hands durable observations to the Python worker. Use
 `./dev trial --players 12500 --minutes 30` to measure capacity and storage
-growth against the local fixtures; run the matching `./dev down --players 12500`
-after a capacity run.
+growth against the local fixtures. Trials accept 1–13,500 players and default to
+12,500 players for 30 minutes. Profiles include ignored fields and battle logs
+include non-Legend entries to resemble the size and processing cost of live
+responses. Earlier trials used smaller responses and do not establish live
+capacity. Each trial removes its isolated stack and data when it finishes.
 
 ## Fedora operation
 
