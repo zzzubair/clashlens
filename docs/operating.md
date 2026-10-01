@@ -186,6 +186,8 @@ growing processing wait with a healthy collector points at the worker or
 PostgreSQL capacity. Processing wait starts at the saved response's creation
 time and includes pending, retrying, dependency-waiting and leased jobs,
 even when the next attempt is scheduled in the future. Finished jobs are excluded.
+Jobs without a saved response use their own creation time, so delayed derived
+work also contributes to the processing wait.
 The overdue alert pauses only while Reset work is unfinished, based on the
 collector's Reset totals, and resumes immediately when that work finishes.
 

@@ -573,8 +573,10 @@ class CollectorDatabase:
                 """WITH active_reset AS (SELECT sweep.id FROM collector_reset_sweeps AS sweep JOIN collector_work AS work ON work.sweep_id = sweep.id WHERE work.kind = 'reset_baseline' AND work.status NOT IN ('complete', 'failed', 'cancelled') ORDER BY sweep.boundary_at DESC, sweep.id DESC LIMIT 1),
                 processing AS (
                     SELECT count(*) AS pending_count,
-                           min((SELECT created_at FROM collector_observations WHERE id = job.observation_id)) AS oldest_saved_at
+                           min(COALESCE(observation.created_at, job.created_at)) AS oldest_saved_at
                     FROM python_processing_jobs AS job
+                    LEFT JOIN collector_observations AS observation
+                      ON observation.id = job.observation_id
                     WHERE job.status IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')
                 )
                 SELECT (SELECT count(*) FROM players WHERE active = true),

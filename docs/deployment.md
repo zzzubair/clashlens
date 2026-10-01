@@ -590,7 +590,9 @@ use the [operating notes](operating.md#respond-to-alerts).
   The collector's `oldest_pending_processing_age_seconds` measures the oldest
   outstanding saved response from `collector_observations.created_at` across
   pending, retrying, dependency-waiting and leased processing jobs. Rescheduling
-  a retry does not reset its age; finished jobs do not contribute.
+  a retry does not reset its age; finished jobs do not contribute. Jobs without
+  a saved response use the job's creation time. Count and oldest time come from
+  one shared pass over outstanding jobs joined to their saved responses.
 
 Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.

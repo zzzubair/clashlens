@@ -131,13 +131,59 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
         assert after["last_success_age_seconds"] >= before["last_success_age_seconds"]
 
 
-def test_no_successful_fetch_does_not_report_a_fresh_success(database_url: str) -> None:
+def test_metrics_include_jobs_without_observations_or_successful_fetches(
+    database_url: str,
+) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database = CollectorDatabase(connection_info)
         try:
             metrics = database.health_metrics()
             assert "active_players" in metrics
             assert "last_success_age_seconds" not in metrics
+            assert metrics["oldest_pending_processing_age_seconds"] == 0
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "INSERT INTO players (normalized_tag) VALUES ('#2PP')"
+                )
+                connection.execute(
+                    """
+                    INSERT INTO python_processing_jobs (
+                        work_type, deduplication_key, input_json, created_at, due_at
+                    )
+                    SELECT 'reconcile_ranked_day', 'metrics-without-observation',
+                           jsonb_build_object('player_id', id,
+                               'ranked_day_start', '2026-10-01T05:00:00Z'),
+                           clock_timestamp() - interval '1 hour',
+                           clock_timestamp() + interval '5 minutes'
+                    FROM players
+                    """
+                )
+            for status in ("pending", "waiting_retry", "waiting_dependency", "leased"):
+                with psycopg.connect(connection_info) as connection:
+                    connection.execute(
+                        """
+                        UPDATE python_processing_jobs
+                        SET status = %s,
+                            lease_owner = CASE WHEN %s THEN 'metrics-test' END,
+                            lease_token = CASE WHEN %s THEN 'metrics-token' END,
+                            lease_expires_at = CASE WHEN %s THEN clock_timestamp() + interval '1 minute' END
+                        """,
+                        (status, status == "leased", status == "leased", status == "leased"),
+                    )
+                metrics = database.health_metrics()
+                assert metrics["pending_processing"] == 1
+                assert metrics["oldest_pending_processing_age_seconds"] >= 3600
+                assert "last_success_age_seconds" not in metrics
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    """
+                    UPDATE python_processing_jobs
+                    SET status = 'complete', lease_owner = NULL,
+                        lease_token = NULL, lease_expires_at = NULL
+                    """
+                )
+            metrics = database.health_metrics()
+            assert metrics["pending_processing"] == 0
             assert metrics["oldest_pending_processing_age_seconds"] == 0
         finally:
             database.close()
