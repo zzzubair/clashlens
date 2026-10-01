@@ -755,7 +755,7 @@ def test_redecode_preserves_report_corrected_before_reset_lock(
                     with connection.transaction():
                         army_ingestion._upsert_army_decodes(db, connection, battle_ids)
                 results.append("processed")
-            except Exception as error:
+            except Exception as error:  # noqa: BLE001 - reported by the assertion
                 results.append(repr(error))
 
         thread = threading.Thread(target=redecode)
@@ -774,7 +774,9 @@ def test_redecode_preserves_report_corrected_before_reset_lock(
             with db.pool.connection() as connection:
                 battle_ids = [
                     row[0]
-                    for row in connection.execute("SELECT id FROM legend_battles").fetchall()
+                    for row in connection.execute(
+                        "SELECT id FROM legend_battles"
+                    ).fetchall()
                 ]
                 connection.execute(
                     "UPDATE battle_army_decodes SET decoder_version = 'army-decoder-v1'"
@@ -792,7 +794,10 @@ def test_redecode_preserves_report_corrected_before_reset_lock(
                     """,
                     (army_ingestion.DECODER_VERSION,),
                 ).fetchone()
-            assert (text(corrected[3]), text(corrected[4])) == (new_code, expected_status)
+            assert (text(corrected[3]), text(corrected[4])) == (
+                new_code,
+                expected_status,
+            )
             resume.set()
             thread.join(timeout=20)
             assert not thread.is_alive()
@@ -811,10 +816,13 @@ def test_redecode_preserves_report_corrected_before_reset_lock(
                 assert len(active) == 2
                 unchanged = next(row for row in active if row[1] != corrected[1])
                 assert (text(unchanged[3]), text(unchanged[4])) == ("u3x58", "decoded")
-                assert connection.execute(
-                    "SELECT count(*) FROM battle_army_decodes WHERE battle_id = %s",
-                    (corrected[1],),
-                ).fetchone()[0] == 2
+                assert (
+                    connection.execute(
+                        "SELECT count(*) FROM battle_army_decodes WHERE battle_id = %s",
+                        (corrected[1],),
+                    ).fetchone()[0]
+                    == 2
+                )
                 assert not connection.execute(
                     """
                     SELECT 1 FROM battle_army_decodes AS decode
@@ -847,7 +855,11 @@ def test_reset_battle_log_and_baseline_writer_take_locks_in_one_order(
             occurrence_key="reset-lock-order",
             endpoint="battle_log",
             body=json.dumps(
-                {"items": [_live_row(True, "#8PP", None, boundary_at + timedelta(hours=1))]}
+                {
+                    "items": [
+                        _live_row(True, "#8PP", None, boundary_at + timedelta(hours=1))
+                    ]
+                }
             ).encode(),
             observed_at=boundary_at + timedelta(hours=2),
             normalized_tag="#2PP",

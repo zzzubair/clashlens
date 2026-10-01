@@ -50,9 +50,7 @@ def _upsert_army_decodes(
 ) -> None:
     if not battle_ids:
         return
-    exists = connection.execute(
-        "SELECT to_regclass('battle_army_decodes')"
-    ).fetchone()
+    exists = connection.execute("SELECT to_regclass('battle_army_decodes')").fetchone()
     if exists is None or exists[0] is None:
         return
     catalog = connection.execute(
@@ -75,9 +73,7 @@ def _upsert_army_decodes(
     decoded_rows = []
     for battle_id, evidence_id, perspective, raw_code, source_json in rows:
         source_code = (
-            source_json.get("armyShareCode")
-            if isinstance(source_json, dict)
-            else None
+            source_json.get("armyShareCode") if isinstance(source_json, dict) else None
         )
         if source_code is not None and not isinstance(source_code, str):
             decoded: DecodedArmy | DecodeFailure = DecodeFailure(
@@ -103,7 +99,12 @@ def _upsert_army_decodes(
             (battle_id, evidence_id, _text_value(perspective), raw_code, decoded)
         )
     current = {
-        (int(row[0]), _text_value(row[1]), _text_value(row[2]), _text_value(row[3])): row[4:]
+        (
+            int(row[0]),
+            _text_value(row[1]),
+            _text_value(row[2]),
+            _text_value(row[3]),
+        ): row[4:]
         for row in connection.execute(
             """
             SELECT battle_id, perspective, decoder_version, catalog_version,
@@ -172,9 +173,7 @@ def _upsert_army_decodes(
         ).fetchall()
     }
     decoded_rows = [
-        row
-        for row in decoded_rows
-        if current_evidence.get((row[0], row[2])) == row[1]
+        row for row in decoded_rows if current_evidence.get((row[0], row[2])) == row[1]
     ]
     if not decoded_rows:
         return
@@ -273,9 +272,7 @@ def _upsert_army_decodes(
                             for f in decoded.home_troops
                         ]
                     ),
-                    Jsonb(
-                        [(f.typed_id, f.quantity, f.origin) for f in decoded.spells]
-                    ),
+                    Jsonb([(f.typed_id, f.quantity, f.origin) for f in decoded.spells]),
                     Jsonb(
                         [
                             (f.typed_id, f.quantity, f.origin)
@@ -288,14 +285,9 @@ def _upsert_army_decodes(
                             for f in decoded.cc_spells_raw
                         ]
                     ),
+                    Jsonb([(f.typed_id, f.quantity, f.origin) for f in decoded.siege]),
                     Jsonb(
-                        [(f.typed_id, f.quantity, f.origin) for f in decoded.siege]
-                    ),
-                    Jsonb(
-                        [
-                            (f.typed_id, f.quantity, f.origin)
-                            for f in decoded.cc_troops
-                        ]
+                        [(f.typed_id, f.quantity, f.origin) for f in decoded.cc_troops]
                     ),
                     Jsonb(
                         [
@@ -363,9 +355,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 boundary_text = claim.input_json.get("boundary_at")
                 if boundary_text is None:
                     raise ValueError("army boundary is required")
-                boundary_at = datetime.fromisoformat(str(boundary_text)).astimezone(
-                    UTC
-                )
+                boundary_at = datetime.fromisoformat(str(boundary_text)).astimezone(UTC)
                 generation_row = connection.execute(
                     """
                     SELECT id, generation, sweep_id, snapshot_state, army_state,
@@ -377,9 +367,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                     (boundary_at, int(generation_input)),
                 ).fetchone()
                 if generation_row is None:
-                    raise ValueError(
-                        "boundary publication generation does not exist"
-                    )
+                    raise ValueError("boundary publication generation does not exist")
                 if _text_value(generation_row[4]) in {"superseded", "published"}:
                     database._finish_claim(
                         connection,
@@ -390,25 +378,17 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                     )
                     return
                 if _text_value(generation_row[4]) not in {"ready", "building"}:
-                    raise ValueError(
-                        "boundary army generation is stale or superseded"
-                    )
+                    raise ValueError("boundary army generation is stale or superseded")
                 if _text_value(generation_row[3]) == "superseded":
-                    raise ValueError(
-                        "boundary publication generation is superseded"
-                    )
+                    raise ValueError("boundary publication generation is superseded")
                 manifest_id = (
-                    int(generation_row[5])
-                    if generation_row[5] is not None
-                    else None
+                    int(generation_row[5]) if generation_row[5] is not None else None
                 )
                 if (
                     manifest_id is None
                     or int(claim.input_json.get("manifest_id", 0)) != manifest_id
                 ):
-                    raise ValueError(
-                        "boundary army manifest identity does not match"
-                    )
+                    raise ValueError("boundary army manifest identity does not match")
                 manifest_digest = connection.execute(
                     "SELECT digest FROM boundary_publication_manifests WHERE id = %s",
                     (manifest_id,),
@@ -424,9 +404,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 now_row = connection.execute("SELECT clock_timestamp()").fetchone()
                 assert now_row is not None
                 if now_row[0] < generation_row[7]:
-                    raise ValueError(
-                        "army publication target dependency is not ready"
-                    )
+                    raise ValueError("army publication target dependency is not ready")
                 manifest_digest_value = _text_value(manifest_digest[0])
                 pending_members = connection.execute(
                     """
@@ -457,8 +435,8 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                     (generation_row[0],),
                 ).fetchone()
                 if season_id_row is None:
-                    season_id, _season_day = _season_metadata_for_ranked_day(database, 
-                        connection, boundary_at - timedelta(days=1)
+                    season_id, _season_day = _season_metadata_for_ranked_day(
+                        database, connection, boundary_at - timedelta(days=1)
                     )
                 else:
                     season_id = _text_value(season_id_row[0])
@@ -466,9 +444,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 ranked_day_str = claim.input_json.get("ranked_day_start")
                 season_id = claim.input_json.get("official_season_id")
             if ranked_day_str is None or season_id is None:
-                raise ValueError(
-                    "army analytics requires ranked-day and season inputs"
-                )
+                raise ValueError("army analytics requires ranked-day and season inputs")
             from .season_retirement import (
                 SEASON_DETAIL_RETIRED,
                 acquire_season_lock_shared,
@@ -519,9 +495,7 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                     int(battle_id)
                     for row in manifest_rows
                     for battle_id in (
-                        row[3].get("battle_ids", [])
-                        if isinstance(row[3], dict)
-                        else []
+                        row[3].get("battle_ids", []) if isinstance(row[3], dict) else []
                     )
                 ]
                 manifest_evidence = [
@@ -535,9 +509,9 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 ]
             else:
                 manifest_evidence = None
-            ranked_day_start = datetime.fromisoformat(
-                str(ranked_day_str)
-            ).astimezone(UTC)
+            ranked_day_start = datetime.fromisoformat(str(ranked_day_str)).astimezone(
+                UTC
+            )
             # Two builds for one ranked day must not interleave: fact
             # versions are computed as latest+1 and the day sweep marks
             # is_current, so a collision would surface as a unique
@@ -547,14 +521,16 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"army-facts:{ranked_day_start.isoformat()}",),
             )
-            season_id = _ensure_army_day_dependency(database, 
+            season_id = _ensure_army_day_dependency(
+                database,
                 connection,
                 ranked_day_start,
                 ranked_version_ids=manifest_versions,
                 allow_empty=generation_row is not None,
                 official_season_id=str(season_id),
             )
-            _build_army_facts(database, 
+            _build_army_facts(
+                database,
                 connection,
                 str(ranked_day_str),
                 member_ids=manifest_members,
@@ -637,7 +613,9 @@ def complete_army_analytics(database: Database, claim: Claim) -> None:
                 ).fetchone()
                 if published_army is None:
                     raise ValueError("boundary army publication fence was lost")
-                boundary_publication._maybe_emit_boundary_signal(database, connection, int(generation_row[0]))
+                boundary_publication._maybe_emit_boundary_signal(
+                    database, connection, int(generation_row[0])
+                )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
@@ -656,9 +634,7 @@ def _ensure_army_day_dependency(
     ranked_day_start = ranked_day_start.astimezone(UTC)
     now = connection.execute("SELECT clock_timestamp()").fetchone()[0]
     if ranked_day_start >= now or ranked_day_start + timedelta(days=1) > now:
-        raise ValueError(
-            "dependency_not_ready: army analytics day is not completed"
-        )
+        raise ValueError("dependency_not_ready: army analytics day is not completed")
     completed_filter = "AND state = 'Complete' AND coverage_complete"
     completed_params: tuple[Any, ...] = (ranked_day_start,)
     if ranked_version_ids is not None:
@@ -709,7 +685,9 @@ def _build_army_facts(
         ranked_state_filter = ""
         daily_state_filter = ""
     if getattr(database, "_supports_coordinator_contract", False):
-        version_filter = "AND (%s::bigint[] IS NULL OR d.ranked_day_version_id = ANY(%s::bigint[]))"
+        version_filter = (
+            "AND (%s::bigint[] IS NULL OR d.ranked_day_version_id = ANY(%s::bigint[]))"
+        )
         version_params = (ranked_version_ids, ranked_version_ids)
     versions = connection.execute(
         f"""
@@ -746,7 +724,14 @@ def _build_army_facts(
     pinned_battle_ids = set(battle_ids) if battle_ids is not None else None
     selected_battle_ids: set[int] = set()
     perspectives: set[str] = set()
-    for version_id, player_id, battles, season_id, day_number, start_trophies in versions:
+    for (
+        version_id,
+        player_id,
+        battles,
+        season_id,
+        day_number,
+        start_trophies,
+    ) in versions:
         if not isinstance(battles, list):
             continue
         events = [
@@ -772,9 +757,7 @@ def _build_army_facts(
         )
         for event in events:
             selected_battle_ids.add(int(event["battle_id"]))
-            perspectives.add(
-                "attacker" if event["lens"] == "offense" else "defender"
-            )
+            perspectives.add("attacker" if event["lens"] == "offense" else "defender")
     battle_id_values = sorted(selected_battle_ids)
     perspective_values = sorted(perspectives)
     lens_values = [
@@ -876,7 +859,9 @@ def _build_army_facts(
             state = (
                 _text_value(decode[5])
                 if decode and _text_value(decode[4]) == "failed" and decode[5]
-                else _text_value(decode[4]) if decode else "decode_missing"
+                else _text_value(decode[4])
+                if decode
+                else "decode_missing"
             )
             disagreement = _text_value(evidence_row[3]) == "disagreement"
             payload = {
@@ -928,15 +913,11 @@ def _build_army_facts(
                     "siege": (decode[8] or []) if decode else [],
                     "cc_troops": (decode[9] or []) if decode else [],
                     "heroes": (decode[10] or []) if decode else [],
-                    "unresolved_components": (
-                        (decode[11] or []) if decode else []
-                    ),
+                    "unresolved_components": ((decode[11] or []) if decode else []),
                     "perspective_disagreement": disagreement,
                     "input_hash": input_hash,
                     "version": (
-                        history["latest_version"] + 1
-                        if history is not None
-                        else 1
+                        history["latest_version"] + 1 if history is not None else 1
                     ),
                     "supersedes_id": supersedes,
                 }
@@ -1063,14 +1044,10 @@ def _build_army_facts(
         # plus per-category upserts, writes skipped when digests match).
         # Each lens refreshes in a savepoint so a projection failure
         # warns without rolling back the day facts/marker above.
-        _refresh_army_season_summaries(database, 
-            connection, _text_value(marker_day[0])
-        )
+        _refresh_army_season_summaries(database, connection, _text_value(marker_day[0]))
 
 
-def _refresh_army_season_summaries(
-    database, connection: Any, season_id: str
-) -> None:
+def _refresh_army_season_summaries(database, connection: Any, season_id: str) -> None:
     """Refresh whole-season army summaries without risking the caller.
 
     The caller is the enclosing day build: its facts and completion
@@ -1123,8 +1100,7 @@ def _refresh_army_season_summaries(
                 )
         except Exception:  # noqa: BLE001 - day facts/marker stay durable; warn, keep the day build green
             warnings.warn(
-                "army_season_summary_refresh_failed:"
-                f"{season_id}:{summary_lens}",
+                f"army_season_summary_refresh_failed:{season_id}:{summary_lens}",
                 RuntimeWarning,
                 stacklevel=2,
             )
@@ -1144,18 +1120,14 @@ def _season_metadata_for_ranked_day(
         (SEASON_ANCHOR_RULE_VERSION,),
     ).fetchone()
     if anchor is None or ranked_day_start < anchor[3]:
-        raise ValueError(
-            "dependency_not_ready: confirmed season anchor is unavailable"
-        )
+        raise ValueError("dependency_not_ready: confirmed season anchor is unavailable")
     if ranked_day_start >= anchor[2]:
         season_id, season_start = _text_value(anchor[0]), anchor[2]
     else:
         season_id, season_start = _text_value(anchor[1]), anchor[3]
     season_day = (ranked_day_start - season_start).days + 1
     if not 1 <= season_day <= 28:
-        raise ValueError(
-            "dependency_not_ready: ranked day is outside confirmed season"
-        )
+        raise ValueError("dependency_not_ready: ranked day is outside confirmed season")
     return season_id, season_day
 
 
@@ -1223,4 +1195,3 @@ def complete_army_redecode(database: Database, claim: Claim) -> None:
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
-
