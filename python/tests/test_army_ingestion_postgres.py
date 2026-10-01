@@ -663,6 +663,50 @@ def test_concurrent_battle_logs_sharing_armies_both_complete(
     assert results == {job_id: "processed" for job_id in jobs}
 
 
+def test_shared_army_decode_holds_boundary_lock_while_decoding(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url) as ci:
+        ts = datetime(2026, 8, 4, 12, tzinfo=UTC)
+        _, job_id = store_observation(
+            ci,
+            archive_server,
+            occurrence_key="shared-decode-lock",
+            endpoint="battle_log",
+            body=json.dumps({"items": [_live_row(True, "#8PP", None, ts)]}).encode(),
+            observed_at=ts + timedelta(minutes=1),
+            normalized_tag="#2PP",
+        )
+        db, proc = _processor(ci, archive_server)
+        original_decode = army_ingestion.decode_army_share_code
+        lock_available = []
+
+        def decode(raw_code):
+            with psycopg.connect(ci) as observer:
+                lock_available.append(
+                    observer.execute(
+                        "SELECT pg_try_advisory_xact_lock(hashtextextended(%s, 0))",
+                        ("boundary-publication:2026-08-05T05:00:00+00:00",),
+                    ).fetchone()[0]
+                )
+            return original_decode(raw_code)
+
+        try:
+            assert proc.process_job(job_id, owner="seed").outcome == "processed"
+            monkeypatch.setattr(army_ingestion, "decode_army_share_code", decode)
+            with db.pool.connection() as connection:
+                battle_ids = [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT id FROM legend_battles"
+                    ).fetchall()
+                ]
+                army_ingestion._upsert_army_decodes(db, connection, battle_ids)
+            assert lock_available and not any(lock_available)
+        finally:
+            db.close()
+
+
 def test_deadlocked_battle_log_is_retried_without_using_an_attempt(
     database_url: str, archive_server, monkeypatch
 ) -> None:

@@ -21,7 +21,32 @@ from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError
 
 
-def _upsert_army_decodes(database: Database, connection: Any, battle_ids: list[int]) -> None:
+def _upsert_army_decodes(
+    database: Database,
+    connection: Any,
+    battle_ids: list[int],
+    *,
+    extra_boundary_at: datetime | None = None,
+) -> None:
+    day_rows = (
+        connection.execute(
+            "SELECT DISTINCT ranked_day_start FROM legend_battles WHERE id = ANY(%s::bigint[]) ORDER BY 1",
+            (battle_ids,),
+        ).fetchall()
+        if battle_ids
+        else []
+    )
+    boundaries = {
+        day_start.astimezone(UTC) + timedelta(days=1)
+        for (day_start,) in day_rows
+    }
+    if extra_boundary_at is not None:
+        boundaries.add(extra_boundary_at.astimezone(UTC))
+    for boundary_at in sorted(boundaries):
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"boundary-publication:{boundary_at.isoformat()}",),
+        )
     if not battle_ids:
         return
     exists = connection.execute(
@@ -291,11 +316,6 @@ def _upsert_army_decodes(database: Database, connection: Any, battle_ids: list[i
                     supersedes,
                 ),
             )
-    day_rows = connection.execute(
-        # Oldest day first: concurrent jobs must take the boundary locks in one order.
-        "SELECT DISTINCT ranked_day_start FROM legend_battles WHERE id = ANY(%s::bigint[]) ORDER BY 1",
-        (battle_ids,),
-    ).fetchall()
     for (day_start,) in day_rows:
         boundary_publication._enqueue_army_analytics(database, connection, ranked_day_start=day_start)
 
@@ -1171,5 +1191,4 @@ def complete_army_redecode(database: Database, claim: Claim) -> None:
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
-
 
