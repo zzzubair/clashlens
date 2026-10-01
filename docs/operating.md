@@ -109,9 +109,8 @@ stable or fall, followed by the Discord recovery message.
 
 ### Service restart loop
 
-The [restart condition](deployment.md#alert-conditions) counts production
-`clashlens-*` units only; preview units such as `clashlens-preview-api.service`
-do not trigger it. Find the restarting unit:
+Find the restarting unit and check it against the
+[restart condition](deployment.md#alert-conditions):
 
 ```sh
 journalctl --user --since '1 hour ago' --no-pager \
