@@ -289,7 +289,9 @@ class ObservationProcessor:
         except (DeadlockDetected, SerializationFailure):
             # The failed transaction recorded no outcome. Restore its retry
             # slot so even a last-attempt lease can be recovered after expiry.
-            for _ in range(DATABASE_CONFLICT_RETRIES):
+            # Only report retrying once the refund commits; lease loss bounds
+            # these retries if the database keeps rejecting the write.
+            while True:
                 try:
                     self.database.refund_claim_attempt(claim)
                     break

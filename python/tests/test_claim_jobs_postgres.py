@@ -182,8 +182,14 @@ def _processor(database: Database, archive_server) -> ObservationProcessor:
 
 @pytest.mark.parametrize("sqlstate", ["40P01", "40001"])
 @pytest.mark.parametrize("reject_failure_write", [False, True])
+@pytest.mark.parametrize("refund_conflicts", [0, 2, 3])
 def test_final_attempt_failure_write_conflict_recovers_after_expiry(
-    database_url: str, archive_server, monkeypatch, sqlstate, reject_failure_write
+    database_url: str,
+    archive_server,
+    monkeypatch,
+    sqlstate,
+    reject_failure_write,
+    refund_conflicts,
 ) -> None:
     from pathlib import Path
 
@@ -215,9 +221,19 @@ def test_final_attempt_failure_write_conflict_recovers_after_expiry(
                     )
 
             processor = _processor(database, archive_server)
+            refund_claim_attempt = database.refund_claim_attempt
+
+            def reject_refund(claim):
+                nonlocal refund_conflicts
+                if refund_conflicts:
+                    refund_conflicts -= 1
+                    reject_transaction()
+                refund_claim_attempt(claim)
+
             with monkeypatch.context() as injected:
                 injected.setattr(ingestion, "complete_profile", reject_transaction)
                 if reject_failure_write:
+                    injected.setattr(database, "refund_claim_attempt", reject_refund)
                     injected.setattr(
                         reset_baselines,
                         "_refresh_reset_baseline_evidence",
