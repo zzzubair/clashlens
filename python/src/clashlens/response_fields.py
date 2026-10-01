@@ -16,7 +16,9 @@ from typing import Any
 
 # The profile fields Clash Lens uses, per the standing decision on issue #110.
 # Everything else in the body (donations, achievements, troop and equipment
-# lists, clan details beyond identity) is ignored for the change test.
+# lists, clan details beyond identity) is ignored for the change test, and so
+# is legendStatistics.currentSeason.rank: it moves whenever other players
+# battle and nothing reads it.
 PROFILE_FIELDS = (
     "tag",
     "name",
@@ -81,14 +83,22 @@ def _profile_projection(payload: Any) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         return None
     clan = payload.get("clan")
+    stats = payload.get("legendStatistics")
+    season = stats.get("currentSeason") if isinstance(stats, dict) else None
+    if isinstance(season, dict) and "rank" in season:
+        # Drop only the rank, so profiles without one keep their fingerprint.
+        stats = stats | {
+            "currentSeason": {k: v for k, v in season.items() if k != "rank"}
+        }
     return {
         name: payload.get(name) for name in PROFILE_FIELDS
     } | {
+        "legendStatistics": stats,
         "clan": (
             {name: clan.get(name) for name in PROFILE_CLAN_FIELDS}
             if isinstance(clan, dict)
             else clan
-        )
+        ),
     }
 
 
