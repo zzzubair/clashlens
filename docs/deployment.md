@@ -583,15 +583,13 @@ use the [operating notes](operating.md#respond-to-alerts).
   those metrics or the overdue age are missing. Checks resume as soon as Reset
   work finishes, with no fixed clock window.
 - **Any stale Live Leaderboard entry**, using the
-  [Live Leaderboard freshness rule](domain.md#live-leaderboard-ordering). The check
+  [Live Leaderboard membership and freshness rules](domain.md#live-leaderboard-ordering). The check
   enters the private API container and runs the Live Leaderboard's own query,
-  printing only two counts. Players whose most recent not-found profile check
-  is newer than their last successful profile check, or who have no successful
-  check after a not-found response, are left out of both. Later timeouts and
-  server errors keep them excluded until a newer successful check. Migration
-  0042 adds the durable not-found time to the existing response state, fills it
-  from retained responses, and grants the private API read access. It adds no
-  index or per-response rows, and collection continues at the normal pace.
+  printing only two counts, with the same not-found exclusion.
+  [Migration 0042](../deploy/migrations/0042_api_profile_not_found_read.sql) adds
+  the durable not-found time to the existing response state, fills it from
+  retained responses, and grants the private API read access. It adds no index
+  or per-response rows.
   If the query fails, the check fails and preserves
   the existing alert state. The displayed time follows the
   [player page confirmation rule](domain.md#player-page-freshness), including
