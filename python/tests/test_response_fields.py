@@ -99,6 +99,33 @@ def test_legend_statistics_and_role_change_the_fingerprint() -> None:
     )
 
 
+def test_current_season_rank_alone_does_not_change_the_fingerprint() -> None:
+    def ranked(rank: int, trophies: int = 7000) -> bytes:
+        season = {"rank": rank, "trophies": trophies}
+        return _profile(
+            trophies=trophies,
+            legendStatistics={"legendTrophies": 100, "currentSeason": season},
+        )
+
+    def fingerprint(body: bytes) -> str:
+        return content_fingerprint(
+            "profile", body, http_status=200, response_hash=_digest(body)
+        )
+
+    assert fingerprint(ranked(812)) == fingerprint(ranked(790))
+    assert fingerprint(ranked(812)) != fingerprint(ranked(790, trophies=7032))
+
+    # Profiles without a rank keep the fingerprint stored before this rule.
+    unranked = {"legendTrophies": 100, "currentSeason": {"trophies": 7000}}
+    body = _profile(legendStatistics=unranked)
+    old_projection = json.loads(body) | {
+        "clan": {"tag": "#2CLAN", "name": "Synthetic Clan"},
+        "role": None,
+    }
+    old_canonical = json.dumps(old_projection, sort_keys=True, separators=(",", ":"))
+    assert fingerprint(body) == _digest(old_canonical.encode())
+
+
 def test_clan_name_is_read_but_other_clan_fields_are_ignored() -> None:
     first = _profile()
     renamed = _profile(clan={"tag": "#2CLAN", "name": "Renamed"})

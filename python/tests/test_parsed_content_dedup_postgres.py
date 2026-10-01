@@ -713,6 +713,92 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
             database.close()
 
 
+def test_rank_only_profile_check_confirms_without_saving_or_processing(
+    database_url: str, archive_server
+) -> None:
+    import hashlib
+
+    from clashlens.collector_db import CollectorDatabase, ResponseHandoff
+    from clashlens.profile import PROFILE_PARSER_VERSION
+
+    def ranked(rank: int, trophies: int) -> bytes:
+        payload = json.loads(PROFILE_FIXTURE.read_bytes())
+        payload["trophies"] = trophies
+        payload["legendStatistics"] = {
+            "legendTrophies": 100,
+            "currentSeason": {"rank": rank, "trophies": trophies},
+        }
+        return json.dumps(payload).encode()
+
+    trophies = json.loads(PROFILE_FIXTURE.read_bytes())["trophies"]
+    body = ranked(812, trophies)
+    checked_at = NOW + timedelta(hours=2)
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _, job = store_observation(
+            connection_info, archive_server, occurrence_key="rank-applied",
+            endpoint="profile", body=body, observed_at=NOW, normalized_tag="#2PP",
+            parser_version=PROFILE_PARSER_VERSION,
+        )
+        database, processor = _processor(connection_info, archive_server)
+        collector = CollectorDatabase(connection_info)
+        api = ApiDatabase(as_api_role(connection_info))
+
+        def check(payload: bytes, at: datetime, occurrence: str):
+            digest = hashlib.sha256(payload).hexdigest()
+            with psycopg.connect(connection_info) as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+            return collector.record_response(ResponseHandoff(
+                occurrence_key=occurrence, scope="player", identity_key="#2PP",
+                endpoint="profile", player_id=player_id, normalized_tag="#2PP",
+                request_started_at=at - timedelta(seconds=1), response_completed_at=at,
+                http_status=200, response_hash=digest,
+                content_fingerprint=content_fingerprint(
+                    "profile", payload, http_status=200, response_hash=digest
+                ),
+                byte_size=len(payload), spool_key=f"sha256/{digest[:2]}/{digest}",
+                collector_version="rank-test", key_label="regular-a",
+                evidence_headers={"content-type": "application/json"},
+            ))
+
+        def counts() -> tuple[int, int, int]:
+            with psycopg.connect(connection_info) as connection:
+                return connection.execute(
+                    """
+                    SELECT (SELECT count(*) FROM collector_observations),
+                           (SELECT count(*) FROM python_processing_jobs),
+                           (SELECT count(*) FROM collector_response_uploads)
+                    """
+                ).fetchone()
+
+        try:
+            assert processor.process_job(job, owner="rank-applied").outcome == "processed"
+            check(body, NOW, "rank-applied")
+            before = counts()
+
+            result = check(ranked(790, trophies), checked_at, "rank-only")
+            assert result.changed is False and result.processing_job_id is None
+            assert counts() == before
+            page = api_players.get_player_page(
+                api, "#2PP", now=checked_at + timedelta(minutes=1), freshness_seconds=900
+            )
+            board = api_leaderboard.get_live_leaderboard(
+                api, limit=1, now=checked_at + timedelta(minutes=1)
+            )
+            assert page["observed_at"] == board["entries"][0]["observed_at"]
+            assert page["observed_at"] == checked_at.isoformat()
+
+            moved = check(
+                ranked(790, trophies + 32), checked_at + timedelta(minutes=5), "rank-trophies"
+            )
+            assert moved.changed is True and moved.processing_job_id is not None
+        finally:
+            api.close()
+            collector.close()
+            database.close()
+
+
 def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
     database_url: str, archive_server, tmp_path, monkeypatch, capsys
 ) -> None:
