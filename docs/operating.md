@@ -183,21 +183,18 @@ fetches still succeed.
 `./ops logs worker --since '15 minutes ago' --no-pager` for processing errors.
 A growing overdue check with many timeouts points at the official API; a
 growing processing wait with a healthy collector points at the worker or
-PostgreSQL capacity. Processing wait starts at the saved response's creation
-time and includes pending, retrying, dependency-waiting and leased jobs,
-even when the next attempt is scheduled in the future. Finished jobs are excluded.
-Jobs without a saved response use their own creation time, so delayed derived
-work also contributes to the processing wait.
-The overdue alert pauses only while Reset work is unfinished, based on the
-collector's Reset totals, and resumes immediately when that work finishes.
+PostgreSQL capacity. `oldest_pending_processing_age_seconds` starts at the
+saved response's `collector_observations.created_at` and includes pending,
+retrying, dependency-waiting and leased jobs, even when the next attempt is
+scheduled in the future. Rescheduling a retry does not reset its age; finished
+jobs are excluded. Jobs without a saved response use their own creation time,
+so delayed derived work also contributes to the processing wait.
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Escalate a wait that keeps growing; restarting services does not shrink it.
 
-**Recovered:** the overdue alert clears when Reset work is finished and the
-oldest overdue check falls under 10 minutes. The Live Leaderboard alert clears
-when no player is past 10 minutes. Confirm each condition's Discord recovery message.
-A valid empty Live Leaderboard also clears its freshness alert.
+**Recovered:** the measurements satisfy the linked alert conditions and each
+condition's Discord recovery message arrives.
 
 ### When alerts themselves fail
 

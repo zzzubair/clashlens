@@ -396,7 +396,7 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
     import psycopg
     from domain_test_support import as_api_role, domain_database, store_observation
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
-    from test_domain_processing_postgres import PROFILE_FIXTURE, _WorkerRoleDatabase, _processor
+    from test_domain_processing_postgres import PROFILE_FIXTURE, _processor
 
     from clashlens import api_leaderboard, api_players
     from clashlens.api_db import ApiDatabase
@@ -411,11 +411,13 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
             connection_info, archive_server, occurrence_key="confirmed-initial",
             endpoint="profile", body=body, observed_at=accepted_at,
             normalized_tag="#2PP",
-        )
-        database, processor = _processor(
-            connection_info, archive_server, database_factory=_WorkerRoleDatabase
+            parser_version="supercell-profile-parser-v3",
         )
         options = conninfo_to_dict(connection_info)["options"]
+        database, processor = _processor(
+            make_conninfo(connection_info, options=options + " -c role=clashlens_python_worker"),
+            archive_server,
+        )
         collector = CollectorDatabase(make_conninfo(
             connection_info, options=options + " -c role=clashlens_collector"
         ))
@@ -481,6 +483,7 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
                 connection_info, archive_server, occurrence_key="confirmed-older",
                 endpoint="profile", body=older_body, observed_at=older_at,
                 normalized_tag="#2PP",
+                parser_version="supercell-profile-parser-v3",
             )
             check(older_body, older_at, "confirmed-older")
             assert processor.process_job(older_job, owner="confirmed-older") is not None
@@ -493,6 +496,7 @@ def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
                 connection_info, archive_server, occurrence_key="confirmed-changed",
                 endpoint="profile", body=changed_body, observed_at=changed_at,
                 normalized_tag="#2PP",
+                parser_version="supercell-profile-parser-v3",
             )
             check(changed_body, changed_at, "confirmed-changed")
             assert_time(changed_at + timedelta(minutes=1), confirmed_at, trophies)

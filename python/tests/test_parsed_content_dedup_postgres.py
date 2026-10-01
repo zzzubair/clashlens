@@ -588,8 +588,6 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
 
     from psycopg.conninfo import conninfo_to_dict, make_conninfo
     from test_api_migration import ROOT, migrated_production_database
-    from test_domain_processing_postgres import _WorkerRoleDatabase
-
     from clashlens.collector_db import CollectorDatabase, ResponseHandoff
 
     body = PROFILE_FIXTURE.read_bytes()
@@ -608,6 +606,7 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
         _, initial_job = store_observation(
             connection_info, archive_server, occurrence_key="upgrade-initial",
             endpoint="profile", body=body, observed_at=NOW, normalized_tag="#2PP",
+            parser_version="supercell-profile-parser-v3",
         )
         database, processor = _processor(connection_info, archive_server)
         options = conninfo_to_dict(connection_info)["options"]
@@ -668,7 +667,8 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
                 )
                 assert text(fingerprint) == (None if failed_check else expected)
             database, processor = _processor(
-                connection_info, archive_server, database_factory=_WorkerRoleDatabase
+                make_conninfo(connection_info, options=options + " -c role=clashlens_python_worker"),
+                archive_server,
             )
             api = ApiDatabase(as_api_role(connection_info))
             assert_time(confirmed_at + timedelta(minutes=6), confirmed_at)
@@ -681,6 +681,7 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
                     connection_info, archive_server, occurrence_key="upgrade-repair",
                     endpoint="profile", body=changed_body, observed_at=applied_at,
                     normalized_tag="#2PP",
+                    parser_version="supercell-profile-parser-v3",
                 )
             result = check(changed_body, applied_at, "upgrade-repair")
             assert result.changed is failed_check

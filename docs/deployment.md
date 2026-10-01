@@ -575,34 +575,30 @@ use the [operating notes](operating.md#respond-to-alerts).
   healthy. The check enters the private API container, checks `/readyz`, and
   signs a `/v1/players/search` read limited to one result. Keys stay inside the
   container and response data is discarded. An empty search result is valid.
-- **A player check more than 600 seconds overdue**, from the collector's
+- **A player check at least 600 seconds overdue**, from the collector's
   `oldest_due_age_seconds`. This catches collection that slows down without
   stopping, such as a slow official API.
   It is neither raised nor cleared while Reset work is unfinished, measured by
   `clashlens_collector_reset_total > clashlens_collector_reset_terminal`, or while
   those metrics or the overdue age are missing. Checks resume as soon as Reset
   work finishes, with no fixed clock window.
-- **Any Live Leaderboard player last updated over 600 seconds ago.** The check
+- **Any stale Live Leaderboard entry**, using the
+  [Live Leaderboard freshness rule](domain.md#live-leaderboard-ordering). The check
   enters the private API container and runs the Live Leaderboard's own query,
-  printing only two counts. Its fresh/stale labels and population counts use the
-  same 600-second limit. The retained confirmation advances on a successful
-  unchanged check or when a changed profile is applied. Failed checks and
-  pending changes preserve it, including across restarts. Migration 0040
+  printing only two counts. If the query fails, the check fails and preserves
+  the existing alert state. The displayed time follows the
+  [player page confirmation rule](domain.md#player-page-freshness), including
+  across restarts. Migration 0040
   backfills existing confirmations from accepted profiles and successful saved
   responses. It copies a content identifier only when the latest saved response
   is a successful profile already applied to the shown profile; otherwise the
-  identifier stays unknown until the next profile is applied. The previous
-  confirmation time remains visible while that response waits for processing.
+  identifier stays unknown until the next profile is applied.
   It retains one time and one content identifier per player, about
   1 MiB for 13,000 players, with no growing check history. There is no percentage
   allowance or extra alert delay. A valid empty leaderboard reports `0 0`, has
   no freshness breach, and permits an existing freshness alert to recover.
-  The collector's `oldest_pending_processing_age_seconds` measures the oldest
-  outstanding saved response from `collector_observations.created_at` across
-  pending, retrying, dependency-waiting and leased processing jobs. Rescheduling
-  a retry does not reset its age; finished jobs do not contribute. Jobs without
-  a saved response use the job's creation time. Count and oldest time come from
-  one shared pass over outstanding jobs joined to their saved responses.
+  Use the [collection and processing measurements](operating.md#collection-or-processing-behind)
+  to distinguish delayed collection from delayed processing.
 
 Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.

@@ -99,9 +99,9 @@ A domain change is complete only when every affected source observation, derived
 - The player page's Updated time and freshness use the retained last-confirmed
   time for the profile currently shown.
   Show the time without adding technical freshness panels.
-  Advance it when a successful check returns the same content as the applied
-  profile, or when a changed profile is applied. A failed check or a changed
-  response awaiting processing preserves the previous confirmation. Older
+  Advance it when a successful check matches the applied profile in the fields
+  Clash Lens uses, or when a changed profile is applied. A failed check or a
+  changed response awaiting processing preserves the previous confirmation. Older
   responses cannot replace a profile confirmed more recently. The displayed
   time never moves backward. "Stale saved profile" appears when this time is
   more than 15 minutes old, even if the saved trophies have not changed.
@@ -125,8 +125,8 @@ A domain change is complete only when every affected source observation, derived
 
 - The **Live Leaderboard** orders actively tracked players by the newest valid trophy observation that Clash Lens has accepted for each player. Its **Rank** means position among players tracked by Clash Lens, not a claim of complete global coverage or one simultaneous official observation.
 - Keep a player in this ordering when a later request is missing, delayed, malformed, or unsuccessful. Change the player's trophy value only when Clash Lens accepts a newer valid observation. Remove the player from active ordering only when newer valid evidence shows that the player is no longer eligible for active Legend I tracking.
-- Record the trophy observation time, age, and freshness state with each leaderboard entry. The displayed time follows the player page freshness rule above, using the retained last-confirmed time for the profile currently shown. Show that time as Last updated on the public Live Leaderboard without adding technical freshness panels. Old data remains ranked and remains eligible for that snapshot's cumulative Top-N cohorts and rank bands, but the snapshot and its analytics must record how much membership uses old data.
-- Live Leaderboard entries are fresh through 600 seconds since Last updated and stale beyond that. Population counts and alerts use this same ten-minute limit, with no allowance for a percentage of stale players.
+- Record Last updated, age, and freshness state with each leaderboard entry. Last updated follows the [player page freshness rule](#player-page-freshness). Show that time on the public Live Leaderboard without adding technical freshness panels. Old data remains ranked and remains eligible for that snapshot's cumulative Top-N cohorts and rank bands, but the snapshot and its analytics must record how much membership uses old data.
+- Live Leaderboard entries are fresh through 600 seconds since Last updated and stale beyond that. Population counts use this same ten-minute limit. See [alert conditions](deployment.md#alert-conditions) for when this raises an operator alert.
 - Order all Live Leaderboard entries by newest accepted trophies descending and resolve equal-trophy ties with a versioned deterministic hash of the normalized player tag. An official rank is separate provenance, is not a public leaderboard column, and does not change a Live Leaderboard Rank.
 - Never use fresh randomness for a snapshot tie-break. The same tag, trophies, and ordering-rule version must reproduce the same position.
 - Every snapshot must identify the ordering-rule version it used.

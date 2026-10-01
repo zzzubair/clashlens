@@ -88,7 +88,7 @@ def test_live_leaderboard_freshness_uses_ten_minutes(database_url: str) -> None:
             with database.pool.connection() as connection:
                 observed_at = connection.execute(
                     "SELECT current_observed_at FROM players WHERE normalized_tag = '#2PP'"
-                ).fetchone()[0]
+                ).fetchone()[0].astimezone(UTC)
             current = observed_at
             app = create_app(
                 database,
