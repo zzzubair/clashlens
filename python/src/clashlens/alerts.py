@@ -209,7 +209,14 @@ def deliver(
                 if active is None or active == incident["active"]:
                     break
                 if active:
-                    incident["since"] = now
+                    incident["since"] = (
+                        max(
+                            state.get("backup_failing_since", now),
+                            state.get("resumed_at", 0),
+                        )
+                        if name == "backup"
+                        else now
+                    )
                 incident["pending"] = {"active": active, "at": now}
                 save_state(path, state)
             pending = incident["pending"]
@@ -333,26 +340,39 @@ def observe(
     except (OSError, ValueError, subprocess.SubprocessError):
         errors.append("Restart history unavailable; run ./ops logs")
 
-    for name, args, timeout in (
-        ("backup", [str(root / "ops"), "backup-status"], 25),
-        (
-            "reads",
-            [
-                podman,
-                "exec",
-                "clashlens-python-api",
-                "python",
-                "-m",
-                "clashlens.alerts",
-                "--probe",
-            ],
-            25,
-        ),
-    ):
-        try:
-            findings[name] = command(args, timeout).returncode != 0
-        except (OSError, subprocess.SubprocessError):
-            findings[name] = True
+    try:
+        backup_failed = (
+            command([str(root / "ops"), "backup-status"], 25).returncode != 0
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        errors.append(
+            "Backup check timed out after 25 seconds; run ./ops backup-status"
+            if isinstance(error, subprocess.TimeoutExpired)
+            else "Backup check could not run; run ./ops backup-status"
+        )
+        since = state.setdefault("backup_failing_since", now)
+        failing = now - max(since, state.get("resumed_at", 0)) >= 900
+        findings["backup"] = True if failing else None
+    else:
+        findings["backup"] = backup_failed
+        if backup_failed:
+            errors.append("Backup check failed; run ./ops backup-status")
+        else:
+            state.pop("backup_failing_since", None)
+
+    probe = [
+        podman,
+        "exec",
+        "clashlens-python-api",
+        "python",
+        "-m",
+        "clashlens.alerts",
+        "--probe",
+    ]
+    try:
+        findings["reads"] = command(probe, 25).returncode != 0
+    except (OSError, subprocess.SubprocessError):
+        findings["reads"] = True
     return findings, errors
 
 
