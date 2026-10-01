@@ -13,7 +13,7 @@ WITH latest_success AS (
 ), retained AS (
     SELECT player.id, player.current_observed_at, checked.last_success_at,
            checked.last_content_fingerprint, checked.last_observation_id,
-           source.response_hash, successful.id AS successful_id,
+           successful.id AS successful_id,
            successful.response_completed_at <= player.current_observed_at
            AND (successful.id = profile.observation_id OR EXISTS (
                SELECT 1 FROM player_profile_effects AS effect
@@ -23,7 +23,6 @@ WITH latest_success AS (
     FROM players AS player
     JOIN player_profile_versions AS profile
       ON profile.id = player.current_profile_version_id
-    JOIN collector_observations AS source ON source.id = profile.observation_id
     LEFT JOIN latest_success AS successful ON successful.player_id = player.id
     LEFT JOIN collector_response_state AS checked
       ON checked.scope = 'player' AND checked.identity_key = player.normalized_tag
@@ -35,7 +34,7 @@ SET current_profile_confirmed_at = GREATEST(retained.current_observed_at,
     current_profile_fingerprint = CASE
         WHEN retained.confirms_profile
          AND retained.last_observation_id = retained.successful_id
-        THEN retained.last_content_fingerprint ELSE retained.response_hash END
+        THEN retained.last_content_fingerprint END
 FROM retained WHERE player.id = retained.id;
 
 CREATE FUNCTION clashlens_retain_profile_confirmation()
@@ -47,9 +46,7 @@ BEGIN
     FROM collector_response_state
     WHERE scope = 'player' AND identity_key = NEW.normalized_tag
       AND endpoint = 'profile' AND last_success_at = last_seen_at
-      AND NEW.current_profile_fingerprint IN (
-          last_content_fingerprint, last_response_hash
-      );
+      AND NEW.current_profile_fingerprint = last_content_fingerprint;
     NEW.current_profile_confirmed_at := GREATEST(
         OLD.current_profile_confirmed_at, NEW.current_profile_confirmed_at,
         NEW.current_observed_at, checked_at
@@ -74,14 +71,7 @@ BEGIN
       AND player.current_profile_version_id IS NOT NULL
       AND NEW.last_success_at >= COALESCE(player.current_profile_confirmed_at,
                                           player.current_observed_at)
-      AND (player.current_profile_fingerprint IN (
-          NEW.last_content_fingerprint, NEW.last_response_hash
-      ) OR EXISTS (
-          SELECT 1 FROM player_profile_effects AS effect
-          WHERE effect.observation_id = NEW.last_observation_id
-            AND effect.profile_version_id = player.current_profile_version_id
-            AND effect.observed_at <= player.current_observed_at
-      ));
+      AND player.current_profile_fingerprint = NEW.last_content_fingerprint;
     RETURN NEW;
 END;
 $$;

@@ -589,7 +589,11 @@ use the [operating notes](operating.md#respond-to-alerts).
   unchanged check or when a changed profile is applied. Failed checks and
   pending changes preserve it, including across restarts. Migration 0040
   backfills existing confirmations from accepted profiles and successful saved
-  responses. It retains one time and one content identifier per player, about
+  responses. It copies a content identifier only when the latest saved response
+  is a successful profile already applied to the shown profile; otherwise the
+  identifier stays unknown until the next profile is applied. The previous
+  confirmation time remains visible while that response waits for processing.
+  It retains one time and one content identifier per player, about
   1 MiB for 13,000 players, with no growing check history. There is no percentage
   allowance or extra alert delay. A valid empty leaderboard reports `0 0`, has
   no freshness breach, and permits an existing freshness alert to recover.
