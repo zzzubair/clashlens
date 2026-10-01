@@ -217,7 +217,7 @@ or failed work. Completed derived processing jobs (except exports and legacy
 publication-migration anchors) and unreferenced parsed/ranking payloads are also
 eligible. Restrictive domain foreign keys remain a final safety barrier. Lock or
 statement timeout aborts the transaction; investigate rather than disabling
-constraints. Ordinary five-minute collections have no explicit work row and
+constraints. Ordinary regular collections have no explicit work row and
 their observations are not selected by this cleanup. Their completed processing
 jobs can be pruned separately, but observation metadata and archive catalogue
 tombstones remain. Failed work also requires operator investigation; this is
