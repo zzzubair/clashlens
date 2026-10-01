@@ -250,6 +250,9 @@ def _supported_claim_filter(
         AND ({alias}.input_json->>'manifest_id') ~ '^[1-9][0-9]*$'
         AND ({alias}.input_json->>'manifest_digest') ~ '^[0-9a-f]{{64}}$'
     )"""
+    # Claim generations fence staggered upgrades so older worker images cannot
+    # interpret newer source contracts. Retain earlier generations for queued
+    # work and explicit replay.
     claim_versions = "1, 2, 3, 4, 5, 6" if supports_coordinator else "1, 2, 3"
     return (
         f"""({alias}.claim_compatibility_version IN ({claim_versions}) AND (
@@ -756,12 +759,10 @@ class Database:
         )
 
     def newest_job_plan(self, *, limit: int) -> list[int]:
-        """Each player's newest waiting profile and battle-log job, stalest first.
+        """Suggest newest eligible jobs using the rules in docs/architecture.md.
 
-        Each player's profile and battle log stay together, with their profile
-        first. Players are ordered by how old their leaderboard entry looks.
-        The ids are only suggestions: ``claim_job(job_id=...)`` still applies
-        every due, lease and supported-contract check.
+        ``claim_job(job_id=...)`` rechecks eligibility and lease state because
+        a cached plan can become stale before its suggestions are claimed.
         """
         self._ensure_dependency_support_probed()
         supported_filter, supported_params = _supported_claim_filter(

@@ -20,6 +20,7 @@ from test_domain_processing_postgres import (
 from clashlens import api_leaderboard, job_outcomes
 from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
+from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 
 DAY = ranked_day_for(datetime(2026, 8, 4, 12, tzinfo=UTC))
 
@@ -534,6 +535,11 @@ def test_collector_owned_observations_cannot_be_finished_as_superseded(
                 ),
                 observed_at=DAY.start,
                 normalized_tag="#2PP",
+                parser_version=(
+                    LEAGUE_HISTORY_PARSER_VERSION
+                    if endpoint == "league_history"
+                    else LIVE_BATTLE_PARSER_VERSION
+                ),
             )
             observation_ids.append(observation_id)
             job_ids.append(job_id)

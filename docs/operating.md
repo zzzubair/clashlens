@@ -174,8 +174,8 @@ Discord recovery arrives. Website `/healthz` alone is insufficient.
 ### Collection or processing behind
 
 Use the [overdue-check and Live Leaderboard conditions](deployment.md#alert-conditions).
-Either one means Live Leaderboard times are falling behind even though some
-fetches still succeed.
+Check collection and leaderboard freshness separately; a processing backlog
+alone does not prove the leaderboard is stale.
 
 **First checks:** `./ops queue-status` and the collector's
 `oldest_due_age_seconds` and `oldest_pending_processing_age_seconds`, then
@@ -189,10 +189,10 @@ retrying, dependency-waiting and leased jobs, even when the next attempt is
 scheduled in the future. Rescheduling a retry does not reset its age; finished
 jobs are excluded. Jobs without a saved response use their own creation time,
 so delayed derived work also contributes to the processing wait.
-The worker handles each player's newest response first, so during a backlog
+With the [worker's queue ordering](architecture.md#structured-data-and-evidence),
 this age can stay high while the Live Leaderboard is already current. Worker
-`job_result` lines with outcome `superseded` are older copies skipped because a
-newer response from the same Legend day already covers them.
+`job_result` lines with outcome `superseded` identify jobs skipped under those
+rules.
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Escalate a wait that keeps growing; restarting services does not shrink it.
