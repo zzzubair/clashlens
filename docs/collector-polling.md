@@ -163,7 +163,7 @@ at once. Those uploads share a limit of four database calls at once for claiming
 archive configuration checks, renewing upload ownership, and recording completion
 or failure. The limit reduces competition with player collection for database
 connections. Archive writes run outside it.
-See [migration 0041](../deploy/migrations/0041_upload_claim_order.sql) for the
+See [migration 0042](../deploy/migrations/0042_upload_claim_order.sql) for the
 ordered upload lookup and earlier automatic cleanup of obsolete database row
 versions.
 

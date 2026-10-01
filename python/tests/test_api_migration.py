@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -648,3 +649,18 @@ def test_public_army_migration_cancels_leased_v1_job_and_clears_lease(
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
             admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def test_each_migration_prefix_is_unique_and_matches_its_recorded_version() -> None:
+    # ops skips a migration when the version from its filename prefix is
+    # already recorded, so a shared or mismatched number silently skips one.
+    names: dict[int, str] = {}
+    for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
+        version = int(migration.name.split("_", 1)[0])
+        assert version not in names, f"{migration.name} reuses {names[version]}"
+        names[version] = migration.name
+        recorded = re.findall(
+            r"clash_lens_schema_migrations\s*\(version\)\s*VALUES\s*\((\d+)\)",
+            migration.read_text(encoding="utf-8"),
+        )
+        assert recorded == [str(version)], migration.name
