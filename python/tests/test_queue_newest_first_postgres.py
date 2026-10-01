@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import psycopg
+import pytest
 from domain_test_support import as_api_role, domain_database, store_observation, text
 from test_domain_processing_postgres import (
     LIVE_BATTLE_PARSER_VERSION,
@@ -14,7 +16,7 @@ from test_domain_processing_postgres import (
     _seed_battle_anchor,
 )
 
-from clashlens import api_leaderboard
+from clashlens import api_leaderboard, job_outcomes
 from clashlens.api_db import ApiDatabase
 from clashlens.domain import ranked_day_for
 
@@ -250,13 +252,20 @@ def test_battle_log_is_skipped_only_when_every_row_is_already_stored(
 
         _earlier, earlier_job = battle_log("earlier", 0, [rows[0]])
         slid_observation, slid_job = battle_log("slid", 10, [rows[1], rows[0]])
+        _confirmed, confirmed_job = battle_log("confirmed", 15, [rows[0]])
         _gap, gap_job = battle_log("gap", 20, [rows[4], rows[1]])
         _newest, newest_job = battle_log("newest", 30, [rows[3], rows[2], rows[1]])
         database, processor = _processor(connection_info, archive_server)
         try:
             outcomes = [
                 processor.process_job(job_id, owner=f"battle-{job_id}").outcome
-                for job_id in (earlier_job, newest_job, slid_job, gap_job)
+                for job_id in (
+                    earlier_job,
+                    confirmed_job,
+                    newest_job,
+                    slid_job,
+                    gap_job,
+                )
             ]
             with database.pool.connection() as connection:
                 battles, slid_logs = connection.execute(
@@ -270,6 +279,273 @@ def test_battle_log_is_skipped_only_when_every_row_is_already_stored(
         finally:
             database.close()
     # Battle 0 left the window before the newest log, but the earlier log
-    # already stored it. Battle 4 is only in the gap log, so that log runs.
-    assert outcomes == ["processed", "processed", "superseded", "processed"]
+    # already confirmed it after the slid log. Battle 4 is only in the gap log.
+    assert outcomes == [
+        "processed",
+        "processed",
+        "processed",
+        "superseded",
+        "processed",
+    ]
     assert (battles, slid_logs) == (5, 0)
+
+
+@pytest.mark.parametrize("attack", [True, False])
+def test_returning_battle_report_is_applied_after_the_battle_leaves_the_window(
+    database_url: str,
+    archive_server,
+    attack: bool,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        _seed_battle_anchor(connection_info, DAY.start)
+        original = _live_battle_row(
+            attack=attack,
+            battle_timestamp=DAY.start + timedelta(hours=1),
+            opponent_tag="#8PP",
+            opponent_name="Opponent",
+        )
+        corrected = {**original, "stars": 2, "destructionPercentage": 80}
+        jobs = []
+        for hour, items in ((3, [original]), (4, [corrected]), (5, [original]), (7, [])):
+            _observation, job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key=f"correction-{hour}",
+                endpoint="battle_log",
+                body=json.dumps({"items": items}).encode(),
+                observed_at=DAY.start + timedelta(hours=hour),
+                normalized_tag="#2PP",
+                parser_version=LIVE_BATTLE_PARSER_VERSION,
+            )
+            jobs.append(job_id)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            outcomes = [
+                processor.process_job(jobs[index], owner="correction").outcome
+                for index in (0, 1, 3, 2)
+            ]
+            with database.pool.connection() as connection:
+                selected = connection.execute(
+                    """
+                    SELECT evidence.stars, selected.source_observed_at,
+                           evidence.source_observed_at
+                    FROM battle_perspectives AS selected
+                    JOIN battle_evidence AS evidence ON evidence.id = selected.evidence_id
+                    """
+                ).fetchone()
+        finally:
+            database.close()
+    assert outcomes == ["processed"] * 4
+    assert selected == (
+        3, DAY.start + timedelta(hours=5), DAY.start + timedelta(hours=5)
+    )
+
+
+@pytest.mark.parametrize("attack", [True, False])
+@pytest.mark.parametrize("latest_stars", [2, 3])
+def test_current_battle_report_confirmed_after_a_queued_log_covers_it(
+    database_url: str,
+    archive_server,
+    attack: bool,
+    latest_stars: int,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        _seed_battle_anchor(connection_info, DAY.start)
+        original = _live_battle_row(
+            attack=attack,
+            battle_timestamp=DAY.start + timedelta(hours=1),
+            opponent_tag="#8PP",
+            opponent_name="Opponent",
+        )
+        latest = {**original, "stars": latest_stars}
+        if latest_stars == 2:
+            latest["destructionPercentage"] = 80
+        jobs = []
+        for hour, item in ((3, original), (5, original), (7, latest)):
+            _observation, job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key=f"confirmed-{hour}",
+                endpoint="battle_log",
+                body=json.dumps({"items": [item]}).encode(),
+                observed_at=DAY.start + timedelta(hours=hour),
+                normalized_tag="#2PP",
+                parser_version=LIVE_BATTLE_PARSER_VERSION,
+            )
+            jobs.append(job_id)
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            outcomes = [
+                processor.process_job(jobs[index], owner="confirmed").outcome
+                for index in (0, 2, 1)
+            ]
+            with database.pool.connection() as connection:
+                selected = connection.execute(
+                    """
+                    SELECT evidence.stars, selected.source_observed_at
+                    FROM battle_perspectives AS selected
+                    JOIN battle_evidence AS evidence ON evidence.id = selected.evidence_id
+                    """
+                ).fetchone()
+        finally:
+            database.close()
+    assert outcomes == ["processed", "processed", "superseded"]
+    assert selected == (latest_stars, DAY.start + timedelta(hours=7))
+
+
+def test_limited_newest_plan_keeps_each_players_latest_responses_together(
+    database_url: str,
+    archive_server,
+) -> None:
+    tags = ("#9PP", "#2PP", "#8PP", "#QQQ", "#RRR")
+    with domain_database(database_url) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            for tag, hour in zip(tags[:3], (2, 1, 1), strict=True):
+                _observation, job_id = _profile(
+                    connection_info,
+                    archive_server,
+                    tag=tag,
+                    trophies=5000,
+                    observed_at=DAY.start + timedelta(hours=hour),
+                )
+                assert processor.process_job(job_id, owner="seed").outcome == "processed"
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    """
+                    UPDATE players SET current_profile_confirmed_at = %s
+                    WHERE normalized_tag = '#2PP'
+                    """,
+                    (DAY.start + timedelta(hours=3),),
+                )
+            newest = {}
+            for tag in tags:
+                for minutes in (0, 20):
+                    _profile_observation, profile_job = _profile(
+                        connection_info,
+                        archive_server,
+                        tag=tag,
+                        trophies=5100 + minutes,
+                        observed_at=DAY.start + timedelta(hours=4, minutes=minutes),
+                    )
+                    _battle_observation, battle_job = store_observation(
+                        connection_info,
+                        archive_server,
+                        occurrence_key=f"planned-battle-{tag}-{minutes}",
+                        endpoint="battle_log",
+                        body=json.dumps({"items": []}).encode(),
+                        observed_at=DAY.start
+                        + timedelta(hours=4, minutes=minutes + 10),
+                        normalized_tag=tag,
+                        parser_version=LIVE_BATTLE_PARSER_VERSION,
+                    )
+                    newest[tag] = (profile_job, battle_job)
+            expected = [
+                job_id
+                for tag in ("#QQQ", "#RRR", "#8PP", "#9PP", "#2PP")
+                for job_id in newest[tag]
+            ]
+            assert database.newest_job_plan(limit=4) == expected[:4]
+            assert database.newest_job_plan(limit=10) == expected
+        finally:
+            database.close()
+
+
+def test_collector_owned_observations_cannot_be_finished_as_superseded(
+    database_url: str,
+    archive_server,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        observation_ids, job_ids = [], []
+        for endpoint in ("profile", "battle_log", "league_history"):
+            observation_id, job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key=f"owned-{endpoint}",
+                endpoint=endpoint,
+                body=(
+                    PROFILE_FIXTURE.read_bytes()
+                    if endpoint == "profile"
+                    else b'{"items":[]}'
+                ),
+                observed_at=DAY.start,
+                normalized_tag="#2PP",
+            )
+            observation_ids.append(observation_id)
+            job_ids.append(job_id)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO collector_work (
+                    kind, lane, scope, player_id, normalized_tag, due_at,
+                    coalescing_key, status, profile_status, battle_log_status,
+                    league_history_status, profile_observation_id,
+                    battle_log_observation_id, league_history_observation_id, completed_at
+                )
+                SELECT 'initial_collection', 'interactive', 'player', id,
+                       normalized_tag, %s, 'owned-observations', 'complete',
+                       'observed', 'observed', 'observed', %s, %s, %s, %s
+                FROM players WHERE normalized_tag = '#2PP'
+                """,
+                (DAY.start, *observation_ids, DAY.start),
+            )
+        database, _ = _processor(connection_info, archive_server)
+        try:
+            for job_id in job_ids:
+                claim = database.claim_job(owner="owned", job_id=job_id)
+                assert claim is not None
+                assert not job_outcomes.complete_superseded(
+                    database, claim, lambda _: True
+                )
+            with database.pool.connection() as connection:
+                statuses = connection.execute(
+                    "SELECT status FROM python_processing_jobs WHERE id = ANY(%s)",
+                    (job_ids,),
+                ).fetchall()
+            assert [text(row[0]) for row in statuses] == ["leased"] * 3
+        finally:
+            database.close()
+
+
+def test_collector_work_observation_lookups_are_available_and_repeatable(
+    database_url: str,
+) -> None:
+    migration = (
+        Path(__file__).parents[2]
+        / "deploy/migrations/0044_collector_work_observation_lookup.sql"
+    )
+    fields = (
+        "profile_observation_id",
+        "battle_log_observation_id",
+        "league_history_observation_id",
+    )
+    names = [f"collector_work_{field.removesuffix('_id')}_lookup" for field in fields]
+    with domain_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(migration.read_text())
+            rows = connection.execute(
+                """
+                SELECT relation.relname, method.amname, attribute.attname,
+                       definition.indisvalid, definition.indisready
+                FROM pg_index AS definition
+                JOIN pg_class AS relation ON relation.oid = definition.indexrelid
+                JOIN pg_am AS method ON method.oid = relation.relam
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = definition.indrelid
+                 AND attribute.attnum = definition.indkey[0]
+                WHERE definition.indrelid = 'collector_work'::regclass
+                  AND definition.indnkeyatts = 1
+                  AND relation.relname = ANY(%s)
+                """,
+                (names,),
+            ).fetchall()
+            assert {
+                text(row[0]): (text(row[1]), text(row[2]), row[3], row[4])
+                for row in rows
+            } == {
+                name: ("btree", field, True, True)
+                for name, field in zip(names, fields, strict=True)
+            }
+            assert connection.execute(
+                "SELECT count(*) FROM clash_lens_schema_migrations WHERE version = 44"
+            ).fetchone()[0] == 1

@@ -33,12 +33,13 @@ def _battle_log_reset_baseline(
 def supersede_battle_log(
     database: Database, claim: Claim, battle_log: ParsedBattleLog
 ) -> bool:
-    """Skip a battle log when every row is already stored for its player.
+    """Skip a battle log when newer evidence already covers every stored row.
 
     A newer processed log from the same player and Legend day must exist, so
     that day's battles and daily result were already refreshed after this log.
     Rows may come from that log or, once the window has slid, from older
-    processed ones. Any row stored nowhere (a gap) means the log is processed.
+    processed ones. Each battle's selected perspective must also have been
+    confirmed at or after this log. Any uncovered row means the log runs.
     """
     if not getattr(database, "_supports_compact_battles", False):
         return False
@@ -60,6 +61,19 @@ def supersede_battle_log(
                     JOIN battle_payload_rows AS member ON member.source_row_id = source.id
                     WHERE source.report_hash = wanted.report_hash
                       AND member.reporting_player_id = player.id
+                      AND (
+                          source.outcome <> 'valid_legend' OR EXISTS (
+                              SELECT 1
+                              FROM battle_evidence AS evidence
+                              JOIN battle_perspectives AS selected
+                                ON selected.battle_id = evidence.battle_id
+                               AND selected.perspective = evidence.perspective
+                              WHERE evidence.source_row_id = source.id
+                                AND evidence.reporting_player_id = player.id
+                                AND evidence.observation_row_id IS NULL
+                                AND selected.source_observed_at >= %s
+                          )
+                      )
                 )
             )
             FROM players AS player
@@ -70,6 +84,7 @@ def supersede_battle_log(
                 battle_log.observed_at,
                 day_end,
                 report_hashes,
+                battle_log.observed_at,
                 battle_log.normalized_tag,
             ),
         ).fetchone()

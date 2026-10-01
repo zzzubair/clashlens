@@ -47,7 +47,7 @@ from .source_observation_contract import validate_source_observation_contract
 
 MAX_CONCURRENCY = 32
 DATABASE_CONFLICT_RETRIES = 3
-# Claims follow a plan of each player's newest waiting profile and battle log,
+# Claims keep each player's newest waiting profile and battle log together,
 # stalest players first, so a backlog never keeps the leaderboard behind. Every
 # fourth claim keeps the oldest-first order so daily results and other derived
 # work still move while a backlog drains.

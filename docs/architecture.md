@@ -129,12 +129,15 @@ with leases and fencing, and handlers are safe to run more than once. Keep
 backups and recovery procedures in [`deployment.md`](deployment.md); do not
 make the runtime boundary depend on an unowned queue or warehouse.
 
-The worker takes each player's newest waiting profile, then battle log, first,
-starting with the players whose leaderboard entry is oldest. Every fourth claim
+The worker keeps each player's newest waiting profile and battle log together,
+with that player's profile first, starting with the players whose leaderboard
+entry is oldest, including its latest profile confirmation. Every fourth claim
 keeps the plain oldest-first order so daily results and other derived work
 keep moving. An ordinary check's job is finished as `superseded`, without being
 applied, when newer processed evidence from the same player and Legend day
 already covers it: a later current profile, or a newer battle log while every
-row of the older one is already stored. The last profile before a Reset, Reset sweep, Refresh, first lookup,
+row of the older one is already stored and each battle's currently selected
+attacker or defender report was confirmed at or after the older log. The last
+profile before a Reset, Reset sweep, Refresh, first lookup,
 discovery and replay responses always run. Superseded responses keep their
 observation and raw bytes, so they can still be replayed.

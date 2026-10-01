@@ -769,18 +769,17 @@ class Database:
     def newest_job_plan(self, *, limit: int) -> list[int]:
         """Each player's newest waiting profile and battle-log job, stalest first.
 
-        Profiles come before battle logs because they set the leaderboard.
-        Players are ordered by how old their leaderboard entry looks. The ids
-        are only suggestions: ``claim_job(job_id=...)`` still applies every
-        due, lease and supported-contract check.
+        Each player's profile and battle log stay together, with their profile
+        first. Players are ordered by how old their leaderboard entry looks.
+        The ids are only suggestions: ``claim_job(job_id=...)`` still applies
+        every due, lease and supported-contract check.
         """
         with self._timed_connection() as connection:
             rows = connection.execute(
                 f"""
                 WITH newest AS (
                     SELECT DISTINCT ON (observation.player_id, job.endpoint)
-                           job.id, job.endpoint, observation.player_id,
-                           observation.response_observed_at
+                           job.id, job.endpoint, observation.player_id
                     FROM {self._jobs_relation} AS job
                     JOIN collector_observations AS observation
                       ON observation.id = job.observation_id
@@ -796,10 +795,9 @@ class Database:
                 SELECT newest.id
                 FROM newest
                 JOIN players AS player ON player.id = newest.player_id
-                ORDER BY newest.endpoint = 'profile' DESC,
-                         greatest(player.current_observed_at,
+                ORDER BY greatest(player.current_observed_at,
                                   player.current_profile_confirmed_at) NULLS FIRST,
-                         newest.response_observed_at DESC, newest.id DESC
+                         player.id, newest.endpoint = 'profile' DESC
                 LIMIT %s
                 """,
                 (PYTHON_LIVE_PRIORITY, limit),

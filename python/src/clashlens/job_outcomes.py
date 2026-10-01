@@ -356,11 +356,16 @@ def complete_superseded(
                 """
                 SELECT EXISTS (
                     SELECT 1 FROM collector_work
-                    WHERE %s IN (profile_observation_id, battle_log_observation_id,
-                                 league_history_observation_id)
+                    WHERE profile_observation_id = %s
+                ) OR EXISTS (
+                    SELECT 1 FROM collector_work
+                    WHERE battle_log_observation_id = %s
+                ) OR EXISTS (
+                    SELECT 1 FROM collector_work
+                    WHERE league_history_observation_id = %s
                 )
                 """,
-                (claim.observation_id,),
+                (claim.observation_id,) * 3,
             ).fetchone()
             if owned[0]:
                 return False
@@ -389,5 +394,4 @@ def complete_classified(database: Database, claim: Claim, *, outcome: str) -> No
             database._finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )
-
 
