@@ -197,7 +197,9 @@ def test_final_attempt_failure_write_conflict_recovers_after_expiry(
 ) -> None:
     from pathlib import Path
 
-    body = (Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json").read_bytes()
+    body = (
+        Path(__file__).parents[1] / "testdata/legend_i_profile_v1.json"
+    ).read_bytes()
     with domain_database(database_url) as connection_info:
         _, job_id = store_observation(
             connection_info,
@@ -268,28 +270,40 @@ def test_final_attempt_failure_write_conflict_recovers_after_expiry(
             recovered = processor.process_job(job_id, owner="recovery-worker")
             if reject_failure_write:
                 assert recovered == ProcessResult(job_id, "processed")
-                assert database.scalar(
-                    "SELECT status FROM python_processing_jobs WHERE id = %s",
-                    (job_id,),
-                ) == "complete"
-                assert database.scalar(
-                    "SELECT attempt_count FROM python_processing_jobs WHERE id = %s",
-                    (job_id,),
-                ) == 3
-                assert database.scalar(
-                    "SELECT count(*) FROM player_profile_versions"
-                ) == 1
-                assert database.scalar(
-                    "SELECT max(attempt_number) FROM python_processing_attempts "
-                    "WHERE job_id = %s",
-                    (job_id,),
-                ) == 4
+                assert (
+                    database.scalar(
+                        "SELECT status FROM python_processing_jobs WHERE id = %s",
+                        (job_id,),
+                    )
+                    == "complete"
+                )
+                assert (
+                    database.scalar(
+                        "SELECT attempt_count FROM python_processing_jobs WHERE id = %s",
+                        (job_id,),
+                    )
+                    == 3
+                )
+                assert (
+                    database.scalar("SELECT count(*) FROM player_profile_versions") == 1
+                )
+                assert (
+                    database.scalar(
+                        "SELECT max(attempt_number) FROM python_processing_attempts "
+                        "WHERE job_id = %s",
+                        (job_id,),
+                    )
+                    == 4
+                )
             else:
                 assert recovered is None
-                assert database.scalar(
-                    "SELECT failure_category FROM python_processing_jobs WHERE id = %s",
-                    (job_id,),
-                ) == "database_deadlock"
+                assert (
+                    database.scalar(
+                        "SELECT failure_category FROM python_processing_jobs WHERE id = %s",
+                        (job_id,),
+                    )
+                    == "database_deadlock"
+                )
         finally:
             database.close()
 
@@ -318,10 +332,13 @@ def test_expired_refund_cannot_change_a_job_another_worker_took(
             assert database.maintain_queue(max_jobs=1) == 1
             with pytest.raises(LeaseLost):
                 database.refund_claim_attempt(expired)
-            assert database.scalar(
-                "SELECT attempt_count FROM python_processing_jobs WHERE id = %s",
-                (job_id,),
-            ) == 2
+            assert (
+                database.scalar(
+                    "SELECT attempt_count FROM python_processing_jobs WHERE id = %s",
+                    (job_id,),
+                )
+                == 2
+            )
         finally:
             database.close()
 
