@@ -53,9 +53,8 @@ Successful profile fetches completed since Monday's 05:00 UTC Reset prevent
 another routine profile request, even while processing is pending or after a
 later fetch fails. This reuse applies both before enqueueing and when admitting
 already-queued ordinary discovery or weekly work. Unchanged responses also
-count when the successful fetch advances freshness but retains an older
-observation awaiting processing. Reuse does not confirm eligibility; only
-processing recognized tier evidence does that.
+count when they retain an older observation awaiting processing. Reuse does
+not confirm eligibility; only processing recognized tier evidence does that.
 
 A fetch completed before Monday Reset cannot satisfy the new week's check
 merely because its processing finishes after Reset. Recognized post-Reset
@@ -161,10 +160,12 @@ capacity and resumes when cleanup frees it.
 One background uploader creates immutable archive objects. A local spool file is
 deletable only after its processing and upload both succeed. Identical bytes
 share one spool/archive object. The fields listed in `response_fields.py` decide
-whether an ordinary response changed; changes to ignored fields update freshness
-without a new observation, processing job, or archive upload. A changed response
-is stored in full. Reset always stores paired boundary observations, including
-unchanged responses.
+whether an ordinary response changed. When those fields match the retained
+response, changes to ignored fields need no new observation, processing job,
+or archive upload. Profile freshness follows the
+[player page confirmation rule](domain.md#player-page-freshness).
+A changed response is stored in full. Reset always stores paired boundary
+observations, including unchanged responses.
 
 Uploaded-copy cleanup holds one publication barrier and rechecks the bounded
 batch in one database transaction. Pending durable handoffs protect their raw

@@ -10,8 +10,9 @@ from domain_test_support import as_api_role, domain_database, store_observation,
 from test_discovery_history_prune_postgres import _attach_complete_work
 from test_domain_processing_postgres import _processor
 
-from clashlens import api_players, boundary, ingestion
+from clashlens import alerts, api_leaderboard, api_players, boundary, ingestion
 from clashlens.api_db import ApiDatabase
+from clashlens.response_fields import content_fingerprint
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 BATTLE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_battle_log_v1.json"
@@ -458,8 +459,262 @@ def test_public_profile_uses_latest_occurrence_metadata_and_freshness(
             database.close()
 
 
-def test_player_page_freshness_follows_the_collectors_last_successful_check(
+def test_concurrent_profiles_for_one_player_complete_without_retry(
     database_url: str, archive_server
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    from unittest.mock import patch
+
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _, initial_job = store_observation(
+            connection_info, archive_server, occurrence_key="concurrent-profile-initial",
+            endpoint="profile", body=PROFILE_FIXTURE.read_bytes(),
+            observed_at=NOW, normalized_tag="#2PP",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert processor.process_job(initial_job, owner="initial").outcome == "processed"
+            jobs = []
+            for index in (1, 2):
+                payload = json.loads(PROFILE_FIXTURE.read_bytes())
+                payload["trophies"] += index
+                _, job = store_observation(
+                    connection_info, archive_server,
+                    occurrence_key=f"concurrent-profile-{index}", endpoint="profile",
+                    body=json.dumps(payload).encode(),
+                    observed_at=NOW + timedelta(minutes=index), normalized_tag="#2PP",
+                )
+                jobs.append(job)
+            barrier = Barrier(2)
+            original_anchor = ingestion._record_season_anchor
+
+            def record_anchor(connection, profile_version_id, profile):
+                barrier.wait(timeout=10)
+                return original_anchor(connection, profile_version_id, profile)
+
+            with patch.object(ingestion, "_record_season_anchor", record_anchor):
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = [
+                        executor.submit(processor.process_job, job, owner=f"profile-{job}")
+                        for job in jobs
+                    ]
+                    results = [future.result(timeout=20) for future in futures]
+            assert [result.outcome for result in results] == ["processed", "processed"]
+            with database.pool.connection() as connection:
+                rows = connection.execute(
+                    "SELECT status, attempt_count FROM python_processing_jobs WHERE id = ANY(%s)",
+                    (jobs,),
+                ).fetchall()
+                assert [(text(status), attempts) for status, attempts in rows] == [
+                    ("complete", 1), ("complete", 1)
+                ]
+                assert connection.execute(
+                    """
+                    SELECT profile.trophies, player.current_profile_confirmed_at
+                    FROM players AS player JOIN player_profile_versions AS profile
+                      ON profile.id = player.current_profile_version_id
+                    WHERE player.normalized_tag = '#2PP'
+                    """
+                ).fetchone() == (payload["trophies"], NOW + timedelta(minutes=2))
+        finally:
+            database.close()
+
+
+def test_profile_confirmation_backfill_preserves_proven_checks(
+    database_url: str, archive_server
+) -> None:
+    from test_api_db_public_ops import NOW as accepted_at
+    from test_api_db_public_ops import seed_profile
+    from test_api_migration import ROOT, migrated_production_database
+
+    confirmed_at = accepted_at + timedelta(hours=2)
+    with migrated_production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
+                if 9 <= int(migration.name.split("_", 1)[0]) < 40:
+                    connection.execute(migration.read_text())
+        api = ApiDatabase(connection_info)
+        try:
+            for tag in ("#2PP", "#8PY", "#9PY"):
+                seed_profile(api, tag, 6000)
+            failed, _ = store_observation(
+                connection_info, archive_server, occurrence_key="backfill-failed",
+                endpoint="profile", body=b'{"reason":"inMaintenance"}',
+                observed_at=confirmed_at + timedelta(minutes=5),
+                normalized_tag="#2PP", http_status=503,
+            )
+            pending, _ = store_observation(
+                connection_info, archive_server, occurrence_key="backfill-pending",
+                endpoint="profile", body=b'{"trophies":6030}',
+                observed_at=confirmed_at, normalized_tag="#9PY",
+            )
+            with psycopg.connect(connection_info) as connection:
+                for observation_id in (failed, pending):
+                    connection.execute(
+                        """
+                        INSERT INTO collector_response_state (
+                            scope, identity_key, endpoint, player_id, normalized_tag,
+                            last_response_hash, last_content_fingerprint,
+                            last_occurrence_key, last_applied_occurrence_key,
+                            last_seen_at, last_observation_id, last_success_at
+                        )
+                        SELECT scope, normalized_tag, endpoint, player_id, normalized_tag,
+                               response_hash, response_hash, occurrence_key, occurrence_key,
+                               response_completed_at, id, %s
+                        FROM collector_observations WHERE id = %s
+                        """,
+                        (confirmed_at, observation_id),
+                    )
+                connection.commit()
+                connection.execute(
+                    (ROOT / "deploy/migrations/0040_profile_confirmation.sql").read_text()
+                )
+            for tag, expected in (
+                ("#2PP", confirmed_at), ("#8PY", accepted_at), ("#9PY", accepted_at)
+            ):
+                page = api_players.get_player_page(
+                    api, tag, now=confirmed_at + timedelta(minutes=6), freshness_seconds=900
+                )
+                assert page["observed_at"] == expected.isoformat()
+        finally:
+            api.close()
+
+
+@pytest.mark.parametrize("failed_check", [False, True])
+def test_backfilled_profile_identifier_confirms_checks_after_repair(
+    database_url: str, archive_server, tmp_path, monkeypatch, capsys, failed_check: bool
+) -> None:
+    import hashlib
+
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    from test_api_migration import ROOT, migrated_production_database
+
+    from clashlens.collector_db import CollectorDatabase, ResponseHandoff
+
+    body = PROFILE_FIXTURE.read_bytes()
+    confirmed_at = NOW + timedelta(hours=2)
+    with migrated_production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
+                if 9 <= int(migration.name.split("_", 1)[0]) < 40:
+                    connection.execute(migration.read_text())
+            connection.execute(
+                """
+                ALTER TABLE players ADD COLUMN current_profile_confirmed_at timestamptz,
+                    ADD COLUMN current_profile_fingerprint text
+                """
+            )
+        _, initial_job = store_observation(
+            connection_info, archive_server, occurrence_key="upgrade-initial",
+            endpoint="profile", body=body, observed_at=NOW, normalized_tag="#2PP",
+            parser_version="supercell-profile-parser-v3",
+        )
+        database, processor = _processor(connection_info, archive_server)
+        options = conninfo_to_dict(connection_info)["options"]
+        collector = CollectorDatabase(make_conninfo(
+            connection_info, options=options + " -c role=clashlens_collector"
+        ))
+        api = None
+
+        def check(payload: bytes, at: datetime, occurrence: str, status: int = 200):
+            digest = hashlib.sha256(payload).hexdigest()
+            with psycopg.connect(connection_info) as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+            return collector.record_response(ResponseHandoff(
+                occurrence_key=occurrence, scope="player", identity_key="#2PP",
+                endpoint="profile", player_id=player_id, normalized_tag="#2PP",
+                request_started_at=at - timedelta(seconds=1), response_completed_at=at,
+                http_status=status, response_hash=digest,
+                content_fingerprint=content_fingerprint(
+                    "profile", payload, http_status=status, response_hash=digest
+                ),
+                byte_size=len(payload), spool_key=f"sha256/{digest[:2]}/{digest}",
+                collector_version="upgrade-test", key_label="regular-a",
+                evidence_headers={"content-type": "application/json"},
+            ))
+
+        def assert_time(at: datetime, expected: datetime) -> None:
+            page = api_players.get_player_page(api, "#2PP", now=at, freshness_seconds=900)
+            board = api_leaderboard.get_live_leaderboard(api, limit=1, now=at)
+            assert page["observed_at"] == board["entries"][0]["observed_at"] == expected.isoformat()
+            assert page["trophies"] == board["entries"][0]["trophies"] == json.loads(body)["trophies"]
+
+        try:
+            assert processor.process_job(initial_job, owner="upgrade-initial").outcome == "processed"
+            check(body, NOW, "upgrade-initial")
+            assert check(body, confirmed_at, "upgrade-unchanged").changed is False
+            if failed_check:
+                check(b'{"reason":"inMaintenance"}', confirmed_at + timedelta(minutes=5),
+                      "upgrade-failed", status=503)
+            database.close()
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    """
+                    ALTER TABLE players DROP COLUMN current_profile_confirmed_at,
+                        DROP COLUMN current_profile_fingerprint
+                    """
+                )
+                connection.commit()
+                connection.execute(
+                    (ROOT / "deploy/migrations/0040_profile_confirmation.sql").read_text()
+                )
+                fingerprint = connection.execute(
+                    "SELECT current_profile_fingerprint FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+                expected = content_fingerprint(
+                    "profile", body, http_status=200, response_hash=hashlib.sha256(body).hexdigest()
+                )
+                assert text(fingerprint) == (None if failed_check else expected)
+            database, processor = _processor(
+                make_conninfo(connection_info, options=options + " -c role=clashlens_python_worker"),
+                archive_server,
+            )
+            api = ApiDatabase(as_api_role(connection_info))
+            assert_time(confirmed_at + timedelta(minutes=6), confirmed_at)
+            changed = json.loads(body)
+            changed["donations"] = 9
+            changed_body = json.dumps(changed).encode()
+            applied_at = confirmed_at + timedelta(minutes=10)
+            if failed_check:
+                _, job = store_observation(
+                    connection_info, archive_server, occurrence_key="upgrade-repair",
+                    endpoint="profile", body=changed_body, observed_at=applied_at,
+                    normalized_tag="#2PP",
+                    parser_version="supercell-profile-parser-v3",
+                )
+            result = check(changed_body, applied_at, "upgrade-repair")
+            assert result.changed is failed_check
+            if failed_check:
+                assert_time(applied_at, confirmed_at)
+                assert processor.process_job(job, owner="upgrade-repair").outcome == "processed"
+            assert_time(applied_at + timedelta(minutes=1), applied_at)
+            with database.pool.connection() as connection:
+                jobs_before = connection.execute("SELECT count(*) FROM python_processing_jobs").fetchone()[0]
+            checked_at = confirmed_at + timedelta(minutes=15)
+            changed["donations"] = 10
+            result = check(json.dumps(changed).encode(), checked_at, "upgrade-confirmed")
+            assert result.changed is False and result.processing_job_id is None
+            with database.pool.connection() as connection:
+                assert connection.execute("SELECT count(*) FROM python_processing_jobs").fetchone()[0] == jobs_before
+            assert_time(checked_at + timedelta(minutes=1), checked_at)
+            url_file = tmp_path / "database-url"
+            url_file.write_text(as_api_role(connection_info))
+            monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
+            capsys.readouterr()
+            alerts.leaderboard_freshness_probe(checked_at + timedelta(minutes=1))
+            assert capsys.readouterr().out.strip() == "0 1"
+        finally:
+            if api is not None:
+                api.close()
+            collector.close()
+            database.close()
+
+
+def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
+    database_url: str, archive_server, tmp_path, monkeypatch, capsys
 ) -> None:
     body = PROFILE_FIXTURE.read_bytes()
     checked_at = NOW + timedelta(hours=2)
@@ -476,9 +731,17 @@ def test_player_page_freshness_follows_the_collectors_last_successful_check(
         database, processor = _processor(connection_info, archive_server)
         api = ApiDatabase(as_api_role(connection_info))
 
-        def collector_checked(observation_id: int, last_success_at: datetime) -> None:
-            # Unchanged responses only move this row; no new profile is saved.
+        def collector_checked(observation_id: int, check_time: datetime) -> None:
             with psycopg.connect(connection_info) as connection:
+                response_hash, status = connection.execute(
+                    "SELECT response_hash, http_status FROM collector_observations WHERE id = %s",
+                    (observation_id,),
+                ).fetchone()
+                response_hash = text(response_hash)
+                saved_body = archive_server[3].objects[f"sha256/{response_hash[:2]}/{response_hash}"]
+                fingerprint = content_fingerprint(
+                    "profile", saved_body, http_status=status, response_hash=response_hash
+                )
                 connection.execute(
                     """
                     INSERT INTO collector_response_state (
@@ -488,15 +751,19 @@ def test_player_page_freshness_follows_the_collectors_last_successful_check(
                         last_seen_at, last_observation_id, last_success_at
                     )
                     SELECT 'player', '#2PP', 'profile', player_id, '#2PP',
-                           response_hash, response_hash, occurrence_key,
-                           occurrence_key, response_completed_at, id, %s
+                           response_hash, %s, occurrence_key,
+                           occurrence_key, %s, id,
+                           CASE WHEN http_status BETWEEN 200 AND 299 THEN %s END
                     FROM collector_observations WHERE id = %s
                     ON CONFLICT (scope, identity_key, endpoint) DO UPDATE
                     SET last_observation_id = EXCLUDED.last_observation_id,
                         last_seen_at = EXCLUDED.last_seen_at,
-                        last_success_at = EXCLUDED.last_success_at
+                        last_response_hash = EXCLUDED.last_response_hash,
+                        last_content_fingerprint = EXCLUDED.last_content_fingerprint,
+                        last_success_at = GREATEST(collector_response_state.last_success_at,
+                                                   EXCLUDED.last_success_at)
                     """,
-                    (last_success_at, observation_id),
+                    (fingerprint, check_time, check_time, observation_id),
                 )
 
         def page(now: datetime) -> tuple[str, str, list[str]]:
@@ -504,6 +771,18 @@ def test_player_page_freshness_follows_the_collectors_last_successful_check(
                 api, "#2PP", now=now, freshness_seconds=900
             )
             assert result is not None
+            # The Live Leaderboard's Last updated follows the same rule.
+            board = api_leaderboard.get_live_leaderboard(
+                api, limit=50, now=now
+            )
+            assert board is not None
+            [entry] = [row for row in board["entries"] if row["tag"] == "#2PP"]
+            assert entry["observed_at"] == result["observed_at"]
+            expected_stale = (
+                now - datetime.fromisoformat(result["observed_at"])
+            ).total_seconds() > 600
+            assert entry["freshness"] == ("stale" if expected_stale else "fresh")
+            assert board["source_observations"]["stale_count"] == int(expected_stale)
             return (
                 result["freshness"],
                 result["observed_at"],
@@ -517,6 +796,17 @@ def test_player_page_freshness_follows_the_collectors_last_successful_check(
             fresh = page(checked_at + timedelta(minutes=1))
             assert fresh[:2] == ("fresh", checked_at.isoformat())
             assert "stale" not in fresh[2]
+
+            # The alert check counts players past ten minutes the same way.
+            url_file = tmp_path / "database-url"
+            url_file.write_text(as_api_role(connection_info))
+            monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
+            capsys.readouterr()
+            for seconds, expected in ((599, "0 1"), (600, "0 1"), (600.5, "1 1"), (720, "1 1")):
+                now = checked_at + timedelta(seconds=seconds)
+                assert page(now)[:2] == ("fresh", checked_at.isoformat())
+                alerts.leaderboard_freshness_probe(now)
+                assert capsys.readouterr().out.strip() == expected
 
             # Checks overdue or failing: the last success stops moving.
             overdue = page(checked_at + timedelta(minutes=16))
@@ -535,8 +825,8 @@ def test_player_page_freshness_follows_the_collectors_last_successful_check(
             )
             collector_checked(failed, checked_at + timedelta(minutes=10))
             assert page(checked_at + timedelta(minutes=11))[:2] == (
-                "stale",
-                NOW.isoformat(),
+                "fresh",
+                checked_at.isoformat(),
             )
 
             # A changed profile the worker has not applied yet is not shown,
@@ -554,8 +844,8 @@ def test_player_page_freshness_follows_the_collectors_last_successful_check(
             )
             collector_checked(pending, checked_at + timedelta(minutes=12))
             assert page(checked_at + timedelta(minutes=13))[:2] == (
-                "stale",
-                NOW.isoformat(),
+                "fresh",
+                checked_at.isoformat(),
             )
         finally:
             api.close()

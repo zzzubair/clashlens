@@ -28,6 +28,9 @@ def runtime(tmp_path, monkeypatch):
             "clashlens_collector_active_players": 200,
             "clashlens_spool_bytes": 0,
             "clashlens_spool_objects": 0,
+            "clashlens_collector_oldest_due_age_seconds": 120,
+            "clashlens_collector_reset_total": 0,
+            "clashlens_collector_reset_terminal": 0,
         },
         posts=[],
         attempts=[],
@@ -39,6 +42,7 @@ def runtime(tmp_path, monkeypatch):
         backup_failed=False,
         backup_error=None,
         reads_failed=False,
+        leaderboard="0 13000",
         disk_used=10,
         volume_failed=False,
         read_requests=[],
@@ -123,6 +127,8 @@ def runtime(tmp_path, monkeypatch):
             code, output = int(rt.backup_failed), "private backup output"
         elif "--probe" in args:
             code, output = int(rt.reads_failed), "private account output"
+        elif "--leaderboard" in args:
+            code, output = 0, rt.leaderboard
         else:
             assert f"MESSAGE_ID={alerts.RESTART_MESSAGE}" in args
             code, output = (
@@ -167,6 +173,10 @@ def trigger(rt, condition, value=True):
         rt.backup_failed = value
     elif condition == "reads":
         rt.reads_failed = value
+    elif condition == "collection":
+        rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 600 if value else 599
+    elif condition == "leaderboard":
+        rt.leaderboard = "1 13000" if value else "0 13000"
 
 
 @pytest.mark.parametrize(
@@ -178,6 +188,8 @@ def trigger(rt, condition, value=True):
         "filesystem",
         "restarts",
         "reads",
+        "collection",
+        "leaderboard",
     ],
 )
 def test_alert_and_recovery_once_across_separate_runs(runtime, condition, capsys):
@@ -298,6 +310,204 @@ def test_reset_pause_is_excluded_but_stuck_reset_work_still_alerts(runtime):
     rt.metrics["clashlens_collector_last_success_age_seconds"] = rt.now - last
     assert rt.run() == 0
     assert len(rt.posts) == 1
+
+
+def test_slow_collection_alerts_when_reset_finishes_before_half_past(runtime):
+    rt = runtime
+    rt.now = datetime(2026, 9, 27, 5, 1, tzinfo=UTC).timestamp()
+    rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 1800
+    rt.metrics["clashlens_collector_reset_total"] = 200
+    rt.metrics["clashlens_collector_reset_terminal"] = 199
+    assert rt.run() == 0
+    assert not rt.posts
+    rt.now = datetime(2026, 9, 27, 5, 20, tzinfo=UTC).timestamp()
+    rt.metrics["clashlens_collector_reset_terminal"] = 200
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    assert "overdue" in rt.posts[0]["content"]
+    rt.now += 86400 - 15 * 60
+    rt.metrics["clashlens_collector_reset_terminal"] = 0
+    rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 1
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    rt.metrics["clashlens_collector_reset_terminal"] = 200
+    assert rt.run() == 0
+    assert len(rt.posts) == 2
+    assert "recovered" in rt.posts[-1]["content"]
+
+
+def test_unfinished_reset_holds_overdue_alert_after_half_past(runtime):
+    rt = runtime
+    rt.now = datetime(2026, 9, 27, 6, tzinfo=UTC).timestamp()
+    trigger(rt, "collection")
+    rt.metrics["clashlens_collector_reset_total"] = 200
+    rt.metrics["clashlens_collector_reset_terminal"] = 199
+    assert rt.run() == 0
+    assert not rt.posts
+    rt.metrics["clashlens_collector_reset_total"] = 0
+    rt.metrics["clashlens_collector_reset_terminal"] = 0
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+
+
+@pytest.mark.parametrize(
+    "metric",
+    ["clashlens_collector_reset_total", "clashlens_collector_reset_terminal"],
+)
+def test_missing_reset_progress_does_not_clear_overdue_alert(runtime, metric):
+    rt = runtime
+    trigger(rt, "collection")
+    assert rt.run() == 0
+    trigger(rt, "collection", False)
+    del rt.metrics[metric]
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+
+
+def test_unreadable_leaderboard_freshness_fails_the_check_without_clearing(runtime):
+    rt = runtime
+    trigger(rt, "leaderboard")
+    assert rt.run() == 0
+    rt.leaderboard = ""
+    assert rt.run() == 1
+    assert len(rt.posts) == 1
+
+
+def test_empty_leaderboard_is_healthy_and_recovers_an_open_alert(runtime):
+    rt = runtime
+    rt.leaderboard = "0 0"
+    assert rt.run() == 0
+    assert not rt.posts
+    trigger(rt, "leaderboard")
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    rt.leaderboard = "0 0"
+    assert rt.run() == 0
+    assert len(rt.posts) == 2
+    assert "recovered" in rt.posts[-1]["content"]
+
+
+def test_failed_or_pending_checks_keep_the_confirmed_profile_time(
+    runtime, database_url, archive_server, tmp_path, monkeypatch, capsys
+):
+    import hashlib
+    from datetime import timedelta
+
+    import psycopg
+    from domain_test_support import as_api_role, domain_database, store_observation
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+    from test_domain_processing_postgres import PROFILE_FIXTURE, _processor
+
+    from clashlens import api_leaderboard, api_players
+    from clashlens.api_db import ApiDatabase
+    from clashlens.collector_db import CollectorDatabase, ResponseHandoff
+    from clashlens.response_fields import content_fingerprint
+
+    accepted_at = datetime(2026, 8, 6, 6, tzinfo=UTC)
+    confirmed_at = accepted_at + timedelta(hours=2)
+    body = PROFILE_FIXTURE.read_bytes()
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        _, job = store_observation(
+            connection_info, archive_server, occurrence_key="confirmed-initial",
+            endpoint="profile", body=body, observed_at=accepted_at,
+            normalized_tag="#2PP",
+            parser_version="supercell-profile-parser-v3",
+        )
+        options = conninfo_to_dict(connection_info)["options"]
+        database, processor = _processor(
+            make_conninfo(connection_info, options=options + " -c role=clashlens_python_worker"),
+            archive_server,
+        )
+        collector = CollectorDatabase(make_conninfo(
+            connection_info, options=options + " -c role=clashlens_collector"
+        ))
+        api = ApiDatabase(as_api_role(connection_info))
+        url_file = tmp_path / "database-url"
+        url_file.write_text(as_api_role(connection_info))
+        monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
+
+        def check(payload, at, occurrence, status=200):
+            digest = hashlib.sha256(payload).hexdigest()
+            with psycopg.connect(connection_info) as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = '#2PP'"
+                ).fetchone()[0]
+            return collector.record_response(ResponseHandoff(
+                occurrence_key=occurrence, scope="player", identity_key="#2PP",
+                endpoint="profile", player_id=player_id, normalized_tag="#2PP",
+                request_started_at=at - timedelta(seconds=1), response_completed_at=at,
+                http_status=status, response_hash=digest,
+                content_fingerprint=content_fingerprint(
+                    "profile", payload, http_status=status, response_hash=digest
+                ),
+                byte_size=len(payload), spool_key=f"sha256/{digest[:2]}/{digest}",
+                collector_version="confirmation-test", key_label="regular-a",
+                evidence_headers={"content-type": "application/json"},
+            ))
+
+        def assert_time(now, expected, trophies):
+            page = api_players.get_player_page(api, "#2PP", now=now, freshness_seconds=900)
+            board = api_leaderboard.get_live_leaderboard(api, limit=1, now=now)
+            [entry] = board["entries"]
+            assert page["observed_at"] == entry["observed_at"] == expected.isoformat()
+            assert page["trophies"] == entry["trophies"] == trophies
+            assert page["age_seconds"] == entry["age_seconds"] == int((now - expected).total_seconds())
+            assert board["source_observations"]["stale_count"] == 0
+            capsys.readouterr()
+            alerts.leaderboard_freshness_probe(now)
+            runtime.leaderboard = capsys.readouterr().out.strip()
+            runtime.now = now.timestamp()
+            assert runtime.run() == 0
+            assert not runtime.posts
+
+        try:
+            capsys.readouterr()
+            alerts.leaderboard_freshness_probe(accepted_at)
+            runtime.leaderboard = capsys.readouterr().out.strip()
+            assert runtime.leaderboard == "0 0"
+            runtime.now = accepted_at.timestamp()
+            assert runtime.run() == 0
+            assert not runtime.posts
+            assert processor.process_job(job, owner="confirmed-initial") is not None
+            trophies = json.loads(body)["trophies"]
+            check(body, accepted_at, "confirmed-initial")
+            assert check(body, confirmed_at, "confirmed-unchanged").changed is False
+            check(b'{"reason":"inMaintenance"}', confirmed_at + timedelta(minutes=5),
+                  "confirmed-failed", status=503)
+            assert_time(confirmed_at + timedelta(minutes=6), confirmed_at, trophies)
+            older = json.loads(body)
+            older["trophies"] += 50
+            older_body = json.dumps(older).encode()
+            older_at = confirmed_at - timedelta(hours=1)
+            _, older_job = store_observation(
+                connection_info, archive_server, occurrence_key="confirmed-older",
+                endpoint="profile", body=older_body, observed_at=older_at,
+                normalized_tag="#2PP",
+                parser_version="supercell-profile-parser-v3",
+            )
+            check(older_body, older_at, "confirmed-older")
+            assert processor.process_job(older_job, owner="confirmed-older") is not None
+            assert_time(confirmed_at + timedelta(minutes=6), confirmed_at, trophies)
+            changed = json.loads(body)
+            changed["trophies"] += 30
+            changed_body = json.dumps(changed).encode()
+            changed_at = confirmed_at + timedelta(minutes=7)
+            _, changed_job = store_observation(
+                connection_info, archive_server, occurrence_key="confirmed-changed",
+                endpoint="profile", body=changed_body, observed_at=changed_at,
+                normalized_tag="#2PP",
+                parser_version="supercell-profile-parser-v3",
+            )
+            check(changed_body, changed_at, "confirmed-changed")
+            assert_time(changed_at + timedelta(minutes=1), confirmed_at, trophies)
+            assert processor.process_job(changed_job, owner="confirmed-changed") is not None
+            assert_time(changed_at + timedelta(minutes=1), changed_at, trophies + 30)
+            check(changed_body, changed_at + timedelta(minutes=2), "confirmed-new-unchanged")
+            assert_time(changed_at + timedelta(minutes=3), changed_at + timedelta(minutes=2), trophies + 30)
+        finally:
+            api.close()
+            collector.close()
+            database.close()
 
 
 @pytest.mark.parametrize("missing_metrics", [False, True])

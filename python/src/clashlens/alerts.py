@@ -41,6 +41,14 @@ CONDITIONS = {
         "./ops backup-status",
     ),
     "reads": ("A private player-data read failed", "./ops logs api"),
+    "collection": (
+        "A player check is more than ten minutes overdue, so collection is slow or stalled",
+        "./ops logs collector",
+    ),
+    "leaderboard": (
+        "A Live Leaderboard player was last updated over ten minutes ago",
+        "./ops queue-status",
+    ),
 }
 
 
@@ -141,6 +149,23 @@ def private_read_probe(origin: str = "http://127.0.0.1:8000") -> None:
         result.get("users"), list
     ):
         raise CheckError("Private API player read returned an invalid response")
+
+
+def leaderboard_freshness_probe(now: datetime | None = None) -> None:
+    """Run inside the API container; prints only two counts."""
+    from clashlens import api_leaderboard
+    from clashlens.api_db import ApiDatabase
+
+    url = Path(os.environ["CLASHLENS_DATABASE_URL_FILE"]).read_text().strip()
+    database = ApiDatabase(url, max_size=1)
+    try:
+        # The same query and Last updated rule the Live Leaderboard uses.
+        board = api_leaderboard.get_live_leaderboard(
+            database, limit=1, now=now or datetime.now(UTC)
+        )
+    finally:
+        database.close()
+    print(board["source_observations"]["stale_count"], board["total_entries"])
 
 
 def elapsed_without_reset(start: float, end: float) -> float:
@@ -275,6 +300,11 @@ def observe(
         )
     last = max(state.setdefault("last_success", now), state.get("resumed_at", 0))
     findings["tracker"] = elapsed_without_reset(last, now) >= 600
+    overdue = metrics.get("clashlens_collector_oldest_due_age_seconds")
+    reset_total = metrics.get("clashlens_collector_reset_total")
+    reset_terminal = metrics.get("clashlens_collector_reset_terminal")
+    if overdue is not None and reset_total is not None and reset_terminal == reset_total:
+        findings["collection"] = overdue >= 600
 
     names = (
         ("clashlens_spool_bytes", "max_bytes"),
@@ -373,6 +403,25 @@ def observe(
         findings["reads"] = command(probe, 25).returncode != 0
     except (OSError, subprocess.SubprocessError):
         findings["reads"] = True
+    try:
+        result = command(
+            [
+                podman,
+                "exec",
+                "clashlens-python-api",
+                "python",
+                "-m",
+                "clashlens.alerts",
+                "--leaderboard",
+            ],
+            25,
+        )
+        stale, _ = (int(value) for value in result.stdout.split())
+        if result.returncode:
+            raise ValueError
+        findings["leaderboard"] = stale > 0
+    except (OSError, ValueError, subprocess.SubprocessError):
+        errors.append("Live Leaderboard freshness unavailable; run ./ops logs api")
     return findings, errors
 
 
@@ -411,6 +460,9 @@ def main() -> int:
     try:
         if sys.argv[1:] == ["--probe"]:
             private_read_probe()
+            return 0
+        if sys.argv[1:] == ["--leaderboard"]:
+            leaderboard_freshness_probe()
             return 0
         state_dir, root, webhook, health, spool, max_bytes, max_objects = sys.argv[1:]
         return run(

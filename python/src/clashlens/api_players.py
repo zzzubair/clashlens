@@ -126,24 +126,11 @@ def get_player_page(
                    player.current_observed_at,
                    {metadata_columns},
                    profile.profile_json -> 'clan' ->> 'name',
-                   checked.last_success_at
+                   player.current_profile_confirmed_at
             FROM players AS player
             JOIN player_profile_versions AS profile
                 ON profile.id = player.current_profile_version_id
             {metadata_join}
-            -- Unchanged profile responses only move the collector's check
-            -- time. A check confirms the saved profile only once the latest
-            -- stored response has been applied to it; a newer changed or
-            -- failed response that is not yet shown confirms nothing.
-            LEFT JOIN collector_response_state AS checked
-                ON checked.scope = 'player'
-               AND checked.identity_key = player.normalized_tag
-               AND checked.endpoint = 'profile'
-               AND EXISTS (
-                   SELECT 1 FROM player_profile_effects AS applied
-                   WHERE applied.observation_id = checked.last_observation_id
-                     AND applied.observed_at <= player.current_observed_at
-               )
             WHERE player.normalized_tag = %s
               AND profile.source_contract_state = 'accepted'
             """,

@@ -449,7 +449,6 @@ def create_app(
                 limit=limit,
                 offset=offset,
                 now=current_time(),
-                freshness_seconds=_DEFAULT_FRESHNESS_SECONDS,
             )
         else:
             result = api_leaderboard.get_frozen_leaderboard(production_database,

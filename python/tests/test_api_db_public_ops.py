@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
@@ -27,7 +27,9 @@ def anonymous_binding(operation: str, target: str, tag: str) -> RequestBinding:
     )
 
 
-def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
+def seed_profile(
+    database: ApiDatabase, tag: str, trophies: int, *, observed_at: datetime = NOW
+) -> None:
     with database.pool.connection() as connection:
         player_id = connection.execute(
             """
@@ -48,7 +50,7 @@ def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
                 %s, 'pending', 'pending', 'pending', 'pending'
             ) RETURNING id
             """,
-            (player_id, tag, NOW, f"seed:{tag}"),
+            (player_id, tag, observed_at, f"seed:{tag}"),
         ).fetchone()[0]
         observation_id = connection.execute(
             """
@@ -68,8 +70,8 @@ def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
                 f"seed:{tag}:profile",
                 player_id,
                 tag,
-                NOW,
-                NOW,
+                observed_at,
+                observed_at,
                 "a" * 64,
                 f"/v1/players/%23{tag.removeprefix('#')}",
             ),
@@ -83,7 +85,7 @@ def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
                 completed_at = %s, updated_at = %s
             WHERE id = %s
             """,
-            (observation_id, NOW, NOW, work_id),
+            (observation_id, observed_at, observed_at, work_id),
         )
         profile_id = connection.execute(
             """
@@ -98,7 +100,7 @@ def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
                 'Legend I', 'eligible', '{}'::jsonb
             ) RETURNING id
             """,
-            (player_id, observation_id, tag, NOW, f"Player {tag}", trophies),
+            (player_id, observation_id, tag, observed_at, f"Player {tag}", trophies),
         ).fetchone()[0]
         connection.execute(
             """
@@ -106,7 +108,7 @@ def seed_profile(database: ApiDatabase, tag: str, trophies: int) -> None:
             SET current_profile_version_id = %s, current_observed_at = %s
             WHERE id = %s
             """,
-            (profile_id, NOW, player_id),
+            (profile_id, observed_at, player_id),
         )
         connection.execute(
             """
@@ -207,7 +209,7 @@ def test_public_saved_operations_are_bounded_and_screen_ready(
                 database, "#2PP", now=NOW, freshness_seconds=900
             )
             live = api_leaderboard.get_live_leaderboard(
-                database, limit=100, now=NOW, freshness_seconds=900
+                database, limit=100, now=NOW
             )
             analytics = api_analytics.get_basic_analytics(
                 database, now=NOW, freshness_seconds=900
@@ -733,31 +735,15 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
         database = ApiDatabase(connection_info)
         try:
             for tag in tags:
-                seed_profile(database, tag, 6000)
-            with database.pool.connection() as connection:
-                connection.execute(
-                    """
-                    WITH stale AS (
-                        UPDATE player_profile_versions
-                        SET observed_at = %s - interval '900.5 seconds'
-                        WHERE player_id = (
-                            SELECT id FROM players WHERE normalized_tag = %s
-                        )
-                        RETURNING player_id, observed_at
-                    )
-                    UPDATE players
-                    SET current_observed_at = stale.observed_at
-                    FROM stale
-                    WHERE players.id = stale.player_id
-                    """,
-                    (NOW, tags[0]),
+                seed_profile(
+                    database, tag, 6000,
+                    observed_at=NOW - timedelta(seconds=600.5) if tag == tags[0] else NOW,
                 )
-                connection.commit()
             first = api_leaderboard.get_live_leaderboard(
-                database, limit=100, offset=0, now=NOW, freshness_seconds=900
+                database, limit=100, offset=0, now=NOW
             )
             second = api_leaderboard.get_live_leaderboard(
-                database, limit=100, offset=100, now=NOW, freshness_seconds=900
+                database, limit=100, offset=100, now=NOW
             )
             assert first is not None and second is not None
             assert [entry["position"] for entry in first["entries"]] == list(
@@ -775,7 +761,7 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
             assert first["source_observations"]["stale_count"] == 1
             assert (
                 first["source_observations"]["oldest_observed_at"]
-                == "2026-08-06T11:44:59.500000+00:00"
+                == "2026-08-06T11:49:59.500000+00:00"
             )
             assert (
                 first["source_observations"]["newest_observed_at"]
@@ -790,11 +776,11 @@ def test_live_pagination_has_absolute_ranks_and_population_freshness(
                 for entry in first["entries"] + second["entries"]
                 if entry["tag"] == tags[0]
             )
-            assert stale_entry["age_seconds"] == 900
+            assert stale_entry["age_seconds"] == 600
             assert stale_entry["freshness"] == "stale"
             assert (
                 api_leaderboard.get_live_leaderboard(
-                    database, limit=100, offset=200, now=NOW, freshness_seconds=900
+                    database, limit=100, offset=200, now=NOW
                 )
                 is None
             )
@@ -809,7 +795,7 @@ def test_live_leaderboard_reports_empty_population(database_url: str) -> None:
         database = ApiDatabase(connection_info)
         try:
             empty = api_leaderboard.get_live_leaderboard(
-                database, limit=25, now=NOW, freshness_seconds=900
+                database, limit=25, now=NOW
             )
             assert empty is not None
             assert empty["entries"] == []
@@ -824,7 +810,6 @@ def test_live_leaderboard_reports_empty_population(database_url: str) -> None:
             assert (
                 api_leaderboard.get_live_leaderboard(
                     database, limit=25, offset=25, now=NOW,
-                    freshness_seconds=900,
                 )
                 is None
             )

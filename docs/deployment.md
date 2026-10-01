@@ -523,7 +523,7 @@ without printing configuration files.
 
 ## Private Discord alerts
 
-`./ops alert-check` checks the five launch conditions and posts changes to the
+`./ops alert-check` checks the seven conditions below and posts changes to the
 private operator channel through an incoming webhook. Create the service-owned
 mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
 Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
@@ -575,13 +575,37 @@ use the [operating notes](operating.md#respond-to-alerts).
   healthy. The check enters the private API container, checks `/readyz`, and
   signs a `/v1/players/search` read limited to one result. Keys stay inside the
   container and response data is discarded. An empty search result is valid.
+- **A player check at least 600 seconds overdue**, from the collector's
+  `oldest_due_age_seconds`. This catches collection that slows down without
+  stopping, such as a slow official API.
+  It is neither raised nor cleared while Reset work is unfinished, measured by
+  `clashlens_collector_reset_total > clashlens_collector_reset_terminal`, or while
+  those metrics or the overdue age are missing. Checks resume as soon as Reset
+  work finishes, with no fixed clock window.
+- **Any stale Live Leaderboard entry**, using the
+  [Live Leaderboard freshness rule](domain.md#live-leaderboard-ordering). The check
+  enters the private API container and runs the Live Leaderboard's own query,
+  printing only two counts. If the query fails, the check fails and preserves
+  the existing alert state. The displayed time follows the
+  [player page confirmation rule](domain.md#player-page-freshness), including
+  across restarts. Migration 0040
+  backfills existing confirmations from accepted profiles and successful saved
+  responses. It copies a content identifier only when the latest saved response
+  is a successful profile already applied to the shown profile; otherwise the
+  identifier stays unknown until the next profile is applied.
+  It retains one time and one content identifier per player, about
+  1 MiB for 13,000 players, with no growing check history. There is no percentage
+  allowance or extra alert delay. A valid empty leaderboard reports `0 0`, has
+  no freshness breach, and permits an existing freshness alert to recover.
+  Use the [collection and processing measurements](operating.md#collection-or-processing-behind)
+  to distinguish delayed collection from delayed processing.
 
 Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.
 Missing disk measurements or restart history never clear an existing alert.
 `alerts.json` and `alerts.lock` live under the existing private ops state
 folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
-replaced with mode 600 and contains five condition records with at most one
+replaced with mode 600 and contains seven condition records with at most one
 pending transition each, plus when backup check timeouts or errors began,
 normally under 4 KiB. It keeps no growing event history, keys, URLs, player lists
 or account data.
