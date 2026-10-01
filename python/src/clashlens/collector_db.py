@@ -1455,20 +1455,25 @@ class CollectorDatabase:
         return [str(row[0]) for row in rows]
 
     def delete_spool_if_deletable(
-        self, response_hash: str, delete: Callable[[str], bool]
-    ) -> bool:
-        self._validate_hash(response_hash)
+        self, response_hashes: list[str], delete: Callable[[str], bool]
+    ) -> int:
+        # Cleanup holds the spool publication barrier across this call, so one
+        # commit per batch, not per hash, keeps new raw responses moving.
+        hashes = sorted(set(response_hashes))
+        for response_hash in hashes:
+            self._validate_hash(response_hash)
         with self._connection() as connection:
             with connection.transaction():
                 connection.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                    (response_hash,),
+                    "SELECT pg_advisory_xact_lock(hashtextextended(hash, 0))"
+                    " FROM unnest(%s::text[]) AS hash",
+                    (hashes,),
                 )
                 eligible = connection.execute(
                     """
-                    SELECT 1
+                    SELECT upload.response_hash
                     FROM collector_response_uploads AS upload
-                    WHERE upload.response_hash = %s
+                    WHERE upload.response_hash = ANY(%s)
                       AND upload.state = 'complete'
                       AND upload.local_deleted_at IS NULL
                       AND NOT EXISTS (
@@ -1482,19 +1487,13 @@ class CollectorDatabase:
                       )
                     FOR UPDATE
                     """,
-                    (response_hash,),
-                ).fetchone()
-                if eligible is None:
-                    return False
-                if not delete(response_hash):
-                    return False
+                    (hashes,),
+                ).fetchall()
+                deleted = [str(row[0]) for row in eligible if delete(str(row[0]))]
                 connection.execute(
-                    """
-                    UPDATE collector_response_uploads
-                    SET local_deleted_at = clock_timestamp(),
-                        updated_at = clock_timestamp()
-                    WHERE response_hash = %s
-                    """,
-                    (response_hash,),
+                    "UPDATE collector_response_uploads SET local_deleted_at ="
+                    " clock_timestamp(), updated_at = clock_timestamp()"
+                    " WHERE response_hash = ANY(%s)",
+                    (deleted,),
                 )
-        return True
+        return len(deleted)

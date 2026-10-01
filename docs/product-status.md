@@ -78,7 +78,7 @@ The revised manual commands and their verification limits belong in
   eligibility functions. [Verification](manual-list-import-validation.md) passed
   at 22,157 synthetic tags, including overlaps and interruptions. The old
   command remains unchanged; no reusable import feature is needed for launch.
-- `./dev up` supports 200 or 12,500 fake players; `./dev trial` caps at 12,500.
+- `./dev up` supports 200 or 12,500 fake players; `./dev trial` caps at 13,500.
   That matches the active launch target; raising the live-player limit to
   22,157 is not required. Measure 12,500 live players alongside a 22,157-tag
   known pool and its weekly eligibility work. Prior 12,500-player evidence is

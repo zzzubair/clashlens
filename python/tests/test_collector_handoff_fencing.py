@@ -27,11 +27,10 @@ def test_cleanup_batch_acknowledges_a_file_already_removed_by_a_crash(
         def deletable_hashes(self, **_kwargs: object) -> list[str]:
             return [digest]
 
-        def delete_spool_if_deletable(self, candidate: str, delete: Any) -> bool:
-            if not delete(candidate):
-                return False
-            self.marked.append(candidate)
-            return True
+        def delete_spool_if_deletable(self, candidates: list[str], delete: Any) -> int:
+            deleted = [candidate for candidate in candidates if delete(candidate)]
+            self.marked.extend(deleted)
+            return len(deleted)
 
     spool = Spool(tmp_path / "spool", max_body_bytes=1024)
     store = CleanupStore()
@@ -65,11 +64,14 @@ def test_normal_upload_shutdown_finishes_owned_upload_and_removes_its_raw_body(
         def deletable_hashes(self, *, limit: int) -> list[str]:
             return sorted(self.uploaded - self.local_deleted)[:limit]
 
-        def delete_spool_if_deletable(self, candidate: str, delete: Any) -> bool:
-            if candidate not in self.uploaded or not delete(candidate):
-                return False
-            self.local_deleted.add(candidate)
-            return True
+        def delete_spool_if_deletable(self, candidates: list[str], delete: Any) -> int:
+            deleted = {
+                candidate
+                for candidate in candidates
+                if candidate in self.uploaded and delete(candidate)
+            }
+            self.local_deleted |= deleted
+            return len(deleted)
 
         def referenced_spool_hashes(self) -> set[str]:
             return digests - self.local_deleted

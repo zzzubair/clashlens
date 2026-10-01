@@ -899,9 +899,20 @@ class Spool:
                 self._final(digest)
                 if digest in protected:
                     return False
-                with self._capacity_lock():
-                    self._delete_locked(digest)
+                try:
+                    prefix_fd = self._sub_dir_fd("sha256", digest[:2])
+                except FileNotFoundError:
                     return True
+                try:
+                    with self._capacity_lock():
+                        unlinked = self._unlink_final_locked(digest, prefix_fd)
+                    # The publication barrier, not the capacity lock, keeps this
+                    # digest from being republished while its removal is flushed.
+                    if unlinked:
+                        _fsync_dir(prefix_fd)
+                    return True
+                finally:
+                    os.close(prefix_fd)
 
             try:
                 yield delete
