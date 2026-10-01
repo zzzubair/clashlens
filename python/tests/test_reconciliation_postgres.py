@@ -7,6 +7,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from domain_test_support import domain_database, store_observation, text
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
 from clashlens import api_players, reconciliation_db
@@ -785,7 +786,14 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                 "ranked_day_state:Inconsistent",
             ]
 
-            api_database = ApiDatabase(connection_info)
+            # Read as the production data-service role, not the test owner.
+            options = conninfo_to_dict(connection_info).get("options", "")
+            api_database = ApiDatabase(
+                make_conninfo(
+                    connection_info,
+                    options=f"{options} -c role=clashlens_python_api".strip(),
+                )
+            )
             try:
                 player_page = api_players.get_player_page(api_database,
                     "#2PP",

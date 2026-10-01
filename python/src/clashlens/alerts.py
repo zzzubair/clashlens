@@ -307,11 +307,12 @@ def observe(
         )
 
     try:
+        # No unit-name pattern here: journalctl matches it against every unit
+        # in the whole journal, which took over 15 seconds on production.
         result = command(
             [
                 os.environ.get("JOURNALCTL_BIN", "journalctl"),
                 "--user",
-                "--user-unit=clashlens-*.service",
                 "--since",
                 "1 hour ago",
                 "--no-pager",

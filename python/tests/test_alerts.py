@@ -276,6 +276,7 @@ def test_thresholds_are_strict_and_restarts_are_per_service(runtime):
     rt.metrics["clashlens_spool_objects"] = 80
     rt.metrics["clashlens_collector_last_success_age_seconds"] = 599
     rt.restarts = ["clashlens-api.service"] * 3 + ["clashlens-worker.service"] * 3
+    rt.restarts += ["pipewire.service"] * 4
     assert rt.run() == 0
     assert not rt.posts
     rt.metrics["clashlens_collector_last_success_age_seconds"] = 600
