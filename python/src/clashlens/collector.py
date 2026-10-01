@@ -44,6 +44,9 @@ _GLOBAL_ARCHIVE_FAILURES = {
     "archive_unsupported",
 }
 _UPLOAD_CONCURRENCY = 32
+# Upload owners share these slots to limit competition with player checks.
+# Archive writes run outside the database limit and can still overlap.
+_UPLOAD_DATABASE_SLOTS = 4
 _UPLOAD_LEASE_SECONDS = 60
 _UPLOAD_RENEW_INTERVAL = 20.0
 _HANDOFF_LOCK_STRIPES = 256
@@ -96,6 +99,7 @@ class Collector:
         self._archive_terminal = False
         self._archive_identity_validated = False
         self._next_upload_release = 0.0
+        self._upload_database_slots = asyncio.Semaphore(_UPLOAD_DATABASE_SLOTS)
         self._spool_io_failed = False
         self._spool_capacity_failed = False
         self._spool_recovery_lock = asyncio.Lock()
@@ -115,6 +119,14 @@ class Collector:
                     raise
                 await asyncio.sleep(_retry_delay(attempt))
         raise AssertionError("unreachable database retry loop")
+
+    async def _upload_database_call(
+        self, operation: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        async with self._upload_database_slots:
+            return await _drain_awaitable(
+                self._database_call(operation, *args, **kwargs)
+            )
 
     async def collect_player(
         self,
@@ -551,7 +563,7 @@ class Collector:
         release_expired = time.monotonic() >= self._next_upload_release
         if release_expired:
             self._next_upload_release = time.monotonic() + _UPLOAD_LEASE_SECONDS / 2
-        claim = await self._database_call(
+        claim = await self._upload_database_call(
             collector_uploads.claim_upload,
             self.database,
             owner=owner,
@@ -565,7 +577,7 @@ class Collector:
         try:
             config = self.archive.instance_config
             if config is not None and not self._archive_identity_validated:
-                if not await self._database_call(
+                if not await self._upload_database_call(
                     self.database.validate_archive_instance, config
                 ):
                     raise ArchiveReadError(
@@ -610,7 +622,7 @@ class Collector:
             await self._ensure_upload_lease(renewal, claim)
             await _stop_task(renewal_stop, renewal)
             await _drain_awaitable(
-                self._database_call(
+                self._upload_database_call(
                     collector_uploads.complete_upload,
                     self.database,
                     claim,
@@ -625,7 +637,7 @@ class Collector:
                 await self._ensure_upload_lease(renewal, claim)
                 await _stop_task(renewal_stop, renewal)
                 await _drain_awaitable(
-                    self._database_call(
+                    self._upload_database_call(
                         collector_uploads.fail_upload,
                         self.database,
                         claim,
@@ -658,7 +670,7 @@ class Collector:
                     stop_requested.wait(), timeout=_UPLOAD_RENEW_INTERVAL
                 )
             except TimeoutError:
-                await self._database_call(
+                await self._upload_database_call(
                     collector_uploads.renew_upload,
                     self.database,
                     claim,
@@ -672,7 +684,7 @@ class Collector:
     ) -> None:
         if renewal.done():
             await renewal
-        await self._database_call(
+        await self._upload_database_call(
             collector_uploads.renew_upload,
             self.database,
             claim,
