@@ -28,6 +28,7 @@ def runtime(tmp_path, monkeypatch):
             "clashlens_collector_active_players": 200,
             "clashlens_spool_bytes": 0,
             "clashlens_spool_objects": 0,
+            "clashlens_collector_oldest_due_age_seconds": 120,
         },
         posts=[],
         attempts=[],
@@ -39,6 +40,7 @@ def runtime(tmp_path, monkeypatch):
         backup_failed=False,
         backup_error=None,
         reads_failed=False,
+        leaderboard="0 13000",
         disk_used=10,
         volume_failed=False,
         read_requests=[],
@@ -123,6 +125,8 @@ def runtime(tmp_path, monkeypatch):
             code, output = int(rt.backup_failed), "private backup output"
         elif "--probe" in args:
             code, output = int(rt.reads_failed), "private account output"
+        elif "--leaderboard" in args:
+            code, output = 0, rt.leaderboard
         else:
             assert f"MESSAGE_ID={alerts.RESTART_MESSAGE}" in args
             code, output = (
@@ -167,6 +171,10 @@ def trigger(rt, condition, value=True):
         rt.backup_failed = value
     elif condition == "reads":
         rt.reads_failed = value
+    elif condition == "collection":
+        rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 600 if value else 599
+    elif condition == "leaderboard":
+        rt.leaderboard = "131 13000" if value else "130 13000"
 
 
 @pytest.mark.parametrize(
@@ -178,6 +186,8 @@ def trigger(rt, condition, value=True):
         "filesystem",
         "restarts",
         "reads",
+        "collection",
+        "leaderboard",
     ],
 )
 def test_alert_and_recovery_once_across_separate_runs(runtime, condition, capsys):
@@ -297,6 +307,34 @@ def test_reset_pause_is_excluded_but_stuck_reset_work_still_alerts(runtime):
     rt.now += 60
     rt.metrics["clashlens_collector_last_success_age_seconds"] = rt.now - last
     assert rt.run() == 0
+    assert len(rt.posts) == 1
+
+
+def test_slow_collection_alerts_while_fetches_still_succeed_except_after_reset(
+    runtime,
+):
+    rt = runtime
+    rt.now = datetime(2026, 9, 27, 5, 1, tzinfo=UTC).timestamp()
+    rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 1800
+    assert rt.run() == 0
+    assert not rt.posts
+    rt.now = datetime(2026, 9, 27, 5, 30, tzinfo=UTC).timestamp()
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    assert "overdue" in rt.posts[0]["content"]
+    # The next Reset window neither repeats nor clears the open incident.
+    rt.now += 86400 - 25 * 60
+    rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 1
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+
+
+def test_unreadable_leaderboard_freshness_fails_the_check_without_clearing(runtime):
+    rt = runtime
+    trigger(rt, "leaderboard")
+    assert rt.run() == 0
+    rt.leaderboard = ""
+    assert rt.run() == 1
     assert len(rt.posts) == 1
 
 

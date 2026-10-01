@@ -776,7 +776,9 @@ def test_public_player_read_p95_is_below_200_milliseconds(
 def test_leaderboard_rejects_misaligned_selectors_and_missing_pages(
     database_url: str,
 ) -> None:
-    with migrated_production_database(database_url) as connection_info:
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as connection_info:
         database = ApiDatabase(connection_info)
         app = create_app(
             database=database,

@@ -10,7 +10,12 @@ from psycopg.types.json import Jsonb
 from . import army_ingestion, job_outcomes, reconciliation_db, reset_baselines
 from .battle import ParsedBattleLog
 from .db import Claim, Database, _text_value
-from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, ranked_day_for
+from .domain import (
+    RANKED_DAY_DURATION,
+    SEASON_ANCHOR_RULE_VERSION,
+    DomainRuleError,
+    ranked_day_for,
+)
 
 
 def _battle_log_reset_baseline(
@@ -928,23 +933,27 @@ def _guard_battle_rows(connection: Any, rows: list[Any]) -> list[Any]:
                 previous_start + timedelta(days=28),
             )
         )
-    for item_index, item in enumerate(rows):
-        if item.battle is None:
-            continue
-        day = item.battle.ranked_day_start
+    days = {item.battle.ranked_day_start for item in rows if item.battle is not None}
+    for day in sorted(days):
         canonical_ids = {
             season_id
             for season_id, start, end in canonical_bounds
             if start <= day < end
         }
         seasons.update(canonical_ids)
+        # A ranked day always ends RANKED_DAY_DURATION after it starts. The
+        # range on ranked_day_end keeps the (ranked_day_end, id DESC) index as
+        # the only ordered path; an equality lets PostgreSQL walk the primary
+        # key backwards through every newer day's rows instead.
+        day_end = day + RANKED_DAY_DURATION
         season_rows = connection.execute(
             """
             SELECT official_season_id FROM ranked_day_versions
-            WHERE ranked_day_start = %s
-            ORDER BY id DESC LIMIT 1
+            WHERE ranked_day_end >= %s AND ranked_day_end <= %s
+              AND ranked_day_start = %s
+            ORDER BY ranked_day_end, id DESC LIMIT 1
             """,
-            (day,),
+            (day_end, day_end, day),
         ).fetchall()
         seasons.update(_text_value(row[0]) for row in season_rows)
         retired_rows = []

@@ -523,7 +523,7 @@ without printing configuration files.
 
 ## Private Discord alerts
 
-`./ops alert-check` checks the five launch conditions and posts changes to the
+`./ops alert-check` checks the seven conditions below and posts changes to the
 private operator channel through an incoming webhook. Create the service-owned
 mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
 Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
@@ -575,13 +575,24 @@ use the [operating notes](operating.md#respond-to-alerts).
   healthy. The check enters the private API container, checks `/readyz`, and
   signs a `/v1/players/search` read limited to one result. Keys stay inside the
   container and response data is discarded. An empty search result is valid.
+- **A player check more than 600 seconds overdue**, from the collector's
+  `oldest_due_age_seconds`. This catches collection that slows down without
+  stopping, such as a slow official API.
+  It is neither raised nor cleared during **05:00–05:30 UTC**, while the Reset
+  sweep holds regular checks, or while collector metrics are missing.
+- **More than 1% of Live Leaderboard players last updated over 600 seconds
+  ago.** The check enters the private API container and runs the Live
+  Leaderboard's own query, printing only two counts. A changed profile keeps its
+  previous time until the worker applies it, so a few players are always
+  briefly behind; the 1% margin covers that. The collector's
+  `oldest_pending_processing_age_seconds` shows whether processing is the cause.
 
 Messages give the condition, its first observed UTC time and one next step.
 There is one alert and one recovery per condition; unchanged checks stay quiet.
 Missing disk measurements or restart history never clear an existing alert.
 `alerts.json` and `alerts.lock` live under the existing private ops state
 folder, `${XDG_STATE_HOME:-$HOME/.local/state}/clashlens`. State is atomically
-replaced with mode 600 and contains five condition records with at most one
+replaced with mode 600 and contains seven condition records with at most one
 pending transition each, plus when backup check timeouts or errors began,
 normally under 4 KiB. It keeps no growing event history, keys, URLs, player lists
 or account data.

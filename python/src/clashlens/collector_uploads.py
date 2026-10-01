@@ -32,7 +32,14 @@ def claim_upload(
     owner: str,
     lease_seconds: int = 60,
     now: datetime | None = None,
+    release_expired: bool = True,
 ) -> UploadClaim | None:
+    """Lease the next due upload.
+
+    ``release_expired`` first returns expired leases to pending. No index
+    covers leased rows, so that step reads the whole table; the collector runs
+    it once every half lease rather than on every claim.
+    """
     if not owner or lease_seconds < 1:
         raise ValueError("upload owner and positive lease are required")
     token = str(uuid4())
@@ -42,15 +49,16 @@ def claim_upload(
                 now or connection.execute("SELECT clock_timestamp()").fetchone()[0]
             )
             expires = claim_time + timedelta(seconds=lease_seconds)
-            connection.execute(
-                """
-                UPDATE collector_response_uploads
-                SET state = 'pending', lease_owner = NULL, lease_token = NULL,
-                    lease_expires_at = NULL, updated_at = clock_timestamp()
-                WHERE state = 'leased' AND lease_expires_at <= %s
-                """,
-                (claim_time,),
-            )
+            if release_expired:
+                connection.execute(
+                    """
+                    UPDATE collector_response_uploads
+                    SET state = 'pending', lease_owner = NULL, lease_token = NULL,
+                        lease_expires_at = NULL, updated_at = clock_timestamp()
+                    WHERE state = 'leased' AND lease_expires_at <= %s
+                    """,
+                    (claim_time,),
+                )
             row = connection.execute(
                 """
                 SELECT response_hash

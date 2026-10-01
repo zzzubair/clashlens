@@ -584,30 +584,20 @@ class CollectorDatabase:
                        (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline'),
                        (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline' AND status IN ('complete', 'failed', 'cancelled')),
                        (SELECT CASE WHEN max(last_success_at) IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM clock_timestamp() - max(last_success_at))) END
-                        FROM collector_response_state)"""
+                        FROM collector_response_state),
+                       COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - min(due_at))) FROM python_processing_jobs WHERE status = 'pending' AND due_at <= clock_timestamp()), 0)"""
             ).fetchone()
         assert row is not None
         names = (
-            "active_players",
-            "due_queue_depth",
-            "oldest_due_age_seconds",
-            "pending_processing",
-            "pending_uploads",
-            "failed_processing",
-            "failed_uploads",
-            "reset_total",
-            "reset_terminal",
-            "last_success_age_seconds",
+            "active_players", "due_queue_depth", "oldest_due_age_seconds",
+            "pending_processing", "pending_uploads", "failed_processing",
+            "failed_uploads", "reset_total", "reset_terminal",
+            "last_success_age_seconds", "oldest_pending_processing_age_seconds",
         )
         metrics: dict[str, int | float] = {}
         for name, value in zip(names, row, strict=True):
-            if value is None:
-                continue
-            metrics[name] = (
-                float(value)
-                if name in {"oldest_due_age_seconds", "last_success_age_seconds"}
-                else int(value)
-            )
+            if value is not None:
+                metrics[name] = float(value) if name.endswith("_seconds") else int(value)
         return metrics
 
     def schedule_rankings_cycle(self, now: datetime | None = None) -> bool:

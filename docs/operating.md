@@ -23,7 +23,7 @@ cd ~/development/ClashLens
 ./ops backup-status
 curl --fail --silent --show-error --max-time 10 http://127.0.0.1:3000/healthz
 curl --fail --silent --show-error --max-time 10 http://127.0.0.1:8081/metrics \
-  | grep -E '^clashlens_(collector_last_success_age_seconds|spool_bytes|spool_objects) '
+  | grep -E '^clashlens_(collector_(last_success|oldest_due|oldest_pending_processing)_age_seconds|spool_bytes|spool_objects) '
 df -h /srv/clashlens-data/spool "$(podman volume inspect --format '{{.Mountpoint}}' clashlens-postgres-data)"
 systemctl --user list-timers --all 'clashlens-*' --no-pager
 ```
@@ -74,7 +74,7 @@ Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
 to interpret messages. Confirm both the measurements below and the recovery
 message in the private operator channel. `./ops alert-check` can run the check
 immediately, but **sends real Discord messages** and saves alert state.
-A successful exit means the check and delivery worked, not that all five
+A successful exit means the check and delivery worked, not that all seven
 conditions are healthy.
 
 ### Tracker stopped
@@ -170,6 +170,26 @@ repair. Keep checks inside the private container; do not publish its port or key
 
 **Recovered:** the same private probe successfully reads stored data and the
 Discord recovery arrives. Website `/healthz` alone is insufficient.
+
+### Collection or processing behind
+
+Use the [overdue-check and Live Leaderboard conditions](deployment.md#alert-conditions).
+Either one means Live Leaderboard times are falling behind even though some
+fetches still succeed.
+
+**First checks:** `./ops queue-status` and the collector's
+`oldest_due_age_seconds` and `oldest_pending_processing_age_seconds`, then
+`./ops logs collector --since '15 minutes ago' --no-pager` for timeouts and
+`./ops logs worker --since '15 minutes ago' --no-pager` for processing errors.
+A growing overdue check with many timeouts points at the official API; a
+growing processing wait with a healthy collector points at the worker or
+PostgreSQL capacity.
+
+**Fix or escalate:** repair the reported cause through an approved change.
+Escalate a wait that keeps growing; restarting services does not shrink it.
+
+**Recovered:** the overdue check falls under 10 minutes or at most 1% of Live
+Leaderboard players are past 10 minutes, followed by the Discord recovery message.
 
 ### When alerts themselves fail
 

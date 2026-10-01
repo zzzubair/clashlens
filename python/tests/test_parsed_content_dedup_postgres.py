@@ -10,7 +10,7 @@ from domain_test_support import as_api_role, domain_database, store_observation,
 from test_discovery_history_prune_postgres import _attach_complete_work
 from test_domain_processing_postgres import _processor
 
-from clashlens import api_players, boundary, ingestion
+from clashlens import alerts, api_leaderboard, api_players, boundary, ingestion
 from clashlens.api_db import ApiDatabase
 
 PROFILE_FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
@@ -458,8 +458,8 @@ def test_public_profile_uses_latest_occurrence_metadata_and_freshness(
             database.close()
 
 
-def test_player_page_freshness_follows_the_collectors_last_successful_check(
-    database_url: str, archive_server
+def test_player_page_and_leaderboard_freshness_follow_the_last_successful_check(
+    database_url: str, archive_server, tmp_path, monkeypatch, capsys
 ) -> None:
     body = PROFILE_FIXTURE.read_bytes()
     checked_at = NOW + timedelta(hours=2)
@@ -504,6 +504,16 @@ def test_player_page_freshness_follows_the_collectors_last_successful_check(
                 api, "#2PP", now=now, freshness_seconds=900
             )
             assert result is not None
+            # The Live Leaderboard's Last updated follows the same rule.
+            board = api_leaderboard.get_live_leaderboard(
+                api, limit=50, now=now, freshness_seconds=900
+            )
+            assert board is not None
+            [entry] = [row for row in board["entries"] if row["tag"] == "#2PP"]
+            assert (entry["freshness"], entry["observed_at"]) == (
+                result["freshness"],
+                result["observed_at"],
+            )
             return (
                 result["freshness"],
                 result["observed_at"],
@@ -517,6 +527,17 @@ def test_player_page_freshness_follows_the_collectors_last_successful_check(
             fresh = page(checked_at + timedelta(minutes=1))
             assert fresh[:2] == ("fresh", checked_at.isoformat())
             assert "stale" not in fresh[2]
+
+            # The alert check counts players past ten minutes the same way.
+            url_file = tmp_path / "database-url"
+            url_file.write_text(as_api_role(connection_info))
+            monkeypatch.setenv("CLASHLENS_DATABASE_URL_FILE", str(url_file))
+            capsys.readouterr()
+            for minutes, expected in ((9, "0 1"), (11, "1 1")):
+                alerts.leaderboard_freshness_probe(
+                    checked_at + timedelta(minutes=minutes)
+                )
+                assert capsys.readouterr().out.strip() == expected
 
             # Checks overdue or failing: the last success stops moving.
             overdue = page(checked_at + timedelta(minutes=16))

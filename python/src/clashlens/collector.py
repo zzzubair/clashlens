@@ -95,6 +95,7 @@ class Collector:
         self.archive_health = "unconfigured" if archive is None else "unknown"
         self._archive_terminal = False
         self._archive_identity_validated = False
+        self._next_upload_release = 0.0
         self._spool_io_failed = False
         self._spool_capacity_failed = False
         self._spool_recovery_lock = asyncio.Lock()
@@ -546,11 +547,16 @@ class Collector:
     async def upload_once(self, *, owner: str) -> bool:
         if self.archive is None or self._archive_terminal:
             return False
+        # One of the upload owners releases expired leases each half lease.
+        release_expired = time.monotonic() >= self._next_upload_release
+        if release_expired:
+            self._next_upload_release = time.monotonic() + _UPLOAD_LEASE_SECONDS / 2
         claim = await self._database_call(
             collector_uploads.claim_upload,
             self.database,
             owner=owner,
             lease_seconds=_UPLOAD_LEASE_SECONDS,
+            release_expired=release_expired,
         )
         if claim is None:
             return False

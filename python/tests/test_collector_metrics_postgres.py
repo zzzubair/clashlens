@@ -63,6 +63,14 @@ def test_health_metrics_survive_restart_and_separate_failed_uploads(
         assert before["pending_uploads"] == 2
         assert before["failed_uploads"] == 0
         assert before["last_success_age_seconds"] >= 1
+        assert before["oldest_pending_processing_age_seconds"] < 600
+        with psycopg.connect(connection_info) as connection:
+            # Responses still waiting for the worker 20 minutes later.
+            connection.execute(
+                "UPDATE python_processing_jobs SET due_at = due_at - interval '20 minutes'"
+            )
+        waiting = database.health_metrics()["oldest_pending_processing_age_seconds"]
+        assert waiting >= 1200
 
         claim = claim_upload(database, owner="metrics-test")
         assert claim is not None
