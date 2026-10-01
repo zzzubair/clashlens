@@ -60,6 +60,7 @@ WORKER_OUTCOMES = (
     "failed",
     "lease_lost",
     "classified",
+    "superseded",
     "other",
 )
 WORKER_STAGES = (

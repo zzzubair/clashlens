@@ -128,3 +128,21 @@ Use PostgreSQL-backed durable queues in the initial system. Workers claim work
 with leases and fencing, and handlers are safe to run more than once. Keep
 backups and recovery procedures in [`deployment.md`](deployment.md); do not
 make the runtime boundary depend on an unowned queue or warehouse.
+
+For live profile and battle-log work, the worker selects each player's newest
+waiting job that is due, uses supported versions and has attempts left. It keeps
+that player's profile and battle log together, with the profile first, starting
+with players whose leaderboard entry is oldest, including its latest profile
+confirmation. Players with no observation or confirmation time go first.
+Every fourth claim keeps the existing oldest-first order so daily results and
+other derived work keep moving. If all planned claims are rejected, that call
+falls back to the existing order without refreshing the plan again.
+
+An ordinary check's job is finished as `superseded`, without being
+applied, when newer processed evidence from the same player and Legend day
+already covers it: a later accepted profile, or a newer battle log while every
+row of the older one is already stored and each battle's currently selected
+attacker or defender report was confirmed at or after the older log. The last
+profile before a Reset, Reset sweep, Refresh, first lookup,
+discovery and replay responses always run. Superseded responses keep their
+observation and raw bytes, so they can still be replayed.

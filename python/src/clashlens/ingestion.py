@@ -7,10 +7,46 @@ from psycopg.types.json import Jsonb
 
 from . import job_outcomes, reset_baselines
 from .db import Claim, Database, _text_value
-from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError, validate_season_anchor
+from .domain import (
+    SEASON_ANCHOR_RULE_VERSION,
+    DomainRuleError,
+    ranked_day_for,
+    validate_season_anchor,
+)
 from .profile import PROFILE_PARSER_VERSION, ParsedProfile
 from .rankings import ParsedOfficialRankings
 from .response_fields import content_fingerprint
+
+
+def supersede_profile(database: Database, claim: Claim) -> bool:
+    """Skip a profile when a later one from the same Legend day was applied.
+
+    Only the newest profile sets the leaderboard. Each Legend day's last
+    profile is never skipped: end-of-day snapshots read the latest profile at
+    or before the Reset, so only a newer profile from the same day covers one.
+    """
+    if claim.normalized_tag is None or claim.observed_at is None:
+        return False
+    day_end = ranked_day_for(claim.observed_at).end
+
+    def covered(connection: Any) -> bool:
+        return connection.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM players AS player
+                JOIN player_profile_versions AS version ON version.player_id = player.id
+                JOIN player_profile_effects AS effect
+                  ON effect.profile_version_id = version.id
+                WHERE player.normalized_tag = %s
+                  AND version.source_contract_state = 'accepted'
+                  AND effect.observed_at > %s AND effect.observed_at < %s
+            )
+            """,
+            (claim.normalized_tag, claim.observed_at, day_end),
+        ).fetchone()[0]
+
+    return job_outcomes.complete_superseded(database, claim, covered)
 
 
 def complete_profile(database: Database, claim: Claim, profile: ParsedProfile) -> None:

@@ -183,10 +183,9 @@ def _supported_claim_filter(
 ) -> tuple[str, dict[str, Any]]:
     """Parameterized supported-job predicate for the claim SELECT.
 
-    Identical contract to ``_supported_job_filter`` (used by the cleanup
-    UPDATE paths, which have no observation join): both read the denormalized
-    endpoint/schema contract columns on the job row itself, so neither needs
-    to reference collector_observations and claim plans stay bounded.
+    The job-version checks match ``_supported_job_filter`` (used by cleanup
+    UPDATE paths), with the claim compatibility fence also applied here. Both
+    read the denormalized endpoint/schema contract columns on the job row.
     Parameters are named so the claim statement can
     also bind the claim time and direct job id.
     """
@@ -251,8 +250,12 @@ def _supported_claim_filter(
         AND ({alias}.input_json->>'manifest_id') ~ '^[1-9][0-9]*$'
         AND ({alias}.input_json->>'manifest_digest') ~ '^[0-9a-f]{{64}}$'
     )"""
+    # Claim generations fence staggered upgrades so older worker images cannot
+    # interpret newer source contracts. Retain earlier generations for queued
+    # work and explicit replay.
+    claim_versions = "1, 2, 3, 4, 5, 6" if supports_coordinator else "1, 2, 3"
     return (
-        f"""(
+        f"""({alias}.claim_compatibility_version IN ({claim_versions}) AND (
             ({alias}.work_type = ANY(%(source_work_types)s::text[])
                 AND {alias}.processing_version = %(processing_version)s
                 AND {alias}.domain_rule_version = %(domain_rule_version)s
@@ -283,7 +286,7 @@ def _supported_claim_filter(
                         {alias}.work_type = 'build_army_analytics'
                         AND {coordinator_input_shape}
                     )
-                )))
+                ))))
         """,
         {
             "source_work_types": list(SUPPORTED_WORK_TYPES[:2]),
@@ -355,22 +358,13 @@ def _claim_select_statement(
             AND job.due_at <= statement_timestamp())
         OR (job.state = 'leased'
             AND job.lease_expires_at <= statement_timestamp())"""
-    # Generation 2 is the parser-v2 rollout fence. The previous image claims
-    # only generation 1, so it cannot interpret new v2 rows with its old
-    # adapter during a staggered deployment. This image retains generation 1
-    # for queued work and deterministic v1 replay.
     dependency_filter = (
         "job.state = 'waiting_dependency' OR " if supports_dependency else ""
     )
     dependency_column = "job.dependency_deferral_count" if supports_dependency else "0"
-    # Generation 6 is the league-history parser fence: older images cannot
-    # interpret those rows, and this image keeps 1..5 for queued and replay work.
-    claim_versions = "1, 2, 3, 4, 5, 6" if supports_coordinator else "1, 2, 3"
-    job_filter = f"""job.claim_compatibility_version IN ({claim_versions})
-        AND ({dependency_filter}job.attempt_count < job.max_attempts)
+    job_filter = f"""({dependency_filter}job.attempt_count < job.max_attempts)
         AND {supported_filter}"""
-    ordinary_job_filter = f"""job.claim_compatibility_version IN ({claim_versions})
-        AND job.attempt_count < job.max_attempts
+    ordinary_job_filter = f"""job.attempt_count < job.max_attempts
         AND {supported_filter}"""
     # Dependency resumptions do not consume the ordinary attempt budget. Keep
     # them in their own partial-index probe rather than expressing that rule as
@@ -390,7 +384,6 @@ def _claim_select_statement(
                         WHERE job.state = 'waiting_dependency'
                           AND job.priority = claim_priority.priority
                           AND job.due_at <= statement_timestamp()
-                          AND job.claim_compatibility_version IN ({claim_versions})
                           AND {supported_filter}
                         ORDER BY job.due_at, job.created_at, job.id
                         LIMIT {_CLAIM_CANDIDATE_LIMIT}
@@ -410,7 +403,6 @@ def _claim_select_statement(
                     WHERE job.state = 'waiting_dependency'
                       AND job.priority NOT IN ({_PYTHON_CLAIM_PRIORITY_EXCLUSIONS})
                       AND job.due_at <= statement_timestamp()
-                      AND job.claim_compatibility_version IN ({claim_versions})
                       AND {supported_filter}
                     ORDER BY job.due_at, job.created_at, job.id
                     LIMIT {_CLAIM_CANDIDATE_LIMIT}
@@ -765,6 +757,50 @@ class Database:
             config.marker_hash,
             config.marker_payload_version,
         )
+
+    def newest_job_plan(self, *, limit: int) -> list[int]:
+        """Suggest newest eligible jobs using the rules in docs/architecture.md.
+
+        ``claim_job(job_id=...)`` rechecks eligibility and lease state because
+        a cached plan can become stale before its suggestions are claimed.
+        """
+        self._ensure_dependency_support_probed()
+        supported_filter, supported_params = _supported_claim_filter(
+            "job",
+            "observation",
+            denormalized_contract=self._supports_denormalized_contract,
+            supports_coordinator=getattr(self, "_supports_coordinator_contract", False),
+        )
+        with self._timed_connection() as connection:
+            rows = connection.execute(
+                f"""
+                WITH newest AS (
+                    SELECT DISTINCT ON (observation.player_id, job.endpoint)
+                           job.id, job.endpoint, observation.player_id
+                    FROM {self._jobs_relation} AS job
+                    JOIN collector_observations AS observation
+                      ON observation.id = job.observation_id
+                    WHERE job.state IN ('pending', 'waiting_retry')
+                      AND job.priority = %(priority)s
+                      AND job.due_at <= statement_timestamp()
+                      AND job.work_type = 'process_observation'
+                      AND job.endpoint IN ('profile', 'battle_log')
+                      AND job.attempt_count < job.max_attempts
+                      AND {supported_filter}
+                    ORDER BY observation.player_id, job.endpoint,
+                             observation.response_observed_at DESC, job.id DESC
+                )
+                SELECT newest.id
+                FROM newest
+                JOIN players AS player ON player.id = newest.player_id
+                ORDER BY greatest(player.current_observed_at,
+                                  player.current_profile_confirmed_at) NULLS FIRST,
+                         player.id, newest.endpoint = 'profile' DESC
+                LIMIT %(limit)s
+                """,
+                {**supported_params, "priority": PYTHON_LIVE_PRIORITY, "limit": limit},
+            ).fetchall()
+        return [int(row[0]) for row in rows]
 
     def queue_health(self) -> dict[str, bool | int | float | None]:
         with self.pool.connection() as connection:

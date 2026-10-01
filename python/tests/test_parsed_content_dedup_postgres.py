@@ -945,7 +945,7 @@ def test_duplicate_profiles_reuse_canonical_and_semantic_rows(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
-            for index in range(2):
+            duplicate_jobs = [
                 store_observation(
                     connection_info,
                     archive_server,
@@ -954,13 +954,16 @@ def test_duplicate_profiles_reuse_canonical_and_semantic_rows(
                     body=body,
                     observed_at=NOW + timedelta(minutes=index),
                     normalized_tag="#2PP",
-                )
-            assert processor.process_once(owner="dedup-profile-1") is not None
+                )[1]
+                for index in range(2)
+            ]
+            # Oldest first: a newer copy processed first would skip the older.
+            assert processor.process_job(duplicate_jobs[0], owner="dedup-profile-1") is not None
             with psycopg.connect(connection_info) as connection:
                 first_updated_at = connection.execute(
                     "SELECT updated_at FROM players WHERE normalized_tag = '#2PP'"
                 ).fetchone()[0]
-            assert processor.process_once(owner="dedup-profile-2") is not None
+            assert processor.process_job(duplicate_jobs[1], owner="dedup-profile-2") is not None
             with psycopg.connect(connection_info) as connection:
                 second_updated_at = connection.execute(
                     "SELECT updated_at FROM players WHERE normalized_tag = '#2PP'"
@@ -1213,10 +1216,12 @@ def test_duplicate_battles_and_rankings_reuse_source_rows(
             )
             # A late-arriving older log still needs its own as-of evidence:
             # the current perspective's newer report cannot describe that log.
+            # It is from the previous Legend day; same-day copies are skipped.
             older_observation, older_job = store_observation(
                 connection_info, archive_server,
                 occurrence_key="dedup-battle-out-of-order", endpoint="battle_log",
-                body=BATTLE_FIXTURE.read_bytes(), observed_at=NOW - timedelta(minutes=1),
+                body=BATTLE_FIXTURE.read_bytes(),
+                observed_at=NOW - timedelta(hours=1, minutes=1),
                 normalized_tag="#2PP",
             )
             assert processor.process_job(older_job, owner="older-log").outcome == "processed"

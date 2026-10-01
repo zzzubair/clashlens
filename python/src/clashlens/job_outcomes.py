@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
@@ -334,6 +335,46 @@ def complete_terminal(database: Database, claim: Claim, *, outcome: str) -> None
             )
 
 
+def complete_superseded(
+    database: Database, claim: Claim, covered: Callable[[Any], bool]
+) -> bool:
+    """Finish a regular check's job unapplied when newer evidence covers it.
+
+    Only ordinary queued checks qualify. Reset, Refresh, first lookup and
+    discovery responses belong to collector work whose own completion reads
+    their processing outcome, and replays are explicit requests, so those
+    always run. The raw response and its observation stay for replay.
+    """
+    if claim.work_type != "process_observation" or claim.observation_id is None:
+        return False
+    with database._timed_connection() as connection:
+        with connection.transaction():
+            job = database._lock_live_claim(connection, claim)
+            if not covered(connection):
+                return False
+            owned = connection.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM collector_work
+                    WHERE profile_observation_id = %s
+                ) OR EXISTS (
+                    SELECT 1 FROM collector_work
+                    WHERE battle_log_observation_id = %s
+                ) OR EXISTS (
+                    SELECT 1 FROM collector_work
+                    WHERE league_history_observation_id = %s
+                )
+                """,
+                (claim.observation_id,) * 3,
+            ).fetchone()
+            if owned[0]:
+                return False
+            database._finish_claim(
+                connection, claim, job, state="complete", outcome="superseded"
+            )
+            return True
+
+
 def complete_classified(database: Database, claim: Claim, *, outcome: str) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
@@ -353,5 +394,4 @@ def complete_classified(database: Database, claim: Claim, *, outcome: str) -> No
             database._finish_claim(
                 connection, claim, job, state="complete", outcome=outcome
             )
-
 
