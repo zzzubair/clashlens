@@ -278,12 +278,20 @@ class ObservationProcessor:
         with self._plan_lock:
             self._claim_count += 1
             planned = self._claim_count % OLDEST_FIRST_CLAIM_EVERY != 0
-        while planned and (job_id := self._next_planned_job()) is not None:
-            claim = self.database.claim_job(
-                owner=owner, lease_seconds=lease_seconds, job_id=job_id
-            )
-            if claim is not None:
-                return claim
+        if planned:
+            for attempt in range(NEWEST_PLAN_SIZE):
+                if attempt == 0:
+                    job_id = self._next_planned_job()
+                else:
+                    with self._plan_lock:
+                        job_id = self._plan.popleft() if self._plan else None
+                if job_id is None:
+                    break
+                claim = self.database.claim_job(
+                    owner=owner, lease_seconds=lease_seconds, job_id=job_id
+                )
+                if claim is not None:
+                    return claim
         return self.database.claim_job(owner=owner, lease_seconds=lease_seconds)
 
     def _next_planned_job(self) -> int | None:

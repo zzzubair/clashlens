@@ -7,6 +7,7 @@ from pathlib import Path
 import psycopg
 import pytest
 from domain_test_support import as_api_role, domain_database, store_observation, text
+from psycopg import sql
 from test_domain_processing_postgres import (
     LIVE_BATTLE_PARSER_VERSION,
     PROFILE_FIXTURE,
@@ -447,6 +448,69 @@ def test_limited_newest_plan_keeps_each_players_latest_responses_together(
             ]
             assert database.newest_job_plan(limit=4) == expected[:4]
             assert database.newest_job_plan(limit=10) == expected
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("endpoint", ["profile", "battle_log"])
+@pytest.mark.parametrize(
+    ("field", "unusable_value"),
+    [
+        ("claim_compatibility_version", 99),
+        ("parser_version", "future-parser"),
+        ("endpoint_version", "future-endpoint"),
+        ("schema_version", "future-schema"),
+        ("processing_version", "future-processing"),
+        ("domain_rule_version", "future-domain"),
+        ("attempt_count", 3),
+    ],
+)
+def test_unclaimable_newest_response_does_not_hide_the_players_usable_response(
+    database_url: str,
+    archive_server,
+    endpoint: str,
+    field: str,
+    unusable_value: str | int,
+) -> None:
+    with domain_database(database_url) as connection_info:
+        jobs = []
+        for hour in (1, 2):
+            _observation, job_id = store_observation(
+                connection_info,
+                archive_server,
+                occurrence_key=f"supported-plan-{hour}",
+                endpoint=endpoint,
+                body=(
+                    PROFILE_FIXTURE.read_bytes()
+                    if endpoint == "profile"
+                    else b'{"items":[]}'
+                ),
+                observed_at=DAY.start + timedelta(hours=hour),
+                normalized_tag="#2PP",
+            )
+            jobs.append(job_id)
+        usable_job, unusable_job = jobs
+        with psycopg.connect(connection_info) as connection:
+            connection.execute("SET LOCAL session_replication_role = replica")
+            connection.execute(
+                sql.SQL("UPDATE python_processing_jobs SET {} = %s WHERE id = %s").format(
+                    sql.Identifier(field)
+                ),
+                (unusable_value, unusable_job),
+            )
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            assert database.newest_job_plan(limit=1) == [usable_job]
+            result = processor.process_once(owner="supported-plan")
+            assert result is not None
+            assert (result.job_id, result.outcome) == (usable_job, "processed")
+            with database.pool.connection() as connection:
+                status, attempts = connection.execute(
+                    "SELECT status, attempt_count FROM python_processing_jobs WHERE id = %s",
+                    (unusable_job,),
+                ).fetchone()
+            assert text(status) == "pending"
+            assert attempts == (3 if field == "attempt_count" else 0)
         finally:
             database.close()
 

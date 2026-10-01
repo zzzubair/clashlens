@@ -127,6 +127,98 @@ def test_failure_write_conflict_keeps_worker_processing(
     assert database.spent_attempts == spent_attempts + 1
 
 
+@pytest.mark.parametrize("seconds_per_rejection", [2.0, 31.0])
+@pytest.mark.parametrize(
+    ("planned_jobs", "fallback_available"),
+    [
+        ((17, 18), True),
+        ((17, 18), False),
+        ((17, 7), True),
+        ((7,), True),
+        ((), True),
+    ],
+)
+def test_worker_finishes_a_claim_call_despite_rejected_newest_jobs(
+    planned_jobs, fallback_available, seconds_per_rejection, monkeypatch
+) -> None:
+    clock = SimpleNamespace(now=0.0)
+    completed = []
+
+    class Database:
+        def __init__(self):
+            self.rejections = 0
+
+        def newest_job_plan(self, *, limit):
+            return list(planned_jobs[:limit])
+
+        def claim_job(self, *, owner, lease_seconds, job_id=None):
+            if job_id is None:
+                if not fallback_available:
+                    return None
+                job_id = 7
+            if job_id != 7:
+                self.rejections += 1
+                if self.rejections > len(planned_jobs):
+                    raise AssertionError("unclaimable jobs blocked usable work")
+                clock.now += seconds_per_rejection
+                return None
+            return SimpleNamespace(
+                job_id=job_id,
+                work_type="reconcile_ranked_day",
+                processing_version=PROCESSING_VERSION,
+                domain_rule_version=DOMAIN_RULE_VERSION,
+            )
+
+        def renew_claim(self, claim, *, lease_seconds):
+            pass
+
+    monkeypatch.setattr("clashlens.worker.monotonic", lambda: clock.now)
+    monkeypatch.setattr(
+        reconciliation_db,
+        "complete_reconciliation",
+        lambda database, claim: completed.append(claim.job_id),
+    )
+    processor = ObservationProcessor(Database(), archive=object())
+    result = processor.process_once(owner="rejected-plan")
+    assert result == (ProcessResult(7, "processed") if fallback_available else None)
+    assert completed == ([7] if fallback_available else [])
+
+
+def test_worker_keeps_every_fourth_claim_oldest_first(monkeypatch) -> None:
+    queued = [7, 8, 9, 10, 11]
+    completed = []
+
+    class Database:
+        def newest_job_plan(self, *, limit):
+            return [8, 9, 10, 11][:limit]
+
+        def claim_job(self, *, owner, lease_seconds, job_id=None):
+            job_id = queued[0] if job_id is None else job_id
+            if job_id not in queued:
+                return None
+            queued.remove(job_id)
+            return SimpleNamespace(
+                job_id=job_id,
+                work_type="reconcile_ranked_day",
+                processing_version=PROCESSING_VERSION,
+                domain_rule_version=DOMAIN_RULE_VERSION,
+            )
+
+        def renew_claim(self, claim, *, lease_seconds):
+            pass
+
+    monkeypatch.setattr(
+        reconciliation_db,
+        "complete_reconciliation",
+        lambda database, claim: completed.append(claim.job_id),
+    )
+    processor = ObservationProcessor(Database(), archive=object())
+    results = [processor.process_once(owner="fourth-claim") for _ in range(4)]
+    assert results == [ProcessResult(job_id, "processed") for job_id in (8, 9, 10, 7)]
+    assert completed == [8, 9, 10, 7]
+    assert queued == [11]
+
+
 def test_stage_metrics_report_bounded_histogram_percentiles() -> None:
     metrics = StageMetrics()
     for duration in (0.0002, 0.001, 0.02, 0.2):
