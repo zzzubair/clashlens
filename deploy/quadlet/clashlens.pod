@@ -9,6 +9,7 @@ PodName=@@PREFIX@@-pod
 Network=clashlens.network
 @@POD_ADDRESS@@
 ExitPolicy=continue
+StopTimeout=85
 ShmSize=@@POSTGRES_SHM@@
 PodmanArgs=--userns=keep-id:uid=10001,gid=10001
 PublishPort=127.0.0.1:@@WEBSITE_PORT@@:3000
@@ -18,3 +19,4 @@ PublishPort=127.0.0.1:@@HEALTH_PORT@@:8081
 [Service]
 Restart=on-failure
 RestartMode=direct
+TimeoutStopSec=90
