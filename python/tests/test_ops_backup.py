@@ -330,7 +330,7 @@ def test_production_refuses_unsafe_key_settings(mode_config, setting, message):
 
 
 @pytest.mark.parametrize("mode", ["production", "fixture"])
-def test_production_pod_address_is_pinned_inside_its_network(
+def test_pod_address_and_stop_limits_are_rendered(
     tmp_path, mode_config, mode
 ):
     result = subprocess.run(
@@ -355,10 +355,17 @@ render_units
     units = tmp_path / "config" / "containers" / "systemd"
     network = configparser.ConfigParser(interpolation=None, strict=False)
     pod = configparser.ConfigParser(interpolation=None, strict=False)
-    network.optionxform = pod.optionxform = str
+    postgres = configparser.ConfigParser(interpolation=None, strict=False)
+    network.optionxform = pod.optionxform = postgres.optionxform = str
     network.read(units / "clashlens.network")
     pod.read(units / "clashlens.pod")
+    postgres.read(units / "clashlens-postgres.container")
     assert pod["Pod"]["Network"] == "clashlens.network"
+    # Stopping the pod applies its limit to every container, overriding theirs.
+    postgres_stop = int(postgres["Container"]["StopTimeout"])
+    pod_stop = int(pod["Pod"]["StopTimeout"])
+    assert pod_stop >= postgres_stop == 85
+    assert int(pod["Service"]["TimeoutStopSec"]) > pod_stop
     if mode == "fixture":
         assert not network.has_option("Network", "Subnet")
         assert not pod.has_option("Pod", "IP")

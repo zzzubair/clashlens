@@ -50,6 +50,14 @@ Quadlets: Podman turns them into ordinary system services. PostgreSQL, the
 collector, private API, worker, and website are owned by one
 `clashlens.target`, so they start together after reboot and stop together.
 
+Stopping the pod applies one time limit to every container still running,
+replacing each container's own limit. `clashlens.pod` sets that limit to
+PostgreSQL's 85 seconds and gives the pod service 90 seconds before systemd
+gives up, so a busy database finishes its shutdown checkpoint and last change-log
+upload. Podman's default pod limit is 10 seconds. On reboot, Rogue's system
+manager allowed the whole user service manager 60 seconds at the 2026-10-01
+check, which can still cut a longer shutdown short.
+
 Building and running are separate operations. `up` never builds or pulls an
 image. `build` records the exact image IDs and a fingerprint of every source,
 migration, and unit input; `up` refuses to mix those images with changed init
