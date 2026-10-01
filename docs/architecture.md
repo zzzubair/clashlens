@@ -18,11 +18,12 @@ implementation gaps and launch issues.
 
 The single Python asyncio collector owns official API transport: scheduling,
 key-rate limiting, retries, and request/response handling. It hashes and writes
-each exact response to the bounded local spool, records the observation metadata
-and durable processing handoff, and uploads the raw body to the immutable
-archive. The collector must not interpret battle meaning, reconcile ranked
-days, infer shields or automatic defenses, decode armies, or calculate product
-analytics; the Python worker owns that interpretation.
+each retained response to the bounded local spool, records the observation
+metadata and durable processing handoff, and uploads the raw body to the immutable
+archive. The [collection and storage rules](collector-polling.md#spool-archive-and-rate-enforcement)
+determine which responses are retained. The collector must not interpret battle
+meaning, reconcile ranked days, infer shields or automatic defenses, decode
+armies, or calculate product analytics; the Python worker owns that interpretation.
 
 ### Python application
 

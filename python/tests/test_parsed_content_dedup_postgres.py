@@ -719,6 +719,7 @@ def test_rank_only_profile_check_confirms_without_saving_or_processing(
     import hashlib
 
     from clashlens.collector_db import CollectorDatabase, ResponseHandoff
+    from clashlens.profile import PROFILE_PARSER_VERSION
 
     def ranked(rank: int, trophies: int) -> bytes:
         payload = json.loads(PROFILE_FIXTURE.read_bytes())
@@ -736,6 +737,7 @@ def test_rank_only_profile_check_confirms_without_saving_or_processing(
         _, job = store_observation(
             connection_info, archive_server, occurrence_key="rank-applied",
             endpoint="profile", body=body, observed_at=NOW, normalized_tag="#2PP",
+            parser_version=PROFILE_PARSER_VERSION,
         )
         database, processor = _processor(connection_info, archive_server)
         collector = CollectorDatabase(connection_info)

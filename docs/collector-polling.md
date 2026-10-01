@@ -165,13 +165,12 @@ response, changes to ignored fields need no new observation, processing job,
 or archive upload. The profile's official season rank
 (`legendStatistics.currentSeason.rank`) is ignored: it moves whenever other
 players battle and nothing reads it, so a rank-only change counts as unchanged.
-A changed response still keeps the rank in its raw bytes. Fingerprints saved
-before this rule include the rank, so after deploying it each player who
+A changed response is still stored in full, including the rank. Fingerprints
+saved before this rule include the rank, so after deploying it each player who
 carries a rank counts as changed once on their next check (about 4,300 extra
 jobs); other players keep their saved fingerprint. Profile freshness follows the
 [player page confirmation rule](domain.md#player-page-freshness).
-A changed response is stored in full. Reset always stores paired boundary
-observations, including unchanged responses.
+Reset always stores paired boundary observations, including unchanged responses.
 
 Uploaded-copy cleanup holds one publication barrier and rechecks the bounded
 batch in one database transaction. Pending durable handoffs protect their raw
