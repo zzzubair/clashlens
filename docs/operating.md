@@ -86,8 +86,9 @@ release procedure. No code change is needed.
 start per second across all callers, the interactive key included. It accepts
 whole numbers from 1 to 29 and defaults to 25. `./ops`, the collector command
 and its request pacing refuse 30 or more. Six regular keys at the default allow
-at most 150 requests per second. This is arithmetic, not measured throughput
-or a provider-limit guarantee.
+at most 150 requests per second. Checking 13,263 players every three minutes
+needs about 147; above that, checks run later. This is arithmetic, not measured
+throughput or a provider-limit guarantee.
 
 The collector stores the interactive key's configured total in the shared
 database. Interactive collection, player verification and operator Discord

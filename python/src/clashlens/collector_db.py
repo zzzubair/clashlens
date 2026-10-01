@@ -24,7 +24,7 @@ ANALYTICS_RULE_VERSION = "legend-analytics-v1"
 PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
 SOURCE_PARSER_VERSION = "supercell-source-parser-v2"
 LEAGUE_HISTORY_PARSER_VERSION = "supercell-league-history-parser-v1"
-REVISIT_INTERVAL = timedelta(minutes=5)
+REVISIT_INTERVAL = timedelta(minutes=3)
 PROFILE_CACHE_WINDOW = timedelta(seconds=5)
 UPLOAD_RETRY_DELAY = timedelta(seconds=5)
 _ENDPOINTS = {
@@ -453,7 +453,7 @@ class CollectorDatabase:
                         LIMIT %s
                     ), claimed AS (
                         UPDATE players AS player
-                        SET next_due_at = %s + interval '5 minutes'
+                        SET next_due_at = %s
                         FROM due
                         WHERE player.id = due.id
                         RETURNING due.id, due.normalized_tag, due.next_due_at,
@@ -482,7 +482,7 @@ class CollectorDatabase:
                         claim_time,
                         *priority_params,
                         limit,
-                        claim_time,
+                        claim_time + REVISIT_INTERVAL,
                         claim_time,
                         claim_time - PROFILE_CACHE_WINDOW,
                         PROFILE_CACHE_WINDOW,
