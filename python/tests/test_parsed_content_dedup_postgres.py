@@ -600,7 +600,7 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
                 if 9 <= int(migration.name.split("_", 1)[0]) < 40:
                     connection.execute(migration.read_text())
             connection.execute(
-                (ROOT / "deploy/migrations/0042_api_profile_not_found_read.sql").read_text()
+                (ROOT / "deploy/migrations/0043_api_profile_not_found_read.sql").read_text()
             )
             connection.execute(
                 """

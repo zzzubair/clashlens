@@ -1,4 +1,4 @@
--- Clash Lens deployment migration 0042.
+-- Clash Lens deployment migration 0043.
 BEGIN;
 
 ALTER TABLE collector_response_state
@@ -26,6 +26,6 @@ WHERE observation.id = state.last_observation_id
 GRANT SELECT (last_not_found_at) ON TABLE collector_response_state
     TO clashlens_python_api;
 
-INSERT INTO clash_lens_schema_migrations(version) VALUES (42)
+INSERT INTO clash_lens_schema_migrations(version) VALUES (43)
 ON CONFLICT (version) DO NOTHING;
 COMMIT;

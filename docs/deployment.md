@@ -586,7 +586,7 @@ use the [operating notes](operating.md#respond-to-alerts).
   [Live Leaderboard membership and freshness rules](domain.md#live-leaderboard-ordering). The check
   enters the private API container and runs the Live Leaderboard's own query,
   printing only two counts, with the same not-found exclusion.
-  [Migration 0042](../deploy/migrations/0042_api_profile_not_found_read.sql) adds
+  [Migration 0043](../deploy/migrations/0043_api_profile_not_found_read.sql) adds
   the durable not-found time to the existing response state, fills it from
   retained responses, and grants the private API read access. It adds no index
   or per-response rows.

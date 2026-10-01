@@ -632,7 +632,7 @@ def test_not_found_player_leaves_the_leaderboard_and_alert_until_found_again(
                     )
                     connection.commit()
                     connection.execute(
-                        (ROOT / "deploy/migrations/0042_api_profile_not_found_read.sql").read_text()
+                        (ROOT / "deploy/migrations/0043_api_profile_not_found_read.sql").read_text()
                     )
             board, counts = alert_at(accepted_at + timedelta(hours=3, minutes=9))
             assert board["entries"] == [] and board["total_entries"] == 0
