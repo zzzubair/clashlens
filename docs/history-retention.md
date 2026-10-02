@@ -304,6 +304,9 @@ plus an `eligible` summary of every due, unprotected response: count, bytes and
 oldest/newest deadline.
 It must run on the collector host with the **exact same spool**, because a wrong
 spool path defeats cross-process locking.
+Migration 0047 adds a lookup from each processing job to its source response,
+built without blocking job writes, so each response's in-use check is one
+index lookup rather than a search of the whole job history.
 
 The local spool remains bounded temporary storage, not a bucket mirror. Existing
 spool cleanup is separate from remote retirement. After raw expiry or operational
