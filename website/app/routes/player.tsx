@@ -316,9 +316,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     // Decide once per visit, including when saved data is already recent.
     // Fetcher updates and revalidation must not spend another Refresh allowance.
     automaticRefreshHandled.current = true;
-    const savedCheckAge =
-      Date.now() - Date.parse(trackedPlayer.profile.freshness.observedAt);
-    if (!isDocumentReload && savedCheckAge <= 60_000) return;
+    if (!isDocumentReload && trackedPlayer.profile.freshness.ageSeconds <= 60) return;
     refreshFetcher.submit(
       { idempotencyKey: data.noJsIdempotencyKey },
       {

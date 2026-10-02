@@ -1,7 +1,33 @@
 import { expect, test } from "@playwright/test";
 
-for (const ageMs of [30_000, 60_000, 60_001, 120_000]) {
-  test(`profile visit refreshes once only when its saved check is older than 60 seconds (${ageMs}ms)`, async ({
+// Sets the server-calculated check age in React Router's serialized page data.
+function withServerAge(html: string, ageSeconds: number) {
+  const served = html.replace(
+    /streamController\.enqueue\(("(?:[^"\\]|\\.)*")\)/g,
+    (call, literal: string) => {
+      const [head, ...rest] = (JSON.parse(literal) as string).split("\n");
+      const values: unknown[] = JSON.parse(head);
+      const key = `_${values.indexOf("ageSeconds")}`;
+      if (key === "_-1") return call;
+      const age = values.push(ageSeconds) - 1;
+      for (const value of values) {
+        if (value && typeof value === "object" && key in value)
+          (value as Record<string, number>)[key] = age;
+      }
+      const text = [JSON.stringify(values), ...rest].join("\n");
+      const escaped = JSON.stringify(text).replace(
+        /[&<>\u2028\u2029]/g,
+        (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
+      );
+      return `streamController.enqueue(${escaped})`;
+    },
+  );
+  expect(served).not.toBe(html);
+  return served;
+}
+
+for (const ageSeconds of [30, 60, 61, 120]) {
+  test(`profile visit refreshes once only when the server says its saved check is older than 60 seconds (${ageSeconds}s)`, async ({
     page,
     browser,
     baseURL,
@@ -19,10 +45,15 @@ for (const ageMs of [30_000, 60_000, 60_001, 120_000]) {
     } finally {
       await savedContext.close();
     }
+    const automaticCount = ageSeconds > 60 ? 1 : 0;
+    const served = withServerAge(html.toString(), ageSeconds);
     await page.route("**/players/%232PP", (route) =>
-      route.fulfill({ contentType: "text/html", body: html }),
+      route.fulfill({ contentType: "text/html", body: served }),
     );
-    await page.clock.setFixedTime(new Date(Date.parse(observedAt) + ageMs));
+    // The browser clock disagrees with the server, which must decide.
+    await page.clock.setFixedTime(
+      new Date(Date.parse(observedAt) + (automaticCount ? 0 : 3_600_000)),
+    );
     const submissions: string[] = [];
     await page.route("**/resources/players/*/refresh*", async (route) => {
       if (route.request().method() !== "POST") return route.continue();
@@ -32,7 +63,6 @@ for (const ageMs of [30_000, 60_000, 60_001, 120_000]) {
     });
 
     await page.goto("/players/%232PP");
-    const automaticCount = ageMs > 60_000 ? 1 : 0;
     const refusal = page
       .getByRole("alert")
       .filter({ hasText: "Check the submitted value" });
@@ -99,7 +129,7 @@ test("a battle processed shortly after a completed Refresh reaches the open page
   await page.route("**/players/%232PP", (route) =>
     route.fulfill({
       contentType: "text/html",
-      body: html.replaceAll(observedAt, earlierAt),
+      body: withServerAge(html.replaceAll(observedAt, earlierAt), 120),
     }),
   );
   await page.route("**/players/%232PP.data*", (route) => {
@@ -121,7 +151,6 @@ test("a battle processed shortly after a completed Refresh reaches the open page
     }
     await route.fulfill({ response, json: status });
   });
-  await page.clock.setFixedTime(new Date(Date.parse(earlierAt) + 120_000));
 
   await page.goto("/players/%232PP");
   await expect(attacks).not.toHaveCount(0);

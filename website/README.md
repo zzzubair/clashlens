@@ -28,9 +28,10 @@ and does not enable production discovery. The [product map](../docs/product-stat
 tracks the remaining launch work.
 
 Opening a tracked player's profile with JavaScript enabled automatically submits
-the existing Refresh request once when its saved check is more than 60 seconds
-old. Saved data stays visible while the existing Refresh flow runs, including if
-the request is refused. Manual Refresh and browser-reload Refresh still work.
+the existing Refresh request once when the server reports its saved check is
+more than 60 seconds old. Saved data stays visible while the existing Refresh
+flow runs, including if the request is refused. Manual Refresh and
+browser-reload Refresh still work.
 
 When any Refresh reports complete, the page reloads its data immediately and
 again about 3 and 8 seconds later. The player carried by the completed Refresh
