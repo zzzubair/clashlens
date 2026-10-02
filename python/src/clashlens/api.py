@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from threading import Lock
 from typing import Any, Literal, Protocol
 from uuid import UUID
 
@@ -168,6 +169,9 @@ def create_app(
     production_database = database
     current_time = now or (lambda: datetime.fromtimestamp(int(clock()), tz=UTC))
     operating_metrics = api_metrics or ApiMetrics()
+    freshness_lock = Lock()
+    freshness_refresh_after = 0.0
+    leaderboard_metrics: dict[str, Any] = {}
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -299,6 +303,7 @@ def create_app(
 
     @app.get("/operatorz")
     def operator(request: Request) -> dict[str, Any]:
+        nonlocal freshness_refresh_after, leaderboard_metrics
         proof: VerifiedProof = request.state.proof
         if (
             proof.caller != "typescript-website"
@@ -307,7 +312,16 @@ def create_app(
         ):
             raise ApiError(403, "caller_operation_not_authorized")
         pool_health = getattr(database, "pool_health", dict)()
-        return operating_metrics.snapshot(pool_health)
+        with freshness_lock:
+            if time.monotonic() >= freshness_refresh_after:
+                leaderboard_metrics = api_leaderboard.live_freshness_metrics(
+                    production_database, now=current_time()
+                )
+                freshness_refresh_after = time.monotonic() + 30
+            return {
+                **operating_metrics.snapshot(pool_health),
+                "live_leaderboard": leaderboard_metrics,
+            }
 
     @app.get("/v1/players/search")
     def search_players(

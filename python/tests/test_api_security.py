@@ -165,7 +165,11 @@ def test_invalid_private_proof_has_a_safe_error_envelope() -> None:
     assert response.json() == {"error": "invalid_proof"}
 
 
-def test_operator_metrics_are_private_bounded_and_preserve_response_paths() -> None:
+def test_operator_metrics_are_private_bounded_and_preserve_response_paths(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "clashlens.api_leaderboard.live_freshness_metrics",
+        lambda database, now: {"entries": 0, "older_than_10_minutes": 0},
+    )
     database = FakeDatabase(ready=False)
     metrics = ApiMetrics(
         process_id="00000000-0000-4000-8000-000000000080",
@@ -250,3 +254,34 @@ def test_public_player_read_denies_a_signed_end_user_identity() -> (
 
     assert response.status_code == 401
     assert response.json() == {"error": "invalid_proof"}
+
+
+def test_operator_freshness_cache_expires_and_never_hides_refresh_failure(monkeypatch):
+    from time import perf_counter
+    from types import SimpleNamespace
+
+    instant = [100.0]
+    calls = []
+    failed = [False]
+    monkeypatch.setattr("clashlens.api.time", SimpleNamespace(monotonic=lambda: instant[0], perf_counter=perf_counter))
+
+    def measure(database, *, now):
+        calls.append(now)
+        if failed[0]:
+            raise RuntimeError("database unavailable")
+        return {"age_max_seconds": len(calls)}
+
+    monkeypatch.setattr("clashlens.api_leaderboard.live_freshness_metrics", measure)
+    with TestClient(_app(FakeDatabase()), raise_server_exceptions=False) as client:
+        def scrape():
+            return client.get("/operatorz", headers=_signed_headers("/operatorz"))
+
+        assert scrape().json()["live_leaderboard"]["age_max_seconds"] == 1
+        instant[0] = 129.99
+        assert scrape().json()["live_leaderboard"]["age_max_seconds"] == 1
+        instant[0] = 130
+        failed[0] = True
+        assert scrape().status_code >= 500
+        failed[0] = False
+        assert scrape().json()["live_leaderboard"]["age_max_seconds"] == 3
+    assert len(calls) == 3

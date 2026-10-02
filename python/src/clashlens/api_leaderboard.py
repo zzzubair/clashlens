@@ -13,6 +13,66 @@ from .api_db import (
 _LIVE_FRESHNESS_SECONDS = 600
 
 
+# Shared membership and confirmation rule for the page and operator measurements.
+_LIVE_PLAYERS_SQL = """
+SELECT player.normalized_tag, profile.name, profile.trophies,
+       greatest(
+           player.current_observed_at, player.current_profile_confirmed_at
+       ) AS observed_at,
+       player.eligibility_state,
+       profile.profile_json -> 'clan' ->> 'name' AS clan
+FROM players AS player
+JOIN LATERAL (
+    SELECT name, trophies, profile_json, source_contract_state
+    FROM player_profile_versions
+    WHERE id = player.current_profile_version_id
+    -- Keep one indexed current-profile lookup per player as history grows.
+    OFFSET 0
+) AS profile ON true
+WHERE player.active = true
+  AND profile.source_contract_state = 'accepted'
+  AND NOT EXISTS (
+      SELECT 1 FROM collector_response_state AS checked
+      WHERE checked.scope = 'player'
+        AND checked.identity_key = player.normalized_tag
+        AND checked.endpoint = 'profile'
+        AND checked.last_not_found_at IS NOT NULL
+        AND (checked.last_success_at IS NULL
+             OR checked.last_not_found_at > checked.last_success_at)
+  )
+"""
+
+
+def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str, Any]:
+    """Measure the whole Live Leaderboard, without sorting or fetching a page."""
+    with database.pool.connection() as connection:
+        row = connection.execute(
+            f"""
+            WITH selected AS ({_LIVE_PLAYERS_SQL}), ages AS (
+                SELECT CASE WHEN observed_at IS NOT NULL
+                            THEN greatest(0, extract(epoch FROM %s - observed_at))
+                       END AS age
+                FROM selected
+            )
+            SELECT count(*), count(*) - count(age),
+                   percentile_disc(0.5) WITHIN GROUP (ORDER BY age),
+                   percentile_disc(0.95) WITHIN GROUP (ORDER BY age), max(age),
+                   count(*) FILTER (WHERE age > %s)
+            FROM ages
+            """,
+            (now, _LIVE_FRESHNESS_SECONDS),
+        ).fetchone()
+    return {
+        "sample_timestamp_seconds": now.timestamp(),
+        "entries": int(row[0]),
+        "age_missing_entries": int(row[1]),
+        "age_p50_seconds": None if row[2] is None else float(row[2]),
+        "age_p95_seconds": None if row[3] is None else float(row[3]),
+        "age_max_seconds": None if row[4] is None else float(row[4]),
+        "older_than_10_minutes": int(row[5]),
+    }
+
+
 def get_live_leaderboard(
     database: ApiDatabase,
     *,
@@ -24,28 +84,9 @@ def get_live_leaderboard(
         raise ValueError("offset must be non-negative and aligned to limit")
     with database.pool.connection() as connection:
         rows = connection.execute(
-            """
+            f"""
             WITH selected AS MATERIALIZED (
-                SELECT player.normalized_tag, profile.name, profile.trophies,
-                       greatest(
-                           player.current_observed_at, player.current_profile_confirmed_at
-                       ) AS observed_at,
-                       player.eligibility_state,
-                       profile.profile_json -> 'clan' ->> 'name' AS clan
-                FROM players AS player
-                JOIN player_profile_versions AS profile
-                  ON profile.id = player.current_profile_version_id
-                WHERE player.active = true
-                  AND profile.source_contract_state = 'accepted'
-                  AND NOT EXISTS (
-                      SELECT 1 FROM collector_response_state AS checked
-                      WHERE checked.scope = 'player'
-                        AND checked.identity_key = player.normalized_tag
-                        AND checked.endpoint = 'profile'
-                        AND checked.last_not_found_at IS NOT NULL
-                        AND (checked.last_success_at IS NULL
-                             OR checked.last_not_found_at > checked.last_success_at)
-                  )
+                {_LIVE_PLAYERS_SQL}
             ), stats AS (
                 SELECT count(*) AS total_entries,
                        count(*) FILTER (

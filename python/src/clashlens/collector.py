@@ -111,6 +111,9 @@ class Collector:
             asyncio.Lock() for _index in range(_HANDOFF_LOCK_STRIPES)
         )
         self._handoff_recovery_required = False
+        self._metrics_lock = asyncio.Lock()
+        self._metrics_refresh_after = 0.0
+        self._database_metrics: dict[str, int | float] = {}
 
     async def _database_call(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
         for attempt in range(3):
@@ -1111,7 +1114,13 @@ class Collector:
             body = state.encode() + b"\n"
             return (200 if healthy else 503), "text/plain", body
         try:
-            database_metrics = await asyncio.to_thread(self.database.health_metrics)
+            async with self._metrics_lock:
+                if time.monotonic() >= self._metrics_refresh_after:
+                    self._database_metrics = await asyncio.to_thread(
+                        self.database.health_metrics
+                    )
+                    self._metrics_refresh_after = time.monotonic() + 30
+                database_metrics = self._database_metrics
         except psycopg.Error:
             return 503, "text/plain", b"database_unavailable\n"
         stats = None

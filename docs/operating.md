@@ -61,6 +61,49 @@ The alert and backup services run once per timer firing, so `inactive (dead)`
 between successful runs is normal. `failed`, missing units, delivery failures or
 unavailable measurements need investigation.
 
+## Freshness measurements
+
+The collector's `/metrics` exports these gauges with the
+`clashlens_collector_` prefix:
+
+- `check_age_p50_seconds`, `check_age_p95_seconds`, `check_age_max_seconds`:
+  successful check ages across active tracked players. Each player's age uses
+  the older of the profile and battle-log `last_success_at` values. Unchanged
+  successful responses advance these times; failures do not. Both times must
+  exist for a player to contribute an age.
+- `check_age_sample_players` and `check_age_missing_players`: players with both
+  successful checks and active players missing either check. No samples means
+  the three age gauges are absent, not zero.
+- `metrics_sample_timestamp_seconds`: database sample time as Unix seconds.
+  Database gauges refresh on the first scrape and then at most once every
+  30 seconds, with concurrent scrapes sharing the sample. A failed refresh
+  returns HTTP 503 rather than silently serving an expired sample.
+- Existing `oldest_due_age_seconds`, `last_success_age_seconds` and
+  `oldest_pending_processing_age_seconds` remain available. An overdue check
+  measures scheduling delay; it is different from time since successful checks.
+
+The private API's existing signed `/operatorz` response adds a `live_leaderboard`
+object. Its fields are `age_p50_seconds`, `age_p95_seconds`, `age_max_seconds`,
+`older_than_10_minutes`, `entries`, `age_missing_entries`, and
+`sample_timestamp_seconds`. These numbers cover every entry, regardless of
+page size, using the same membership and confirmation rule as the Live
+Leaderboard page. Inactive players, unaccepted or missing profiles, and players
+whose profile was last reported not found are excluded. Age starts at the later
+of the processed profile time and its last unchanged confirmation. Exactly
+600 seconds is fresh; more than 600 seconds contributes to the count.
+Empty populations have zero counts and null age values. The API samples on
+the first authorized request and at most once every 30 seconds thereafter;
+failed refreshes fail the request. Check the sample timestamp when using either
+endpoint for deployment checks. Neither readiness endpoint runs these queries.
+
+Both sets use nearest-rank percentiles: p50 is the age at or below which 50%
+of the measured population falls, and p95 covers 95%. Future timestamps produce
+zero age. These are raw elapsed seconds, including Reset; alert suppression
+and the existing 10-minute alert thresholds are unchanged. Samples live only
+in process memory and add no stored history or per-player metric labels.
+Leaderboard measurements stay in the API because its database role already
+has the required reads; the collector receives no additional permissions.
+
 ## Clash API keys
 
 Clash Lens keeps to a budget of **8** Clash API keys. The Clash API allows up
