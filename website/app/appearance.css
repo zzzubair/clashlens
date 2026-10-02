@@ -59,6 +59,22 @@ summary {
   touch-action: manipulation;
 }
 
+.site-brand {
+  min-height: 2.75rem;
+}
+.search-result {
+  position: relative;
+}
+.search-result .player-name::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+}
+.search-result .player-name:focus-visible::after {
+  outline: 3px solid var(--cl-action-text);
+  outline-offset: -3px;
+}
+
 /* Keep the header usable at 320px and when the page is zoomed. */
 @media (max-width: 24rem) {
   .site-header {
