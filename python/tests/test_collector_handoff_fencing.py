@@ -183,20 +183,21 @@ def test_same_endpoint_waits_for_predecessor_handoff_ack() -> None:
     asyncio.run(scenario())
 
 
+class _Profiles(_Client):
+    def __init__(self, spool: _Spool, bodies: list[bytes]) -> None:
+        super().__init__(spool)
+        self.bodies = bodies
+
+    async def fetch_player(
+        self, pool: KeyPool, tag: str, endpoint: str
+    ) -> FetchedResponse:
+        response = await super().fetch_player(pool, tag, endpoint)
+        if endpoint != "profile":
+            return response
+        return replace(response, body=self.bodies.pop(0))
+
+
 def test_only_known_unchanged_responses_skip_the_spool() -> None:
-    class Profiles(_Client):
-        def __init__(self, spool: _Spool, bodies: list[bytes]) -> None:
-            super().__init__(spool)
-            self.bodies = bodies
-
-        async def fetch_player(
-            self, pool: KeyPool, tag: str, endpoint: str
-        ) -> FetchedResponse:
-            response = await super().fetch_player(pool, tag, endpoint)
-            if endpoint != "profile":
-                return response
-            return replace(response, body=self.bodies.pop(0))
-
     class CompactingStore(_Store):
         checks = 0
 
@@ -207,7 +208,7 @@ def test_only_known_unchanged_responses_skip_the_spool() -> None:
     spool = _Spool()
     store = CompactingStore(spool)
     collector = _collector(
-        spool, store, Profiles(spool, [b"a", b"b", b"b", b"b", b"b", b"b"])
+        spool, store, _Profiles(spool, [b"a", b"b", b"b", b"b", b"b", b"b"])
     )
     work = CollectorWork(1, "#2PP", datetime.now(UTC))
 
@@ -236,6 +237,48 @@ def test_only_known_unchanged_responses_skip_the_spool() -> None:
         "battle_log",
     ]
     assert spool.handoffs == {}
+
+
+def test_refresh_is_saved_while_an_unchanged_check_waits() -> None:
+    class SlowStore(_Store):
+        def __init__(self, spool: _Spool) -> None:
+            super().__init__(spool)
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def record_unchanged_response(self, _handoff: Any) -> bool:
+            self.entered.set()
+            assert self.release.wait(timeout=5)
+            return True
+
+    async def scenario() -> None:
+        spool = _Spool()
+        store = SlowStore(spool)
+        collector = _collector(spool, store, _Profiles(spool, [b"a", b"a", b"b"]))
+        work = CollectorWork(1, "#2PP", datetime.now(UTC))
+        assert await collector.collect_player(
+            work, lane="ordinary", endpoints=("profile",)
+        ) == ["recorded"]
+        unchanged = asyncio.create_task(
+            collector.collect_player(work, lane="ordinary", endpoints=("profile",))
+        )
+        assert await asyncio.to_thread(store.entered.wait, 1)
+        try:
+            # The changed refresh must not queue behind the slow database check.
+            assert await asyncio.wait_for(
+                collector.collect_player(
+                    work, lane="interactive", endpoints=("profile",)
+                ),
+                1,
+            ) == ["recorded"]
+        finally:
+            store.release.set()
+        assert await unchanged == ["recorded"]
+        assert [handoff.response_hash for handoff in store.handoffs] == [
+            hashlib.sha256(body).hexdigest() for body in (b"a", b"b")
+        ]
+
+    asyncio.run(scenario())
 
 
 def _poll_profile(collector: Any) -> Any:

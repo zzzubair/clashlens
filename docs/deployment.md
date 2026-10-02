@@ -464,7 +464,8 @@ minutes. The 128 MB page cache also wrote 8.6 MB/s of table pages as it evicted
 them.
 
 The PostgreSQL unit now sets `shared_buffers=2GB` (inside the 4 GB memory cap;
-128 MB for fake-service runs), `checkpoint_timeout=10min`, `max_wal_size=2GB` and `wal_compression=zstd`.
+128 MB for fake-service runs; `./ops` refuses a `CLASHLENS_POSTGRES_MEMORY`
+below twice the cache), `checkpoint_timeout=10min`, `max_wal_size=2GB` and `wal_compression=zstd`.
 Commit flushing, full-page writes, checksums and archiving are unchanged. A
 70-minute page-by-page replay of production's change log predicts 225 instead of
 393 page copies per second; zstd shrinks each copy to about 37%. Expect roughly
@@ -481,11 +482,12 @@ The collector remembers, in memory, the used fields it last committed for each
 player and endpoint. An ordinary response that matches them is recorded in the
 database without being saved to the spool, so most of the roughly 97% unchanged
 responses no longer reach it. Each saved response cost about 147 KiB of disk
-writes, mostly the forced flushes that make it crash-safe. Any other response
-(the first per player and endpoint after a restart, a changed one, a reset or
-work-bound one) is saved to the spool before the collector waits on the
-database, exactly as before; so is a matching one the database does not accept
-as unchanged, or whose check fails or is cancelled. A hard crash can therefore
+writes, mostly the forced flushes that make it crash-safe. The unchanged check
+holds no lock, so no other response waits behind it. Any other response (the
+first per player and endpoint after a restart, a changed one, a reset or
+work-bound one) is saved to the spool before its own database work, exactly as
+before; so is a matching one the database does not accept as unchanged, or
+whose check fails or is cancelled. A hard crash can therefore
 lose only an unchanged sighting's seen time, poll count, and the sighting time
 and retirement deadline it would have extended; no raw response or other kept
 data is lost, and the next poll records the sighting again. The memory record

@@ -248,7 +248,7 @@ load_production_config() {
   WORKER_DB_POOL=$(setting CLASHLENS_WORKER_DATABASE_POOL_SIZE 12)
   WORKER_ARCHIVE_POOL=$(setting CLASHLENS_WORKER_ARCHIVE_POOL_SIZE 12)
   POSTGRES_MEMORY=$(setting CLASHLENS_POSTGRES_MEMORY 4g)
-  POSTGRES_SHARED_BUFFERS=2GB
+  POSTGRES_SHARED_BUFFERS=2048MB
   POSTGRES_SHM=$(setting CLASHLENS_POSTGRES_SHM_SIZE 1g)
   POSTGRES_CPUS=$(setting CLASHLENS_POSTGRES_CPUS 4)
   POSTGRES_PIDS=$(setting CLASHLENS_POSTGRES_PIDS 512)
@@ -323,6 +323,16 @@ validate_runtime_values() {
   [[ "$WEBSITE_PORT" != "$HEALTH_PORT" ]] || die "website and health ports must differ"
   for item in POSTGRES_CPUS COLLECTOR_CPUS API_CPUS WORKER_CPUS WEBSITE_CPUS; do validate_number "$item" "${!item}" cpu; done
   for item in POSTGRES_MEMORY POSTGRES_SHM COLLECTOR_MEMORY API_MEMORY WORKER_MEMORY WEBSITE_MEMORY; do validate_number "$item" "${!item}" memory; done
+  local memory_mib=${POSTGRES_MEMORY%[bBkKmMgGtT]}
+  case "$POSTGRES_MEMORY" in
+    *[kK]) memory_mib=$((memory_mib / 1024)) ;;
+    *[mM]) ;;
+    *[gG]) memory_mib=$((memory_mib * 1024)) ;;
+    *[tT]) memory_mib=$((memory_mib * 1048576)) ;;
+    *) memory_mib=$((memory_mib / 1048576)) ;;
+  esac
+  (( memory_mib >= 2 * ${POSTGRES_SHARED_BUFFERS%MB} )) || \
+    die "POSTGRES_MEMORY must be at least twice the fixed ${POSTGRES_SHARED_BUFFERS} database cache"
   for item in PREFIX NETWORK_NAME POSTGRES_VOLUME SPOOL_ROOT STATE_DIR; do safe_env_value "$item" "${!item}"; done
   [[ -z "$ARCHIVE_ROOT" ]] || safe_env_value ARCHIVE_ROOT "$ARCHIVE_ROOT"
   validate_directory_ancestry "$STATE_DIR"

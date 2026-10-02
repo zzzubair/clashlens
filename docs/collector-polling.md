@@ -345,12 +345,15 @@ responses in October 2026). The collector remembers, in memory, the used-field
 fingerprint it last committed for each player and endpoint. An ordinary response
 with no work row whose fingerprint matches is a known-unchanged sighting: the
 collector records it in the database without saving it, so its bytes never
-reach the disk. Every other response (the first per player and endpoint since
-the collector started, a changed one, a reset or work-bound one) is saved to the
-spool before the collector waits on the database. So is a known-unchanged one
-when the database does not accept it as unchanged, or when that one-attempt
-check fails, times out or is cancelled. A changed or unknown response is
-therefore never lost. The trade-off: a hard crash before a known-unchanged
+reach the disk. That check holds no lock, so no other response waits behind
+it, and it runs only while no other response sharing its lock is being saved.
+Every other response (the first per player and endpoint since the collector
+started, a changed one, a reset or work-bound one) is saved to the spool before
+its own database work. So is a known-unchanged one when the database does not
+accept it as unchanged, or when that one-attempt check fails, times out or is
+cancelled. A saved response can still wait its turn behind another response
+being saved under the same lock, as before this change. A changed or unknown
+response is therefore never lost to the unchanged check. The trade-off: a hard crash before a known-unchanged
 sighting commits loses that sighting, meaning its seen time, its poll count, and
 the later sighting time and archive retirement deadline it would have given the
 kept response. No raw response,

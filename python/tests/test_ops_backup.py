@@ -329,6 +329,24 @@ def test_production_refuses_unsafe_key_settings(mode_config, setting, message):
     assert message in result.stderr
 
 
+@pytest.mark.parametrize(("memory", "accepted"), [("3g", False), ("4096m", True)])
+def test_production_refuses_memory_below_the_database_cache(
+    mode_config, memory, accepted
+):
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write(f"CLASHLENS_POSTGRES_MEMORY={memory}\n")
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG + "validate_runtime_values\n", "memory-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted, result.stderr
+    assert ("database cache" in result.stderr) is not accepted
+
+
 @pytest.mark.parametrize("mode", ["production", "fixture"])
 def test_pod_address_and_stop_limits_are_rendered(
     tmp_path, mode_config, mode

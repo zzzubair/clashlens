@@ -1090,9 +1090,6 @@ class CollectorDatabase:
             with connection.transaction():
                 connection.execute("SET LOCAL transaction_timeout = '2s'")
                 state = self._lock_response_state(connection, handoff)
-                # A retry after an unknown commit outcome finds its own key.
-                if state is not None and state[5] == handoff.occurrence_key:
-                    return True
                 return self._record_unchanged(connection, handoff, state, None)
 
     @staticmethod

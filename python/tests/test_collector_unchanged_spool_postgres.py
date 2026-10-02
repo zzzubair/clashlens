@@ -3,14 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg
 from domain_test_support import domain_database
 from test_collector import _collector
-from test_collector_uploads_postgres import NOW, _handoff, _player
+from test_collector_uploads_postgres import _player
 
 from clashlens.collector_db import CollectorDatabase, CollectorWork
 from clashlens.collector_http import FetchedResponse, KeyPool
@@ -93,33 +92,3 @@ def test_unchanged_profile_is_recorded_without_saving_its_bytes(
         finally:
             database.close()
             spool.close()
-
-
-def test_retried_compaction_counts_the_poll_once(database_url: str) -> None:
-    with domain_database(database_url) as connection_info:
-        database = CollectorDatabase(connection_info)
-        first = _handoff(
-            occurrence_key="first",
-            response_hash="a" * 64,
-            player_id=_player(connection_info),
-        )
-        # Same used fields as the first poll, different raw bytes.
-        repeat = replace(
-            first,
-            occurrence_key="repeat",
-            response_hash="b" * 64,
-            spool_key=f"sha256/bb/{'b' * 64}",
-            response_completed_at=NOW + timedelta(minutes=1),
-        )
-        try:
-            # The first poll and work-bound responses always keep their bytes.
-            assert not database.record_unchanged_response(first)
-            database.record_response(first)
-            assert not database.record_unchanged_response(
-                replace(repeat, collector_work_id=1)
-            )
-            assert database.record_unchanged_response(repeat)
-            assert database.record_unchanged_response(repeat)
-            assert _sightings(connection_info)[0] == 2
-        finally:
-            database.close()
