@@ -1138,27 +1138,29 @@ class CollectorDatabase:
             or work_kind == "reset_baseline"
         ):
             return False
-        # Identical bodies (one not-found profile for hundreds of players) share
-        # a row. Unsaved, skip a held one: the caller saves rather than waits.
+        # Unsaved, skip a row another transaction holds (a body players share,
+        # or the worker's observation or player): the caller saves, not waits.
         skip = "" if saved else " SKIP LOCKED"
         retained = connection.execute(
-            """
-            SELECT response_hash, archive_reference
-            FROM collector_observations WHERE id = %s FOR UPDATE
-            """,
+            """SELECT response_hash, archive_reference
+            FROM collector_observations WHERE id = %s FOR UPDATE""" + skip,
             (state[2],),
         ).fetchone()
         if retained is None:
             return False
         if retained[1] is not None:
             availability = connection.execute(
-                """
-                SELECT availability FROM archive_catalogue
+                """SELECT availability FROM archive_catalogue
                 WHERE response_hash = %s AND archive_reference = %s
                 FOR UPDATE""" + skip,
                 retained,
             ).fetchone()
             if availability is None or availability[0] != "verified":
+                return False
+        # The 0040 trigger locks the player on a successful profile check.
+        if skip and handoff.endpoint == "profile" and 200 <= handoff.http_status < 300:
+            held = "SELECT 1 FROM players WHERE id = %s FOR NO KEY UPDATE SKIP LOCKED"
+            if connection.execute(held, (handoff.player_id,)).fetchone() is None:
                 return False
         sighted = connection.execute(
             """UPDATE collector_response_uploads
@@ -1172,16 +1174,13 @@ class CollectorDatabase:
             return False
         self._upsert_response_state(connection, handoff, state[2], saved)
         self._record_intent_endpoint(connection, handoff, state[2])
-        # A body still being returned in a later season keeps that
-        # season's retirement deadline.
+        # A body still returned in a later season keeps that season's deadline.
         connection.execute(
-            """
-            UPDATE archive_catalogue
+            """UPDATE archive_catalogue
             SET retire_after = clashlens_season_retire_after(%s)
             WHERE response_hash = %s AND archive_reference = %s
               AND availability = 'verified'
-              AND retire_after < clashlens_season_retire_after(%s)
-            """,
+              AND retire_after < clashlens_season_retire_after(%s)""",
             (handoff.response_completed_at, *retained, handoff.response_completed_at),
         )
         return True
