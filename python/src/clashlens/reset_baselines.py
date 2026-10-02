@@ -160,11 +160,11 @@ def _evaluate_reset_baseline(
     starts_ended_day: bool = False,
     recalculate_season: str | None = None,
 ) -> tuple[list[int], list[str]]:
-    """Record the Reset pair evidence seen from one of its observations.
+    """Record Reset pair evidence and return queued job IDs and failure reasons.
 
-    Returns the reconciliation jobs queued when the pair is complete: the day
-    the Reset ends, when ``ends_day``, and the day it starts, when
-    ``starts_ended_day``. Also returns the pair's failure reasons.
+    A repair's selected ended days share one job so their dependent results
+    are rebuilt oldest first in one transaction, including later saved days
+    in ``recalculate_season``.
     """
     context = _load_reset_baseline_context(connection, observation_id)
     if context is None:

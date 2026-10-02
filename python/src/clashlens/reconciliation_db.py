@@ -1265,7 +1265,7 @@ def enqueue_current_season_republication(
     *,
     max_jobs: int = 100,
 ) -> dict[str, Any]:
-    """Queue a bounded batch of published current-season days missing v3.
+    """Queue bounded current-season Reset repairs before v3 republication.
 
     This rebuilds derived ranked-day publications from canonical database
     evidence; it does not replay archived source observations. Repeating

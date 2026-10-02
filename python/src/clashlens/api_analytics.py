@@ -194,11 +194,9 @@ def get_army_analytics(
                     # current-season identity; never fall back to the most
                     # recently published season.
                     raise CurrentSeasonEmpty(None)
-                # The default range ends at the latest Legend day whose
-                # interval has ended in reset chronology (05:00 UTC). The
-                # completed-day gates below then keep only the finished days
-                # the population can use, and the response names them in
-                # collection_coverage.covered_days.
+                # Bound the default range using Reset chronology (05:00 UTC).
+                # Publication delays do not make an ended day unfinished; the
+                # population-specific coverage checks below decide availability.
                 current_time = (
                     now.astimezone(UTC) if now is not None else datetime.now(tz=UTC)
                 )
