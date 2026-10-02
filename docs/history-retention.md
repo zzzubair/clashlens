@@ -246,14 +246,13 @@ relation files or imply that retained WAL/backups have expired. Do not run
 ## Implemented raw expiry and required recovery protection
 
 Do **not** configure an upload-age lifecycle on the evidence namespace. A raw
-response becomes due **86 days after the end of the 28-day season containing its
-latest sighting**: the season boundary starts the clock, not each response's
-individual age. A response last seen in the final instant of a season is kept 86
-days; one last seen at the start of a season is kept 114 days. A body still
-returned in a later season keeps that season's later deadline; an earlier
-sighting never shortens it. The deadline derives from the response's own
-completion time, not the upload's. Migration 0046 moved every existing
-deadline from the old 56-day rule to this one.
+response becomes due **86 days after its latest sighting**. A body returned again
+later moves its deadline later; an earlier sighting never shortens it. The
+deadline derives from the response's own completion time, not the upload's.
+Migration 0046 cannot recover the exact latest sighting of responses stored
+before it, so it adds 30 days to their old deadline (56 days after their
+season's end). That never gives less than 86 days; those responses may be kept
+up to 28 days longer, once.
 
 A due response is not deleted straight away. Cleanup first marks it `retiring`,
 which blocks every new use, then deletes its bytes only **nine days later**: the
@@ -263,14 +262,10 @@ Anything still usable at that point was marked after it, so its bytes survive at
 least two more days after the restore starts. If production keeps running during
 a longer restore, stop `clashlens-archive-retention.timer` first.
 
-A response therefore stays usable for at least 86 days after its latest
-sighting, and its bytes stay at least 95 days and normally at most 123 days,
-plus any cleanup backlog. All responses from one
-season become due together, so each season's backlog is worked through in
-batches; at the estimated rate below that takes about 20 days. The measured
-21.83 GB/day of new raw responses (October 2) means about 2.5–2.7 TB stored,
-roughly EUR 40–43/month at EUR 0.01606/GB-month. This is a projection, not a
-bill.
+A response therefore stays usable for 86 days after its latest sighting, and
+its bytes stay 95 days plus the wait for the next cleanup batch. The measured
+21.83 GB/day of new raw responses (October 2) means about 2.07 TB stored,
+roughly EUR 33/month at EUR 0.01606/GB-month. This is a projection, not a bill.
 
 Pending verification and unfinished/failed processing or replay keep a response
 usable; the preview reports them as `due_protected`. Marking commits before any

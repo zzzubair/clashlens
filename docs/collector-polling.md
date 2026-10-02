@@ -394,8 +394,8 @@ Missing files still let cleanup finish a deletion interrupted by a crash.
 
 League history is collected initially and after each season-ending Reset. It
 is stored in full and parsed separately from profiles and battle logs. Raw
-responses become due 86 days after their season ends; a body seen in a later
-season keeps that season's later deadline. Their bytes are deleted nine days
+responses become due 86 days after their latest sighting; a body seen again
+later moves its deadline later. Their bytes are deleted nine days
 after that, to keep seven-day backup recovery and restore time safe; see
 [history-retention.md](history-retention.md). Retirement uses separate operator
 credentials and runs only on its own timer when switched on.

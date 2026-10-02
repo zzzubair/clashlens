@@ -1,6 +1,7 @@
--- Raw responses now stay at least 86 days after their latest sighting: the
--- deadline is 86 days after the end of the 28-day season containing that
--- sighting (was 56). Retirement first marks a response 'retiring', which
+-- Raw responses now become due exactly 86 days after their latest sighting
+-- (was 56 days after the end of that sighting's 28-day season). The function
+-- keeps its historical name so existing callers and triggers stay unchanged.
+-- Retirement first marks a response 'retiring', which
 -- blocks every new use, and deletes the bytes only after the promised
 -- seven-day recovery window plus a restore allowance has passed, so a
 -- restore to any promised point never references deleted bytes.
@@ -11,12 +12,7 @@ RETURNS timestamptz
 LANGUAGE sql
 IMMUTABLE
 AS $$
-    SELECT to_timestamp(
-        1783918800
-        + floor((extract(epoch FROM observed_at) - 1783918800) / 2419200)
-            * 2419200
-        + 9849600
-    )
+    SELECT to_timestamp(extract(epoch FROM observed_at) + 7430400)
 $$;
 ALTER FUNCTION clashlens_season_retire_after(timestamptz) SECURITY DEFINER;
 DO $$
@@ -28,8 +24,9 @@ BEGIN
 END
 $$;
 
--- Every stored deadline sits on the old grid (season end + 56 days), including
--- migration 0028's safety floor, so moving each by 30 days gives the new rule.
+-- A stored deadline is old season end + 56 days and its latest sighting was
+-- before that season end, so adding 30 days never gives less than 86 days.
+-- Existing responses may wait up to 28 days longer than the new rule, once.
 UPDATE archive_catalogue
 SET retire_after = retire_after + interval '30 days'
 WHERE availability = 'verified';
