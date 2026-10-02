@@ -28,7 +28,7 @@ HealthOnFailure=kill
 # max_wal_size (a soft limit): 845 MB took 90 s on rogue, so 2 GB is about
 # 3.5 minutes. Failed checks are ignored meanwhile, but TimeoutStartSec below
 # still stops a replay that outlasts five minutes.
-HealthStartPeriod=5min
+HealthStartPeriod=5m
 Notify=healthy
 # Write volume: data checksums log a full 8 KB page the first time each page
 # changes after a checkpoint, so checkpoints are spaced out and those copies

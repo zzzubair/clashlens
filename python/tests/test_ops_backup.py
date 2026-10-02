@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -403,6 +404,21 @@ render_units
     assert address == ipaddress.ip_address("10.89.14.2")
     assert address in subnet
     assert network["Network"]["NetworkName"] == "clashlens-private"
+
+
+def test_health_durations_use_podman_units():
+    # Podman reads these with Go's duration parser, which rejects systemd's "min".
+    keys = ("HealthInterval=", "HealthTimeout=", "HealthStartPeriod=")
+    values = {
+        f"{unit.name}: {line}": line.split("=", 1)[1]
+        for unit in (OPS.parent / "deploy" / "quadlet").glob("*.container")
+        for line in unit.read_text().splitlines()
+        if line.startswith(keys)
+    }
+    go_duration = re.compile(r"(\d+(ns|us|ms|s|m|h))+")
+    bad = [k for k, v in values.items() if not go_duration.fullmatch(v)]
+    assert not bad
+    assert "clashlens-postgres.container: HealthStartPeriod=5m" in values
 
 
 @pytest.mark.parametrize(
