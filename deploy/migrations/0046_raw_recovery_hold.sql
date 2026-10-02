@@ -1,7 +1,7 @@
--- Raw responses now become due exactly 86 days after their latest sighting
--- or first verification, whichever is later (was 56 days after the end of
--- that sighting's 28-day season). The function
--- keeps its historical name so existing callers and triggers stay unchanged.
+-- Replace the season-based deadline with 86 days after the latest sighting.
+-- Existing records use the later of their retained sighting and first
+-- verification. Keep the function's historical name so existing callers
+-- and triggers stay unchanged.
 -- Retirement first marks a response 'retiring', which
 -- blocks every new use, and deletes the bytes only after the promised
 -- seven-day recovery window plus a restore allowance has passed, so a
@@ -65,7 +65,7 @@ UPDATE archive_catalogue
 SET retiring_since = GREATEST(clock_timestamp(), retire_after)
 WHERE availability = 'retiring';
 
--- Many responses share one season deadline; keep each batch an index range.
+-- Avoid sorting all due responses before selecting a bounded batch.
 DROP INDEX IF EXISTS archive_catalogue_retention;
 CREATE INDEX archive_catalogue_retention
     ON archive_catalogue (availability, retire_after, archive_reference);

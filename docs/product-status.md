@@ -169,8 +169,9 @@ existing eligibility processing locally; live import and capacity are pending.
   needed key count, measured growth capacity and cost. Prove the weekly Monday
   eligibility pass and reuse of that week's result across repeat inputs and
   daily clan checks. The 22,157 known count is not a measured active count.
-- Added storage for both historical populations and Clan Castle units; measured
-  raw-deletion restore allowance and the revised six-month projection.
+- Added storage for both historical populations and Clan Castle units, proof
+  that restores fit the [raw-expiry allowance](history-retention.md#implemented-raw-expiry-and-required-recovery-protection),
+  and the revised six-month projection.
 - Discord server/invite/channel identifiers, ticket provider/plan, permissions,
   transcript retention and support staffing. Overdue-check and Live Leaderboard
   thresholds are defined in [alert conditions](deployment.md#alert-conditions);

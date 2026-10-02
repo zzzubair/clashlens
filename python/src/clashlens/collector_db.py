@@ -1177,7 +1177,7 @@ class CollectorDatabase:
             return False
         self._upsert_response_state(connection, handoff, state[2], saved)
         self._record_intent_endpoint(connection, handoff, state[2])
-        # A body still returned in a later season keeps that season's deadline.
+        # Ignored duplicates still extend the deadline; retention follows sightings.
         connection.execute(
             """UPDATE archive_catalogue SET retire_after = clashlens_season_retire_after(%s)
             WHERE response_hash = %s AND archive_reference = %s AND availability = 'verified'

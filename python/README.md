@@ -18,8 +18,8 @@ private signed API. Runtime boundaries are in
 The production schema is owned by the numbered SQL files under
 `deploy/migrations/`.
 See [history retention](../docs/history-retention.md) for compact storage,
-operator-only cleanup, and the limits on replay after expiry. Application startup does not create or
-alter tables; tests apply these migrations directly.
+raw-response expiry, and the limits on replay after expiry. Application startup
+does not create or alter tables; tests apply these migrations directly.
 
 ## Local checks
 
