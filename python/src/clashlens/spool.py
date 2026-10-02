@@ -117,6 +117,7 @@ class Spool:
         self._temporary_sizes: dict[str, int | None] = {}
         self._durable_prefixes: set[str] = set()
         self._high_water_bytes = 0
+        self._filesystem_type: str | None = None
         self._closed = False
         try:
             self._ensure_descendants()
@@ -449,7 +450,14 @@ class Spool:
     def _capacity_facts_locked(
         self, limit: int, *, reserved_bytes: int, reserved_objects: int
     ) -> None:
-        capacity = filesystem_capacity(self.root)
+        # Every reservation runs this under the spool lock. The filesystem under
+        # the open root cannot change, so its mount-table lookup runs until it
+        # succeeds once; free space and inodes are still measured every time.
+        capacity = filesystem_capacity(
+            self.root, filesystem_type=self._filesystem_type
+        )
+        if capacity["filesystem_type"] != "unknown":
+            self._filesystem_type = str(capacity["filesystem_type"])
         if capacity["inode_model"] == "unknown":
             raise SpoolError("degraded_capacity: spool unknown filesystem capacity")
         if (
