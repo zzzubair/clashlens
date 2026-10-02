@@ -1026,9 +1026,9 @@ class CollectorDatabase:
                     collector_response_state.last_seen_at
                     THEN EXCLUDED.last_occurrence_key
                     ELSE collector_response_state.last_occurrence_key END,
-                last_applied_occurrence_key = COALESCE(
-                    EXCLUDED.last_applied_occurrence_key,
-                    collector_response_state.last_applied_occurrence_key),
+                last_applied_occurrence_key = CASE WHEN %s
+                    THEN EXCLUDED.last_applied_occurrence_key
+                    ELSE collector_response_state.last_applied_occurrence_key END,
                 last_seen_at = GREATEST(
                     EXCLUDED.last_seen_at, collector_response_state.last_seen_at
                 ),
@@ -1051,7 +1051,7 @@ class CollectorDatabase:
                 handoff.response_hash,
                 handoff.content_fingerprint,
                 handoff.occurrence_key,
-                handoff.occurrence_key if saved else None,
+                handoff.occurrence_key,
                 handoff.response_completed_at,
                 observation_id,
                 handoff.response_completed_at
@@ -1060,6 +1060,7 @@ class CollectorDatabase:
                 handoff.response_completed_at
                 if handoff.endpoint == "profile" and handoff.http_status == 404
                 else None,
+                saved,
             ),
         )
         if (

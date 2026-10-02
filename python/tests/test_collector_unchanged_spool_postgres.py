@@ -122,6 +122,11 @@ def test_unsaved_sighting_keeps_a_saved_refresh_recoverable(database_url: str) -
             refresh = poll("refresh", "b", 1)
             database.record_response(refresh)
             assert database.record_unchanged_response(poll("unsaved", "c", 2))
+            with psycopg.connect(connection_info) as connection:
+                marker = connection.execute(
+                    "SELECT last_applied_occurrence_key FROM collector_response_state"
+                ).fetchone()
+            assert marker == ("refresh",)
             database.record_recovered_response(refresh, serialized=True)
             assert _sightings(connection_info)[0] == 3
         finally:
