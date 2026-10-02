@@ -193,7 +193,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     !Number.isNaN(Date.parse(requestedDay))
       ? requestedDay
       : null;
-  const refreshFetcher = useFetcher<RefreshWork | RefreshError>();
+  const refreshFetcher = useFetcher<RefreshWork | RefreshError | null>();
   const revalidator = useRevalidator();
   const [workId, setWorkId] = useState<string | null>(null);
   const [lastStatus, setLastStatus] = useState<RefreshStatus | RefreshWork | null>(null);
@@ -318,7 +318,10 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     automaticRefreshHandled.current = true;
     if (!isDocumentReload && trackedPlayer.profile.freshness.ageSeconds <= 60) return;
     refreshFetcher.submit(
-      { idempotencyKey: data.noJsIdempotencyKey },
+      {
+        idempotencyKey: data.noJsIdempotencyKey,
+        trigger: isDocumentReload ? "manual" : "automatic",
+      },
       {
         method: "post",
         action: `/resources/players/${encodeURIComponent(trackedPlayer.tag)}/refresh`,

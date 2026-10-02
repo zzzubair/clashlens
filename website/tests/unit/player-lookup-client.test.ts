@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { action as refreshAction } from "../../app/routes/refresh";
 import {
   allowPublicRefresh,
   clearPublicRefreshLimits,
@@ -23,6 +24,76 @@ beforeEach(() => {
     "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
   );
   vi.stubEnv("CLASHLENS_TRUST_PROXY", "true");
+  vi.stubEnv("CLASHLENS_PUBLIC_ORIGIN", "https://clashlens.example");
+});
+
+async function refresh(trigger = "automatic", peer = VISITOR, tag = "#2PP") {
+  const request = new Request(
+    `https://clashlens.example/resources/players/${encodeURIComponent(tag)}/refresh`,
+    {
+      method: "POST",
+      headers: { Origin: "https://clashlens.example" },
+      body: new URLSearchParams({ idempotencyKey: crypto.randomUUID(), trigger }),
+    },
+  );
+  return refreshAction({
+    request,
+    params: { tag },
+    context: createClientAddressContext({})(request, { address: peer }),
+  } as never);
+}
+
+function fakeInteractiveApi() {
+  const fetch = vi.fn().mockImplementation(async (url: URL) => {
+    const tag = decodeURIComponent(url.pathname.split("/")[3]);
+    return new Response(
+      JSON.stringify(
+        url.pathname.endsWith("/lookup")
+          ? { tag, state: "checking" }
+          : {
+              refresh_id: crypto.randomUUID(),
+              tag,
+              status: "pending",
+              outcome: "created",
+            },
+      ),
+    );
+  });
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+
+it("keeps all six manual requests available after six automatic profile refresh attempts", async () => {
+  fakeInteractiveApi();
+  for (const tag of ["#2PP", "#2PQ", "#2PY", "#2PL", "#2PG", "#2PR"])
+    await refresh("automatic", VISITOR, tag);
+
+  await expect(startPlayerLookup(VISITOR, "#LQQP")).resolves.toMatchObject({
+    state: "checking",
+  });
+  for (let index = 0; index < 5; index++)
+    expect((await refresh("manual")).init?.status).toBe(202);
+  expect((await refresh("manual")).init?.status).toBe(429);
+});
+
+it("quietly skips automatic requests after three, isolates visitors, and allows them after a minute", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+  const fetch = fakeInteractiveApi();
+  for (let index = 0; index < 3; index++)
+    expect((await refresh()).init?.status).toBe(202);
+  for (let index = 0; index < 3; index++) {
+    const skipped = await refresh();
+    expect(skipped.init?.status).toBe(200);
+    expect(skipped.data).toBeNull();
+    expect(skipped.init?.headers).toEqual({ "Cache-Control": "no-store" });
+  }
+  expect(fetch).toHaveBeenCalledTimes(3);
+  expect((await refresh("automatic", "198.51.100.10")).init?.status).toBe(202);
+  clock.mockReturnValue(1_059_999);
+  expect((await refresh()).data).toBeNull();
+  clock.mockReturnValue(1_060_000);
+  expect((await refresh()).init?.status).toBe(202);
+  expect(fetch).toHaveBeenCalledTimes(5);
 });
 
 afterEach(() => {

@@ -46,6 +46,21 @@ more than 60 seconds old. Saved data stays visible while the existing Refresh
 flow runs, including if the request is refused. Manual Refresh and
 browser-reload Refresh still work.
 
+Automatic refreshes have their own allowance of three attempts per visitor per
+minute. Once spent, further automatic attempts quietly keep the saved profile and
+its check time on screen. They never spend the six-per-minute allowance shared by
+manual Refresh, browser-reload Refresh and new-player lookups. Both counters use
+the same trusted visitor address, each retains at most 10,000 addresses, and both
+reset when the website process restarts.
+
+Three automatic checks normally fetch six responses per minute, averaging 0.1
+request starts per second per visitor. The interactive key defaults to 25 starts
+per second, with one reserved for verification, leaving 24 for collection. This
+small automatic allowance limits incidental browsing traffic while keeping that
+shared key protection, the 30-second per-player cooldown and reuse of active
+refresh work unchanged. It is a per-visitor bound, not a guarantee of spare
+capacity across all visitors; the shared key limit still controls aggregate load.
+
 When any Refresh reports complete, the page reloads its data immediately and
 again about 3 and 8 seconds later. The player carried by the completed Refresh
 stays on screen only while its profile check is newer than the reloaded data, so
@@ -133,7 +148,8 @@ operator configuration.
 
 The intended production path is Cloudflare Tunnel → a local proxy → the website.
 `npm start` and the website image run `server.ts`, which passes the real socket
-peer to React Router. Refresh allows six requests per address per minute in this
+peer to React Router. Manual Refresh and lookups share six requests per address
+per minute; automatic profile refreshes get a separate three per minute in this
 website process. Cookies, form fields, URL parameters and forwarding chains do
 not choose that address. Restarting the process resets its in-memory counters.
 Without a valid connection address, Refresh returns `503 service_unavailable`
