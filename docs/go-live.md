@@ -183,8 +183,8 @@ without collection. The secret checks succeed silently. Stop on a failed check.
 If configuration overrides the standard webhook location, privately verify that
 path without displaying its contents.
 
-Do not stop only `clashlens-collector.service`: the parent target requires it,
-so systemd can stop the whole application, including PostgreSQL. Use this
+Do not stop only `clashlens-collector.service`: that leaves the worker and API
+running, and this step needs everything stopped. Use this
 explicit full stop, followed by database-only startup. To abandon, use step 9.
 After import commits, even an old collector can send real requests on restart.
 
@@ -523,8 +523,8 @@ validation remain separate work due by October 12; see the
 **Get Zubair's approval for a brief private API interruption**, away from
 04:55–05:10 UTC and before the warm-up deadline. This tests the data-read alert
 while collection, the database and backups continue. Pausing the container
-keeps the parent target and alert timer running. Stopping the required service
-can stop both. Keep the pause under 60 seconds and arm
+keeps the parent target and alert timer running. Keep the pause under 60
+seconds and arm
 recovery in the same shell:
 
 ```sh

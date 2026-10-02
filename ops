@@ -711,7 +711,7 @@ render_units() {
   local template base fixture_requires fixture_ports backup_secret= archive_args= backup_requires= alert_requires=
   fixture_requires=
   fixture_ports=
-  [[ "$MODE" != fixture ]] || fixture_requires='Requires=clashlens-archive.service clashlens-clash-api.service clashlens-login.service'
+  [[ "$MODE" != fixture ]] || fixture_requires='Wants=clashlens-archive.service clashlens-clash-api.service clashlens-login.service'
   [[ "$MODE" != fixture ]] || fixture_ports=$'PublishPort=127.0.0.1:8011:8011\nPublishPort=127.0.0.1:8012:8012'
   if backup_enabled; then
     backup_secret='Secret=clashlens-walg-config,type=mount,target=/run/secrets/walg.json,uid=70,gid=70,mode=0400'

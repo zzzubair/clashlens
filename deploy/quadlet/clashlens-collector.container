@@ -2,7 +2,8 @@
 [Unit]
 Description=Clash Lens collector
 PartOf=clashlens.target
-Requires=clashlens-pod.service clashlens-postgres.service clashlens-worker.service
+Requires=clashlens-pod.service clashlens-postgres.service
+Wants=clashlens-worker.service
 After=clashlens-pod.service clashlens-postgres.service clashlens-worker.service
 
 [Container]

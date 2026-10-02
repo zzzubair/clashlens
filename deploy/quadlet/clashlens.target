@@ -1,7 +1,9 @@
 # Managed by Clash Lens ./ops.
 [Unit]
 Description=Clash Lens
-Requires=clashlens-pod.service clashlens-postgres.service clashlens-collector.service clashlens-api.service clashlens-worker.service clashlens-website.service
+# Wants, not Requires: systemd restarts a unit's requirers with it, and
+# restarting this target restarts every PartOf member, the database included.
+Wants=clashlens-pod.service clashlens-postgres.service clashlens-collector.service clashlens-api.service clashlens-worker.service clashlens-website.service
 After=clashlens-postgres.service
 @@FIXTURE_REQUIRES@@
 @@BACKUP_REQUIRES@@
