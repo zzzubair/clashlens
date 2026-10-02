@@ -99,7 +99,13 @@ it("explains tracked ranks and distinguishes whole-board times from the row's co
   expect(html).toMatch(/<summary>Last updated 20 minutes ago/);
   expect(html).toContain("Over 10 min old");
   expect(html).toMatch(/<details[^>]*>.*dateTime="2026-10-02T11:40:00Z".*<\/details>/);
-  expect(mocks.getTrackedLeaderboard).toHaveBeenCalledWith(100, "live", 100, undefined);
+  expect(mocks.getTrackedLeaderboard).toHaveBeenCalledWith(
+    100,
+    "live",
+    100,
+    undefined,
+    undefined,
+  );
 });
 
 it.each([

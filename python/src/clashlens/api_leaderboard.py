@@ -11,6 +11,8 @@ from .api_db import (
 )
 
 _LIVE_FRESHNESS_SECONDS = 600
+# Rows kept beside a selected player when their page edge would hide them.
+_FOCUS_NEIGHBORS = 5
 
 
 # Shared membership and confirmation rule for the page and operator measurements.
@@ -41,6 +43,51 @@ WHERE player.active = true
              OR checked.last_not_found_at > checked.last_success_at)
   )
 """
+
+_LIVE_ORDER_SQL = "trophies DESC, md5(normalized_tag), normalized_tag"
+_LIVE_RANKED_SQL = f"""
+SELECT *, row_number() OVER (ORDER BY {_LIVE_ORDER_SQL}) AS position
+FROM ({_LIVE_PLAYERS_SQL}) AS live
+"""
+
+
+def search_live_leaderboard(database: ApiDatabase, query: str) -> dict[str, Any]:
+    """Filter after ranking the board, using only indexed current-profile reads."""
+    query = query.strip()
+    if not query or len(query) > 80:
+        raise ValueError("invalid leaderboard search")
+    explicit_tag = query.startswith("#")
+    tag = "#" + query.removeprefix("#").upper()
+    with database.pool.connection() as connection:
+        rows = connection.execute(
+            f"""
+            WITH ranked AS MATERIALIZED ({_LIVE_RANKED_SQL}), exact AS (
+                SELECT 1 FROM ranked
+                WHERE %(explicit_tag)s AND normalized_tag = %(tag)s
+            )
+            SELECT normalized_tag, name, trophies, position,
+                   EXISTS (SELECT 1 FROM exact) AS exact_match
+            FROM ranked
+            WHERE normalized_tag = %(tag)s
+               OR (NOT EXISTS (SELECT 1 FROM exact)
+                   AND strpos(lower(name), lower(%(query)s)) > 0)
+            ORDER BY position LIMIT 21
+            """,
+            {"tag": tag, "explicit_tag": explicit_tag, "query": query},
+        ).fetchall()
+    return {
+        "exact_tag": tag if rows and rows[0][4] else None,
+        "has_more": len(rows) > 20,
+        "results": [
+            {
+                "tag": _text(row[0]),
+                "name": _text(row[1]),
+                "trophies": int(row[2]),
+                "rank": int(row[3]),
+            }
+            for row in rows[:20]
+        ],
+    }
 
 
 def live_freshness_metrics(database: ApiDatabase, *, now: datetime) -> dict[str, Any]:
@@ -79,6 +126,7 @@ def get_live_leaderboard(
     limit: int,
     offset: int = 0,
     now: datetime,
+    focus_tag: str | None = None,
 ) -> dict[str, Any] | None:
     if offset < 0 or offset % limit:
         raise ValueError("offset must be non-negative and aligned to limit")
@@ -86,39 +134,52 @@ def get_live_leaderboard(
         rows = connection.execute(
             f"""
             WITH selected AS MATERIALIZED (
-                {_LIVE_PLAYERS_SQL}
+                {_LIVE_RANKED_SQL}
+            ), location AS (
+                SELECT CASE WHEN %(focus_tag)s::text IS NULL THEN %(offset)s::bigint
+                            ELSE ((position - 1) / %(limit)s) * %(limit)s
+                       END AS page_offset,
+                       position AS focus_position
+                FROM (SELECT max(position) AS position FROM selected
+                      WHERE normalized_tag = %(focus_tag)s::text) AS focus
             ), stats AS (
                 SELECT count(*) AS total_entries,
                        count(*) FILTER (
-                           WHERE observed_at < %s - make_interval(secs => %s)
+                           WHERE observed_at < %(now)s - make_interval(secs => %(fresh)s)
                        ) AS stale_count,
                        min(observed_at) AS oldest_observed_at,
                        max(observed_at) AS newest_observed_at
                 FROM selected
             ), page AS MATERIALIZED (
-                SELECT * FROM selected
-                ORDER BY trophies DESC, md5(normalized_tag), normalized_tag
-                LIMIT %s OFFSET %s
+                SELECT selected.* FROM selected CROSS JOIN location
+                WHERE position BETWEEN
+                    least(page_offset + 1, focus_position - %(neighbors)s)
+                    AND greatest(page_offset + %(limit)s, focus_position + %(neighbors)s)
             ), totals AS (
                 SELECT count(*)::bigint AS tracked_population FROM players WHERE active
             )
             SELECT page.normalized_tag, page.name, page.trophies,
                    page.observed_at, page.eligibility_state, page.clan,
-                   CASE WHEN page.normalized_tag IS NOT NULL THEN
-                       row_number() OVER (
-                           ORDER BY page.trophies DESC, md5(page.normalized_tag),
-                                    page.normalized_tag
-                       ) + %s
-                   END AS position,
+                   page.position,
                    stats.total_entries, stats.stale_count,
                    stats.oldest_observed_at, stats.newest_observed_at,
-                   totals.tracked_population
-            FROM stats CROSS JOIN totals
+                   totals.tracked_population, location.page_offset
+            FROM stats CROSS JOIN totals CROSS JOIN location
             LEFT JOIN page ON true
             ORDER BY position NULLS LAST
             """,
-            (now, _LIVE_FRESHNESS_SECONDS, limit, offset, offset),
+            {
+                "focus_tag": focus_tag,
+                "offset": offset,
+                "limit": limit,
+                "now": now,
+                "fresh": _LIVE_FRESHNESS_SECONDS,
+                "neighbors": _FOCUS_NEIGHBORS,
+            },
         ).fetchall()
+        if rows[0][12] is None:
+            return None
+        offset = int(rows[0][12])
         total_entries = int(rows[0][7]) if rows else 0
         if offset and offset >= total_entries:
             return None

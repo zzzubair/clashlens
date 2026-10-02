@@ -442,6 +442,18 @@ def create_app(
             raise ApiError(404, "refresh_not_found")
         return JSONResponse(status_code=200, content=result)
 
+    @app.get("/v1/leaderboards/live/search")
+    def leaderboard_search(
+        request: Request,
+        q: str = Query(min_length=1, max_length=80),
+    ) -> JSONResponse:
+        _authorize(request, "leaderboards.read", production_database)
+        if not q.strip():
+            raise ApiError(422, "invalid_request")
+        return JSONResponse(
+            content=api_leaderboard.search_live_leaderboard(production_database, q)
+        )
+
     @app.get("/v1/leaderboards/{kind}")
     def leaderboard(
         kind: Literal["live", "frozen"],
@@ -450,6 +462,7 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         official_season_id: str | None = None,
         season_day_number: int | None = Query(default=None, ge=1, le=28),
+        focus_tag: str | None = Query(default=None, max_length=16),
     ) -> JSONResponse:
         _authorize(request, "leaderboards.read", production_database)
         if offset % limit or (official_season_id is None) != (
@@ -463,8 +476,11 @@ def create_app(
                 limit=limit,
                 offset=offset,
                 now=current_time(),
+                focus_tag=None if focus_tag is None else _safe_tag(focus_tag),
             )
         else:
+            if focus_tag is not None:
+                raise ApiError(422, "invalid_request")
             result = api_leaderboard.get_frozen_leaderboard(production_database,
                 limit=limit,
                 offset=offset,

@@ -3,6 +3,19 @@
 This directory contains the self-hosted TypeScript SSR website. It talks to
 the private Python API through one server-only client boundary.
 
+The Live Leaderboard's Find your rank search accepts player names and tags.
+A tag typed with `#` opens its row directly when that tag is on the board;
+other searches show up to 20 tracked players whose name matches, or whose tag
+matches without the `#`, with their whole-board ranks and trophies and a
+prompt to narrow larger results.
+Selecting a player loads their current page, highlights the row and scrolls it
+into view, adding up to 5 players from the next or previous page when the row
+sits at a page edge. The page is located again when
+opened, so movement since the search cannot strand the player on an old page.
+Search uses the same ordering and not-found exclusions as the board. It never
+starts tracking an unknown player. [Validation and screenshots](../docs/find-my-rank-validation.md)
+include measurements at 13,000 players.
+
 Exact-tag search opens the player page and starts an unknown tag's first check
 without a button or sign-in. The existing interactive collector retains the
 profile, battle log and league history; existing profile processing activates
