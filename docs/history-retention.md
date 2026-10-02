@@ -278,9 +278,10 @@ DELETE, and the delete step rechecks that the row is still this archive's held
 tombstone. An unknown or failed DELETE leaves the row `retiring`, is counted in
 `failed_objects`, does not stop the batch and is retried by the next run.
 Recollection uses a new immutable `generation/<token>` location, so a delayed
-old DELETE cannot remove new bytes. An upload that finishes on a location
-already `retiring` or `expired` is never attached to it: it uploads again under
-a new generation. One that finishes on a kept location extends its deadline to
+old DELETE cannot remove new bytes. An upload whose original location is already
+`retiring` or `expired` gets a new generation before it writes anything. One
+whose location is marked while it uploads is never attached to it: it uploads
+again under a new generation. One that finishes on a kept location extends its deadline to
 86 days after the latest sighting. Catalogue tombstones remain; cleanup does
 not compact them. Bucket versioning, noncurrent versions, backup retention and
 orphan objects need separately verified provider policies; deleting a current
