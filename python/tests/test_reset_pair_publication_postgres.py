@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import psycopg
+import pytest
 from domain_test_support import domain_database, store_observation, text
+from test_reconciliation import _input
 from test_reconciliation_postgres import (
     DAY_END,
     DAY_START,
@@ -16,8 +21,90 @@ from test_reconciliation_postgres import (
 from test_snapshot_publication_postgres import _process_snapshot_and_analytics
 
 from clashlens import reconciliation_db
+from clashlens.domain import ranked_day_for
 from clashlens.profile import PROFILE_PARSER_VERSION
+from clashlens.reconciliation import (
+    BattleContribution,
+    PreviousRankedDay,
+    reconcile_ranked_day,
+)
 from clashlens.worker import ObservationProcessor
+
+
+@pytest.mark.parametrize("shielded", [False, True])
+@pytest.mark.parametrize("repair", [False, True])
+def test_repair_rebuilds_dependent_results_in_one_job(monkeypatch, shielded, repair):
+    database = MagicMock()
+    connection = database.pool.connection.return_value.__enter__.return_value
+    days = [DAY_START + timedelta(days=offset) for offset in range(3)]
+    connection.execute.return_value.fetchall.return_value = [(days[2],), (days[1],)]
+    saved = {}
+
+    def recalculate(_database, _connection, *, day_start, **_versions):
+        offset = days.index(day_start)
+        previous = saved.get(day_start - timedelta(days=1))
+        previous_day = (
+            PreviousRankedDay(
+                complete=previous.state == "Complete",
+                coverage_complete=previous.coverage_complete,
+                observed_defense_count=previous.defense_count,
+                observed_defense_loss=previous.observed_defense_loss,
+                shield_run_length=previous.shield_duration_days or 0,
+            )
+            if previous is not None else None
+        )
+        base = _input()
+        contributions = (
+            () if shielded else tuple(
+                BattleContribution(f"defense-{index}", "defense", 20)
+                for index in range(8 if offset == 0 else 4)
+            )
+        )
+        saved[day_start] = reconcile_ranked_day(
+            replace(
+                base,
+                ranked_day=ranked_day_for(day_start),
+                now=day_start + timedelta(days=1, minutes=1),
+                start_trophies=6000 if shielded else 6000 - offset * 160,
+                next_start_trophies=6000 if shielded else 6000 - (offset + 1) * 160,
+                coverage_observations=tuple(
+                    replace(item, observed_at=item.observed_at + timedelta(days=offset))
+                    for item in base.coverage_observations
+                ),
+                contributions=contributions,
+                previous_day=previous_day,
+            )
+        )
+
+    saved[days[0]] = reconcile_ranked_day(_input(now=DAY_START + timedelta(hours=1)))
+    for day in days[1:]:
+        recalculate(database, connection, day_start=day)
+    monkeypatch.setattr(reconciliation_db, "recalculate_ranked_day", recalculate)
+    inputs = {"player_id": 1, "ranked_day_start": DAY_START.isoformat()}
+    if repair:
+        inputs.update(
+            recalculate_season="1783918800",
+            last_ranked_day_start=days[1].isoformat(),
+        )
+    claim = SimpleNamespace(
+        input_json=inputs, parser_version="test", processing_version="test",
+        domain_rule_version="test", analytics_rule_version="test",
+    )
+    reconciliation_db.complete_reconciliation(database, claim)
+    assert saved[days[0]].state == "Complete"
+    if shielded:
+        assert saved[days[0]].shield_duration_days == 1
+        assert saved[days[1]].shield_duration_days == (2 if repair else 1)
+        assert saved[days[2]].shield_state == (
+            "uncertain_sequence" if repair else "inferred_shielded"
+        )
+    elif repair:
+        for day in days[1:]:
+            assert saved[day].state == "Complete"
+            assert saved[day].automatic_defense_loss == 80
+            assert "automatic_defense_basis_unavailable" not in saved[day].failure_reasons
+    else:
+        assert "automatic_defense_basis_unavailable" in saved[days[1]].failure_reasons
 
 
 def test_reset_pair_with_production_parser_versions_publishes_army_day(
@@ -276,19 +363,22 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
             report = repair()
             assert report["evaluated_count"] == 1
             days = queued_days(report["job_ids"])
-            assert sorted(days) == [iso(DAY_START), iso(DAY_END)]
+            assert list(days) == [iso(DAY_START)]
             assert latest_states() == ["complete", "failed", "complete"]
             job = days[iso(DAY_START)]
             assert processor.process_job(job, owner="repair").outcome == "processed"
             assert repair() == {"job_ids": [], "evaluated_count": 0, "failure_reasons": {}}
             with database.pool.connection() as connection:
-                day_state = connection.execute(
+                day_states = connection.execute(
                     """
-                    SELECT state FROM ranked_day_versions
-                    WHERE ranked_day_start = %s ORDER BY id DESC LIMIT 1
+                    SELECT DISTINCT ON (ranked_day_start) ranked_day_start, state
+                    FROM ranked_day_versions
+                    WHERE ranked_day_start = ANY(%s)
+                    ORDER BY ranked_day_start, id DESC
                     """,
-                    (DAY_START,),
-                ).fetchone()[0]
-            assert text(day_state) != "Live"
+                    ([DAY_START, DAY_END],),
+                ).fetchall()
+            assert [row[0] for row in day_states] == [DAY_START, DAY_END]
+            assert all(text(row[1]) != "Live" for row in day_states)
         finally:
             database.close()

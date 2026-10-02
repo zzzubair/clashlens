@@ -36,18 +36,37 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
             job = database._lock_live_claim(connection, claim)
-            recalculate_ranked_day(
-                database,
-                connection,
-                player_id=int(claim.input_json["player_id"]),
-                day_start=datetime.fromisoformat(
-                    str(claim.input_json["ranked_day_start"])
-                ),
-                parser_version=claim.parser_version,
-                processing_version=claim.processing_version,
-                domain_rule_version=claim.domain_rule_version,
-                analytics_rule_version=claim.analytics_rule_version,
-            )
+            player_id = int(claim.input_json["player_id"])
+            day_start = datetime.fromisoformat(str(claim.input_json["ranked_day_start"]))
+            day_starts = {day_start}
+            if "recalculate_season" in claim.input_json:
+                day_starts.add(
+                    datetime.fromisoformat(
+                        str(claim.input_json["last_ranked_day_start"])
+                    )
+                )
+                saved_days = connection.execute(
+                    """
+                    SELECT DISTINCT ranked_day_start
+                    FROM api_player_daily_logs
+                    WHERE player_id = %s AND ranked_day_start >= %s
+                      AND official_season_id = %s
+                    ORDER BY ranked_day_start
+                    """,
+                    (player_id, day_start, claim.input_json["recalculate_season"]),
+                ).fetchall()
+                day_starts.update(row[0] for row in saved_days)
+            for day_start in sorted(day_starts):
+                recalculate_ranked_day(
+                    database,
+                    connection,
+                    player_id=player_id,
+                    day_start=day_start,
+                    parser_version=claim.parser_version,
+                    processing_version=claim.processing_version,
+                    domain_rule_version=claim.domain_rule_version,
+                    analytics_rule_version=claim.analytics_rule_version,
+                )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
@@ -1380,5 +1399,3 @@ def enqueue_current_season_republication(
                 if row is not None:
                     job_ids.append(int(row[0]))
             return {**repaired, "job_ids": job_ids}
-
-

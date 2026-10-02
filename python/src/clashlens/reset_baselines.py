@@ -65,7 +65,7 @@ def repair_current_season_reset_baselines(
             candidates = connection.execute(
                 """
                 WITH current_anchor AS (
-                    SELECT current_start
+                    SELECT current_start, current_league_season_id
                     FROM legend_season_anchors
                     WHERE state = 'confirmed' AND anchor_rule_version = %s
                     ORDER BY current_start DESC
@@ -80,7 +80,8 @@ def repair_current_season_reset_baselines(
                     LIMIT 1
                 ), sweep.boundary_at > anchor.current_start,
                 sweep.boundary_at < anchor.current_start + interval '28 days'
-                AND sweep.boundary_at + interval '1 day' <= clock_timestamp()
+                AND sweep.boundary_at + interval '1 day' <= clock_timestamp(),
+                anchor.current_league_season_id
                 FROM collector_work AS work
                 JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
                 JOIN current_anchor AS anchor
@@ -122,6 +123,7 @@ def repair_current_season_reset_baselines(
             profile_parser_version,
             ends_day,
             starts_ended_day,
+            official_season_id,
         ) in candidates:
             with connection.transaction():
                 pair_job_ids, reasons = _evaluate_reset_baseline(
@@ -133,6 +135,7 @@ def repair_current_season_reset_baselines(
                     processing_version=PROCESSING_VERSION,
                     ends_day=bool(ends_day),
                     starts_ended_day=bool(starts_ended_day),
+                    recalculate_season=_text_value(official_season_id),
                 )
             job_ids.extend(pair_job_ids)
             failure_reasons.update(reasons)
@@ -155,6 +158,7 @@ def _evaluate_reset_baseline(
     failure_retryable: bool = False,
     ends_day: bool = True,
     starts_ended_day: bool = False,
+    recalculate_season: str | None = None,
 ) -> tuple[list[int], list[str]]:
     """Record the Reset pair evidence seen from one of its observations.
 
@@ -311,18 +315,19 @@ def _evaluate_reset_baseline(
     day_starts = [boundary_at - timedelta(days=1)] if ends_day else []
     if starts_ended_day:
         day_starts.append(boundary_at)
-    job_ids = [
-        _enqueue_reset_reconciliation(
-            connection,
-            baseline_id=evidence_id,
-            baseline_version=version,
-            player_id=int(player_id),
-            boundary_at=boundary_at,
-            ranked_day_start=ranked_day_start,
-        )
-        for ranked_day_start in day_starts
-    ]
-    return [job_id for job_id in job_ids if job_id is not None], reasons
+    if not day_starts:
+        return [], reasons
+    job_id = _enqueue_reset_reconciliation(
+        connection,
+        baseline_id=evidence_id,
+        baseline_version=version,
+        player_id=int(player_id),
+        boundary_at=boundary_at,
+        ranked_day_start=day_starts[0],
+        last_ranked_day_start=day_starts[-1],
+        recalculate_season=recalculate_season,
+    )
+    return [job_id] if job_id is not None else [], reasons
 
 
 def _record_boundary_baseline(
@@ -762,6 +767,8 @@ def _enqueue_reset_reconciliation(
     player_id: int,
     boundary_at: datetime,
     ranked_day_start: datetime,
+    last_ranked_day_start: datetime,
+    recalculate_season: str | None,
 ) -> int | None:
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
@@ -794,6 +801,18 @@ def _enqueue_reset_reconciliation(
                     "boundary_at": boundary_text,
                     "reset_baseline_id": int(baseline_id),
                     "reset_baseline_version": int(baseline_version),
+                    **(
+                        {
+                            "last_ranked_day_start": (
+                                last_ranked_day_start.astimezone(UTC).strftime(
+                                    "%Y-%m-%dT%H:%M:%SZ"
+                                )
+                            ),
+                            "recalculate_season": recalculate_season,
+                        }
+                        if recalculate_season is not None
+                        else {}
+                    ),
                 }
             ),
             DEFAULT_PARSER_VERSION,
@@ -803,5 +822,3 @@ def _enqueue_reset_reconciliation(
         ),
     ).fetchone()
     return int(row[0]) if row is not None else None
-
-

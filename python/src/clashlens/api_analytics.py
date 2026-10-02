@@ -255,17 +255,20 @@ def get_army_analytics(
                 (resolved.season, resolved.start_day, resolved.end_day),
             ).fetchall()
             completed_days = {int(row[0]) for row in completed_day_rows}
+            population = resolved.population
+            streak = population.startswith("streak-top-")
             requested_days = list(range(resolved.start_day, resolved.end_day + 1))
             covered_days = [
                 day
                 for day in requested_days
                 if day in day_starts and day in completed_days
             ]
-            if selection.season != "current" and covered_days != requested_days:
+            if (
+                selection.season != "current" or streak
+            ) and covered_days != requested_days:
                 raise ArmyAnalyticsUnavailable(
                     [day for day in requested_days if day not in covered_days]
                 )
-            population = resolved.population
             snapshot_versions: list[int] = []
             snapshot_ids: list[int] = []
             missing_trophies = 0
@@ -274,7 +277,6 @@ def get_army_analytics(
             cohort_evidence: dict[str, int] | None = None
             minimum: int | None = None
             maximum: int | None = None
-            streak = population.startswith("streak-top-")
             boundary_by_day = {
                 day: day_starts[day] + timedelta(days=1) for day in covered_days
             }
@@ -294,24 +296,20 @@ def get_army_analytics(
                 by_boundary = {
                     row[0]: (int(row[1]), int(row[2])) for row in snapshots
                 }
-                if selection.season == "current":
+                if selection.season == "current" and not streak:
                     ranked_days = [
                         day
                         for day in covered_days
                         if boundary_by_day[day] in by_boundary
                     ]
-                    covered_days = (
-                        ranked_days
-                        if streak
-                        else [
-                            day
-                            for day in covered_days
-                            if ranked_days and day <= ranked_days[-1]
-                        ]
-                    )
+                    covered_days = [
+                        day
+                        for day in covered_days
+                        if ranked_days and day <= ranked_days[-1]
+                    ]
             if not covered_days:
                 raise ArmyAnalyticsUnavailable(requested_days)
-            if selection.season == "current":
+            if selection.season == "current" and not streak:
                 resolved = ArmyAnalyticsSelection.parse(
                     **{
                         **resolved.as_dict(),
@@ -328,7 +326,7 @@ def get_army_analytics(
             if population.startswith("trophies-"):
                 minimum, maximum = map(int, population.split("-")[1:])
             else:
-                needed_days = covered_days if streak else covered_days[-1:]
+                needed_days = requested_days if streak else covered_days[-1:]
                 unavailable_days = [
                     day
                     for day in needed_days
