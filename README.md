@@ -50,9 +50,10 @@ measured startup time.
 The website is available at <http://127.0.0.1:5173>. `down` keeps the local
 database, raw-response archive, and spool; the isolated `check` stack removes
 its data when the checks finish. The single Python asyncio collector revisits
-player profiles and battle logs on a three-minute cadence, writes exact raw
-responses to the bounded local spool, uploads them to the immutable archive,
-and hands durable observations to the Python worker. Use
+player profiles every 90 seconds or as fast as the keys allow, and battle logs
+when they can have changed. It writes exact raw responses to the bounded local
+spool, uploads them to the immutable archive, and hands durable observations to
+the Python worker. Use
 `./dev trial --players 12500 --minutes 30` to measure capacity and storage
 growth against the local fixtures. Trials accept 1–13,500 players and default to
 12,500 players for 30 minutes. Profiles include ignored fields and battle logs
