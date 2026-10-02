@@ -455,11 +455,10 @@ def test_fail_upload_reconciles_exact_retry_but_fences_an_old_owner(
             )
 
 
-def test_upload_retire_after_follows_the_response_season(
+def test_late_upload_counts_86_days_from_its_first_verification(
     database_url: str,
 ) -> None:
-    # A season-N response uploaded days later still retires with season N:
-    # retire_after derives from response_completed_at, not upload completion.
+    # A response verified days after its sighting keeps 86 days from verification.
     response_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     uploaded_later = response_at + timedelta(days=40)
     with upload_database(database_url) as connection_info:
@@ -508,8 +507,8 @@ def test_upload_retire_after_follows_the_response_season(
                 (response_at, uploaded_later, response_hash),
             ).fetchone()
         assert row is not None
-        assert row[0] == row[1]
-        assert row[0] != row[2]
+        assert row[0] == row[2] == uploaded_later + timedelta(days=86)
+        assert row[0] != row[1]
 
 
 def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
@@ -517,7 +516,8 @@ def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
 ) -> None:
     response_at = NOW
     seen_next_season = response_at + timedelta(days=29)
-    upload_at = seen_next_season + timedelta(days=30)
+    # Verified before that later sighting, so the sighting sets the deadline.
+    upload_at = response_at + timedelta(days=2)
     with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
@@ -579,10 +579,10 @@ def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
                        clashlens_season_retire_after(%s)
                 FROM archive_catalogue WHERE response_hash = %s
                 """,
-                (seen_next_season, response_at, response_hash),
+                (seen_next_season, upload_at, response_hash),
             ).fetchone()
         assert row is not None
-        assert row[0] == row[1]
+        assert row[0] == row[1] == seen_next_season + timedelta(days=86)
         assert row[0] != row[2]
 
 

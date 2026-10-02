@@ -164,13 +164,7 @@ def _lock_upload(connection: Any, response_hash: str) -> tuple[Any, ...] | None:
         SELECT response_hash, spool_key, byte_size, state, lease_owner,
                lease_token, lease_expires_at, attempt_count,
                upload_generation,
-               GREATEST(
-                   clashlens_season_retire_after(latest_sighting_at),
-                   COALESCE(
-                       minimum_retire_after,
-                       clashlens_season_retire_after(latest_sighting_at)
-                   )
-               ) AS retire_after,
+               latest_sighting_at,
                settled_lease_token,
                archive_reference, archive_instance_id, completed_at,
                last_error_category, last_error_detail, last_error_retryable
@@ -253,15 +247,20 @@ def complete_upload(
                     """
                     INSERT INTO archive_catalogue (
                         response_hash, archive_reference, byte_size,
-                        archive_instance_id, retire_after
-                    ) VALUES (%s, %s, %s, %s, %s)
+                        archive_instance_id, first_verified_at, retire_after
+                    ) VALUES (
+                        %s, %s, %s, %s, %s,
+                        clashlens_season_retire_after(GREATEST(%s, %s))
+                    )
                     """,
                     (
                         claim.response_hash,
                         archive_reference,
                         claim.byte_size,
                         archive_instance_id,
+                        complete_time,
                         row[9],
+                        complete_time,
                     ),
                 )
             connection.execute(

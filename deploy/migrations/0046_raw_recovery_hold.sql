@@ -1,5 +1,6 @@
 -- Raw responses now become due exactly 86 days after their latest sighting
--- (was 56 days after the end of that sighting's 28-day season). The function
+-- or first verification, whichever is later (was 56 days after the end of
+-- that sighting's 28-day season). The function
 -- keeps its historical name so existing callers and triggers stay unchanged.
 -- Retirement first marks a response 'retiring', which
 -- blocks every new use, and deletes the bytes only after the promised
@@ -24,9 +25,10 @@ BEGIN
 END
 $$;
 
--- Recalculate every kept response from its latest retained sighting: the
--- exact location's observations, plus the hash's upload row and compact state.
--- An existing deadline is never moved earlier.
+-- Recalculate every kept response: 86 days after the later of its latest
+-- retained sighting (the exact location's observations, plus the hash's upload
+-- row and compact state) and its first verification. The old season deadline
+-- is discarded.
 WITH by_reference AS (
     SELECT archive_reference, max(response_completed_at) AS seen_at
     FROM collector_observations WHERE archive_reference IS NOT NULL
@@ -41,19 +43,20 @@ WITH by_reference AS (
     GROUP BY response_hash
 ), latest AS (
     SELECT catalogue.response_hash, catalogue.archive_reference,
-           GREATEST(by_reference.seen_at, by_hash.seen_at) AS seen_at
+           GREATEST(by_reference.seen_at, by_hash.seen_at, catalogue.first_verified_at) AS seen_at
     FROM archive_catalogue AS catalogue
     LEFT JOIN by_reference USING (archive_reference)
     LEFT JOIN by_hash USING (response_hash)
     WHERE catalogue.availability IN ('verified', 'retiring')
 )
 UPDATE archive_catalogue AS catalogue
-SET retire_after = GREATEST(
-    catalogue.retire_after, clashlens_season_retire_after(latest.seen_at)
-)
+SET retire_after = clashlens_season_retire_after(latest.seen_at)
 FROM latest
 WHERE latest.response_hash = catalogue.response_hash
   AND latest.archive_reference = catalogue.archive_reference;
+
+-- Pending uploads take the same rule at completion; the old season floor goes.
+ALTER TABLE collector_response_uploads DROP COLUMN minimum_retire_after;
 
 ALTER TABLE archive_catalogue ADD COLUMN retiring_since timestamptz;
 -- Responses already marked by the old code start their recovery hold now, or

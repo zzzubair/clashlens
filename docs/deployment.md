@@ -610,9 +610,9 @@ the lock like other operator commands.
 
 Enable it in two approved steps:
 
-1. Set `preview`, run `./ops up`, then `./ops archive-prune`. Put its batch
-   counts (`deleted_objects`, `deleted_bytes`, `marked_objects`, `marked_bytes`,
-   `protected_objects`) in the deployment report.
+1. Set `preview`, run `./ops up`, then `./ops archive-prune`. Put its
+   `eligible` summary (count, bytes, oldest and newest deadline) in the
+   deployment report.
 2. Only after #122/#129 prove the seven-day-old restore above and that report
    is approved, set `apply` and run `./ops up`.
 
