@@ -198,7 +198,7 @@ def _saved_disagreement(connection_info: str, tag: str) -> list[bool]:
     with psycopg.connect(connection_info) as connection:
         row = connection.execute(
             """
-            SELECT version.contribution_evidence
+            SELECT version.input_evidence -> 'contributions'
             FROM api_player_daily_logs AS log
             JOIN players AS player ON player.id = log.player_id
             JOIN ranked_day_versions AS version

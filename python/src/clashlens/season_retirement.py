@@ -850,20 +850,53 @@ def _delete_battles(connection: Any, battle_ids: list[int]) -> int:
         (battle_ids,),
     )
     if source_rows:
+        unreferenced = [
+            int(row[0])
+            for row in connection.execute(
+                """
+                SELECT id FROM unnest(%s::bigint[]) AS candidate (id)
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM battle_evidence AS remaining
+                    WHERE remaining.source_row_id = candidate.id
+                )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM battle_log_observation_rows AS remaining
+                    WHERE remaining.source_row_id = candidate.id
+                )
+                """,
+                (source_rows,),
+            ).fetchall()
+        ]
+        connection.execute(
+            "DELETE FROM battle_payload_rows WHERE source_row_id = ANY(%s::bigint[])",
+            (unreferenced,),
+        )
+        # A list keeps each remaining battle at its log position; a list
+        # with nothing left goes, as its per-row predecessors did.
         connection.execute(
             """
-            DELETE FROM battle_payload_rows
-            WHERE source_row_id = ANY(%s::bigint[])
+            DELETE FROM battle_payload_row_lists AS list
+            WHERE list.source_row_ids && %(ids)s::bigint[]
               AND NOT EXISTS (
-                  SELECT 1 FROM battle_evidence AS remaining
-                  WHERE remaining.source_row_id = battle_payload_rows.source_row_id
-              )
-              AND NOT EXISTS (
-                  SELECT 1 FROM battle_log_observation_rows AS remaining
-                  WHERE remaining.source_row_id = battle_payload_rows.source_row_id
+                  SELECT 1 FROM unnest(list.source_row_ids) AS member (id)
+                  WHERE member.id <> ALL(%(ids)s::bigint[])
               )
             """,
-            (source_rows,),
+            {"ids": unreferenced},
+        )
+        connection.execute(
+            """
+            UPDATE battle_payload_row_lists AS list
+            SET source_row_ids = ARRAY(
+                SELECT CASE WHEN member.id = ANY(%(ids)s::bigint[]) THEN NULL
+                            ELSE member.id END
+                FROM unnest(list.source_row_ids) WITH ORDINALITY
+                    AS member (id, position)
+                ORDER BY member.position
+            )
+            WHERE list.source_row_ids && %(ids)s::bigint[]
+            """,
+            {"ids": unreferenced},
         )
         connection.execute(
             """
@@ -880,6 +913,10 @@ def _delete_battles(connection: Any, battle_ids: list[int]) -> int:
               AND NOT EXISTS (
                   SELECT 1 FROM battle_payload_rows AS remaining
                   WHERE remaining.source_row_id = battle_source_rows.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM battle_payload_row_lists AS remaining
+                  WHERE remaining.source_row_ids @> ARRAY[battle_source_rows.id]
               )
             """,
             (source_rows,),

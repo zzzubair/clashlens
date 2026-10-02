@@ -522,7 +522,9 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
                            observed_trophy_change, boundary_adjustment,
                            boundary_adjustment_type, observed_boundary_adjustment,
                            unexplained_residual, formula_components, input_evidence,
-                           coverage_evidence, contribution_evidence, shield_evidence,
+                           input_evidence -> 'coverage_observations' AS coverage_evidence,
+                           input_evidence -> 'contributions' AS contribution_evidence,
+                           shield_evidence,
                            evidence_complete, coverage_complete, reconciled,
                            shield_state, shield_duration_days, start_baseline_id,
                            end_baseline_id
@@ -703,14 +705,6 @@ def test_durable_reconciliation_versions_late_corrections_without_rewriting_hist
             assert first_version["formula_components"]["observed_defense_loss"] == 0
             assert first_version["formula_components"]["automatic_defense_loss"] is None
             assert first_version["input_evidence"]["player_eligible"] is True
-            assert (
-                first_version["input_evidence"]["coverage_observations"]
-                == (first_version["coverage_evidence"])
-            )
-            assert (
-                first_version["input_evidence"]["contributions"]
-                == (first_version["contribution_evidence"])
-            )
             assert isinstance(first_version["coverage_evidence"], list)
             assert isinstance(first_version["contribution_evidence"], list)
             assert isinstance(first_version["shield_evidence"], dict)
@@ -899,8 +893,10 @@ def test_postgres_persists_complete_inferred_shield_evidence(
                            automatic_defense_evidence_state, net_trophy_change,
                            observed_trophy_change, expected_next_start_trophies,
                            unexplained_residual, formula_components,
-                           input_evidence, coverage_evidence,
-                           contribution_evidence, shield_evidence,
+                           input_evidence,
+                           input_evidence -> 'coverage_observations' AS coverage_evidence,
+                           input_evidence -> 'contributions' AS contribution_evidence,
+                           shield_evidence,
                            coverage_complete, reconciled, shield_state,
                            shield_duration_days
                     FROM ranked_day_versions
@@ -1104,7 +1100,8 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
                 ).fetchone()
                 ranked = connection.execute(
                     """
-                    SELECT reconciliation_rule_version, contribution_evidence
+                    SELECT reconciliation_rule_version,
+                           input_evidence -> 'contributions' AS contribution_evidence
                     FROM ranked_day_versions
                     WHERE ranked_day_start = %s
                     ORDER BY version DESC
@@ -1255,7 +1252,7 @@ def test_completion_binds_coverage_chain_to_sweep_battle_log_observation_ids(
                 row = connection.execute(
                     """
                     SELECT state, confidence, failure_reasons, coverage_complete,
-                           coverage_evidence, input_evidence
+                           input_evidence -> 'coverage_observations' AS coverage_evidence, input_evidence
                     FROM ranked_day_versions
                     WHERE ranked_day_start = %s
                     ORDER BY version DESC

@@ -77,7 +77,10 @@ so runs are bounded, restartable, and idempotent. Summaries, players
 and accounts, raw lifecycle, reset baselines, frozen publication
 identities/entries, boundary generations/manifests, correction chains,
 and ranked-day versions are retained, and restrictive foreign keys are
-unchanged. Once finalized, targeted corrections, replays, and
+unchanged. Since migration 0051 a battle-log fetch lists its battles in one
+row instead of one row per battle; retirement empties a retired battle's place
+in that list, and a database trigger stands in for the foreign key a list
+cannot carry. Once finalized, targeted corrections, replays, and
 rematerializations return an explicit `season_detail_retired` result
 before any domain mutation and never rebuild retired detail or replace
 summaries from a reduced sample; rolling logs containing old battles
@@ -222,6 +225,10 @@ their observations are not selected by this cleanup. Their completed processing
 jobs can be pruned separately, but observation metadata and archive catalogue
 tombstones remain. Failed work also requires operator investigation; this is
 not a time limit on all tables or a bounded database-size guarantee.
+
+Since migration 0051, `known_player_discoveries` records a player once per
+source (battle opponent or official ranking) instead of on every fetch that
+returns them; rows recorded before it stay.
 
 The same command also prunes redundant discovery provenance attached to retained
 roots: `known_player_discoveries` rows and observation-backed

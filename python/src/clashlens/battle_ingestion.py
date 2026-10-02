@@ -58,9 +58,18 @@ def supersede_battle_log(
                 WHERE NOT EXISTS (
                     SELECT 1
                     FROM battle_source_rows AS source
-                    JOIN battle_payload_rows AS member ON member.source_row_id = source.id
                     WHERE source.report_hash = wanted.report_hash
-                      AND member.reporting_player_id = player.id
+                      AND (
+                          EXISTS (
+                              SELECT 1 FROM battle_payload_row_lists AS list
+                              WHERE list.source_row_ids @> ARRAY[source.id]
+                                AND list.reporting_player_id = player.id
+                          ) OR EXISTS (
+                              SELECT 1 FROM battle_payload_rows AS member
+                              WHERE member.source_row_id = source.id
+                                AND member.reporting_player_id = player.id
+                          )
+                      )
                       AND (
                           source.outcome <> 'valid_legend' OR EXISTS (
                               SELECT 1
@@ -1211,6 +1220,9 @@ def _record_battle_sources(
         (Jsonb(rows),) if compact else (Jsonb(rows), payload_id),
     )
     if compact:
+        # One row lists the whole log; array position N is source row N - 1.
+        # A payload first listed per row, before the list table, stays so.
+        assert [row["source_row_index"] for row in rows] == list(range(len(rows)))
         connection.execute(
             """
             WITH input AS (
@@ -1218,17 +1230,30 @@ def _record_battle_sources(
                     source_row_index integer, report_hash text
                 )
             ), members AS (
-                INSERT INTO battle_payload_rows (
-                    parsed_payload_id, reporting_player_id, source_row_index, source_row_id
+                INSERT INTO battle_payload_row_lists (
+                    parsed_payload_id, reporting_player_id, source_row_ids
                 )
-                SELECT %s, %s, input.source_row_index, source.id
-                FROM input JOIN battle_source_rows AS source USING (report_hash)
-                ON CONFLICT (parsed_payload_id, reporting_player_id, source_row_index) DO NOTHING
+                SELECT %s, %s, array_agg(source.id ORDER BY input.source_row_index)
+                FROM input LEFT JOIN battle_source_rows AS source USING (report_hash)
+                HAVING count(*) > 0 AND NOT EXISTS (
+                    SELECT 1 FROM battle_payload_rows AS member
+                    WHERE member.parsed_payload_id = %s
+                      AND member.reporting_player_id = %s
+                )
+                ON CONFLICT (parsed_payload_id, reporting_player_id) DO NOTHING
             )
             UPDATE battle_log_observations SET parsed_payload_id = %s
             WHERE id = %s
             """,
-            (Jsonb(rows), payload_id, reporter_id, payload_id, log_id),
+            (
+                Jsonb(rows),
+                payload_id,
+                reporter_id,
+                payload_id,
+                reporter_id,
+                payload_id,
+                log_id,
+            ),
         )
     else:
         connection.execute(

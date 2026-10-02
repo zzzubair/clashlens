@@ -106,12 +106,13 @@ CROSS JOIN LATERAL (
     LIMIT 1
 ) AS published
 LEFT JOIN LATERAL (
-    SELECT version.contribution_evidence, version.official_season_id
+    SELECT version.input_evidence -> 'contributions' AS contributions,
+           version.official_season_id
     FROM ranked_day_versions AS version
     WHERE version.id = published.ranked_day_version_id
     OFFSET 0
 ) AS version ON true
-WHERE NOT coalesce(version.contribution_evidence @> pair.expected, false)
+WHERE NOT coalesce(version.contributions @> pair.expected, false)
   AND NOT EXISTS (
       SELECT 1 FROM season_detail_retirements AS retirement
       WHERE retirement.status IN ('finalized', 'retired')

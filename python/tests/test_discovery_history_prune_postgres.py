@@ -590,7 +590,8 @@ def test_discovery_scheduling_and_replay_survive_cleanup(
                 ).fetchone()[0] > 0
         finally:
             database.close()
-        # Replay of a cleaned observation still processes and re-records provenance.
+        # Replay of a cleaned observation still processes; its opponent stays
+        # recorded once, by the fresh observation.
         with psycopg.connect(connection_info) as connection:
             parser_version = connection.execute(
                 "SELECT parser_version FROM battle_log_observations WHERE observation_id = %s",
@@ -622,9 +623,8 @@ def test_discovery_scheduling_and_replay_survive_cleanup(
             assert replayed is not None and replayed.outcome == "processed"
             with database.pool.connection() as connection:
                 assert connection.execute(
-                    "SELECT count(*) FROM known_player_discoveries WHERE observation_id = %s",
-                    (observation,),
-                ).fetchone()[0] == 1
+                    "SELECT array_agg(observation_id) FROM known_player_discoveries"
+                ).fetchone()[0] == [fresh_observation]
         finally:
             database.close()
 
