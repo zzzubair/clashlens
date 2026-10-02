@@ -995,7 +995,7 @@ class CollectorDatabase:
         connection: Any,
         handoff: ResponseHandoff,
         observation_id: int | None,
-        saved: bool,
+        saved: bool = True,
     ) -> None:
         connection.execute(
             """
