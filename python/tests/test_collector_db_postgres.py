@@ -99,7 +99,7 @@ def test_due_players_are_claimed_without_collector_work_rows(
             next_due_at = connection.execute(
                 "SELECT next_due_at FROM players WHERE id = %s", (player_id,)
             ).fetchone()[0]
-        assert next_due_at == NOW + timedelta(seconds=90)
+        assert next_due_at == NOW + timedelta(minutes=3)
 
 
 def test_due_claim_reuses_only_a_current_profile_before_the_first_successful_battle(

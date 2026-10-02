@@ -189,8 +189,8 @@ the server. This address is what every
 The September 30 quote totals **EUR 10.56/month before tax** at 730 hours:
 EUR 6.55 compute, EUR 3.65 IPv4 and EUR 0.36 for the 10 GB local disk. This fits
 the approved EUR 11–15/month budget. Outgoing instance
-traffic is included. At 150 requests/second, response sizes of 10, 25 or 50 KB
-mean approximately 4.9, 12.3 or 24.6 TB/month with a 25% traffic allowance.
+traffic is included. At 147 requests/second, response sizes of 10, 25 or 50 KB
+mean approximately 4.8, 12.1 or 24.1 TB/month with a 25% traffic allowance.
 These are sizing assumptions, not measured successful response sizes.
 See [instance pricing](https://www.scaleway.com/en/pricing/virtual-instances/)
 and [the June 2026 IPv4 price update](https://www.scaleway.com/en/blog/a-transparent-update-on-scaleway-pricing/).
