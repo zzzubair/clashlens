@@ -26,6 +26,7 @@ from clashlens import job_outcomes, late_battle_sweep, reconciliation_db
 from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
 from clashlens.late_battle_sweep import LateBattleSweep, sweep_late_battles
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
 
 ANCHOR = datetime(2026, 8, 3, 5, tzinfo=UTC)
 DAY = ANCHOR + timedelta(days=1)
@@ -646,8 +647,8 @@ def test_correction_finishes_in_one_pass_before_the_window_slides(
             database.close()
 
 
-def test_late_battle_older_than_the_window_is_logged_and_not_corrected(
-    database_url: str, archive_server, capsys
+def test_late_battle_older_than_the_window_is_not_corrected(
+    database_url: str, archive_server
 ) -> None:
     # The worker was stopped for over a week after the late battle was saved.
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -665,13 +666,6 @@ def test_late_battle_older_than_the_window_is_logged_and_not_corrected(
             ) == (0, 0)
 
             assert _published(connection_info, DAY) == before
-            with psycopg.connect(connection_info) as connection:
-                player_id = connection.execute(
-                    "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
-                ).fetchone()[0]
-            assert [
-                (line["status"], line["player_days"]) for line in _sweep_lines(capsys)
-            ] == [("skipped", [f"{player_id}:2026-08-04T05:00:00+00:00"])]
         finally:
             database.close()
 
@@ -866,5 +860,222 @@ def test_agreement_restored_by_a_later_report_makes_the_first_result_current_aga
                 database, now=boundary + timedelta(minutes=51)
             ) == (0, 0)
             assert _published(connection_info, DAY, OPPONENT)[1] == restored
+        finally:
+            database.close()
+
+
+# The selection before it was limited to the window and read from indexes.
+_UNINDEXED_STALE_DAYS = """
+WITH late_battle AS (
+    SELECT battle.id, battle.ranked_day_start,
+           battle.attacker_player_id, battle.defender_player_id,
+           battle.disagreement_state = 'disagreement' AS disagreement
+    FROM legend_battles AS battle
+    JOIN battle_perspectives AS perspective ON perspective.battle_id = battle.id
+    JOIN battle_evidence AS evidence ON evidence.id = perspective.evidence_id
+    WHERE battle.ranked_day_start < %(boundary)s
+      AND evidence.created_at
+          >= battle.ranked_day_start + interval '24 hours' - interval '5 minutes'
+    GROUP BY battle.id
+), pair AS (
+    SELECT CASE perspective.perspective
+               WHEN 'attacker' THEN battle.attacker_player_id
+               ELSE battle.defender_player_id
+           END AS player_id,
+           battle.ranked_day_start,
+           jsonb_agg(jsonb_build_object(
+               'source_evidence_id', perspective.evidence_id,
+               'disagreement', battle.disagreement
+           )) AS expected
+    FROM late_battle AS battle
+    JOIN battle_perspectives AS perspective ON perspective.battle_id = battle.id
+    GROUP BY 1, 2
+)
+SELECT pair.player_id, pair.ranked_day_start
+FROM pair
+CROSS JOIN LATERAL (
+    SELECT log.ranked_day_version_id
+    FROM api_player_daily_logs AS log
+    WHERE log.player_id = pair.player_id
+      AND log.ranked_day_start = pair.ranked_day_start
+    ORDER BY log.version DESC
+    LIMIT 1
+) AS published
+LEFT JOIN ranked_day_versions AS version
+  ON version.id = published.ranked_day_version_id
+WHERE NOT coalesce(version.contribution_evidence @> pair.expected, false)
+  AND NOT EXISTS (
+      SELECT 1 FROM season_detail_retirements AS retirement
+      WHERE retirement.status IN ('finalized', 'retired')
+        AND (
+            retirement.official_season_id = version.official_season_id
+            OR (pair.ranked_day_start >= retirement.season_start
+                AND pair.ranked_day_start < retirement.season_end)
+        )
+  )
+ORDER BY pair.player_id, pair.ranked_day_start
+"""
+
+_UNINDEXED_OUTDATED_DAYS = """
+SELECT saved.player_id, saved.ranked_day_start
+FROM (
+    SELECT DISTINCT log.player_id, log.ranked_day_start
+    FROM api_player_daily_logs AS log
+    WHERE log.ranked_day_start >= %(window_start)s
+) AS saved
+CROSS JOIN LATERAL (
+    SELECT version.input_evidence -> 'previous_day' ->> 'version_id' AS previous_id
+    FROM ranked_day_versions AS version
+    WHERE version.player_id = saved.player_id
+      AND version.ranked_day_start = saved.ranked_day_start
+      AND version.reconciliation_rule_version = %(rule)s
+    ORDER BY version.version DESC, version.id DESC
+    LIMIT 1
+) AS built
+CROSS JOIN LATERAL (
+    SELECT version.id
+    FROM ranked_day_versions AS version
+    WHERE version.player_id = saved.player_id
+      AND version.ranked_day_start = saved.ranked_day_start - interval '24 hours'
+      AND version.reconciliation_rule_version = %(rule)s
+    ORDER BY version.version DESC, version.id DESC
+    LIMIT 1
+) AS previous
+WHERE built.previous_id IS DISTINCT FROM previous.id::text
+"""
+
+
+def _selections(connection_info: str) -> tuple[dict, dict]:
+    """Each Reset's selected player-days, by the old and the indexed queries."""
+    unindexed: dict = {}
+    indexed: dict = {}
+    with psycopg.connect(connection_info) as connection:
+        for days in range(1, 10):
+            boundary = DAY + timedelta(days=days)
+            parameters = {
+                "boundary": boundary,
+                "window_start": boundary - late_battle_sweep.WINDOW,
+                "rule": RECONCILIATION_RULE_VERSION,
+            }
+            stale = connection.execute(_UNINDEXED_STALE_DAYS, parameters)
+            outdated = connection.execute(_UNINDEXED_OUTDATED_DAYS, parameters)
+            unindexed[boundary] = (
+                [row for row in stale if row[1] >= parameters["window_start"]],
+                sorted(outdated),
+            )
+            stale = connection.execute(late_battle_sweep._STALE_DAYS, parameters)
+            outdated = connection.execute(late_battle_sweep._OUTDATED_DAYS, parameters)
+            indexed[boundary] = (stale.fetchall(), sorted(outdated))
+    return unindexed, indexed
+
+
+def test_indexed_selection_picks_the_same_player_days_as_before(
+    database_url: str, archive_server
+) -> None:
+    # Two players' late and on-time reports, a late report that changes their
+    # agreement, and a later day built from an outdated previous day, checked
+    # at every Reset from the late battle's day until it has left the window.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _seed_battle_anchor(connection_info, ANCHOR)
+            battle_time = DAY + timedelta(days=1, seconds=-10)
+            _process(
+                processor,
+                store_observation(
+                    connection_info,
+                    archive_server,
+                    occurrence_key="attacker-log",
+                    endpoint="battle_log",
+                    body=json.dumps(
+                        {
+                            "items": [
+                                _live_battle_row(
+                                    attack=True,
+                                    battle_timestamp=battle_time,
+                                    opponent_tag=TAG,
+                                    opponent_name="Defender",
+                                    stars=0,
+                                    destruction_percentage=49,
+                                )
+                            ]
+                        }
+                    ).encode(),
+                    observed_at=battle_time + timedelta(seconds=5),
+                    normalized_tag=OPPONENT,
+                    parser_version=LIVE_BATTLE_PARSER_VERSION,
+                )[1],
+            )
+            _save_log(
+                connection_info,
+                archive_server,
+                processor,
+                key="on-time-log",
+                rows=[_on_time_defense()],
+                observed_at=DAY + timedelta(hours=2),
+            )
+            _publish(database, processor, DAY)
+            _publish(database, processor, DAY + timedelta(days=1))
+            _process(
+                processor,
+                reconciliation_db.enqueue_reconciliation(
+                    database,
+                    player_tag=OPPONENT,
+                    day_start=DAY,
+                    now=DAY,
+                    request_key="published-opponent",
+                ),
+            )
+            _save_log(
+                connection_info,
+                archive_server,
+                processor,
+                key="late-log",
+                rows=[
+                    {**_late_defense(), "armyShareCode": "u3x0-2x1"},
+                    _on_time_defense(),
+                ],
+                observed_at=DAY + timedelta(days=1, minutes=20),
+            )
+            # Reports are saved when they are fetched. The battle's reports are
+            # moved to just before, at, and after the 5-minute margin.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE battle_evidence SET created_at = source_observed_at"
+                )
+            day_end = DAY + timedelta(days=1)
+            for saved_at, late in [
+                (day_end - timedelta(minutes=5, microseconds=1), False),
+                (day_end - timedelta(minutes=5), True),
+                (day_end + timedelta(minutes=20), True),
+            ]:
+                with psycopg.connect(connection_info) as connection:
+                    connection.execute(
+                        "UPDATE battle_evidence SET created_at = %s "
+                        "WHERE battle_timestamp = %s",
+                        (saved_at, battle_time),
+                    )
+                unindexed, indexed = _selections(connection_info)
+                assert indexed == unindexed
+                # Both players' late day is selected until it leaves the window.
+                assert [len(stale) for stale, _ in indexed.values()] == (
+                    [2] * 7 + [0] * 2 if late else [0] * 9
+                )
+
+            # An existing job corrects only the late day, so the next day is
+            # left built from the late day's outdated version.
+            _process(
+                processor,
+                reconciliation_db.enqueue_reconciliation(
+                    database,
+                    player_tag=TAG,
+                    day_start=DAY,
+                    now=DAY + timedelta(days=2),
+                    request_key="existing-first-day-job",
+                ),
+            )
+            unindexed, indexed = _selections(connection_info)
+            assert indexed == unindexed
+            assert [len(old) for _, old in indexed.values()] == [1] * 8 + [0]
         finally:
             database.close()

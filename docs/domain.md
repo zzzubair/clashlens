@@ -241,16 +241,15 @@ A domain change is complete only when every affected source observation, derived
 - A battle saved after its ended day's result was published is added to that
   day by a once-per-Reset check. From 05:30 UTC, every 10 minutes until it
   runs, the worker waits for the Reset sweep to finish and for every response
-  fetched before it finished to be processed. It then looks at every battle,
-  on any ended Legend day still kept, with a report saved within 5 minutes of
-  its day's end or later. For each player who reported that battle, the day's
+  fetched before it finished to be processed. It then looks at every battle
+  on the previous 7 Legend days with a report saved within 5 minutes of its
+  day's end or later. For each player who reported that battle, the day's
   latest saved result must list their report and whether the two players'
   reports currently agree; a late report from the other player can change
   that, so both players are checked. Days of a season whose detail is retired
-  cannot be recalculated and are skipped. Only the previous 7 Legend days are
+  cannot be recalculated and are skipped. Older days are not read or
   corrected, because the recalculation supports only the current and previous
-  Season; a mismatch on an older day is logged as a `late_battle_sweep` line
-  with status `skipped` and not corrected. A saved day in those 7 days, or
+  Season. A saved day in those 7 days, or
   today if it already has a saved result, whose latest result was built from
   an older version of the day before it than the
   one now current also counts as a mismatch, so a rolled-back correction whose
@@ -263,10 +262,13 @@ A domain change is complete only when every affected source observation, derived
   never left half done. If any day fails, that player's changes are rolled
   back, logged with status `player_failed`, and retried at the next check 10
   minutes later; checks for that Reset stop once every player has succeeded.
-  Each check reads every kept battle report once: about 200,000 a day at
-  12,500 players, so about 5.6 million for each full 28-day season kept, and
-  every saved result of the previous 7 Legend days and today, about 100,000
-  at 12,500 players. That read time has not been measured at that size. A battle saved after the last
+  Each check reads, from their own indexes, only the reports saved late in
+  those 7 days (about 300 a day) and a few index entries for each saved result of
+  those days and today (about 100,000 at 12,500 players), so its cost does not
+  grow with the days kept. On fake data shaped like production, with 14 days
+  of battles, it took 0.07 s and 0.8 s, against 5-8 s and 68-77 s before; a
+  window still holding the 197,898 reports backfilled on 2026-09-28 and
+  2026-09-29 took 1.8 s for the first part. A battle saved after the last
   check of a Reset is added after the next Reset. Known limitation: a late
   battle that is older than 7 Legend days by the time the check runs, for
   example after a worker outage of over a week, is not corrected.
