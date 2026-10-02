@@ -172,11 +172,10 @@ The archive credentials have separate duties. The collector credential creates
 immutable raw responses and may read back the marker or one exact object to
 prove a write; the worker credential can only read. Neither runtime credential
 may list, overwrite, delete, or broadly browse archive objects.
-The database also has separate collector, worker, and API roles. The admin
-database URL exists as a short-lived Podman secret during fixture bootstrap or
-while an operator explicitly handles a failed item. The persistent administrator
-credential used by cleanup follows the separate
-[raw-response cleanup lifecycle](#raw-response-cleanup).
+The database also has separate collector, worker, and API roles, plus a
+[raw-response cleanup](#raw-response-cleanup) role. The admin database URL
+exists only as a short-lived Podman secret during fixture bootstrap or while an
+operator explicitly handles a failed item.
 
 ### Paris fixed-address relay
 
@@ -583,18 +582,24 @@ It is off by default. Store the operator key pair as two service-owned mode-600
 one-line files beside the Clash API keys:
 `clashlens-archive-operator-access-key` and
 `clashlens-archive-operator-secret-key` in `CLASHLENS_API_KEY_HOST_DIR`. Then set
-`CLASHLENS_ARCHIVE_RETENTION` in `app.env`:
+`CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD` (32–128 URL-safe characters, like the
+other role passwords) and `CLASHLENS_ARCHIVE_RETENTION` in `app.env`:
 
-- `off`: no timer, and `up` removes the operator secrets from Podman.
+- `off`: no timer, `up` removes the operator secrets from Podman, and the
+  cleanup database role cannot log in.
 - `preview`: no timer; `./ops archive-prune` previews one batch on request. It
   changes nothing.
 - `apply`: the timer marks and deletes.
 
-`up` copies the operator keys and an administrator database address into Podman
-secrets that only the cleanup container mounts. The database secret,
-`clashlens-archive-operator-database-url`, carries full administrator database
-authority. These secrets remain after `down`; the next production `up` with
-`CLASHLENS_ARCHIVE_RETENTION=off` removes them. The collector, worker, API and
+`up` copies the operator keys and the cleanup role's database address into
+Podman secrets that only the cleanup container mounts. The database secret,
+`clashlens-archive-operator-database-url`, logs in as `clashlens_archive_retention`,
+not the administrator. That role can read only the archive identity, the stored-response list, upload
+states, each observation's stored-response location and each job's status; it
+can change only a stored response's deletion state, and it locks observations
+and jobs through one fixed database function. These secrets remain after
+`down`; the next production `up` with `CLASHLENS_ARCHIVE_RETENTION=off` removes
+them. The collector, worker, API and
 website never receive them. Each run starts a short-lived container with the
 same spool as the collector, processes one batch of up to 1,000 deletions and
 1,000 markings, and prints one JSON report. In `apply` the timer starts five

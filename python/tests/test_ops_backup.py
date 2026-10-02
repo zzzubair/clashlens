@@ -681,10 +681,47 @@ def test_backup_accepts_unchanged_release_across_locales(runtime, tmp_path):
 def _raw_cleanup_config(mode_config, tmp_path, setting):
     with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
         config.write(f"CLASHLENS_ARCHIVE_RETENTION={setting}\n")
+        config.write("CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD=" + "r" * 32 + "\n")
     for name in ("access", "secret"):
         key = tmp_path / "secrets" / f"clashlens-archive-operator-{name}-key"
         key.write_text("operator-key\n")
         key.chmod(0o600)
+
+
+def test_raw_cleanup_database_secret_uses_its_own_role(tmp_path, mode_config):
+    _raw_cleanup_config(mode_config, tmp_path, "apply")
+    store = tmp_path / "podman-secrets"
+    store.mkdir()
+    podman = tmp_path / "podman"
+    podman.write_text(FAKE_SECRET_STORE)
+    podman.chmod(0o700)
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG + "prepare_secrets\n", "cleanup-secret-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production", PODMAN_BIN=str(podman), SECRET_STORE=str(store)),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (store / "clashlens-archive-operator-database-url").read_text() == (
+        "postgresql://clashlens_archive_retention:" + "r" * 32
+        + "@127.0.0.1:5432/clashlens?sslmode=disable"
+    )
+    assert not (store / "clashlens-init-database-url").exists()
+
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write("CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD=short\n")
+    result = subprocess.run(
+        ["bash", "-c", MODE_CONFIG, "cleanup-secret-test", str(OPS)],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD must be 32-128" in result.stderr
 
 
 def _systemd_unit(path):

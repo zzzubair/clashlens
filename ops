@@ -910,6 +910,7 @@ validate_production_secret_files() {
   fi
   [[ "$(setting CLASHLENS_ARCHIVE_RETENTION off)" =~ ^(off|preview|apply)$ ]] || die "CLASHLENS_ARCHIVE_RETENTION must be off, preview or apply"
   if [[ "$(setting CLASHLENS_ARCHIVE_RETENTION off)" != off ]]; then
+    [[ "$(setting CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD)" =~ ^[A-Za-z0-9_-]{32,128}$ ]] || die "CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD must be 32-128 URL-safe characters"
     for name in access secret; do read_secret_value "$secret_dir/clashlens-archive-operator-$name-key"; done
   fi
   unset SECRET_VALUE
@@ -978,7 +979,7 @@ prepare_secrets() {
       replace_secret clashlens-discord-client-secret disabled
     fi
     if archive_retention_enabled; then
-      replace_secret clashlens-archive-operator-database-url "$(admin_database_url)"
+      replace_secret clashlens-archive-operator-database-url "postgresql://clashlens_archive_retention:${CONFIG[CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD]}@127.0.0.1:5432/$POSTGRES_DB?sslmode=disable"
       for name in access secret; do replace_file_secret "clashlens-archive-operator-$name-key" "$secret_dir/clashlens-archive-operator-$name-key"; done
     else
       "$PODMAN_BIN" secret rm clashlens-archive-operator-database-url clashlens-archive-operator-access-key clashlens-archive-operator-secret-key >/dev/null 2>&1 || true
@@ -1035,6 +1036,8 @@ configure_database() {
   sql+=" ALTER ROLE clashlens_collector WITH LOGIN PASSWORD $collector_password;"
   sql+=" ALTER ROLE clashlens_python_worker WITH LOGIN PASSWORD $worker_password;"
   sql+=" ALTER ROLE clashlens_python_api WITH LOGIN PASSWORD $api_password;"
+  if archive_retention_enabled; then sql+=" ALTER ROLE clashlens_archive_retention WITH LOGIN PASSWORD $(sql_literal "${CONFIG[CLASHLENS_ARCHIVE_RETENTION_DB_PASSWORD]}");"
+  else sql+=' ALTER ROLE clashlens_archive_retention WITH NOLOGIN PASSWORD NULL;'; fi
   sql+=' REVOKE ALL PRIVILEGES ON TABLE python_processing_jobs FROM clashlens_python_worker;'
   sql+=' GRANT SELECT (id, lease_generation) ON TABLE python_processing_jobs TO clashlens_python_worker; COMMIT;'
   printf '%s\n' "$sql" | psql_exec_sensitive
@@ -1411,23 +1414,18 @@ if candidates:
   wal_g delete before "$anchor" --use-sentinel-time ${apply:+"$apply"}
 }
 
-archive_retention_enabled() {
-  [[ "${MODE:-}" == production && "$(setting CLASHLENS_ARCHIVE_RETENTION off)" != off ]]
-}
+archive_retention_enabled() { [[ "${MODE:-}" == production && "$(setting CLASHLENS_ARCHIVE_RETENTION off)" != off ]]; }
 
 archive_prune() {
   local apply=() argument lock_fd
-  for argument in "$@"; do
-    case "$argument" in --apply|--scheduled) apply=(--apply) ;; *) die "archive-prune accepts only --apply" ;; esac
-  done
+  for argument in "$@"; do case "$argument" in --apply|--scheduled) apply=(--apply) ;; *) die "archive-prune accepts only --apply" ;; esac; done
   require_host
   prepare_managed_runtime worker
   [[ "$MODE" == production ]] || die "raw-response cleanup is unavailable in fixture mode"
   load_production_config
   archive_retention_enabled || die "set CLASHLENS_ARCHIVE_RETENTION=preview in app.env and run ./ops up first"
   [[ ${#apply[@]} == 0 || "$(setting CLASHLENS_ARCHIVE_RETENTION)" == apply ]] || die "deletion requires CLASHLENS_ARCHIVE_RETENTION=apply and ./ops up"
-  # Scheduled runs skip the operation lock so cleanup never blocks up or backups;
-  # up and down stop this timer first. This lock only keeps runs from overlapping.
+  # Scheduled runs skip the operation lock (up and down stop the timer); this lock only stops overlaps.
   exec {lock_fd}> "$STATE_DIR/archive-prune.lock"
   flock --nonblock "$lock_fd" || { printf 'Another raw-response cleanup is running; skipped.\n'; return 0; }
   "$PODMAN_BIN" run --rm --name "$PREFIX-archive-prune" --label org.clashlens.managed=ops --pod "$PREFIX-pod" --read-only --tmpfs /tmp \
@@ -1487,10 +1485,7 @@ case "$command" in
   alert-check) (($# == 0)) || die "alert-check takes no arguments"; alert_check ;;
   backup-status) (($# == 0)) || die "backup-status takes no arguments"; backup_status ;;
   backup-prune) acquire_mutation_lock; backup_prune "$@" ;;
-  archive-prune)
-    [[ " $* " == *" --scheduled "* ]] || acquire_mutation_lock
-    archive_prune "$@"
-    ;;
+  archive-prune) [[ " $* " == *" --scheduled "* ]] || acquire_mutation_lock; archive_prune "$@" ;;
   failed-items)
     acquire_mutation_lock
     failed_items "$@"

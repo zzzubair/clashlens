@@ -257,8 +257,16 @@ observations, its upload record's latest sighting and the newest compact poll
 state for its hash.
 A response with no retained sighting counts from its first verification. Records
 with neither time have no deadline and are never automatically deleted.
+
+- **Retiring**: the state cleanup gives a due response, which blocks every new
+  use of it while its bytes still exist.
+- **Recovery hold**: the nine days a retiring response waits before cleanup
+  deletes its bytes.
+- **Marked or held response**: a response that is retiring and still inside its
+  recovery hold.
+
 A response the old code had already marked `retiring`
-starts its nine-day hold at its recalculated deadline, or at upgrade time if
+starts its recovery hold at its recalculated deadline, or at upgrade time if
 that is later.
 
 A due response is not deleted straight away. Cleanup first marks it `retiring`,

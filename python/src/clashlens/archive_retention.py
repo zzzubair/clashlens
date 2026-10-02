@@ -124,17 +124,8 @@ def retire_archive_objects(
                 # Fence new replay references and changes to existing jobs before
                 # checking activity. The trigger rejects new work after retirement.
                 connection.execute(
-                    "SELECT id FROM collector_observations WHERE archive_reference = %s ORDER BY id FOR UPDATE",
-                    (reference,),
-                ).fetchall()
-                connection.execute(
-                    """
-                    SELECT p.id FROM python_processing_jobs AS p
-                    JOIN collector_observations AS o
-                      ON o.id = COALESCE(p.observation_id, p.replay_observation_id)
-                    WHERE o.archive_reference = %s ORDER BY p.id FOR UPDATE OF p
-                    """, (reference,),
-                ).fetchall()
+                    "SELECT clashlens_lock_archive_reference_work(%s)", (reference,),
+                )
                 current = connection.execute(
                     f"""
                     SELECT ({_ACTIVE}) FROM archive_catalogue AS c
