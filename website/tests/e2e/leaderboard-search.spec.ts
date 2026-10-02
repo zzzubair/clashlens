@@ -55,6 +55,7 @@ test("only hash tags jump directly; back restores search", async ({ page }) => {
   }
   await page.goto("/leaderboards/tracked?view=live&page=1&q=Synthetic");
   await page.locator(".rank-search-results a").first().click();
+  await expect(page.locator('.leaderboard-row[data-selected="true"]')).toBeVisible();
   await page.goBack();
   await expect(page.getByRole("searchbox", { name: "Find your rank" })).toHaveValue(
     "Synthetic",
