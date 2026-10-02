@@ -15,7 +15,8 @@ from clashlens.collector_db import (
     TransportFailure,
 )
 
-NOW = datetime(2030, 9, 13, 4, 0, tzinfo=UTC)
+# A historical Friday keeps the following reset outside the Monday season boundary.
+NOW = datetime(2020, 9, 11, 4, 0, tzinfo=UTC)
 
 
 def _hash(byte: str) -> str:
@@ -947,7 +948,7 @@ def test_discovery_profile_fetches_league_history_once(
                 (player_id,),
             ).fetchone()[0]
         assert created == 1
-        intents = database.pending_intents(limit=10, now=NOW, interactive=False)
+        intents = database.pending_intents(limit=10, interactive=False)
         assert len(intents) == 1
         assert intents[0].kind == "discovery_profile"
         assert intents[0].league_history_required is True
@@ -1296,8 +1297,13 @@ def test_rankings_and_discovery_use_unleased_compact_work(
                   AND column_name IN ('lease_owner', 'lease_token', 'lease_expires_at')
                 """
             ).fetchall()
+            # Rankings have an explicit cycle time; discovery admission uses
+            # database time. Read both due times before advancing the test clock.
+            due_at = connection.execute(
+                "SELECT max(due_at) FROM collector_work"
+            ).fetchone()[0]
         assert lease_columns == []
-        intents = database.pending_intents(limit=10, now=NOW + timedelta(minutes=1))
+        intents = database.pending_intents(limit=10, now=due_at)
         assert {intent.kind for intent in intents} == {
             "global_player_rankings",
             "discovery_profile",
@@ -1320,9 +1326,7 @@ def test_rankings_and_discovery_use_unleased_compact_work(
             )
         assert [
             intent.kind
-            for intent in database.pending_intents(
-                limit=10, now=NOW + timedelta(minutes=1)
-            )
+            for intent in database.pending_intents(limit=10, now=due_at)
         ] == ["global_player_rankings"]
         with psycopg.connect(connection_info) as connection:
             assert (

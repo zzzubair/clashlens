@@ -26,12 +26,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   clearPublicRefreshLimits();
 });
 
-it("shares the existing six-request allowance with Refresh while status reads stay free", async () => {
+it("shares the Refresh allowance, keeps status reads free, and admits lookups after reset", async () => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
   const fetch = vi.fn().mockResolvedValue(
     new Response(JSON.stringify({ tag: "#LQQP", state: "checking" }), {
       headers: { "Content-Type": "application/json" },
@@ -52,6 +54,16 @@ it("shares the existing six-request allowance with Refresh while status reads st
   });
   await expect(getPlayerLookup("#LQQP")).resolves.toMatchObject({ state: "checking" });
   expect(fetch).toHaveBeenCalledTimes(2);
+
+  clock.mockReturnValue(1_059_999);
+  await expect(startPlayerLookup(VISITOR, "#LQQJ")).rejects.toMatchObject({
+    status: 429,
+  });
+  clock.mockReturnValue(1_060_000);
+  await expect(startPlayerLookup(VISITOR, "#LQQP")).resolves.toMatchObject({
+    state: "checking",
+  });
+  expect(fetch).toHaveBeenCalledTimes(3);
 });
 
 it.each(["X-Forwarded-For", "CF-Connecting-IP"])(

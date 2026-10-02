@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
 from domain_test_support import domain_database
+from psycopg import sql
 
 from clashlens.collector_db import CollectorDatabase, ResponseHandoff
 from clashlens.collector_uploads import (
@@ -17,7 +20,23 @@ from clashlens.collector_uploads import (
     renew_upload,
 )
 
-NOW = datetime(2030, 9, 13, 4, 0, tzinfo=UTC)
+NOW = datetime(2020, 9, 13, 4, 0, tzinfo=UTC)
+
+
+@contextmanager
+def upload_database(database_url: str) -> Iterator[str]:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        # Upload admission normally uses the database clock. Seed its due time
+        # on the same controlled timeline as claim/renew/complete below, even
+        # when the real clock has passed every date in this test file.
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                sql.SQL(
+                    "ALTER TABLE collector_response_uploads "
+                    "ALTER COLUMN next_attempt_at SET DEFAULT {}"
+                ).format(sql.Literal(NOW))
+            )
+        yield connection_info
 
 
 def _hash(byte: str) -> str:
@@ -88,7 +107,7 @@ def _handoff(
 
 
 def test_cleanup_batch_marks_only_deleted_eligible_copies(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         _archive_instance(connection_info)
         database = CollectorDatabase(connection_info)
         hashes = [_hash(letter) for letter in "abc"]
@@ -110,6 +129,7 @@ def test_cleanup_batch_marks_only_deleted_eligible_copies(database_url: str) -> 
                 claim,
                 archive_reference=f"s3://evidence/{index}",
                 archive_instance_id="fixture-instance",
+                now=NOW,
             )
         deletable, protected, processing = hashes
         with psycopg.connect(connection_info) as connection:
@@ -134,7 +154,7 @@ def test_cleanup_batch_marks_only_deleted_eligible_copies(database_url: str) -> 
 def test_upload_claim_is_fenced_and_cleanup_waits_for_processing(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("a")
@@ -159,6 +179,7 @@ def test_upload_claim_is_fenced_and_cleanup_waits_for_processing(
                 archive_reference="s3://evidence/a",
                 archive_instance_id="fixture-instance",
                 owner="uploader-b",
+                now=NOW,
             )
 
         with psycopg.connect(connection_info) as connection:
@@ -178,6 +199,7 @@ def test_upload_claim_is_fenced_and_cleanup_waits_for_processing(
             claim,
             archive_reference="s3://evidence/a",
             archive_instance_id="fixture-instance",
+            now=NOW,
         )
         assert database.deletable_hashes(limit=10) == []
         with psycopg.connect(connection_info) as connection:
@@ -209,7 +231,7 @@ def test_upload_claim_is_fenced_and_cleanup_waits_for_processing(
 def test_cleanup_prioritizes_oldest_last_use_over_a_reused_upload(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         first_player = _player(connection_info)
         second_player = _player(connection_info, "#8VV")
         cold_player = _player(connection_info, "#9YY")
@@ -275,7 +297,7 @@ def test_cleanup_prioritizes_oldest_last_use_over_a_reused_upload(
 
 
 def test_upload_renewal_requires_the_same_live_claim(database_url: str) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         database.record_response(
@@ -312,7 +334,7 @@ def test_upload_renewal_requires_the_same_live_claim(database_url: str) -> None:
 def test_complete_upload_reconciles_only_the_exact_settled_claim(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("complete-retry")
@@ -378,7 +400,7 @@ def test_complete_upload_reconciles_only_the_exact_settled_claim(
 def test_fail_upload_reconciles_exact_retry_but_fences_an_old_owner(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         database.record_response(
@@ -440,7 +462,7 @@ def test_upload_retire_after_follows_the_response_season(
     # retire_after derives from response_completed_at, not upload completion.
     response_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     uploaded_later = response_at + timedelta(days=40)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("season-dated")
@@ -452,7 +474,9 @@ def test_upload_retire_after_follows_the_response_season(
                 completed_at=response_at,
             )
         )
-        claim = claim_upload(database, owner="uploader", lease_seconds=60)
+        claim = claim_upload(
+            database, owner="uploader", lease_seconds=60, now=uploaded_later
+        )
         assert claim is not None
         with psycopg.connect(connection_info) as connection:
             connection.execute(
@@ -494,7 +518,7 @@ def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
     response_at = NOW
     seen_next_season = response_at + timedelta(days=29)
     upload_at = seen_next_season + timedelta(days=30)
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("pending-next-season")
@@ -565,7 +589,7 @@ def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
 def test_retryable_upload_failure_returns_to_pending_with_a_fence(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         database.record_response(
@@ -577,7 +601,9 @@ def test_retryable_upload_failure_returns_to_pending_with_a_fence(
         )
         claim = claim_upload(database, owner="uploader", lease_seconds=60, now=NOW)
         assert claim is not None
-        fail_upload(database, claim, category="archive_unavailable", detail="offline")
+        fail_upload(
+            database, claim, category="archive_unavailable", detail="offline", now=NOW
+        )
         retry = claim_upload(
             database,
             owner="uploader-retry",
@@ -591,7 +617,7 @@ def test_retryable_upload_failure_returns_to_pending_with_a_fence(
 def test_retired_archive_location_reuploads_under_a_generation(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         hash_a, hash_b = _hash("retired-a"), _hash("retired-b")
@@ -660,6 +686,11 @@ def test_retired_archive_location_reuploads_under_a_generation(
         )
         assert reobserved.changed is True
 
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE collector_response_uploads SET next_attempt_at = %s WHERE state = 'pending'",
+                (NOW,),
+            )
         recycled = claim_upload(
             database, owner="uploader", now=NOW + timedelta(minutes=10)
         )
@@ -697,7 +728,7 @@ def test_retired_archive_location_reuploads_under_a_generation(
 def test_identical_response_reuploads_when_its_location_is_tombstoned(
     database_url: str, availability: str
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("identical-retired")
@@ -736,6 +767,11 @@ def test_identical_response_reuploads_when_its_location_is_tombstoned(
         assert repeated.changed is True
         assert repeated.observation_id is not None
         assert repeated.processing_job_id is not None
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE collector_response_uploads SET next_attempt_at = %s WHERE state = 'pending'",
+                (NOW,),
+            )
         recycled = claim_upload(
             database, owner="uploader", now=NOW + timedelta(minutes=5)
         )
@@ -756,7 +792,7 @@ def test_identical_response_reuploads_when_its_location_is_tombstoned(
 def test_ignored_raw_change_follows_the_retained_observation_archive(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         hash_a, hash_b = _hash("retained-a"), _hash("ignored-b")
@@ -825,7 +861,7 @@ def test_ignored_raw_change_follows_the_retained_observation_archive(
 def test_hash_reuse_attaches_existing_archive_without_second_upload(
     database_url: str,
 ) -> None:
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         hash_a, hash_b = _hash("a"), _hash("b")
@@ -849,6 +885,7 @@ def test_hash_reuse_attaches_existing_archive_without_second_upload(
             claim,
             archive_reference="s3://evidence/a",
             archive_instance_id="fixture-instance",
+            now=NOW,
         )
         with psycopg.connect(connection_info) as connection:
             connection.execute(
@@ -871,6 +908,7 @@ def test_hash_reuse_attaches_existing_archive_without_second_upload(
             claim,
             archive_reference="s3://evidence/b",
             archive_instance_id="fixture-instance",
+            now=NOW + timedelta(minutes=5),
         )
         with psycopg.connect(connection_info) as connection:
             connection.execute(
@@ -913,7 +951,7 @@ def test_claim_reads_only_the_next_due_row_in_a_production_sized_backlog(
 ) -> None:
     # Production on 2026-10-01 held about 456,000 complete and 57,600 due
     # rows; the old claim read every due row's table page, then sorted them.
-    with domain_database(database_url) as connection_info:
+    with upload_database(database_url) as connection_info:
         _archive_instance(connection_info)
         with psycopg.connect(connection_info) as connection:
             connection.execute(
