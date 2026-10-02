@@ -151,6 +151,22 @@ def test_profile_change_fetches_the_log_on_that_check_and_the_next(
     assert [game.check() for _ in range(3)] == [BOTH, BOTH, PROFILE]
 
 
+def test_defense_won_fetches_the_log_even_when_win_counts_stay_zero(
+    game: SimpleNamespace,
+) -> None:
+    profile = game.client.profile()
+    profile.update(attackWins=0, defenseWins=0)
+    profile["achievements"] = [
+        {"name": "Unbreakable", "village": "home", "value": 1767},
+        {"name": "Conqueror", "village": "home", "value": 12216},
+    ]
+    game.settle()
+    # A 0-star 30% defense: no trophies lost, one more defense won.
+    profile["achievements"][0]["value"] += 1
+
+    assert [game.check() for _ in range(3)] == [BOTH, BOTH, PROFILE]
+
+
 def test_new_change_during_the_follow_up_owes_two_more_fetches(
     game: SimpleNamespace,
 ) -> None:
@@ -258,9 +274,7 @@ def test_refresh_during_a_check_does_not_hide_its_failed_profile(
 @pytest.mark.parametrize(
     "bad_row",
     [
-        {"opponentPlayerTag": []},
         {"battleTimestamp": "yesterday"},
-        {"stars": None},
         # Live battleTime is the battle's length, not its date.
         {"battleTimestamp": None, "battleTime": 180},
     ],
@@ -269,13 +283,32 @@ def test_malformed_log_neither_clears_owed_fetches_nor_stops_collection(
     game: SimpleNamespace, bad_row: dict[str, Any]
 ) -> None:
     game.settle()
-    game.client.logs[TAG] = [_battle(OPPONENT, game.clock[0]) | bad_row]
-    game.client.profile()["trophies"] += 40
+    game.client.logs[TAG] = [_battle(OPPONENT, game.clock[0], attack=False) | bad_row]
+    game.client.profile()["trophies"] -= 40
 
     assert [game.check() for _ in range(3)] == [BOTH] * 3
 
-    game.client.logs[TAG] = [_battle(OPPONENT, game.clock[0])]
+    game.client.logs[TAG] = [_battle(OPPONENT, game.clock[0], attack=False)]
     assert [game.check() for _ in range(3)] == [BOTH, BOTH, PROFILE]
+
+
+@pytest.mark.parametrize(
+    "bad_row",
+    [
+        # Live logs keep rows like this for days: no opponent, no battle.
+        {"opponentPlayerTag": None, "battleTime": 0, "destructionPercentage": 0},
+        {"stars": None},
+    ],
+)
+def test_malformed_row_is_retried_once_not_on_every_check(
+    game: SimpleNamespace, bad_row: dict[str, Any]
+) -> None:
+    game.settle()
+    game.client.logs[TAG] = [_battle(OPPONENT, game.clock[0], attack=False) | bad_row]
+    game.client.profile()["trophies"] -= 40
+
+    # The change's fetch, the retry, then the follow-up past the API cache.
+    assert [game.check() for _ in range(4)] == [BOTH, BOTH, BOTH, PROFILE]
 
 
 def test_failed_log_fetch_keeps_the_obligation(game: SimpleNamespace) -> None:
@@ -286,6 +319,116 @@ def test_failed_log_fetch_keeps_the_obligation(game: SimpleNamespace) -> None:
 
     game.client.battle_log_status = 200
     assert [game.check() for _ in range(3)] == [BOTH, BOTH, PROFILE]
+
+
+def _at(clock: str) -> datetime:
+    """A time on 2026-10-02, the day of the production run, in UTC."""
+    hour, minute, second = map(int, clock.split(":"))
+    return datetime(2026, 10, 2, hour, minute, second, tzinfo=UTC)
+
+
+def test_zero_trophy_defense_of_battle_6964051_arrives_within_a_check(
+    game: SimpleNamespace,
+) -> None:
+    """Production times and profiles. Both players tracked.
+
+    The attacker's profile showed none of these attacks until 07:14, and both
+    players' win counts stayed 0. Only the defender's count of defenses won
+    moved. The defense was saved at 07:13:46, by the safety fetch.
+    """
+    attacker, defender, earlier_defender = "#2990QRJY9", "#P9YJR8QY", "#92C9G8YJ9"
+    logs = game.client.logs
+
+    def check(tag: str, clock: str) -> list[str]:
+        return game.check(tag, after=_at(clock) - game.clock[0])
+
+    def battle(opponent: str, attacked_at: str, defended_at: str) -> None:
+        # The attacker's log times a battle about 161 s after the defender's.
+        logs.setdefault(attacker, []).append(_battle(opponent, _at(attacked_at)))
+        logs.setdefault(opponent, []).append(
+            _battle(attacker, _at(defended_at), attack=False)
+        )
+
+    game.clock[0] = _at("06:40:00")
+    for tag in (attacker, defender, earlier_defender):
+        game.client.profile(tag).update(attackWins=0, defenseWins=0)
+    defenses_won = {"name": "Unbreakable", "village": "home", "value": 1767}
+    game.client.profile(defender)["achievements"] = [defenses_won]
+    game.settle(attacker)
+    game.settle(earlier_defender)
+    # The defender's last log before the battle came at 06:56:29.
+    assert [check(defender, "06:53:00"), check(defender, "06:56:28")] == [BOTH] * 2
+
+    # 3 stars on another tracked player, whose own profile shows the loss.
+    battle(earlier_defender, "06:56:43", "06:53:38")
+    game.client.profile(earlier_defender)["trophies"] -= 40
+    assert check(earlier_defender, "06:57:05") == BOTH
+    assert check(attacker, "06:57:27") == BOTH
+    assert check(defender, "06:59:11") == PROFILE
+
+    # 0 stars, 30%: the attacker gains 3 trophies, the defender loses none.
+    cached = list(logs[attacker])
+    battle(defender, "06:59:55", "06:57:34")
+    defenses_won["value"] += 1
+    fresh, logs[attacker] = logs[attacker], cached
+    # 11 seconds after the battle the API still serves the attacker's old log.
+    assert check(attacker, "07:00:05") == BOTH
+    logs[attacker] = fresh
+
+    # Production skipped both logs on these checks and the next five.
+    assert check(defender, "07:01:54") == BOTH
+    assert check(attacker, "07:03:00") == BOTH
+    assert check(defender, "07:05:12") == BOTH
+    assert check(defender, "07:08:15") == PROFILE
+
+
+def test_attackers_log_is_watched_for_ten_minutes_after_an_attack(
+    game: SimpleNamespace,
+) -> None:
+    game.settle()
+    game.client.logs[TAG] = [_battle(UNTRACKED, game.clock[0])]
+    game.client.profile()["trophies"] += 40
+
+    # Checks start 94 seconds apart; the seventh is 10 minutes after the attack.
+    assert [game.check() for _ in range(9)] == [BOTH] * 7 + [PROFILE] * 2
+
+
+def test_defender_with_the_battle_is_not_refetched_for_each_attacker_log(
+    game: SimpleNamespace,
+) -> None:
+    game.settle(TAG)
+    game.settle(OPPONENT)
+    defended_at = game.clock[0]
+    game.client.logs[OPPONENT] = [_battle(TAG, defended_at, attack=False)]
+    # The attacker's log times the same battle 161 seconds later.
+    game.client.logs[TAG] = [_battle(OPPONENT, defended_at + timedelta(seconds=161))]
+    game.client.profile(OPPONENT)["trophies"] -= 40
+    game.client.profile(TAG)["trophies"] += 40
+    assert [game.check(OPPONENT) for _ in range(3)] == [BOTH, BOTH, PROFILE]
+
+    # Each of the attacker's later checks fetches its log with that battle again.
+    assert [game.check(TAG) for _ in range(5)] == [BOTH] * 5
+    assert game.check(OPPONENT) == PROFILE
+
+
+def test_opponent_whose_newest_battle_is_another_one_is_refetched() -> None:
+    state = _Schedule()
+    now = state.settle(TAG)
+    state.settle(OPPONENT)
+    defended_at = now - timedelta(minutes=3)
+    # The opponent's log shows only a defense two minutes before this battle.
+    state.log(
+        OPPONENT,
+        now,
+        _battle(UNTRACKED, defended_at - timedelta(minutes=2), attack=False),
+    )
+    state.log(
+        TAG,
+        now + timedelta(seconds=30),
+        _battle(OPPONENT, defended_at + timedelta(seconds=161)),
+    )
+
+    assert state.due(OPPONENT, now + timedelta(seconds=92))
 
 
 def test_control_group_fetches_both_on_every_check(game: SimpleNamespace) -> None:

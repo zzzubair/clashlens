@@ -139,28 +139,45 @@ the profile and, only when it can have changed, the battle log (next section).
 At about 1.2 requests per check, 13,263 active players every 90 seconds would
 need about 177 request starts/second, more than the 150 that six regular keys
 allow at 25 each. So the keys set the pace: about one check per player every
-~106 seconds. Before this change every check made two requests, and the same
-keys allowed one check every ~177 seconds. On 2026-10-01, with 56 check slots,
-production reached only ~125 requests/s: each check took ~0.9 s, of which the
-Clash API answered in ~0.12 s and the rest was saving to the spool and database,
-including disk flushes. The collector now keeps up to 160 checks in flight with
-256 save threads. When keys, slots, the spool or the database cannot keep up,
-players are checked later than 90 seconds, still oldest first.
+~108 seconds, if saving keeps up. Before this change every check made two
+requests, and the same keys allowed one check every ~177 seconds.
+
+A check fetches the profile, saves it, and only then fetches the battle log if
+needed, so a check that needs both saves twice in a row. On 2026-10-02, with
+160 checks in flight, production made 76 checks a second: about 2.1 s per
+check, almost all of it saving to the spool and database (the Clash API
+answered in about 0.13 s), while the keys ran at 19 of their 25 requests a
+second. The collector now keeps up to 256 checks in flight with 256 save
+threads. Since a check makes its requests one after the other, that is at most
+256 requests at once, fewer than the 320 that 160 paired checks held before
+this change, and at up to 2 s per check it covers the ~125 checks a second the
+keys allow. This is arithmetic from that
+measurement; the 256-check figure has not run in production yet. When keys,
+slots, the spool or the database cannot keep up, players are checked later
+than 90 seconds, still oldest first, and the due queue does not empty.
 Per-key limits stay in force and regular work never uses the interactive key.
-The 160-slot figure comes from a local timing run with simulated disk delay, not
-from production.
 
 ### Battle log only when it can have changed
 
-A battle almost always changes the Clasher's profile: trophies, or the
-`attackWins` and `defenseWins` counts. So a regular check fetches the profile
-first, saves it, and then fetches the battle log only when:
+A battle shows on the defender's profile at once: trophies lost or, for a
+0-trophy defense such as a 0-star 30% attack, one more defense won in the
+`Unbreakable` achievement. The attacker's profile is less reliable. On
+2026-10-02, of 12,035 attacks between 05:15 and 06:30 UTC, only 29% were on the
+attacker's profile by the check whose battle log first showed them, and half
+reached the profile more than 3½ minutes after the log: the profile seems to
+catch up only when the attacker stops playing. `attackWins` and
+`defenseWins` stayed 0 for about two in three profiles. So a regular check
+fetches the profile first, saves it, and then fetches the battle log only when:
 
-- the profile's trophies, `attackWins` or `defenseWins` differ from the last
-  valid profile, or did so on the previous check (the follow-up fetch);
+- the profile's trophies, `attackWins`, `defenseWins` or `Unbreakable` value
+  differ from the last valid profile, or did so on the previous check (the
+  follow-up fetch);
+- this player's own log showed a new attack less than 10 minutes ago (the
+  after-attack fetch). Clashers usually attack several times in a row, half the
+  time within 4 minutes of the last, so the next attack shows within about one
+  check even while the attacker's profile lags;
 - a newly saved battle log of another player shows a battle against this
-  player, and this player's last battle log does not reach that battle's time
-  yet (the opponent fetch);
+  player that this player's logs do not have yet (the opponent fetch);
 - this check's own profile response is unusable: the request failed, returned
   an error, or had trophies, `attackWins` or `defenseWins` missing, negative or
   not whole numbers. A profile saved by another request at the same time, such
@@ -174,38 +191,50 @@ The follow-up fetch exists because the Clash API caches each endpoint for up to
 counts when it starts at least 60 seconds after the fetch that the profile
 change triggered, so a quick re-check inside that cache cannot satisfy it. The
 opponent fetch likewise only counts when it starts at least 60 seconds after
-the other player's log showed the battle. Only a saved successful battle log
-whose request started after the change was seen counts, and only when every
-Legend row in it passes the worker's row checks (valid side, stars,
-destruction and opponent tag) and has an explicit `battleTimestamp`; `battleTime`,
-the battle's length, never stands in for it. A failed or malformed log leaves
+the other player's log showed the battle, and the after-attack fetch ends with
+a fetch that starts at least 10 minutes after the attack. Only a saved
+successful battle log whose request started after the change was seen counts,
+and only when every Legend row in it passes the worker's row checks (valid side,
+stars, destruction and opponent tag) and has an explicit `battleTimestamp`;
+`battleTime`, the battle's length, never stands in for it. A failed log leaves
 the fetch owed for the next check and does not reset the 15-minute safety
-clock, but its valid rows still count as seen battles and still mark tracked
+clock. A malformed row does the same once, in case a corrected copy follows,
+and after that only if it has no readable `battleTimestamp`: live logs keep
+rows with no opponent for days; 448 players' logs had shown one by 2026-10-02. Valid
+rows in such a log still count as seen battles and still mark tracked
 opponents.
 
-A battle that moves no trophies still counts. When player A attacks player B
-for 0 stars and 49%, A gains trophies and B loses none, but B's `defenseWins`
-goes up, so B's next check fetches B's log. The opponent fetch also covers B
-when only A's side changed or B's profile has not caught up yet. Every valid
-battle in a saved log can mark its opponent, including the first log after a
-restart and a row that was malformed in an earlier copy. No opponent fetch is
-owed when the opponent's own latest saved log already reaches that battle's
-time. Only players the collector has already checked since starting get an
-opponent fetch. Anything still left, such as a tracked player's 0-star attack
-under 10% on an untracked player, waits for the safety fetch: about 15–17 minutes plus
-any queue delay. Leaderboard trophies come from the profile, which every
-check still fetches, so they are unaffected. However late a log is fetched, the
-worker stores each battle under its own `battleTimestamp`, so it lands in its
-real Legend day and order, and a battle reported by both players is stored
-once. A daily result already published for an earlier Legend day is not
-recalculated when a late battle arrives.
+The two players' logs time the same battle differently: on 2026-10-02 the
+attacker's `battleTimestamp` was 108–211 seconds after the defender's. So the
+opponent fetch treats a battle as already seen when this player's log has a
+battle against that opponent within 5 minutes of it, or any battle more than 5
+minutes after it. Comparing times alone made each defender look behind every
+time the attacker's log was fetched again: replaying the production window,
+that was 0.34 of the 0.49 extra requests per check.
 
-The collector keeps this state in memory: one entry of about 520 bytes per
-player it has checked since it started (measured), about 6.8 MB for 13,263
-players. It grows only with the number of players checked, and is not saved.
-After a restart every player's first two checks fetch both responses again: up
-to about 26,500 extra battle-log requests, three minutes of all six keys, but
-never a missed battle.
+A battle that moves no trophies still counts. When player A attacks player B
+for 0 stars and 49%, A gains trophies and B loses none, but B's `Unbreakable`
+count goes up, so B's next check fetches B's log. If A attacked in the 10
+minutes before, A's log shows it too, and the opponent fetch then covers B as
+well. Every valid battle in a saved log can mark its opponent, including the
+first log after a restart and a row that was malformed in an earlier copy.
+Only players the collector has already checked since starting get an opponent
+fetch. Anything still left, such as a tracked player's first 0-star attack
+under 10% on an untracked player, waits for the attacker's profile or the
+safety fetch: at most about 15–17 minutes plus any queue delay. Leaderboard
+trophies come from the profile, which every check still fetches, so they are
+unaffected. However late a log is fetched, the worker stores each battle under
+its own `battleTimestamp`, so it lands in its real Legend day and order, and a
+battle reported by both players is stored once. A daily result already
+published for an earlier Legend day is not recalculated when a late battle
+arrives.
+
+The collector keeps this state in memory: one entry of about 555 bytes per
+player it has checked since it started (measured with real battle logs), about
+7.4 MB for 13,263 players. It grows only with the number of players checked,
+and is not saved. After a restart every player's first two checks fetch both
+responses again: up to about 26,500 extra battle-log requests, three minutes of
+all six keys, but never a missed battle.
 
 The 05:00 UTC Reset, Refresh and first-time collection still fetch both
 responses together, as does the very first battle log of a newly found player.
@@ -218,31 +247,39 @@ their tag is below 13. In SQL:
 Compare battle-to-first-battle-log time, zero-trophy battles and requests per
 check between the two groups.
 
-**Local measurement, 2026-10-02.** The real collector (run loop, local disk
-spool, throwaway PostgreSQL 18.6, 160 check slots, 256 save threads) ran
-against the repository's fake Clash API in a separate process, with 13,264
-players and six keys at 25 requests/s. The fake API changed trophies and added
-a Legend battle for random players at 2.6 a second, about production's rate.
-Figures cover the last 10 minutes of a 25-minute run:
+**Production, 2026-10-02.** The first version of these rules ran for 30
+minutes and was rolled back. One 0-star 30% defense, battle 6964051, was saved
+14 minutes late: neither player's profile moved, the attacker's one log fetch
+after it came 11 seconds after the battle (inside the API cache), and both logs
+waited for the safety fetch. Checks made 1.50 requests, not 1.2, and came every
+166 seconds (median), not ~106. The test
+`test_zero_trophy_defense_of_battle_6964051_arrives_within_a_check` replays
+that battle's real checks.
 
-| | Before (two requests every check) | After |
+**Replay, 2026-10-02.** A scratch replay fed every real battle from production,
+both players' timestamps, and when each attacker's profile really showed each
+attack, through the real rules, with each player checked at a fixed spacing
+and a 60-second API cache. Replaying the rolled-back version over the
+production window gave 1.49 requests per check outside the control group
+(production 1.47) and attacker-side save times of 139 / 272 / 529 s median /
+95% / max (production 140 / 290 / 887 s). With checks every 105 seconds over
+05:50–08:20 UTC on 2026-10-01, the busiest hours after Reset (14,148 attacker
+and 14,203 defender battle copies):
+
+| | Rolled-back version | Now |
 | --- | ---: | ---: |
-| Requests per check | 2.00 | 1.24 |
-| Checks per second | 73.6 | 119 |
-| Time between checks of a player, median / 95th percentile / max | 181 / 181 / 182 s | 104 / 143 / 148 s |
-| Battles whose log was fetched on the same check | every check fetched both | 1,513 of 1,525 |
+| Requests per check, all players | 1.47 | 1.22 |
+| Requests per check, outside the control group | 1.44 | 1.18 |
+| Attacker's copy saved after the battle, median / 95% / max | 109 / 204 / 733 s | 96 / 184 / 263 s |
+| Defender's copy saved after the battle, median / 95% / max | 87 / 145 / 672 s | 90 / 146 / 171 s |
+| 44 zero-trophy battles, first copy saved, median / 90% / max | 78 / 147 / 672 s | 75 / 115 / 146 s |
 
-The 12 misses were 6 players whose two fake battles between checks cancelled
-out exactly; the safety fetch catches those. In that window the battle log was
-fetched by the control group on 5.2% of checks, after a profile change on 4.0%,
-and by the safety fetch on 14.4%. The safety share is high because every
-player's first full checks happened together at startup; spread evenly it is
-about 104 ÷ 900 ≈ 12%, so steady state is about 1.2 requests per check. With
-20 keys, so that keys were not the limit, both versions saved about 200
-responses a second on this machine (12 threads, NVMe): the old code made 99 checks
-a second and the new code 187 (at 1.10 requests per check, before any safety
-fetch). That is about 170 checks a second at 1.2. These runs had no worker,
-uploads or production load, and the fake API answers instantly.
+At 1.22 requests per check six keys allow 150 ÷ 1.22 ≈ 123 checks a second,
+one check per player every 13,263 ÷ 123 ≈ 108 seconds. Without the
+after-attack fetch, requests drop to 1.20 per check but the slowest attacker
+copy takes 364 seconds. The replay is not the collector: it does not model
+saving time, key limits, Refresh or Reset, and it assumes the defender's
+profile shows a battle as soon as it ends.
 
 Ordinary transport failures wait for the next pass. Interactive, Reset and
 ranking work gets bounded retries. Raw responses are published to the local

@@ -87,7 +87,7 @@ The revised manual commands and their verification limits belong in
   [Clash API keys](operating.md#clash-api-keys). At 13,263 active players,
   about 1.2 requests per check every 90 seconds would need about 177
   starts/second before first-time/weekly checks, retries, league-history reads
-  and Reset work, so six keys pace checks to about every ~106 seconds. This is
+  and Reset work, so six keys pace checks to about every ~108 seconds. This is
   arithmetic, not measured throughput or a provider-limit guarantee.
 - Measure collection, processing, imports, clan growth, disk, database, archive,
   backups and restore load together. Keep swap out of the capacity budget.
