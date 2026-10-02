@@ -272,13 +272,16 @@ sighting, and its bytes stay 95 days plus the wait for the next cleanup batch. T
 21.83 GB/day of new raw responses (October 2) means about 2.07 TB stored,
 roughly EUR 33/month at EUR 0.01606/GB-month. This is a projection, not a bill.
 
-Pending verification and unfinished/failed processing or replay keep a response
-usable. Marking commits before any
+Any unfinished upload of the same bytes and unfinished/failed processing or
+replay keep a response usable. Marking commits before any
 DELETE, and the delete step rechecks that the row is still this archive's held
 tombstone. An unknown or failed DELETE leaves the row `retiring`, is counted in
 `failed_objects`, does not stop the batch and is retried by the next run.
 Recollection uses a new immutable `generation/<token>` location, so a delayed
-old DELETE cannot remove new bytes. Catalogue tombstones remain; cleanup does
+old DELETE cannot remove new bytes. An upload that finishes on a location
+already `retiring` or `expired` is never attached to it: it uploads again under
+a new generation. One that finishes on a kept location extends its deadline to
+86 days after the latest sighting. Catalogue tombstones remain; cleanup does
 not compact them. Bucket versioning, noncurrent versions, backup retention and
 orphan objects need separately verified provider policies; deleting a current
 key does not prove all provider storage was reclaimed.

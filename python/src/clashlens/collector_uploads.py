@@ -227,7 +227,7 @@ def complete_upload(
             )
             existing = connection.execute(
                 """
-                SELECT response_hash, byte_size, archive_instance_id
+                SELECT response_hash, byte_size, archive_instance_id, availability
                 FROM archive_catalogue
                 WHERE archive_reference = %s
                 FOR UPDATE
@@ -242,7 +242,31 @@ def complete_upload(
                 raise ValueError(
                     "archive reference is already bound to different bytes"
                 )
-            if existing is None:
+            if existing is not None and existing[3] != "verified":
+                connection.execute(
+                    """
+                    UPDATE collector_response_uploads
+                    SET state = 'pending', upload_generation = %s,
+                        lease_owner = NULL, lease_token = NULL,
+                        lease_expires_at = NULL,
+                        next_attempt_at = clock_timestamp(),
+                        updated_at = clock_timestamp()
+                    WHERE response_hash = %s
+                    """,
+                    (uuid4().hex, claim.response_hash),
+                )
+                return
+            if existing is not None:
+                connection.execute(
+                    """
+                    UPDATE archive_catalogue
+                    SET retire_after = clashlens_season_retire_after(%s)
+                    WHERE archive_reference = %s
+                      AND retire_after < clashlens_season_retire_after(%s)
+                    """,
+                    (row[9], archive_reference, row[9]),
+                )
+            else:
                 connection.execute(
                     """
                     INSERT INTO archive_catalogue (
