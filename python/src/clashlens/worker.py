@@ -163,6 +163,7 @@ def process_concurrently(
     max_jobs: int,
     lease_seconds: int = 30,
     stop_requested: Event | None = None,
+    probe_first: bool = False,
 ) -> list[ProcessResult]:
     """Process up to ``max_jobs`` jobs across up to ``concurrency`` lanes.
 
@@ -173,6 +174,10 @@ def process_concurrently(
     jobs are claimed per call. When ``stop_requested`` is set, lanes finish
     their current job and do not claim another; the call then waits for the
     bounded in-flight set and returns its results.
+
+    With ``probe_first``, one lane processes a single job before the others
+    start, and an empty probe returns at once. An idle queue then costs one
+    claim search per poll instead of one per lane.
 
     An unexpected exception escaping one lane is isolated: other lanes finish
     their in-flight job, no further claims are made, and a sanitized
@@ -197,7 +202,7 @@ def process_concurrently(
     failure_lock = threading.Lock()
     stop_claiming = Event()
 
-    def lane(lane_index: int) -> None:
+    def lane(lane_index: int, *, once: bool = False) -> None:
         nonlocal first_failure, jobs_remaining
         while True:
             if stop_claiming.is_set():
@@ -223,7 +228,14 @@ def process_concurrently(
                 return
             with results_lock:
                 results.append(result)
+            if once:
+                return
 
+    lanes = range(1, concurrency + 1)
+    if probe_first:
+        lane(1, once=True)
+        if not results:
+            lanes = range(0)
     threads = [
         threading.Thread(
             target=lane,
@@ -231,7 +243,7 @@ def process_concurrently(
             name=f"clashlens-worker-lane-{lane_index}",
             daemon=True,
         )
-        for lane_index in range(1, concurrency + 1)
+        for lane_index in lanes
     ]
     for thread in threads:
         thread.start()

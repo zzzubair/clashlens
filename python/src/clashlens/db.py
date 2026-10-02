@@ -424,6 +424,10 @@ def _claim_select_statement(
             LIMIT 1
         """
     else:
+        # The lock-time recheck is wrapped in IS TRUE so PostgreSQL cannot
+        # answer it from a general queue index. Otherwise it may walk every
+        # due-looking entry, including dead ones left before vacuum, instead
+        # of looking up the few probed ids by primary key.
         probe = f"""
             SELECT pick.id
             FROM (
@@ -487,8 +491,7 @@ def _claim_select_statement(
                 ON source_observation.id = COALESCE(
                     job.observation_id, job.replay_observation_id
                 )
-            WHERE ({due})
-              AND {job_filter}
+            WHERE (({due}) AND {job_filter}) IS TRUE
             ORDER BY ({score}) DESC, job.due_at, job.id
             FOR UPDATE OF job SKIP LOCKED
             LIMIT 1

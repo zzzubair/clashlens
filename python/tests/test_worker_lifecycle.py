@@ -986,12 +986,14 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
         max_jobs: int,
         lease_seconds: int,
         stop_requested: object,
+        probe_first: bool,
     ) -> list[ProcessResult]:
         recorded["concurrent_args"] = {
             "concurrency": concurrency,
             "owner": owner,
             "max_jobs": max_jobs,
             "lease_seconds": lease_seconds,
+            "probe_first": probe_first,
         }
         return []
 
@@ -1013,7 +1015,58 @@ def test_run_worker_concurrent_path_uses_explicit_pool_sizes(monkeypatch) -> Non
         "owner": "cli-worker",
         "max_jobs": 25,
         "lease_seconds": 40,
+        "probe_first": False,
     }
+
+
+def test_run_forever_probes_with_one_lane_only_after_the_queue_drains(
+    monkeypatch,
+) -> None:
+    class FakeProcessor:
+        def __init__(self, _database: object, _archive: object) -> None:
+            return
+
+    # Full batch, then a batch that ran out of work, then an idle batch.
+    batches = [
+        [ProcessResult(index, "processed") for index in range(25)],
+        [ProcessResult(26, "processed")],
+        [],
+    ]
+    probes: list[bool] = []
+
+    def fake_concurrent(processor: object, **kwargs: object) -> list[ProcessResult]:
+        del processor
+        probes.append(bool(kwargs["probe_first"]))
+        if not batches:
+            stop_requested = kwargs["stop_requested"]
+            assert isinstance(stop_requested, Event)
+            stop_requested.set()
+            return []
+        return batches.pop(0)
+
+    monkeypatch.setattr(
+        cli,
+        "Database",
+        lambda _url, **kwargs: PoolRecordingDatabase(_url, max_size=kwargs["max_size"]),
+    )
+    monkeypatch.setattr(
+        cli, "_archive", lambda _arguments, **kwargs: PoolRecordingArchive(4)
+    )
+    monkeypatch.setattr(cli, "ObservationProcessor", FakeProcessor)
+    monkeypatch.setattr(cli, "process_concurrently", fake_concurrent)
+
+    result = cli._run_worker(
+        _worker_namespace(
+            concurrency=12,
+            max_jobs=25,
+            run_forever=True,
+            poll_interval_seconds=0.001,
+            operating_snapshot_file="",
+        )
+    )
+
+    assert result == 0
+    assert probes == [False, False, True, True]
 
 
 def test_run_worker_honors_explicit_pool_size_flags(monkeypatch) -> None:

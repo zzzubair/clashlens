@@ -310,6 +310,96 @@ def test_claim_plan_at_production_depth_is_bounded(database_url: str) -> None:
             database.close()
 
 
+def test_claim_skips_dead_queue_entries_left_before_vacuum(database_url: str) -> None:
+    # Production keeps about a million finished jobs, and every finished job
+    # leaves dead queue index entries until vacuum. The claim must look up its
+    # few probed ids instead of walking those entries, however many there are.
+    with _production_database(database_url) as connection_info:
+        with psycopg.connect(connection_info, autocommit=True) as connection:
+            connection.execute(
+                "ALTER TABLE python_processing_jobs SET (autovacuum_enabled = false)"
+            )
+            _insert_observation(connection, occurrence_key="dead-entries-anchor")
+            connection.execute(
+                """
+                INSERT INTO archive_catalogue (
+                    response_hash, archive_reference, byte_size,
+                    archive_instance_id
+                )
+                SELECT lpad(to_hex(i), 64, '0'), 's3://evidence/dead-' || i, 0,
+                       'fixture-instance'
+                FROM generate_series(1, 5001) AS i;
+                INSERT INTO collector_observations (
+                    occurrence_key, player_id, scope, normalized_tag, endpoint,
+                    request_started_at, response_completed_at, http_status,
+                    response_hash, archive_reference, archive_catalogue_hash,
+                    collector_version, key_label, evidence_headers,
+                    request_method, request_path, request_query,
+                    paging_envelope_state, source_adapter_version
+                )
+                SELECT 'dead-entries:' || i, player.id, 'player',
+                       player.normalized_tag, 'profile',
+                       clock_timestamp() - interval '1 minute', clock_timestamp(),
+                       200, lpad(to_hex(i), 64, '0'), 's3://evidence/dead-' || i,
+                       lpad(to_hex(i), 64, '0'), 'collector-v1', 'normal-a', '{}',
+                       'GET', '/v1/players/2PP', '', 'not_applicable',
+                       'player-profile-v1'
+                FROM generate_series(1, 5001) AS i
+                CROSS JOIN players AS player;
+                INSERT INTO python_processing_jobs (
+                    observation_id, work_type, deduplication_key, input_json,
+                    status, due_at, priority, parser_version,
+                    processing_version, domain_rule_version,
+                    analytics_rule_version
+                )
+                SELECT observation.id, 'process_observation',
+                       'dead-entries:' || observation.id, '{}', 'pending',
+                       clock_timestamp() - interval '1 minute', 100,
+                       'supercell-source-parser-v1',
+                       'clashlens-domain-processing-v1',
+                       'clashlens-domain-rules-v1', 'legend-analytics-v1'
+                FROM collector_observations AS observation
+                WHERE observation.occurrence_key LIKE 'dead-entries:%'
+                """
+            )
+            connection.execute(
+                """
+                UPDATE python_processing_jobs
+                SET status = 'leased', lease_owner = 'finished-worker',
+                    lease_token = 'finished-' || id,
+                    lease_expires_at = clock_timestamp() - interval '1 second',
+                    attempt_count = attempt_count + 1
+                """
+            )
+            connection.execute(
+                """
+                UPDATE python_processing_jobs
+                SET status = 'complete', lease_owner = NULL, lease_token = NULL,
+                    lease_expires_at = NULL, completed_at = clock_timestamp()
+                """
+            )
+            connection.execute("ANALYZE python_processing_jobs")
+            waiting_id = connection.execute(
+                """
+                UPDATE python_processing_jobs
+                SET status = 'pending', completed_at = NULL
+                WHERE id = (SELECT max(id) FROM python_processing_jobs)
+                RETURNING id
+                """
+            ).fetchone()[0]
+            plan_text, _millis = _explain_claim(connection)
+            assert "Bitmap Heap Scan on python_processing_jobs" not in plan_text, (
+                f"claim walks dead queue entries:\n{plan_text}"
+            )
+
+        database = Database(connection_info)
+        try:
+            claim = database.claim_job(owner="dead-entries-worker")
+            assert claim is not None and claim.job_id == waiting_id
+        finally:
+            database.close()
+
+
 def test_claim_probe_skips_unsupported_head_and_keeps_age_fairness(
     database_url: str,
 ) -> None:

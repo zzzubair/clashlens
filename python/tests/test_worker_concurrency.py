@@ -141,6 +141,43 @@ def test_empty_queue_drains_lanes_without_runaway_claims() -> None:
     assert processor.calls[0][1] == 30
 
 
+def test_probe_on_empty_queue_searches_once_instead_of_once_per_lane() -> None:
+    claims = 0
+
+    class EmptyQueue:
+        def process_once(self, **_kwargs: object) -> None:
+            nonlocal claims
+            claims += 1
+
+    probed = process_concurrently(
+        EmptyQueue(), concurrency=12, owner="idle", max_jobs=100, probe_first=True
+    )
+    assert probed == []
+    assert claims == 1
+    fanned_out = process_concurrently(
+        EmptyQueue(), concurrency=12, owner="idle", max_jobs=100
+    )
+    assert fanned_out == []
+    assert claims == 13
+
+
+def test_probe_that_finds_work_fans_out_to_every_lane() -> None:
+    class SlowProcessor(RecordingProcessor):
+        def process_once(self, **kwargs: int | str) -> ProcessResult | None:
+            time.sleep(0.01)
+            return super().process_once(**kwargs)  # type: ignore[arg-type]
+
+    processor = SlowProcessor(available_jobs=40)
+
+    results = process_concurrently(
+        processor, concurrency=4, owner="probe", max_jobs=30, probe_first=True
+    )
+
+    assert len(results) == 30
+    assert processor.calls[0][0] == "probe.lane-1"
+    assert len({owner for owner, _ in processor.calls}) == 4
+
+
 def test_concurrency_rejects_out_of_bounds_values() -> None:
     processor = RecordingProcessor()
     with pytest.raises(ValueError, match="concurrency"):
