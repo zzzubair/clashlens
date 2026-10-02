@@ -17,6 +17,11 @@
   flex: 1;
   min-width: 0;
   min-height: 44px;
+  padding: 0.5rem 0.85rem;
+  color: var(--cl-ink);
+  background: var(--cl-surface);
+  border: 1px solid var(--cl-input-border);
+  border-radius: var(--cl-radius);
   font-size: 16px;
 }
 

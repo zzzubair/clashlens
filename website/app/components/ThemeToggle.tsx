@@ -3,20 +3,20 @@ import { useEffect, useState } from "react";
 const STORAGE_KEY = "clashlens-theme";
 let themeFrame = 0;
 
-// Run before paint so a saved dark theme never flashes the light background.
+// Light by default; dark only when chosen. Runs before paint so a saved dark
+// theme never flashes the light background.
 export const themeInitialization = `(() => {
   let saved;
   try { saved = localStorage.getItem("${STORAGE_KEY}"); } catch {}
-  const dark = saved === "dark" || (saved !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+  const dark = saved === "dark";
   document.documentElement.dataset.theme = dark ? "dark" : "light";
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#2456ff");
+  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#1b1c1f" : "#ffffff");
 })();`;
 
 export function ThemeToggle() {
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
-    const preference = window.matchMedia("(prefers-color-scheme: dark)");
     const sync = () => {
       let saved: string | null = null;
       try {
@@ -24,17 +24,13 @@ export function ThemeToggle() {
       } catch {
         /* Storage may be disabled. */
       }
-      const next = saved === "dark" || (saved !== "light" && preference.matches);
+      const next = saved === "dark";
       applyTheme(next);
       setDark(next);
     };
     sync();
-    preference.addEventListener("change", sync);
     window.addEventListener("storage", sync);
-    return () => {
-      preference.removeEventListener("change", sync);
-      window.removeEventListener("storage", sync);
-    };
+    return () => window.removeEventListener("storage", sync);
   }, []);
 
   return (
@@ -91,5 +87,7 @@ function applyTheme(dark: boolean) {
     });
   }
   document.documentElement.dataset.theme = theme;
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#2456ff");
+  document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute("content", theme === "dark" ? "#1b1c1f" : "#ffffff");
 }

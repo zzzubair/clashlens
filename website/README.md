@@ -322,3 +322,15 @@ retained as fallbacks. The WOFF2 files were converted from those exact originals
 with fontTools 4.66.0, without removing characters or changing glyphs. Their SIL
 Open Font License remains in `public/fonts/OFL.txt`. Font conversion is a one-time
 asset step and adds no application or build dependency.
+
+Headings use Bricolage Grotesque ExtraBold (800), one 21.7 KB WOFF2 file
+limited to Latin characters as published by Google Fonts. Other scripts fall
+back to Barlow or the system font. Its SIL Open Font License is in
+`public/fonts/OFL-BricolageGrotesque.txt`.
+
+## Game art
+
+`public/images/legend-league.webp` is the Legend I tier badge from the official
+API (`leaguetiers/326/s5Y12RDRg7tgznd2RwU9kgLbedC5Not4peiHfOaWfJo.png`, as saved
+in a profile response on October 2, 2026), resized to 160 pixels high. It is used under the Supercell Fan Content Policy,
+which the site footer links to.

@@ -1,7 +1,50 @@
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-weight: 800;
+  font-display: swap;
+  src: url("/fonts/bricolage-grotesque-800-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+2000-206F, U+20AC, U+2122, U+2212;
+}
+
 :root {
   color-scheme: light;
   --cl-input-border: var(--cl-outline);
+  --cl-glow: linear-gradient(180deg, #ffefd9 0, #fff8ef 14rem, #ffffff 28rem);
+  --cl-button-shadow: 0 2px 0 var(--cl-action-shade), 0 8px 18px -6px rgb(232 93 4 / 0.6);
+  --cl-raise: 0 1px 2px rgb(90 45 10 / 0.1), 0 6px 14px -8px rgb(90 45 10 / 0.35);
+  --cl-header-shadow: 0 10px 30px -14px rgb(90 45 10 / 0.45);
+  font-synthesis-weight: none;
   -webkit-text-size-adjust: 100%;
+}
+
+/* A sunny wash behind the top of every page; the header floats over it. */
+body {
+  background:
+    var(--cl-glow) no-repeat,
+    var(--cl-paper);
+}
+.site-header {
+  box-shadow: var(--cl-header-shadow);
+  -webkit-backdrop-filter: saturate(1.4) blur(12px);
+  backdrop-filter: saturate(1.4) blur(12px);
+}
+
+/* Secondary controls and medals sit slightly above the page. */
+:is(.section-link, .button-secondary, .button.secondary, .theme-toggle, .page-position),
+.leaderboard-row[data-podium-rank] .rank-mark {
+  box-shadow: var(--cl-raise);
+}
+
+/* In dark mode an ember edge separates the main cards from the page. */
+:root[data-theme="dark"]
+  :is(.home-leaderboard, .standings-board, .player-page .player-header) {
+  border-top: 3px solid var(--cl-action);
+}
+
+/* Headings use the one Bricolage weight that ships. */
+:is(h1, h2, h3, .site-brand) {
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
 
 /* Switch text and surfaces together, without a low-contrast intermediate frame. */
@@ -13,23 +56,34 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --cl-ink: #ffffff;
-  --cl-paper: #181818;
-  --cl-panel: #303030;
-  --cl-surface: #242424;
-  --cl-muted: #bdbdbd;
-  --cl-border: #4c4c4c;
-  --cl-outline: #8a8a8a;
-  --cl-blue: #91b6ff;
-  --cl-blue-dark: #b6ceff;
-  --cl-silver: #c2cedd;
-  --cl-bronze: #d9976b;
-  --cl-action-text: #91b6ff;
-  --cl-action-soft: #343434;
-  --cl-action-border: #8a8a8a;
-  --cl-gold: #ffe600;
-  --cl-positive: #57d16d;
-  --cl-negative: #ff7a7a;
+  --cl-ink: #f4f4f5;
+  --cl-paper: #0f1012;
+  --cl-panel: #25262a;
+  --cl-surface: #1b1c1f;
+  --cl-muted: #a1a1aa;
+  --cl-border: #2c2d32;
+  --cl-outline: #3f4046;
+  --cl-blue: #ff9a4d;
+  --cl-blue-dark: #ffb27a;
+  --cl-action: #ff7a1a;
+  --cl-action-hover: #ff8f3d;
+  --cl-action-shade: #b8460c;
+  --cl-header-bg: rgb(27 28 31 / 0.88);
+  --cl-header-ink: #f4f4f5;
+  --cl-header-muted: #a1a1aa;
+  --cl-header-soft: #25262a;
+  --cl-action-text: #ff9a4d;
+  --cl-action-soft: #352416;
+  --cl-action-border: #7a3d12;
+  --cl-glow: linear-gradient(180deg, rgb(255 122 26 / 0.12) 0, transparent 22rem);
+  --cl-gold: #fbbf24;
+  --cl-positive: #4ade80;
+  --cl-negative: #f87171;
+  --cl-shadow: 0 2px 4px rgb(0 0 0 / 0.4), 0 22px 44px -18px rgb(0 0 0 / 0.8);
+  --cl-raise: 0 1px 2px rgb(0 0 0 / 0.5), 0 6px 14px -8px rgb(0 0 0 / 0.7);
+  --cl-header-shadow: 0 10px 30px -14px rgb(0 0 0 / 0.8);
+  --cl-button-shadow:
+    0 2px 0 var(--cl-action-shade), 0 8px 18px -6px rgb(255 122 26 / 0.35);
 }
 
 .theme-toggle {
@@ -42,8 +96,8 @@
   padding: 0;
   color: var(--cl-header-ink);
   background: transparent;
-  border: 2px solid #000000;
-  border-radius: 0;
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
   cursor: pointer;
 }
 .theme-toggle:active {
@@ -111,7 +165,7 @@ main {
   outline-offset: 3px;
 }
 .site-header :is(a, button):focus-visible {
-  outline-color: #ffffff;
+  outline-color: var(--cl-orange);
 }
 .home-page .search-controls input:focus-visible,
 #main-content:focus {
@@ -129,7 +183,7 @@ main {
 }
 .button[aria-current="page"],
 .season-list [aria-current="page"] {
-  border-color: #000000;
+  border-color: var(--cl-action-border);
 }
 .form-field input,
 .form-field textarea,
