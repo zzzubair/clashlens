@@ -158,7 +158,7 @@ first, saves it, and then fetches the battle log only when:
 
 - the profile's trophies, `attackWins` or `defenseWins` differ from the last
   valid profile, or did so on the previous check (the follow-up fetch);
-- a newly saved battle log of another player shows a new battle against this
+- a newly saved battle log of another player shows a battle against this
   player, and this player's last battle log does not reach that battle's time
   yet (the opponent fetch);
 - this check's own profile response is unusable: the request failed, returned
@@ -177,7 +177,7 @@ opponent fetch likewise only counts when it starts at least 60 seconds after
 the other player's log showed the battle. Only a saved successful battle log
 whose request started after the change was seen counts, and only when every
 Legend row in it passes the worker's row checks (valid side, stars,
-destruction and opponent tag) and has a live `battleTimestamp`; `battleTime`,
+destruction and opponent tag) and has an explicit `battleTimestamp`; `battleTime`,
 the battle's length, never stands in for it. A failed or malformed log leaves
 the fetch owed for the next check and does not reset the 15-minute safety
 clock, but its valid rows still count as seen battles and still mark tracked
@@ -186,11 +186,11 @@ opponents.
 A battle that moves no trophies still counts. When player A attacks player B
 for 0 stars and 49%, A gains trophies and B loses none, but B's `defenseWins`
 goes up, so B's next check fetches B's log. The opponent fetch also covers B
-when only A's side changed or B's profile has not caught up yet. A "new battle"
-is one later than every battle in that player's previous saved log, so the
-first log the collector sees for a player after starting counts all its
-battles as new. No opponent fetch is owed when the opponent's own latest saved
-log already reaches that battle's time. Only players the collector has already
+when only A's side changed or B's profile has not caught up yet. Every valid
+battle in a saved log can mark its opponent, including the first log after a
+restart and a row that was malformed in an earlier copy. No opponent fetch is
+owed when the opponent's own latest saved log already reaches that battle's
+time. Only players the collector has already
 checked since starting get an opponent fetch. Anything still left, such as a tracked player's 0-star attack under 10%
 on an untracked player, waits for the safety fetch: about 15–17 minutes plus
 any queue delay. Leaderboard trophies come from the profile, which every

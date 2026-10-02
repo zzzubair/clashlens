@@ -20,6 +20,7 @@ START = datetime(2026, 10, 2, 12, tzinfo=UTC)
 CHECK_INTERVAL = timedelta(seconds=90)
 TAG = "#2PP"
 OPPONENT = "#8PP"
+UNTRACKED = "#9PP"
 CONTROL_TAG = "#28Q"
 BOTH = ["profile", "battle_log"]
 PROFILE = ["profile"]
@@ -386,6 +387,41 @@ def test_valid_battle_in_a_partly_malformed_log_still_marks_the_opponent() -> No
     assert state.due(OPPONENT, later)
     # The malformed log does not count as this player's owed fetch.
     assert state.due(TAG, later)
+
+
+def test_corrected_older_row_still_marks_the_opponent() -> None:
+    state = _Schedule()
+    now = state.settle(TAG)
+    state.settle(OPPONENT)
+    older = _battle(OPPONENT, now - timedelta(seconds=40))
+    newer = _battle(UNTRACKED, now - timedelta(seconds=20))
+    state.log(TAG, now, newer, older | {"stars": None})
+    assert not state.due(OPPONENT, now + timedelta(seconds=2))
+
+    state.log(TAG, now + timedelta(seconds=90), newer, older)
+    assert state.due(OPPONENT, now + timedelta(seconds=92))
+
+
+def test_row_with_an_unusable_date_is_skipped_without_raising() -> None:
+    state = _Schedule()
+    now = state.settle(TAG)
+    state.settle(OPPONENT)
+    ancient = _battle(OPPONENT, now) | {"battleTimestamp": "00010101T000000.000Z"}
+    valid = _battle(OPPONENT, now - timedelta(seconds=20))
+
+    assert not state.log(TAG, now, ancient, valid)
+    assert state.due(OPPONENT, now + timedelta(seconds=2))
+
+
+def test_timestamp_without_fractional_seconds_counts() -> None:
+    state = _Schedule()
+    now = state.settle(TAG)
+    state.settle(OPPONENT)
+    battle_at = now - timedelta(seconds=20)
+    whole_seconds = {"battleTimestamp": battle_at.strftime("%Y%m%dT%H%M%SZ")}
+
+    assert state.log(TAG, now, _battle(OPPONENT, battle_at) | whole_seconds)
+    assert state.due(OPPONENT, now + timedelta(seconds=2))
 
 
 def test_opponent_log_from_inside_the_api_cache_does_not_count() -> None:

@@ -16,10 +16,9 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
-from typing import Any
+from datetime import datetime, timedelta
 
-from .battle import parse_battle_log
+from .battle import LIVE_SOURCE_PARSER_VERSION, _parse_row
 
 # Read from each valid profile: a battle changes at least one of them unless it
 # is a 0-star attack under 10% destruction.
@@ -77,7 +76,7 @@ class BattleLogSchedule:
             _note_profile(player, signals, completed_at)
             return True
         if endpoint == "battle_log":
-            read = _battles(body, normalized_tag, completed_at)
+            read = _battles(body, normalized_tag)
             if read is None:
                 return False
             battles, complete = read
@@ -94,12 +93,9 @@ class BattleLogSchedule:
         battles: list[tuple[datetime, str]],
         completed_at: datetime,
     ) -> None:
-        previous_latest = player.latest_battle_at
         for battle_at, opponent_tag in battles:
             if player.latest_battle_at is None or battle_at > player.latest_battle_at:
                 player.latest_battle_at = battle_at
-            if previous_latest is not None and battle_at <= previous_latest:
-                continue
             opponent = self._players.get(opponent_tag)
             if opponent is not None and (
                 opponent.latest_battle_at is None
@@ -184,39 +180,33 @@ def _profile_signals(body: bytes) -> tuple[int, ...] | None:
 
 
 def _battles(
-    body: bytes, normalized_tag: str, completed_at: datetime
+    body: bytes, normalized_tag: str
 ) -> tuple[list[tuple[datetime, str]], bool] | None:
     """Each valid Legend battle's time and opponent, and whether all were valid.
 
-    A row is valid when it passes the worker's own row rules and has a live
+    A row is valid when it passes the worker's own row rules with an explicit
     battleTimestamp. None means the body is not a battle log at all.
     """
     try:
-        log = parse_battle_log(
-            body, expected_tag=normalized_tag, observed_at=completed_at
-        )
+        payload = json.loads(body)
     except ValueError:
+        return None
+    items = payload.get("items") if isinstance(payload, dict) else payload
+    if not isinstance(items, list):
         return None
     battles = []
     complete = True
-    for row in log.rows:
+    for index, item in enumerate(items):
+        try:
+            row = _parse_row(index, item, normalized_tag, LIVE_SOURCE_PARSER_VERSION)
+        except Exception:  # noqa: BLE001 - one bad row never stops collection
+            complete = False
+            continue
         if row.outcome == "ignored_non_legend":
             continue
-        battle_at = _battle_at(row.source_json)
-        if row.battle is None or battle_at is None:
+        # Live battleTime is the battle's length, never a stand-in date.
+        if row.battle is None or item.get("battleTimestamp") is None:
             complete = False
         else:
-            battles.append((battle_at, row.battle.opponent_tag))
+            battles.append((row.battle.battle_timestamp, row.battle.opponent_tag))
     return battles, complete
-
-
-def _battle_at(entry: Any) -> datetime | None:
-    # Live entries carry the date as compact text in battleTimestamp;
-    # battleTime is the battle's length in seconds.
-    value = entry.get("battleTimestamp") if isinstance(entry, dict) else None
-    if not isinstance(value, str):
-        return None
-    try:
-        return datetime.strptime(value, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=UTC)
-    except ValueError:
-        return None
