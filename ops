@@ -753,10 +753,13 @@ render_units() {
     render "$TEMPLATE_DIR/clashlens-alert.service" "$USER_UNIT_DIR/clashlens-alert.service" ROOT "$ROOT"
     render "$TEMPLATE_DIR/clashlens-alert.timer" "$USER_UNIT_DIR/clashlens-alert.timer"
   fi
-  if archive_retention_enabled; then
+  if [[ "${MODE:-}" == production && "$(setting CLASHLENS_ARCHIVE_RETENTION off)" == apply ]]; then
     backup_requires+=$'\nWants=clashlens-archive-retention.timer'
     render "$TEMPLATE_DIR/clashlens-archive-retention.service" "$USER_UNIT_DIR/clashlens-archive-retention.service" ROOT "$ROOT"
     render "$TEMPLATE_DIR/clashlens-archive-retention.timer" "$USER_UNIT_DIR/clashlens-archive-retention.timer"
+  else
+    rm -f "$USER_UNIT_DIR/clashlens-archive-retention.service" "$USER_UNIT_DIR/clashlens-archive-retention.timer"
+    "$SYSTEMCTL_BIN" --user reset-failed clashlens-archive-retention.service >/dev/null 2>&1 || true
   fi
   render "$TEMPLATE_DIR/clashlens.target" "$USER_UNIT_DIR/clashlens.target" FIXTURE_REQUIRES "$fixture_requires" BACKUP_REQUIRES "$backup_requires" ALERT_REQUIRES "$alert_requires"
   if backup_enabled; then
@@ -1413,16 +1416,15 @@ archive_retention_enabled() {
 }
 
 archive_prune() {
-  local apply=() scheduled=false argument lock_fd
+  local apply=() argument lock_fd
   for argument in "$@"; do
-    case "$argument" in --apply) apply=(--apply) ;; --scheduled) scheduled=true ;; *) die "archive-prune accepts only --apply" ;; esac
+    case "$argument" in --apply|--scheduled) apply=(--apply) ;; *) die "archive-prune accepts only --apply" ;; esac
   done
   require_host
   prepare_managed_runtime worker
   [[ "$MODE" == production ]] || die "raw-response cleanup is unavailable in fixture mode"
   load_production_config
   archive_retention_enabled || die "set CLASHLENS_ARCHIVE_RETENTION=preview in app.env and run ./ops up first"
-  [[ "$scheduled" == false || "$(setting CLASHLENS_ARCHIVE_RETENTION)" != apply ]] || apply=(--apply)
   [[ ${#apply[@]} == 0 || "$(setting CLASHLENS_ARCHIVE_RETENTION)" == apply ]] || die "deletion requires CLASHLENS_ARCHIVE_RETENTION=apply and ./ops up"
   # Scheduled runs skip the operation lock so cleanup never blocks up or backups;
   # up and down stop this timer first. This lock only keeps runs from overlapping.

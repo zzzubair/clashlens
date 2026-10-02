@@ -24,19 +24,42 @@ BEGIN
 END
 $$;
 
--- A stored deadline is old season end + 56 days and its latest sighting was
--- before that season end, so adding 30 days never gives less than 86 days.
--- Existing responses may wait up to 28 days longer than the new rule, once.
-UPDATE archive_catalogue
-SET retire_after = retire_after + interval '30 days'
-WHERE availability = 'verified';
-UPDATE collector_response_uploads
-SET minimum_retire_after = minimum_retire_after + interval '30 days'
-WHERE state <> 'complete' AND minimum_retire_after IS NOT NULL;
+-- Recalculate every kept response from its latest retained sighting: the
+-- exact location's observations, plus the hash's upload row and compact state.
+-- An existing deadline is never moved earlier.
+WITH by_reference AS (
+    SELECT archive_reference, max(response_completed_at) AS seen_at
+    FROM collector_observations WHERE archive_reference IS NOT NULL
+    GROUP BY archive_reference
+), by_hash AS (
+    SELECT response_hash, max(seen_at) AS seen_at
+    FROM (
+        SELECT response_hash, latest_sighting_at AS seen_at FROM collector_response_uploads
+        UNION ALL
+        SELECT last_response_hash, last_seen_at FROM collector_response_state
+    ) AS sighting
+    GROUP BY response_hash
+), latest AS (
+    SELECT catalogue.response_hash, catalogue.archive_reference,
+           GREATEST(by_reference.seen_at, by_hash.seen_at) AS seen_at
+    FROM archive_catalogue AS catalogue
+    LEFT JOIN by_reference USING (archive_reference)
+    LEFT JOIN by_hash USING (response_hash)
+    WHERE catalogue.availability IN ('verified', 'retiring')
+)
+UPDATE archive_catalogue AS catalogue
+SET retire_after = GREATEST(
+    catalogue.retire_after, clashlens_season_retire_after(latest.seen_at)
+)
+FROM latest
+WHERE latest.response_hash = catalogue.response_hash
+  AND latest.archive_reference = catalogue.archive_reference;
 
 ALTER TABLE archive_catalogue ADD COLUMN retiring_since timestamptz;
--- Responses already marked by the old code start their recovery hold now.
-UPDATE archive_catalogue SET retiring_since = clock_timestamp()
+-- Responses already marked by the old code start their recovery hold now, or
+-- at their recalculated deadline if that is later.
+UPDATE archive_catalogue
+SET retiring_since = GREATEST(clock_timestamp(), retire_after)
 WHERE availability = 'retiring';
 
 -- Many responses share one season deadline; keep each batch an index range.

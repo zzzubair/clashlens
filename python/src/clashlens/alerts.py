@@ -395,20 +395,24 @@ def observe(
             state.pop("backup_failing_since", None)
 
     try:
-        # Exits 0 only for a failed unit; an uninstalled cleanup timer is never failed.
-        findings["cleanup"] = (
-            command(
-                [
-                    os.environ.get("SYSTEMCTL_BIN", "systemctl"),
-                    "--user",
-                    "is-failed",
-                    "--quiet",
-                    "clashlens-archive-retention.service",
-                ]
-            ).returncode
-            == 0
+        result = command(
+            [
+                os.environ.get("SYSTEMCTL_BIN", "systemctl"),
+                "--user",
+                "show",
+                "clashlens-archive-retention.service",
+                "--property=ActiveState,Result",
+            ]
         )
-    except (OSError, subprocess.SubprocessError):
+        unit = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if result.returncode or "ActiveState" not in unit:
+            raise ValueError
+        # A running retry keeps the incident; an uninstalled unit shows inactive/success.
+        if unit["ActiveState"] == "failed":
+            findings["cleanup"] = True
+        elif unit["ActiveState"] == "inactive" and unit.get("Result") == "success":
+            findings["cleanup"] = False
+    except (OSError, ValueError, subprocess.SubprocessError):
         errors.append("Cleanup state unavailable; run ./ops logs archive-retention")
 
     probe = [

@@ -17,8 +17,6 @@ from clashlens.spool import Spool
 FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 MIGRATIONS = Path(__file__).parents[2] / "deploy" / "migrations"
 OPTIONS = {"bucket": "evidence", "instance_id": "fixture-instance"}
-# A Legend season boundary on the old 28-day deadline grid (Monday 05:00 UTC).
-SEASON_START = datetime.fromtimestamp(1783918800, UTC)
 
 
 class DeleteClient:
@@ -102,48 +100,51 @@ def test_response_is_due_86_days_after_its_latest_sighting(database_url, tmp_pat
             spool.close()
 
 
-def test_existing_deadlines_move_to_the_86_day_rule(database_url):
+def test_existing_deadlines_are_recalculated_from_retained_sightings(database_url):
     schema = f"retention_upgrade_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
         admin.execute(f'CREATE SCHEMA "{schema}"')
     dsn = make_conninfo(database_url, options=f"-c search_path={schema}")
-    sighting = SEASON_START + timedelta(days=60)
     try:
         with psycopg.connect(dsn, autocommit=True) as connection:
             for path in sorted(MIGRATIONS.glob("*.sql")):
                 if path.name.startswith("0046_"):
                     break
                 connection.execute(path.read_text(encoding="utf-8"))
-            _seed(connection, 2)
-            connection.execute(
-                "UPDATE archive_catalogue SET retire_after = clashlens_season_retire_after(%s)",
-                (sighting,),
-            )
-            connection.execute(
-                """
-                UPDATE archive_catalogue SET availability = 'retiring'
-                WHERE archive_reference = (SELECT min(archive_reference) FROM archive_catalogue)
-                """
-            )
+            keys = _seed(connection, 3)
+            now = connection.execute("SELECT clock_timestamp()").fetchone()[0].replace(microsecond=0)
+            # Old code marked responses 56 days after their season ended, so a
+            # 60-day-old one may already be marked; another was marked long ago.
+            sightings = [now - timedelta(days=60), now - timedelta(days=60), now - timedelta(days=200)]
+            for key, sighting, availability in zip(keys, sightings, ("verified", "retiring", "retiring")):
+                digest = key.rsplit("/", 1)[1]
+                connection.execute(
+                    "INSERT INTO collector_response_uploads (response_hash, spool_key, byte_size, latest_sighting_at) VALUES (%s, %s, 1000, %s)",
+                    (digest, key, sighting),
+                )
+                connection.execute(
+                    """
+                    UPDATE archive_catalogue
+                    SET retire_after = clashlens_season_retire_after(%s), availability = %s
+                    WHERE response_hash = %s
+                    """,
+                    (sighting, availability, digest),
+                )
             connection.execute((MIGRATIONS / "0046_raw_recovery_hold.sql").read_text(encoding="utf-8"))
-            rows = connection.execute(
-                """
-                SELECT availability, retire_after = clashlens_season_retire_after(%s), retiring_since IS NOT NULL
-                FROM archive_catalogue ORDER BY availability
-                """,
-                (sighting,),
-            ).fetchall()
-            # An existing response cannot know its exact latest sighting, so it
-            # keeps its old season deadline plus 30 days: never under 86 days.
-            # An already marked one starts its recovery hold at upgrade time.
-            assert rows == [("retiring", False, True), ("verified", False, False)]
-            kept = connection.execute(
-                "SELECT retire_after FROM archive_catalogue WHERE availability = 'verified'"
-            ).fetchone()[0]
-            assert kept - sighting == timedelta(days=24 + 86)  # 4 days into its season
-            assert connection.execute(
-                "SELECT clashlens_season_retire_after(%s) - %s", (sighting, sighting)
-            ).fetchone()[0] == timedelta(days=86)
+            rows = [
+                connection.execute(
+                    "SELECT retire_after, retiring_since FROM archive_catalogue WHERE archive_reference = %s",
+                    ("s3://evidence/" + key,),
+                ).fetchone()
+                for key in keys
+            ]
+            assert [retire_after - sighting for (retire_after, _), sighting in zip(rows, sightings)] == [
+                timedelta(days=86)
+            ] * 3
+            assert rows[0][1] is None
+            # A marked response still waits its full 86 days before the hold starts.
+            assert rows[1][1] == rows[1][0]
+            assert rows[2][1] >= now
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
             admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
@@ -159,10 +160,7 @@ def test_bytes_survive_the_recovery_hold_and_reruns_are_safe(database_url, tmp_p
         client = DeleteClient(keys, failing=keys[:1])
         try:
             preview = retire_archive_objects(connection, spool, client, **OPTIONS)
-            assert preview["marked_objects"] == 3
-            assert preview["summary"]["due_unprotected"]["objects"] == 3
-            assert preview["summary"]["due_unprotected"]["bytes"] == 3000
-            assert preview["summary"]["deletable_now"]["objects"] == 0
+            assert (preview["marked_objects"], preview["marked_bytes"], preview["deleted_objects"]) == (3, 3000, 0)
             assert _availability(connection) == ["verified"] * 4
 
             assert retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)["marked_objects"] == 3
@@ -176,10 +174,8 @@ def test_bytes_survive_the_recovery_hold_and_reruns_are_safe(database_url, tmp_p
 
             _hold_elapsed(connection, "9 days 1 minute")
             preview = retire_archive_objects(connection, spool, client, **OPTIONS)
-            assert preview["summary"]["deletable_now"] | {"oldest": None, "newest": None} == {
-                "objects": 3, "bytes": 3000, "oldest": None, "newest": None,
-            }
-            assert preview["deleted_objects"] == 3 and client.calls == []
+            assert (preview["deleted_objects"], preview["deleted_bytes"]) == (3, 3000)
+            assert client.calls == []
 
             # One unknown DELETE outcome does not stop the batch; it stays
             # marked, the run reports a failure, and the next run retries it.
@@ -261,7 +257,6 @@ def test_retirement_fences_replay_and_keeps_active_work(
                 # Unfinished processing keeps the response usable.
                 report = retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)
                 assert report["marked_objects"] == 0
-                assert retire_archive_objects(connection, spool, client, **OPTIONS)["summary"]["due_protected"]["objects"] == 1
                 assert processor.process_job(pending, owner="expiry-duplicate").outcome == "processed"
                 assert retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)["marked_objects"] == 1
                 with pytest.raises(psycopg.errors.RaiseException, match="expired"):

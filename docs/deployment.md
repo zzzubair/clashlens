@@ -554,8 +554,8 @@ each response's bytes for nine days after marking it for deletion: seven days
 plus a two-day restore allowance. See
 [raw expiry](history-retention.md#implemented-raw-expiry-and-required-recovery-protection)
 for the rule and its cost, and [raw-response cleanup](#raw-response-cleanup) for
-switching it on. Restoring a genuine seven-day-old point and checking its raw
-references is still open in #140.
+switching it on. Do not enable production expiry until #122/#129 prove it:
+restore a genuine seven-day-old point and read the raw references it needs.
 
 Validation on 2026-09-19 used a separate PostgreSQL cluster with all 34 migrations
 and synthetic records, under R2 prefix `validation-20260919`. A full backup took
@@ -590,14 +590,15 @@ one-line files beside the Clash API keys:
 `CLASHLENS_ARCHIVE_RETENTION` in `app.env`:
 
 - `off`: no timer, and `up` removes the operator secrets from Podman.
-- `preview`: the timer runs the preview every time. It changes nothing.
+- `preview`: no timer; `./ops archive-prune` previews one batch on request. It
+  changes nothing.
 - `apply`: the timer marks and deletes.
 
 `up` copies the operator keys and an administrator database address into Podman
 secrets that only the cleanup container mounts. The collector, worker, API and
 website never receive them. Each run starts a short-lived container with the
 same spool as the collector, processes one batch of up to 1,000 deletions and
-1,000 markings, and prints one JSON report to the journal. The timer starts five
+1,000 markings, and prints one JSON report. In `apply` the timer starts five
 minutes after `up` and runs again 30 seconds after each batch finishes.
 Scheduled runs do not take the shared operation lock, so they never delay
 deployment or backups; `up` and `down` stop the timer first. A manual run takes
@@ -611,10 +612,11 @@ the lock like other operator commands.
 
 Enable it in two approved steps:
 
-1. Set `preview`, run `./ops up`, then `./ops archive-prune`. Put its `summary`
-   numbers (objects, bytes, oldest and newest for each group) in the deployment
-   report.
-2. Only after that report is approved, set `apply` and run `./ops up`.
+1. Set `preview`, run `./ops up`, then `./ops archive-prune`. Put its batch
+   counts (`deleted_objects`, `deleted_bytes`, `marked_objects`, `marked_bytes`,
+   `protected_objects`) in the deployment report.
+2. Only after #122/#129 prove the seven-day-old restore above and that report
+   is approved, set `apply` and run `./ops up`.
 
 Throughput is unmeasured. The planning estimate is about 50 ms per deletion,
 or roughly 785,000 objects a day, against about 553,000 new objects a day on
@@ -692,8 +694,9 @@ use the [operating notes](operating.md#respond-to-alerts).
   intentional resume if later.
 - **A failed scheduled raw-response cleanup**: `clashlens-archive-retention.service`
   is in the failed state, meaning its last batch had a failed object or could
-  not run. It clears after the next successful batch. With cleanup off, the unit
-  is absent and never alerts.
+  not run. It clears only after a later batch finishes successfully; a batch
+  still running or an unreadable service state keeps the alert. Unless cleanup
+  is set to `apply`, the unit is absent and never alerts.
 - **A failed private player-data read**, including when process readiness says
   healthy. The check enters the private API container, checks `/readyz`, and
   signs a `/v1/players/search` read limited to one result. Keys stay inside the

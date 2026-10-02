@@ -35,8 +35,9 @@ for deadlines and the full product map.
 - Keep raw responses available for every restore promised by the seven-day
   backup window, including time to perform the restore. This is separate from
   the seven-day season-correction window. The cleanup code now enforces this
-  with a nine-day hold, described below; switching it on in production and
-  proving a seven-day-old restore remain open in #140.
+  with a nine-day hold, described below. Production expiry stays off until
+  #122/#129 prove it by restoring a genuine seven-day-old point and reading its
+  raw references.
 
 No existing counters, coverage evidence, unknown-unit history or kept production
 data are authorised for deletion by this documentation change. Historical day
@@ -249,10 +250,12 @@ Do **not** configure an upload-age lifecycle on the evidence namespace. A raw
 response becomes due **86 days after its latest sighting**. A body returned again
 later moves its deadline later; an earlier sighting never shortens it. The
 deadline derives from the response's own completion time, not the upload's.
-Migration 0046 cannot recover the exact latest sighting of responses stored
-before it, so it adds 30 days to their old deadline (56 days after their
-season's end). That never gives less than 86 days; those responses may be kept
-up to 28 days longer, once.
+Migration 0046 recalculates every stored response the same way, from its
+latest retained sighting: the newest of that location's observations, its
+upload record's latest sighting and the newest compact poll state for its hash.
+It never moves an existing deadline earlier. A response the old code had
+already marked `retiring` starts its nine-day hold at its recalculated deadline,
+or at upgrade time if that is later.
 
 A due response is not deleted straight away. Cleanup first marks it `retiring`,
 which blocks every new use, then deletes its bytes only **nine days later**: the
@@ -268,7 +271,7 @@ its bytes stay 95 days plus the wait for the next cleanup batch. The measured
 roughly EUR 33/month at EUR 0.01606/GB-month. This is a projection, not a bill.
 
 Pending verification and unfinished/failed processing or replay keep a response
-usable; the preview reports them as `due_protected`. Marking commits before any
+usable. Marking commits before any
 DELETE, and the delete step rechecks that the row is still this archive's held
 tombstone. An unknown or failed DELETE leaves the row `retiring`, is counted in
 `failed_objects`, does not stop the batch and is retried by the next run.
@@ -278,6 +281,9 @@ not compact them. Bucket versioning, noncurrent versions, backup retention and
 orphan objects need separately verified provider policies; deleting a current
 key does not prove all provider storage was reclaimed.
 
+Do not enable production expiry until #122/#129 prove that no still-promised
+restore can reference deleted bytes: restore a genuine seven-day-old point and
+read the raw references it needs. The code stays off by default until then.
 [`deployment.md`](deployment.md#raw-response-cleanup) owns the scheduled job,
 its credentials and the dry-run-first enablement steps. The command it runs is:
 
@@ -288,11 +294,9 @@ python -m clashlens prune-archive --max-objects 1000 --apply  # mark and delete
 
 Each run deletes up to the batch size of held responses whose nine days have
 passed, then marks up to the batch size of due ones. The preview changes nothing
-and adds a `summary` across the whole catalogue: objects, bytes and the
-oldest/newest deadline for `due_unprotected` and `due_protected`, and objects,
-bytes and oldest/newest marking time for `held_for_recovery` and
-`deletable_now`. It must run on the collector host with the **exact same spool**,
-because a wrong spool path defeats cross-process locking.
+and reports how many objects and bytes that one batch would delete and mark.
+It must run on the collector host with the **exact same spool**, because a wrong
+spool path defeats cross-process locking.
 
 The local spool remains bounded temporary storage, not a bucket mirror. Existing
 spool cleanup is separate from remote retirement. After raw expiry or operational
