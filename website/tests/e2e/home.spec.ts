@@ -1,5 +1,37 @@
 import { expect, test } from "@playwright/test";
 
+test("fan content notice is exact, linked and readable on phones in both themes", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 812 });
+  await page.goto("/");
+  const footer = page.getByRole("contentinfo");
+  await expect(footer).toHaveText(
+    "This material is unofficial and is not endorsed by Supercell. For more information see Supercell's Fan Content Policy: www.supercell.com/fan-content-policy.",
+  );
+  await expect(
+    footer.getByRole("link", { name: "www.supercell.com/fan-content-policy" }),
+  ).toHaveAttribute("href", "https://www.supercell.com/fan-content-policy");
+  for (const theme of ["light", "dark"]) {
+    // Save the choice like the theme toggle does; the page resets an unsaved theme.
+    await page.evaluate((value) => localStorage.setItem("clashlens-theme", value), theme);
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    await footer.scrollIntoViewIfNeeded();
+    await expect(footer).toBeVisible();
+    const bounds = await footer.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320);
+    expect(await footer.evaluate((element) => element.scrollWidth)).toBeLessThanOrEqual(
+      bounds!.width,
+    );
+    expect(
+      await footer.evaluate((element) => parseFloat(getComputedStyle(element).fontSize)),
+    ).toBeGreaterThanOrEqual(12);
+  }
+});
+
 test("home and the full leaderboard show collected synthetic players", async ({
   page,
 }) => {

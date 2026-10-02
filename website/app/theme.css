@@ -29,8 +29,8 @@
   --cl-ink: #2a211b;
   --cl-paper: #ffffff;
   --cl-panel: #fff4e8;
-  --cl-blue: #e85d04;
-  --cl-blue-dark: #b93d0b;
+  --cl-accent: #e85d04;
+  --cl-accent-contrast: #b93d0b;
   --cl-action: #ff7a1a;
   --cl-action-hover: #ff8f3d;
   --cl-action-shade: #e85d04;
@@ -81,13 +81,13 @@ a {
   color: var(--cl-ink);
   font-weight: 600;
   text-decoration: none;
-  text-decoration-color: var(--cl-blue-dark);
+  text-decoration-color: var(--cl-accent-contrast);
   text-decoration-thickness: 0.14em;
   text-underline-offset: 0.16em;
 }
 
 a:hover {
-  color: var(--cl-blue-dark);
+  color: var(--cl-accent-contrast);
 }
 
 button,
@@ -432,7 +432,7 @@ h3 {
 }
 
 .tracked-leaderboard-viewport:focus-visible {
-  outline: 3px solid var(--cl-blue-dark);
+  outline: 3px solid var(--cl-accent-contrast);
   outline-offset: 3px;
 }
 
@@ -707,7 +707,7 @@ h3 {
 }
 
 .legend-day > summary::marker {
-  color: var(--cl-blue-dark);
+  color: var(--cl-accent-contrast);
 }
 
 .legend-day > summary strong {
@@ -843,22 +843,22 @@ h3 {
 
 @media (hover: hover) and (pointer: fine) {
   .battle-profile-link:hover {
-    color: var(--cl-blue-dark);
+    color: var(--cl-accent-contrast);
     text-decoration: underline;
   }
 }
 
 .battle-profile-link:focus-visible::after {
-  outline: 3px solid var(--cl-blue-dark);
+  outline: 3px solid var(--cl-accent-contrast);
   outline-offset: 3px;
 }
 
 .battle-slot.battle-arrival {
   background-color: #e2f2ff;
-  border-color: var(--cl-blue-dark);
+  border-color: var(--cl-accent-contrast);
   box-shadow:
-    0 0 0 4px var(--cl-blue-dark),
-    0 0 24px 6px var(--cl-blue);
+    0 0 0 4px var(--cl-accent-contrast),
+    0 0 24px 6px var(--cl-accent);
   transition: none;
 }
 
@@ -891,7 +891,7 @@ h3 {
 
 .refresh-status progress,
 .refresh-panel progress {
-  accent-color: var(--cl-blue-dark);
+  accent-color: var(--cl-accent-contrast);
 }
 
 .refresh-panel {
@@ -1112,7 +1112,7 @@ h3 {
 .nav-link:focus-visible,
 .nav-button:hover,
 .nav-button:focus-visible {
-  color: var(--cl-blue-dark);
+  color: var(--cl-accent-contrast);
   background: var(--cl-action-soft);
   border-color: var(--cl-action-border);
 }
@@ -1297,7 +1297,7 @@ h3 {
   height: 1.3rem;
   flex: 0 0 auto;
   margin-top: 0.1rem;
-  accent-color: var(--cl-blue-dark);
+  accent-color: var(--cl-accent-contrast);
 }
 
 .danger-form {

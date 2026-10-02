@@ -72,10 +72,10 @@ export function Layout({ children }: { children: ReactNode }) {
         {children}
         <footer className="page-footer">
           <p>
-            Clash Lens is an unofficial fan project and is not affiliated with or endorsed
-            by Supercell. See the{" "}
-            <a href="https://supercell.com/en/fan-content-policy/">
-              Supercell Fan Content Policy
+            This material is unofficial and is not endorsed by Supercell. For more
+            information see Supercell's Fan Content Policy:{" "}
+            <a href="https://www.supercell.com/fan-content-policy">
+              www.supercell.com/fan-content-policy
             </a>
             .
           </p>
