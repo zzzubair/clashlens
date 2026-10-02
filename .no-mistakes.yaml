@@ -1,0 +1,156 @@
+# Local Test-step guidance, supported by no-mistakes v1.84.0.
+# https://kunchenguid.github.io/no-mistakes/reference/repo-config/#testinstructions
+# This trusted setting takes effect after merging to the default branch.
+# commands.* is deliberately unset: ci-workflow generates from those commands.
+# Do not regenerate .github/workflows/ci.yml; its full checks remain authoritative.
+# Measured 2026-10-02 on the Ubuntu 26.04 build host, base 7f07d72:
+# all five example blocks in one fresh shell took 71.08s wall time, including
+# Python/dependency downloads, PostgreSQL 18.6, Node 24.21.0, npm ci, and shutdown.
+# Python-only: 14 passed, 3.762s wall; PostgreSQL/worker: 53 passed, 52.352s wall;
+# website: 35 passed, 1.008s wall. No failures/skips; Python sets overlap.
+# This measures the recipe, not a complete no-mistakes agent round or GitHub CI.
+test:
+  instructions: |
+    Aim to finish Test in 10–15 minutes, including setup, targeted tests, small
+    local behavior checks, cleanup, and reporting. Select tests from the change
+    and requested behavior; the examples below are starting points, not a fixed
+    suite to run for every change. Do not repeat the complete Python/website
+    suites or container builds locally just to reproduce GitHub CI.
+
+    Production-sized trials and live throughput checks are outside this step.
+    The post-merge production deploy verifies real throughput. Do not run
+    ./dev trial, seed thousands of players, wait through real five-minute polling
+    cycles, or improvise a production-sized native stack. Use a few synthetic
+    players/jobs and the existing tests' controlled times for boundary behavior.
+    A passing small check is correctness evidence, not a throughput claim.
+
+    Start with the smallest existing tests that exercise the changed behavior,
+    including a failure/recovery case where relevant. Add a small local product
+    check only for behavior those tests do not exercise. Use existing fake
+    services and real application functions with disposable data. Do not create
+    a new general-purpose test runner. For documentation/configuration-only
+    changes, validate the changed instructions/configuration; do not start the
+    whole product without an affected runtime behavior.
+
+    This build machine has Ubuntu apt/dpkg and uv but may have no Podman or
+    PostgreSQL server installed, Node may be older than 24, and /tmp has a quota.
+    Keep the environment, downloads, database, caches, and temporary test files
+    in the ignored .clashlens-dev directory. Do not use the README's /tmp venv
+    path here. Never point these tests at an existing or production database.
+
+    Setup (Bash, repository root; keep this shell/environment for later blocks):
+    ```bash
+    set -euo pipefail
+    repo_root=$(pwd -P)
+    command -v uv
+    command -v python3
+    mkdir -p "$repo_root/.clashlens-dev"
+    scratch=$(mktemp -d "$repo_root/.clashlens-dev/nm-test.XXXXXX")
+    export TMPDIR="$scratch/tmp"
+    export UV_PROJECT_ENVIRONMENT="$scratch/venv"
+    export UV_CACHE_DIR="$scratch/uv-cache"
+    export UV_PYTHON_INSTALL_DIR="$scratch/uv-python"
+    export UV_LINK_MODE=copy
+    export npm_config_cache="$scratch/npm-cache"
+    mkdir -p "$TMPDIR"
+    unset CLASHLENS_TEST_GROUP CLASHLENS_TEST_DATABASE_URL
+    # CLASHLENS_TEST_GROUP is for CI; inherited values could deselect local tests.
+    pg_bin=
+    cleanup() {
+      if [ -n "$pg_bin" ] && [ -f "$scratch/pgdata/postmaster.pid" ]; then
+        "$pg_bin/pg_ctl" -D "$scratch/pgdata" -m immediate -w stop
+      fi
+    }
+    trap cleanup EXIT
+    cd "$repo_root/python"
+    uv sync --locked --python 3.12
+    ```
+
+    Python-only example for collector concurrency/upload changes:
+    ```bash
+    cd "$repo_root/python"
+    time uv run --locked --python 3.12 pytest -q --durations=10 \
+      tests/test_worker_concurrency.py tests/test_collector_upload_slots.py
+    ```
+    Replace/add test files or use pytest's -k expression for the affected path.
+    For changes to development fake services, the existing focused command is
+    PYTHONPATH=.. uv run --locked --python 3.12 pytest -q ../development/test_fixtures.py
+    from python/. Keep failures and skips visible; a skipped database test is
+    not evidence that the changed database behavior works.
+
+    Disposable PostgreSQL 18 (only when selected tests need it). This unpacks
+    Ubuntu packages without sudo, package installation, Podman, or /tmp. apt
+    package indexes and required shared libraries must already be available.
+    ```bash
+    command -v apt-get
+    command -v dpkg
+    mkdir -p "$scratch/packages" "$scratch/pgsql"
+    cd "$scratch/packages"
+    apt-get download postgresql-18 postgresql-client-18 libpq5
+    for package in ./*.deb; do dpkg -x "$package" "$scratch/pgsql"; done
+    pg_bin="$scratch/pgsql/usr/lib/postgresql/18/bin"
+    pg_lib=$(dirname "$(find "$scratch/pgsql/usr/lib" -name libpq.so.5 -print -quit)")
+    export LD_LIBRARY_PATH="$pg_lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    "$pg_bin/postgres" --version
+    "$pg_bin/initdb" -D "$scratch/pgdata" -U postgres -A trust \
+      --no-locale --encoding=UTF8
+    pg_port=$(python3 - <<'PY'
+    import socket
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        print(sock.getsockname()[1])
+    PY
+    )
+    "$pg_bin/pg_ctl" -D "$scratch/pgdata" -l "$scratch/postgres.log" \
+      -o "-h 127.0.0.1 -p $pg_port -k ''" -w start
+    "$pg_bin/createdb" -h 127.0.0.1 -p "$pg_port" -U postgres clashlens_test
+    export CLASHLENS_TEST_DATABASE_URL="postgresql://postgres@127.0.0.1:$pg_port/clashlens_test"
+    cd "$repo_root/python"
+    time uv run --locked --python 3.12 pytest -q --durations=10 \
+      tests/test_claim_jobs_postgres.py tests/test_worker_concurrency.py
+    cleanup
+    ```
+    The tests apply their own database migrations; no manual schema bootstrap
+    is needed. The server listens only on loopback, with Unix sockets disabled
+    to avoid long worktree socket paths. It uses trust authentication for this
+    disposable local cluster only. The port is dynamically selected; if another
+    process takes it before startup, select a new port and retry once. Inspect
+    postgres.log on startup failure. Do not share this database between parallel
+    test groups; some tests alter roles. The EXIT trap stops it even on failure.
+
+    Website changes: use Node 24 and locked npm dependencies. If Node 24 is not
+    already on PATH, the following optional bootstrap installs only a scratch
+    runtime, without changing the host or website package files:
+    ```bash
+    npm install --prefix "$scratch/node" --no-save --package-lock=false node@24
+    export PATH="$scratch/node/node_modules/.bin:$PATH"
+    ```
+    Then select relevant unit files. This example checks request signing:
+    ```bash
+    cd "$repo_root/website"
+    node --version
+    node -e 'if (process.versions.node.split(".")[0] !== "24") process.exit(1)'
+    npm ci --no-audit --no-fund
+    time npm run test:unit -- tests/unit/signer.test.ts tests/unit/actions-http.test.ts
+    ```
+    Use npm run typecheck for changed TypeScript interfaces and npm run
+    build:verify for changed bundling/server/browser boundaries when relevant.
+    npm test includes typecheck, lint, format, and every unit test; it is not
+    the targeted command. npm run test:e2e builds and starts a Podman stack.
+    Do not attempt it on this host when Podman is absent, install Podman, or
+    spend the budget rebuilding that stack by hand. GitHub CI retains Node 24
+    checks, dependency audits, Chromium browser checks, both PostgreSQL test
+    groups, and container packaging/runtime checks on their existing triggers.
+    Report any affected browser behavior not exercised locally as deferred to
+    those checks; do not represent it as a local pass.
+
+    Spend at most a few minutes fixing missing local prerequisites. If the
+    recipe cannot start, report the precise prerequisite and unverified behavior
+    instead of improvising another environment until the step times out. At
+    10 minutes assess remaining work; aim to report by 15 minutes, without
+    weakening assertions or turning failures/unrun checks into passes.
+    Record selected commands, setup/test elapsed times, pass/fail/skip counts,
+    observed behavior, and what remains for CI or the post-merge deploy.
+    Preserve useful logs as test evidence, then stop your own database and
+    remove only the scratch directory created by this run. Never stop another
+    task's services or remove its files. Leave no database running on exit.
