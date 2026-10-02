@@ -491,7 +491,7 @@ def test_upload_retire_after_follows_the_response_season(
 def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
     database_url: str,
 ) -> None:
-    response_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
+    response_at = NOW
     seen_next_season = response_at + timedelta(days=29)
     upload_at = seen_next_season + timedelta(days=30)
     with domain_database(database_url, include_coordinator=True) as connection_info:
