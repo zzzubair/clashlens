@@ -34,7 +34,7 @@ it("opens the correct page directly for an exact tag", async () => {
     hasMore: false,
     results: [{ tag: "#2PP", rank: 103, name: "Nova", trophies: 6000 }],
   });
-  const response = await load("&q=2pp").catch((cause: unknown) => cause);
+  const response = await load("&q=%232pp").catch((cause: unknown) => cause);
   expect(response).toBeInstanceOf(Response);
   expect((response as Response).headers.get("Location")).toBe(
     "/leaderboards/tracked?view=live&page=2&player=%232PP",

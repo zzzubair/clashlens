@@ -3,8 +3,10 @@
 Measured on October 2, 2026 in the isolated `fm/cl-find-my-rank` worktree.
 The feature uses the private signed API and the existing Live Leaderboard
 membership, trophy ordering and tag-hash tie rule. Name matches keep their
-whole-board ranks. Exact tags win over names, with or without `#` and regardless
-of letter case. Selecting a player recalculates their page and entries in one
+whole-board ranks. Only a tag typed with `#` opens a row directly, regardless of
+letter case; without `#`, the tag's player is listed alongside name matches.
+A selected player within 5 ranks of a page edge also gets up to 5 neighbors
+from the next or previous page. Selecting a player recalculates their page and entries in one
 database statement, so an intervening rank change cannot open the wrong page.
 
 ## Correctness checks
@@ -69,7 +71,8 @@ trophies. Selection opened page **65**, focused and highlighted the player row,
 and scrolled it to vertical coordinates 372–441 inside the 812 px viewport.
 Ranks **6,449** and **6,451** remained adjacent. Document width was 375 px and
 the search input font was 16 px. Both `pvp8` and `#PVP8` jumped directly to that
-row. Reopening the selected URL preserved the scroll behavior; browser Back
+row in this run, before bare tags stopped opening rows directly; the edge-of-page
+neighbors were added afterwards and are not shown in these screenshots. Reopening the selected URL preserved the scroll behavior; browser Back
 restored the name query and result. A missing name showed the empty message
 while keeping 100 board rows. Desktop selection was checked at 1280 × 900.
 

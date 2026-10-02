@@ -37,10 +37,13 @@ test("name search opens the player in the board with neighbors at 375px", async 
   await expect(selected).toBeInViewport();
 });
 
-test("exact tags with and without a hash jump directly; back restores search", async ({
-  page,
-}) => {
-  for (const tag of ["2pp", "#2PP"]) {
+test("only hash tags jump directly; back restores search", async ({ page }) => {
+  await page.goto("/leaderboards/tracked?view=live&page=1&q=2pp");
+  await expect(page).not.toHaveURL(/player=/);
+  await expect(
+    page.locator(".rank-search-results a").filter({ hasText: "#2PP" }),
+  ).toBeVisible();
+  for (const tag of ["#2pp", "#2PP"]) {
     await page.goto("/leaderboards/tracked?view=live&page=1");
     await page.getByRole("searchbox", { name: "Find your rank" }).fill(tag);
     await page.getByRole("button", { name: "Search", exact: true }).click();

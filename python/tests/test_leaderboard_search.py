@@ -49,15 +49,13 @@ def test_search_keeps_whole_board_tie_ranks_and_focus_tracks_moves(board_databas
                 "trophies": 6000,
             }
         ]
-        assert found["exact_tag"] == (
-            target["tag"] if "nova" not in query.lower() and query != "100%_" else None
-        )
+        assert found["exact_tag"] == (target["tag"] if query.startswith("#") else None)
     focused = api_leaderboard.get_live_leaderboard(
         database, limit=100, now=NOW, focus_tag=target["tag"]
     )
     assert focused["page"] == 2
-    assert [entry["position"] for entry in focused["entries"]] == list(range(101, 106))
-    assert focused["entries"][2]["tag"] == target["tag"]
+    assert [entry["position"] for entry in focused["entries"]] == list(range(98, 106))
+    assert focused["entries"][5]["tag"] == target["tag"]
     with database.pool.connection() as connection:
         connection.execute(
             "UPDATE player_profile_versions SET trophies = 7000 WHERE normalized_tag = %s",
@@ -126,7 +124,7 @@ def test_leaderboard_search_and_focus_require_signed_requests(board_database):
         clock=lambda: NOW_SECONDS,
         now=lambda: NOW,
     )
-    search = "/v1/leaderboards/live/search?" + urlencode({"q": "p00"})
+    search = "/v1/leaderboards/live/search?" + urlencode({"q": "#p00"})
     focus = "/v1/leaderboards/live?" + urlencode({"limit": 100, "focus_tag": "#P00"})
     with TestClient(app) as client:
         for target in (search, focus):
@@ -147,12 +145,36 @@ def test_leaderboard_search_and_focus_require_signed_requests(board_database):
             assert client.get(target, headers=signed_headers(target)).status_code == 422
 
 
-def test_exact_tag_wins_over_another_players_name(board_database):
+def test_focus_keeps_neighbors_across_page_edges(board_database):
+    board = api_leaderboard.get_live_leaderboard(board_database, limit=200, now=NOW)
+
+    def window(rank):
+        focused = api_leaderboard.get_live_leaderboard(
+            board_database,
+            limit=100,
+            now=NOW,
+            focus_tag=board["entries"][rank - 1]["tag"],
+        )
+        return focused["page"], [entry["position"] for entry in focused["entries"]]
+
+    assert window(101) == (2, list(range(96, 106)))
+    assert window(100) == (1, list(range(1, 106)))
+    assert window(50) == (1, list(range(1, 101)))
+
+
+def test_only_hash_tags_select_and_name_matches_stay_listed(board_database):
     with board_database.pool.connection() as connection:
         connection.execute(
             "UPDATE player_profile_versions SET name = 'p00' WHERE normalized_tag = '#P02'"
         )
+    board = api_leaderboard.get_live_leaderboard(board_database, limit=200, now=NOW)
+    ranks = {entry["tag"]: entry["position"] for entry in board["entries"]}
     found = api_leaderboard.search_live_leaderboard(board_database, "p00")
+    assert found["exact_tag"] is None
+    assert [entry["tag"] for entry in found["results"]] == sorted(
+        ("#P00", "#P02"), key=ranks.get
+    )
+    found = api_leaderboard.search_live_leaderboard(board_database, "#p00")
     assert found["exact_tag"] == "#P00"
     assert [entry["tag"] for entry in found["results"]] == ["#P00"]
     assert (

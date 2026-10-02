@@ -72,6 +72,7 @@ const DEFAULT_CALLER = "typescript-website";
 const DEFAULT_KEY_ID = "current";
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const FOCUS_NEIGHBORS = 5;
 
 interface ClientConfig {
   baseUrl: URL;
@@ -219,7 +220,7 @@ async function getTrackedLeaderboard(
     undefined,
     undefined,
   );
-  return mapLeaderboard(payload, view);
+  return mapLeaderboard(payload, view, focusTag);
 }
 
 async function searchPlayers(query: string, limit = 50): Promise<SearchResponse> {
@@ -553,7 +554,11 @@ function mapRefresh(
     : ({ ...value, kind: "refresh-work" } as RefreshWork);
 }
 
-function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeaderboard {
+function mapLeaderboard(
+  payload: unknown,
+  view: "live" | "daily",
+  focusTag?: string,
+): TrackedLeaderboard {
   if (
     !isRecord(payload) ||
     !isOneOf(payload.kind, ["live", "frozen"] as const) ||
@@ -587,11 +592,18 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
   )
     throw new PythonApiError(502, { error: "malformed" });
   const expectedPageCount = Math.ceil(payload.total_entries / payload.page_size);
-  const firstPosition = (payload.page - 1) * payload.page_size + 1;
-  const expectedEntries = Math.max(
+  const pageFirstPosition = (payload.page - 1) * payload.page_size + 1;
+  const pageEntries = Math.max(
     0,
-    Math.min(payload.page_size, payload.total_entries - firstPosition + 1),
+    Math.min(payload.page_size, payload.total_entries - pageFirstPosition + 1),
   );
+  const firstEntry: unknown = payload.entries[0];
+  const firstPosition =
+    focusTag && isRecord(firstEntry) && isInteger(firstEntry.position)
+      ? firstEntry.position
+      : pageFirstPosition;
+  const neighborsBefore = pageFirstPosition - firstPosition;
+  const neighborsAfter = payload.entries.length - pageEntries - neighborsBefore;
   if (
     payload.tracked_population < 0 ||
     payload.total_entries < 0 ||
@@ -601,7 +613,13 @@ function mapLeaderboard(payload: unknown, view: "live" | "daily"): TrackedLeader
     payload.page > Math.max(1, payload.page_count) ||
     payload.has_previous !== payload.page > 1 ||
     payload.has_next !== payload.page < payload.page_count ||
-    payload.entries.length !== expectedEntries
+    neighborsBefore < 0 ||
+    neighborsAfter < 0 ||
+    Math.max(neighborsBefore, neighborsAfter) > FOCUS_NEIGHBORS ||
+    firstPosition + payload.entries.length - 1 > payload.total_entries ||
+    (focusTag
+      ? !payload.entries.some((entry) => isRecord(entry) && entry.tag === focusTag)
+      : neighborsBefore + neighborsAfter > 0)
   )
     throw new PythonApiError(502, { error: "malformed" });
   const sourceObservations =
