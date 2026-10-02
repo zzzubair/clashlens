@@ -481,7 +481,7 @@ def test_publication_writer_serves_reproducible_perspective_results(
                     for row in selected_rows
                 ]
                 expected = build_army_result(expected_facts, selection)
-                expected["missing_trophy_membership_evidence"] = 0
+                expected["collection_coverage"]["covered_days"] = [DAY_NUMBER]
                 expected["cohort_evidence"] = {
                     "stale_or_uncertain_cohort_members": 0,
                     "streak_excluded_players": 0,
