@@ -298,3 +298,55 @@ def test_lane_exception_never_exposes_job_details_or_credentials() -> None:
 
     assert secret not in str(excinfo.value)
     assert "archive-secret-material" not in str(excinfo.value)
+
+
+def test_one_slow_job_does_not_leave_other_lanes_idle() -> None:
+    slow_job_running = Event()
+    release_slow_job = Event()
+    other_jobs_done = Event()
+    state_lock = threading.Lock()
+    queued = 20
+    claimed = 0
+    finished_fast = 0
+    captured: list[list[ProcessResult]] = []
+
+    class OneSlowJobProcessor:
+        def process_once(self, **_kwargs: object) -> ProcessResult | None:
+            nonlocal queued, claimed, finished_fast
+            with state_lock:
+                if queued == 0:
+                    return None
+                queued -= 1
+                claimed += 1
+                job_id = claimed
+            if job_id == 1:
+                slow_job_running.set()
+                assert release_slow_job.wait(10), "test release gate was not opened"
+                return ProcessResult(job_id, "processed")
+            with state_lock:
+                finished_fast += 1
+                if finished_fast == 19:
+                    other_jobs_done.set()
+            return ProcessResult(job_id, "processed")
+
+    thread = threading.Thread(
+        target=lambda: captured.append(
+            process_concurrently(
+                OneSlowJobProcessor(),
+                concurrency=3,
+                owner="slow-lane",
+                max_jobs=3,
+                fill_idle_lanes=True,
+            )
+        ),
+        daemon=True,
+    )
+    thread.start()
+
+    assert slow_job_running.wait(10)
+    assert other_jobs_done.wait(10), "other lanes stopped while one job was slow"
+    assert thread.is_alive(), "the call must still wait for the slow job"
+    release_slow_job.set()
+    thread.join(10)
+    assert not thread.is_alive(), "worker did not finish after the slow job"
+    assert sorted(result.job_id for result in captured[0]) == list(range(1, 21))
