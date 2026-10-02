@@ -4,6 +4,7 @@ import asyncio
 import errno
 import hashlib
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -12,8 +13,7 @@ import psycopg
 import pytest
 from test_collector import _Client, _collector, _Reservation, _Spool, _Store
 
-from clashlens import collector as collector_module
-from clashlens.collector_db import CollectorWork
+from clashlens.collector_db import CollectorDatabase, CollectorWork
 from clashlens.spool import Spool
 
 
@@ -181,9 +181,7 @@ def test_same_endpoint_waits_for_predecessor_handoff_ack() -> None:
     asyncio.run(scenario())
 
 
-def test_failed_unchanged_check_still_saves_the_response(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_failed_unchanged_check_still_saves_the_response() -> None:
     class DownStore(_Store):
         checks = 0
 
@@ -191,7 +189,6 @@ def test_failed_unchanged_check_still_saves_the_response(
             self.checks += 1
             raise psycopg.OperationalError("database unavailable")
 
-    monkeypatch.setattr(collector_module, "_retry_delay", lambda _attempt: 0.0)
     spool = _Spool()
     store = DownStore(spool)
     collector = _collector(spool, store, _Client(spool))
@@ -202,7 +199,7 @@ def test_failed_unchanged_check_still_saves_the_response(
     )
 
     assert outcomes == ["recorded"]
-    assert store.checks == 3
+    assert store.checks == 1
     assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
     assert spool.events[-3:] == ["handoff", "database", "ack"]
 
@@ -245,6 +242,46 @@ def test_cancelled_unchanged_check_still_saves_the_response() -> None:
         )
 
     asyncio.run(scenario())
+
+
+def test_unreachable_database_at_shutdown_still_saves_the_response() -> None:
+    database = CollectorDatabase(
+        "postgresql://clashlens@127.0.0.1:1/clashlens?connect_timeout=1"
+    )
+
+    class UnreachableStore(_Store):
+        def __init__(self, spool: _Spool) -> None:
+            super().__init__(spool)
+            self.entered = threading.Event()
+
+        def record_unchanged_response(self, handoff: Any) -> bool:
+            self.entered.set()
+            return database.record_unchanged_response(handoff)
+
+    async def scenario() -> float:
+        spool = _Spool()
+        store = UnreachableStore(spool)
+        collector = _collector(spool, store, _Client(spool))
+        task = asyncio.create_task(
+            collector.collect_player(
+                CollectorWork(1, "#2PP", datetime.now(UTC)),
+                lane="ordinary",
+                endpoints=("profile",),
+            )
+        )
+        assert await asyncio.to_thread(store.entered.wait, 1)
+        stopping = time.monotonic()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 30)
+        assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
+        assert spool.events[-3:] == ["handoff", "database", "ack"]
+        return time.monotonic() - stopping
+
+    try:
+        assert asyncio.run(scenario()) < 10
+    finally:
+        database.close()
 
 
 def test_post_publish_failure_fences_a_waiting_successor() -> None:

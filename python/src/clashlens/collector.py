@@ -444,7 +444,7 @@ class Collector:
                     # A crash before its commit loses only this sighting; the
                     # next poll records it again.
                     check = asyncio.ensure_future(
-                        self._database_call(
+                        asyncio.to_thread(
                             self.database.record_unchanged_response, handoff
                         )
                     )

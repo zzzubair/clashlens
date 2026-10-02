@@ -1086,8 +1086,9 @@ class CollectorDatabase:
         self._validate_handoff(handoff)
         if handoff.collector_work_id is not None:
             return False
-        with self._connection() as connection:
+        with self.pool.connection(timeout=2.0) as connection:
             with connection.transaction():
+                connection.execute("SET LOCAL transaction_timeout = '2s'")
                 state = self._lock_response_state(connection, handoff)
                 # A retry after an unknown commit outcome finds its own key.
                 if state is not None and state[5] == handoff.occurrence_key:

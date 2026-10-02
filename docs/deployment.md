@@ -480,9 +480,12 @@ runs longer is stopped and started again.
 
 The collector records an unchanged ordinary response before saving it, so about
 97% of responses no longer reach the spool. Each saved response cost about
-147 KiB of disk writes, mostly the forced flushes that make it crash-safe. A hard
-crash can therefore lose the few unchanged sightings still waiting for their
-database commit; no kept data is lost, and the next poll records them again.
+147 KiB of disk writes, mostly the forced flushes that make it crash-safe. The
+check gets one attempt of about 4 seconds; on any failure, timeout or
+cancellation the response is saved to the spool as before. A hard crash during
+the check can lose only that unchanged sighting's seen time, poll count, and the
+sighting time and retirement deadline it would have extended; no raw response or
+other kept data is lost, and the next poll records the sighting again.
 
 ### Restore into a separate database
 
