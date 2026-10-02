@@ -21,9 +21,9 @@ change only on navigation or reload.
 
 ## Results
 
-- `npm test` in `website`: type checking, lint, formatting and all 474 unit tests
-  passed. The seven new route tests execute the real loader and render its HTML.
-  Running them against the original route reproduced five failures; all seven
+- `npm test` in `website`: type checking, lint, formatting and all 475 unit tests
+  passed. The eight new route tests execute the real loader and render its HTML.
+  Running them against the original route reproduced seven failures; all eight
   passed after restoring the change.
 - `npm run build:verify`: the production build and browser-secret boundary
   check passed. The build still reports the existing mixed static/dynamic import
