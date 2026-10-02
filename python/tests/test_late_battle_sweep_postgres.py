@@ -864,92 +864,11 @@ def test_agreement_restored_by_a_later_report_makes_the_first_result_current_aga
             database.close()
 
 
-# The selection before it was limited to the window and read from indexes.
-_UNINDEXED_STALE_DAYS = """
-WITH late_battle AS (
-    SELECT battle.id, battle.ranked_day_start,
-           battle.attacker_player_id, battle.defender_player_id,
-           battle.disagreement_state = 'disagreement' AS disagreement
-    FROM legend_battles AS battle
-    JOIN battle_perspectives AS perspective ON perspective.battle_id = battle.id
-    JOIN battle_evidence AS evidence ON evidence.id = perspective.evidence_id
-    WHERE battle.ranked_day_start < %(boundary)s
-      AND evidence.created_at
-          >= battle.ranked_day_start + interval '24 hours' - interval '5 minutes'
-    GROUP BY battle.id
-), pair AS (
-    SELECT CASE perspective.perspective
-               WHEN 'attacker' THEN battle.attacker_player_id
-               ELSE battle.defender_player_id
-           END AS player_id,
-           battle.ranked_day_start,
-           jsonb_agg(jsonb_build_object(
-               'source_evidence_id', perspective.evidence_id,
-               'disagreement', battle.disagreement
-           )) AS expected
-    FROM late_battle AS battle
-    JOIN battle_perspectives AS perspective ON perspective.battle_id = battle.id
-    GROUP BY 1, 2
-)
-SELECT pair.player_id, pair.ranked_day_start
-FROM pair
-CROSS JOIN LATERAL (
-    SELECT log.ranked_day_version_id
-    FROM api_player_daily_logs AS log
-    WHERE log.player_id = pair.player_id
-      AND log.ranked_day_start = pair.ranked_day_start
-    ORDER BY log.version DESC
-    LIMIT 1
-) AS published
-LEFT JOIN ranked_day_versions AS version
-  ON version.id = published.ranked_day_version_id
-WHERE NOT coalesce(version.contribution_evidence @> pair.expected, false)
-  AND NOT EXISTS (
-      SELECT 1 FROM season_detail_retirements AS retirement
-      WHERE retirement.status IN ('finalized', 'retired')
-        AND (
-            retirement.official_season_id = version.official_season_id
-            OR (pair.ranked_day_start >= retirement.season_start
-                AND pair.ranked_day_start < retirement.season_end)
-        )
-  )
-ORDER BY pair.player_id, pair.ranked_day_start
-"""
-
-_UNINDEXED_OUTDATED_DAYS = """
-SELECT saved.player_id, saved.ranked_day_start
-FROM (
-    SELECT DISTINCT log.player_id, log.ranked_day_start
-    FROM api_player_daily_logs AS log
-    WHERE log.ranked_day_start >= %(window_start)s
-) AS saved
-CROSS JOIN LATERAL (
-    SELECT version.input_evidence -> 'previous_day' ->> 'version_id' AS previous_id
-    FROM ranked_day_versions AS version
-    WHERE version.player_id = saved.player_id
-      AND version.ranked_day_start = saved.ranked_day_start
-      AND version.reconciliation_rule_version = %(rule)s
-    ORDER BY version.version DESC, version.id DESC
-    LIMIT 1
-) AS built
-CROSS JOIN LATERAL (
-    SELECT version.id
-    FROM ranked_day_versions AS version
-    WHERE version.player_id = saved.player_id
-      AND version.ranked_day_start = saved.ranked_day_start - interval '24 hours'
-      AND version.reconciliation_rule_version = %(rule)s
-    ORDER BY version.version DESC, version.id DESC
-    LIMIT 1
-) AS previous
-WHERE built.previous_id IS DISTINCT FROM previous.id::text
-"""
-
-
-def _selections(connection_info: str) -> tuple[dict, dict]:
-    """Each Reset's selected player-days, by the old and the indexed queries."""
-    unindexed: dict = {}
-    indexed: dict = {}
+def _selections(connection_info: str) -> dict:
+    """Each Reset's selected player-days, by player tag, late and outdated."""
+    selections: dict = {}
     with psycopg.connect(connection_info) as connection:
+        tags = dict(connection.execute("SELECT id, normalized_tag FROM players"))
         for days in range(1, 10):
             boundary = DAY + timedelta(days=days)
             parameters = {
@@ -957,16 +876,17 @@ def _selections(connection_info: str) -> tuple[dict, dict]:
                 "window_start": boundary - late_battle_sweep.WINDOW,
                 "rule": RECONCILIATION_RULE_VERSION,
             }
-            stale = connection.execute(_UNINDEXED_STALE_DAYS, parameters)
-            outdated = connection.execute(_UNINDEXED_OUTDATED_DAYS, parameters)
-            unindexed[boundary] = (
-                [row for row in stale if row[1] >= parameters["window_start"]],
-                sorted(outdated),
+            selections[boundary] = tuple(
+                sorted(
+                    (tags[player_id], day_start)
+                    for player_id, day_start in connection.execute(query, parameters)
+                )
+                for query in (
+                    late_battle_sweep._STALE_DAYS,
+                    late_battle_sweep._OUTDATED_DAYS,
+                )
             )
-            stale = connection.execute(late_battle_sweep._STALE_DAYS, parameters)
-            outdated = connection.execute(late_battle_sweep._OUTDATED_DAYS, parameters)
-            indexed[boundary] = (stale.fetchall(), sorted(outdated))
-    return unindexed, indexed
+    return selections
 
 
 def test_indexed_selection_picks_the_same_player_days_as_before(
@@ -1055,11 +975,11 @@ def test_indexed_selection_picks_the_same_player_days_as_before(
                         "WHERE battle_timestamp = %s",
                         (saved_at, battle_time),
                     )
-                unindexed, indexed = _selections(connection_info)
-                assert indexed == unindexed
                 # Both players' late day is selected until it leaves the window.
-                assert [len(stale) for stale, _ in indexed.values()] == (
-                    [2] * 7 + [0] * 2 if late else [0] * 9
+                assert list(_selections(connection_info).values()) == (
+                    [([(OPPONENT, DAY), (TAG, DAY)], [])] * 7 + [([], [])] * 2
+                    if late
+                    else [([], [])] * 9
                 )
 
             # An existing job corrects only the late day, so the next day is
@@ -1074,8 +994,8 @@ def test_indexed_selection_picks_the_same_player_days_as_before(
                     request_key="existing-first-day-job",
                 ),
             )
-            unindexed, indexed = _selections(connection_info)
-            assert indexed == unindexed
-            assert [len(old) for _, old in indexed.values()] == [1] * 8 + [0]
+            assert [
+                outdated for _, outdated in _selections(connection_info).values()
+            ] == [[(TAG, DAY + timedelta(days=1))]] * 8 + [[]]
         finally:
             database.close()
