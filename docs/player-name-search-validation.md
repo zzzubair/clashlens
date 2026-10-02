@@ -97,11 +97,6 @@ and exclusion of old names. Existing tests check response fields and the signed
 private search endpoint. After expanding the membership case to reject an
 unaccepted profile and a player without a current profile, that case passed again
 in 2.66 seconds, with 19 other tests deselected. Ruff and `git diff --check` passed.
-Cleanup had an error after checks: the disposable data directory was removed
-before the requested shutdown finished, causing its final checkpoint to fail.
-The PostgreSQL process exited, its loopback port was confirmed closed, and the
-data directory is absent. All test and benchmark results above predate cleanup;
-this affected only the disposable local cluster, not production.
 
 The changed application was not deployed, so successful browser suggestions and
 the new signed endpoint's end-to-end latency remain unverified. The complete
