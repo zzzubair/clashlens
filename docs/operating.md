@@ -184,6 +184,11 @@ files, full container inspection output or player lists into Discord.
 Repairs that restart services, deploy, delete data or change spending need
 Zubair's approval. Use the [existing service lifecycle](deployment.md#existing-service-lifecycle)
 for an approved stop or restart; do not keep restarting a broken service.
+An approved restart of one service is
+`systemctl --user restart clashlens-worker.service`, with `worker` replaced by
+`api`, `website` or `collector`; only that container restarts. Restarting
+`clashlens-postgres.service` also restarts the worker, API and collector, which
+use the database. `./ops down` and `./ops up` stop and start the whole stack.
 
 Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
 to interpret messages. Confirm both the measurements below and the recovery

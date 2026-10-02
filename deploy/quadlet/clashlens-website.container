@@ -2,7 +2,8 @@
 [Unit]
 Description=Clash Lens website
 PartOf=clashlens.target
-Requires=clashlens-pod.service clashlens-api.service
+Requires=clashlens-pod.service
+Wants=clashlens-api.service
 After=clashlens-pod.service clashlens-api.service
 
 [Container]

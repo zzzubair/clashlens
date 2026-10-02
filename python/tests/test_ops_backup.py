@@ -348,10 +348,7 @@ def test_production_refuses_memory_below_the_database_cache(
     assert ("database cache" in result.stderr) is not accepted
 
 
-@pytest.mark.parametrize("mode", ["production", "fixture"])
-def test_pod_address_and_stop_limits_are_rendered(
-    tmp_path, mode_config, mode
-):
+def render_units(tmp_path, mode_config, mode):
     result = subprocess.run(
         [
             "bash",
@@ -371,7 +368,14 @@ render_units
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    units = tmp_path / "config" / "containers" / "systemd"
+    return tmp_path / "config"
+
+
+@pytest.mark.parametrize("mode", ["production", "fixture"])
+def test_pod_address_and_stop_limits_are_rendered(
+    tmp_path, mode_config, mode
+):
+    units = render_units(tmp_path, mode_config, mode) / "containers" / "systemd"
     network = configparser.ConfigParser(interpolation=None, strict=False)
     pod = configparser.ConfigParser(interpolation=None, strict=False)
     postgres = configparser.ConfigParser(interpolation=None, strict=False)
@@ -414,6 +418,54 @@ render_units
     assert address == ipaddress.ip_address("10.89.14.2")
     assert address in subnet
     assert network["Network"]["NetworkName"] == "clashlens-private"
+
+
+@pytest.mark.parametrize("mode", ["production", "fixture"])
+def test_restarting_one_service_restarts_only_that_service(tmp_path, mode_config, mode):
+    config = render_units(tmp_path, mode_config, mode)
+    units = {}
+    for path in [
+        *(config / "containers" / "systemd").iterdir(),
+        *(config / "systemd" / "user").iterdir(),
+    ]:
+        name = {".container": f"{path.stem}.service", ".pod": "clashlens-pod.service"}
+        # A dependency key can repeat, so collect every line rather than the last.
+        dependencies = units.setdefault(name.get(path.suffix, path.name), {})
+        for line in path.read_text().splitlines():
+            key, _, value = line.partition("=")
+            dependencies.setdefault(key, set()).update(value.split())
+    # systemd restarts every unit that Requires, BindsTo or is PartOf the restarted one.
+    restarted_with = {name: set() for name in units}
+    for name, dependencies in units.items():
+        for key in ("Requires", "BindsTo", "PartOf"):
+            for target in dependencies.get(key, ()):
+                restarted_with.setdefault(target, set()).add(name)
+
+    def restart(name):
+        reached, pending = set(), [name]
+        while pending:
+            unit = pending.pop()
+            if unit not in reached:
+                reached.add(unit)
+                pending.extend(restarted_with[unit])
+        return reached
+
+    services = ["worker", "api", "website", "collector"]
+    if mode == "fixture":
+        services += ["archive", "clash-api", "login"]
+    for service in services:
+        unit = f"clashlens-{service}.service"
+        assert restart(unit) == {unit}
+    # Services that use the database still restart with it.
+    assert restart("clashlens-postgres.service") == {
+        f"clashlens-{service}.service"
+        for service in ("postgres", "worker", "api", "collector")
+    }
+    # The target still starts and stops the whole stack.
+    started = units["clashlens.target"]["Wants"]
+    stopped = restart("clashlens.target")
+    for service in ["pod", "postgres", *services]:
+        assert f"clashlens-{service}.service" in started & stopped
 
 
 @pytest.mark.parametrize(
