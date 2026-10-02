@@ -53,7 +53,9 @@ def repair_current_season_reset_baselines(
     batch of at most ``max_works`` pairs is re-checked from saved results, each
     in its own short transaction. Returns the end-of-day reconciliation jobs
     queued, how many pairs were checked, and how often each failure reason was
-    seen; a checked count of zero means no such pair is left.
+    seen; a checked count of zero means no such pair is left. The season's
+    opening Reset is re-checked as day 1's starting evidence but queues no
+    rebuild of the previous season's last day.
     """
 
     with database.pool.connection() as connection:
@@ -74,11 +76,11 @@ def repair_current_season_reset_baselines(
                       AND outcome.processing_version = %s
                     ORDER BY outcome.id DESC
                     LIMIT 1
-                )
+                ), sweep.boundary_at > anchor.current_start
                 FROM collector_work AS work
                 JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
                 JOIN current_anchor AS anchor
-                  ON sweep.boundary_at > anchor.current_start
+                  ON sweep.boundary_at >= anchor.current_start
                  AND sweep.boundary_at <= anchor.current_start + interval '28 days'
                 WHERE work.kind = 'reset_baseline'
                   AND (
@@ -111,7 +113,7 @@ def repair_current_season_reset_baselines(
             ).fetchall()
         job_ids = []
         failure_reasons: Counter[str] = Counter()
-        for profile_observation_id, profile_parser_version in candidates:
+        for profile_observation_id, profile_parser_version, ends_day in candidates:
             with connection.transaction():
                 job_id, reasons = _evaluate_reset_baseline(
                     database,
@@ -120,6 +122,7 @@ def repair_current_season_reset_baselines(
                     observation_endpoint="profile",
                     parser_version=_text_value(profile_parser_version),
                     processing_version=PROCESSING_VERSION,
+                    queue_reconciliation=bool(ends_day),
                 )
             if job_id is not None:
                 job_ids.append(job_id)
@@ -141,6 +144,7 @@ def _evaluate_reset_baseline(
     processing_version: str,
     failure_category: str | None = None,
     failure_retryable: bool = False,
+    queue_reconciliation: bool = True,
 ) -> tuple[int | None, list[str]]:
     """Record the Reset pair evidence seen from one of its observations.
 
@@ -291,7 +295,7 @@ def _evaluate_reset_baseline(
             player_id=int(player_id),
             state=state,
         )
-    if state != "complete":
+    if state != "complete" or not queue_reconciliation:
         return None, reasons
     return _enqueue_reset_reconciliation(
         connection,

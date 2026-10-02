@@ -5,7 +5,6 @@ import time
 from datetime import timedelta
 
 import psycopg
-import pytest
 from domain_test_support import domain_database, store_observation, text
 from test_reconciliation_postgres import (
     DAY_END,
@@ -145,13 +144,12 @@ def test_reset_pair_with_production_parser_versions_publishes_army_day(
             database.close()
 
 
-@pytest.mark.parametrize("stale", [False, True])
 def test_republication_finishes_days_left_by_partial_reset_pairs(
-    database_url: str, archive_server, monkeypatch, stale: bool
+    database_url: str, archive_server, monkeypatch
 ) -> None:
     # Production state on 2026-10-02: both Reset results were processed but
-    # the pair's latest check said partial, so the day stayed Live. A pair
-    # saved before its Reset fails the re-check and queues nothing.
+    # each pair's latest check said partial, so its day stayed Live.
+    opening = DAY_START - timedelta(days=22)
     with domain_database(database_url, include_coordinator=True) as connection_info:
         pairs = [
             _store_baseline_pair(
@@ -160,32 +158,32 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                 key=key,
                 boundary=boundary,
                 trophies=trophies,
-                empty_battle_log=True,
-                observed_at=boundary - timedelta(hours=1) if stale else None,
+                empty_battle_log=empty,
+                observed_at=observed_at,
                 profile_parser_version=PROFILE_PARSER_VERSION,
             )
-            for key, boundary, trophies in (
-                ("start", DAY_START, 6000),
-                ("end", DAY_END, 6040),
+            for key, boundary, trophies, empty, observed_at in (
+                # The season's opening Reset is day 1's starting evidence.
+                ("opening", opening, 5000, True, None),
+                # This profile arrived after the day's first battle at 12:00.
+                ("start", DAY_START, 6000, False, DAY_START + timedelta(hours=8)),
+                ("end", DAY_END, 6040, True, None),
             )
         ]
         database, processor = _processor(connection_info, archive_server)
         try:
-            for job_id in pairs[0][2:]:
-                assert (
-                    processor.process_job(job_id, owner="start").outcome == "processed"
-                )
             with monkeypatch.context() as patch:
                 patch.setattr(
                     reconciliation_db.reset_baselines,
                     "_refresh_reset_baseline_evidence",
                     lambda *args, **kwargs: None,
                 )
-                for job_id in pairs[1][2:]:
-                    assert (
-                        processor.process_job(job_id, owner="end").outcome
-                        == "processed"
-                    )
+                for pair in pairs:
+                    for job_id in pair[2:]:
+                        assert (
+                            processor.process_job(job_id, owner="pair").outcome
+                            == "processed"
+                        )
             with database.pool.connection() as connection:
                 connection.execute(
                     """
@@ -194,12 +192,15 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                         profile_observation_id, battle_log_observation_id,
                         state, failure_reasons, evidence_key
                     )
-                    SELECT sweep_id, player_id, %s, id, profile_observation_id,
-                           battle_log_observation_id, 'partial',
-                           '["unprocessed_profile"]', repeat('e', 64)
-                    FROM collector_work WHERE profile_observation_id = %s
+                    SELECT work.sweep_id, work.player_id, sweep.boundary_at, work.id,
+                           work.profile_observation_id,
+                           work.battle_log_observation_id, 'partial',
+                           '["unprocessed_profile"]', md5(work.id::text) || md5('e')
+                    FROM collector_work AS work
+                    JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
+                    WHERE work.profile_observation_id = ANY(%s)
                     """,
-                    (DAY_END, pairs[1][0]),
+                    ([pair[0] for pair in pairs],),
                 )
                 connection.execute(
                     "UPDATE python_processing_jobs SET status = 'cancelled'"
@@ -207,22 +208,47 @@ def test_republication_finishes_days_left_by_partial_reset_pairs(
                 )
                 connection.commit()
 
-            report = reconciliation_db.enqueue_current_season_republication(
-                database, max_jobs=10
-            )
-            if stale:
-                assert report == {
-                    "job_ids": [],
-                    "evaluated_count": 1,
-                    "failure_reasons": {"battle_log_stale": 1, "profile_stale": 1},
-                }
-                return
+            def latest_states() -> list[str]:
+                with database.pool.connection() as connection:
+                    return [
+                        text(
+                            connection.execute(
+                                """
+                                SELECT evidence.state
+                                FROM reset_baseline_evidence AS evidence
+                                JOIN collector_work AS work
+                                  ON work.id = evidence.collector_work_id
+                                WHERE work.profile_observation_id = %s
+                                ORDER BY evidence.version DESC, evidence.id DESC
+                                LIMIT 1
+                                """,
+                                (pair[0],),
+                            ).fetchone()[0]
+                        )
+                        for pair in pairs
+                    ]
+
+            def repair() -> dict:
+                return reconciliation_db.enqueue_current_season_republication(
+                    database, max_jobs=1
+                )
+
+            # The opening Reset finishes without rebuilding last season's day.
+            assert repair() == {"job_ids": [], "evaluated_count": 1, "failure_reasons": {}}
+            assert latest_states() == ["complete", "partial", "partial"]
+            # A batch that queues nothing reports why and leaves later pairs.
+            assert repair() == {
+                "job_ids": [],
+                "evaluated_count": 1,
+                "failure_reasons": {"profile_after_first_event": 1},
+            }
+            assert latest_states() == ["complete", "failed", "partial"]
+            report = repair()
             assert (len(report["job_ids"]), report["evaluated_count"]) == (1, 1)
+            assert latest_states() == ["complete", "failed", "complete"]
             job = report["job_ids"][0]
             assert processor.process_job(job, owner="repair").outcome == "processed"
-            assert reconciliation_db.enqueue_current_season_republication(
-                database, max_jobs=10
-            ) == {"job_ids": [], "evaluated_count": 0, "failure_reasons": {}}
+            assert repair() == {"job_ids": [], "evaluated_count": 0, "failure_reasons": {}}
             with database.pool.connection() as connection:
                 day_state = connection.execute(
                     """

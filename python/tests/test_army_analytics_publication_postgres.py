@@ -1582,7 +1582,7 @@ def test_current_season_reads_latest_finished_days_it_has(
                 now=DAY_START + timedelta(days=24, hours=12),
             )
             assert (covered["selection"]["start_day"], covered["selection"]["end_day"]) == (23, 23)
-            assert (covered["collection_coverage"]["completed_days"], covered["total_attacks"]) == (1, 1)
+            assert (covered["collection_coverage"]["covered_days"], covered["total_attacks"]) == ([23], 1)
             # The completed day itself stays reachable through the chronology.
             resolved = api_analytics.get_army_analytics(api,
                 _selection(season="current", start_day=23, end_day=28),

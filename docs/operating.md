@@ -366,8 +366,9 @@ Each run re-checks at most `--max-jobs` current-season Reset pairs left
 player. It reports how many pairs it checked (`evaluated_count`), the
 end-of-day jobs it queued, and how often each reason a pair failed was seen
 (`failure_reasons`). A run that checks pairs but queues nothing stops there;
-read its `failure_reasons` before running again. The worker then publishes
-the days on its own.
+read its `failure_reasons` before running again. The season's opening Reset
+is re-checked too, as day 1's starting evidence, but queues no rebuild of the
+previous season's last day. The worker then publishes the days on its own.
 Only days whose Reset evidence is still in the database can be rebuilt;
 older days need the archived raw responses replayed, which this does not do.
 
@@ -382,10 +383,11 @@ against about 2 GB for a whole day at once. Reading two days took 0.03 s
 for Top 100 and 0.93 s for all tracked players.
 
 **Recovered:** `army_analytics_completed_days` lists the backfilled days.
-For the current season the Armies page shows the latest unbroken run of
-finished days in the chosen range, for example days 24–25, with a note that
-earlier days were not tracked. Asking only for days that never finished still
-shows no statistics.
+For the current season the Armies page uses every finished day in the chosen
+range whose leaderboard is ready for the chosen player group, and the API
+returns them as `collection_coverage.covered_days`. The page then notes the
+gaps, for example "Days 24–25 of 28; days not tracked: 1–23." Asking only for
+days that never finished still shows no statistics.
 
 ### When alerts themselves fail
 
