@@ -150,7 +150,7 @@ export async function loader({
         : null;
   return {
     requestedTag: normalizedTag,
-    player,
+    player: refreshStatus?.player ?? player,
     error,
     refreshStatus,
     refreshError,
@@ -235,7 +235,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const player =
     refreshedPlayer &&
     (data.player === null ||
-      Date.parse(refreshedPlayer.profile.freshness.observedAt) >=
+      Date.parse(refreshedPlayer.profile.freshness.observedAt) >
         Date.parse(data.player.profile.freshness.observedAt))
       ? refreshedPlayer
       : data.player;

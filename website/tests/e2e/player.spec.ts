@@ -62,21 +62,26 @@ for (const ageMs of [30_000, 60_000, 60_001, 120_000]) {
   });
 }
 
-test("data processed shortly after a completed Refresh reaches the open page", async ({
+test("a battle processed shortly after a completed Refresh reaches the open page", async ({
   page,
   browser,
   baseURL,
 }) => {
   const savedContext = await browser.newContext({ javaScriptEnabled: false, baseURL });
-  let html: Buffer;
+  let html: string;
   let observedAt: string;
+  let opponent: string;
   let savedData: string;
   let dataType: string;
   try {
     const savedPage = await savedContext.newPage();
     const response = await savedPage.goto("/players/%232PP");
-    html = await response!.body();
+    html = await response!.text();
     observedAt = (await savedPage.locator(".player-updated").getAttribute("datetime"))!;
+    opponent = (await savedPage
+      .locator(".battle-slot-attack .battle-opponent strong")
+      .first()
+      .textContent())!;
     const dataResponse = await savedContext.request.get("/players/%232PP.data");
     savedData = await dataResponse.text();
     dataType = dataResponse.headers()["content-type"];
@@ -84,20 +89,24 @@ test("data processed shortly after a completed Refresh reaches the open page", a
     await savedContext.close();
   }
   expect(savedData).toContain(observedAt);
-  const processedAt = new Date(Date.parse(observedAt) + 1_000).toISOString();
+  const earlierAt = new Date(Date.parse(observedAt) - 1).toISOString();
+  const attacks = page.locator(".battle-slot-attack", { hasText: opponent });
 
-  // Completion carries the old saved player, and the first reload after it is
-  // answered before processing finishes. Only later reloads see processed data.
+  // Before processing, page reads return the earlier check. Completion carries
+  // the processed profile without its battles; only later reads include them.
   let completed = false;
-  let reloadsAfterCompletion = 0;
+  let readsAfterCompletion = 0;
   await page.route("**/players/%232PP", (route) =>
-    route.fulfill({ contentType: "text/html", body: html }),
+    route.fulfill({
+      contentType: "text/html",
+      body: html.replaceAll(observedAt, earlierAt),
+    }),
   );
   await page.route("**/players/%232PP.data*", (route) => {
-    const processed = completed && reloadsAfterCompletion++ > 0;
+    const processed = completed && readsAfterCompletion++ > 0;
     return route.fulfill({
       contentType: dataType,
-      body: processed ? savedData.replaceAll(observedAt, processedAt) : savedData,
+      body: processed ? savedData : savedData.replaceAll(observedAt, earlierAt),
     });
   });
   await page.route("**/resources/players/*/refresh?workId=*", async (route) => {
@@ -105,17 +114,20 @@ test("data processed shortly after a completed Refresh reaches the open page", a
     const status = await response.json();
     if (status.state === "complete") {
       status.player.profile.freshness.observedAt = observedAt;
+      status.player.currentDay = null;
+      status.player.recentDays = [];
+      status.player.seasonDays = [];
       completed = true;
     }
     await route.fulfill({ response, json: status });
   });
-  await page.clock.setFixedTime(new Date(Date.parse(observedAt) + 120_000));
+  await page.clock.setFixedTime(new Date(Date.parse(earlierAt) + 120_000));
 
   await page.goto("/players/%232PP");
-  await expect(page.locator(".player-updated")).toHaveAttribute("datetime", processedAt, {
-    timeout: 30_000,
-  });
-  expect(reloadsAfterCompletion).toBeGreaterThan(1);
+  await expect(attacks).not.toHaveCount(0);
+  await expect.poll(() => readsAfterCompletion, { timeout: 30_000 }).toBeGreaterThan(1);
+  await expect(page.locator(".player-updated")).toHaveAttribute("datetime", observedAt);
+  await expect(attacks).not.toHaveCount(0);
 });
 
 test("player page canonicalizes the tag and shows collected profile data", async ({

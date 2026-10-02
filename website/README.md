@@ -33,12 +33,12 @@ old. Saved data stays visible while the existing Refresh flow runs, including if
 the request is refused. Manual Refresh and browser-reload Refresh still work.
 
 When any Refresh reports complete, the page reloads its data immediately and
-again about 3 and 8 seconds later. A reload replaces the player carried by the
-completed Refresh only when its profile check is newer. Known limitation:
-complete means both API responses were saved, not that the worker has processed
-them. Processing that takes longer than about 8 seconds, or battles processed
-after a profile with the same check time, appear only after the next Refresh or
-page load.
+again about 3 and 8 seconds later. The player carried by the completed Refresh
+stays on screen only while its profile check is newer than the reloaded data, so
+battles processed after the profile still appear. Known limitation: complete
+means both API responses were saved, not that the worker has processed them, so
+processing that takes longer than about 8 seconds appears only after the next
+Refresh or page load.
 
 ## Requirements and setup
 
