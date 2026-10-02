@@ -18,6 +18,10 @@ database statement, so an intervening rank change cannot open the wrong page.
   1 before selection, literal `%` and `_` in names, empty results, bounded
   results, exact-tag precedence, hidden/not-found players and their restoration,
   inactive and unaccepted players, signed-request enforcement and invalid input.
+  These counts predate the review changes, which added a fifth Python test for
+  page-edge neighbors, replaced exact-tag precedence with `#`-only tag selection
+  and name fallback, and added website client cases; this record does not
+  re-count them.
 - Website: 75 tests passed across `python-client.test.ts`, `home-route.test.ts`,
   `leaderboard-search-client.test.ts` and `leaderboard-search-route.test.ts`.
   New cases cover the signed search request, preservation of rank 103, invalid
