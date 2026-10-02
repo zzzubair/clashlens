@@ -12,7 +12,7 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from . import collector_uploads
+from . import collector_metrics, collector_uploads
 from .domain import is_season_boundary
 
 UploadClaim = collector_uploads.UploadClaim
@@ -572,44 +572,7 @@ class CollectorDatabase:
 
     def health_metrics(self) -> dict[str, int | float]:
         with self._connection() as connection:
-            row = connection.execute(
-                """WITH active_reset AS (SELECT sweep.id FROM collector_reset_sweeps AS sweep JOIN collector_work AS work ON work.sweep_id = sweep.id WHERE work.kind = 'reset_baseline' AND work.status NOT IN ('complete', 'failed', 'cancelled') ORDER BY sweep.boundary_at DESC, sweep.id DESC LIMIT 1),
-                processing AS (
-                    SELECT count(*) AS pending_count,
-                           min(COALESCE(observation.created_at, job.created_at)) AS oldest_saved_at
-                    FROM python_processing_jobs AS job
-                    LEFT JOIN collector_observations AS observation
-                      ON observation.id = job.observation_id
-                    WHERE job.status IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')
-                )
-                SELECT (SELECT count(*) FROM players WHERE active = true),
-                       (SELECT count(*) FROM players WHERE active = true AND next_due_at <= clock_timestamp()),
-                       COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - min(next_due_at))) FROM players WHERE active = true AND next_due_at <= clock_timestamp()), 0),
-                       (SELECT pending_count FROM processing),
-                       (SELECT count(*) FROM collector_response_uploads
-                        WHERE state IN ('pending', 'leased')
-                           OR (state = 'failed' AND next_attempt_at < 'infinity'::timestamptz)),
-                       (SELECT count(*) FROM python_processing_jobs WHERE status = 'failed'),
-                       (SELECT count(*) FROM collector_response_uploads
-                        WHERE state = 'failed' AND next_attempt_at = 'infinity'::timestamptz),
-                       (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline'),
-                       (SELECT count(*) FROM collector_work WHERE sweep_id = (SELECT id FROM active_reset) AND kind = 'reset_baseline' AND status IN ('complete', 'failed', 'cancelled')),
-                       (SELECT CASE WHEN max(last_success_at) IS NULL THEN NULL ELSE greatest(0, extract(epoch FROM clock_timestamp() - max(last_success_at))) END
-                        FROM collector_response_state),
-                       COALESCE((SELECT greatest(0, extract(epoch FROM clock_timestamp() - oldest_saved_at)) FROM processing), 0)"""
-            ).fetchone()
-        assert row is not None
-        names = (
-            "active_players", "due_queue_depth", "oldest_due_age_seconds",
-            "pending_processing", "pending_uploads", "failed_processing",
-            "failed_uploads", "reset_total", "reset_terminal",
-            "last_success_age_seconds", "oldest_pending_processing_age_seconds",
-        )
-        metrics: dict[str, int | float] = {}
-        for name, value in zip(names, row, strict=True):
-            if value is not None:
-                metrics[name] = float(value) if name.endswith("_seconds") else int(value)
-        return metrics
+            return collector_metrics.health_metrics(connection)
 
     def schedule_rankings_cycle(self, now: datetime | None = None) -> bool:
         instant = (now or datetime.now(UTC)).astimezone(UTC)

@@ -91,3 +91,42 @@ def test_metrics_show_each_keys_health_and_rate() -> None:
         )
     assert 'key_healthy{pool="interactive",key="interactive-1"} 1\n' in metrics
     assert "fixture-" not in metrics
+
+
+def test_metrics_cache_serializes_scrapes_and_retries_failed_refresh(monkeypatch):
+    from types import SimpleNamespace
+
+    import psycopg
+
+    instant = [100.0]
+    monkeypatch.setattr("clashlens.collector.time", SimpleNamespace(monotonic=lambda: instant[0]))
+
+    class ChangingStore(_Store):
+        calls = 0
+        failed = False
+
+        def health_metrics(self):
+            self.calls += 1
+            if self.failed:
+                raise psycopg.OperationalError("unavailable")
+            return {"check_age_p50_seconds": self.calls}
+
+    spool = _Spool()
+    store = ChangingStore(spool)
+    collector = _collector(spool, store, _Client(spool))
+
+    async def scrape():
+        first = await asyncio.gather(*(collector.health_response("/metrics") for _ in range(8)))
+        assert all(b"clashlens_collector_check_age_p50_seconds 1\n" in response[2] for response in first)
+        assert store.calls == 1
+        instant[0] = 129.99
+        assert (await collector.health_response("/metrics"))[2] == first[0][2]
+        instant[0] = 130
+        store.failed = True
+        assert (await collector.health_response("/metrics"))[0] == 503
+        store.failed = False
+        recovered = await collector.health_response("/metrics")
+        assert recovered[0] == 200
+        assert b"clashlens_collector_check_age_p50_seconds 3\n" in recovered[2]
+
+    asyncio.run(scrape())
