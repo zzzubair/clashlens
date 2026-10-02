@@ -20,6 +20,7 @@ declare -Ag RELEASE=()
 ADMIN_SECRET_ACTIVE=false
 UP_IN_PROGRESS=false
 OPS_LOCK_FD=
+TIMER_UNITS=(clashlens-backup.timer clashlens-backup.service clashlens-alert.timer clashlens-alert.service clashlens-archive-retention.timer clashlens-archive-retention.service)
 
 usage() {
   cat <<'EOF'
@@ -27,12 +28,13 @@ Usage: ./ops build [--fixture]
        ./ops up [--fixture]
        ./ops down
        ./ops status
-       ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login|backup]
+       ./ops logs [postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention]
        ./ops queue-status
        ./ops backup
        ./ops backup-status
        ./ops alert-check
        ./ops backup-prune [--apply]
+       ./ops archive-prune [--apply]
        ./ops failed-items [--limit N|--work-id N|--upload-hash SHA256] [--apply]
        ./ops support-recovery-exec <arguments>
 
@@ -63,7 +65,7 @@ finish() {
   trap - EXIT HUP INT TERM
   cleanup_admin_secret || result=1
   if (( result != 0 )) && [[ "$UP_IN_PROGRESS" == true ]]; then
-    "$SYSTEMCTL_BIN" --user stop clashlens-backup.timer clashlens-backup.service clashlens-alert.timer clashlens-alert.service >/dev/null 2>&1 || true
+    "$SYSTEMCTL_BIN" --user stop "${TIMER_UNITS[@]}" >/dev/null 2>&1 || true
     "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
     local unit
     for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume; do
@@ -408,10 +410,8 @@ guard_generated_units() {
     managed_unit_file "$QUADLET_DIR/${template##*/}"
   done
   managed_unit_file "$USER_UNIT_DIR/clashlens.target"
-  managed_unit_file "$USER_UNIT_DIR/clashlens-backup.service"
-  managed_unit_file "$USER_UNIT_DIR/clashlens-backup.timer"
-  managed_unit_file "$USER_UNIT_DIR/clashlens-alert.service"
-  managed_unit_file "$USER_UNIT_DIR/clashlens-alert.timer"
+  local unit
+  for unit in "${TIMER_UNITS[@]}"; do managed_unit_file "$USER_UNIT_DIR/$unit"; done
 }
 
 managed_label() {
@@ -455,7 +455,7 @@ guard_trusted_proxy_ip() {
 guard_existing_resources() {
   local prefix resource
   for prefix in clashlens clashlens-ops-fixture; do
-    for resource in postgres collector python-api python-worker website archive clash-api login admin-operation; do
+    for resource in postgres collector python-api python-worker website archive clash-api login admin-operation archive-prune; do
       guard_resource container "$prefix-$resource"
     done
     guard_resource pod "$prefix-pod"
@@ -468,7 +468,8 @@ guard_existing_resources() {
   for secret in clashlens-postgres-password clashlens-collector-database-url clashlens-worker-database-url clashlens-api-database-url \
     clashlens-collector-archive-access-key clashlens-collector-archive-secret-key clashlens-worker-archive-access-key clashlens-worker-archive-secret-key \
     clashlens-normal-api-keys clashlens-interactive-api-keys clashlens-interactive-1 clashlens-hmac-current clashlens-hmac-previous \
-    clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url clashlens-walg-config; do
+    clashlens-login-secret clashlens-google-client-secret clashlens-discord-client-secret clashlens-init-database-url clashlens-walg-config \
+    clashlens-archive-operator-database-url clashlens-archive-operator-access-key clashlens-archive-operator-secret-key; do
     guard_resource secret "$secret"
   done
 }
@@ -521,7 +522,7 @@ guard_systemd_units() {
   done
   fragment=$($SYSTEMCTL_BIN --user show clashlens.target --property=FragmentPath --value 2>/dev/null || true)
   [[ -z "$fragment" || "$fragment" == "$USER_UNIT_DIR/clashlens.target" ]] || die "refusing unmanaged systemd unit clashlens.target"
-  for unit in clashlens-backup.service clashlens-backup.timer clashlens-alert.service clashlens-alert.timer; do
+  for unit in "${TIMER_UNITS[@]}"; do
     fragment=$($SYSTEMCTL_BIN --user show "$unit" --property=FragmentPath --value 2>/dev/null || true)
     [[ -z "$fragment" || "$fragment" == "$USER_UNIT_DIR/$unit" ]] || die "refusing unmanaged systemd unit $unit"
   done
@@ -752,6 +753,11 @@ render_units() {
     render "$TEMPLATE_DIR/clashlens-alert.service" "$USER_UNIT_DIR/clashlens-alert.service" ROOT "$ROOT"
     render "$TEMPLATE_DIR/clashlens-alert.timer" "$USER_UNIT_DIR/clashlens-alert.timer"
   fi
+  if archive_retention_enabled; then
+    backup_requires+=$'\nWants=clashlens-archive-retention.timer'
+    render "$TEMPLATE_DIR/clashlens-archive-retention.service" "$USER_UNIT_DIR/clashlens-archive-retention.service" ROOT "$ROOT"
+    render "$TEMPLATE_DIR/clashlens-archive-retention.timer" "$USER_UNIT_DIR/clashlens-archive-retention.timer"
+  fi
   render "$TEMPLATE_DIR/clashlens.target" "$USER_UNIT_DIR/clashlens.target" FIXTURE_REQUIRES "$fixture_requires" BACKUP_REQUIRES "$backup_requires" ALERT_REQUIRES "$alert_requires"
   if backup_enabled; then
     [[ "$ROOT" =~ ^/[A-Za-z0-9_./-]+$ ]] || die "backup service requires a checkout path without spaces or systemd specifiers"
@@ -899,6 +905,10 @@ validate_production_secret_files() {
       [[ "${#SECRET_VALUE}" -le 512 && "$SECRET_VALUE" != *[[:space:]]* && "$SECRET_VALUE" != CHANGE_ME && "$SECRET_VALUE" != REPLACE_ME ]] || die "$file contains an invalid provider secret"
     done
   fi
+  [[ "$(setting CLASHLENS_ARCHIVE_RETENTION off)" =~ ^(off|preview|apply)$ ]] || die "CLASHLENS_ARCHIVE_RETENTION must be off, preview or apply"
+  if [[ "$(setting CLASHLENS_ARCHIVE_RETENTION off)" != off ]]; then
+    for name in access secret; do read_secret_value "$secret_dir/clashlens-archive-operator-$name-key"; done
+  fi
   unset SECRET_VALUE
 }
 
@@ -963,6 +973,12 @@ prepare_secrets() {
       replace_secret clashlens-login-secret disabled
       replace_secret clashlens-google-client-secret disabled
       replace_secret clashlens-discord-client-secret disabled
+    fi
+    if archive_retention_enabled; then
+      replace_secret clashlens-archive-operator-database-url "$(admin_database_url)"
+      for name in access secret; do replace_file_secret "clashlens-archive-operator-$name-key" "$secret_dir/clashlens-archive-operator-$name-key"; done
+    else
+      "$PODMAN_BIN" secret rm clashlens-archive-operator-database-url clashlens-archive-operator-access-key clashlens-archive-operator-secret-key >/dev/null 2>&1 || true
     fi
   fi
 }
@@ -1085,7 +1101,7 @@ ensure_linger() {
 }
 
 stop_units() {
-  "$SYSTEMCTL_BIN" --user stop clashlens-backup.timer clashlens-backup.service clashlens-alert.timer clashlens-alert.service >/dev/null 2>&1 || true
+  "$SYSTEMCTL_BIN" --user stop "${TIMER_UNITS[@]}" >/dev/null 2>&1 || true
   "$SYSTEMCTL_BIN" --user disable --now clashlens.target >/dev/null 2>&1 || true
   local unit state
   for unit in clashlens-website clashlens-collector clashlens-api clashlens-worker clashlens-login clashlens-clash-api clashlens-archive clashlens-postgres clashlens-pod clashlens-network clashlens-postgres-volume clashlens-python-api clashlens-python-worker clashlens; do
@@ -1259,7 +1275,7 @@ logs() {
     journalctl --user-unit clashlens.target --user-unit 'clashlens-*.service' --lines 200 --no-pager
     return
   fi
-  case "$service" in postgres|collector|api|worker|website|archive|clash-api|login|backup) unit="clashlens-$service.service" ;; *) die "unknown service $service" ;; esac
+  case "$service" in postgres|collector|api|worker|website|archive|clash-api|login|backup|archive-retention) unit="clashlens-$service.service" ;; *) die "unknown service $service" ;; esac
   shift || true
   journalctl --user-unit "$unit" "$@"
 }
@@ -1392,6 +1408,34 @@ if candidates:
   wal_g delete before "$anchor" --use-sentinel-time ${apply:+"$apply"}
 }
 
+archive_retention_enabled() {
+  [[ "${MODE:-}" == production && "$(setting CLASHLENS_ARCHIVE_RETENTION off)" != off ]]
+}
+
+archive_prune() {
+  local apply=() scheduled=false argument lock_fd
+  for argument in "$@"; do
+    case "$argument" in --apply) apply=(--apply) ;; --scheduled) scheduled=true ;; *) die "archive-prune accepts only --apply" ;; esac
+  done
+  require_host
+  prepare_managed_runtime worker
+  [[ "$MODE" == production ]] || die "raw-response cleanup is unavailable in fixture mode"
+  load_production_config
+  archive_retention_enabled || die "set CLASHLENS_ARCHIVE_RETENTION=preview in app.env and run ./ops up first"
+  [[ "$scheduled" == false || "$(setting CLASHLENS_ARCHIVE_RETENTION)" != apply ]] || apply=(--apply)
+  [[ ${#apply[@]} == 0 || "$(setting CLASHLENS_ARCHIVE_RETENTION)" == apply ]] || die "deletion requires CLASHLENS_ARCHIVE_RETENTION=apply and ./ops up"
+  # Scheduled runs skip the operation lock so cleanup never blocks up or backups;
+  # up and down stop this timer first. This lock only keeps runs from overlapping.
+  exec {lock_fd}> "$STATE_DIR/archive-prune.lock"
+  flock --nonblock "$lock_fd" || { printf 'Another raw-response cleanup is running; skipped.\n'; return 0; }
+  "$PODMAN_BIN" run --rm --name "$PREFIX-archive-prune" --label org.clashlens.managed=ops --pod "$PREFIX-pod" --read-only --tmpfs /tmp \
+    --env-file "$STATE_DIR/env/worker.env" --volume "$SPOOL_ROOT:/spool:rw,z" \
+    --secret clashlens-archive-operator-database-url,type=mount,target=/run/secrets/database-url,uid=10001,gid=10001,mode=0400 \
+    --secret clashlens-archive-operator-access-key,type=mount,target=/run/secrets/archive-access-key,uid=10001,gid=10001,mode=0400 \
+    --secret clashlens-archive-operator-secret-key,type=mount,target=/run/secrets/archive-secret-key,uid=10001,gid=10001,mode=0400 \
+    "${RELEASE[PYTHON_IMAGE]}" prune-archive --max-objects 1000 "${apply[@]}"
+}
+
 write_alert_intent() {
   local temporary
   temporary=$(mktemp "$STATE_DIR/alert-intent.XXXXXX")
@@ -1441,6 +1485,10 @@ case "$command" in
   alert-check) (($# == 0)) || die "alert-check takes no arguments"; alert_check ;;
   backup-status) (($# == 0)) || die "backup-status takes no arguments"; backup_status ;;
   backup-prune) acquire_mutation_lock; backup_prune "$@" ;;
+  archive-prune)
+    [[ " $* " == *" --scheduled "* ]] || acquire_mutation_lock
+    archive_prune "$@"
+    ;;
   failed-items)
     acquire_mutation_lock
     failed_items "$@"

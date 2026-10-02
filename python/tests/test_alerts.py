@@ -41,6 +41,7 @@ def runtime(tmp_path, monkeypatch):
         journal_failed=False,
         backup_failed=False,
         backup_error=None,
+        cleanup_failed=False,
         reads_failed=False,
         leaderboard="0 13000",
         disk_used=10,
@@ -125,6 +126,8 @@ def runtime(tmp_path, monkeypatch):
             if rt.backup_error:
                 raise rt.backup_error
             code, output = int(rt.backup_failed), "private backup output"
+        elif "is-failed" in args:
+            code, output = int(not rt.cleanup_failed), ""
         elif "--probe" in args:
             code, output = int(rt.reads_failed), "private account output"
         elif "--leaderboard" in args:
@@ -173,6 +176,8 @@ def trigger(rt, condition, value=True):
         rt.backup_failed = value
     elif condition == "reads":
         rt.reads_failed = value
+    elif condition == "cleanup":
+        rt.cleanup_failed = value
     elif condition == "collection":
         rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 600 if value else 599
     elif condition == "leaderboard":
@@ -187,6 +192,7 @@ def trigger(rt, condition, value=True):
         "spool_objects",
         "filesystem",
         "restarts",
+        "cleanup",
         "reads",
         "collection",
         "leaderboard",

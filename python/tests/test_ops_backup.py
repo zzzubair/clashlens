@@ -676,3 +676,79 @@ def test_backup_accepts_unchanged_release_across_locales(runtime, tmp_path):
     assert result.returncode != 0
     assert "release inputs changed after deployment" in result.stderr
     assert not activity.exists()
+
+
+def _raw_cleanup_config(mode_config, tmp_path, setting):
+    with Path(mode_config["OPS_ENV_FILE"]).open("a") as config:
+        config.write(f"CLASHLENS_ARCHIVE_RETENTION={setting}\n")
+    for name in ("access", "secret"):
+        key = tmp_path / "secrets" / f"clashlens-archive-operator-{name}-key"
+        key.write_text("operator-key\n")
+        key.chmod(0o600)
+
+
+@pytest.mark.parametrize("setting", ["off", "preview", "apply"])
+def test_raw_cleanup_timer_is_installed_only_when_enabled(tmp_path, mode_config, setting):
+    _raw_cleanup_config(mode_config, tmp_path, setting)
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            MODE_CONFIG
+            + "RELEASE=([POSTGRES_IMAGE]=postgres [COLLECTOR_IMAGE]=collector [PYTHON_IMAGE]=python [WEBSITE_IMAGE]=website)\nrender_units\n",
+            "unit-rendering-test",
+            str(OPS),
+        ],
+        env=dict(mode_config, TEST_MODE="production"),
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    units = tmp_path / "config" / "systemd" / "user"
+    target = (units / "clashlens.target").read_text()
+    enabled = setting != "off"
+    assert ("Wants=clashlens-archive-retention.timer" in target) is enabled
+    assert (units / "clashlens-archive-retention.timer").exists() is enabled
+    if enabled:
+        service = (units / "clashlens-archive-retention.service").read_text()
+        assert "ops archive-prune --scheduled" in service
+
+
+@pytest.mark.parametrize(("setting", "deletes"), [("preview", False), ("apply", True)])
+def test_scheduled_raw_cleanup_follows_setting_and_never_waits_for_operations(
+    runtime, mode_config, tmp_path, setting, deletes
+):
+    env, _ = runtime
+    _raw_cleanup_config(mode_config, tmp_path, setting)
+    runs = tmp_path / "runs"
+    podman = tmp_path / "recording-podman"
+    podman.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        "if sys.argv[1] == 'run':\n"
+        f"    open({str(runs)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+        "    sys.exit(0)\n"
+        f"os.execv({env['PODMAN_BIN']!r}, [{env['PODMAN_BIN']!r}, *sys.argv[1:]])\n"
+    )
+    podman.chmod(0o700)
+    env = dict(mode_config, **{k: env[k] for k in ("SYSTEMCTL_BIN", "PATH")}, PODMAN_BIN=str(podman))
+    lock_path = tmp_path / "state" / "clashlens" / "ops.lock"
+    with lock_path.open("w") as lock:
+        # A deployment or backup holding the operation lock does not delay cleanup.
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        scheduled = subprocess.run(
+            ["bash", str(OPS), "archive-prune", "--scheduled"],
+            env=env, capture_output=True, text=True, timeout=15, check=False,
+        )
+    assert scheduled.returncode == 0, scheduled.stderr
+    command = runs.read_text()
+    assert "prune-archive --max-objects 1000" in command
+    assert command.rstrip().endswith("--apply") is deletes
+    assert "clashlens-archive-operator-secret-key" in command
+    manual = subprocess.run(
+        ["bash", str(OPS), "archive-prune", "--apply"],
+        env=env, capture_output=True, text=True, timeout=15, check=False,
+    )
+    assert (manual.returncode == 0) is deletes, manual.stderr

@@ -1,0 +1,11 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens raw-response cleanup batch
+PartOf=clashlens.target
+Requires=clashlens-postgres.service
+After=clashlens-postgres.service
+
+[Service]
+Type=oneshot
+ExecStart=@@ROOT@@/ops archive-prune --scheduled
+TimeoutStartSec=30min

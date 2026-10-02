@@ -40,6 +40,10 @@ CONDITIONS = {
         "The backup check failed or found a stale backup",
         "./ops backup-status",
     ),
+    "cleanup": (
+        "The scheduled raw-response cleanup failed",
+        "./ops logs archive-retention",
+    ),
     "reads": ("A private player-data read failed", "./ops logs api"),
     "collection": (
         "A player check is more than ten minutes overdue, so collection is slow or stalled",
@@ -389,6 +393,23 @@ def observe(
             errors.append("Backup check failed; run ./ops backup-status")
         else:
             state.pop("backup_failing_since", None)
+
+    try:
+        # Exits 0 only for a failed unit; an uninstalled cleanup timer is never failed.
+        findings["cleanup"] = (
+            command(
+                [
+                    os.environ.get("SYSTEMCTL_BIN", "systemctl"),
+                    "--user",
+                    "is-failed",
+                    "--quiet",
+                    "clashlens-archive-retention.service",
+                ]
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        errors.append("Cleanup state unavailable; run ./ops logs archive-retention")
 
     probe = [
         podman,
