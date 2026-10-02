@@ -617,9 +617,8 @@ the lock like other operator commands.
 
 Enable it in two approved steps:
 
-1. Set `preview`, run `./ops up`, then `./ops archive-prune`. Put its
-   `eligible` summary (count, bytes, oldest and newest deadline) in the
-   deployment report.
+1. Set `preview`, run `./ops up`, then `./ops archive-prune`. Put its per-batch
+   counts and bytes for responses to delete and mark in the deployment report.
 2. Only after #122/#129 prove the seven-day-old restore above and that report
    is approved, set `apply` and run `./ops up`.
 
@@ -629,7 +628,8 @@ October 2. After switching on deletion, compare `deleted_objects` per run with
 that rate. If cleanup cannot keep up, the backlog and the bill keep growing.
 
 A run with any failed object exits unsuccessfully, which marks the service
-failed and raises the [cleanup alert](#alert-conditions). The next run retries.
+failed. Logs record its report and each failed object's location and error type.
+The next run retries.
 
 ## Status and logs
 
@@ -649,7 +649,7 @@ without printing configuration files.
 
 ## Private Discord alerts
 
-`./ops alert-check` checks the eight conditions below and posts changes to the
+`./ops alert-check` checks the seven conditions below and posts changes to the
 private operator channel through an incoming webhook. Create the service-owned
 mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
 Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
@@ -697,11 +697,6 @@ use the [operating notes](operating.md#respond-to-alerts).
   run clears the grace clock and any active alert. Delayed alerts and their
   recoveries report when the timeouts or errors first began, or the last
   intentional resume if later.
-- **A failed scheduled raw-response cleanup**: `clashlens-archive-retention.service`
-  is in the failed state, meaning its last batch had a failed object or could
-  not run. It clears only after a later batch finishes successfully; a batch
-  still running or an unreadable service state keeps the alert. Unless cleanup
-  is set to `apply`, the unit is absent and never alerts.
 - **A failed private player-data read**, including when process readiness says
   healthy. The check enters the private API container, checks `/readyz`, and
   signs a `/v1/players/search` read limited to one result. Keys stay inside the

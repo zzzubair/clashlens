@@ -171,11 +171,8 @@ def test_bytes_survive_the_recovery_hold_and_reruns_are_safe(database_url, tmp_p
         spool = Spool(tmp_path / "spool", max_body_bytes=1 << 20)
         client = DeleteClient(keys, failing=keys[:1])
         try:
-            preview = retire_archive_objects(connection, spool, client, **OPTIONS)
-            assert (preview["marked_objects"], preview["marked_bytes"], preview["deleted_objects"]) == (3, 3000, 0)
-            eligible = preview["eligible"]
-            assert (eligible["objects"], eligible["bytes"]) == (3, 3000)
-            assert eligible["oldest"] <= eligible["newest"]
+            preview = retire_archive_objects(connection, spool, client, max_objects=2, **OPTIONS)
+            assert (preview["marked_objects"], preview["marked_bytes"], preview["deleted_objects"]) == (2, 2000, 0)
             assert _availability(connection) == ["verified"] * 4
 
             assert retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)["marked_objects"] == 3
