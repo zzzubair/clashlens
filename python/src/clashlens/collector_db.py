@@ -24,7 +24,7 @@ ANALYTICS_RULE_VERSION = "legend-analytics-v1"
 PROFILE_PARSER_VERSION = "supercell-profile-parser-v3"
 SOURCE_PARSER_VERSION = "supercell-source-parser-v2"
 LEAGUE_HISTORY_PARSER_VERSION = "supercell-league-history-parser-v1"
-REVISIT_INTERVAL = timedelta(minutes=3)
+REVISIT_INTERVAL = timedelta(seconds=90)
 PROFILE_CACHE_WINDOW = timedelta(seconds=5)
 UPLOAD_RETRY_DELAY = timedelta(seconds=5)
 _ENDPOINTS = {

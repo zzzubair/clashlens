@@ -43,6 +43,63 @@ def test_profiles_keep_the_weekly_previous_id_regression_case() -> None:
     )
 
 
+def test_fake_profiles_carry_the_counts_the_collector_watches() -> None:
+    # The collector fetches a battle log only when trophies, attackWins,
+    # defenseWins or the Unbreakable achievement change, or a profile lacks
+    # them, so the fake API must send them and keep them still between battles.
+    population = tags_for(200)
+    handler = type(
+        "TestClashHandler",
+        (ClashHandler,),
+        {
+            "population": population,
+            "tag_indexes": {tag: i for i, tag in enumerate(population)},
+            "trial_mutations": {},
+            "trial_mutation_ticks": {},
+        },
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    origin = f"http://127.0.0.1:{server.server_port}"
+    authorization = {"Authorization": "Bearer synthetic-key"}
+
+    def counts(modes: dict[str, str] | None = None) -> tuple[object, ...]:
+        if modes:
+            mutate = urllib.request.Request(
+                f"{origin}/_trial/mutate",
+                data=json.dumps({"tag": "#2PP", "modes": modes}).encode(),
+                headers=authorization,
+                method="POST",
+            )
+            urllib.request.urlopen(mutate).close()
+        request = urllib.request.Request(
+            f"{origin}/v1/players/%232PP", headers=authorization
+        )
+        with urllib.request.urlopen(request) as response:
+            profile = json.load(response)
+        return (
+            profile["trophies"],
+            profile["attackWins"],
+            profile["defenseWins"],
+            [
+                item["value"]
+                for item in profile["achievements"]
+                if item["name"] == "Unbreakable" and item["village"] == "home"
+            ],
+        )
+
+    try:
+        quiet = counts()
+        assert quiet == (7_000, 0, 0, [1_767])
+        assert counts({"profile": "ignored"}) == quiet
+        assert counts({"profile": "relevant"}) == (7_001, 0, 0, [1_767])
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+
 def test_clash_fixture_serves_rankings_profiles_and_verification() -> None:
     population = tags_for(200)
     handler = type(

@@ -51,14 +51,9 @@ def test_collector_exports_population_check_ages_with_missing_history(database_u
                     if index == 0
                     else now - timedelta(seconds=index * 10)
                 )
-                # Alternate the older endpoint so neither can mask the other.
-                for endpoint in ("profile", "battle_log"):
-                    at = (
-                        older
-                        if endpoint == ("profile" if index % 2 else "battle_log")
-                        else now + timedelta(seconds=120)
-                    )
-                    seed_check(connection, tag, endpoint, at)
+                seed_check(connection, tag, "profile", older)
+                # Checks skip the battle log on purpose, so its age never counts.
+                seed_check(connection, tag, "battle_log", now - timedelta(days=1))
             for tag, active in (
                 ("#NONE", True),
                 ("#HALF", True),
@@ -71,7 +66,7 @@ def test_collector_exports_population_check_ages_with_missing_history(database_u
                     "INSERT INTO players (normalized_tag, active) VALUES (%s, %s)",
                     (tag, active),
                 )
-            seed_check(connection, "#HALF", "profile", now)
+            seed_check(connection, "#HALF", "battle_log", now)
             seed_check(connection, "#FAIL", "profile", None)
             for endpoint in ("profile", "battle_log"):
                 seed_check(connection, "#OFF", endpoint, now - timedelta(days=10))
@@ -156,8 +151,9 @@ def test_collector_check_age_not_found_membership(
                     elapsed = (
                         measured["metrics_sample_timestamp_seconds"] - now.timestamp()
                     )
+                    profile_age = 180 if endpoint == "battle_log" else -success_seconds
                     assert measured[f"check_age_{name}_seconds"] == pytest.approx(
-                        180 + elapsed, abs=0.001
+                        profile_age + elapsed, abs=0.001
                     )
                 else:
                     assert f"check_age_{name}_seconds" not in measured
@@ -326,7 +322,8 @@ def test_unchanged_success_advances_check_age_but_failure_does_not(database_url)
                         occurrence_key=f"initial-{endpoint}",
                     )
                 )
-            for endpoint, expected_age in (("profile", 120), ("battle_log", 20)):
+            # Only the profile check counts; a later battle log changes nothing.
+            for endpoint, expected_age in (("profile", 20), ("battle_log", 20)):
                 result = database.record_response(
                     replace(
                         original,
@@ -381,7 +378,7 @@ def test_unchanged_success_advances_check_age_but_failure_does_not(database_url)
                         measured["metrics_sample_timestamp_seconds"] - now.timestamp()
                     )
                     assert measured["check_age_max_seconds"] == pytest.approx(
-                        20 + elapsed, abs=0.001
+                        max(0.0, elapsed - seconds), abs=0.001
                     )
                 else:
                     assert all(

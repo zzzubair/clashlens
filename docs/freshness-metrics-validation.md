@@ -6,7 +6,8 @@ credentials were used. The operating contract and metric names are in
 
 ## Scope
 
-The collector exports successful profile/battle-log check ages at `/metrics`.
+The collector exports successful check ages at `/metrics`. Since the battle log
+began to be skipped on purpose, they measure profile checks only.
 The private API exports Live Leaderboard ages in `/operatorz.live_leaderboard`.
 This split preserves the existing database permissions. Neither alert thresholds
 nor the alert probe's two-count output changed.

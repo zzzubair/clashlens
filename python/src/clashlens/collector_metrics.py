@@ -14,18 +14,15 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
               ON observation.id = job.observation_id
             WHERE job.status IN ('pending', 'waiting_retry', 'waiting_dependency', 'leased')
         ), check_ages AS (
+            -- Profile checks only: regular checks skip the battle log on purpose.
             SELECT CASE WHEN profile.last_success_at IS NOT NULL
-                             AND battle.last_success_at IS NOT NULL
                         THEN greatest(0, extract(epoch FROM statement_timestamp()
-                             - least(profile.last_success_at, battle.last_success_at)))
+                             - profile.last_success_at))
                    END AS age
             FROM players AS player
             LEFT JOIN collector_response_state AS profile
               ON profile.scope = 'player' AND profile.identity_key = player.normalized_tag
              AND profile.endpoint = 'profile'
-            LEFT JOIN collector_response_state AS battle
-              ON battle.scope = 'player' AND battle.identity_key = player.normalized_tag
-             AND battle.endpoint = 'battle_log'
             WHERE player.active
               AND NOT (
                   profile.last_not_found_at IS NOT NULL

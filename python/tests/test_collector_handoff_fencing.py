@@ -220,7 +220,7 @@ def test_post_publish_failure_fences_a_waiting_successor() -> None:
     asyncio.run(scenario())
 
 
-def test_player_failure_drains_sibling_publication_before_reservation_close() -> None:
+def test_reset_failure_drains_sibling_publication_before_reservation_close() -> None:
     class TrackedReservation(_Reservation):
         closed = False
 
@@ -257,7 +257,7 @@ def test_player_failure_drains_sibling_publication_before_reservation_close() ->
         collector = _collector(spool, FailedStore(spool), _Client(spool))
         task = asyncio.create_task(
             collector.collect_player(
-                CollectorWork(1, "#2PP", datetime.now(UTC)), lane="ordinary"
+                CollectorWork(1, "#2PP", datetime.now(UTC)), lane="reset"
             )
         )
         assert await asyncio.to_thread(spool.entered.wait, 1)
@@ -491,27 +491,27 @@ def test_regular_admission_serves_repeats_and_borrows_an_empty_first_battle_tier
         now = datetime.now(UTC)
         first_battles = [
             CollectorWork(index, f"#F{index}", now, first_battle_pending=True)
-            for index in range(1, 201)
+            for index in range(1, 301)
         ]
         repeats = [
             CollectorWork(1000 + index, f"#R{index}", now)
-            for index in range(1, 51)
+            for index in range(1, 81)
         ]
-        mixed = await run_case(first_battles, repeats, 160)
-        assert sum(not work.first_battle_pending for work in mixed) == 40
-        assert sum(work.first_battle_pending for work in mixed) == 120
+        mixed = await run_case(first_battles, repeats, 256)
+        assert sum(not work.first_battle_pending for work in mixed) == 64
+        assert sum(work.first_battle_pending for work in mixed) == 192
         assert len({work.player_id for work in mixed}) == len(mixed)
 
-        only_first_battles = first_battles[:170]
+        only_first_battles = first_battles[:270]
         first_borrowed = await run_case(
-            only_first_battles, [], 160
+            only_first_battles, [], 256
         )
-        assert first_borrowed == only_first_battles[:160]
+        assert first_borrowed == only_first_battles[:256]
 
         only_repeats = [
-            CollectorWork(index, f"#R{index}", now) for index in range(1, 171)
+            CollectorWork(index, f"#R{index}", now) for index in range(1, 271)
         ]
-        borrowed = await run_case([], only_repeats, 160)
-        assert borrowed == only_repeats[:160]
+        borrowed = await run_case([], only_repeats, 256)
+        assert borrowed == only_repeats[:256]
 
     asyncio.run(scenario())

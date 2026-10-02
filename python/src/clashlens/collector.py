@@ -18,6 +18,7 @@ from psycopg_pool import PoolTimeout
 
 from . import collector_uploads, weekly_eligibility
 from .archive import ArchiveReadError, S3ArchiveReader
+from .battle_log_schedule import BattleLogSchedule
 from .collector_db import (
     CollectorDatabase,
     CollectorIntent,
@@ -54,13 +55,15 @@ _HANDOFF_PROTOCOL = 2
 # Short cleanup turns keep publication moving while the deletion queue drains.
 _CLEANUP_BATCH_SIZE = 16
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
-# Production checks took ~0.9 s each, mostly saving to disk and database, so 56
-# slots held collection near 124 requests/s. 160 slots cover 74 checks/s
-# (147 requests/s) at up to 2.1 s per check; the CLI sizes threads to match.
-_REGULAR_PARALLELISM = 160
+# A check fetches its profile, saves it, then maybe its battle log, one after
+# the other. On 2026-10-02 production held 160 checks in flight at 76 checks/s:
+# 2.1 s each, almost all saving, while keys ran at 19 of 25 requests/s. 256
+# slots cover ~125 checks/s (150 requests/s at ~1.2 per check) at up to 2 s
+# each, and hold at most 256 requests at once, fewer than 160 paired checks did.
+_REGULAR_PARALLELISM = 256
 # Cold discovery measured 21.21 players/s against 29.27 regular jobs/s.
 # A quarter of regular slots keeps overdue revisits moving until discovery drains.
-_REGULAR_REPEAT_MINIMUM = 40
+_REGULAR_REPEAT_MINIMUM = 64
 _ORDINARY_INTENT_PARALLELISM = 32
 
 
@@ -91,6 +94,7 @@ class Collector:
         self.max_body_bytes = max_body_bytes
         self.interactive_fingerprint = interactive_fingerprint
         self.weekly_eligibility_enabled = weekly_eligibility_enabled
+        self.battle_logs = BattleLogSchedule()
         self.outcomes: dict[str, int] = {}
         self.endpoint_outcomes: dict[tuple[str, str, str], int] = {}
         self.latency_seconds: dict[tuple[str, str], float] = {}
@@ -144,16 +148,26 @@ class Collector:
         if not await self._spool_available():
             return ["capacity_paused"] * len(endpoints)
         pool = self.interactive_keys if lane == "interactive" else self.regular_keys
+        regular_check = lane == "ordinary" and endpoints == ("profile", "battle_log")
+        reuse_fresh_profile = (
+            regular_check
+            and work.profile_fresh_until is not None
+            and datetime.now(UTC) < work.profile_fresh_until
+        )
+        profile_first = regular_check and not reuse_fresh_profile
         try:
-            stack, reservations = await self._reserve_endpoints_safely(endpoints)
+            stack, reservations = await self._reserve_endpoints_safely(
+                endpoints[:1] if profile_first else endpoints
+            )
+            if profile_first:
+                try:
+                    return await self._collect_profile_first(
+                        work, pool, reservations[0]
+                    )
+                finally:
+                    await _drain_to_thread(stack.close)
             selected_endpoints = endpoints
             selected_reservations = reservations
-            reuse_fresh_profile = (
-                lane == "ordinary"
-                and endpoints == ("profile", "battle_log")
-                and work.profile_fresh_until is not None
-                and datetime.now(UTC) < work.profile_fresh_until
-            )
             if reuse_fresh_profile:
                 selected_endpoints = ("battle_log",)
                 selected_reservations = (reservations[1],)
@@ -204,6 +218,29 @@ class Collector:
         except (OSError, SpoolError) as error:
             self._record_spool_failure(error)
             return ["capacity_paused"] * len(endpoints)
+
+    async def _collect_profile_first(
+        self, work: CollectorWork, pool: KeyPool, reservation: Any
+    ) -> list[str]:
+        """Fetch the profile, then the battle log only when it can have changed."""
+        usable: list[bool] = []
+        profile = await self._collect_endpoint(
+            work, "profile", "ordinary", pool, reservation=reservation, usable=usable
+        )
+        if profile == "capacity_paused" or not self.battle_logs.due(
+            work.normalized_tag,
+            profile_usable=usable[-1:] == [True],
+            now=datetime.now(UTC),
+        ):
+            return [profile]
+        stack, reservations = await self._reserve_endpoints_safely(("battle_log",))
+        try:
+            battle_log = await self._collect_endpoint(
+                work, "battle_log", "ordinary", pool, reservation=reservations[0]
+            )
+        finally:
+            await _drain_to_thread(stack.close)
+        return [profile, battle_log]
 
     def _reserve_endpoints(
         self, endpoints: tuple[str, ...]
@@ -317,6 +354,7 @@ class Collector:
         pool: KeyPool,
         *,
         reservation: Any | None = None,
+        usable: list[bool] | None = None,
     ) -> str:
         important = (
             lane in {"interactive", "reset"}
@@ -425,6 +463,20 @@ class Collector:
                                 ) from error
                         raise
                 self._count("recorded")
+                # Discovery work (ordinary lane with a work row) is not tracked.
+                noted = (
+                    200 <= response.http_status < 300
+                    and (lane != "ordinary" or work.collector_work_id is None)
+                    and self.battle_logs.note_response(
+                        work.normalized_tag,
+                        endpoint,
+                        response.body,
+                        started_at=response.request_started_at,
+                        completed_at=response.response_completed_at,
+                    )
+                )
+                if usable is not None:
+                    usable.append(noted)
                 outcome = f"http_{response.http_status}"
                 key = (endpoint, pool_name, outcome)
                 self.endpoint_outcomes[key] = self.endpoint_outcomes.get(key, 0) + 1

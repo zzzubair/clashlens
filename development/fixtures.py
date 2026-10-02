@@ -105,6 +105,8 @@ PROFILE_PADDING = {
         for index in range(18)
     ],
 }
+# Defenses won; the collector reads it to spot a defense that moves no trophies.
+UNBREAKABLE = {"name": "Unbreakable", "value": 1_767, "village": "home"}
 NON_LEGEND_BATTLES = [
     {
         "battleType": "homeVillage",
@@ -169,7 +171,11 @@ def profile_payload(tag: str, index: int) -> dict[str, object]:
             "legendTrophies": 200 + index % 500,
             "currentSeason": {"trophies": 7_000 - index % 1_500},
         },
+        # The collector skips the battle log while these counts stay the same.
+        "attackWins": 0,
+        "defenseWins": 0,
         **PROFILE_PADDING,
+        "achievements": [*PROFILE_PADDING["achievements"], UNBREAKABLE],
     }
 
 
@@ -443,7 +449,8 @@ class ClashHandler(QuietHandler):
             elif mutation == "ignored":
                 payload["donations"] = type(self).mutation_tick(tag)
                 payload["achievements"] = [
-                    {"name": "Trial Marker", "value": payload["donations"]}
+                    {"name": "Trial Marker", "value": payload["donations"]},
+                    UNBREAKABLE,
                 ]
             if type(self).trial_generation:
                 payload["_trialGeneration"] = type(self).trial_generation
