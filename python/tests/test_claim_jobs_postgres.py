@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation
+from domain_test_support import apply_migration, domain_database, store_observation
 from psycopg.conninfo import make_conninfo
 
 from clashlens import ingestion, reconciliation_db, reset_baselines
@@ -46,7 +46,7 @@ def _production_database(
 
             root = Path(__file__).parents[2]
             for migration in sorted((root / "deploy/migrations").glob("*.sql")):
-                connection.execute(migration.read_text(encoding="utf-8"))
+                apply_migration(connection, migration)
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:

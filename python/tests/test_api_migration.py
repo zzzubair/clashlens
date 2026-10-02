@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from domain_test_support import apply_migration
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
@@ -83,7 +84,7 @@ def migrated_production_database(
                 for migration in migrations:
                     version = int(migration.name.split("_", 1)[0])
                     if version >= 9:
-                        connection.execute(migration.read_text(encoding="utf-8"))
+                        apply_migration(connection, migration)
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
@@ -669,7 +670,7 @@ def test_each_migration_records_exactly_its_filename_version(database_url: str) 
             for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
                 version = int(migration.name.split("_", 1)[0])
                 assert version not in versions, migration.name
-                connection.execute(migration.read_text(encoding="utf-8"))
+                apply_migration(connection, migration)
                 recorded_versions = {
                     row[0]
                     for row in connection.execute(
