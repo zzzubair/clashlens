@@ -247,15 +247,17 @@ relation files or imply that retained WAL/backups have expired. Do not run
 ## Implemented raw expiry and required recovery protection
 
 Do **not** configure an upload-age lifecycle on the evidence namespace. A raw
-response becomes due **86 days after its latest sighting**. A body returned again
-later moves its deadline later; an earlier sighting never shortens it. The
-deadline derives from the response's own completion time, not the upload's.
-Migration 0046 recalculates every stored response the same way, from its
-latest retained sighting: the newest of that location's observations, its
+response becomes due **86 days after the later of its latest sighting and its
+first verification in the archive**. A body returned again later moves its
+deadline later; an earlier sighting never shortens it. A response uploaded late
+therefore still keeps 86 days from verification. Migration 0046 recalculates
+every stored response the same way and discards the old season deadline. The
+latest retained sighting is the newest of that location's observations, its
 upload record's latest sighting and the newest compact poll state for its hash.
-It never moves an existing deadline earlier. A response the old code had
-already marked `retiring` starts its nine-day hold at its recalculated deadline,
-or at upgrade time if that is later.
+A response with no retained sighting counts from its first verification, which
+every catalogue row has. A response the old code had already marked `retiring`
+starts its nine-day hold at its recalculated deadline, or at upgrade time if
+that is later.
 
 A due response is not deleted straight away. Cleanup first marks it `retiring`,
 which blocks every new use, then deletes its bytes only **nine days later**: the
@@ -265,8 +267,8 @@ Anything still usable at that point was marked after it, so its bytes survive at
 least two more days after the restore starts. If production keeps running during
 a longer restore, stop `clashlens-archive-retention.timer` first.
 
-A response therefore stays usable for 86 days after its latest sighting, and
-its bytes stay 95 days plus the wait for the next cleanup batch. The measured
+A response therefore stays usable for at least 86 days after its latest
+sighting, and its bytes stay 95 days plus the wait for the next cleanup batch. The measured
 21.83 GB/day of new raw responses (October 2) means about 2.07 TB stored,
 roughly EUR 33/month at EUR 0.01606/GB-month. This is a projection, not a bill.
 
@@ -294,7 +296,9 @@ python -m clashlens prune-archive --max-objects 1000 --apply  # mark and delete
 
 Each run deletes up to the batch size of held responses whose nine days have
 passed, then marks up to the batch size of due ones. The preview changes nothing
-and reports how many objects and bytes that one batch would delete and mark.
+and reports how many objects and bytes that one batch would delete and mark,
+plus an `eligible` summary of every due, unprotected response: count, bytes and
+oldest/newest deadline.
 It must run on the collector host with the **exact same spool**, because a wrong
 spool path defeats cross-process locking.
 

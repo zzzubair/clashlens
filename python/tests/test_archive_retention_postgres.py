@@ -100,7 +100,7 @@ def test_response_is_due_86_days_after_its_latest_sighting(database_url, tmp_pat
             spool.close()
 
 
-def test_existing_deadlines_are_recalculated_from_retained_sightings(database_url):
+def test_existing_deadlines_count_from_latest_sighting_or_verification(database_url):
     schema = f"retention_upgrade_{uuid4().hex}"
     with psycopg.connect(database_url, autocommit=True) as admin:
         admin.execute(f'CREATE SCHEMA "{schema}"')
@@ -111,24 +111,34 @@ def test_existing_deadlines_are_recalculated_from_retained_sightings(database_ur
                 if path.name.startswith("0046_"):
                     break
                 connection.execute(path.read_text(encoding="utf-8"))
-            keys = _seed(connection, 3)
             now = connection.execute("SELECT clock_timestamp()").fetchone()[0].replace(microsecond=0)
-            # Old code marked responses 56 days after their season ended, so a
+            day = timedelta(days=1)
+            # (latest retained sighting, first verification, availability). Old
+            # code marked responses 56 days after their season ended, so a
             # 60-day-old one may already be marked; another was marked long ago.
-            sightings = [now - timedelta(days=60), now - timedelta(days=60), now - timedelta(days=200)]
-            for key, sighting, availability in zip(keys, sightings, ("verified", "retiring", "retiring")):
+            # The last response has no retained sighting.
+            cases = [
+                (now - 60 * day, now - 61 * day, "verified"),
+                (now - 60 * day, now - 61 * day, "retiring"),
+                (now - 200 * day, now - 201 * day, "retiring"),
+                (None, now - 30 * day, "verified"),
+            ]
+            keys = _seed(connection, len(cases))
+            for key, (sighting, verified, availability) in zip(keys, cases):
                 digest = key.rsplit("/", 1)[1]
-                connection.execute(
-                    "INSERT INTO collector_response_uploads (response_hash, spool_key, byte_size, latest_sighting_at) VALUES (%s, %s, 1000, %s)",
-                    (digest, key, sighting),
-                )
+                if sighting is not None:
+                    connection.execute(
+                        "INSERT INTO collector_response_uploads (response_hash, spool_key, byte_size, latest_sighting_at) VALUES (%s, %s, 1000, %s)",
+                        (digest, key, sighting),
+                    )
                 connection.execute(
                     """
                     UPDATE archive_catalogue
-                    SET retire_after = clashlens_season_retire_after(%s), availability = %s
+                    SET retire_after = clashlens_season_retire_after(%s), availability = %s,
+                        first_verified_at = %s
                     WHERE response_hash = %s
                     """,
-                    (sighting, availability, digest),
+                    (sighting or verified, availability, verified, digest),
                 )
             connection.execute((MIGRATIONS / "0046_raw_recovery_hold.sql").read_text(encoding="utf-8"))
             rows = [
@@ -138,10 +148,10 @@ def test_existing_deadlines_are_recalculated_from_retained_sightings(database_ur
                 ).fetchone()
                 for key in keys
             ]
-            assert [retire_after - sighting for (retire_after, _), sighting in zip(rows, sightings)] == [
-                timedelta(days=86)
-            ] * 3
-            assert rows[0][1] is None
+            assert [retire_after for retire_after, _ in rows] == [
+                (sighting or verified) + 86 * day for sighting, verified, _ in cases
+            ]
+            assert rows[0][1] is None and rows[3][1] is None
             # A marked response still waits its full 86 days before the hold starts.
             assert rows[1][1] == rows[1][0]
             assert rows[2][1] >= now
@@ -161,6 +171,9 @@ def test_bytes_survive_the_recovery_hold_and_reruns_are_safe(database_url, tmp_p
         try:
             preview = retire_archive_objects(connection, spool, client, **OPTIONS)
             assert (preview["marked_objects"], preview["marked_bytes"], preview["deleted_objects"]) == (3, 3000, 0)
+            eligible = preview["eligible"]
+            assert (eligible["objects"], eligible["bytes"]) == (3, 3000)
+            assert eligible["oldest"] <= eligible["newest"]
             assert _availability(connection) == ["verified"] * 4
 
             assert retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)["marked_objects"] == 3
