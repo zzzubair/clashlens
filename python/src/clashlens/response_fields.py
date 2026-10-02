@@ -1,11 +1,10 @@
 """The response fields Clash Lens uses, and the collector's change test.
 
 The collector hashes only the listed fields to decide whether a response
-changed. Bytes that differ outside these fields are not stored again. Apart
-from deciding when a check also fetches the battle log (see
-``battle_log_schedule``), the collector never interprets meaning. When a
-response counts as changed, the full raw body is still stored and archived
-exactly as before. A Reset baseline always counts as changed;
+changed. Bytes that differ outside these fields are not stored again. This is
+the only thing the collector reads from a response body; it never interprets
+meaning. When a response counts as changed, the full raw body is still stored
+and archived exactly as before. A Reset baseline always counts as changed;
 that rule lives in ``collector_db.record_response``.
 """
 

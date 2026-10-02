@@ -231,7 +231,7 @@ def _collector(spool: _Spool, store: _Store, client: _Client) -> Collector:
     )
 
 
-def test_reset_pair_is_reserved_then_fetched_concurrently_then_handed_off() -> None:
+def test_player_pair_is_reserved_then_fetched_concurrently_then_handed_off() -> None:
     spool = _Spool()
     store = _Store(spool)
     client = _Client(spool)
@@ -239,7 +239,7 @@ def test_reset_pair_is_reserved_then_fetched_concurrently_then_handed_off() -> N
 
     outcomes = asyncio.run(
         collector.collect_player(
-            CollectorWork(1, "#2PP", datetime.now(UTC)), lane="reset"
+            CollectorWork(1, "#2PP", datetime.now(UTC)), lane="ordinary"
         )
     )
 
@@ -387,7 +387,7 @@ def test_regular_collection_fetches_profile_when_first_battle_fails() -> None:
     assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
 
 
-def test_reset_pair_publishes_spool_handoffs_concurrently() -> None:
+def test_player_pair_publishes_spool_handoffs_concurrently() -> None:
     class ConcurrentSpool(_Spool):
         def __init__(self) -> None:
             super().__init__()
@@ -409,7 +409,7 @@ def test_reset_pair_publishes_spool_handoffs_concurrently() -> None:
 
     assert asyncio.run(
         collector.collect_player(
-            CollectorWork(1, "#2PP", datetime.now(UTC)), lane="reset"
+            CollectorWork(1, "#2PP", datetime.now(UTC)), lane="ordinary"
         )
     ) == ["recorded", "recorded"]
 

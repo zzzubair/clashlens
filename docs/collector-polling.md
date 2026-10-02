@@ -1,7 +1,7 @@
 # Continuous player polling
 
 The Python collector runs a continuous, fair loop through tracked Legend I
-players. Ninety seconds is the minimum revisit interval, not a batch deadline.
+players. Three minutes is the minimum revisit interval, not a batch deadline.
 
 ## Agreed discovery and population changes, 2026-09-25
 
@@ -69,7 +69,7 @@ The weekly scheduler queues at most 30 players at a time, with starts spaced by
 two seconds and one check in flight. It uses the existing regular keys and their
 configured request/concurrency limits. It pauses during the 04:55 admission
 cutoff, unfinished Reset work, or when any live player is more than two minutes
-past its normal 90-second due time. A backlog does not trigger a catch-up
+past its normal three-minute due time. A backlog does not trigger a catch-up
 burst. Turning the switch off also leaves queued weekly work paused.
 
 Weekly checks reuse previously successful league-history collection; a player
@@ -133,116 +133,21 @@ timing and complete storage cost still require the population timing trial.
 ## Queue behavior
 
 The collector selects `players.next_due_at` oldest first, breaking ties by player
-ID. Admission moves the player to admission time plus 90 seconds, then fetches
-the profile and, only when it can have changed, the battle log (next section).
+ID. Admission moves the player to admission time plus three minutes, then fetches
+the profile and battle log concurrently.
 
-At about 1.2 requests per check, 13,263 active players every 90 seconds would
-need about 177 request starts/second, more than the 150 that six regular keys
-allow at 25 each. So the keys set the pace: about one check per player every
-~106 seconds. Before this change every check made two requests, and the same
-keys allowed one check every ~177 seconds. On 2026-10-01, with 56 check slots,
-production reached only ~125 requests/s: each check took ~0.9 s, of which the
-Clash API answered in ~0.12 s and the rest was saving to the spool and database,
-including disk flushes. The collector now keeps up to 160 checks in flight with
-256 save threads. When keys, slots, the spool or the database cannot keep up,
-players are checked later than 90 seconds, still oldest first.
+On 2026-10-01, 13,263 active players at two requests every three minutes need
+about 147 request starts/second, just under the 150 that six regular keys allow
+at 25 each. With 56 check slots, production reached only ~125 requests/s (one
+player every ~215 s): each check took ~0.9 s, of which the Clash API answered in
+~0.12 s and the rest was saving to the spool and database, including disk flushes.
+The collector now keeps up to 160 checks in flight with 256 save threads.
+160 slots ÷ 0.9 s ≈ 178 checks/s, well above the ~74 needed, so the keys are the
+limit unless each check slows past ~2.1 s. When keys, slots or the database cannot
+keep up, players are checked later than three minutes, still oldest first.
 Per-key limits stay in force and regular work never uses the interactive key.
 The 160-slot figure comes from a local timing run with simulated disk delay, not
 from production.
-
-### Battle log only when it can have changed
-
-A battle almost always changes the Clasher's profile: trophies, or the
-`attackWins` and `defenseWins` counts. So a regular check fetches the profile
-first, saves it, and then fetches the battle log only when:
-
-- the profile's trophies, `attackWins` or `defenseWins` differ from the last
-  valid profile, or did so on the previous check (the follow-up fetch);
-- a newly saved battle log of another player shows a battle against this
-  player, and this player's last battle log does not reach that battle's time
-  yet (the opponent fetch);
-- this check's own profile response is unusable: the request failed, returned
-  an error, or had trophies, `attackWins` or `defenseWins` missing, negative or
-  not whole numbers. A profile saved by another request at the same time, such
-  as a Refresh, does not stand in for it;
-- the last successful battle log is at least 15 minutes old, or the collector
-  has none for this player since it started (the safety fetch); or
-- the player is in the control group (below).
-
-The follow-up fetch exists because the Clash API caches each endpoint for up to
-60 seconds, so a profile can show a battle before the battle log does. It only
-counts when it starts at least 60 seconds after the fetch that the profile
-change triggered, so a quick re-check inside that cache cannot satisfy it. The
-opponent fetch likewise only counts when it starts at least 60 seconds after
-the other player's log showed the battle. Only a saved successful battle log
-whose request started after the change was seen counts, and only when every
-Legend row in it passes the worker's row checks (valid side, stars,
-destruction and opponent tag) and has an explicit `battleTimestamp`; `battleTime`,
-the battle's length, never stands in for it. A failed or malformed log leaves
-the fetch owed for the next check and does not reset the 15-minute safety
-clock, but its valid rows still count as seen battles and still mark tracked
-opponents.
-
-A battle that moves no trophies still counts. When player A attacks player B
-for 0 stars and 49%, A gains trophies and B loses none, but B's `defenseWins`
-goes up, so B's next check fetches B's log. The opponent fetch also covers B
-when only A's side changed or B's profile has not caught up yet. Every valid
-battle in a saved log can mark its opponent, including the first log after a
-restart and a row that was malformed in an earlier copy. No opponent fetch is
-owed when the opponent's own latest saved log already reaches that battle's
-time. Only players the collector has already checked since starting get an
-opponent fetch. Anything still left, such as a tracked player's 0-star attack
-under 10% on an untracked player, waits for the safety fetch: about 15–17 minutes plus
-any queue delay. Leaderboard trophies come from the profile, which every
-check still fetches, so they are unaffected. However late a log is fetched, the
-worker stores each battle under its own `battleTimestamp`, so it lands in its
-real Legend day and order, and a battle reported by both players is stored
-once. A daily result already published for an earlier Legend day is not
-recalculated when a late battle arrives.
-
-The collector keeps this state in memory: one entry of about 520 bytes per
-player it has checked since it started (measured), about 6.8 MB for 13,263
-players. It grows only with the number of players checked, and is not saved.
-After a restart every player's first two checks fetch both responses again: up
-to about 26,500 extra battle-log requests, three minutes of all six keys, but
-never a missed battle.
-
-The 05:00 UTC Reset, Refresh and first-time collection still fetch both
-responses together, as does the very first battle log of a newly found player.
-
-**Control group.** About 5% of players (13 of every 256) fetch both responses on
-every check, so production can measure how much later battle details appear for
-everyone else. A player is in the group when the first byte of the SHA-256 of
-their tag is below 13. In SQL:
-`get_byte(sha256(convert_to(normalized_tag, 'UTF8')), 0) < 13`.
-Compare battle-to-first-battle-log time, zero-trophy battles and requests per
-check between the two groups.
-
-**Local measurement, 2026-10-02.** The real collector (run loop, local disk
-spool, throwaway PostgreSQL 18.6, 160 check slots, 256 save threads) ran
-against the repository's fake Clash API in a separate process, with 13,264
-players and six keys at 25 requests/s. The fake API changed trophies and added
-a Legend battle for random players at 2.6 a second, about production's rate.
-Figures cover the last 10 minutes of a 25-minute run:
-
-| | Before (two requests every check) | After |
-| --- | ---: | ---: |
-| Requests per check | 2.00 | 1.24 |
-| Checks per second | 73.6 | 119 |
-| Time between checks of a player, median / 95th percentile / max | 181 / 181 / 182 s | 104 / 143 / 148 s |
-| Battles whose log was fetched on the same check | every check fetched both | 1,513 of 1,525 |
-
-The 12 misses were 6 players whose two fake battles between checks cancelled
-out exactly; the safety fetch catches those. In that window the battle log was
-fetched by the control group on 5.2% of checks, after a profile change on 4.0%,
-and by the safety fetch on 14.4%. The safety share is high because every
-player's first full checks happened together at startup; spread evenly it is
-about 104 ÷ 900 ≈ 12%, so steady state is about 1.2 requests per check. With
-20 keys, so that keys were not the limit, both versions saved about 200
-responses a second on this machine (12 threads, NVMe): the old code made 99 checks
-a second and the new code 187 (at 1.10 requests per check, before any safety
-fetch). That is about 170 checks a second at 1.2. These runs had no worker,
-uploads or production load, and the fake API answers instantly.
 
 Ordinary transport failures wait for the next pass. Interactive, Reset and
 ranking work gets bounded retries. Raw responses are published to the local
