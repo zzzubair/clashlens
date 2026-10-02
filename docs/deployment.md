@@ -470,9 +470,13 @@ Commit flushing, full-page writes, checksums and archiving are unchanged. A
 70-minute page-by-page replay of production's change log predicts 225 instead of
 393 page copies per second; zstd shrinks each copy to about 37%. Expect roughly
 1 MB/s of change log (about 85 GB/day) and 60–70 GB/day of backup uploads.
-Crash recovery replays at most about 2 GB: on rogue 845 MB took 90 seconds plus
-14 seconds to save, so allow up to four minutes. The health check ignores
-failures for the first five minutes so it cannot restart a replay in progress.
+Crash recovery replays the change log written since the last checkpoint.
+`max_wal_size` is a soft limit that heavy load or stalled archiving can exceed,
+so 2 GB is the usual size, not a ceiling: on rogue 845 MB took 90 seconds plus
+14 seconds to save, so 2 GB takes about four minutes. The health check ignores
+failures for its first five minutes, but the unit still waits for a healthy
+check within its five-minute start limit (`TimeoutStartSec`), so a replay that
+runs longer is stopped and started again.
 
 The collector records an unchanged ordinary response before saving it, so about
 97% of responses no longer reach the spool. Each saved response cost about

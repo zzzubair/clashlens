@@ -443,10 +443,22 @@ class Collector:
                     # unchanged regular response skips the spool's disk flushes.
                     # A crash before its commit loses only this sighting; the
                     # next poll records it again.
-                    compacted = await _drain_awaitable(
+                    check = asyncio.ensure_future(
                         self._database_call(
                             self.database.record_unchanged_response, handoff
                         )
+                    )
+                    cancelled = False
+                    try:
+                        await _drain_awaitable(check)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                    except Exception:  # noqa: BLE001, S110 - the spool handoff keeps it.
+                        pass
+                    compacted = (
+                        not check.cancelled()
+                        and check.exception() is None
+                        and check.result() is True
                     )
                     published = False
                     try:
@@ -474,6 +486,8 @@ class Collector:
                                     "durable response handoff requires restart recovery"
                                 ) from error
                         raise
+                    if cancelled:
+                        raise asyncio.CancelledError
                 self._count("recorded")
                 # Discovery work (ordinary lane with a work row) is not tracked.
                 noted = (

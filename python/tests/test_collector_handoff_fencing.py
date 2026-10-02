@@ -8,9 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import psycopg
 import pytest
 from test_collector import _Client, _collector, _Reservation, _Spool, _Store
 
+from clashlens import collector as collector_module
 from clashlens.collector_db import CollectorWork
 from clashlens.spool import Spool
 
@@ -175,6 +177,72 @@ def test_same_endpoint_waits_for_predecessor_handoff_ack() -> None:
         assert await first == ["recorded"]
         assert await second == ["recorded"]
         assert spool.handoffs == {}
+
+    asyncio.run(scenario())
+
+
+def test_failed_unchanged_check_still_saves_the_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DownStore(_Store):
+        checks = 0
+
+        def record_unchanged_response(self, _handoff: Any) -> bool:
+            self.checks += 1
+            raise psycopg.OperationalError("database unavailable")
+
+    monkeypatch.setattr(collector_module, "_retry_delay", lambda _attempt: 0.0)
+    spool = _Spool()
+    store = DownStore(spool)
+    collector = _collector(spool, store, _Client(spool))
+    work = CollectorWork(1, "#2PP", datetime.now(UTC))
+
+    outcomes = asyncio.run(
+        collector.collect_player(work, lane="ordinary", endpoints=("profile",))
+    )
+
+    assert outcomes == ["recorded"]
+    assert store.checks == 3
+    assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
+    assert spool.events[-3:] == ["handoff", "database", "ack"]
+
+
+def test_cancelled_unchanged_check_still_saves_the_response() -> None:
+    class SlowStore(_Store):
+        def __init__(self, spool: _Spool) -> None:
+            super().__init__(spool)
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def record_unchanged_response(self, _handoff: Any) -> bool:
+            self.entered.set()
+            assert self.release.wait(timeout=2)
+            return False
+
+    async def scenario() -> None:
+        spool = _Spool()
+        store = SlowStore(spool)
+        collector = _collector(spool, store, _Client(spool))
+        task = asyncio.create_task(
+            collector.collect_player(
+                CollectorWork(1, "#2PP", datetime.now(UTC)),
+                lane="ordinary",
+                endpoints=("profile",),
+            )
+        )
+        assert await asyncio.to_thread(store.entered.wait, 1)
+        task.cancel()
+        await asyncio.sleep(0.01)
+        store.release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+        assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
+        assert spool.events[-3:] == ["handoff", "database", "ack"]
+        assert await collector.health_response("/readyz") != (
+            503,
+            "text/plain",
+            b"handoff_recovery_required\n",
+        )
 
     asyncio.run(scenario())
 
