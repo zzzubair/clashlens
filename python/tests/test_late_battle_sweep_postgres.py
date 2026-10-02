@@ -108,7 +108,9 @@ def _finish_reset_sweep(connection_info: str, boundary: datetime) -> None:
         connection.commit()
 
 
-def _published(connection_info: str, day: datetime) -> tuple[list, int] | None:
+def _published(
+    connection_info: str, day: datetime, tag: str = TAG
+) -> tuple[list, int] | None:
     """The defenses on the player's latest published log, and its version id."""
     with psycopg.connect(connection_info) as connection:
         row = connection.execute(
@@ -120,7 +122,7 @@ def _published(connection_info: str, day: datetime) -> tuple[list, int] | None:
             ORDER BY log.version DESC
             LIMIT 1
             """,
-            (TAG, day),
+            (tag, day),
         ).fetchone()
     if row is None:
         return None
@@ -132,7 +134,7 @@ def _published(connection_info: str, day: datetime) -> tuple[list, int] | None:
     return defenses, int(row[1])
 
 
-def _previous_day_version(connection_info: str, day: datetime) -> int:
+def _previous_day_version(connection_info: str, day: datetime, tag: str = TAG) -> int:
     with psycopg.connect(connection_info) as connection:
         return int(
             connection.execute(
@@ -144,7 +146,7 @@ def _previous_day_version(connection_info: str, day: datetime) -> int:
                 ORDER BY version.version DESC
                 LIMIT 1
                 """,
-                (TAG, day),
+                (tag, day),
             ).fetchone()[0]
         )
 
@@ -753,5 +755,116 @@ def test_other_players_day_is_corrected_when_a_late_report_changes_agreement(
 
             assert _saved_disagreement(connection_info, OPPONENT) == [not agreed]
             assert _saved_disagreement(connection_info, TAG) == [not agreed]
+        finally:
+            database.close()
+
+
+def test_agreement_restored_by_a_later_report_makes_the_first_result_current_again(
+    database_url: str, archive_server
+) -> None:
+    # The attacker's day is published while both reports agree. A late defender
+    # report disagrees, then a later one agrees again, so the attacker's day
+    # returns to its first result and the next day must read it again.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _seed_battle_anchor(connection_info, ANCHOR)
+            battle_time = DAY + timedelta(days=1, seconds=-10)
+            _process(
+                processor,
+                store_observation(
+                    connection_info,
+                    archive_server,
+                    occurrence_key="attacker-log",
+                    endpoint="battle_log",
+                    body=json.dumps(
+                        {
+                            "items": [
+                                _live_battle_row(
+                                    attack=True,
+                                    battle_timestamp=battle_time,
+                                    opponent_tag=TAG,
+                                    opponent_name="Defender",
+                                    stars=0,
+                                    destruction_percentage=49,
+                                )
+                            ]
+                        }
+                    ).encode(),
+                    observed_at=battle_time + timedelta(seconds=5),
+                    normalized_tag=OPPONENT,
+                    parser_version=LIVE_BATTLE_PARSER_VERSION,
+                )[1],
+            )
+            agreeing = {**_late_defense(), "armyShareCode": "u1x0-2x1"}
+            _save_log(
+                connection_info,
+                archive_server,
+                processor,
+                key="agreeing-log",
+                rows=[agreeing],
+                observed_at=battle_time + timedelta(seconds=5),
+            )
+            next_day = DAY + timedelta(days=1)
+            for day in (DAY, next_day):
+                _process(
+                    processor,
+                    reconciliation_db.enqueue_reconciliation(
+                        database,
+                        player_tag=OPPONENT,
+                        day_start=day,
+                        now=day,
+                        request_key=f"published-{day.isoformat()}",
+                    ),
+                )
+            assert _saved_disagreement(connection_info, OPPONENT) == [False]
+            first = _published(connection_info, DAY, OPPONENT)[1]
+            boundary = DAY + timedelta(days=2)
+            _finish_reset_sweep(connection_info, boundary)
+
+            _save_log(
+                connection_info,
+                archive_server,
+                processor,
+                key="disagreeing-log",
+                rows=[{**agreeing, "armyShareCode": "u3x0-2x1"}],
+                observed_at=DAY + timedelta(days=1, minutes=20),
+            )
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=31)
+            ) == (1, 0)
+            assert _saved_disagreement(connection_info, OPPONENT) == [True]
+            disputed = _published(connection_info, DAY, OPPONENT)[1]
+            assert disputed != first
+            assert _previous_day_version(connection_info, next_day, OPPONENT) == disputed
+
+            _save_log(
+                connection_info,
+                archive_server,
+                processor,
+                key="agreeing-again-log",
+                rows=[agreeing],
+                observed_at=DAY + timedelta(days=1, minutes=40),
+            )
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=41)
+            ) == (1, 0)
+            assert _saved_disagreement(connection_info, OPPONENT) == [False]
+            restored = _published(connection_info, DAY, OPPONENT)[1]
+            assert restored != disputed
+            with psycopg.connect(connection_info) as connection:
+                # The same inputs as the first result, published again.
+                assert connection.execute(
+                    "SELECT count(DISTINCT input_hash) FROM ranked_day_versions "
+                    "WHERE id = ANY(%s)",
+                    ([first, restored],),
+                ).fetchone()[0] == 1
+            assert _previous_day_version(connection_info, next_day, OPPONENT) == restored
+
+            # The restored result is current, so nothing is left to correct.
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=51)
+            ) == (0, 0)
+            assert _published(connection_info, DAY, OPPONENT)[1] == restored
         finally:
             database.close()
