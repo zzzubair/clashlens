@@ -394,6 +394,16 @@ render_units
     )
     memory = postgres["Container"]["Memory"]
     assert int(buffers[:-2]) * mib[buffers[-2:]] * 2 <= int(memory[:-1]) * mib[memory[-1]]
+    # Podman reads these with Go's duration parser, which rejects systemd's "min".
+    assert postgres.has_option("Container", "HealthStartPeriod")
+    go_duration = re.compile(r"(\d+(ns|us|ms|s|m|h))+")
+    for path in units.glob("*.container"):
+        unit = configparser.ConfigParser(interpolation=None, strict=False)
+        unit.optionxform = str
+        unit.read(path)
+        for key in ("HealthInterval", "HealthTimeout", "HealthStartPeriod"):
+            value = unit.get("Container", key, fallback=None)
+            assert value is None or go_duration.fullmatch(value), (path.name, key, value)
     if mode == "fixture":
         assert not network.has_option("Network", "Subnet")
         assert not pod.has_option("Pod", "IP")
@@ -404,21 +414,6 @@ render_units
     assert address == ipaddress.ip_address("10.89.14.2")
     assert address in subnet
     assert network["Network"]["NetworkName"] == "clashlens-private"
-
-
-def test_health_durations_use_podman_units():
-    # Podman reads these with Go's duration parser, which rejects systemd's "min".
-    keys = ("HealthInterval=", "HealthTimeout=", "HealthStartPeriod=")
-    values = {
-        f"{unit.name}: {line}": line.split("=", 1)[1]
-        for unit in (OPS.parent / "deploy" / "quadlet").glob("*.container")
-        for line in unit.read_text().splitlines()
-        if line.startswith(keys)
-    }
-    go_duration = re.compile(r"(\d+(ns|us|ms|s|m|h))+")
-    bad = [k for k, v in values.items() if not go_duration.fullmatch(v)]
-    assert not bad
-    assert "clashlens-postgres.container: HealthStartPeriod=5m" in values
 
 
 @pytest.mark.parametrize(
