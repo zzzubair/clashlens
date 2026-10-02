@@ -643,30 +643,36 @@ def recalculate_ranked_day(
     input_evidence = result.input_evidence
     coverage_evidence = input_evidence.get("coverage_observations", [])
     contribution_evidence = input_evidence.get("contributions", [])
-    existing = connection.execute(
+    previous_version = connection.execute(
         """
-        SELECT id, version FROM ranked_day_versions
+        SELECT id, version, result_hash, replaces_version_id
+        FROM ranked_day_versions
+        WHERE player_id = %s AND ranked_day_start = %s
+          AND reconciliation_rule_version = %s
+        ORDER BY version DESC LIMIT 1
+        FOR UPDATE
+        """,
+        (player_id, ranked_day.start, RECONCILIATION_RULE_VERSION),
+    ).fetchone()
+    existing = None
+    if previous_version is not None and _text_value(previous_version[2]) in (
+        result_hash,
+        _restored_result_hash(result_hash, previous_version[3]),
+    ):
+        existing = previous_version
+    elif previous_version is not None and connection.execute(
+        """
+        SELECT 1 FROM ranked_day_versions
         WHERE player_id = %s AND ranked_day_start = %s
           AND reconciliation_rule_version = %s AND result_hash = %s
         """,
-        (
-            player_id,
-            ranked_day.start,
-            RECONCILIATION_RULE_VERSION,
-            result_hash,
-        ),
-    ).fetchone()
+        (player_id, ranked_day.start, RECONCILIATION_RULE_VERSION, result_hash),
+    ).fetchone() is not None:
+        # The inputs returned to an earlier, non-current result. Publish it
+        # again as the current version so later days and the leaderboard stop
+        # reading the replaced one; the hash names what it replaces.
+        result_hash = _restored_result_hash(result_hash, previous_version[0])
     if existing is None:
-        previous_version = connection.execute(
-            """
-            SELECT id, version FROM ranked_day_versions
-            WHERE player_id = %s AND ranked_day_start = %s
-              AND reconciliation_rule_version = %s
-            ORDER BY version DESC LIMIT 1
-            FOR UPDATE
-            """,
-            (player_id, ranked_day.start, RECONCILIATION_RULE_VERSION),
-        ).fetchone()
         previous_publication = connection.execute(
             """
             SELECT max(version)
@@ -818,6 +824,13 @@ def recalculate_ranked_day(
             ranked_day_version_id=version_id,
             ranked_day_input_hash=input_hash,
         )
+
+
+def _restored_result_hash(result_hash: str, replaces_version_id: Any) -> str:
+    """The unique hash of an earlier result published again over another."""
+    return hashlib.sha256(
+        f"{result_hash}:restores-over:{replaces_version_id}".encode()
+    ).hexdigest()
 
 
 def _store_ranked_day_adjustments(
