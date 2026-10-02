@@ -61,17 +61,22 @@ def search_live_leaderboard(database: ApiDatabase, query: str) -> dict[str, Any]
     with database.pool.connection() as connection:
         rows = connection.execute(
             f"""
-            WITH ranked AS MATERIALIZED ({_LIVE_RANKED_SQL})
-            SELECT normalized_tag, name, trophies, position
+            WITH ranked AS MATERIALIZED ({_LIVE_RANKED_SQL}), exact AS (
+                SELECT 1 FROM ranked
+                WHERE %(explicit_tag)s AND normalized_tag = %(tag)s
+            )
+            SELECT normalized_tag, name, trophies, position,
+                   EXISTS (SELECT 1 FROM exact) AS exact_match
             FROM ranked
             WHERE normalized_tag = %(tag)s
-               OR (NOT %(explicit_tag)s AND strpos(lower(name), lower(%(query)s)) > 0)
+               OR (NOT EXISTS (SELECT 1 FROM exact)
+                   AND strpos(lower(name), lower(%(query)s)) > 0)
             ORDER BY position LIMIT 21
             """,
             {"tag": tag, "explicit_tag": explicit_tag, "query": query},
         ).fetchall()
     return {
-        "exact_tag": tag if explicit_tag and rows else None,
+        "exact_tag": tag if rows and rows[0][4] else None,
         "has_more": len(rows) > 20,
         "results": [
             {

@@ -177,6 +177,13 @@ def test_only_hash_tags_select_and_name_matches_stay_listed(board_database):
     found = api_leaderboard.search_live_leaderboard(board_database, "#p00")
     assert found["exact_tag"] == "#P00"
     assert [entry["tag"] for entry in found["results"]] == ["#P00"]
+    with board_database.pool.connection() as connection:
+        connection.execute(
+            "UPDATE player_profile_versions SET name = '#Nova' WHERE normalized_tag = '#P08'"
+        )
+    found = api_leaderboard.search_live_leaderboard(board_database, "#nova")
+    assert found["exact_tag"] is None
+    assert [entry["tag"] for entry in found["results"]] == ["#P08"]
     assert (
         api_leaderboard.search_live_leaderboard(board_database, "nobody")["results"]
         == []

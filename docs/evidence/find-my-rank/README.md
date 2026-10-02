@@ -4,7 +4,8 @@ Measured on October 2, 2026 in the isolated `fm/cl-find-my-rank` worktree.
 The feature uses the private signed API and the existing Live Leaderboard
 membership, trophy ordering and tag-hash tie rule. Name matches keep their
 whole-board ranks. Only a tag typed with `#` opens a row directly, regardless of
-letter case; without `#`, the tag's player is listed alongside name matches.
+letter case; without `#`, the tag's player is listed alongside name matches, and
+a `#` search matching no tag falls back to names.
 A selected player within 5 ranks of a page edge also gets up to 5 neighbors
 from the next or previous page. Selecting a player recalculates their page and entries in one
 database statement, so an intervening rank change cannot open the wrong page.
