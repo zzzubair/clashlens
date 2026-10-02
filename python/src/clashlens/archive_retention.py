@@ -30,35 +30,11 @@ _ACTIVE = """
           AND p.status NOT IN ('complete', 'cancelled'))
 """
 _DUE = "c.availability = 'verified' AND c.retire_after <= clock_timestamp()"
-_HELD = "c.availability = 'retiring' AND c.retiring_since > clock_timestamp() - %s::interval"
 _RELEASED = "c.availability = 'retiring' AND c.retiring_since <= clock_timestamp() - %s::interval"
 
 
 def _text(value: Any) -> str:
     return value.decode() if isinstance(value, bytes) else value
-
-
-def _summary(connection: Any, instance_id: str) -> dict[str, Any]:
-    """Totals across the whole catalogue, for the preview report."""
-    groups = {
-        "due_unprotected": (f"{_DUE} AND NOT ({_ACTIVE})", "c.retire_after", ()),
-        "due_protected": (f"{_DUE} AND ({_ACTIVE})", "c.retire_after", ()),
-        "held_for_recovery": (_HELD, "c.retiring_since", (RECOVERY_HOLD,)),
-        "deletable_now": (_RELEASED, "c.retiring_since", (RECOVERY_HOLD,)),
-    }
-    summary = {}
-    for name, (condition, clock, parameters) in groups.items():
-        objects, size, oldest, newest = connection.execute(
-            f"""
-            SELECT count(*), COALESCE(sum(c.byte_size), 0), min({clock}), max({clock})
-            FROM archive_catalogue AS c WHERE c.archive_instance_id = %s AND {condition}
-            """, (instance_id, *parameters),
-        ).fetchone()
-        summary[name] = {
-            "objects": objects, "bytes": int(size),
-            "oldest": oldest and oldest.isoformat(), "newest": newest and newest.isoformat(),
-        }
-    return summary
 
 
 def retire_archive_objects(
@@ -82,8 +58,6 @@ def retire_archive_objects(
         "deleted_objects": 0, "deleted_bytes": 0, "marked_objects": 0, "marked_bytes": 0,
         "protected_objects": 0, "failed_objects": 0,
     }
-    if not apply:
-        report["summary"] = _summary(connection, instance_id)
 
     def location(digest: Any, reference: Any) -> tuple[str, str]:
         digest, reference = _text(digest), _text(reference)
@@ -120,14 +94,14 @@ def retire_archive_objects(
                       AND c.archive_instance_id = %s AND {_RELEASED}
                     """, (digest, reference, instance_id, RECOVERY_HOLD),
                 ).fetchone()
-                if current is None:
-                    continue
-                if apply:
-                    client.remove_object(bucket, reference.removeprefix(f"s3://{bucket}/"))
-                    connection.execute(
-                        "UPDATE archive_catalogue SET availability = 'expired' WHERE archive_reference = %s AND availability = 'retiring'",
-                        (reference,),
-                    )
+            if current is None:
+                continue
+            if apply:
+                client.remove_object(bucket, reference.removeprefix(f"s3://{bucket}/"))
+                connection.execute(
+                    "UPDATE archive_catalogue SET availability = 'expired' WHERE archive_reference = %s AND availability = 'retiring'",
+                    (reference,),
+                )
             report["deleted_objects"] += 1
             report["deleted_bytes"] += size
         except Exception as error:  # noqa: BLE001 - one object never stops the batch

@@ -687,8 +687,26 @@ def _raw_cleanup_config(mode_config, tmp_path, setting):
         key.chmod(0o600)
 
 
+def _systemd_unit(path):
+    """systemd semantics: comments ignored, repeated keys and words accumulate."""
+    sections, section = {}, None
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line.startswith("["):
+            section = sections.setdefault(line.strip("[]"), {})
+        elif line and line[0] not in "#;":
+            key, value = line.split("=", 1)
+            section.setdefault(key.strip(), []).extend(value.split())
+    return sections
+
+
 @pytest.mark.parametrize("setting", ["off", "preview", "apply"])
-def test_raw_cleanup_timer_is_installed_only_when_enabled(tmp_path, mode_config, setting):
+def test_raw_cleanup_timer_is_installed_only_when_deletion_is_on(tmp_path, mode_config, setting):
+    units = tmp_path / "config" / "systemd" / "user"
+    units.mkdir(parents=True, exist_ok=True)
+    # A unit left by an earlier apply setting is removed when deletion is off.
+    for name in ("service", "timer"):
+        (units / f"clashlens-archive-retention.{name}").write_text("# Managed by Clash Lens ./ops.\n")
     _raw_cleanup_config(mode_config, tmp_path, setting)
     result = subprocess.run(
         [
@@ -706,22 +724,23 @@ def test_raw_cleanup_timer_is_installed_only_when_enabled(tmp_path, mode_config,
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    units = tmp_path / "config" / "systemd" / "user"
-    target = (units / "clashlens.target").read_text()
-    enabled = setting != "off"
-    assert ("Wants=clashlens-archive-retention.timer" in target) is enabled
+    target = _systemd_unit(units / "clashlens.target")
+    enabled = setting == "apply"
+    assert ("clashlens-archive-retention.timer" in target["Unit"].get("Wants", [])) is enabled
     assert (units / "clashlens-archive-retention.timer").exists() is enabled
+    assert (units / "clashlens-archive-retention.service").exists() is enabled
     if enabled:
-        service = (units / "clashlens-archive-retention.service").read_text()
-        assert "ops archive-prune --scheduled" in service
+        service = _systemd_unit(units / "clashlens-archive-retention.service")
+        assert service["Service"]["ExecStart"] == [str(OPS), "archive-prune", "--scheduled"]
 
 
-@pytest.mark.parametrize(("setting", "deletes"), [("preview", False), ("apply", True)])
-def test_scheduled_raw_cleanup_follows_setting_and_never_waits_for_operations(
-    runtime, mode_config, tmp_path, setting, deletes
+@pytest.mark.parametrize("setting", ["preview", "apply"])
+def test_scheduled_raw_cleanup_deletes_and_never_waits_for_operations(
+    runtime, mode_config, tmp_path, setting
 ):
     env, _ = runtime
     _raw_cleanup_config(mode_config, tmp_path, setting)
+    deletes = setting == "apply"
     runs = tmp_path / "runs"
     podman = tmp_path / "recording-podman"
     podman.write_text(
@@ -742,11 +761,20 @@ def test_scheduled_raw_cleanup_follows_setting_and_never_waits_for_operations(
             ["bash", str(OPS), "archive-prune", "--scheduled"],
             env=env, capture_output=True, text=True, timeout=15, check=False,
         )
-    assert scheduled.returncode == 0, scheduled.stderr
-    command = runs.read_text()
-    assert "prune-archive --max-objects 1000" in command
-    assert command.rstrip().endswith("--apply") is deletes
-    assert "clashlens-archive-operator-secret-key" in command
+    assert (scheduled.returncode == 0) is deletes, scheduled.stderr
+    if deletes:
+        command = runs.read_text()
+        assert "prune-archive --max-objects 1000" in command
+        assert command.rstrip().endswith("--apply")
+        assert "clashlens-archive-operator-secret-key" in command
+    else:
+        assert not runs.exists()
+        preview = subprocess.run(
+            ["bash", str(OPS), "archive-prune"],
+            env=env, capture_output=True, text=True, timeout=15, check=False,
+        )
+        assert preview.returncode == 0, preview.stderr
+        assert not runs.read_text().rstrip().endswith("--apply")
     manual = subprocess.run(
         ["bash", str(OPS), "archive-prune", "--apply"],
         env=env, capture_output=True, text=True, timeout=15, check=False,

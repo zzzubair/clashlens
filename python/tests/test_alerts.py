@@ -41,7 +41,7 @@ def runtime(tmp_path, monkeypatch):
         journal_failed=False,
         backup_failed=False,
         backup_error=None,
-        cleanup_failed=False,
+        cleanup="ActiveState=inactive\nResult=success",
         reads_failed=False,
         leaderboard="0 13000",
         disk_used=10,
@@ -126,8 +126,8 @@ def runtime(tmp_path, monkeypatch):
             if rt.backup_error:
                 raise rt.backup_error
             code, output = int(rt.backup_failed), "private backup output"
-        elif "is-failed" in args:
-            code, output = int(not rt.cleanup_failed), ""
+        elif "clashlens-archive-retention.service" in args:
+            code, output = 0, rt.cleanup
         elif "--probe" in args:
             code, output = int(rt.reads_failed), "private account output"
         elif "--leaderboard" in args:
@@ -177,7 +177,7 @@ def trigger(rt, condition, value=True):
     elif condition == "reads":
         rt.reads_failed = value
     elif condition == "cleanup":
-        rt.cleanup_failed = value
+        rt.cleanup = f"ActiveState={'failed' if value else 'inactive'}\nResult={'exit-code' if value else 'success'}"
     elif condition == "collection":
         rt.metrics["clashlens_collector_oldest_due_age_seconds"] = 600 if value else 599
     elif condition == "leaderboard":
@@ -224,6 +224,24 @@ def test_alert_and_recovery_once_across_separate_runs(runtime, condition, capsys
         assert private not in output.out + output.err + state.read_text() + json.dumps(
             rt.posts
         )
+
+
+def test_cleanup_incident_clears_only_after_a_confirmed_successful_batch(runtime):
+    rt = runtime
+    trigger(rt, "cleanup")
+    assert rt.run() == 0
+    assert len(rt.posts) == 1
+    # The timer's retry is starting, then the service manager cannot answer.
+    for unconfirmed, code in (("ActiveState=activating\nResult=success", 0), ("", 1)):
+        rt.now += 60
+        rt.cleanup = unconfirmed
+        assert rt.run() == code
+        assert len(rt.posts) == 1
+    rt.now += 60
+    trigger(rt, "cleanup", False)
+    assert rt.run() == 0
+    assert len(rt.posts) == 2
+    assert "recovered" in rt.posts[1]["content"]
 
 
 @pytest.mark.parametrize("status", [302, 429, 500])
