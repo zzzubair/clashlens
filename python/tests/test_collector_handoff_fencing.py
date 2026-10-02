@@ -174,7 +174,9 @@ def test_same_endpoint_waits_for_predecessor_handoff_ack() -> None:
         while client.fetch_count < 2:
             await asyncio.sleep(0)
         await asyncio.sleep(0.1)
-        assert len(spool.handoffs) == 1
+        # The successor is saved at once but commits only after its predecessor.
+        assert len(spool.handoffs) == 2
+        assert store.handoffs == []
         store.release.set()
         assert await first == ["recorded"]
         assert await second == ["recorded"]
@@ -277,6 +279,65 @@ def test_refresh_is_saved_while_an_unchanged_check_waits() -> None:
         assert [handoff.response_hash for handoff in store.handoffs] == [
             hashlib.sha256(body).hexdigest() for body in (b"a", b"b")
         ]
+
+    asyncio.run(scenario())
+
+
+def test_refresh_survives_cancellation_while_a_fallback_waits_on_the_database() -> (
+    None
+):
+    first, changed = b"a", b"b"
+
+    class SlowFallbackStore(_Store):
+        def __init__(self, spool: _Spool) -> None:
+            super().__init__(spool)
+            self.entered = threading.Event()
+            self.release = threading.Event()
+
+        def record_unchanged_response(self, _handoff: Any) -> bool:
+            return False
+
+        def record_response(self, handoff: Any) -> object:
+            if self.handoffs and handoff.response_hash == self.handoffs[0].response_hash:
+                self.entered.set()
+                assert self.release.wait(timeout=5)
+            return super().record_response(handoff)
+
+    async def scenario() -> None:
+        spool = _Spool()
+        store = SlowFallbackStore(spool)
+        collector = _collector(
+            spool, store, _Profiles(spool, [first, first, changed])
+        )
+        work = CollectorWork(1, "#2PP", datetime.now(UTC))
+        assert await collector.collect_player(
+            work, lane="ordinary", endpoints=("profile",)
+        ) == ["recorded"]
+        fallback = asyncio.create_task(
+            collector.collect_player(work, lane="ordinary", endpoints=("profile",))
+        )
+        assert await asyncio.to_thread(store.entered.wait, 1)
+        refresh = asyncio.create_task(
+            collector.collect_player(work, lane="interactive", endpoints=("profile",))
+        )
+        saved = f"publish:{hashlib.sha256(changed).hexdigest()}:b"
+        try:
+            async with asyncio.timeout(1):
+                while saved not in spool.events:
+                    await asyncio.sleep(0.001)
+        finally:
+            refresh.cancel()
+            store.release.set()
+        results = await asyncio.gather(fallback, refresh, return_exceptions=True)
+        assert results[0] == ["recorded"]
+        assert isinstance(results[1], asyncio.CancelledError)
+        # The cancelled refresh stays saved for restart recovery.
+        assert len(spool.handoffs) == 1
+        assert await collector.health_response("/readyz") == (
+            503,
+            "text/plain",
+            b"handoff_recovery_required\n",
+        )
 
     asyncio.run(scenario())
 
@@ -405,13 +466,14 @@ def test_post_publish_failure_fences_a_waiting_successor() -> None:
         second = asyncio.create_task(
             collector.collect_player(work, lane="ordinary", endpoints=("profile",))
         )
-        while client.fetch_count < 2:
-            await asyncio.sleep(0)
+        while len(spool.handoffs) < 2:
+            await asyncio.sleep(0.001)
         store.release.set()
         results = await asyncio.gather(first, second, return_exceptions=True)
         assert isinstance(results[0], RuntimeError)
         assert results[1] == ["capacity_paused"]
-        assert len(spool.handoffs) == 1
+        # Both saved responses are left for restart recovery to replay in order.
+        assert len(spool.handoffs) == 2
         assert await collector.health_response("/readyz") == (
             503,
             "text/plain",

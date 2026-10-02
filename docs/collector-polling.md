@@ -351,9 +351,12 @@ Every other response (the first per player and endpoint since the collector
 started, a changed one, a reset or work-bound one) is saved to the spool before
 its own database work. So is a known-unchanged one when the database does not
 accept it as unchanged, or when that one-attempt check fails, times out or is
-cancelled. A saved response can still wait its turn behind another response
-being saved under the same lock, as before this change. A changed or unknown
-response is therefore never lost to the unchanged check. The trade-off: a hard crash before a known-unchanged
+cancelled. No response waits on the database while holding the shared lock:
+the lock covers only the spool write, so a later response is saved before it
+waits for an earlier one's database commit. Saved responses for the same lock
+still commit in the order they were saved, so restart recovery replays them in
+that order. A changed or unknown response is therefore never lost to a
+database wait. The trade-off: a hard crash before a known-unchanged
 sighting commits loses that sighting, meaning its seen time, its poll count, and
 the later sighting time and archive retirement deadline it would have given the
 kept response. No raw response,

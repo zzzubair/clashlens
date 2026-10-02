@@ -115,6 +115,9 @@ class Collector:
             asyncio.Lock() for _index in range(_HANDOFF_LOCK_STRIPES)
         )
         self._handoff_recovery_required = False
+        # Each stripe's newest saved response; it resolves once that response
+        # has committed or failed, so the next one commits after it.
+        self._handoff_turns: dict[asyncio.Lock, asyncio.Future[None]] = {}
         # Newest committed (seen time, field fingerprint) per scope, identity
         # and endpoint, from this process only; empty after a restart.
         self._committed: dict[tuple[str, str, str], tuple[datetime, str]] = {}
@@ -448,6 +451,7 @@ class Collector:
                 # the check does not compact.
                 identity = (handoff.scope, handoff.identity_key, handoff.endpoint)
                 lock = self._handoff_lock(handoff)
+                pending = self._handoff_turns.get(lock)
                 committed = self._committed.get(identity)
                 cancelled = False
                 compacted = False
@@ -457,6 +461,7 @@ class Collector:
                     and committed is not None
                     and committed[1] == handoff.content_fingerprint
                     and not lock.locked()
+                    and (pending is None or pending.done())
                     and not self._handoff_recovery_required
                 ):
                     check = asyncio.ensure_future(
@@ -481,17 +486,18 @@ class Collector:
                         seen, self._committed.get(identity) or seen
                     )
                 else:
-                    async with lock:
-                        # A predecessor may have failed after its durable publish
-                        # while this response was waiting for the same stripe.
-                        # Recovery must run before any successor can become
-                        # current.
-                        if self._handoff_recovery_required:
-                            if cancelled:
-                                raise asyncio.CancelledError
-                            return "capacity_paused"
-                        published = False
-                        try:
+                    published = False
+                    turn = asyncio.get_running_loop().create_future()
+                    try:
+                        async with lock:
+                            # A predecessor may have failed after its durable
+                            # publish while this response was waiting for the
+                            # same stripe. Recovery must run before any
+                            # successor can become current.
+                            if self._handoff_recovery_required:
+                                if cancelled:
+                                    raise asyncio.CancelledError
+                                return "capacity_paused"
                             await _drain_to_thread(
                                 self.spool.publish_handoff,
                                 response.body,
@@ -501,23 +507,34 @@ class Collector:
                                 current_reservation,
                             )
                             published = True
-                            await _drain_awaitable(
-                                self._database_call(
-                                    self.database.record_response, handoff
-                                )
-                            )
-                            self._committed[identity] = max(
-                                seen, self._committed.get(identity) or seen
-                            )
-                            await _drain_to_thread(self.spool.remove_handoff, name)
-                        except BaseException as error:
-                            if published or self._sidecar_exists(name):
-                                self._handoff_recovery_required = True
-                                if isinstance(error, (OSError, SpoolError)):
-                                    raise _HandoffRecoveryRequired(
-                                        "durable response handoff requires restart recovery"
-                                    ) from error
-                            raise
+                            previous = self._handoff_turns.get(lock)
+                            self._handoff_turns[lock] = turn
+                        # Saved responses commit in publish order, but no
+                        # database wait holds the lock, so a later response
+                        # always reaches the spool first.
+                        if previous is not None:
+                            await asyncio.shield(previous)
+                        if self._handoff_recovery_required:
+                            if cancelled:
+                                raise asyncio.CancelledError
+                            return "capacity_paused"
+                        await _drain_awaitable(
+                            self._database_call(self.database.record_response, handoff)
+                        )
+                        self._committed[identity] = max(
+                            seen, self._committed.get(identity) or seen
+                        )
+                        await _drain_to_thread(self.spool.remove_handoff, name)
+                    except BaseException as error:
+                        if published or self._sidecar_exists(name):
+                            self._handoff_recovery_required = True
+                            if isinstance(error, (OSError, SpoolError)):
+                                raise _HandoffRecoveryRequired(
+                                    "durable response handoff requires restart recovery"
+                                ) from error
+                        raise
+                    finally:
+                        turn.set_result(None)
                 if cancelled:
                     raise asyncio.CancelledError
                 self._count("recorded")
