@@ -364,7 +364,10 @@ sighting commits loses that sighting, meaning its seen time, its poll count, and
 the later sighting time and archive retirement deadline it would have given the
 kept response. No raw response,
 observation, job, battle or archive object is lost, and the next poll records
-the sighting again about 90 seconds later. The profile's official season rank
+the sighting again about 90 seconds later. The poll count (`request_count`) is
+also approximate: if an unchanged sighting commits but the confirmation is lost,
+the collector saves and records that response again, counting one poll twice.
+This is an accepted trade-off. The profile's official season rank
 (`legendStatistics.currentSeason.rank`) is ignored: it moves whenever other
 players battle and nothing reads it, so a rank-only change counts as unchanged.
 A changed response is still stored in full, including the rank. Fingerprints

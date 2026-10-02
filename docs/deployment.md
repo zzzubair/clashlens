@@ -494,7 +494,10 @@ recovery finishes any already committed saved response first, then replays the
 rest in the order they were received. A hard crash can therefore
 lose only an unchanged sighting's seen time, poll count, and the sighting time
 and retirement deadline it would have extended; no raw response or other kept
-data is lost, and the next poll records the sighting again. The memory record
+data is lost, and the next poll records the sighting again. The poll count can
+also count one poll twice when an unchanged sighting commits but the
+confirmation is lost and the response is then saved and recorded again; this is
+an accepted trade-off. The memory record
 holds one entry per player and endpoint polled since the collector started:
 about 26,500 entries and 9 MB for 13,263 players.
 
