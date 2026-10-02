@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from domain_test_support import production_worker_grants
 from psycopg.conninfo import make_conninfo
 
 from clashlens.db import Database
@@ -27,14 +28,8 @@ def _production_database(database_url: str) -> Iterator[tuple[str, str]]:
             root = Path(__file__).parents[2]
             for migration in sorted((root / "deploy" / "migrations").glob("*.sql")):
                 connection.execute(migration.read_text(encoding="utf-8"))
-            connection.execute(
-                "REVOKE ALL PRIVILEGES ON TABLE python_processing_jobs "
-                "FROM clashlens_python_worker"
-            )
-            connection.execute(
-                "GRANT SELECT (id, lease_generation) ON TABLE python_processing_jobs "
-                "TO clashlens_python_worker"
-            )
+            for statement in production_worker_grants():
+                connection.execute(statement)
         yield connection_info, schema
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:

@@ -38,6 +38,10 @@ UV_PROJECT_ENVIRONMENT=/tmp/clashlens-python-venv \
 UV_LINK_MODE=copy uv run --locked --python 3.12 pytest -q
 ```
 
+Test databases built by `domain_database` in `tests/domain_test_support.py` also
+run the worker permission limits that `../ops` applies after migrations, read
+from `../ops` itself, so worker-role tests fail where production would.
+
 The collector and worker share the bounded local spool. The collector saves the
 exact raw response and durable observation metadata before the worker parses it;
 restarts can recover incomplete handoffs without calling the official API.

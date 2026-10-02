@@ -158,9 +158,9 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
         responses_pending = connection.execute(
             """
             SELECT EXISTS (
-                SELECT 1 FROM python_processing_jobs
+                SELECT 1 FROM python_processing_jobs_worker
                 WHERE work_type IN ('process_observation', 'replay_observation')
-                  AND status IN (
+                  AND state IN (
                       'pending', 'leased', 'waiting_retry', 'waiting_dependency'
                   )
                   AND created_at <= %s
