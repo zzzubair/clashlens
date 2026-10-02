@@ -57,6 +57,10 @@
   border-bottom: 3px solid var(--cl-outline);
 }
 
+.home-overview:has(.search-results) {
+  align-items: start;
+}
+
 .home-intro {
   min-width: 0;
 }
