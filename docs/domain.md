@@ -247,7 +247,10 @@ A domain change is complete only when every affected source observation, derived
   latest saved result must list their report and whether the two players'
   reports currently agree; a late report from the other player can change
   that. Days of a season whose detail is retired cannot be recalculated and are
-  skipped. For each player with a mismatch it queues the normal ranked-day
+  skipped. Only the previous 7 Legend days are corrected, because the
+  recalculation supports only the current and previous Season; a mismatch on
+  an older day is logged as a `late_battle_sweep_skipped` line and never
+  queued. For each player with a mismatch it queues the normal ranked-day
   recalculation for that day, then for every later day that already had a
   saved result when the correction started, one at a time: each later day is
   queued only once the day before it has finished, because each day's result
@@ -257,8 +260,13 @@ A domain change is complete only when every affected source observation, derived
   restarted worker, continues a correction rather than repeating it. Each
   check reads every kept battle report once: about 200,000 a day at 12,500
   players, so about 5.6 million for each full 28-day season kept. That read
-  time has not been measured at that size. A battle saved after the last check of a
-  Reset is added after the next Reset.
+  time has not been measured at that size. A battle saved after the last check
+  of a Reset is added after the next Reset. Known limitations: a late battle
+  that is older than 7 Legend days by the time the check runs, for example
+  after a worker outage of over a week, is not corrected; and history cleanup,
+  which deletes finished jobs after 48 hours, can delete an unfinished
+  correction's job records during a worker outage of 48 hours or more, after
+  which its remaining later days are not recalculated.
 - A **frozen leaderboard snapshot** is the accepted, versioned ordering of actively tracked players at a reset baseline.
 - Continue serving the previously frozen snapshot while the next snapshot is assembled. Publish the replacement atomically so users never receive a mixture of snapshot versions.
 - Target snapshot publication at approximately 05:05 UTC on normal days, after the daily no-attack matchmaking window.

@@ -4,8 +4,8 @@ The Clash API can serve a battle log cached for about 60 seconds, so a battle
 in the last minute before the 05:00 UTC Reset can first be saved after its
 Legend day's result was published. Once per Reset, after the Reset sweep has
 finished and every response fetched before it finished has been processed,
-this finds each saved day whose result misses such a report, or still holds
-the old agreement flag for its battle. It queues the existing ranked-day
+this finds each saved day from the previous 7 Legend days whose result misses
+such a report, or still holds the old agreement flag for its battle. It queues the existing ranked-day
 recalculation for that day, then for each later saved day of that player one
 at a time, each only once the day before it has finished. The live
 recalculation and Reset paths are unchanged; the worker does the
@@ -36,6 +36,10 @@ CHECK_INTERVAL_SECONDS = 600
 # A report saved this close before its day ended may have missed the live
 # recalculation queued with it, so it is checked too.
 SAVE_MARGIN = timedelta(minutes=5)
+# Ended Legend days that are corrected. The recalculation supports only the
+# current and previous Season; a late battle on an older day is logged and
+# skipped.
+WINDOW = timedelta(days=7)
 
 _UNFINISHED = "('pending', 'leased', 'waiting_retry', 'waiting_dependency')"
 
@@ -57,7 +61,8 @@ _FIRST_DAY_KEY = _job_key(
 # Every retained battle with a report saved late is checked against each
 # reporting player's latest saved result: their own report and the battle's
 # current agreement flag must both be listed. Days of a retired season cannot
-# be recalculated and are skipped.
+# be recalculated and are skipped; mismatched days before the window are
+# returned as skipped instead of being corrected.
 _OUTSTANDING_CORRECTIONS = f"""
 WITH late_battle AS (
     SELECT battle.id, battle.ranked_day_start,
@@ -132,10 +137,13 @@ WITH late_battle AS (
         WHERE job.deduplication_key = {_FIRST_DAY_KEY}
         LIMIT 1
     ) AS first_job ON true
-    WHERE first_job.created_at IS NOT NULL
-       OR (saved_day.stale AND mark.id = mark.newest)
+    WHERE saved_day.ranked_day_start >= %(window_start)s
+      AND (first_job.created_at IS NOT NULL
+           OR (saved_day.stale AND mark.id = mark.newest))
 )
-SELECT correction.player_id, correction.mark,
+(
+SELECT correction.player_id, correction.first_day, correction.mark,
+       false AS skipped,
        coalesce(bool_or(job.state IN {_UNFINISHED}), false) AS waiting,
        (array_agg(saved_day_row.day_text ORDER BY saved_day_row.ranked_day_start)
             FILTER (WHERE job.id IS NULL))[1] AS next_day,
@@ -163,7 +171,12 @@ LEFT JOIN LATERAL (
 ) AS job ON true
 GROUP BY correction.player_id, correction.first_day, correction.mark
 HAVING bool_or(job.id IS NULL OR job.state IN {_UNFINISHED})
-ORDER BY correction.player_id, correction.first_day, correction.mark
+)
+UNION ALL
+SELECT player_id, ranked_day_start, NULL, true, false, NULL, NULL
+FROM saved_day
+WHERE stale AND ranked_day_start < %(window_start)s
+ORDER BY 1, 2, 3
 """
 
 
@@ -213,12 +226,32 @@ def sweep_late_battles(
             return None
         rows = connection.execute(
             _OUTSTANDING_CORRECTIONS,
-            {"boundary": boundary, "margin": SAVE_MARGIN},
+            {
+                "boundary": boundary,
+                "margin": SAVE_MARGIN,
+                "window_start": boundary - WINDOW,
+            },
         ).fetchall()
         corrections: dict[int, list[tuple[int, bool, str, str]]] = {}
-        for player_id, mark, waiting, next_day, next_key in rows:
+        skipped: list[str] = []
+        for player_id, first_day, mark, is_skipped, waiting, next_day, next_key in rows:
+            if is_skipped:
+                skipped.append(f"{player_id}:{first_day.astimezone(UTC).isoformat()}")
+                continue
             corrections.setdefault(int(player_id), []).append(
                 (int(mark), bool(waiting), next_day, next_key)
+            )
+        if skipped:
+            print(
+                json.dumps(
+                    {
+                        "event": "late_battle_sweep_skipped",
+                        "boundary_at": boundary.isoformat(),
+                        "reason": "older_than_correction_window",
+                        "player_days": skipped,
+                    }
+                ),
+                flush=True,
             )
         job_ids: list[int] = []
         for player_id, player_corrections in corrections.items():

@@ -569,8 +569,8 @@ def test_later_day_waits_for_the_corrected_day_even_after_a_restart(
             database.close()
 
 
-def test_late_battle_on_an_old_retained_day_is_still_added(
-    database_url: str, archive_server
+def test_late_battle_older_than_the_window_is_logged_and_not_queued(
+    database_url: str, archive_server, capsys
 ) -> None:
     # The worker was stopped for over a week after the late battle was saved.
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -579,14 +579,28 @@ def test_late_battle_on_an_old_retained_day_is_still_added(
             _published_with_late_battle(
                 connection_info, archive_server, processor, database
             )
-            boundary = DAY + timedelta(days=9)
+            boundary = DAY + timedelta(days=8)
             _finish_reset_sweep(connection_info, boundary)
+            before = _published(connection_info, DAY)
 
-            _correct(database, processor, boundary + timedelta(minutes=31))
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=31)
+            ) == ([], 0)
 
-            corrected = _published(connection_info, DAY)
-            assert corrected is not None
-            assert corrected[0] == [("#2PP", 0, 0), ("#QPP", 3, -40)]
+            assert _queued_days(connection_info) == []
+            assert _published(connection_info, DAY) == before
+            with psycopg.connect(connection_info) as connection:
+                player_id = connection.execute(
+                    "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
+                ).fetchone()[0]
+            events = [
+                json.loads(line)
+                for line in capsys.readouterr().out.splitlines()
+                if '"late_battle_sweep_skipped"' in line
+            ]
+            assert [event["player_days"] for event in events] == [
+                [f"{player_id}:2026-08-04T05:00:00+00:00"]
+            ]
         finally:
             database.close()
 
