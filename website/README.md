@@ -349,9 +349,7 @@ were preserved when renaming the former blue-named settings.
 For that rename, full-page Chrome screenshots before and after changing only
 the colour names showed zero changed pixels on both Home in light mode
 (375 × 876) and Sign in in dark mode (375 × 812). These used the local website
-with the data service unavailable and sign-in disabled. The task worktree's
-`results/fan-notice/` holds the images, pixel-diff images and `colour-diff.json`.
-The final notice was also visually checked at 320 pixels in both themes, with
+with the data service unavailable and sign-in disabled. The final notice was also visually checked at 320 pixels in both themes, with
 no horizontal overflow. All 496 unit tests, the footer browser test, type
 checking, lint, formatting and `build:verify` passed on Node 22.23.2. Node 24,
 the full browser suite, populated player pages and real providers were not
