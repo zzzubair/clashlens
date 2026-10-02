@@ -580,7 +580,7 @@ or close #122.
 ## Raw-response cleanup
 
 The scheduled cleanup deletes old raw responses from the Scaleway archive under
-the [86-day rule and nine-day recovery hold](history-retention.md#implemented-raw-expiry-and-required-recovery-protection).
+the [86-days-after-latest-sighting rule and nine-day recovery hold](history-retention.md#implemented-raw-expiry-and-required-recovery-protection).
 It is off by default. Store the operator key pair as two service-owned mode-600
 one-line files beside the Clash API keys:
 `clashlens-archive-operator-access-key` and

@@ -1,4 +1,4 @@
-"""Raw-response expiry: 86-day season deadline, then a recovery hold, then delete."""
+"""Raw-response expiry: 86 days after the latest sighting, then a recovery hold, then delete."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from clashlens.spool import Spool
 FIXTURE = Path(__file__).parents[1] / "testdata" / "legend_i_profile_v1.json"
 MIGRATIONS = Path(__file__).parents[2] / "deploy" / "migrations"
 OPTIONS = {"bucket": "evidence", "instance_id": "fixture-instance"}
-# A Legend season boundary on the fixed 28-day grid (Monday 05:00 UTC).
+# A Legend season boundary on the old 28-day deadline grid (Monday 05:00 UTC).
 SEASON_START = datetime.fromtimestamp(1783918800, UTC)
 
 
@@ -79,40 +79,25 @@ def _hold_elapsed(connection, age: str) -> None:
     )
 
 
-def test_no_response_is_due_before_86_days_after_its_latest_sighting(database_url, tmp_path):
+def test_response_is_due_86_days_after_its_latest_sighting(database_url, tmp_path):
     from domain_test_support import domain_database
 
     with domain_database(database_url) as dsn, psycopg.connect(dsn, autocommit=True) as connection:
-        shortest, longest = connection.execute(
-            """
-            SELECT min(clashlens_season_retire_after(t) - t), max(clashlens_season_retire_after(t) - t)
-            FROM generate_series(%s::timestamptz, %s::timestamptz, interval '1 minute') AS t
-            """,
-            (SEASON_START, SEASON_START + timedelta(days=28, minutes=-1)),
-        ).fetchone()
-        assert shortest == timedelta(days=86, minutes=1)
-        assert longest == timedelta(days=114)
-        # The last instant of a season gets 86 days, never 85.
-        last = SEASON_START + timedelta(days=28, microseconds=-1)
-        deadline = connection.execute(
-            "SELECT clashlens_season_retire_after(%s)", (last,)
-        ).fetchone()[0]
-        assert deadline - last == timedelta(days=86, microseconds=1)
-
-        # A response last seen 85 days ago is kept; one whose 86-day season
-        # deadline has passed is marked.
         _seed(connection, 1)
         spool = Spool(tmp_path / "spool", max_body_bytes=1 << 20)
+        client = DeleteClient()
         try:
-            client = DeleteClient()
-            connection.execute(
-                "UPDATE archive_catalogue SET retire_after = clashlens_season_retire_after(clock_timestamp() - interval '85 days')"
-            )
-            assert retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)["marked_objects"] == 0
-            connection.execute(
-                "UPDATE archive_catalogue SET retire_after = clock_timestamp() - interval '1 second'"
-            )
-            assert retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)["marked_objects"] == 1
+            for last_seen, marked in (
+                ("85 days", 0),
+                ("85 days 23 hours 59 minutes", 0),
+                ("86 days 1 second", 1),
+            ):
+                connection.execute(
+                    "UPDATE archive_catalogue SET retire_after = clashlens_season_retire_after(clock_timestamp() - %s::interval)",
+                    (last_seen,),
+                )
+                report = retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)
+                assert report["marked_objects"] == marked, last_seen
         finally:
             spool.close()
 
@@ -148,12 +133,17 @@ def test_existing_deadlines_move_to_the_86_day_rule(database_url):
                 """,
                 (sighting,),
             ).fetchall()
-            # The kept response now follows the new rule; an already marked one
-            # starts its recovery hold at upgrade time instead of being deleted.
-            assert rows == [("retiring", False, True), ("verified", True, False)]
+            # An existing response cannot know its exact latest sighting, so it
+            # keeps its old season deadline plus 30 days: never under 86 days.
+            # An already marked one starts its recovery hold at upgrade time.
+            assert rows == [("retiring", False, True), ("verified", False, False)]
+            kept = connection.execute(
+                "SELECT retire_after FROM archive_catalogue WHERE availability = 'verified'"
+            ).fetchone()[0]
+            assert kept - sighting == timedelta(days=24 + 86)  # 4 days into its season
             assert connection.execute(
                 "SELECT clashlens_season_retire_after(%s) - %s", (sighting, sighting)
-            ).fetchone()[0] == timedelta(days=24 + 86)  # 4 days into its season
+            ).fetchone()[0] == timedelta(days=86)
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
             admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

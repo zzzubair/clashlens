@@ -1,8 +1,7 @@
-"""Season-based expiry using immutable location tombstones.
+"""Raw-response expiry using immutable location tombstones.
 
-A raw response becomes due 86 days after the 28-day season containing its
-latest sighting ends; a body still observed in a later season keeps that
-season's deadline instead. A due response is first marked 'retiring', which
+A raw response becomes due 86 days after its latest sighting; every new
+sighting of the same body moves the deadline later. A due response is first marked 'retiring', which
 blocks every new use, and its bytes are deleted only after the promised
 seven-day recovery window plus a two-day restore allowance. A restore to any
 promised point therefore still finds every byte its catalogue calls usable.
