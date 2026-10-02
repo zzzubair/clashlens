@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import psycopg
 import pytest
@@ -16,13 +17,94 @@ from psycopg.types.json import Jsonb
 from clashlens import api_analytics, army_ingestion, boundary_publication
 from clashlens.api_db import ApiDatabase
 from clashlens.archive import S3ArchiveReader
-from clashlens.army_analytics import ArmyAnalyticsSelection
+from clashlens.army_analytics import (
+    ArmyAnalyticsSelection,
+    ArmyAnalyticsUnavailable,
+    build_army_result,
+)
 from clashlens.db import Database
 from clashlens.worker import ObservationProcessor
 
 DAY_START = datetime(2026, 8, 4, 5, tzinfo=UTC)
 SEASON_ID = "1783918800"
 FIXTURE_CODE = "h0p9e14_32d1x53u2x58-1x97s2x2"
+
+
+def _army_range_database(monkeypatch, *, missing_kind: str, missing_day: int):
+    database = MagicMock()
+    database._army_request_timeout_seconds = 30
+    database._army_cache_get.return_value = None
+    connection = database.pool.connection.return_value.__enter__.return_value
+    cursor = connection.execute.return_value
+    cursor.fetchone.side_effect = [
+        (SEASON_ID, "previous-season", DAY_START - timedelta(days=22)),
+        (0, "a" * 64),
+        (0,),
+    ]
+    rows = iter(
+        [
+            [
+                (day, DAY_START + timedelta(days=day - 23))
+                for day in (23, 24, 25)
+                if missing_kind != "day" or day != missing_day
+            ],
+            [
+                (day, str(day))
+                for day in (23, 24, 25)
+                if missing_kind != "army" or day != missing_day
+            ],
+            [
+                (DAY_START + timedelta(days=day - 22), day, 1)
+                for day in (23, 24, 25)
+                if missing_kind != "snapshot" or day != missing_day
+            ],
+        ]
+    )
+    cursor.fetchall.side_effect = lambda: next(rows, [])
+    monkeypatch.setattr(
+        api_analytics,
+        "_query_troops_aggregates",
+        lambda _connection, **kwargs: (
+            build_army_result([], kwargs["selection"]),
+            "b" * 64,
+        ),
+    )
+    return database
+
+
+@pytest.mark.parametrize("lens", ["offense", "defense"])
+@pytest.mark.parametrize("missing_kind", ["day", "army", "snapshot"])
+@pytest.mark.parametrize("missing_day", [23, 24, 25])
+def test_current_streak_requires_evidence_for_every_requested_day(
+    monkeypatch, lens, missing_kind, missing_day
+) -> None:
+    database = _army_range_database(
+        monkeypatch, missing_kind=missing_kind, missing_day=missing_day
+    )
+    selection = ArmyAnalyticsSelection.parse(
+        lens=lens, season="current", start_day=23, end_day=25,
+        population="streak-top-100", category="troops", sort="usage-rate",
+    )
+    with pytest.raises(ArmyAnalyticsUnavailable) as unavailable:
+        api_analytics.get_army_analytics(
+            database, selection, now=DAY_START + timedelta(days=3)
+        )
+    assert unavailable.value.affected_days == [missing_day]
+
+
+@pytest.mark.parametrize("lens", ["offense", "defense"])
+def test_default_top_100_keeps_partial_army_day_recovery(monkeypatch, lens) -> None:
+    database = _army_range_database(monkeypatch, missing_kind="army", missing_day=24)
+    selection = ArmyAnalyticsSelection.parse(
+        lens=lens, season="current", start_day=23, end_day=25,
+        population="top-100", category="troops", sort="usage-rate",
+    )
+    result = api_analytics.get_army_analytics(
+        database, selection, now=DAY_START + timedelta(days=3)
+    )
+    assert result["selection"]["start_day"] == 23
+    assert result["selection"]["end_day"] == 25
+    assert result["collection_coverage"]["covered_days"] == [23, 25]
 
 
 def _processor(connection_info: str, archive_server, monkeypatch):

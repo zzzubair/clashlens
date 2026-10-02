@@ -180,7 +180,7 @@ export interface ArmyAnalytics {
     streakExcludedPlayers: number;
     shieldedPlayerDays: number;
   };
-  collectionCoverage: { state: string; completedDays: number };
+  collectionCoverage: { state: string; completedDays: number; coveredDays?: number[] };
   freshness: { state: string };
   reproducibility: {
     officialSeasonId: string;

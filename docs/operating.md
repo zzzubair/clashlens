@@ -321,6 +321,85 @@ Escalate a wait that keeps growing; restarting services does not shrink it.
 **Recovered:** the measurements satisfy the linked alert conditions and each
 condition's Discord recovery message arrives.
 
+### Armies page empty
+
+The Armies page reads only finished Legend days. Each day passes through
+these steps, all run by the worker without a timer:
+
+1. At Reset the collector saves each tracked player's profile and battle log,
+   called the Reset pair. Once both are processed, the pair's latest row in
+   `reset_baseline_evidence` becomes `complete` and queues that player's
+   end-of-day `reconcile_ranked_day` job; unusable evidence makes it `failed`.
+2. The end-of-day job replaces the player's `Live` day in
+   `ranked_day_versions` with a finished one. After the Reset publication
+   target time, the worker queues `build_snapshot` or `build_army_analytics`
+   when that output's inputs are ready for every player in the Reset's
+   `boundary_publication_generations` row. A failed pair is recorded as
+   unavailable rather than blocking the other players' publication.
+3. `build_army_analytics` writes the day's `army_analytics_battle_facts` and
+   its `army_analytics_completed_days` marker in one transaction, in batches
+   of 500 players.
+
+**First checks**, read-only:
+
+```sql
+SELECT boundary_at, state, count(*) FROM reset_baseline_evidence
+GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT ranked_day_start, state, count(*) FROM ranked_day_versions
+GROUP BY 1, 2 ORDER BY 1, 2;
+SELECT ranked_day_start FROM army_analytics_completed_days ORDER BY 1;
+```
+
+Ended days still `Live`, with Reset pairs `partial`, means step 1 is stuck.
+That happened for every Reset before the October 2026 fix: profiles and battle logs are
+processed under different parser versions, and each Reset check looked for
+both results under one of them.
+
+**Backfill:** run outside 04:45–05:15 UTC and repeat until `evaluated_count`
+and `enqueued_count` are both zero:
+
+```sh
+podman exec clashlens-python-worker \
+  python -m clashlens.cli republish-current-season --max-jobs 100
+```
+
+Each run re-checks at most `--max-jobs` current-season Reset pairs left
+`partial` although both results were processed, one short transaction per
+player. It reports how many pairs it checked (`evaluated_count`), the
+end-of-day jobs it queued, and how often each reason a pair failed was seen
+(`failure_reasons`). A run that checks pairs but queues nothing stops there;
+read its `failure_reasons` before running again. The season's opening Reset
+is re-checked too, as day 1's starting evidence, but queues no leaderboard,
+army or day rebuild for the previous season. A repaired pair rebuilds both
+current-season days it touches once they have ended, so a day already
+finished without its starting pair is corrected. One job rebuilds those days
+and every later saved day in that Season, oldest first in one transaction,
+so automatic defense loss and shield duration use the corrected earlier day.
+The worker then publishes the days on its own.
+Only days whose Reset evidence is still in the database can be rebuilt;
+older days need the archived raw responses replayed, which this does not do.
+Once no partial pairs remain to check, the same command queues up to
+`--max-jobs` published current-season player-days that lack the current
+reconciliation rule version.
+
+**Cost:** on 2026-10-02 this re-checks 25,599 pairs for the 2026-10-01 and
+2026-10-02 Resets. Each queues one job, about 25,600 jobs in total. Each job
+recalculates up to 28 player-days. With only the two ended days saved, that
+is about 38,400 day calculations if the pairs split evenly between the two
+Resets, about 12% of a day's normal reconciliation work (about 332,000 jobs
+a day in early October 2026). Later saved days add calculations; the Season
+limit bounds this batch at 716,772 day calculations. One army day is about
+183,000 facts. Measured with synthetic
+facts built from production armies: 1,787 bytes per fact with its indexes,
+so about 330 MB per day and 9.2 GB per 28-day season until the season is
+retired. Building a day in 500-player batches adds about 76 MB to the worker,
+against about 2 GB for a whole day at once. Reading two days took 0.03 s
+for Top 100 and 0.93 s for all tracked players.
+
+**Recovered:** `army_analytics_completed_days` lists the backfilled days.
+Check the Armies page against the
+[current-season coverage and population rules](domain.md#population-filters-and-lenses).
+
 ### When alerts themselves fail
 
 Use the daily timer status and alert journal commands. Check connectivity and

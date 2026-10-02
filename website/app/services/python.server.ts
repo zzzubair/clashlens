@@ -816,6 +816,9 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
     !isRecord(payload.collection_coverage) ||
     !isString(payload.collection_coverage.state) ||
     !isInteger(payload.collection_coverage.completed_days) ||
+    (payload.collection_coverage.covered_days !== undefined &&
+      (!Array.isArray(payload.collection_coverage.covered_days) ||
+        !payload.collection_coverage.covered_days.every(isInteger))) ||
     !isRecord(payload.freshness) ||
     !isString(payload.freshness.state) ||
     !isRecord(payload.reproducibility) ||
@@ -942,6 +945,7 @@ function mapArmyAnalytics(payload: unknown): ArmyAnalytics {
     collectionCoverage: {
       state: payload.collection_coverage.state,
       completedDays: payload.collection_coverage.completed_days,
+      coveredDays: payload.collection_coverage.covered_days as number[] | undefined,
     },
     freshness: { state: payload.freshness.state },
     reproducibility: {

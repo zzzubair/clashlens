@@ -224,6 +224,60 @@ describe("army analytics route historical reads", () => {
     expect(data).toMatchObject({ error: null, seasonEmpty: null });
   });
 
+  it("names the finished days covered when current-season days are missing", async () => {
+    const selection = {
+      season: SEASON,
+      lens: "offense",
+      startDay: 23,
+      endDay: 26,
+      population: "top-100",
+      category: "troops",
+      sort: "usage-rate",
+    };
+    mocks.createPythonClient.mockReturnValue({
+      getArmyAnalytics: vi.fn().mockResolvedValue({
+        kind: "army-analytics",
+        selection,
+        totalAttacks: 0,
+        usableArmySample: 0,
+        armyStates: {},
+        armyStatesSumConfirmed: true,
+        unknownAffectedAttacks: 0,
+        unknownComponentOccurrences: 0,
+        perspectiveDisagreementCount: 0,
+        missingTrophyMembershipEvidence: 0,
+        cohortEvidence: {
+          staleOrUncertainCohortMembers: 0,
+          streakExcludedPlayers: 0,
+          shieldedPlayerDays: 0,
+        },
+        collectionCoverage: {
+          state: "complete",
+          completedDays: 3,
+          coveredDays: [23, 25, 26],
+        },
+        freshness: { state: "frozen" },
+        reproducibility: {
+          officialSeasonId: SEASON,
+          legendDays: [23, 26],
+          snapshotVersions: [],
+        },
+        versions: { decoder: "decoder", catalog: "catalog", analytics: "v3" },
+        publicationIdentity: "publication",
+        rows: [],
+      }),
+    });
+    const html = await renderArmyRoute("season=current");
+    expect(renderedText(html)).toContain(
+      "Days 23, 25–26 of 28; days not tracked: 1–22, 24.",
+    );
+    // The form keeps asking for the whole range so later days appear once ready.
+    expect(html).toMatch(/name="start_day"[^>]*value="1"/);
+    expect(html).toMatch(/name="end_day"[^>]*value="28"/);
+    const chosen = renderedText(await renderArmyRoute("season=current&start_day=25"));
+    expect(chosen).not.toContain("days not tracked");
+  });
+
   it("reads individual Clan Castle troops when the toggle is on", async () => {
     const getArmyAnalytics = vi.fn().mockResolvedValue({ selection: {} });
     mocks.createPythonClient.mockReturnValue({ getArmyAnalytics });

@@ -153,6 +153,7 @@ def _store_baseline_pair(
     observed_at: datetime | None = None,
     normalized_tag: str = "#2PP",
     production_admission: bool = False,
+    profile_parser_version: str | None = None,
 ) -> tuple[int, int, int, int]:
     # A reset-baseline sweep requests its endpoints after the boundary, so the
     # stored observations may complete after ``boundary`` itself.
@@ -165,6 +166,7 @@ def _store_baseline_pair(
         body=_profile(trophies, normalized_tag),
         observed_at=observed_at,
         normalized_tag=normalized_tag,
+        parser_version=profile_parser_version,
     )
     battle_observation, battle_job = store_observation(
         connection_info,
@@ -1059,7 +1061,7 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
                     ),
                 )
                 connection.commit()
-            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1) == []
+            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1)["job_ids"] == []
             with database.pool.connection() as connection:
                 # The source setup runs under v3 and therefore queued a normal
                 # reconciliation. Simulate a deployment whose v2 work is
@@ -1075,9 +1077,9 @@ def test_reconciliation_publishes_frozen_canonical_battle_projection(
                 connection.commit()
             republication_jobs = reconciliation_db.enqueue_current_season_republication(database,
                 max_jobs=1
-            )
+            )["job_ids"]
             assert len(republication_jobs) == 1
-            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1) == []
+            assert reconciliation_db.enqueue_current_season_republication(database, max_jobs=1)["job_ids"] == []
             with database.pool.connection() as connection:
                 republication_input = connection.execute(
                     "SELECT input_json FROM python_processing_jobs WHERE id = %s",

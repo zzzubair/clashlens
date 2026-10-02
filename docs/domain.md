@@ -300,6 +300,21 @@ The following day-range filters describe current-season analytics. Army
 percentages use completed Legend days and update after Reset, not from the
 unfinished live day. Completed-season scope is defined separately below.
 
+For `season=current`, the requested range ends no later than the latest Legend
+day that has ended at Reset. Except for Consistent top, use the available
+completed army days within that range. The returned selection starts and ends
+at the first and last covered days; `collection_coverage.covered_days` lists
+the exact days used, including gaps. The Armies page keeps the requested range
+in its controls so later days can appear as they become ready, and names gaps
+between the requested start and the last covered day. If no days can be used,
+the view is unavailable.
+
+Frozen Top-N cohorts and rank bands use membership from the frozen leaderboard
+at the end of the final covered Legend day. For `season=current`, stop at the
+latest completed army day in the requested range with a published frozen
+leaderboard. Earlier completed army days can contribute without their own
+leaderboard. Trophy-range filters need no leaderboard.
+
 - For a trophy-range filter, the **defense lens** groups attacks by the defender's trophies at battle time.
 - For a trophy-range filter, the **offense lens** groups attacks by the attacker's trophies at battle time.
 - For a frozen leaderboard-cohort or rank-band filter, the defense lens includes attacks whose defenders belong to the selected snapshot population.
@@ -308,9 +323,9 @@ unfinished live day. Completed-season scope is defined separately below.
 - For a rank-streak filter, the offense lens includes attacks made by players in the resulting streak set during the selected consecutive period.
 - Do not substitute current, snapshot, or season-end trophies for battle-time trophies without labeling the value as an estimate.
 - Do not count the same battle twice when it appears in both the attacker's and defender's battle logs.
-- Frozen Top-N cohorts are cumulative and use Top 5, 10, 20, 50, 100, 200, 500, and 1,000. Membership is frozen at the end of the final selected Legend day; Top 100 is the default.
-- Frozen rank bands are ranks 1–5, 6–10, 11–20, 21–50, 51–100, 101–200, and each 100-rank band from 201–300 through 901–1,000. Membership is frozen at the end of the final selected Legend day.
-- A **rank streak** is available only for a Top-N preset and contains players in that Top-N cohort in every frozen daily snapshot of the selected inclusive range. A stale, missing, or uncertain membership cannot establish a confirmed streak; report excluded membership and shielded-day evidence.
+- Frozen Top-N cohorts are cumulative and use Top 5, 10, 20, 50, 100, 200, 500, and 1,000; Top 100 is the default.
+- Frozen rank bands are ranks 1–5, 6–10, 11–20, 21–50, 51–100, 101–200, and each 100-rank band from 201–300 through 901–1,000.
+- A **rank streak**, shown as Consistent top, is available only for a Top-N preset and contains players in that Top-N cohort in every frozen daily snapshot of the selected inclusive range. Completed army data and a published frozen leaderboard are required on every day in that range; a missing day makes the view unavailable. A stale, missing, or uncertain membership cannot establish a confirmed streak; report excluded membership and shielded-day evidence.
 - A trophy range is an arbitrary inclusive minimum and maximum, with minimum at least 5,000 and maximum not lower than minimum. Use the lens-specific battle-time trophy value; missing battle-time evidence is an exclusion, never a substituted observation.
 - Exactly one trophy range, frozen Top-N cohort, frozen rank band, or Top-N rank streak applies at a time.
 

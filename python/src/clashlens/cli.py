@@ -534,15 +534,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.command == "republish-current-season":
             database = Database(_database_url(arguments))
             try:
-                job_ids = reconciliation_db.enqueue_current_season_republication(
+                report = reconciliation_db.enqueue_current_season_republication(
                     database, max_jobs=arguments.max_jobs
                 )
-                print(
-                    json.dumps(
-                        {"enqueued_count": len(job_ids), "job_ids": job_ids},
-                        sort_keys=True,
-                    )
-                )
+                report["enqueued_count"] = len(report["job_ids"])
+                print(json.dumps(report, sort_keys=True))
             finally:
                 database.close()
             return 0

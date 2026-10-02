@@ -106,11 +106,6 @@ Workers claim fenced jobs from the shared queue, verify local spool bytes, and
 use their archive-read credential when archived evidence is needed. The private
 API is reachable only within the stack; the website authenticates its requests.
 
-After a publication contract change, bounded current-season republishing is
-available to the worker role:
-
-```sh
-python -m clashlens.cli republish-current-season --max-jobs 100
-```
-
-Repeat until the command reports `enqueued_count` as zero.
+For bounded current-season repair and republishing, follow
+[Armies page empty](../docs/operating.md#armies-page-empty) for the command,
+stopping conditions, failure reasons and repair limits.

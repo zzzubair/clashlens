@@ -194,11 +194,9 @@ def get_army_analytics(
                     # current-season identity; never fall back to the most
                     # recently published season.
                     raise CurrentSeasonEmpty(None)
-                # The default range ends at the latest Legend day whose
-                # interval has ended in reset chronology (05:00 UTC), not
-                # at the latest day with published source data. The
-                # completed-day gates below then report any ended but
-                # withheld day as unavailable instead of hiding it.
+                # Bound the default range using Reset chronology (05:00 UTC).
+                # Publication delays do not make an ended day unfinished; the
+                # population-specific coverage checks below decide availability.
                 current_time = (
                     now.astimezone(UTC) if now is not None else datetime.now(tz=UTC)
                 )
@@ -255,18 +253,20 @@ def get_army_analytics(
                 (resolved.season, resolved.start_day, resolved.end_day),
             ).fetchall()
             completed_days = {int(row[0]) for row in completed_day_rows}
-            completed_day_signature = tuple(
-                (int(row[0]), _text(row[1])) for row in completed_day_rows
-            )
-            missing_days = [
-                day
-                for day in range(resolved.start_day, resolved.end_day + 1)
-                if day not in day_starts or day not in completed_days
-            ]
-            if missing_days:
-                raise ArmyAnalyticsUnavailable(missing_days)
-            requested = resolved.as_dict()
             population = resolved.population
+            streak = population.startswith("streak-top-")
+            requested_days = list(range(resolved.start_day, resolved.end_day + 1))
+            covered_days = [
+                day
+                for day in requested_days
+                if day in day_starts and day in completed_days
+            ]
+            if (
+                selection.season != "current" or streak
+            ) and covered_days != requested_days:
+                raise ArmyAnalyticsUnavailable(
+                    [day for day in requested_days if day not in covered_days]
+                )
             snapshot_versions: list[int] = []
             snapshot_ids: list[int] = []
             missing_trophies = 0
@@ -275,17 +275,11 @@ def get_army_analytics(
             cohort_evidence: dict[str, int] | None = None
             minimum: int | None = None
             maximum: int | None = None
-            if population.startswith("trophies-"):
-                minimum, maximum = map(int, population.split("-")[1:])
-            else:
-                streak = population.startswith("streak-top-")
-                boundary_by_day = {
-                    day: day_starts[day] + timedelta(days=1)
-                    for day in range(resolved.start_day, resolved.end_day + 1)
-                }
-                needed_days = (
-                    list(boundary_by_day) if streak else [resolved.end_day]
-                )
+            boundary_by_day = {
+                day: day_starts[day] + timedelta(days=1) for day in covered_days
+            }
+            by_boundary: dict[Any, tuple[int, int]] = {}
+            if not population.startswith("trophies-"):
                 snapshots = connection.execute(
                     """
                     SELECT DISTINCT ON (boundary_at)
@@ -295,11 +289,42 @@ def get_army_analytics(
                       AND boundary_at = ANY(%s::timestamptz[])
                     ORDER BY boundary_at, version DESC
                     """,
-                    ([boundary_by_day[day] for day in needed_days],),
+                    (list(boundary_by_day.values()),),
                 ).fetchall()
                 by_boundary = {
                     row[0]: (int(row[1]), int(row[2])) for row in snapshots
                 }
+                if selection.season == "current" and not streak:
+                    ranked_days = [
+                        day
+                        for day in covered_days
+                        if boundary_by_day[day] in by_boundary
+                    ]
+                    covered_days = [
+                        day
+                        for day in covered_days
+                        if ranked_days and day <= ranked_days[-1]
+                    ]
+            if not covered_days:
+                raise ArmyAnalyticsUnavailable(requested_days)
+            if selection.season == "current" and not streak:
+                resolved = ArmyAnalyticsSelection.parse(
+                    **{
+                        **resolved.as_dict(),
+                        "start_day": covered_days[0],
+                        "end_day": covered_days[-1],
+                    }
+                )
+            completed_day_signature = tuple(
+                (int(row[0]), _text(row[1]))
+                for row in completed_day_rows
+                if int(row[0]) in covered_days
+            )
+            requested = resolved.as_dict()
+            if population.startswith("trophies-"):
+                minimum, maximum = map(int, population.split("-")[1:])
+            else:
+                needed_days = requested_days if streak else covered_days[-1:]
                 unavailable_days = [
                     day
                     for day in needed_days
@@ -402,13 +427,7 @@ def get_army_analytics(
                             FROM current_versions
                             """,
                             (
-                                [
-                                    day_starts[day]
-                                    for day in range(
-                                        resolved.start_day,
-                                        resolved.end_day + 1,
-                                    )
-                                ],
+                                [day_starts[day] for day in covered_days],
                                 sorted(member_ids),
                             ),
                         ).fetchone()
@@ -482,31 +501,21 @@ def get_army_analytics(
                         SELECT count(*)
                         FROM army_analytics_battle_facts
                         WHERE official_season_id=%s
-                          AND season_day_number BETWEEN %s AND %s
+                          AND season_day_number = ANY(%s::integer[])
                           AND lens=%s AND is_current
                           AND battle_time_trophies IS NULL
                         """,
-                        (
-                            resolved.season,
-                            resolved.start_day,
-                            resolved.end_day,
-                            resolved.lens,
-                        ),
+                        (resolved.season, covered_days, resolved.lens),
                     ).fetchone()[0]
                 )
             component_column = _ARMY_ANALYTICS_COMPONENT_COLUMN[resolved.category]
             fact_filters = [
                 "official_season_id = %s",
-                "season_day_number BETWEEN %s AND %s",
+                "season_day_number = ANY(%s::integer[])",
                 "lens = %s",
                 "is_current",
             ]
-            fact_params: list[Any] = [
-                resolved.season,
-                resolved.start_day,
-                resolved.end_day,
-                resolved.lens,
-            ]
+            fact_params: list[Any] = [resolved.season, covered_days, resolved.lens]
             if member_ids is None:
                 assert minimum is not None and maximum is not None
                 fact_filters.append("battle_time_trophies BETWEEN %s AND %s")
@@ -594,6 +603,11 @@ def get_army_analytics(
                 source_hash = source_digest.hexdigest()
                 del facts_rows
             result["missing_trophy_membership_evidence"] = missing_trophies
+            result["collection_coverage"] = {
+                **result["collection_coverage"],
+                "completed_days": len(covered_days),
+                "covered_days": covered_days,
+            }
             if cohort_evidence is None:
                 cohort_evidence = {
                     "stale_or_uncertain_cohort_members": 0,

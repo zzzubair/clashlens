@@ -1039,7 +1039,7 @@ describe("server-only Python client response boundary", () => {
         streak_excluded_players: 1,
         shielded_player_days: 3,
       },
-      collection_coverage: { state: "complete", completed_days: 8 },
+      collection_coverage: { state: "complete", completed_days: 8, covered_days: [9] },
       freshness: { state: "frozen" },
       reproducibility: {
         official_season_id: "1783918800",
@@ -1140,7 +1140,7 @@ describe("server-only Python client response boundary", () => {
         streakExcludedPlayers: 1,
         shieldedPlayerDays: 3,
       },
-      collectionCoverage: { state: "complete", completedDays: 8 },
+      collectionCoverage: { state: "complete", completedDays: 8, coveredDays: [9] },
       freshness: { state: "frozen" },
       reproducibility: {
         officialSeasonId: "1783918800",

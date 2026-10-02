@@ -20,6 +20,8 @@ from .catalog import CATALOG_HASH, CATALOG_VERSION
 from .db import Claim, Database, _text_value
 from .domain import SEASON_ANCHOR_RULE_VERSION, DomainRuleError
 
+ARMY_FACT_PLAYER_BATCH = 500
+
 
 def _decode_is_current(
     active: Any, evidence_id: int, raw_code: Any, decoded: DecodedArmy | DecodeFailure
@@ -689,37 +691,152 @@ def _build_army_facts(
             "AND (%s::bigint[] IS NULL OR d.ranked_day_version_id = ANY(%s::bigint[]))"
         )
         version_params = (ranked_version_ids, ranked_version_ids)
-    versions = connection.execute(
-        f"""
-        SELECT DISTINCT ON (d.player_id)
-               rv.id, d.player_id, d.battles, d.official_season_id,
-               d.season_day_number, rv.start_trophies
-        FROM api_player_daily_logs AS d
-        JOIN ranked_day_versions AS rv
-          ON rv.player_id = d.player_id
-         AND rv.ranked_day_start = d.ranked_day_start
-         {ranked_state_filter}
-        WHERE d.ranked_day_start = %s
-          {daily_state_filter}
-          AND (%s::bigint[] IS NULL OR d.player_id = ANY(%s::bigint[]))
-          {version_filter}
-          {daily_log_filter}
-          AND (%s::bigint[] IS NULL OR rv.id = ANY(%s::bigint[]))
-        ORDER BY d.player_id, d.version DESC, rv.version DESC
+    # A Legend day has about 183,000 facts for 13,000 players. Building them
+    # in player batches keeps the worker's memory and each insert bounded;
+    # the whole day still commits as one transaction.
+    active_keys: set[tuple[int, str]] = set()
+    after_player_id = 0
+    while True:
+        versions = connection.execute(
+            f"""
+            SELECT DISTINCT ON (d.player_id)
+                   rv.id, d.player_id, d.battles, d.official_season_id,
+                   d.season_day_number, rv.start_trophies
+            FROM api_player_daily_logs AS d
+            JOIN ranked_day_versions AS rv
+              ON rv.player_id = d.player_id
+             AND rv.ranked_day_start = d.ranked_day_start
+             {ranked_state_filter}
+            WHERE d.ranked_day_start = %s
+              AND d.player_id > %s
+              {daily_state_filter}
+              AND (%s::bigint[] IS NULL OR d.player_id = ANY(%s::bigint[]))
+              {version_filter}
+              {daily_log_filter}
+              AND (%s::bigint[] IS NULL OR rv.id = ANY(%s::bigint[]))
+            ORDER BY d.player_id, d.version DESC, rv.version DESC
+            LIMIT %s
+            """,
+            (
+                ranked_day_start,
+                after_player_id,
+                member_ids,
+                member_ids,
+                *version_params,
+                *daily_log_params,
+                ranked_version_ids,
+                ranked_version_ids,
+                ARMY_FACT_PLAYER_BATCH,
+            ),
+        ).fetchall()
+        if versions:
+            after_player_id = int(versions[-1][1])
+            _build_army_fact_batch(
+                connection,
+                ranked_day_start,
+                versions,
+                battle_ids=battle_ids,
+                decode_ids=decode_ids,
+                evidence_ids=evidence_ids,
+                active_keys=active_keys,
+            )
+        if len(versions) < ARMY_FACT_PLAYER_BATCH:
+            break
+    connection.execute(
+        """
+        UPDATE army_analytics_battle_facts AS fact
+        SET is_current = false
+        WHERE fact.ranked_day_start = %s AND fact.is_current
+          AND NOT EXISTS (
+              SELECT 1
+              FROM unnest(%s::bigint[], %s::text[]) AS active(battle_id, lens)
+              WHERE active.battle_id = fact.battle_id
+                AND active.lens = fact.lens
+          )
         """,
         (
             ranked_day_start,
-            member_ids,
-            member_ids,
-            *version_params,
-            *daily_log_params,
-            ranked_version_ids,
-            ranked_version_ids,
+            [battle_id for battle_id, _lens in active_keys],
+            [lens for _battle_id, lens in active_keys],
         ),
-    ).fetchall()
-    # Load every input relation once. The Python pass below only preserves
-    # the existing event ordering and input-hash semantics; all writes are
-    # bulk statements outside the per-event loop.
+    )
+    # Durable per-day completion marker, atomic with the facts above.
+    marker_filter = "AND state = 'Complete' AND coverage = 'complete'"
+    marker_params: tuple[Any, ...] = (ranked_day_start,)
+    if ranked_version_ids is not None:
+        marker_filter = "AND ranked_day_version_id = ANY(%s::bigint[])"
+        marker_params = (ranked_day_start, ranked_version_ids)
+    marker_day = connection.execute(
+        f"""
+        SELECT DISTINCT official_season_id, season_day_number
+        FROM api_player_daily_logs
+        WHERE ranked_day_start = %s
+          {marker_filter}
+        LIMIT 1
+        """,
+        marker_params,
+    ).fetchone()
+    if marker_day is not None:
+        marker_rows = connection.execute(
+            """
+            SELECT battle_id, lens, input_hash
+            FROM army_analytics_battle_facts
+            WHERE ranked_day_start = %s AND is_current
+            ORDER BY battle_id, lens
+            """,
+            (ranked_day_start,),
+        ).fetchall()
+        marker_hash = hashlib.sha256(
+            json.dumps(
+                [
+                    [int(r[0]), _text_value(r[1]), _text_value(r[2])]
+                    for r in marker_rows
+                ],
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        connection.execute(
+            """
+            INSERT INTO army_analytics_completed_days (
+                ranked_day_start, official_season_id, season_day_number,
+                fact_input_hash
+            ) VALUES (%s, %s, %s, %s)
+            ON CONFLICT (ranked_day_start) DO UPDATE SET
+                official_season_id = EXCLUDED.official_season_id,
+                season_day_number = EXCLUDED.season_day_number,
+                fact_input_hash = EXCLUDED.fact_input_hash,
+                completed_at = clock_timestamp()
+            """,
+            (
+                ranked_day_start,
+                _text_value(marker_day[0]),
+                int(marker_day[1]),
+                marker_hash,
+            ),
+        )
+        # A late correction refreshes an already-summarized season.
+        # Seasons without summaries (live seasons stay on explicit
+        # preview-first backfill) cost one season lock plus one existence
+        # lookup; summarized seasons pay one projection per lens per day build (fact scan
+        # plus per-category upserts, writes skipped when digests match).
+        # Each lens refreshes in a savepoint so a projection failure
+        # warns without rolling back the day facts/marker above.
+        _refresh_army_season_summaries(database, connection, _text_value(marker_day[0]))
+
+
+def _build_army_fact_batch(
+    connection: Any,
+    ranked_day_start: datetime,
+    versions: list[Any],
+    *,
+    battle_ids: list[int] | None,
+    decode_ids: list[int] | None,
+    evidence_ids: list[int] | None,
+    active_keys: set[tuple[int, str]],
+) -> None:
+    # Load every input relation of the batch once. The Python pass below only
+    # preserves the existing event ordering and input-hash semantics; all
+    # writes are bulk statements outside the per-event loop.
     streams: list[tuple[Any, ...]] = []
     pinned_battle_ids = set(battle_ids) if battle_ids is not None else None
     selected_battle_ids: set[int] = set()
@@ -843,7 +960,6 @@ def _build_army_facts(
         }
         for row in fact_rows_by_key
     }
-    active_keys: set[tuple[int, str]] = set()
     superseded_ids: list[int] = []
     fact_rows: list[dict[str, Any]] = []
     for version_id, player_id, season_id, day_number, start_trophies, events in streams:
@@ -965,86 +1081,6 @@ def _build_army_facts(
             """,
             (ranked_day_start, Jsonb(fact_rows)),
         )
-    connection.execute(
-        """
-        UPDATE army_analytics_battle_facts AS fact
-        SET is_current = false
-        WHERE fact.ranked_day_start = %s AND fact.is_current
-          AND NOT EXISTS (
-              SELECT 1
-              FROM unnest(%s::bigint[], %s::text[]) AS active(battle_id, lens)
-              WHERE active.battle_id = fact.battle_id
-                AND active.lens = fact.lens
-          )
-        """,
-        (
-            ranked_day_start,
-            [battle_id for battle_id, _lens in active_keys],
-            [lens for _battle_id, lens in active_keys],
-        ),
-    )
-    # Durable per-day completion marker, atomic with the facts above.
-    marker_filter = "AND state = 'Complete' AND coverage = 'complete'"
-    marker_params: tuple[Any, ...] = (ranked_day_start,)
-    if ranked_version_ids is not None:
-        marker_filter = "AND ranked_day_version_id = ANY(%s::bigint[])"
-        marker_params = (ranked_day_start, ranked_version_ids)
-    marker_day = connection.execute(
-        f"""
-        SELECT DISTINCT official_season_id, season_day_number
-        FROM api_player_daily_logs
-        WHERE ranked_day_start = %s
-          {marker_filter}
-        LIMIT 1
-        """,
-        marker_params,
-    ).fetchone()
-    if marker_day is not None:
-        marker_rows = connection.execute(
-            """
-            SELECT battle_id, lens, input_hash
-            FROM army_analytics_battle_facts
-            WHERE ranked_day_start = %s AND is_current
-            ORDER BY battle_id, lens
-            """,
-            (ranked_day_start,),
-        ).fetchall()
-        marker_hash = hashlib.sha256(
-            json.dumps(
-                [
-                    [int(r[0]), _text_value(r[1]), _text_value(r[2])]
-                    for r in marker_rows
-                ],
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
-        connection.execute(
-            """
-            INSERT INTO army_analytics_completed_days (
-                ranked_day_start, official_season_id, season_day_number,
-                fact_input_hash
-            ) VALUES (%s, %s, %s, %s)
-            ON CONFLICT (ranked_day_start) DO UPDATE SET
-                official_season_id = EXCLUDED.official_season_id,
-                season_day_number = EXCLUDED.season_day_number,
-                fact_input_hash = EXCLUDED.fact_input_hash,
-                completed_at = clock_timestamp()
-            """,
-            (
-                ranked_day_start,
-                _text_value(marker_day[0]),
-                int(marker_day[1]),
-                marker_hash,
-            ),
-        )
-        # A late correction refreshes an already-summarized season.
-        # Seasons without summaries (live seasons stay on explicit
-        # preview-first backfill) cost one season lock plus one existence
-        # lookup; summarized seasons pay one projection per lens per day build (fact scan
-        # plus per-category upserts, writes skipped when digests match).
-        # Each lens refreshes in a savepoint so a projection failure
-        # warns without rolling back the day facts/marker above.
-        _refresh_army_season_summaries(database, connection, _text_value(marker_day[0]))
 
 
 def _refresh_army_season_summaries(database, connection: Any, season_id: str) -> None:

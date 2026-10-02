@@ -401,6 +401,15 @@ export default function ArmyAnalyticsRoute() {
   const pendingChange = useRef<ReturnType<typeof setTimeout> | null>(null);
   const selected = analytics?.selection;
   const isHistorical = historicalSummary === true;
+  const requestedStartDay = params.get("start_day") ?? "1";
+  const requestedEndDay = params.get("end_day") ?? "28";
+  const coveredDays = analytics?.collectionCoverage.coveredDays ?? [];
+  const untrackedDays = coveredDays.length
+    ? Array.from(
+        { length: coveredDays[coveredDays.length - 1] - Number(requestedStartDay) + 1 },
+        (_, index) => Number(requestedStartDay) + index,
+      ).filter((day) => !coveredDays.includes(day))
+    : [];
   const lens = selected?.lens ?? params.get("lens") ?? "offense";
   const population = selected?.population ?? params.get("population") ?? "top-100";
   const category =
@@ -478,8 +487,8 @@ export default function ArmyAnalyticsRoute() {
       category: showCategory,
       sort: selected?.sort ?? params.get("sort") ?? "usage-rate",
       season: requestedSeason,
-      start_day: String(selected?.startDay ?? params.get("start_day") ?? 1),
-      end_day: String(selected?.endDay ?? params.get("end_day") ?? 28),
+      start_day: requestedStartDay,
+      end_day: requestedEndDay,
     };
     for (const [name, value] of Object.entries(values)) {
       const control = filterForm.current.elements.namedItem(name);
@@ -721,7 +730,7 @@ export default function ArmyAnalyticsRoute() {
                     required
                     min="1"
                     max="28"
-                    defaultValue={selected?.startDay ?? params.get("start_day") ?? 1}
+                    defaultValue={requestedStartDay}
                     disabled={isHistorical}
                   />
                 </label>
@@ -733,7 +742,7 @@ export default function ArmyAnalyticsRoute() {
                     required
                     min="1"
                     max="28"
-                    defaultValue={selected?.endDay ?? params.get("end_day") ?? 28}
+                    defaultValue={requestedEndDay}
                     disabled={isHistorical}
                   />
                 </label>
@@ -824,6 +833,12 @@ export default function ArmyAnalyticsRoute() {
               · {analytics.selection.lens === "offense" ? "Attacks" : "Defenses"}
             </span>
           </div>
+          {!isHistorical && !snapshot && untrackedDays.length > 0 ? (
+            <p className="section-note analytics-coverage-note">
+              Days {dayList(coveredDays)} of 28; days not tracked:{" "}
+              {dayList(untrackedDays)}.
+            </p>
+          ) : null}
           <p className="section-note analytics-coverage-note" id="army-rate-help">
             Star rates show how often battles using each component ended with that result.
             Each battle counts once per component.
@@ -956,6 +971,17 @@ function seasonName(seasonId: string) {
         year: "numeric",
         timeZone: "UTC",
       });
+}
+
+function dayList(days: number[]) {
+  const runs: string[] = [];
+  for (let first = 0; first < days.length;) {
+    let last = first;
+    while (days[last + 1] === days[last] + 1) last += 1;
+    runs.push(last === first ? String(days[first]) : `${days[first]}–${days[last]}`);
+    first = last + 1;
+  }
+  return runs.join(", ");
 }
 
 function shortDate(value: string) {

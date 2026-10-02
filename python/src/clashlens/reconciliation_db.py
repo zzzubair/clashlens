@@ -36,18 +36,37 @@ def complete_reconciliation(database: Database, claim: Claim) -> None:
     with database.pool.connection() as connection:
         with connection.transaction():
             job = database._lock_live_claim(connection, claim)
-            recalculate_ranked_day(
-                database,
-                connection,
-                player_id=int(claim.input_json["player_id"]),
-                day_start=datetime.fromisoformat(
-                    str(claim.input_json["ranked_day_start"])
-                ),
-                parser_version=claim.parser_version,
-                processing_version=claim.processing_version,
-                domain_rule_version=claim.domain_rule_version,
-                analytics_rule_version=claim.analytics_rule_version,
-            )
+            player_id = int(claim.input_json["player_id"])
+            day_start = datetime.fromisoformat(str(claim.input_json["ranked_day_start"]))
+            day_starts = {day_start}
+            if "recalculate_season" in claim.input_json:
+                day_starts.add(
+                    datetime.fromisoformat(
+                        str(claim.input_json["last_ranked_day_start"])
+                    )
+                )
+                saved_days = connection.execute(
+                    """
+                    SELECT DISTINCT ranked_day_start
+                    FROM api_player_daily_logs
+                    WHERE player_id = %s AND ranked_day_start >= %s
+                      AND official_season_id = %s
+                    ORDER BY ranked_day_start
+                    """,
+                    (player_id, day_start, claim.input_json["recalculate_season"]),
+                ).fetchall()
+                day_starts.update(row[0] for row in saved_days)
+            for day_start in sorted(day_starts):
+                recalculate_ranked_day(
+                    database,
+                    connection,
+                    player_id=player_id,
+                    day_start=day_start,
+                    parser_version=claim.parser_version,
+                    processing_version=claim.processing_version,
+                    domain_rule_version=claim.domain_rule_version,
+                    analytics_rule_version=claim.analytics_rule_version,
+                )
             database._finish_claim(
                 connection, claim, job, state="complete", outcome="processed"
             )
@@ -142,14 +161,12 @@ def recalculate_ranked_day(
         connection,
         player_id,
         ranked_day.start,
-        parser_version,
         processing_version,
     )
     end_baseline = reset_baselines._load_reset_baseline(database, 
         connection,
         player_id,
         ranked_day.end,
-        parser_version,
         processing_version,
     )
     start_battle_log_observation_id = (
@@ -1247,17 +1264,26 @@ def enqueue_current_season_republication(
     database: Database,
     *,
     max_jobs: int = 100,
-) -> list[int]:
-    """Queue a bounded batch of published current-season days missing v3.
+) -> dict[str, Any]:
+    """Queue bounded current-season Reset repairs before v3 republication.
 
     This rebuilds derived ranked-day publications from canonical database
     evidence; it does not replay archived source observations. Repeating
     the call advances past already queued targets, so an operator can drain
     a season in measured batches without an unbounded deployment action.
+    A batch that re-checks partial Reset pairs reports only that work; see
+    ``reset_baselines.repair_current_season_reset_baselines``.
     """
 
     if isinstance(max_jobs, bool) or not 1 <= max_jobs <= 1000:
         raise ValueError("current-season republication batch must be 1 to 1000")
+    # Days left Live by Reset pairs wrongly recorded as partial come first:
+    # finishing them is what lets those days publish at all.
+    repaired = reset_baselines.repair_current_season_reset_baselines(
+        database, max_works=max_jobs
+    )
+    if repaired["evaluated_count"]:
+        return repaired
     with database.pool.connection() as connection:
         with connection.transaction():
             candidates = connection.execute(
@@ -1372,6 +1398,4 @@ def enqueue_current_season_republication(
                 ).fetchone()
                 if row is not None:
                     job_ids.append(int(row[0]))
-            return job_ids
-
-
+            return {**repaired, "job_ids": job_ids}
