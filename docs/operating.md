@@ -67,13 +67,19 @@ The collector's `/metrics` exports these gauges with the
 `clashlens_collector_` prefix:
 
 - `check_age_p50_seconds`, `check_age_p95_seconds`, `check_age_max_seconds`:
-  successful check ages across active tracked players. Each player's age uses
+  successful check ages across active tracked players, excluding players hidden
+  as not found by the Live Leaderboard. A player is excluded when the profile's
+  `last_not_found_at` exists and either it is newer than `last_success_at` or no
+  profile success exists. A success at or after that not-found time includes the
+  player again; other failures do not change membership. Each player's age uses
   the older of the profile and battle-log `last_success_at` values. Unchanged
   successful responses advance these times; failures do not. Both times must
   exist for a player to contribute an age.
 - `check_age_sample_players` and `check_age_missing_players`: players with both
-  successful checks and active players missing either check. No samples means
-  the three age gauges are absent, not zero.
+  successful checks and active players missing either check, after the same
+  not-found exclusion. No samples means the three age gauges are absent, not
+  zero. Existing active-player and scheduling gauges still include these
+  tracked players so their retry work remains visible.
 - `metrics_sample_timestamp_seconds`: database sample time as Unix seconds.
   Database gauges refresh on the first scrape and then at most once every
   30 seconds, with concurrent scrapes sharing the sample. A failed refresh
