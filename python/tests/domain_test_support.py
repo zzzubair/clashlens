@@ -124,18 +124,6 @@ def as_api_role(connection_info: str) -> str:
     )
 
 
-def apply_migration(connection: Any, path: Path) -> None:
-    """Apply one migration file the way ./ops does with psql.
-
-    psql runs a file without BEGIN one statement at a time, which CREATE INDEX
-    CONCURRENTLY requires; a single multi-statement query would not allow it.
-    """
-    text = path.read_text(encoding="utf-8")
-    for statement in text.split(";\n") if "CONCURRENTLY" in text else [text]:
-        if statement.strip():
-            connection.execute(statement)
-
-
 @contextmanager
 def domain_database(
     database_url: str, *, include_coordinator: bool = False
@@ -150,7 +138,7 @@ def domain_database(
         sql_files = sorted(migrations_dir.glob("*.sql"))
         with psycopg.connect(connection_info, autocommit=True) as connection:
             for path in sql_files:
-                apply_migration(connection, path)
+                connection.execute(path.read_text(encoding="utf-8"))
             for statement in production_worker_grants():
                 connection.execute(statement)
         yield connection_info

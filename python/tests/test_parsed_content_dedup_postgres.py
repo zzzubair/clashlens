@@ -6,13 +6,7 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from domain_test_support import (
-    apply_migration,
-    as_api_role,
-    domain_database,
-    store_observation,
-    text,
-)
+from domain_test_support import as_api_role, domain_database, store_observation, text
 from test_discovery_history_prune_postgres import _attach_complete_work
 from test_domain_processing_postgres import _processor
 
@@ -659,16 +653,17 @@ def test_backfilled_profile_identifier_confirms_checks_after_repair(
                 check(b'{"reason":"inMaintenance"}', confirmed_at + timedelta(minutes=5),
                       "upgrade-failed", status=503)
             database.close()
-            with psycopg.connect(connection_info, autocommit=True) as connection:
+            with psycopg.connect(connection_info) as connection:
                 connection.execute(
                     """
                     ALTER TABLE players DROP COLUMN current_profile_confirmed_at,
                         DROP COLUMN current_profile_fingerprint
                     """
                 )
+                connection.commit()
                 for migration in sorted((ROOT / "deploy/migrations").glob("*.sql")):
                     if int(migration.name.split("_", 1)[0]) >= 40:
-                        apply_migration(connection, migration)
+                        connection.execute(migration.read_text())
                 fingerprint = connection.execute(
                     "SELECT current_profile_fingerprint FROM players WHERE normalized_tag = '#2PP'"
                 ).fetchone()[0]
