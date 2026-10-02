@@ -18,19 +18,19 @@ RECOVERY_WINDOW_DAYS = 7
 RESTORE_ALLOWANCE_DAYS = 2
 RECOVERY_HOLD = f"{RECOVERY_WINDOW_DAYS + RESTORE_ALLOWANCE_DAYS} days"
 
-# Pending uploads and unfinished processing or replay keep a response usable.
+# Unfinished uploads of the same bytes and unfinished processing or replay
+# keep a response usable.
 _ACTIVE = """
     EXISTS (SELECT 1 FROM collector_response_uploads AS u
-        WHERE u.response_hash = c.response_hash
-          AND u.archive_reference = c.archive_reference AND u.state <> 'complete')
+        WHERE u.response_hash = c.response_hash AND u.state <> 'complete')
     OR EXISTS (SELECT 1 FROM collector_observations AS o
         JOIN python_processing_jobs AS p
           ON o.id = COALESCE(p.observation_id, p.replay_observation_id)
         WHERE o.archive_reference = c.archive_reference
           AND p.status NOT IN ('complete', 'cancelled'))
 """
-_DUE = "c.availability = 'verified' AND c.retire_after <= clock_timestamp()"
-_RELEASED = "c.availability = 'retiring' AND c.retiring_since <= clock_timestamp() - %s::interval"
+_DUE = "c.availability = 'verified' AND c.retire_after <= statement_timestamp()"
+_RELEASED = "c.availability = 'retiring' AND c.retiring_since <= statement_timestamp() - %s::interval"
 
 
 def _text(value: Any) -> str:

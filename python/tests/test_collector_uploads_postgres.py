@@ -789,6 +789,64 @@ def test_identical_response_reuploads_when_its_location_is_tombstoned(
             )
 
 
+@pytest.mark.parametrize("availability", ["verified", "retiring", "expired"])
+def test_upload_completion_never_reuses_a_tombstoned_legacy_location(
+    database_url: str, availability: str
+) -> None:
+    # A location catalogued before upload rows existed has no upload row, so
+    # its bytes seen again upload to the same key without a generation.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        response_hash = _hash("legacy-location")
+        reference = f"s3://evidence/sha256/{response_hash[:2]}/{response_hash}"
+        _archive_instance(connection_info)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                """
+                INSERT INTO archive_catalogue (
+                    response_hash, archive_reference, byte_size, archive_instance_id,
+                    first_verified_at, retire_after, availability
+                ) VALUES (%s, %s, 1, 'fixture-instance', %s, %s, %s)
+                """,
+                (response_hash, reference, NOW - timedelta(days=200), NOW - timedelta(days=1), availability),
+            )
+        observed = database.record_response(
+            _handoff(
+                occurrence_key="legacy-location-seen-again",
+                response_hash=response_hash,
+                player_id=player_id,
+            )
+        )
+        claim = claim_upload(database, owner="uploader", now=NOW)
+        assert claim is not None and claim.generation == ""
+        complete_upload(
+            database,
+            claim,
+            archive_reference=reference,
+            archive_instance_id="fixture-instance",
+            now=NOW + timedelta(minutes=1),
+        )
+        with psycopg.connect(connection_info) as connection:
+            bound, retire_after = connection.execute(
+                """
+                SELECT observation.archive_reference, catalogue.retire_after
+                FROM collector_observations AS observation, archive_catalogue AS catalogue
+                WHERE observation.id = %s AND catalogue.archive_reference = %s
+                """,
+                (observed.observation_id, reference),
+            ).fetchone()
+        if availability == "verified":
+            assert bound == reference
+            assert retire_after == NOW + timedelta(days=86)
+            return
+        assert bound is None
+        assert retire_after == NOW - timedelta(days=1)
+        retry = claim_upload(database, owner="uploader", now=NOW + timedelta(minutes=1))
+        assert retry is not None and retry.response_hash == response_hash
+        assert len(retry.generation) == 32
+
+
 def test_ignored_raw_change_follows_the_retained_observation_archive(
     database_url: str,
 ) -> None:
