@@ -17,6 +17,7 @@ from .db import (
     Database,
     _text_value,
 )
+from .domain import SEASON_ANCHOR_RULE_VERSION
 
 
 def _refresh_reset_baseline_evidence(
@@ -29,10 +30,135 @@ def _refresh_reset_baseline_evidence(
 ) -> None:
     if claim.observation_id is None:
         return
-    context = _load_reset_baseline_context(connection, claim.observation_id)
+    _evaluate_reset_baseline(
+        database,
+        connection,
+        observation_id=claim.observation_id,
+        observation_endpoint=claim.endpoint,
+        parser_version=claim.parser_version,
+        processing_version=claim.processing_version,
+        failure_category=failure_category,
+        failure_retryable=failure_retryable,
+    )
+
+
+def repair_current_season_reset_baselines(
+    database: Database, *, max_works: int
+) -> list[int]:
+    """Re-check current-season Reset pairs left partial with both results saved.
+
+    Until profiles and battle logs were read under their own parser versions,
+    every such pair stayed partial, so its Legend day was never finished. Each
+    pair is re-checked from saved results in its own short transaction, at most
+    ``max_works`` per batch. Returns the end-of-day reconciliation jobs queued;
+    an empty list means no such pair is left.
+    """
+
+    after_work_id = 0
+    with database.pool.connection() as connection:
+        while True:
+            with connection.transaction():
+                candidates = connection.execute(
+                    """
+                    WITH current_anchor AS (
+                        SELECT current_start
+                        FROM legend_season_anchors
+                        WHERE state = 'confirmed' AND anchor_rule_version = %s
+                        ORDER BY current_start DESC
+                        LIMIT 1
+                    )
+                    SELECT work.id, work.profile_observation_id, (
+                        SELECT outcome.parser_version
+                        FROM observation_processing_outcomes AS outcome
+                        WHERE outcome.observation_id = work.profile_observation_id
+                          AND outcome.processing_version = %s
+                        ORDER BY outcome.id DESC
+                        LIMIT 1
+                    )
+                    FROM collector_work AS work
+                    JOIN collector_reset_sweeps AS sweep ON sweep.id = work.sweep_id
+                    JOIN current_anchor AS anchor
+                      ON sweep.boundary_at > anchor.current_start
+                     AND sweep.boundary_at <= anchor.current_start + interval '28 days'
+                    WHERE work.kind = 'reset_baseline'
+                      AND work.id > %s
+                      AND (
+                          SELECT evidence.state
+                          FROM reset_baseline_evidence AS evidence
+                          WHERE evidence.collector_work_id = work.id
+                          ORDER BY evidence.version DESC, evidence.id DESC
+                          LIMIT 1
+                      ) = 'partial'
+                      AND EXISTS (
+                          SELECT 1 FROM observation_processing_outcomes AS outcome
+                          WHERE outcome.observation_id = work.profile_observation_id
+                            AND outcome.processing_version = %s
+                      )
+                      AND EXISTS (
+                          SELECT 1 FROM observation_processing_outcomes AS outcome
+                          WHERE outcome.observation_id = work.battle_log_observation_id
+                            AND outcome.processing_version = %s
+                      )
+                    ORDER BY work.id
+                    LIMIT %s
+                    """,
+                    (
+                        SEASON_ANCHOR_RULE_VERSION,
+                        PROCESSING_VERSION,
+                        after_work_id,
+                        PROCESSING_VERSION,
+                        PROCESSING_VERSION,
+                        max_works,
+                    ),
+                ).fetchall()
+            if not candidates:
+                return []
+            job_ids = []
+            for work_id, profile_observation_id, profile_parser_version in candidates:
+                with connection.transaction():
+                    job_id = _evaluate_reset_baseline(
+                        database,
+                        connection,
+                        observation_id=int(profile_observation_id),
+                        observation_endpoint="profile",
+                        parser_version=_text_value(profile_parser_version),
+                        processing_version=PROCESSING_VERSION,
+                    )
+                if job_id is not None:
+                    job_ids.append(job_id)
+                after_work_id = int(work_id)
+            # A batch whose pairs all failed queued nothing; keep going so an
+            # empty result still means no partial pair is left.
+            if job_ids:
+                return job_ids
+
+
+def _evaluate_reset_baseline(
+    database: Database,
+    connection: Any,
+    *,
+    observation_id: int,
+    observation_endpoint: str | None,
+    parser_version: str,
+    processing_version: str,
+    failure_category: str | None = None,
+    failure_retryable: bool = False,
+) -> int | None:
+    """Record the Reset pair evidence seen from one of its observations.
+
+    Returns the end-of-day reconciliation job queued when the pair is complete.
+    """
+    context = _load_reset_baseline_context(connection, observation_id)
     if context is None:
-        return
+        return None
     work_id, player_id, normalized_tag, sweep_id, boundary_at = context
+    # The profile and battle-log jobs of one Reset pair often run at the same
+    # time. Lock before reading so the later job sees the earlier job's
+    # committed result instead of each recording only its own endpoint.
+    connection.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"reset-baseline:{work_id}",),
+    )
     endpoints = {
         endpoint: _load_reset_endpoint_evidence(database, 
             connection,
@@ -41,9 +167,10 @@ def _refresh_reset_baseline_evidence(
             player_id=int(player_id),
             normalized_tag=_text_value(normalized_tag),
             boundary_at=boundary_at,
-            parser_version=claim.parser_version,
-            processing_version=claim.processing_version,
-            claim=claim,
+            parser_version=parser_version,
+            processing_version=processing_version,
+            source_observation_id=observation_id,
+            source_endpoint=observation_endpoint,
             failure_category=failure_category,
             failure_retryable=failure_retryable,
         )
@@ -89,16 +216,12 @@ def _refresh_reset_baseline_evidence(
         "profile_valid": profile_valid,
         "battle_log_valid": battle_log_valid,
         "state": state,
-        "parser_version": claim.parser_version,
-        "processing_version": claim.processing_version,
+        "parser_version": parser_version,
+        "processing_version": processing_version,
     }
     evidence_key = hashlib.sha256(
         json.dumps(fingerprint, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    connection.execute(
-        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-        (f"reset-baseline:{work_id}",),
-    )
     existing = connection.execute(
         """
         SELECT id, version
@@ -148,8 +271,8 @@ def _refresh_reset_baseline_evidence(
                 battle_log_valid,
                 profile["processing_outcome_id"],
                 battle_log["processing_outcome_id"],
-                claim.parser_version,
-                claim.processing_version,
+                parser_version,
+                processing_version,
                 version,
                 prior[0] if prior is not None else None,
                 state,
@@ -169,14 +292,15 @@ def _refresh_reset_baseline_evidence(
             player_id=int(player_id),
             state=state,
         )
-    if state == "complete":
-        _enqueue_reset_reconciliation(
-            connection,
-            baseline_id=evidence_id,
-            baseline_version=version,
-            player_id=int(player_id),
-            boundary_at=boundary_at,
-        )
+    if state != "complete":
+        return None
+    return _enqueue_reset_reconciliation(
+        connection,
+        baseline_id=evidence_id,
+        baseline_version=version,
+        player_id=int(player_id),
+        boundary_at=boundary_at,
+    )
 
 
 def _record_boundary_baseline(
@@ -317,7 +441,8 @@ def _load_reset_endpoint_evidence(
     boundary_at: datetime,
     parser_version: str,
     processing_version: str,
-    claim: Claim,
+    source_observation_id: int,
+    source_endpoint: str | None,
     failure_category: str | None,
     failure_retryable: bool,
 ) -> dict[str, Any]:
@@ -325,7 +450,7 @@ def _load_reset_endpoint_evidence(
         """
         LEFT JOIN player_profile_effects AS profile_effect
           ON profile_effect.observation_id = observed.id
-         AND profile_effect.parser_version = %s
+         AND profile_effect.parser_version = processing.parser_version
         LEFT JOIN player_profile_versions AS profile
           ON profile.id = profile_effect.profile_version_id
         """
@@ -333,7 +458,7 @@ def _load_reset_endpoint_evidence(
         else """
         LEFT JOIN player_profile_versions AS profile
           ON profile.observation_id = observed.id
-         AND profile.parser_version = %s
+         AND profile.parser_version = processing.parser_version
         """
     )
     endpoint_column = (
@@ -358,20 +483,29 @@ def _load_reset_endpoint_evidence(
         FROM collector_work AS work
         LEFT JOIN collector_observations AS observed
           ON observed.id = {endpoint_column}
-        LEFT JOIN observation_processing_outcomes AS processing
-          ON processing.observation_id = observed.id
-         AND processing.parser_version = %s
-         AND processing.processing_version = %s
+        -- Profiles and battle logs have different parser versions, so the
+        -- other endpoint's result is its own latest outcome, not one under
+        -- this job's parser version.
+        LEFT JOIN LATERAL (
+            SELECT outcome.id, outcome.outcome, outcome.failure_category,
+                   outcome.parser_version
+            FROM observation_processing_outcomes AS outcome
+            WHERE outcome.observation_id = observed.id
+              AND outcome.processing_version = %s
+            ORDER BY (
+                outcome.observation_id = %s AND outcome.parser_version = %s
+            ) DESC, outcome.id DESC
+            LIMIT 1
+        ) AS processing ON true
         {profile_join}
         LEFT JOIN battle_log_observations AS battle_log
           ON battle_log.observation_id = observed.id
-         AND battle_log.parser_version = %s
+         AND battle_log.parser_version = processing.parser_version
         WHERE work.id = %s
         """,
         (
-            parser_version,
             processing_version,
-            parser_version,
+            source_observation_id,
             parser_version,
             work_id,
         ),
@@ -398,8 +532,8 @@ def _load_reset_endpoint_evidence(
         if processing_outcome is None:
             missing = True
             if (
-                claim.endpoint == endpoint
-                and claim.observation_id == observation_id
+                source_endpoint == endpoint
+                and source_observation_id == observation_id
                 and failure_category is not None
             ):
                 suffix = f"_{failure_category}"
@@ -464,7 +598,6 @@ def _load_reset_baseline(
     connection: Any,
     player_id: int,
     boundary_at: datetime,
-    parser_version: str,
     processing_version: str,
 ) -> dict[str, Any] | None:
     dedup = getattr(database, "_supports_content_dedup", False)
@@ -473,7 +606,7 @@ def _load_reset_baseline(
         """
         LEFT JOIN player_profile_effects AS profile_effect
           ON profile_effect.observation_id = evidence.profile_observation_id
-         AND profile_effect.parser_version = evidence.parser_version
+         AND profile_effect.parser_version = profile_processing.parser_version
         LEFT JOIN player_profile_versions AS profile
           ON profile.id = profile_effect.profile_version_id
         """
@@ -481,7 +614,7 @@ def _load_reset_baseline(
         else """
         LEFT JOIN player_profile_versions AS profile
           ON profile.observation_id = evidence.profile_observation_id
-         AND profile.parser_version = evidence.parser_version
+         AND profile.parser_version = profile_processing.parser_version
         """
     )
     row = connection.execute(
@@ -501,24 +634,28 @@ def _load_reset_baseline(
                profile_observation.response_hash,
                battle_observation.response_hash
         FROM reset_baseline_evidence AS evidence
+        -- Each endpoint is read under the parser version that processed it.
+        LEFT JOIN observation_processing_outcomes AS profile_processing
+          ON profile_processing.id = evidence.profile_processing_outcome_id
+        LEFT JOIN observation_processing_outcomes AS battle_processing
+          ON battle_processing.id = evidence.battle_log_processing_outcome_id
         {profile_join}
         LEFT JOIN collector_observations AS profile_observation
           ON profile_observation.id = evidence.profile_observation_id
          AND profile_observation.endpoint = 'profile'
         LEFT JOIN battle_log_observations AS battle_log
           ON battle_log.observation_id = evidence.battle_log_observation_id
-         AND battle_log.parser_version = evidence.parser_version
+         AND battle_log.parser_version = battle_processing.parser_version
         LEFT JOIN collector_observations AS battle_observation
           ON battle_observation.id = evidence.battle_log_observation_id
          AND battle_observation.endpoint = 'battle_log'
         WHERE evidence.player_id = %s
           AND evidence.boundary_at = %s
-          AND evidence.parser_version = %s
           AND evidence.processing_version = %s
         ORDER BY evidence.version DESC, evidence.id DESC
         LIMIT 1
         """,
-        (player_id, boundary_at, parser_version, processing_version),
+        (player_id, boundary_at, processing_version),
     ).fetchone()
     if row is None:
         return None
@@ -602,7 +739,7 @@ def _enqueue_reset_reconciliation(
     baseline_version: int,
     player_id: int,
     boundary_at: datetime,
-) -> None:
+) -> int | None:
     boundary_text = boundary_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     ranked_day_start = boundary_at - timedelta(days=1)
     ranked_day_start_text = ranked_day_start.astimezone(UTC).strftime(
@@ -611,7 +748,7 @@ def _enqueue_reset_reconciliation(
     deduplication_key = (
         f"reconcile:reset-baseline:{baseline_id}:v{baseline_version}"
     )
-    connection.execute(
+    row = connection.execute(
         """
         INSERT INTO python_processing_jobs_worker (
             observation_id, work_type, deduplication_key, input_json,
@@ -622,6 +759,7 @@ def _enqueue_reset_reconciliation(
             %s, %s, %s, %s
         )
         ON CONFLICT (deduplication_key) DO NOTHING
+        RETURNING id
         """,
         (
             deduplication_key,
@@ -639,6 +777,7 @@ def _enqueue_reset_reconciliation(
             DOMAIN_RULE_VERSION,
             ANALYTICS_RULE_VERSION,
         ),
-    )
+    ).fetchone()
+    return int(row[0]) if row is not None else None
 
 

@@ -153,6 +153,7 @@ def _store_baseline_pair(
     observed_at: datetime | None = None,
     normalized_tag: str = "#2PP",
     production_admission: bool = False,
+    profile_parser_version: str | None = None,
 ) -> tuple[int, int, int, int]:
     # A reset-baseline sweep requests its endpoints after the boundary, so the
     # stored observations may complete after ``boundary`` itself.
@@ -165,6 +166,7 @@ def _store_baseline_pair(
         body=_profile(trophies, normalized_tag),
         observed_at=observed_at,
         normalized_tag=normalized_tag,
+        parser_version=profile_parser_version,
     )
     battle_observation, battle_job = store_observation(
         connection_info,

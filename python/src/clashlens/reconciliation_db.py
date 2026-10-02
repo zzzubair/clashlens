@@ -142,14 +142,12 @@ def recalculate_ranked_day(
         connection,
         player_id,
         ranked_day.start,
-        parser_version,
         processing_version,
     )
     end_baseline = reset_baselines._load_reset_baseline(database, 
         connection,
         player_id,
         ranked_day.end,
-        parser_version,
         processing_version,
     )
     start_battle_log_observation_id = (
@@ -1258,6 +1256,13 @@ def enqueue_current_season_republication(
 
     if isinstance(max_jobs, bool) or not 1 <= max_jobs <= 1000:
         raise ValueError("current-season republication batch must be 1 to 1000")
+    # Days left Live by Reset pairs wrongly recorded as partial come first:
+    # finishing them is what lets those days publish at all.
+    repaired = reset_baselines.repair_current_season_reset_baselines(
+        database, max_works=max_jobs
+    )
+    if repaired:
+        return repaired
     with database.pool.connection() as connection:
         with connection.transaction():
             candidates = connection.execute(

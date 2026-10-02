@@ -113,4 +113,6 @@ available to the worker role:
 python -m clashlens.cli republish-current-season --max-jobs 100
 ```
 
-Repeat until the command reports `enqueued_count` as zero.
+Repeat until the command reports `enqueued_count` as zero. It first finishes
+current-season Legend days left `Live` by Reset pairs wrongly recorded as
+partial; see [Armies page empty](../docs/operating.md#armies-page-empty).
