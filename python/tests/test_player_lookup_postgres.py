@@ -8,7 +8,12 @@ import psycopg
 import pytest
 from domain_test_support import store_observation
 from psycopg.conninfo import make_conninfo
-from test_api_db_public_ops import NOW, anonymous_binding, seed_profile
+from test_api_db_public_ops import (
+    NOW,
+    anonymous_binding,
+    seed_league_history,
+    seed_profile,
+)
 from test_api_migration import migrated_production_database
 from test_collector_db_postgres import _handoff, _hash
 from test_domain_processing_postgres import _processor
@@ -196,6 +201,128 @@ def test_name_results_only_include_active_or_historical_players(database_url):
             )
             assert submit(database, "#2PY")["state"] == "not_in_legend"
             assert database.scalar("SELECT count(*) FROM collector_work") == 3
+        finally:
+            database.close()
+
+
+def test_name_search_preserves_history_membership_order_and_limit(database_url):
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        try:
+            tags = ("#2PP", "#2PY", "#2PQ", "#2PR", "#2PV", "#2P0", "#2P2", "#2P8", "#2P9")
+            for tag in tags:
+                seed_profile(database, tag, 6000)
+            seed_league_history(database, "#2PV", "202608")
+            with database.pool.connection() as connection:
+                # The first two matching names must be excluded before LIMIT.
+                connection.execute("UPDATE players SET active = false")
+                connection.execute(
+                    "UPDATE players SET active = true WHERE normalized_tag IN ('#2PP', '#2P8', '#2P9')"
+                )
+                connection.execute(
+                    "UPDATE player_profile_versions SET source_contract_state = 'quarantined' WHERE normalized_tag = '#2P8'"
+                )
+                connection.execute(
+                    "UPDATE players SET current_profile_version_id = NULL WHERE normalized_tag = '#2P9'"
+                )
+                connection.execute(
+                    """
+                    UPDATE player_profile_versions SET name = CASE
+                        WHEN normalized_tag IN ('#2P0', '#2P2') THEN 'aaa Hiroya'
+                        WHEN normalized_tag = '#2PY' THEN 'HIROYA'
+                        ELSE 'Hiroya' END
+                    """
+                )
+                connection.execute(
+                    """
+                    DELETE FROM api_player_daily_logs WHERE player_id IN (
+                        SELECT id FROM players
+                        WHERE normalized_tag NOT IN ('#2PY', '#2PQ', '#2P2')
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    UPDATE api_player_daily_logs
+                    SET partial_reasons = '["player_not_eligible"]'::jsonb,
+                        battles = CASE WHEN player_id = (
+                            SELECT id FROM players WHERE normalized_tag = '#2PQ'
+                        ) THEN '[{}]'::jsonb ELSE '[]'::jsonb END
+                    WHERE player_id IN (
+                        SELECT id FROM players WHERE normalized_tag IN ('#2PQ', '#2P2')
+                    )
+                    """
+                )
+                connection.execute(
+                    """
+                    INSERT INTO player_season_summaries (
+                        player_id, official_season_id, projection_version, content_digest
+                    ) SELECT id, '202608', 'test', repeat('a', 64)
+                      FROM players WHERE normalized_tag = '#2PR'
+                    """
+                )
+                schema = connection.execute("SELECT current_schema()").fetchone()[0]
+            reader = ApiDatabase(
+                make_conninfo(
+                    info, options=f"-c search_path={schema} -c role=clashlens_python_api"
+                )
+            )
+            try:
+                for limit in (1, 3, 50):
+                    results = api_players.search_known_players(
+                        reader, "iRoY", now=NOW, freshness_seconds=900, limit=limit
+                    )
+                    assert [row["tag"] for row in results] == [
+                        "#2PP", "#2PQ", "#2PR", "#2PV", "#2PY"
+                    ][:limit]
+            finally:
+                reader.close()
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize("query", ["%", "_", "\\", "東京"])
+def test_name_search_matches_literal_substrings_and_ignores_old_names(
+    database_url, query
+):
+    with migrated_production_database(
+        database_url, include_compact_collector=True
+    ) as info:
+        database = ApiDatabase(info)
+        try:
+            seed_profile(database, "#2PP", 6000)
+            seed_profile(database, "#2PY", 6100)
+            with database.pool.connection() as connection:
+                connection.execute(
+                    "UPDATE player_profile_versions SET name = %s",
+                    (f"Before {query} After",),
+                )
+                current_id = connection.execute(
+                    """
+                    INSERT INTO player_profile_versions (
+                        player_id, observation_id, normalized_tag, endpoint_version,
+                        schema_version, parser_version, observed_at, source_http_status,
+                        name, trophies, league_tier_id, league_tier_name,
+                        eligibility_state, profile_json
+                    ) SELECT player_id, observation_id, normalized_tag, endpoint_version,
+                             schema_version, 'search-test-current', observed_at, 200,
+                             'Renamed', trophies, league_tier_id, league_tier_name,
+                             eligibility_state, profile_json
+                      FROM player_profile_versions WHERE normalized_tag = '#2PY'
+                    RETURNING id
+                    """
+                ).fetchone()[0]
+                connection.execute(
+                    "UPDATE players SET current_profile_version_id = %s WHERE normalized_tag = '#2PY'",
+                    (current_id,),
+                )
+            results = api_players.search_known_players(
+                database, query, now=NOW, freshness_seconds=900
+            )
+            assert [row["tag"] for row in results] == ["#2PP"]
+            assert results[0]["name"] == f"Before {query} After"
         finally:
             database.close()
 

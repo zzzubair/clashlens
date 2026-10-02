@@ -539,25 +539,41 @@ def search_known_players(
     with database.pool.connection() as connection:
         rows = connection.execute(
             """
-            SELECT player.normalized_tag, profile.name, profile.trophies,
-                   player.current_observed_at,
-                   player.eligibility_state,
-                   profile.profile_json -> 'clan' ->> 'name'
-            FROM players AS player
-            JOIN player_profile_versions AS profile
-                ON profile.id = player.current_profile_version_id
-            WHERE profile.name ILIKE %s ESCAPE '\\'
-              AND profile.source_contract_state = 'accepted'
-              AND (player.active
-                   OR EXISTS (SELECT 1 FROM api_player_daily_logs AS history
-                              WHERE history.player_id = player.id
-                                AND (NOT history.partial_reasons @> '["player_not_eligible"]'::jsonb
-                                     OR jsonb_array_length(history.battles) > 0))
-                   OR EXISTS (SELECT 1 FROM player_season_summaries AS history
-                              WHERE history.player_id = player.id)
-                   OR EXISTS (SELECT 1 FROM player_league_history_entries AS history
-                              WHERE history.player_id = player.id))
-            ORDER BY lower(profile.name), player.normalized_tag
+            -- Match current names before checking history. Without this boundary,
+            -- PostgreSQL can scan and decode every player's daily battle JSON.
+            WITH matches AS MATERIALIZED (
+                SELECT player.id, player.normalized_tag, profile.name,
+                       profile.trophies, player.current_observed_at,
+                       player.eligibility_state, player.active,
+                       profile.profile_json -> 'clan' ->> 'name' AS clan
+                FROM players AS player
+                JOIN LATERAL (
+                    SELECT name, trophies, source_contract_state, profile_json
+                    FROM player_profile_versions
+                    WHERE id = player.current_profile_version_id
+                    -- Keep indexed current-profile reads as old versions grow.
+                    OFFSET 0
+                ) AS profile ON true
+                WHERE player.current_profile_version_id IS NOT NULL
+                  AND profile.name ILIKE %s ESCAPE '\\'
+                  AND profile.source_contract_state = 'accepted'
+            )
+            SELECT player.normalized_tag, player.name, player.trophies,
+                   player.current_observed_at, player.eligibility_state, player.clan
+            FROM matches AS player
+            -- Scalar subqueries stop after one row and cannot become a hashed
+            -- EXISTS subplan that reads the entire history table.
+            WHERE (player.active
+                   OR (SELECT true FROM api_player_daily_logs AS history
+                       WHERE history.player_id = player.id
+                         AND (NOT history.partial_reasons @> '["player_not_eligible"]'::jsonb
+                              OR jsonb_array_length(history.battles) > 0)
+                       LIMIT 1)
+                   OR (SELECT true FROM player_season_summaries AS history
+                       WHERE history.player_id = player.id LIMIT 1)
+                   OR (SELECT true FROM player_league_history_entries AS history
+                       WHERE history.player_id = player.id LIMIT 1))
+            ORDER BY lower(player.name), player.normalized_tag
             LIMIT %s
             """,
             (f"%{escaped_query}%", limit),
