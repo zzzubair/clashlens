@@ -50,10 +50,12 @@ for (const ageSeconds of [30, 60, 61, 120]) {
     await page.route("**/players/%232PP", (route) =>
       route.fulfill({ contentType: "text/html", body: served }),
     );
-    // The browser clock disagrees with the server, which must decide.
-    await page.clock.setFixedTime(
-      new Date(Date.parse(observedAt) + (automaticCount ? 0 : 3_600_000)),
-    );
+    // The browser clock disagrees with the server, which must decide. Shift
+    // Date.now directly: Playwright's clock also hides reload navigation timing.
+    await page.addInitScript((offset) => {
+      const now = Date.now;
+      Date.now = () => now() + offset;
+    }, Date.parse(observedAt) + (automaticCount ? 0 : 3_600_000) - Date.now());
     const submissions: string[] = [];
     await page.route("**/resources/players/*/refresh*", async (route) => {
       if (route.request().method() !== "POST") return route.continue();
