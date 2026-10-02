@@ -463,9 +463,8 @@ checkpoint, and the old 1 GB `max_wal_size` forced a checkpoint every three
 minutes. The 128 MB page cache also wrote 8.6 MB/s of table pages as it evicted
 them.
 
-The PostgreSQL unit now sets `shared_buffers` from
-`CLASHLENS_POSTGRES_SHARED_BUFFERS` (2 GB, inside the 4 GB memory cap),
-`checkpoint_timeout=10min`, `max_wal_size=2GB` and `wal_compression=zstd`.
+The PostgreSQL unit now sets `shared_buffers=2GB` (inside the 4 GB memory cap;
+128 MB for fake-service runs), `checkpoint_timeout=10min`, `max_wal_size=2GB` and `wal_compression=zstd`.
 Commit flushing, full-page writes, checksums and archiving are unchanged. A
 70-minute page-by-page replay of production's change log predicts 225 instead of
 393 page copies per second; zstd shrinks each copy to about 37%. Expect roughly
@@ -478,14 +477,20 @@ failures for its first five minutes, but the unit still waits for a healthy
 check within its five-minute start limit (`TimeoutStartSec`), so a replay that
 runs longer is stopped and started again.
 
-The collector records an unchanged ordinary response before saving it, so about
-97% of responses no longer reach the spool. Each saved response cost about
-147 KiB of disk writes, mostly the forced flushes that make it crash-safe. The
-check gets one attempt of about 4 seconds; on any failure, timeout or
-cancellation the response is saved to the spool as before. A hard crash during
-the check can lose only that unchanged sighting's seen time, poll count, and the
-sighting time and retirement deadline it would have extended; no raw response or
-other kept data is lost, and the next poll records the sighting again.
+The collector remembers, in memory, the used fields it last committed for each
+player and endpoint. An ordinary response that matches them is recorded in the
+database without being saved to the spool, so most of the roughly 97% unchanged
+responses no longer reach it. Each saved response cost about 147 KiB of disk
+writes, mostly the forced flushes that make it crash-safe. Any other response
+(the first per player and endpoint after a restart, a changed one, a reset or
+work-bound one) is saved to the spool before the collector waits on the
+database, exactly as before; so is a matching one the database does not accept
+as unchanged, or whose check fails or is cancelled. A hard crash can therefore
+lose only an unchanged sighting's seen time, poll count, and the sighting time
+and retirement deadline it would have extended; no raw response or other kept
+data is lost, and the next poll records the sighting again. The memory record
+holds one entry per player and endpoint polled since the collector started:
+about 26,500 entries and 9 MB for 13,263 players.
 
 ### Restore into a separate database
 

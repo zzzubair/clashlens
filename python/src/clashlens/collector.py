@@ -115,6 +115,9 @@ class Collector:
             asyncio.Lock() for _index in range(_HANDOFF_LOCK_STRIPES)
         )
         self._handoff_recovery_required = False
+        # Newest committed (seen time, field fingerprint) per scope, identity
+        # and endpoint, from this process only; empty after a restart.
+        self._committed: dict[tuple[str, str, str], tuple[datetime, str]] = {}
         self._metrics_lock = asyncio.Lock()
         self._metrics_refresh_after = 0.0
         self._database_metrics: dict[str, int | float] = {}
@@ -439,27 +442,40 @@ class Collector:
                     # Recovery must run before any successor can become current.
                     if self._handoff_recovery_required:
                         return "capacity_paused"
-                    # Bytes that compact to state are never kept, so an
-                    # unchanged regular response skips the spool's disk flushes.
-                    # A crash before its commit loses only this sighting; the
-                    # next poll records it again.
-                    check = asyncio.ensure_future(
-                        asyncio.to_thread(
-                            self.database.record_unchanged_response, handoff
-                        )
-                    )
+                    # Only a known-unchanged sighting may skip the spool: an
+                    # ordinary, work-free response whose used fields match the
+                    # ones this process last committed for the same endpoint.
+                    # A crash before its database commit loses only that
+                    # sighting; the next poll records it again. Every other
+                    # response (first since restart, changed, reset or
+                    # work-bound) reaches the spool before any database wait,
+                    # as does a known-unchanged one the check does not compact.
+                    identity = (handoff.scope, handoff.identity_key, handoff.endpoint)
+                    committed = self._committed.get(identity)
                     cancelled = False
-                    try:
-                        await _drain_awaitable(check)
-                    except asyncio.CancelledError:
-                        cancelled = True
-                    except Exception:  # noqa: BLE001, S110 - the spool handoff keeps it.
-                        pass
-                    compacted = (
-                        not check.cancelled()
-                        and check.exception() is None
-                        and check.result() is True
-                    )
+                    compacted = False
+                    if (
+                        lane == "ordinary"
+                        and handoff.collector_work_id is None
+                        and committed is not None
+                        and committed[1] == handoff.content_fingerprint
+                    ):
+                        check = asyncio.ensure_future(
+                            asyncio.to_thread(
+                                self.database.record_unchanged_response, handoff
+                            )
+                        )
+                        try:
+                            await _drain_awaitable(check)
+                        except asyncio.CancelledError:
+                            cancelled = True
+                        except Exception:  # noqa: BLE001, S110 - the spool handoff keeps it.
+                            pass
+                        compacted = (
+                            not check.cancelled()
+                            and check.exception() is None
+                            and check.result() is True
+                        )
                     published = False
                     try:
                         if not compacted:
@@ -477,6 +493,12 @@ class Collector:
                                     self.database.record_response, handoff
                                 )
                             )
+                        seen = (
+                            handoff.response_completed_at,
+                            handoff.content_fingerprint,
+                        )
+                        self._committed[identity] = max(seen, committed or seen)
+                        if published:
                             await _drain_to_thread(self.spool.remove_handoff, name)
                     except BaseException as error:
                         if published or self._sidecar_exists(name):

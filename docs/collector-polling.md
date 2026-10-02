@@ -340,15 +340,20 @@ A local spool file is deletable only after its processing and upload both
 succeed. Identical bytes share one spool/archive object. The fields listed in
 `response_fields.py` decide whether an ordinary response changed. When those
 fields match the retained response, changes to ignored fields need no new
-observation, processing job, archive upload or spool file: the collector records
-such an ordinary response before saving it, so its bytes never reach the disk
-(about 97% of responses in October 2026). That check is one attempt of at most
-about 4 seconds (2 to get a database connection, 2 for its transaction). If it
-fails, times out or is cancelled, the response is saved to the spool and recorded
-the normal way, so a changed or unknown response is never lost. The trade-off: a
-hard crash before the check commits loses that one unchanged sighting, meaning
-its seen time, its poll count, and the later sighting time and archive
-retirement deadline it would have given the kept response. No raw response,
+observation, processing job, archive upload or spool file (about 97% of
+responses in October 2026). The collector remembers, in memory, the used-field
+fingerprint it last committed for each player and endpoint. An ordinary response
+with no work row whose fingerprint matches is a known-unchanged sighting: the
+collector records it in the database without saving it, so its bytes never
+reach the disk. Every other response (the first per player and endpoint since
+the collector started, a changed one, a reset or work-bound one) is saved to the
+spool before the collector waits on the database. So is a known-unchanged one
+when the database does not accept it as unchanged, or when that one-attempt
+check fails, times out or is cancelled. A changed or unknown response is
+therefore never lost. The trade-off: a hard crash before a known-unchanged
+sighting commits loses that sighting, meaning its seen time, its poll count, and
+the later sighting time and archive retirement deadline it would have given the
+kept response. No raw response,
 observation, job, battle or archive object is lost, and the next poll records
 the sighting again about 90 seconds later. The profile's official season rank
 (`legendStatistics.currentSeason.rank`) is ignored: it moves whenever other

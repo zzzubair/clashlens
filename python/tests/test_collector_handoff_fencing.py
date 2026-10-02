@@ -5,6 +5,7 @@ import errno
 import hashlib
 import threading
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ import pytest
 from test_collector import _Client, _collector, _Reservation, _Spool, _Store
 
 from clashlens.collector_db import CollectorDatabase, CollectorWork
+from clashlens.collector_http import FetchedResponse, KeyPool
 from clashlens.spool import Spool
 
 
@@ -181,6 +183,69 @@ def test_same_endpoint_waits_for_predecessor_handoff_ack() -> None:
     asyncio.run(scenario())
 
 
+def test_only_known_unchanged_responses_skip_the_spool() -> None:
+    class Profiles(_Client):
+        def __init__(self, spool: _Spool, bodies: list[bytes]) -> None:
+            super().__init__(spool)
+            self.bodies = bodies
+
+        async def fetch_player(
+            self, pool: KeyPool, tag: str, endpoint: str
+        ) -> FetchedResponse:
+            response = await super().fetch_player(pool, tag, endpoint)
+            if endpoint != "profile":
+                return response
+            return replace(response, body=self.bodies.pop(0))
+
+    class CompactingStore(_Store):
+        checks = 0
+
+        def record_unchanged_response(self, _handoff: Any) -> bool:
+            self.checks += 1
+            return True
+
+    spool = _Spool()
+    store = CompactingStore(spool)
+    collector = _collector(
+        spool, store, Profiles(spool, [b"a", b"b", b"b", b"b", b"b", b"b"])
+    )
+    work = CollectorWork(1, "#2PP", datetime.now(UTC))
+
+    async def scenario() -> list[int]:
+        checks = []
+        for poll_work, lane, endpoints in (
+            (work, "ordinary", ("profile",)),
+            (work, "ordinary", ("profile",)),
+            (work, "ordinary", ("profile",)),
+            (replace(work, collector_work_id=7), "ordinary", ("profile",)),
+            (work, "reset", ("profile", "battle_log")),
+            (work, "ordinary", ("profile",)),
+        ):
+            await collector.collect_player(poll_work, lane=lane, endpoints=endpoints)
+            checks.append(store.checks)
+        return checks
+
+    # First sight, changed, work-bound and reset responses never wait on the
+    # database before reaching the spool; only repeats of committed fields do.
+    assert asyncio.run(scenario()) == [0, 0, 1, 1, 1, 2]
+    assert [handoff.endpoint for handoff in store.handoffs] == [
+        "profile",
+        "profile",
+        "profile",
+        "profile",
+        "battle_log",
+    ]
+    assert spool.handoffs == {}
+
+
+def _poll_profile(collector: Any) -> Any:
+    return collector.collect_player(
+        CollectorWork(1, "#2PP", datetime.now(UTC)),
+        lane="ordinary",
+        endpoints=("profile",),
+    )
+
+
 def test_failed_unchanged_check_still_saves_the_response() -> None:
     class DownStore(_Store):
         checks = 0
@@ -192,15 +257,13 @@ def test_failed_unchanged_check_still_saves_the_response() -> None:
     spool = _Spool()
     store = DownStore(spool)
     collector = _collector(spool, store, _Client(spool))
-    work = CollectorWork(1, "#2PP", datetime.now(UTC))
 
-    outcomes = asyncio.run(
-        collector.collect_player(work, lane="ordinary", endpoints=("profile",))
-    )
+    async def scenario() -> list[list[str]]:
+        return [await _poll_profile(collector), await _poll_profile(collector)]
 
-    assert outcomes == ["recorded"]
+    assert asyncio.run(scenario()) == [["recorded"], ["recorded"]]
     assert store.checks == 1
-    assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
+    assert [handoff.endpoint for handoff in store.handoffs] == ["profile"] * 2
     assert spool.events[-3:] == ["handoff", "database", "ack"]
 
 
@@ -220,20 +283,15 @@ def test_cancelled_unchanged_check_still_saves_the_response() -> None:
         spool = _Spool()
         store = SlowStore(spool)
         collector = _collector(spool, store, _Client(spool))
-        task = asyncio.create_task(
-            collector.collect_player(
-                CollectorWork(1, "#2PP", datetime.now(UTC)),
-                lane="ordinary",
-                endpoints=("profile",),
-            )
-        )
+        assert await _poll_profile(collector) == ["recorded"]
+        task = asyncio.create_task(_poll_profile(collector))
         assert await asyncio.to_thread(store.entered.wait, 1)
         task.cancel()
         await asyncio.sleep(0.01)
         store.release.set()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 1)
-        assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
+        assert [handoff.endpoint for handoff in store.handoffs] == ["profile"] * 2
         assert spool.events[-3:] == ["handoff", "database", "ack"]
         assert await collector.health_response("/readyz") != (
             503,
@@ -262,19 +320,14 @@ def test_unreachable_database_at_shutdown_still_saves_the_response() -> None:
         spool = _Spool()
         store = UnreachableStore(spool)
         collector = _collector(spool, store, _Client(spool))
-        task = asyncio.create_task(
-            collector.collect_player(
-                CollectorWork(1, "#2PP", datetime.now(UTC)),
-                lane="ordinary",
-                endpoints=("profile",),
-            )
-        )
+        assert await _poll_profile(collector) == ["recorded"]
+        task = asyncio.create_task(_poll_profile(collector))
         assert await asyncio.to_thread(store.entered.wait, 1)
         stopping = time.monotonic()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, 30)
-        assert [handoff.endpoint for handoff in store.handoffs] == ["profile"]
+        assert [handoff.endpoint for handoff in store.handoffs] == ["profile"] * 2
         assert spool.events[-3:] == ["handoff", "database", "ack"]
         return time.monotonic() - stopping
 
