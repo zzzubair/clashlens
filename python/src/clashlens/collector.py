@@ -56,8 +56,9 @@ _HANDOFF_PROTOCOL = 2
 _CLEANUP_BATCH_SIZE = 16
 # These slots cover HTTP plus durable handoffs; key limits still bound requests.
 # Production checks took ~0.9 s each, mostly saving to disk and database, so 56
-# slots held collection near 124 requests/s. 160 slots cover 74 checks/s
-# (147 requests/s) at up to 2.1 s per check; the CLI sizes threads to match.
+# slots held collection near 124 requests/s. 160 slots cover ~125 checks/s
+# (150 requests/s at ~1.2 per check) at up to ~1.3 s per check; the CLI sizes
+# threads to match.
 _REGULAR_PARALLELISM = 160
 # Cold discovery measured 21.21 players/s against 29.27 regular jobs/s.
 # A quarter of regular slots keeps overdue revisits moving until discovery drains.
