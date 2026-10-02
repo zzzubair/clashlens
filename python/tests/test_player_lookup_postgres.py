@@ -211,7 +211,17 @@ def test_name_search_preserves_history_membership_order_and_limit(database_url):
     ) as info:
         database = ApiDatabase(info)
         try:
-            tags = ("#2PP", "#2PY", "#2PQ", "#2PR", "#2PV", "#2P0", "#2P2", "#2P8", "#2P9")
+            tags = (
+                "#2PP",
+                "#2PY",
+                "#2PQ",
+                "#2PR",
+                "#2PV",
+                "#2P0",
+                "#2P2",
+                "#2P8",
+                "#2P9",
+            )
             for tag in tags:
                 seed_profile(database, tag, 6000)
             seed_league_history(database, "#2PV", "202608")
@@ -266,7 +276,8 @@ def test_name_search_preserves_history_membership_order_and_limit(database_url):
                 schema = connection.execute("SELECT current_schema()").fetchone()[0]
             reader = ApiDatabase(
                 make_conninfo(
-                    info, options=f"-c search_path={schema} -c role=clashlens_python_api"
+                    info,
+                    options=f"-c search_path={schema} -c role=clashlens_python_api",
                 )
             )
             try:
@@ -275,7 +286,11 @@ def test_name_search_preserves_history_membership_order_and_limit(database_url):
                         reader, "iRoY", now=NOW, freshness_seconds=900, limit=limit
                     )
                     assert [row["tag"] for row in results] == [
-                        "#2PP", "#2PQ", "#2PR", "#2PV", "#2PY"
+                        "#2PP",
+                        "#2PQ",
+                        "#2PR",
+                        "#2PV",
+                        "#2PY",
                     ][:limit]
             finally:
                 reader.close()
