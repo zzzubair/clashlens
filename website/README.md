@@ -330,7 +330,7 @@ back to Barlow or the system font. Its SIL Open Font License is in
 
 ## Game art
 
-`public/images/legend-league.webp` is the Legend League tier badge from the
-official API (`leaguetiers/326/BvEu_UE53UzADvTRiU9AdyOrlvb1RqvBmMau_uX6xm0.png`),
-resized to 160 pixels high. It is used under the Supercell Fan Content Policy,
+`public/images/legend-league.webp` is the Legend I tier badge from the official
+API (`leaguetiers/326/s5Y12RDRg7tgznd2RwU9kgLbedC5Not4peiHfOaWfJo.png`, as saved
+in a profile response on October 2, 2026), resized to 160 pixels high. It is used under the Supercell Fan Content Policy,
 which the site footer links to.
