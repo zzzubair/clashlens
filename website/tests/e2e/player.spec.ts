@@ -379,10 +379,24 @@ test("not-found and uncertain eligibility are different outcomes", async ({ page
 test("first lookup works without JavaScript and exposes a temporary failure with retry", async ({
   browser,
 }) => {
+  test.setTimeout(100_000);
   const context = await browser.newContext({ javaScriptEnabled: false });
   try {
     const page = await context.newPage();
     await page.goto("/?q=%23LQQJ");
+    // Every browser context shares the same socket address. On the long-lived
+    // dev check stack, earlier stale-profile visits can spend the six-request
+    // allowance. Wait only for that explicit refusal to clear, then exercise
+    // the original no-JavaScript lookup and failure assertions unchanged.
+    const limited = page.getByRole("alert").filter({
+      hasText: "Refresh requests are temporarily limited",
+    });
+    if (await limited.isVisible()) {
+      await expect(async () => {
+        await page.reload();
+        await expect(limited).toHaveCount(0);
+      }).toPass({ timeout: 65_000, intervals: [1000] });
+    }
     await expect(page.getByRole("region", { name: "Player lookup" })).toContainText(
       "Checking this tag",
     );
