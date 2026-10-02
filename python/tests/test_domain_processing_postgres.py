@@ -1621,7 +1621,7 @@ def test_reset_baseline_evidence_worker_role_contract(
                 reconciliation_count = connection.execute(
                     """
                     SELECT count(*)
-                    FROM python_processing_jobs
+                    FROM python_processing_jobs_worker
                     WHERE work_type = 'reconcile_ranked_day'
                     """
                 ).fetchone()[0]

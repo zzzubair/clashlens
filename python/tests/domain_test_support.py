@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -106,6 +107,15 @@ def enable_direct_army_fixture(database: Any, monkeypatch: Any) -> None:
     monkeypatch.setattr(army_ingestion, "complete_army_analytics", complete)
 
 
+def production_worker_grants() -> list[str]:
+    """The worker table restrictions `./ops` applies after every migration."""
+    ops = (Path(__file__).parents[2] / "ops").read_text(encoding="utf-8")
+    body = ops.split("\nconfigure_database() {\n", 1)[1].split("\n}\n", 1)[0]
+    statements = re.findall(r"((?:REVOKE|GRANT) [^;']+);", body)
+    assert statements, "ops configure_database no longer restricts the worker"
+    return statements
+
+
 def as_api_role(connection_info: str) -> str:
     """Connect as the production data-service role, not the test owner."""
     options = conninfo_to_dict(connection_info).get("options", "")
@@ -129,6 +139,8 @@ def domain_database(
         with psycopg.connect(connection_info, autocommit=True) as connection:
             for path in sql_files:
                 connection.execute(path.read_text(encoding="utf-8"))
+            for statement in production_worker_grants():
+                connection.execute(statement)
         yield connection_info
     finally:
         with psycopg.connect(database_url, autocommit=True) as admin:
