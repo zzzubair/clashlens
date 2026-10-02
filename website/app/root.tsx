@@ -57,7 +57,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Clash Lens</title>
-        <meta name="theme-color" content="#2456ff" suppressHydrationWarning />
+        <meta name="theme-color" content="#ffffff" suppressHydrationWarning />
         <meta name="color-scheme" content="light dark" />
         <script dangerouslySetInnerHTML={{ __html: themeInitialization }} />
         <link rel="icon" href="data:," />

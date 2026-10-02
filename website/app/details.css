@@ -26,9 +26,8 @@
   margin-bottom: 1.35rem;
   padding: 1.25rem 1.4rem;
   background: var(--cl-surface);
-  border: 2px solid var(--cl-outline);
-  border-top: 8px solid var(--cl-action);
-  border-radius: 0;
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
   box-shadow: var(--cl-shadow);
 }
 .player-page .player-profile {
@@ -108,7 +107,7 @@
 .player-page .season-list :is(a, strong) {
   min-height: 2.75rem;
   padding: 0.62rem 0.8rem;
-  border-radius: 0;
+  border-radius: var(--cl-radius);
 }
 .player-page > .data-section {
   margin-top: 1.65rem;
@@ -127,7 +126,7 @@
 }
 .player-page .legend-day {
   border-color: var(--cl-outline);
-  border-radius: 0;
+  border-radius: var(--cl-radius);
   background: var(--cl-surface);
 }
 .player-page .legend-day > summary {
@@ -248,8 +247,8 @@
 .player-page .battle-column h3 {
   margin: 0;
   padding: 0.7rem 0.85rem;
-  color: #ffffff;
-  background: var(--cl-header-bg);
+  color: var(--cl-muted);
+  background: var(--cl-panel);
   font-size: 0.9375rem;
   border-bottom: 1px solid var(--cl-border);
 }
@@ -267,7 +266,7 @@
   background: var(--cl-surface);
   border: 0;
   border-bottom: 1px solid var(--cl-border);
-  border-radius: 0;
+  border-radius: var(--cl-radius);
 }
 .player-page .battle-slot-attack {
   border-left: 3px solid var(--detail-positive);
@@ -350,7 +349,7 @@
   max-width: none;
   margin-bottom: 1.1rem;
   padding-bottom: 1rem;
-  border-bottom: 3px solid var(--cl-outline);
+  border-bottom: 1px solid var(--cl-border);
 }
 .analytics-page .hero h1 {
   margin-bottom: 0.3rem;
@@ -364,7 +363,7 @@
   margin-bottom: 1.4rem;
   padding: 0.9rem;
   background: var(--cl-surface);
-  border-radius: 0;
+  border-radius: var(--cl-radius);
   box-shadow: var(--cl-shadow);
 }
 .analytics-page .filter-heading {
@@ -375,7 +374,7 @@
   color: var(--cl-muted);
   background: var(--cl-panel);
   border: 1px solid var(--cl-border);
-  border-radius: 0;
+  border-radius: var(--cl-radius);
   font-size: 0.75rem;
 }
 .analytics-page .segmented-control {
@@ -389,8 +388,8 @@
 }
 .analytics-page .segmented-control input:checked + span {
   color: var(--cl-on-action);
-  background: var(--cl-action);
-  box-shadow: inset 0 0 0 2px #000000;
+  background: var(--cl-surface);
+  box-shadow: var(--cl-shadow);
 }
 .analytics-page .filter-grid {
   gap: 0.65rem;
@@ -412,7 +411,7 @@
   padding: 0.4rem 0.65rem;
   color: var(--cl-ink);
   background: var(--cl-paper);
-  border: 2px solid var(--cl-outline);
+  border: 1px solid var(--cl-border);
   font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
@@ -460,8 +459,7 @@
   justify-items: start;
   padding: 1.25rem;
   text-align: left;
-  border-top: 8px solid var(--cl-action);
-  border-radius: 0;
+  border-radius: var(--cl-radius);
 }
 .analytics-page .analytics-empty h2 {
   margin: 0 0 0.35rem;
@@ -477,8 +475,8 @@
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   background: var(--cl-surface);
-  border: 2px solid var(--cl-outline);
-  border-radius: 0;
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
   overflow: hidden;
 }
 .analytics-page .analytics-kpi {
@@ -491,9 +489,7 @@
   border-right: 0;
 }
 .analytics-page .analytics-kpi-primary {
-  --cl-ink: #000000;
-  --cl-muted: #333333;
-  background: var(--cl-action);
+  background: var(--cl-action-soft);
 }
 .analytics-page .analytics-kpi :is(span, small) {
   color: var(--cl-muted);
@@ -513,7 +509,7 @@
 }
 .analytics-page .analytics-table-wrap {
   border-color: var(--cl-outline);
-  border-radius: 0;
+  border-radius: var(--cl-radius);
 }
 .analytics-page .analytics-table {
   min-width: 60rem;
@@ -525,8 +521,8 @@
   text-align: right;
 }
 .analytics-page .analytics-table thead th {
-  color: #ffffff;
-  background: var(--cl-header-bg);
+  color: var(--cl-muted);
+  background: var(--cl-panel);
   text-transform: none;
 }
 .analytics-page .analytics-table th.analytics-sort-heading {
@@ -543,7 +539,7 @@
   color: inherit;
   background: transparent;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--cl-radius);
   box-shadow: none;
   font: inherit;
   white-space: nowrap;
@@ -553,8 +549,8 @@
   justify-content: flex-start;
 }
 .analytics-page .analytics-sort-heading[aria-sort] {
-  color: #000000;
-  background: var(--cl-action);
+  color: var(--cl-action-text);
+  background: var(--cl-action-soft);
 }
 .analytics-page .analytics-sort-button:focus-visible {
   outline: 3px solid currentColor;
@@ -597,12 +593,12 @@
     background: var(--cl-panel);
   }
   .analytics-page .analytics-sort-button:hover {
-    color: #ffffff;
-    background: #1748eb;
+    color: var(--cl-ink);
+    background: var(--cl-panel);
   }
   .analytics-page .analytics-sort-heading[aria-sort] .analytics-sort-button:hover {
-    color: #000000;
-    background: #fff24d;
+    color: var(--cl-action-text);
+    background: var(--cl-action-soft);
   }
   .analytics-page .analytics-table tbody tr:hover,
   .analytics-page .analytics-table tbody tr:hover th {

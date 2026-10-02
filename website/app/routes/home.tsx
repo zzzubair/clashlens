@@ -124,6 +124,13 @@ export default function Home() {
     <main id="main-content" tabIndex={-1} className="page-shell home-page">
       <section className="home-overview" aria-labelledby="search-title">
         <div className="home-intro">
+          <img
+            className="home-badge"
+            src="/images/legend-league.webp"
+            alt=""
+            width="72"
+            height="72"
+          />
           <h1 id="search-title">Legend League</h1>
           <p>
             {leaderboard
