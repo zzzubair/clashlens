@@ -306,8 +306,9 @@ and reports how many objects and bytes that one batch would delete and mark.
 It must run on the collector host with the **exact same spool**, because a wrong
 spool path defeats cross-process locking.
 Migration 0047 adds a lookup from each processing job to its source response,
-built without blocking job writes, so each response's in-use check is one
-index lookup rather than a search of the whole job history.
+built in the normal migration transaction while application services are stopped,
+so each response's in-use check is one index lookup rather than a search of the
+whole job history.
 
 The local spool remains bounded temporary storage, not a bucket mirror. Existing
 spool cleanup is separate from remote retirement. After raw expiry or operational
