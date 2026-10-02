@@ -388,11 +388,10 @@ Missing files still let cleanup finish a deletion interrupted by a crash.
 
 League history is collected initially and after each season-ending Reset. It
 is stored in full and parsed separately from profiles and battle logs. Raw
-responses become due 86 days after their latest sighting; a body seen again
-later moves its deadline later. Their bytes are deleted nine days
-after that, to keep seven-day backup recovery and restore time safe; see
-[history-retention.md](history-retention.md). Retirement uses separate operator
-credentials and runs only on its own timer when switched on.
+response deadlines and recovery protection belong in
+[history-retention.md](history-retention.md#implemented-raw-expiry-and-required-recovery-protection).
+The [deployment runbook](deployment.md#raw-response-cleanup) owns cleanup
+credentials, scheduling and enablement.
 
 Collection allows six concurrent requests per key. Request-start limits and
 shared permission rules belong in [Clash API keys](operating.md#clash-api-keys).

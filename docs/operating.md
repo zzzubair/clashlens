@@ -410,9 +410,10 @@ Each run prints one JSON report; `failed_objects` counts objects whose marking
 or deletion failed, and the journal names each one's location and error type.
 
 **Fix or escalate:** repair the reported storage, network, credential or
-database problem with approval. Failed objects stay marked and are retried by
-the next run; never delete them by hand or mark rows in the database to hide
-the failure. To pause deletion, set `CLASHLENS_ARCHIVE_RETENTION=preview` and run
+database problem with approval. A failed marking leaves the response usable;
+a failed deletion leaves it marked. The next run retries both. Never delete
+them by hand or mark rows in the database to hide the failure. To pause deletion,
+set `CLASHLENS_ARCHIVE_RETENTION=preview` and run
 `./ops up` with approval.
 
 **Recovered:** the next batch succeeds and its report has `failed_objects=0`.

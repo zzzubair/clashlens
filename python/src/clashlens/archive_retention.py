@@ -45,8 +45,8 @@ def retire_archive_objects(
 ) -> dict[str, Any]:
     """Delete up to max_objects held responses, then mark up to max_objects due ones.
 
-    Safe to re-run: each object is decided under its own lock and transaction,
-    and a failed delete stays 'retiring' for the next run to retry.
+    Safe to re-run: marking commits before deletion, and a failed delete
+    stays 'retiring' for the next run to retry.
     """
     if not instance_id or not bucket or not 1 <= max_objects <= 1000:
         raise ValueError("archive instance, bucket and a 1..1000 object batch are required")

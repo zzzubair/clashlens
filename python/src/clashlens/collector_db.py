@@ -1166,8 +1166,8 @@ class CollectorDatabase:
             WHERE response_hash = %s""",
             (handoff.response_completed_at, retained[0]),
         )
-        # A body still being returned in a later season keeps that
-        # season's retirement deadline.
+        # Ignored duplicate responses still extend the deadline:
+        # retention follows raw sightings, not parsed changes.
         connection.execute(
             """
             UPDATE archive_catalogue

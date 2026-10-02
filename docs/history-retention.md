@@ -2,8 +2,8 @@
 
 ## Agreed changes, 2026-09-25
 
-These requirements extend the delivered #126 format; they are not yet runtime
-behavior. [#139](https://github.com/zzzubair/clashlens/issues/139) owns the new
+These requirements extend the delivered #126 format; implementation and
+remaining gaps are described below. [#139](https://github.com/zzzubair/clashlens/issues/139) owns the new
 history views, [#129](https://github.com/zzzubair/clashlens/issues/129) owns
 scheduled cleanup, and [#122](https://github.com/zzzubair/clashlens/issues/122)
 owns backup-compatible raw retention. See [product-status.md](product-status.md)
@@ -34,10 +34,9 @@ for deadlines and the full product map.
   does not make a finalized season reopenable in the current code.
 - Keep raw responses available for every restore promised by the seven-day
   backup window, including time to perform the restore. This is separate from
-  the seven-day season-correction window. The cleanup code now enforces this
-  with a nine-day hold, described below. Production expiry stays off until
-  #122/#129 prove it by restoring a genuine seven-day-old point and reading its
-  raw references.
+  the seven-day season-correction window. See
+  [raw expiry and recovery protection](#implemented-raw-expiry-and-required-recovery-protection)
+  for the implemented rule and required restore proof.
 
 No existing counters, coverage evidence, unknown-unit history or kept production
 data are authorised for deletion by this documentation change. Historical day
@@ -252,9 +251,10 @@ again later moves its deadline later; an earlier sighting never shortens it.
 Uploading late does not start another retention clock.
 
 Migration 0046 recalculates existing stored responses from the later of their
-latest retained sighting and first verification, and discards the old season deadline. The
-latest retained sighting is the newest of that location's observations, its
-upload record's latest sighting and the newest compact poll state for its hash.
+latest retained sighting and first verification, and discards the old season
+deadline. The latest retained sighting is the newest of that location's
+observations, its upload record's latest sighting and the newest compact poll
+state for its hash.
 A response with no retained sighting counts from its first verification. Records
 with neither time have no deadline and are never automatically deleted.
 A response the old code had already marked `retiring`
@@ -266,11 +266,13 @@ which blocks every new use, then deletes its bytes only **nine days later**: the
 seven-day recovery window chosen on September 25 plus a two-day allowance to
 carry out a restore. A restore can target any point from the last seven days.
 Anything still usable at that point was marked after it, so its bytes survive at
-least two more days after the restore starts. If production keeps running during
-a longer restore, stop `clashlens-archive-retention.timer` first.
+least two more days after the restore starts. For longer restores while
+production keeps running, follow the
+[restore procedure](deployment.md#restore-into-a-separate-database).
 
 A response therefore stays usable for at least 86 days after its latest
-sighting, and its bytes stay 95 days plus the wait for the next cleanup batch. The measured
+sighting. With no unfinished work and cleanup keeping up, its bytes stay about
+95 days, plus the wait for the next cleanup batch. The measured
 21.83 GB/day of new raw responses (October 2) means about 2.07 TB stored,
 roughly EUR 33/month at EUR 0.01606/GB-month. This is a projection, not a bill.
 
@@ -283,9 +285,9 @@ Recollection uses a new immutable `generation/<token>` location, so a delayed
 old DELETE cannot remove new bytes. An upload whose original location is already
 `retiring` or `expired` gets a new generation before it writes anything. One
 whose location is marked while it uploads is never attached to it: it uploads
-again under a new generation. One that finishes on a kept location extends its deadline to
-86 days after the latest sighting. Catalogue tombstones remain; cleanup does
-not compact them. Bucket versioning, noncurrent versions, backup retention and
+again under a new generation. One that finishes on a kept location extends its
+deadline when its latest sighting is later. Catalogue tombstones remain;
+cleanup does not compact them. Bucket versioning, noncurrent versions, backup retention and
 orphan objects need separately verified provider policies; deleting a current
 key does not prove all provider storage was reclaimed.
 
@@ -307,8 +309,8 @@ It must run on the collector host with the **exact same spool**, because a wrong
 spool path defeats cross-process locking.
 Migration 0047 adds a lookup from each processing job to its source response,
 built in the normal migration transaction while application services are stopped,
-so each response's in-use check is one index lookup rather than a search of the
-whole job history.
+so each response's in-use check finds matching jobs through that lookup rather
+than searching the whole job history.
 
 The local spool remains bounded temporary storage, not a bucket mirror. Existing
 spool cleanup is separate from remote retirement. After raw expiry or operational

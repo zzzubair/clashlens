@@ -551,14 +551,10 @@ until they age out; failed uploads can leave partial objects requiring separatel
 reviewed cleanup. Real traffic must be measured before accepting the €60 total
 monthly envelope. Do not silently let failed pruning or WAL uploads accumulate.
 
-On September 25 Zubair chose to preserve raw responses for the entire promised
-seven-day recovery window, including time to restore. The cleanup code holds
-each response's bytes for nine days after marking it for deletion: seven days
-plus a two-day restore allowance. See
+The raw-response retention rule, recovery protection and projected cost belong in
 [raw expiry](history-retention.md#implemented-raw-expiry-and-required-recovery-protection)
-for the rule and its cost, and [raw-response cleanup](#raw-response-cleanup) for
-switching it on. Do not enable production expiry until #122/#129 prove it:
-restore a genuine seven-day-old point and read the raw references it needs.
+and the enablement prerequisites belong in
+[raw-response cleanup](#raw-response-cleanup).
 
 Validation on 2026-09-19 used a separate PostgreSQL cluster with all 34 migrations
 and synthetic records, under R2 prefix `validation-20260919`. A full backup took
@@ -585,7 +581,7 @@ or close #122.
 ## Raw-response cleanup
 
 The scheduled cleanup deletes old raw responses from the Scaleway archive under
-the [86-days-after-latest-sighting rule and nine-day recovery hold](history-retention.md#implemented-raw-expiry-and-required-recovery-protection).
+the [raw-expiry rule and recovery protection](history-retention.md#implemented-raw-expiry-and-required-recovery-protection).
 It is off by default. Store the operator key pair as two service-owned mode-600
 one-line files beside the Clash API keys:
 `clashlens-archive-operator-access-key` and
