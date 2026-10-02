@@ -26,6 +26,7 @@ from clashlens import job_outcomes, late_battle_sweep, reconciliation_db
 from clashlens.db import DOMAIN_RULE_VERSION, PROCESSING_VERSION
 from clashlens.late_battle_sweep import LateBattleSweep, sweep_late_battles
 from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
+from clashlens.reconciliation import RECONCILIATION_RULE_VERSION
 
 ANCHOR = datetime(2026, 8, 3, 5, tzinfo=UTC)
 DAY = ANCHOR + timedelta(days=1)
@@ -646,8 +647,8 @@ def test_correction_finishes_in_one_pass_before_the_window_slides(
             database.close()
 
 
-def test_late_battle_older_than_the_window_is_logged_and_not_corrected(
-    database_url: str, archive_server, capsys
+def test_late_battle_older_than_the_window_is_not_corrected(
+    database_url: str, archive_server
 ) -> None:
     # The worker was stopped for over a week after the late battle was saved.
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -665,13 +666,6 @@ def test_late_battle_older_than_the_window_is_logged_and_not_corrected(
             ) == (0, 0)
 
             assert _published(connection_info, DAY) == before
-            with psycopg.connect(connection_info) as connection:
-                player_id = connection.execute(
-                    "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
-                ).fetchone()[0]
-            assert [
-                (line["status"], line["player_days"]) for line in _sweep_lines(capsys)
-            ] == [("skipped", [f"{player_id}:2026-08-04T05:00:00+00:00"])]
         finally:
             database.close()
 
@@ -866,5 +860,142 @@ def test_agreement_restored_by_a_later_report_makes_the_first_result_current_aga
                 database, now=boundary + timedelta(minutes=51)
             ) == (0, 0)
             assert _published(connection_info, DAY, OPPONENT)[1] == restored
+        finally:
+            database.close()
+
+
+def _selections(connection_info: str) -> dict:
+    """Each Reset's selected player-days, by player tag, late and outdated."""
+    selections: dict = {}
+    with psycopg.connect(connection_info) as connection:
+        tags = dict(connection.execute("SELECT id, normalized_tag FROM players"))
+        for days in range(1, 10):
+            boundary = DAY + timedelta(days=days)
+            parameters = {
+                "boundary": boundary,
+                "window_start": boundary - late_battle_sweep.WINDOW,
+                "rule": RECONCILIATION_RULE_VERSION,
+            }
+            selections[boundary] = tuple(
+                sorted(
+                    (tags[player_id], day_start)
+                    for player_id, day_start in connection.execute(query, parameters)
+                )
+                for query in (
+                    late_battle_sweep._STALE_DAYS,
+                    late_battle_sweep._OUTDATED_DAYS,
+                )
+            )
+    return selections
+
+
+def test_indexed_selection_picks_the_same_player_days_as_before(
+    database_url: str, archive_server
+) -> None:
+    # Two players' late and on-time reports, a late report that changes their
+    # agreement, and a later day built from an outdated previous day, checked
+    # at every Reset from the late battle's day until it has left the window.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _seed_battle_anchor(connection_info, ANCHOR)
+            battle_time = DAY + timedelta(days=1, seconds=-10)
+            _process(
+                processor,
+                store_observation(
+                    connection_info,
+                    archive_server,
+                    occurrence_key="attacker-log",
+                    endpoint="battle_log",
+                    body=json.dumps(
+                        {
+                            "items": [
+                                _live_battle_row(
+                                    attack=True,
+                                    battle_timestamp=battle_time,
+                                    opponent_tag=TAG,
+                                    opponent_name="Defender",
+                                    stars=0,
+                                    destruction_percentage=49,
+                                )
+                            ]
+                        }
+                    ).encode(),
+                    observed_at=battle_time + timedelta(seconds=5),
+                    normalized_tag=OPPONENT,
+                    parser_version=LIVE_BATTLE_PARSER_VERSION,
+                )[1],
+            )
+            _save_log(
+                connection_info,
+                archive_server,
+                processor,
+                key="on-time-log",
+                rows=[_on_time_defense()],
+                observed_at=DAY + timedelta(hours=2),
+            )
+            _publish(database, processor, DAY)
+            _publish(database, processor, DAY + timedelta(days=1))
+            _process(
+                processor,
+                reconciliation_db.enqueue_reconciliation(
+                    database,
+                    player_tag=OPPONENT,
+                    day_start=DAY,
+                    now=DAY,
+                    request_key="published-opponent",
+                ),
+            )
+            _save_log(
+                connection_info,
+                archive_server,
+                processor,
+                key="late-log",
+                rows=[
+                    {**_late_defense(), "armyShareCode": "u3x0-2x1"},
+                    _on_time_defense(),
+                ],
+                observed_at=DAY + timedelta(days=1, minutes=20),
+            )
+            # Reports are saved when they are fetched. The battle's reports are
+            # moved to just before, at, and after the 5-minute margin.
+            with psycopg.connect(connection_info) as connection:
+                connection.execute(
+                    "UPDATE battle_evidence SET created_at = source_observed_at"
+                )
+            day_end = DAY + timedelta(days=1)
+            for saved_at, late in [
+                (day_end - timedelta(minutes=5, microseconds=1), False),
+                (day_end - timedelta(minutes=5), True),
+                (day_end + timedelta(minutes=20), True),
+            ]:
+                with psycopg.connect(connection_info) as connection:
+                    connection.execute(
+                        "UPDATE battle_evidence SET created_at = %s "
+                        "WHERE battle_timestamp = %s",
+                        (saved_at, battle_time),
+                    )
+                # Both players' late day is selected until it leaves the window.
+                assert list(_selections(connection_info).values()) == (
+                    [([(OPPONENT, DAY), (TAG, DAY)], [])] * 7 + [([], [])] * 2
+                    if late
+                    else [([], [])] * 9
+                )
+
+            # An existing job corrects only the late day, so the next day is
+            # left built from the late day's outdated version.
+            _process(
+                processor,
+                reconciliation_db.enqueue_reconciliation(
+                    database,
+                    player_tag=TAG,
+                    day_start=DAY,
+                    now=DAY + timedelta(days=2),
+                    request_key="existing-first-day-job",
+                ),
+            )
+            assert [
+                outdated for _, outdated in _selections(connection_info).values()
+            ] == [[(TAG, DAY + timedelta(days=1))]] * 8 + [[]]
         finally:
             database.close()

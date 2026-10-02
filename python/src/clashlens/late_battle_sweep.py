@@ -6,7 +6,8 @@ Legend day's result was published. Once per Reset, after the Reset sweep has
 finished and every response fetched before it finished has been processed,
 this finds each player whose saved result for one of the previous 7 Legend
 days misses such a report, still holds the old agreement flag for its battle,
-or was built from an older version of the previous day than the current one. For each such player, in one transaction, it recalculates and
+or was built from an older version of the previous day than the current one.
+For each such player, in one transaction, it recalculates and
 publishes that day and then every later saved day, in order, with the existing
 ranked-day recalculation. The live recalculation and Reset paths are
 unchanged.
@@ -33,30 +34,48 @@ from .reconciliation import RECONCILIATION_RULE_VERSION
 # selected player has been corrected.
 SWEEP_DELAY = timedelta(minutes=30)
 CHECK_INTERVAL_SECONDS = 600
-# A report saved this close before its day ended may have missed the live
-# recalculation queued with it, so it is checked too.
-SAVE_MARGIN = timedelta(minutes=5)
 # Ended Legend days whose late battles are corrected. The recalculation
-# supports only the current and previous Season; a late battle on an older day
-# is logged and skipped.
+# supports only the current and previous Season, so older days are not read.
 WINDOW = timedelta(days=7)
 
-# Every kept battle with a report saved late is checked against each reporting
-# player's latest saved result: their own report and the battle's current
-# agreement flag must both be listed. Days of a retired season cannot be
-# recalculated and are skipped.
+# Every kept battle in the window with a report saved within 5 minutes of its
+# day's end or later is checked against each reporting player's latest saved
+# result: their own report and the battle's current agreement flag must both
+# be listed. A report saved that close before its day ended may have missed
+# the live recalculation queued with it. A battle's Legend day is the day of
+# its timestamp, so the late reports are read from their own index, whose
+# condition this repeats. The database cannot tell how few reports are late,
+# so OFFSET 0 keeps it looking up each late report's battle, reports and
+# saved result one at a time instead of reading every battle and result. Days of a retired season cannot
+# be recalculated and are skipped.
 _STALE_DAYS = """
 WITH late_battle AS (
-    SELECT battle.id, battle.ranked_day_start,
+    SELECT DISTINCT battle.id, battle.ranked_day_start,
            battle.attacker_player_id, battle.defender_player_id,
            battle.disagreement_state = 'disagreement' AS disagreement
-    FROM legend_battles AS battle
-    JOIN battle_perspectives AS perspective ON perspective.battle_id = battle.id
-    JOIN battle_evidence AS evidence ON evidence.id = perspective.evidence_id
-    WHERE battle.ranked_day_start < %(boundary)s
-      AND evidence.created_at
-          >= battle.ranked_day_start + interval '24 hours' - %(margin)s
-    GROUP BY battle.id
+    FROM battle_evidence AS evidence
+    CROSS JOIN LATERAL (
+        SELECT perspective.battle_id
+        FROM battle_perspectives AS perspective
+        WHERE perspective.evidence_id = evidence.id
+        OFFSET 0
+    ) AS perspective
+    CROSS JOIN LATERAL (
+        SELECT battle.id, battle.ranked_day_start,
+               battle.attacker_player_id, battle.defender_player_id,
+               battle.disagreement_state
+        FROM legend_battles AS battle
+        WHERE battle.id = perspective.battle_id
+          AND battle.ranked_day_start >= %(window_start)s
+          AND battle.ranked_day_start < %(boundary)s
+        OFFSET 0
+    ) AS battle
+    WHERE date_bin('24 hours', evidence.created_at,
+                   TIMESTAMPTZ '2000-01-01 04:55+00')
+          > date_bin('24 hours', evidence.battle_timestamp,
+                     TIMESTAMPTZ '2000-01-01 05:00+00')
+      AND evidence.battle_timestamp >= %(window_start)s
+      AND evidence.battle_timestamp < %(boundary)s
 ), pair AS (
     SELECT CASE perspective.perspective
                WHEN 'attacker' THEN battle.attacker_player_id
@@ -68,7 +87,12 @@ WITH late_battle AS (
                'disagreement', battle.disagreement
            )) AS expected
     FROM late_battle AS battle
-    JOIN battle_perspectives AS perspective ON perspective.battle_id = battle.id
+    CROSS JOIN LATERAL (
+        SELECT perspective.perspective, perspective.evidence_id
+        FROM battle_perspectives AS perspective
+        WHERE perspective.battle_id = battle.id
+        OFFSET 0
+    ) AS perspective
     GROUP BY 1, 2
 )
 SELECT pair.player_id, pair.ranked_day_start
@@ -81,8 +105,12 @@ CROSS JOIN LATERAL (
     ORDER BY log.version DESC
     LIMIT 1
 ) AS published
-LEFT JOIN ranked_day_versions AS version
-  ON version.id = published.ranked_day_version_id
+LEFT JOIN LATERAL (
+    SELECT version.contribution_evidence, version.official_season_id
+    FROM ranked_day_versions AS version
+    WHERE version.id = published.ranked_day_version_id
+    OFFSET 0
+) AS version ON true
 WHERE NOT coalesce(version.contribution_evidence @> pair.expected, false)
   AND NOT EXISTS (
       SELECT 1 FROM season_detail_retirements AS retirement
@@ -96,35 +124,54 @@ WHERE NOT coalesce(version.contribution_evidence @> pair.expected, false)
 ORDER BY pair.player_id, pair.ranked_day_start
 """
 
-# A saved day in the window, or today's saved day, whose latest result was built from an older
-# version of the previous day than the one now current, for example after a
-# rolled-back correction whose first day an existing job then recalculated.
+# A saved day in the window, or today's saved day, whose latest result was
+# built from an older version of the previous day than the one now current,
+# for example after a rolled-back correction whose first day an existing job
+# then recalculated. Saved days are read player by player, so only the window
+# is read however many days are kept. A day's version numbers are unique. Each
+# latest result is looked up, one at a time, by its version number joined to
+# the previous day's version it should have been built from: that pair is
+# indexed, so no result's stored input is unpacked, and no other index can
+# answer the lookup.
 _OUTDATED_DAYS = """
-SELECT saved.player_id, saved.ranked_day_start
-FROM (
-    SELECT DISTINCT log.player_id, log.ranked_day_start
+SELECT player.id, saved.ranked_day_start
+FROM players AS player
+CROSS JOIN LATERAL (
+    SELECT DISTINCT log.ranked_day_start
     FROM api_player_daily_logs AS log
-    WHERE log.ranked_day_start >= %(window_start)s
+    WHERE log.player_id = player.id
+      AND log.ranked_day_start >= %(window_start)s
 ) AS saved
 CROSS JOIN LATERAL (
-    SELECT version.input_evidence -> 'previous_day' ->> 'version_id' AS previous_id
+    SELECT version.version
     FROM ranked_day_versions AS version
-    WHERE version.player_id = saved.player_id
+    WHERE version.player_id = player.id
       AND version.ranked_day_start = saved.ranked_day_start
       AND version.reconciliation_rule_version = %(rule)s
-    ORDER BY version.version DESC, version.id DESC
+    ORDER BY version.version DESC
     LIMIT 1
 ) AS built
 CROSS JOIN LATERAL (
     SELECT version.id
     FROM ranked_day_versions AS version
-    WHERE version.player_id = saved.player_id
+    WHERE version.player_id = player.id
       AND version.ranked_day_start = saved.ranked_day_start - interval '24 hours'
       AND version.reconciliation_rule_version = %(rule)s
-    ORDER BY version.version DESC, version.id DESC
+    ORDER BY version.version DESC
     LIMIT 1
 ) AS previous
-WHERE built.previous_id IS DISTINCT FROM previous.id::text
+LEFT JOIN LATERAL (
+    SELECT true AS current
+    FROM ranked_day_versions AS version
+    WHERE version.player_id = player.id
+      AND version.ranked_day_start = saved.ranked_day_start
+      AND version.reconciliation_rule_version = %(rule)s
+      AND version.version::text || ':'
+          || (version.input_evidence -> 'previous_day' ->> 'version_id')
+          = built.version::text || ':' || previous.id::text
+    LIMIT 1
+) AS built_from ON true
+WHERE built_from.current IS NULL
 """
 
 
@@ -170,39 +217,20 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
         ).fetchone()[0]
         if responses_pending:
             return None
-        stale_days = connection.execute(
-            _STALE_DAYS, {"boundary": boundary, "margin": SAVE_MARGIN}
-        ).fetchall()
-        outdated_days = connection.execute(
-            _OUTDATED_DAYS,
-            {
-                "window_start": boundary - WINDOW,
-                "rule": RECONCILIATION_RULE_VERSION,
-            },
-        ).fetchall()
+        parameters = {
+            "boundary": boundary,
+            "window_start": boundary - WINDOW,
+            "rule": RECONCILIATION_RULE_VERSION,
+        }
+        stale_days = connection.execute(_STALE_DAYS, parameters).fetchall()
+        outdated_days = connection.execute(_OUTDATED_DAYS, parameters).fetchall()
     event = {"event": "late_battle_sweep", "boundary_at": boundary.isoformat()}
     first_days: dict[int, datetime] = {}
-    skipped: list[str] = []
     for player_id, day_start in stale_days:
-        if day_start < boundary - WINDOW:
-            skipped.append(f"{player_id}:{day_start.astimezone(UTC).isoformat()}")
-        else:
-            first_days.setdefault(int(player_id), day_start)
+        first_days.setdefault(int(player_id), day_start)
     for player_id, day_start in outdated_days:
         first_days[int(player_id)] = min(
             first_days.get(int(player_id), day_start), day_start
-        )
-    if skipped:
-        print(
-            json.dumps(
-                {
-                    **event,
-                    "status": "skipped",
-                    "reason": "older_than_correction_window",
-                    "player_days": skipped,
-                }
-            ),
-            flush=True,
         )
     failed = 0
     for player_id, first_day in first_days.items():
