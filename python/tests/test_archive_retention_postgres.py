@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
-from psycopg.conninfo import make_conninfo
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from clashlens.archive_retention import retire_archive_objects
 from clashlens.spool import Spool
@@ -59,6 +59,11 @@ def _seed(connection, count: int, *, deadline: str = "-1 minute") -> list[str]:
         )
         keys.append(key)
     return keys
+
+
+def _as_cleanup_role(dsn: str) -> str:
+    options = conninfo_to_dict(dsn).get("options", "")
+    return make_conninfo(dsn, options=f"{options} -c role=clashlens_archive_retention".strip())
 
 
 def _availability(connection) -> list[str]:
@@ -205,6 +210,48 @@ def test_bytes_survive_the_recovery_hold_and_reruns_are_safe(database_url, tmp_p
             spool.close()
 
 
+def test_cleanup_role_can_mark_and_delete_but_nothing_else(database_url, tmp_path):
+    from types import SimpleNamespace
+
+    from domain_test_support import domain_database
+
+    from clashlens.db import Database
+
+    with domain_database(database_url) as dsn, psycopg.connect(dsn, autocommit=True) as owner:
+        keys = _seed(owner, 2)
+        role_dsn = _as_cleanup_role(dsn)
+        # The command checks the archive identity before any cleanup.
+        database = Database(role_dsn)
+        try:
+            assert database.validate_archive_instance(SimpleNamespace(
+                instance_id="fixture-instance", endpoint="archive.test:443", region="us-east-1",
+                bucket="evidence", marker_key="clashlens/archive-instance.json",
+                marker_hash="f" * 64, marker_payload_version="v1",
+            ))
+        finally:
+            database.close()
+        spool = Spool(tmp_path / "spool", max_body_bytes=1 << 20)
+        client = DeleteClient(keys)
+        try:
+            with psycopg.connect(role_dsn, autocommit=True) as cleanup:
+                assert retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)["marked_objects"] == 2
+                _hold_elapsed(owner, "9 days 1 minute")
+                report = retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)
+                assert (report["deleted_objects"], report["failed_objects"]) == (2, 0)
+                assert _availability(owner) == ["expired", "expired"]
+                for statement in (
+                    "UPDATE archive_catalogue SET retire_after = clock_timestamp() + interval '1 year'",
+                    "DELETE FROM archive_catalogue",
+                    "UPDATE collector_observations SET archive_reference = NULL",
+                    "UPDATE python_processing_jobs SET status = 'cancelled'",
+                    "SELECT count(*) FROM players",
+                ):
+                    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                        cleanup.execute(statement)
+        finally:
+            spool.close()
+
+
 def test_retirement_fences_replay_and_keeps_active_work(
     database_url: str, archive_server, tmp_path: Path
 ) -> None:
@@ -225,7 +272,9 @@ def test_retirement_fences_replay_and_keeps_active_work(
                 body=FIXTURE.read_bytes(), normalized_tag="#2PP", observed_at=datetime.now(UTC),
             )
             assert processor.process_job(job, owner="expiry").outcome == "processed"
-            with psycopg.connect(dsn, autocommit=True) as connection:
+            with psycopg.connect(dsn, autocommit=True) as connection, psycopg.connect(
+                _as_cleanup_role(dsn), autocommit=True
+            ) as cleanup:
                 reference = connection.execute(
                     "SELECT archive_reference FROM collector_observations WHERE id = %s",
                     (observation,),
@@ -264,13 +313,13 @@ def test_retirement_fences_replay_and_keeps_active_work(
                     dsn, archive_server, occurrence_key="expiry-duplicate", endpoint="profile",
                     body=FIXTURE.read_bytes(), normalized_tag="#2PP", observed_at=datetime.now(UTC),
                 )
-                assert retire_archive_objects(connection, spool, client, **OPTIONS)["marked_objects"] == 0
+                assert retire_archive_objects(cleanup, spool, client, **OPTIONS)["marked_objects"] == 0
                 connection.execute("UPDATE archive_catalogue SET retire_after = clock_timestamp() - interval '1 minute'")
                 # Unfinished processing keeps the response usable.
-                report = retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)
+                report = retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)
                 assert report["marked_objects"] == 0
                 assert processor.process_job(pending, owner="expiry-duplicate").outcome == "processed"
-                assert retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)["marked_objects"] == 1
+                assert retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)["marked_objects"] == 1
                 with pytest.raises(psycopg.errors.RaiseException, match="expired"):
                     _replay_job(connection, observation, "supercell-source-parser-v2")
                 # Recollection gets a separate location. Deleting the old key can
@@ -285,7 +334,7 @@ def test_retirement_fences_replay_and_keeps_active_work(
                     """, (renewed, reference),
                 )
                 _hold_elapsed(connection, "10 days")
-                assert retire_archive_objects(connection, spool, client, apply=True, **OPTIONS)["deleted_objects"] == 1
+                assert retire_archive_objects(cleanup, spool, client, apply=True, **OPTIONS)["deleted_objects"] == 1
                 assert client.keys == {renewed.removeprefix("s3://evidence/")}
                 assert connection.execute("SELECT count(*) FROM player_profile_versions").fetchone()[0] == 1
         finally:
