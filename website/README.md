@@ -27,6 +27,20 @@ only instead of a season day number. This adds no weekly recheck or clan discove
 and does not enable production discovery. The [product map](../docs/product-status.md)
 tracks the remaining launch work.
 
+Opening a tracked player's profile with JavaScript enabled automatically submits
+the existing Refresh request once when the server reports its saved check is
+more than 60 seconds old. Saved data stays visible while the existing Refresh
+flow runs, including if the request is refused. Manual Refresh and
+browser-reload Refresh still work.
+
+When any Refresh reports complete, the page reloads its data immediately and
+again about 3 and 8 seconds later. The player carried by the completed Refresh
+stays on screen only while its profile check is newer than the reloaded data, so
+battles processed after the profile still appear. Known limitation: complete
+means both API responses were saved, not that the worker has processed them, so
+processing that takes longer than about 8 seconds appears only after the next
+Refresh or page load.
+
 ## Requirements and setup
 
 - Node.js 24 LTS and npm with the committed `package-lock.json`; and

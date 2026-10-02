@@ -200,6 +200,7 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   const [pollingError, setPollingError] = useState<WebsiteErrorResponse | null>(null);
   const [lookupTimedOut, setLookupTimedOut] = useState(false);
   const lookupStartedAt = useRef(Date.now());
+  const automaticRefreshHandled = useRef(false);
   useEffect(() => {
     const status = data.refreshStatus;
     if (status && status.tag === data.requestedTag) {
@@ -231,7 +232,13 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     visibleStatus && "player" in visibleStatus && visibleStatus.tag === data.requestedTag
       ? (visibleStatus as RefreshStatus).player
       : null;
-  const player = refreshedPlayer ?? data.player;
+  const player =
+    refreshedPlayer &&
+    (data.player === null ||
+      Date.parse(refreshedPlayer.profile.freshness.observedAt) >
+        Date.parse(data.player.profile.freshness.observedAt))
+      ? refreshedPlayer
+      : data.player;
   const trackedPlayer = player?.trackingState === "tracking" ? player : null;
   const lookup: PlayerLookup | null = player
     ? { tag: player.tag, state: player.trackingState }
@@ -297,16 +304,19 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
   }, [location.hash, location.key, player?.tag]);
 
   useEffect(() => {
-    if (documentReloadHandled) return;
-    documentReloadHandled = true;
+    if (automaticRefreshHandled.current) return;
     const navigation = performance.getEntriesByType?.("navigation")[0] as
       PerformanceNavigationTiming | undefined;
-    if (
-      navigation?.type !== "reload" ||
-      new URL(navigation.name).pathname !== window.location.pathname ||
-      trackedPlayer === null
-    )
-      return;
+    const isDocumentReload =
+      !documentReloadHandled &&
+      navigation?.type === "reload" &&
+      new URL(navigation.name).pathname === window.location.pathname;
+    documentReloadHandled = true;
+    if (trackedPlayer === null) return;
+    // Decide once per visit, including when saved data is already recent.
+    // Fetcher updates and revalidation must not spend another Refresh allowance.
+    automaticRefreshHandled.current = true;
+    if (!isDocumentReload && trackedPlayer.profile.freshness.ageSeconds <= 60) return;
     refreshFetcher.submit(
       { idempotencyKey: data.noJsIdempotencyKey },
       {
@@ -363,7 +373,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         }
         setPollingError(null);
         setLastStatus(payload);
-        if (payload.state === "complete") revalidator.revalidate();
       } catch (error) {
         if (
           !cancelled &&
@@ -384,7 +393,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       clearInterval(timer);
       controller?.abort();
     };
-  }, [player?.tag, refreshResourcePath, revalidator, terminalState, workId]);
+  }, [player?.tag, refreshResourcePath, terminalState, workId]);
+
+  const completedWorkId = lastStatus?.state === "complete" ? lastStatus.workId : null;
+  const { revalidate } = revalidator;
+  useEffect(() => {
+    if (completedWorkId === null) return;
+    const timers = [0, 3_000, 8_000].map((delay) =>
+      setTimeout(() => void revalidate(), delay),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [completedWorkId, revalidate]);
 
   if (trackedPlayer === null) {
     if (data.requestedTag === null) {
