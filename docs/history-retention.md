@@ -247,15 +247,17 @@ relation files or imply that retained WAL/backups have expired. Do not run
 ## Implemented raw expiry and required recovery protection
 
 Do **not** configure an upload-age lifecycle on the evidence namespace. A raw
-response becomes due **86 days after the later of its latest sighting and its
-first verification in the archive**. A body returned again later moves its
-deadline later; an earlier sighting never shortens it. A response uploaded late
-therefore still keeps 86 days from verification. Migration 0046 recalculates
-every stored response the same way and discards the old season deadline. The
+response becomes due **86 days after its latest sighting**. A body returned
+again later moves its deadline later; an earlier sighting never shortens it.
+Uploading late does not start another retention clock.
+
+Migration 0046 recalculates existing stored responses from the later of their
+latest retained sighting and first verification, and discards the old season deadline. The
 latest retained sighting is the newest of that location's observations, its
 upload record's latest sighting and the newest compact poll state for its hash.
-A response with no retained sighting counts from its first verification, which
-every catalogue row has. A response the old code had already marked `retiring`
+A response with no retained sighting counts from its first verification. Records
+with neither time have no deadline and are never automatically deleted.
+A response the old code had already marked `retiring`
 starts its nine-day hold at its recalculated deadline, or at upgrade time if
 that is later.
 
@@ -300,9 +302,7 @@ python -m clashlens prune-archive --max-objects 1000 --apply  # mark and delete
 
 Each run deletes up to the batch size of held responses whose nine days have
 passed, then marks up to the batch size of due ones. The preview changes nothing
-and reports how many objects and bytes that one batch would delete and mark,
-plus an `eligible` summary of every due, unprotected response: count, bytes and
-oldest/newest deadline.
+and reports how many objects and bytes that one batch would delete and mark.
 It must run on the collector host with the **exact same spool**, because a wrong
 spool path defeats cross-process locking.
 Migration 0047 adds a lookup from each processing job to its source response,

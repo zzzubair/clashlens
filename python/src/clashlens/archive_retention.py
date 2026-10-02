@@ -1,7 +1,9 @@
 """Raw-response expiry using immutable location tombstones.
 
-A raw response becomes due 86 days after the later of its latest sighting and
-its first verification; every new sighting of the same body moves the deadline later. A due response is first marked 'retiring', which
+A raw response becomes due 86 days after its latest sighting; every new sighting
+of the same body moves the deadline later. Upgraded records count from the later
+of their retained latest sighting and first verification. A due response is first
+marked 'retiring', which
 blocks every new use, and its bytes are deleted only after the promised
 seven-day recovery window plus a two-day restore allowance. A restore to any
 promised point therefore still finds every byte its catalogue calls usable.
@@ -58,19 +60,6 @@ def retire_archive_objects(
         "deleted_objects": 0, "deleted_bytes": 0, "marked_objects": 0, "marked_bytes": 0,
         "protected_objects": 0, "failed_objects": 0,
     }
-    if not apply:
-        objects, size, oldest, newest = connection.execute(
-            f"""
-            SELECT count(*), COALESCE(sum(c.byte_size), 0), min(c.retire_after), max(c.retire_after)
-            FROM archive_catalogue AS c
-            WHERE c.archive_instance_id = %s AND {_DUE} AND NOT ({_ACTIVE})
-            """, (instance_id,),
-        ).fetchone()
-        report["eligible"] = {
-            "objects": objects, "bytes": int(size),
-            "oldest": oldest and oldest.isoformat(), "newest": newest and newest.isoformat(),
-        }
-
     def location(digest: Any, reference: Any) -> tuple[str, str]:
         digest, reference = _text(digest), _text(reference)
         prefix = f"s3://{bucket}/sha256/{digest[:2]}/{digest}"

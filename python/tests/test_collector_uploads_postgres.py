@@ -455,10 +455,9 @@ def test_fail_upload_reconciles_exact_retry_but_fences_an_old_owner(
             )
 
 
-def test_late_upload_counts_86_days_from_its_first_verification(
+def test_late_upload_counts_86_days_from_its_latest_sighting(
     database_url: str,
 ) -> None:
-    # A response verified days after its sighting keeps 86 days from verification.
     response_at = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     uploaded_later = response_at + timedelta(days=40)
     with upload_database(database_url) as connection_info:
@@ -499,16 +498,12 @@ def test_late_upload_counts_86_days_from_its_first_verification(
         with psycopg.connect(connection_info) as connection:
             row = connection.execute(
                 """
-                SELECT retire_after,
-                       clashlens_season_retire_after(%s),
-                       clashlens_season_retire_after(%s)
+                SELECT retire_after, first_verified_at
                 FROM archive_catalogue WHERE response_hash = %s
                 """,
-                (response_at, uploaded_later, response_hash),
+                (response_hash,),
             ).fetchone()
-        assert row is not None
-        assert row[0] == row[2] == uploaded_later + timedelta(days=86)
-        assert row[0] != row[1]
+        assert row == (response_at + timedelta(days=86), uploaded_later)
 
 
 def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
@@ -516,7 +511,6 @@ def test_pending_upload_uses_later_ignored_hash_sighting_for_retention(
 ) -> None:
     response_at = NOW
     seen_next_season = response_at + timedelta(days=29)
-    # Verified before that later sighting, so the sighting sets the deadline.
     upload_at = response_at + timedelta(days=2)
     with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
@@ -803,7 +797,7 @@ def test_upload_never_reuses_a_tombstoned_legacy_location(
 ) -> None:
     # A location catalogued before upload rows existed has no upload row, so
     # its bytes seen again would upload to the same key without a generation.
-    with domain_database(database_url, include_coordinator=True) as connection_info:
+    with upload_database(database_url) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
         response_hash = _hash("legacy-location")
@@ -853,9 +847,8 @@ def test_upload_never_reuses_a_tombstoned_legacy_location(
                 (bound or reference,),
             ).fetchone()[0]
         if destination != reference:
-            # A new location counts from its own verification a minute later.
             assert bound == destination
-            assert retire_after == NOW + timedelta(days=86, minutes=1)
+            assert retire_after == NOW + timedelta(days=86)
             return
         if at_completion == "verified":
             assert bound == destination
@@ -864,6 +857,11 @@ def test_upload_never_reuses_a_tombstoned_legacy_location(
         # Marked between claim and completion: never attached, uploaded again.
         assert bound is None
         assert retire_after == NOW - timedelta(days=1)
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE collector_response_uploads SET next_attempt_at = %s WHERE response_hash = %s",
+                (NOW + timedelta(minutes=1), response_hash),
+            )
         retry = claim_upload(database, owner="uploader", now=NOW + timedelta(minutes=1))
         assert retry is not None and retry.response_hash == response_hash
         assert len(retry.generation) == 32

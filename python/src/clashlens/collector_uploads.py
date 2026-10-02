@@ -283,7 +283,7 @@ def complete_upload(
                         archive_instance_id, first_verified_at, retire_after
                     ) VALUES (
                         %s, %s, %s, %s, %s,
-                        clashlens_season_retire_after(GREATEST(%s, %s))
+                        clashlens_season_retire_after(%s)
                     )
                     """,
                     (
@@ -293,7 +293,6 @@ def complete_upload(
                         archive_instance_id,
                         complete_time,
                         row[9],
-                        complete_time,
                     ),
                 )
             connection.execute(
