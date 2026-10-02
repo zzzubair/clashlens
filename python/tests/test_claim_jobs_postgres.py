@@ -752,11 +752,14 @@ def test_repair_outlasting_its_lease_completes_on_its_first_attempt(
 
             assert taken_while_running == [0, None]
             assert result == ProcessResult(job_id, "processed")
-            assert database.scalar(
-                "SELECT status || ':' || attempt_count FROM python_processing_jobs "
-                "WHERE id = %s",
-                (job_id,),
-            ) == "complete:1"
+            assert (
+                database.scalar(
+                    "SELECT status || ':' || attempt_count FROM python_processing_jobs "
+                    "WHERE id = %s",
+                    (job_id,),
+                )
+                == "complete:1"
+            )
         finally:
             database.close()
 
