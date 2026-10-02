@@ -70,7 +70,13 @@ The collector's `/metrics` exports these gauges with the
   successful check ages across active tracked players. Each player's age uses
   the older of the profile and battle-log `last_success_at` values. Unchanged
   successful responses advance these times; failures do not. Both times must
-  exist for a player to contribute an age.
+  exist for a player to contribute an age. Regular checks fetch the battle log
+  only when it can have changed
+  ([details](collector-polling.md#battle-log-only-when-it-can-have-changed)),
+  so for most players this age follows the battle log's 15-minute safety fetch:
+  expect a median near 8 minutes and a maximum near 17, even while profiles are
+  checked about every 100 seconds. Use `oldest_due_age_seconds` for check
+  scheduling delay.
 - `check_age_sample_players` and `check_age_missing_players`: players with both
   successful checks and active players missing either check. No samples means
   the three age gauges are absent, not zero.
@@ -129,9 +135,19 @@ release procedure. No code change is needed.
 start per second across all callers, the interactive key included. It accepts
 whole numbers from 1 to 29 and defaults to 25. `./ops`, the collector command
 and its request pacing refuse 30 or more. Six regular keys at the default allow
-at most 150 requests per second. Checking 13,263 players every three minutes
-needs about 147; above that, checks run later. This is arithmetic, not measured
-throughput or a provider-limit guarantee.
+at most 150 requests per second. A regular check fetches the profile and, only
+when trophies or win counts changed recently, a tracked opponent's log shows a
+new battle, it has no fresh battle log, or it is in the 5% control group, the
+battle log: about 1.2 requests per check
+([details](collector-polling.md#battle-log-only-when-it-can-have-changed)).
+Checking 13,263 players every 90 seconds would need about 177, so in practice
+the keys pace checks to about one every ~106 seconds per player. This is
+arithmetic, not measured throughput or a provider-limit guarantee. To read the
+real figure, divide the growth of
+`clashlens_collector_requests_total{endpoint="battle_log",pool="regular"}` by
+that of `{endpoint="profile",pool="regular"}` over a few minutes outside Reset,
+summing all outcomes, and add one. For about two check rounds (~4 minutes)
+after a collector restart, every check fetches both responses.
 
 The collector stores the interactive key's configured total in the shared
 database. Interactive collection, player verification and operator Discord

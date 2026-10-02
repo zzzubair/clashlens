@@ -18,6 +18,7 @@ from psycopg_pool import PoolTimeout
 
 from . import collector_uploads, weekly_eligibility
 from .archive import ArchiveReadError, S3ArchiveReader
+from .battle_log_schedule import BattleLogSchedule
 from .collector_db import (
     CollectorDatabase,
     CollectorIntent,
@@ -33,7 +34,7 @@ from .collector_http import (
     ProviderFailure,
     retry_after_seconds,
 )
-from .response_fields import content_fingerprint
+from .response_fields import read_fields
 from .spool import Spool, SpoolError
 
 _GLOBAL_ARCHIVE_FAILURES = {
@@ -91,6 +92,7 @@ class Collector:
         self.max_body_bytes = max_body_bytes
         self.interactive_fingerprint = interactive_fingerprint
         self.weekly_eligibility_enabled = weekly_eligibility_enabled
+        self.battle_logs = BattleLogSchedule()
         self.outcomes: dict[str, int] = {}
         self.endpoint_outcomes: dict[tuple[str, str, str], int] = {}
         self.latency_seconds: dict[tuple[str, str], float] = {}
@@ -144,16 +146,26 @@ class Collector:
         if not await self._spool_available():
             return ["capacity_paused"] * len(endpoints)
         pool = self.interactive_keys if lane == "interactive" else self.regular_keys
+        regular_check = lane == "ordinary" and endpoints == ("profile", "battle_log")
+        reuse_fresh_profile = (
+            regular_check
+            and work.profile_fresh_until is not None
+            and datetime.now(UTC) < work.profile_fresh_until
+        )
+        profile_first = regular_check and not reuse_fresh_profile
         try:
-            stack, reservations = await self._reserve_endpoints_safely(endpoints)
+            stack, reservations = await self._reserve_endpoints_safely(
+                endpoints[:1] if profile_first else endpoints
+            )
+            if profile_first:
+                try:
+                    return await self._collect_profile_first(
+                        work, pool, reservations[0]
+                    )
+                finally:
+                    await _drain_to_thread(stack.close)
             selected_endpoints = endpoints
             selected_reservations = reservations
-            reuse_fresh_profile = (
-                lane == "ordinary"
-                and endpoints == ("profile", "battle_log")
-                and work.profile_fresh_until is not None
-                and datetime.now(UTC) < work.profile_fresh_until
-            )
             if reuse_fresh_profile:
                 selected_endpoints = ("battle_log",)
                 selected_reservations = (reservations[1],)
@@ -204,6 +216,29 @@ class Collector:
         except (OSError, SpoolError) as error:
             self._record_spool_failure(error)
             return ["capacity_paused"] * len(endpoints)
+
+    async def _collect_profile_first(
+        self, work: CollectorWork, pool: KeyPool, reservation: Any
+    ) -> list[str]:
+        """Fetch the profile, then the battle log only when it can have changed."""
+        check_started_at = datetime.now(UTC)
+        profile = await self._collect_endpoint(
+            work, "profile", "ordinary", pool, reservation=reservation
+        )
+        if profile == "capacity_paused" or not self.battle_logs.due(
+            work.normalized_tag,
+            check_started_at=check_started_at,
+            now=datetime.now(UTC),
+        ):
+            return [profile]
+        stack, reservations = await self._reserve_endpoints_safely(("battle_log",))
+        try:
+            battle_log = await self._collect_endpoint(
+                work, "battle_log", "ordinary", pool, reservation=reservations[0]
+            )
+        finally:
+            await _drain_to_thread(stack.close)
+        return [profile, battle_log]
 
     def _reserve_endpoints(
         self, endpoints: tuple[str, ...]
@@ -393,7 +428,7 @@ class Collector:
                         ),
                     )
                 digest = hashlib.sha256(response.body).hexdigest()
-                handoff = self._make_handoff(work, response, digest)
+                handoff, fields = self._make_handoff(work, response, digest)
                 name, payload = self.serialize_handoff(handoff)
                 async with self._handoff_lock(handoff):
                     # A predecessor may have failed after its durable publish
@@ -425,6 +460,17 @@ class Collector:
                                 ) from error
                         raise
                 self._count("recorded")
+                # Discovery work (ordinary lane with a work row) is not tracked.
+                if fields is not None and (
+                    lane != "ordinary" or work.collector_work_id is None
+                ):
+                    self.battle_logs.note_response(
+                        work.normalized_tag,
+                        endpoint,
+                        fields,
+                        started_at=response.request_started_at,
+                        completed_at=response.response_completed_at,
+                    )
                 outcome = f"http_{response.http_status}"
                 key = (endpoint, pool_name, outcome)
                 self.endpoint_outcomes[key] = self.endpoint_outcomes.get(key, 0) + 1
@@ -471,9 +517,15 @@ class Collector:
         work: CollectorWork,
         response: FetchedResponse,
         digest: str,
-    ) -> ResponseHandoff:
+    ) -> tuple[ResponseHandoff, Any]:
         global_scope = response.endpoint == "global_player_rankings"
-        return ResponseHandoff(
+        fingerprint, fields = read_fields(
+            response.endpoint,
+            response.body,
+            http_status=response.http_status,
+            response_hash=digest,
+        )
+        handoff = ResponseHandoff(
             occurrence_key=str(uuid4()),
             scope="global" if global_scope else "player",
             identity_key="global" if global_scope else work.normalized_tag,
@@ -484,12 +536,7 @@ class Collector:
             response_completed_at=response.response_completed_at,
             http_status=response.http_status,
             response_hash=digest,
-            content_fingerprint=content_fingerprint(
-                response.endpoint,
-                response.body,
-                http_status=response.http_status,
-                response_hash=digest,
-            ),
+            content_fingerprint=fingerprint,
             byte_size=len(response.body),
             spool_key=f"sha256/{digest[:2]}/{digest}",
             collector_version=self.collector_version,
@@ -501,6 +548,7 @@ class Collector:
             },
             collector_work_id=work.collector_work_id,
         )
+        return handoff, fields
 
     def _handoff_lock(self, handoff: ResponseHandoff) -> asyncio.Lock:
         identity = (
