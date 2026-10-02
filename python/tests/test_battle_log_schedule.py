@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import json
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -30,6 +31,8 @@ def _battle(opponent: str, at: datetime, *, attack: bool = True) -> dict[str, An
         "attack": attack,
         "battleTimestamp": at.strftime("%Y%m%dT%H%M%S.000Z"),
         "opponentPlayerTag": opponent,
+        "stars": 0,
+        "destructionPercentage": 49,
     }
 
 
@@ -44,6 +47,7 @@ class _GameClient(_Client):
         self.profile_status = 200
         self.battle_log_status = 200
         self.profile_fails = False
+        self.during_profile: Callable[[], Awaitable[None]] | None = None
         self.fetched: list[str] = []
 
     def profile(self, tag: str = TAG) -> dict[str, Any]:
@@ -55,6 +59,9 @@ class _GameClient(_Client):
         self, _pool: KeyPool, tag: str, endpoint: str
     ) -> FetchedResponse:
         self.fetched.append(endpoint)
+        if endpoint == "profile" and self.during_profile is not None:
+            during, self.during_profile = self.during_profile, None
+            await during()
         if endpoint == "profile" and self.profile_fails:
             raise ProviderFailure("timeout", retryable=True)
         if endpoint == "profile":
@@ -101,7 +108,9 @@ def game(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         """A restarted collector knows nothing yet, so it checks twice in full."""
         assert [check(tag) for _ in range(3)] == [BOTH, BOTH, PROFILE]
 
-    return SimpleNamespace(check=check, settle=settle, client=client, clock=clock)
+    return SimpleNamespace(
+        check=check, settle=settle, client=client, clock=clock, collector=collector
+    )
 
 
 def test_quiet_player_needs_only_the_profile_once_settled(
@@ -194,22 +203,76 @@ def test_battle_moving_nothing_is_found_by_the_safety_fetch(
 
 @pytest.mark.parametrize(
     "failure",
-    ["transport", "server_error", "missing_trophies", "malformed_trophies"],
+    [
+        "transport",
+        "server_error",
+        "missing_trophies",
+        "malformed_trophies",
+        "negative_trophies",
+        "boolean_defense_wins",
+    ],
 )
 def test_unreadable_profile_fetches_the_log(
     game: SimpleNamespace, failure: str
 ) -> None:
     game.settle()
+    profile = game.client.profile()
     if failure == "transport":
         game.client.profile_fails = True
     elif failure == "server_error":
         game.client.profile_status = 503
+    elif failure == "boolean_defense_wins":
+        profile["defenseWins"] = True
     else:
-        game.client.profile()["trophies"] = (
-            None if failure == "missing_trophies" else "5000"
-        )
+        profile["trophies"] = {
+            "missing_trophies": None,
+            "malformed_trophies": "5000",
+            "negative_trophies": -1,
+        }[failure]
 
     assert game.check() == BOTH
+
+
+def test_refresh_during_a_check_does_not_hide_its_failed_profile(
+    game: SimpleNamespace,
+) -> None:
+    game.settle()
+
+    async def refresh_saves_an_unchanged_profile() -> None:
+        game.client.profile_fails = False
+        await game.collector.collect_player(
+            CollectorWork(1, TAG, game.clock[0]),
+            lane="interactive",
+            endpoints=("profile",),
+        )
+        game.client.profile_fails = True
+
+    game.client.during_profile = refresh_saves_an_unchanged_profile
+    game.client.profile_fails = True
+
+    # The Refresh's profile, then this check's failed profile and its log.
+    assert game.check() == ["profile", "profile", "battle_log"]
+
+
+@pytest.mark.parametrize(
+    "bad_row",
+    [
+        {"opponentPlayerTag": []},
+        {"battleTimestamp": "yesterday"},
+        {"stars": None},
+    ],
+)
+def test_malformed_log_neither_clears_owed_fetches_nor_stops_collection(
+    game: SimpleNamespace, bad_row: dict[str, Any]
+) -> None:
+    game.settle()
+    game.client.logs[TAG] = [_battle(OPPONENT, game.clock[0]) | bad_row]
+    game.client.profile()["trophies"] += 40
+
+    assert [game.check() for _ in range(3)] == [BOTH] * 3
+
+    game.client.logs[TAG] = [_battle(OPPONENT, game.clock[0])]
+    assert [game.check() for _ in range(3)] == [BOTH, BOTH, PROFILE]
 
 
 def test_failed_log_fetch_keeps_the_obligation(game: SimpleNamespace) -> None:
@@ -237,21 +300,22 @@ class _Schedule:
         self.schedule = BattleLogSchedule()
 
     def profile(self, tag: str, at: datetime, trophies: int = 5_000) -> None:
-        self.schedule.note_response(
-            tag, "profile", {"trophies": trophies}, started_at=at, completed_at=at
+        body = {"trophies": trophies, "attackWins": 10, "defenseWins": 7}
+        assert self.schedule.note_response(
+            tag, "profile", json.dumps(body).encode(), started_at=at, completed_at=at
         )
 
     def log(self, tag: str, started_at: datetime, *entries: dict[str, Any]) -> None:
-        self.schedule.note_response(
+        assert self.schedule.note_response(
             tag,
             "battle_log",
-            list(entries),
+            json.dumps({"items": list(entries)}).encode(),
             started_at=started_at,
             completed_at=started_at + timedelta(seconds=1),
         )
 
     def due(self, tag: str, at: datetime) -> bool:
-        return self.schedule.due(tag, check_started_at=START, now=at)
+        return self.schedule.due(tag, profile_usable=True, now=at)
 
     def settle(self, tag: str) -> datetime:
         """Two full checks a minute apart, as after a restart; returns the time."""
@@ -298,11 +362,44 @@ def test_opponent_that_already_has_the_battle_is_not_refetched() -> None:
     assert not state.due(OPPONENT, now + timedelta(seconds=2))
 
 
-def test_first_log_seen_after_a_restart_owes_opponents_nothing() -> None:
+def test_first_log_seen_after_a_restart_still_marks_opponents() -> None:
     state = _Schedule()
     now = state.settle(OPPONENT)
-    # The first log this collector sees may hold battles it never missed.
     state.profile(TAG, now)
     state.log(TAG, now, _battle(OPPONENT, now - timedelta(seconds=30)))
 
-    assert not state.due(OPPONENT, now + timedelta(seconds=2))
+    assert state.due(OPPONENT, now + timedelta(seconds=2))
+
+
+def test_opponent_log_from_inside_the_api_cache_does_not_count() -> None:
+    state = _Schedule()
+    now = state.settle(TAG)
+    state.settle(OPPONENT)
+    battle_at = now - timedelta(seconds=20)
+
+    state.log(TAG, now, _battle(OPPONENT, battle_at))
+    # The opponent's cached log, saved just before the battle, comes back again.
+    state.log(OPPONENT, now + timedelta(seconds=10))
+    assert state.due(OPPONENT, now + timedelta(seconds=12))
+
+    state.log(
+        OPPONENT, now + timedelta(seconds=61), _battle(TAG, battle_at, attack=False)
+    )
+    assert not state.due(OPPONENT, now + timedelta(seconds=63))
+
+
+def test_opponent_mark_during_a_profile_change_outlasts_its_follow_up() -> None:
+    state = _Schedule()
+    now = state.settle(TAG)
+    state.settle(OPPONENT)
+    state.profile(OPPONENT, now, trophies=5_040)
+    # The opponent's owed log request is already running when the mark arrives.
+    started = now + timedelta(seconds=1)
+    state.log(TAG, now + timedelta(seconds=30), _battle(OPPONENT, now))
+    state.log(OPPONENT, started)
+    state.log(OPPONENT, started + timedelta(seconds=60))
+
+    assert state.due(OPPONENT, started + timedelta(seconds=62))
+
+    state.log(OPPONENT, now + timedelta(seconds=91), _battle(TAG, now, attack=False))
+    assert not state.due(OPPONENT, now + timedelta(seconds=93))

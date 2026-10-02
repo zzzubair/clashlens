@@ -1,11 +1,11 @@
 """The response fields Clash Lens uses, and the collector's change test.
 
 The collector hashes only the listed fields to decide whether a response
-changed. Bytes that differ outside these fields are not stored again. This is
-the only thing the collector reads from a response body. Apart from what
-decides when a check also fetches the battle log (profile trophies and win
-counts, battle times and opponents), it never interprets meaning. When a response counts as changed, the full raw body is
-still stored and archived exactly as before. A Reset baseline always counts as changed;
+changed. Bytes that differ outside these fields are not stored again. Apart
+from deciding when a check also fetches the battle log (see
+``battle_log_schedule``), the collector never interprets meaning. When a
+response counts as changed, the full raw body is still stored and archived
+exactly as before. A Reset baseline always counts as changed;
 that rule lives in ``collector_db.record_response``.
 """
 
@@ -33,9 +33,6 @@ PROFILE_FIELDS = (
     "role",
 )
 PROFILE_CLAN_FIELDS = ("tag", "name")
-# Read but not fingerprinted: a battle changes at least one of them unless it
-# is a 0-star attack under 10% destruction.
-PROFILE_SIGNALS = ("trophies", "attackWins", "defenseWins")
 
 # Only Legend entries count, and only the listed fields on them, per the
 # standing decision on issue #110. Other entry types and every other field
@@ -66,41 +63,21 @@ def content_fingerprint(
     Endpoints without a field list, error responses, and unparseable bodies
     fall back to the raw-response digest so their behaviour is unchanged.
     """
-    return read_fields(
-        endpoint, body, http_status=http_status, response_hash=response_hash
-    )[0]
-
-
-def read_fields(
-    endpoint: str,
-    body: bytes,
-    *,
-    http_status: int,
-    response_hash: str,
-) -> tuple[str, Any]:
-    """The content fingerprint and the fields the collector schedules from.
-
-    The second value is the profile's trophies and win counts, or the Legend
-    battle-log entries, or None when the response is unreadable.
-    """
     if not 200 <= http_status < 300 or endpoint not in _FIELD_ENDPOINTS:
-        return response_hash, None
+        return response_hash
     try:
         payload = json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError):
-        return response_hash, None
+        return response_hash
     projection = (
         _profile_projection(payload)
         if endpoint == "profile"
         else _battle_log_projection(payload)
     )
     if projection is None:
-        return response_hash, None
+        return response_hash
     canonical = json.dumps(projection, sort_keys=True, separators=(",", ":"))
-    fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    if endpoint == "profile":
-        return fingerprint, {name: payload.get(name) for name in PROFILE_SIGNALS}
-    return fingerprint, projection
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _profile_projection(payload: Any) -> dict[str, Any] | None:

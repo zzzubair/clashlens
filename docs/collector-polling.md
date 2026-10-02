@@ -161,8 +161,10 @@ first, saves it, and then fetches the battle log only when:
 - a newly saved battle log of another player shows a new battle against this
   player, and this player's last battle log does not reach that battle's time
   yet (the opponent fetch);
-- this check got no valid trophies: the profile request failed, returned an
-  error, or had missing or malformed trophies;
+- this check's own profile response is unusable: the request failed, returned
+  an error, or had trophies, `attackWins` or `defenseWins` missing, negative or
+  not whole numbers. A profile saved by another request at the same time, such
+  as a Refresh, does not stand in for it;
 - the last successful battle log is at least 15 minutes old, or the collector
   has none for this player since it started (the safety fetch); or
 - the player is in the control group (below).
@@ -170,23 +172,30 @@ first, saves it, and then fetches the battle log only when:
 The follow-up fetch exists because the Clash API caches each endpoint for up to
 60 seconds, so a profile can show a battle before the battle log does. It only
 counts when it starts at least 60 seconds after the fetch that the profile
-change triggered, so a quick re-check inside that cache cannot satisfy it. Only
-a saved successful battle log whose request started after the change was seen
-counts; a failed fetch leaves the fetch owed for the next check.
+change triggered, so a quick re-check inside that cache cannot satisfy it. The
+opponent fetch likewise only counts when it starts at least 60 seconds after
+the other player's log showed the battle. Only a saved successful battle log
+whose request started after the change was seen counts, and only when every
+Legend row in it passes the worker's row checks (valid side, time, stars,
+destruction and opponent tag). A failed or malformed log leaves the fetch owed
+for the next check and does not reset the 15-minute safety clock.
 
 A battle that moves no trophies still counts. When player A attacks player B
 for 0 stars and 49%, A gains trophies and B loses none, but B's `defenseWins`
 goes up, so B's next check fetches B's log. The opponent fetch also covers B
 when only A's side changed or B's profile has not caught up yet. A "new battle"
-is one later than every battle in that player's previous saved log; the first
-log the collector sees for a player after starting marks no opponents. Only
-players the collector has already checked since starting get an opponent
-fetch. Anything still left, such as a tracked player's 0-star attack under 10%
+is one later than every battle in that player's previous saved log, so the
+first log the collector sees for a player after starting counts all its
+battles as new. No opponent fetch is owed when the opponent's own latest saved
+log already reaches that battle's time. Only players the collector has already
+checked since starting get an opponent fetch. Anything still left, such as a tracked player's 0-star attack under 10%
 on an untracked player, waits for the safety fetch: about 15–17 minutes plus
 any queue delay. Leaderboard trophies come from the profile, which every
 check still fetches, so they are unaffected. However late a log is fetched, the
-worker files each battle by its own `battleTimestamp`, so it lands in its real
-Legend day and order, and a battle reported by both players is stored once.
+worker stores each battle under its own `battleTimestamp`, so it lands in its
+real Legend day and order, and a battle reported by both players is stored
+once. A daily result already published for an earlier Legend day is not
+recalculated when a late battle arrives.
 
 The collector keeps this state in memory: one entry of about 520 bytes per
 player it has checked since it started (measured), about 6.8 MB for 13,263
