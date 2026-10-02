@@ -16,7 +16,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from .battle import parse_battle_log
 
@@ -76,38 +77,23 @@ class BattleLogSchedule:
             _note_profile(player, signals, completed_at)
             return True
         if endpoint == "battle_log":
-            battles = _battles(body, normalized_tag, completed_at)
-            if battles is None:
+            read = _battles(body, normalized_tag, completed_at)
+            if read is None:
                 return False
+            battles, complete = read
             player = self._players.setdefault(normalized_tag, _Player())
-            self._note_battle_log(player, battles, started_at, completed_at)
-            return True
+            if complete:
+                _note_complete_log(player, started_at, completed_at)
+            self._note_battles(player, battles, completed_at)
+            return complete
         return False
 
-    def _note_battle_log(
+    def _note_battles(
         self,
         player: _Player,
         battles: list[tuple[datetime, str]],
-        started_at: datetime,
         completed_at: datetime,
     ) -> None:
-        if player.battle_log_at is None or completed_at > player.battle_log_at:
-            player.battle_log_at = completed_at
-        # A log requested before the change was seen may not show it.
-        if (
-            player.owed == 2
-            and player.owed_since is not None
-            and started_at >= player.owed_since
-        ):
-            player.owed = 1
-            _start_no_earlier_than(player, started_at + FOLLOW_UP_GAP)
-        elif (
-            player.owed == 1
-            and player.follow_up_after is not None
-            and started_at >= player.follow_up_after
-        ):
-            player.owed = 0
-            player.follow_up_after = None
         previous_latest = player.latest_battle_at
         for battle_at, opponent_tag in battles:
             if player.latest_battle_at is None or battle_at > player.latest_battle_at:
@@ -140,6 +126,28 @@ class BattleLogSchedule:
             or player.battle_log_at is None
             or now - player.battle_log_at >= SAFETY_INTERVAL
         )
+
+
+def _note_complete_log(
+    player: _Player, started_at: datetime, completed_at: datetime
+) -> None:
+    if player.battle_log_at is None or completed_at > player.battle_log_at:
+        player.battle_log_at = completed_at
+    # A log requested before the change was seen may not show it.
+    if (
+        player.owed == 2
+        and player.owed_since is not None
+        and started_at >= player.owed_since
+    ):
+        player.owed = 1
+        _start_no_earlier_than(player, started_at + FOLLOW_UP_GAP)
+    elif (
+        player.owed == 1
+        and player.follow_up_after is not None
+        and started_at >= player.follow_up_after
+    ):
+        player.owed = 0
+        player.follow_up_after = None
 
 
 def _note_profile(
@@ -177,10 +185,11 @@ def _profile_signals(body: bytes) -> tuple[int, ...] | None:
 
 def _battles(
     body: bytes, normalized_tag: str, completed_at: datetime
-) -> list[tuple[datetime, str]] | None:
-    """Each Legend battle's time and opponent, or None for an unusable log.
+) -> tuple[list[tuple[datetime, str]], bool] | None:
+    """Each valid Legend battle's time and opponent, and whether all were valid.
 
-    A log counts only when every Legend row passes the worker's own row rules.
+    A row is valid when it passes the worker's own row rules and has a live
+    battleTimestamp. None means the body is not a battle log at all.
     """
     try:
         log = parse_battle_log(
@@ -188,10 +197,26 @@ def _battles(
         )
     except ValueError:
         return None
-    if log.has_row_gap:
+    battles = []
+    complete = True
+    for row in log.rows:
+        if row.outcome == "ignored_non_legend":
+            continue
+        battle_at = _battle_at(row.source_json)
+        if row.battle is None or battle_at is None:
+            complete = False
+        else:
+            battles.append((battle_at, row.battle.opponent_tag))
+    return battles, complete
+
+
+def _battle_at(entry: Any) -> datetime | None:
+    # Live entries carry the date as compact text in battleTimestamp;
+    # battleTime is the battle's length in seconds.
+    value = entry.get("battleTimestamp") if isinstance(entry, dict) else None
+    if not isinstance(value, str):
         return None
-    return [
-        (row.battle.battle_timestamp, row.battle.opponent_tag)
-        for row in log.rows
-        if row.battle is not None
-    ]
+    try:
+        return datetime.strptime(value, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=UTC)
+    except ValueError:
+        return None

@@ -176,9 +176,12 @@ change triggered, so a quick re-check inside that cache cannot satisfy it. The
 opponent fetch likewise only counts when it starts at least 60 seconds after
 the other player's log showed the battle. Only a saved successful battle log
 whose request started after the change was seen counts, and only when every
-Legend row in it passes the worker's row checks (valid side, time, stars,
-destruction and opponent tag). A failed or malformed log leaves the fetch owed
-for the next check and does not reset the 15-minute safety clock.
+Legend row in it passes the worker's row checks (valid side, stars,
+destruction and opponent tag) and has a live `battleTimestamp`; `battleTime`,
+the battle's length, never stands in for it. A failed or malformed log leaves
+the fetch owed for the next check and does not reset the 15-minute safety
+clock, but its valid rows still count as seen battles and still mark tracked
+opponents.
 
 A battle that moves no trophies still counts. When player A attacks player B
 for 0 stars and 49%, A gains trophies and B loses none, but B's `defenseWins`

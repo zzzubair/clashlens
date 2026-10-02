@@ -260,6 +260,8 @@ def test_refresh_during_a_check_does_not_hide_its_failed_profile(
         {"opponentPlayerTag": []},
         {"battleTimestamp": "yesterday"},
         {"stars": None},
+        # Live battleTime is the battle's length, not its date.
+        {"battleTimestamp": None, "battleTime": 180},
     ],
 )
 def test_malformed_log_neither_clears_owed_fetches_nor_stops_collection(
@@ -305,8 +307,8 @@ class _Schedule:
             tag, "profile", json.dumps(body).encode(), started_at=at, completed_at=at
         )
 
-    def log(self, tag: str, started_at: datetime, *entries: dict[str, Any]) -> None:
-        assert self.schedule.note_response(
+    def log(self, tag: str, started_at: datetime, *entries: dict[str, Any]) -> bool:
+        return self.schedule.note_response(
             tag,
             "battle_log",
             json.dumps({"items": list(entries)}).encode(),
@@ -369,6 +371,21 @@ def test_first_log_seen_after_a_restart_still_marks_opponents() -> None:
     state.log(TAG, now, _battle(OPPONENT, now - timedelta(seconds=30)))
 
     assert state.due(OPPONENT, now + timedelta(seconds=2))
+
+
+def test_valid_battle_in_a_partly_malformed_log_still_marks_the_opponent() -> None:
+    state = _Schedule()
+    now = state.settle(TAG)
+    state.settle(OPPONENT)
+    state.profile(TAG, now, trophies=5_040)
+    valid = _battle(OPPONENT, now - timedelta(seconds=20))
+    malformed = _battle(OPPONENT, now - timedelta(minutes=5)) | {"stars": None}
+
+    assert not state.log(TAG, now, valid, malformed)
+    later = now + timedelta(minutes=2)
+    assert state.due(OPPONENT, later)
+    # The malformed log does not count as this player's owed fetch.
+    assert state.due(TAG, later)
 
 
 def test_opponent_log_from_inside_the_api_cache_does_not_count() -> None:
