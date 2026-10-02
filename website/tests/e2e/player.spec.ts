@@ -62,6 +62,62 @@ for (const ageMs of [30_000, 60_000, 60_001, 120_000]) {
   });
 }
 
+test("data processed shortly after a completed Refresh reaches the open page", async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  const savedContext = await browser.newContext({ javaScriptEnabled: false, baseURL });
+  let html: Buffer;
+  let observedAt: string;
+  let savedData: string;
+  let dataType: string;
+  try {
+    const savedPage = await savedContext.newPage();
+    const response = await savedPage.goto("/players/%232PP");
+    html = await response!.body();
+    observedAt = (await savedPage.locator(".player-updated").getAttribute("datetime"))!;
+    const dataResponse = await savedContext.request.get("/players/%232PP.data");
+    savedData = await dataResponse.text();
+    dataType = dataResponse.headers()["content-type"];
+  } finally {
+    await savedContext.close();
+  }
+  expect(savedData).toContain(observedAt);
+  const processedAt = new Date(Date.parse(observedAt) + 1_000).toISOString();
+
+  // Completion carries the old saved player, and the first reload after it is
+  // answered before processing finishes. Only later reloads see processed data.
+  let completed = false;
+  let reloadsAfterCompletion = 0;
+  await page.route("**/players/%232PP", (route) =>
+    route.fulfill({ contentType: "text/html", body: html }),
+  );
+  await page.route("**/players/%232PP.data*", (route) => {
+    const processed = completed && reloadsAfterCompletion++ > 0;
+    return route.fulfill({
+      contentType: dataType,
+      body: processed ? savedData.replaceAll(observedAt, processedAt) : savedData,
+    });
+  });
+  await page.route("**/resources/players/*/refresh?workId=*", async (route) => {
+    const response = await route.fetch();
+    const status = await response.json();
+    if (status.state === "complete") {
+      status.player.profile.freshness.observedAt = observedAt;
+      completed = true;
+    }
+    await route.fulfill({ response, json: status });
+  });
+  await page.clock.setFixedTime(new Date(Date.parse(observedAt) + 120_000));
+
+  await page.goto("/players/%232PP");
+  await expect(page.locator(".player-updated")).toHaveAttribute("datetime", processedAt, {
+    timeout: 30_000,
+  });
+  expect(reloadsAfterCompletion).toBeGreaterThan(1);
+});
+
 test("player page canonicalizes the tag and shows collected profile data", async ({
   page,
 }) => {

@@ -32,6 +32,14 @@ the existing Refresh request once when its saved check is more than 60 seconds
 old. Saved data stays visible while the existing Refresh flow runs, including if
 the request is refused. Manual Refresh and browser-reload Refresh still work.
 
+When any Refresh reports complete, the page reloads its data immediately and
+again about 3 and 8 seconds later. A reload replaces the player carried by the
+completed Refresh only when its profile check is newer. Known limitation:
+complete means both API responses were saved, not that the worker has processed
+them. Processing that takes longer than about 8 seconds, or battles processed
+after a profile with the same check time, appear only after the next Refresh or
+page load.
+
 ## Requirements and setup
 
 - Node.js 24 LTS and npm with the committed `package-lock.json`; and

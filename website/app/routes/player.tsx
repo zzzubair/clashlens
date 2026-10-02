@@ -232,7 +232,13 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
     visibleStatus && "player" in visibleStatus && visibleStatus.tag === data.requestedTag
       ? (visibleStatus as RefreshStatus).player
       : null;
-  const player = refreshedPlayer ?? data.player;
+  const player =
+    refreshedPlayer &&
+    (data.player === null ||
+      Date.parse(refreshedPlayer.profile.freshness.observedAt) >=
+        Date.parse(data.player.profile.freshness.observedAt))
+      ? refreshedPlayer
+      : data.player;
   const trackedPlayer = player?.trackingState === "tracking" ? player : null;
   const lookup: PlayerLookup | null = player
     ? { tag: player.tag, state: player.trackingState }
@@ -369,7 +375,6 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
         }
         setPollingError(null);
         setLastStatus(payload);
-        if (payload.state === "complete") revalidator.revalidate();
       } catch (error) {
         if (
           !cancelled &&
@@ -390,7 +395,17 @@ function PlayerContent({ data }: { data: PlayerLoaderData }) {
       clearInterval(timer);
       controller?.abort();
     };
-  }, [player?.tag, refreshResourcePath, revalidator, terminalState, workId]);
+  }, [player?.tag, refreshResourcePath, terminalState, workId]);
+
+  const completedWorkId = lastStatus?.state === "complete" ? lastStatus.workId : null;
+  const { revalidate } = revalidator;
+  useEffect(() => {
+    if (completedWorkId === null) return;
+    const timers = [0, 3_000, 8_000].map((delay) =>
+      setTimeout(() => void revalidate(), delay),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [completedWorkId, revalidate]);
 
   if (trackedPlayer === null) {
     if (data.requestedTag === null) {
