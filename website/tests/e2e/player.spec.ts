@@ -1,4 +1,72 @@
-import { expect, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
+
+import { expect, test, type Page } from "@playwright/test";
+
+import type { PlayerPage, RankedBattleEvent } from "../../app/lib/contracts";
+
+// Sends Refresh submissions with an invalid key, so the server refuses them
+// before they spend the per-visitor allowance (6 a minute) that lookups share.
+async function refuseRefreshes(page: Page, allowNext = () => false) {
+  const submissions: string[] = [];
+  await page.route("**/resources/players/*/refresh*", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    submissions.push(route.request().postData() ?? "");
+    if (allowNext()) return route.continue();
+    await route.continue({ postData: "idempotencyKey=invalid" });
+  });
+  return submissions;
+}
+
+function refreshSubmitted(page: Page) {
+  return page.waitForResponse(
+    (response) =>
+      response.request().method() === "POST" &&
+      response.url().includes("/resources/players/"),
+  );
+}
+
+// React Router page data is a flat list of values: objects map "_<key index>"
+// to value indexes, arrays list value indexes, -5 is null and -7 undefined.
+function decodePageData(text: string) {
+  const values: unknown[] = JSON.parse(text.split("\n")[0]);
+  const decode = (index: number): unknown => {
+    if (index < 0) return index === -5 ? null : undefined;
+    const value = values[index];
+    if (Array.isArray(value)) return value.map(decode);
+    if (value === null || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        values[Number(key.slice(1))],
+        decode(item as number),
+      ]),
+    );
+  };
+  return decode(0) as Record<string, { data?: { player?: PlayerPage } }>;
+}
+
+function encodePageData(data: unknown) {
+  const values: unknown[] = [];
+  const encode = (value: unknown): number => {
+    if (value === null) return -5;
+    if (value === undefined) return -7;
+    if (typeof value !== "object") return values.push(value) - 1;
+    const index = values.push(null) - 1;
+    values[index] = Array.isArray(value)
+      ? value.map(encode)
+      : Object.fromEntries(
+          Object.entries(value).map(([key, item]) => [`_${encode(key)}`, encode(item)]),
+        );
+    return index;
+  };
+  encode(data);
+  return `${JSON.stringify(values)}\n`;
+}
+
+function pagePlayer(data: ReturnType<typeof decodePageData>) {
+  const player = Object.values(data).find((route) => route.data?.player)?.data?.player;
+  expect(player?.currentDay, "saved player has a current Legend day").toBeTruthy();
+  return player!;
+}
 
 // Sets the server-calculated check age in React Router's serialized page data.
 function withServerAge(html: string, ageSeconds: number) {
@@ -56,15 +124,12 @@ for (const ageSeconds of [30, 60, 61, 120]) {
       const now = Date.now;
       Date.now = () => now() + offset;
     }, Date.parse(observedAt) + (automaticCount ? 0 : 3_600_000) - Date.now());
-    const submissions: string[] = [];
-    await page.route("**/resources/players/*/refresh*", async (route) => {
-      if (route.request().method() !== "POST") return route.continue();
-      submissions.push(route.request().postData() ?? "");
-      // Exercise the existing refusal display without spending the shared allowance.
-      await route.continue({ postData: "idempotencyKey=invalid" });
-    });
+    // Exercise the existing refusal display without spending the shared allowance.
+    const submissions = await refuseRefreshes(page);
 
+    const automatic = automaticCount ? refreshSubmitted(page) : null;
     await page.goto("/players/%232PP");
+    await automatic;
     const refusal = page
       .getByRole("alert")
       .filter({ hasText: "Check the submitted value" });
@@ -76,7 +141,9 @@ for (const ageSeconds of [30, 60, 61, 120]) {
 
     // The rejected automatic request has re-rendered the page. Manual Refresh
     // must still submit the same valid form, without another automatic attempt.
+    const manual = refreshSubmitted(page);
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await manual;
     await expect(refusal).toBeVisible();
     await page.waitForLoadState("networkidle");
     expect(submissions).toHaveLength(automaticCount + 1);
@@ -87,7 +154,9 @@ for (const ageSeconds of [30, 60, 61, 120]) {
 
     // A full reload retains its existing unconditional Refresh behavior, and
     // stale data must not add a second request on top of it.
+    const reloaded = refreshSubmitted(page);
     await page.reload();
+    await reloaded;
     await expect(refusal).toBeVisible();
     await page.waitForLoadState("networkidle");
     expect(submissions).toHaveLength(automaticCount + 2);
@@ -102,7 +171,6 @@ test("a battle processed shortly after a completed Refresh reaches the open page
   const savedContext = await browser.newContext({ javaScriptEnabled: false, baseURL });
   let html: string;
   let observedAt: string;
-  let opponent: string;
   let savedData: string;
   let dataType: string;
   try {
@@ -110,10 +178,6 @@ test("a battle processed shortly after a completed Refresh reaches the open page
     const response = await savedPage.goto("/players/%232PP");
     html = await response!.text();
     observedAt = (await savedPage.locator(".player-updated").getAttribute("datetime"))!;
-    opponent = (await savedPage
-      .locator(".battle-slot-attack .battle-opponent strong")
-      .first()
-      .textContent())!;
     const dataResponse = await savedContext.request.get("/players/%232PP.data");
     savedData = await dataResponse.text();
     dataType = dataResponse.headers()["content-type"];
@@ -122,10 +186,40 @@ test("a battle processed shortly after a completed Refresh reaches the open page
   }
   expect(savedData).toContain(observedAt);
   const earlierAt = new Date(Date.parse(observedAt) - 1).toISOString();
-  const attacks = page.locator(".battle-slot-attack", { hasText: opponent });
+
+  // The fake Clash API dates its battles to the previous Legend day, so publish
+  // an attack in the current one. The page shows one entry per Legend day,
+  // which may come from the season log rather than currentDay.
+  const processed = decodePageData(savedData);
+  const player = pagePlayer(processed);
+  const attack: RankedBattleEvent = {
+    battleId: "catch-up-attack",
+    battleTimestamp: new Date().toISOString(),
+    opponent: { tag: "#PYLQ", name: "Catch-up Clasher" },
+    destructionPercentage: 100,
+    stars: 3,
+    trophyChange: 40,
+    perspectiveDisagreement: false,
+    army: null,
+  };
+  for (const day of [player.currentDay!, ...player.recentDays, ...player.seasonDays]) {
+    if (day.period === player.currentDay!.period) day.offenseEvents.unshift(attack);
+  }
+  const processedData = encodePageData(processed);
+  const attacks = page.locator(".battle-slot-attack", { hasText: "Catch-up Clasher" });
 
   // Before processing, page reads return the earlier check. Completion carries
   // the processed profile without its battles; only later reads include them.
+  // The Refresh itself is faked, so it spends none of the shared allowance.
+  const work = {
+    kind: "refresh-work",
+    workId: randomUUID(),
+    tag: player.tag,
+    state: "queued",
+    progressPercent: 0,
+    message: "Queued.",
+    publishedAt: null,
+  };
   let completed = false;
   let readsAfterCompletion = 0;
   await page.route("**/players/%232PP", (route) =>
@@ -135,27 +229,38 @@ test("a battle processed shortly after a completed Refresh reaches the open page
     }),
   );
   await page.route("**/players/%232PP.data*", (route) => {
-    const processed = completed && readsAfterCompletion++ > 0;
+    const published = completed && readsAfterCompletion++ > 0;
     return route.fulfill({
       contentType: dataType,
-      body: processed ? savedData : savedData.replaceAll(observedAt, earlierAt),
+      body: published ? processedData : savedData.replaceAll(observedAt, earlierAt),
     });
   });
-  await page.route("**/resources/players/*/refresh?workId=*", async (route) => {
-    const response = await route.fetch();
-    const status = await response.json();
-    if (status.state === "complete") {
-      status.player.profile.freshness.observedAt = observedAt;
-      status.player.currentDay = null;
-      status.player.recentDays = [];
-      status.player.seasonDays = [];
-      completed = true;
+  await page.route("**/resources/players/*/refresh*", (route) => {
+    if (route.request().method() === "POST") {
+      return route.fulfill({
+        status: 202,
+        contentType: "text/x-script",
+        headers: { "X-Remix-Response": "yes" },
+        body: encodePageData({ data: work }),
+      });
     }
-    await route.fulfill({ response, json: status });
+    completed = true;
+    return route.fulfill({
+      json: {
+        ...work,
+        kind: "refresh-status",
+        state: "complete",
+        progressPercent: 100,
+        message: "Complete.",
+        publishedAt: observedAt,
+        player: { ...player, currentDay: null, recentDays: [], seasonDays: [] },
+      },
+    });
   });
 
   await page.goto("/players/%232PP");
-  await expect(attacks).not.toHaveCount(0);
+  await expect(page.locator(".player-updated")).toHaveAttribute("datetime", earlierAt);
+  await expect(attacks).toHaveCount(0);
   await expect.poll(() => readsAfterCompletion, { timeout: 30_000 }).toBeGreaterThan(1);
   await expect(page.locator(".player-updated")).toHaveAttribute("datetime", observedAt);
   await expect(attacks).not.toHaveCount(0);
@@ -164,6 +269,7 @@ test("a battle processed shortly after a completed Refresh reaches the open page
 test("player page canonicalizes the tag and shows collected profile data", async ({
   page,
 }) => {
+  await refuseRefreshes(page);
   await page.goto("/players/%232pp");
 
   await expect(page).toHaveURL(/\/players\/%232PP$/);
@@ -180,6 +286,7 @@ test("player page canonicalizes the tag and shows collected profile data", async
 
 test("player page stays within a narrow viewport", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 900 });
+  await refuseRefreshes(page);
   await page.goto("/players/%232PP");
 
   expect(
@@ -190,7 +297,16 @@ test("player page stays within a narrow viewport", async ({ page }) => {
 });
 
 test("season navigation clears refresh state for the same player", async ({ page }) => {
+  // Only the manual Refresh below may spend the shared allowance.
+  let manual = false;
+  await refuseRefreshes(page, () => {
+    const allowed = manual;
+    manual = false;
+    return allowed;
+  });
   await page.goto("/players/%232PP");
+  await page.waitForLoadState("networkidle");
+  manual = true;
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   const refresh = page.getByRole("region", { name: "Player refresh" });
   await expect(refresh).toBeVisible();
@@ -208,6 +324,7 @@ test("season navigation clears refresh state for the same player", async ({ page
 test("unknown tag starts anonymously, shows progress, and enters tracking", async ({
   page,
 }) => {
+  await refuseRefreshes(page);
   await page.goto("/?q=%23lqqp");
   await expect(page).toHaveURL(/\/players\/%23LQQP$/);
   await expect(page.getByRole("region", { name: "Player lookup" })).toContainText(
