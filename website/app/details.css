@@ -387,7 +387,6 @@
   padding: 0.45rem 1rem;
 }
 .analytics-page .segmented-control input:checked + span {
-  color: var(--cl-on-action);
   background: var(--cl-surface);
   box-shadow: var(--cl-shadow);
 }
