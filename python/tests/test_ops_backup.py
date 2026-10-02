@@ -372,9 +372,7 @@ render_units
 
 
 @pytest.mark.parametrize("mode", ["production", "fixture"])
-def test_pod_address_and_stop_limits_are_rendered(
-    tmp_path, mode_config, mode
-):
+def test_pod_address_and_stop_limits_are_rendered(tmp_path, mode_config, mode):
     units = render_units(tmp_path, mode_config, mode) / "containers" / "systemd"
     network = configparser.ConfigParser(interpolation=None, strict=False)
     pod = configparser.ConfigParser(interpolation=None, strict=False)
