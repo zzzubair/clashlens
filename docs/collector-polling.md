@@ -110,7 +110,7 @@ check in flight every two seconds.
   records alone. This excludes observations, processing jobs, raw storage and
   future changes in the known population.
 
-Run this measurement explicitly with `CLASHLENS_RUN_WEEKLY_LOAD=1` and an
+Run this measurement from `python/` with `CLASHLENS_RUN_WEEKLY_LOAD=1` and an
 isolated `CLASHLENS_TEST_DATABASE_URL`, using the locked Python environment:
 `uv run --locked --python 3.12 pytest -q -s tests/test_weekly_eligibility_load.py`.
 The existing container check runner's `/tmp` temporary-memory mount is required
@@ -132,8 +132,11 @@ timing and complete storage cost still require the population timing trial.
 
 ## Queue behavior
 
-The collector selects `players.next_due_at` oldest first, breaking ties by player
-ID. Admission moves the player to admission time plus 90 seconds, then fetches
+The collector reserves 64 of its 256 regular slots for repeat checks when both
+repeat and first-battle checks are due, then fills remaining slots with
+first-battle checks before more repeats. Each group selects `players.next_due_at`
+oldest first, breaking ties by player ID; either can use spare slots.
+Admission moves the player to admission time plus 90 seconds, then fetches
 the profile and, only when it can have changed, the battle log (next section).
 
 At about 1.2 requests per check, 13,263 active players every 90 seconds would
@@ -154,7 +157,8 @@ this change, and at up to 2 s per check it covers the ~125 checks a second the
 keys allow. This is arithmetic from that
 measurement; the 256-check figure has not run in production yet. When keys,
 slots, the spool or the database cannot keep up, players are checked later
-than 90 seconds, still oldest first, and the due queue does not empty.
+than 90 seconds, still oldest first within each group, and the due queue does
+not empty.
 Per-key limits stay in force and regular work never uses the interactive key.
 
 ### Battle log only when it can have changed
@@ -193,10 +197,12 @@ change triggered, so a quick re-check inside that cache cannot satisfy it. The
 opponent fetch likewise only counts when it starts at least 60 seconds after
 the other player's log showed the battle, and the after-attack fetch ends with
 a fetch that starts at least 10 minutes after the attack. Only a saved
-successful battle log whose request started after the change was seen counts,
-and only when every Legend row in it passes the worker's row checks (valid side,
-stars, destruction and opponent tag) and has an explicit `battleTimestamp`;
-`battleTime`, the battle's length, never stands in for it. A failed log leaves
+successful battle log whose request started after the change was seen counts.
+Valid Legend rows pass the worker's row checks (valid side,
+stars, destruction and opponent tag) and have an explicit `battleTimestamp`;
+`battleTime`, the battle's length, never stands in for it. A newly seen malformed
+row leaves a retry owed, but the same malformed row in a later log does not
+prevent that retry from completing. A failed log leaves
 the fetch owed for the next check and does not reset the 15-minute safety
 clock. A malformed row does the same once, the first time any saved log shows
 it, in case a corrected copy follows: whether a regular check, Refresh or Reset
@@ -247,8 +253,10 @@ grows only with the number of players checked, and is not saved. After a restart
 responses again: up to about 26,500 extra battle-log requests, three minutes of
 all six keys, but never a missed battle.
 
-The 05:00 UTC Reset, Refresh and first-time collection still fetch both
-responses together, as does the very first battle log of a newly found player.
+The 05:00 UTC Reset, Refresh and interactive first-time collection still fetch
+both responses together. A newly found player's first regular battle-log check
+can reuse its saved profile within the five-second profile cache window; if that
+window expires or the battle-log request fails, it fetches the profile again.
 
 **Control group.** About 5% of players (13 of every 256) fetch both responses on
 every check, so production can measure how much later battle details appear for
@@ -366,8 +374,9 @@ The interactive key is never borrowed for regular work.
 ## Validation and live-run boundary
 
 `./dev trial` measures per-player gaps, coverage, failures, queue age, database
-growth, spool recovery, and memory/swap behavior. Profiles must meet the
-300-second median and 600-second worst gap; battle logs, which are skipped until
-they can have changed, need only every player revisited with a worst gap within
-the 15-minute safety fetch plus one check (1,020 seconds). It uses loopback
-fixtures; a real Legend-day run still needs separate authorization.
+growth, spool recovery, and memory/swap behavior. Profiles must have a median
+gap below 300 seconds and a worst gap below 600 seconds; battle logs, which are
+skipped until they can have changed, need only every player revisited with a
+worst gap within the 15-minute safety fetch plus one check (1,020 seconds).
+It uses loopback fixtures; a real Legend-day run still needs separate
+authorization.
