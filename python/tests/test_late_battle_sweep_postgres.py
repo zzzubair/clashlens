@@ -1,9 +1,8 @@
 """A battle saved after its Legend day was published is added to that day.
 
 Once per Reset, after the Reset sweep has finished and every response fetched
-before it finished has been processed, the sweep queues the existing
-recalculation for that day, then for each later saved day of the player once
-the day before it has finished.
+before it finished has been processed, the sweep recalculates that day and
+every later saved day of the player, in order, in one transaction.
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 import psycopg
 import pytest
-from domain_test_support import domain_database, store_observation, text
+from domain_test_support import domain_database, store_observation
 from test_domain_processing_postgres import (
     LIVE_BATTLE_PARSER_VERSION,
     _live_battle_row,
@@ -31,6 +30,7 @@ from clashlens.league_history import LEAGUE_HISTORY_PARSER_VERSION
 ANCHOR = datetime(2026, 8, 3, 5, tzinfo=UTC)
 DAY = ANCHOR + timedelta(days=1)
 TAG = "#8PP"
+OPPONENT = "#2PP"
 
 
 def _on_time_defense() -> dict:
@@ -108,20 +108,6 @@ def _finish_reset_sweep(connection_info: str, boundary: datetime) -> None:
         connection.commit()
 
 
-def _correct(database, processor, now: datetime) -> None:
-    """Run the sweep and its queued jobs until no correction is in progress."""
-    for _round in range(10):
-        result = sweep_late_battles(database, now=now)
-        assert result is not None
-        job_ids, players_in_progress = result
-        if players_in_progress == 0:
-            return
-        # Each player has one recalculation queued at a time.
-        assert len(job_ids) == players_in_progress
-        _process(processor, *job_ids)
-    raise AssertionError("corrections did not finish")
-
-
 def _published(connection_info: str, day: datetime) -> tuple[list, int] | None:
     """The defenses on the player's latest published log, and its version id."""
     with psycopg.connect(connection_info) as connection:
@@ -144,21 +130,6 @@ def _published(connection_info: str, day: datetime) -> tuple[list, int] | None:
         if item["lens"] == "defense"
     )
     return defenses, int(row[1])
-
-
-def _queued_days(connection_info: str) -> list[str]:
-    with psycopg.connect(connection_info) as connection:
-        return [
-            text(row[0])
-            for row in connection.execute(
-                """
-                SELECT input_json ->> 'ranked_day_start'
-                FROM python_processing_jobs
-                WHERE input_json ->> 'trigger' = 'late_battle_sweep'
-                ORDER BY id
-                """
-            ).fetchall()
-        ]
 
 
 def _previous_day_version(connection_info: str, day: datetime) -> int:
@@ -201,7 +172,44 @@ def _published_with_late_battle(connection_info, archive_server, processor, data
     )
 
 
-def test_late_pre_reset_battle_is_added_to_its_published_day_once(
+def _reconcile_job_count(connection_info: str) -> int:
+    with psycopg.connect(connection_info) as connection:
+        return int(
+            connection.execute(
+                "SELECT count(*) FROM python_processing_jobs "
+                "WHERE work_type = 'reconcile_ranked_day'"
+            ).fetchone()[0]
+        )
+
+
+def _sweep_lines(capsys) -> list[dict]:
+    return [
+        json.loads(line)
+        for line in capsys.readouterr().out.splitlines()
+        if '"late_battle_sweep"' in line
+    ]
+
+
+def _saved_disagreement(connection_info: str, tag: str) -> list[bool]:
+    """The disagreement flag of each battle on the player's latest saved result."""
+    with psycopg.connect(connection_info) as connection:
+        row = connection.execute(
+            """
+            SELECT version.contribution_evidence
+            FROM api_player_daily_logs AS log
+            JOIN players AS player ON player.id = log.player_id
+            JOIN ranked_day_versions AS version
+              ON version.id = log.ranked_day_version_id
+            WHERE player.normalized_tag = %s AND log.ranked_day_start = %s
+            ORDER BY log.version DESC
+            LIMIT 1
+            """,
+            (tag, DAY),
+        ).fetchone()
+    return [item["disagreement"] for item in row[0]]
+
+
+def test_late_battle_corrects_its_day_then_later_days_in_order(
     database_url: str, archive_server
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -216,26 +224,15 @@ def test_late_pre_reset_battle_is_added_to_its_published_day_once(
             _finish_reset_sweep(connection_info, boundary)
             before = _published(connection_info, DAY)
             assert before is not None and before[0] == [("#QPP", 3, -40)]
+            jobs_before = _reconcile_job_count(connection_info)
 
-            # The production worker role can read the evidence and queue the
-            # existing job; the job table's own checks accept it.
-            result = sweep_late_battles(
-                worker_database, now=boundary + timedelta(minutes=31)
-            )
-            assert result is not None and len(result[0]) == 1
-            assert _queued_days(connection_info) == ["2026-08-04T05:00:00Z"]
-            # Running again before the worker gets to it changes nothing.
+            # The production worker role can read the evidence and run the
+            # existing recalculation directly; no job is queued.
             assert sweep_late_battles(
-                database, now=boundary + timedelta(minutes=41)
-            ) == ([], 1)
+                worker_database, now=boundary + timedelta(minutes=31)
+            ) == (1, 0)
+            assert _reconcile_job_count(connection_info) == jobs_before
 
-            _process(processor, *result[0])
-            _correct(database, processor, boundary + timedelta(minutes=51))
-
-            assert _queued_days(connection_info) == [
-                "2026-08-04T05:00:00Z",
-                "2026-08-05T05:00:00Z",
-            ]
             after = _published(connection_info, DAY)
             assert after is not None
             assert after[0] == [("#2PP", 0, 0), ("#QPP", 3, -40)]
@@ -245,9 +242,8 @@ def test_late_pre_reset_battle_is_added_to_its_published_day_once(
 
             # Once published, the late battle needs no more work.
             assert sweep_late_battles(
-                database, now=boundary + timedelta(minutes=61)
-            ) == ([], 0)
-            assert len(_queued_days(connection_info)) == 2
+                database, now=boundary + timedelta(minutes=41)
+            ) == (0, 0)
             assert _published(connection_info, DAY) == after
         finally:
             worker_database.close()
@@ -274,11 +270,12 @@ def test_battle_saved_after_the_reset_but_already_published_needs_nothing(
             _publish(database, processor, DAY)
             boundary = DAY + timedelta(days=1)
             _finish_reset_sweep(connection_info, boundary)
+            before = _published(connection_info, DAY)
 
             assert sweep_late_battles(
                 database, now=boundary + timedelta(minutes=31)
-            ) == ([], 0)
-            assert _queued_days(connection_info) == []
+            ) == (0, 0)
+            assert _published(connection_info, DAY) == before
         finally:
             database.close()
 
@@ -311,11 +308,9 @@ def test_later_saved_days_are_refreshed_and_missing_days_stay_missing(
             boundary = DAY + timedelta(days=3)
             _finish_reset_sweep(connection_info, boundary)
 
-            _correct(database, processor, boundary + timedelta(minutes=31))
-            assert _queued_days(connection_info) == [
-                "2026-08-04T05:00:00Z",
-                "2026-08-06T05:00:00Z",
-            ]
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=31)
+            ) == (1, 0)
 
             corrected = _published(connection_info, DAY)
             assert corrected is not None
@@ -440,13 +435,12 @@ def test_sweep_waits_for_the_reset_and_every_response_fetched_before_it_finished
                 connection.commit()
             _process(processor, waiting_job)
 
-            result = sweep_late_battles(database, now=ready_at)
-            assert result is not None and len(result[0]) == 1
+            assert sweep_late_battles(database, now=ready_at) == (1, 0)
         finally:
             database.close()
 
 
-def test_worker_loop_checks_every_ten_minutes_until_corrections_finish(
+def test_worker_loop_checks_every_ten_minutes_and_corrects_once_per_reset(
     database_url: str, archive_server, monkeypatch, capsys
 ) -> None:
     with domain_database(database_url, include_coordinator=True) as connection_info:
@@ -461,27 +455,20 @@ def test_worker_loop_checks_every_ten_minutes_until_corrections_finish(
             monkeypatch.setattr(late_battle_sweep, "monotonic", lambda: clock[0])
             sweep = LateBattleSweep(database)
 
-            def check(minutes: int, at: datetime = boundary) -> list[str]:
-                clock[0] += 600
-                sweep.run_when_due(now=at + timedelta(minutes=minutes))
-                return _queued_days(connection_info)
-
             sweep.run_when_due(now=boundary + timedelta(minutes=25))
-            assert _queued_days(connection_info) == []
             # Ready, but ten minutes have not passed since the last check.
             clock[0] += 300
             sweep.run_when_due(now=boundary + timedelta(minutes=35))
-            assert _queued_days(connection_info) == []
-            assert len(check(40)) == 1
-            # The next day waits until the corrected day has been recalculated.
-            assert len(check(50)) == 1
-            _process(processor, _late_job_ids(connection_info)[-1])
-            assert len(check(60)) == 2
-            _process(processor, _late_job_ids(connection_info)[-1])
-            assert len(check(70)) == 2
+            assert _sweep_lines(capsys) == []
+            clock[0] += 600
+            sweep.run_when_due(now=boundary + timedelta(minutes=45))
+            assert [
+                (line["status"], line["corrected_players"])
+                for line in _sweep_lines(capsys)
+            ] == [("complete", 1)]
 
-            # Every correction has finished, so a battle saved later waits for
-            # the next Reset's sweep.
+            # It has run for this Reset, so a battle saved later waits for the
+            # next Reset's sweep.
             _save_log(
                 connection_info,
                 archive_server,
@@ -497,67 +484,89 @@ def test_worker_loop_checks_every_ten_minutes_until_corrections_finish(
                     _late_defense(),
                     _on_time_defense(),
                 ],
-                observed_at=boundary + timedelta(minutes=75),
+                observed_at=boundary + timedelta(minutes=50),
             )
-            assert len(check(80)) == 2
+            clock[0] += 600
+            sweep.run_when_due(now=boundary + timedelta(minutes=55))
+            assert _sweep_lines(capsys) == []
+            assert ("#CPP", 3, -40) not in _published(connection_info, DAY)[0]
 
             next_boundary = boundary + timedelta(days=1)
             _finish_reset_sweep(connection_info, next_boundary)
-            assert len(check(30, next_boundary)) == 3
-            statuses = [
-                json.loads(line)["status"]
-                for line in capsys.readouterr().out.splitlines()
-                if '"late_battle_sweep"' in line
-            ]
-            assert statuses == ["running", "running", "running", "complete", "running"]
+            clock[0] += 600
+            sweep.run_when_due(now=next_boundary + timedelta(minutes=30))
+            assert [line["status"] for line in _sweep_lines(capsys)] == ["complete"]
+            assert ("#CPP", 3, -40) in _published(connection_info, DAY)[0]
         finally:
             database.close()
 
 
-def _late_job_ids(connection_info: str) -> list[int]:
-    with psycopg.connect(connection_info) as connection:
-        return [
-            int(row[0])
-            for row in connection.execute(
-                "SELECT id FROM python_processing_jobs "
-                "WHERE input_json ->> 'trigger' = 'late_battle_sweep' ORDER BY id"
-            ).fetchall()
-        ]
-
-
-def test_later_day_waits_for_the_corrected_day_even_after_a_restart(
-    database_url: str, archive_server
+def test_failed_player_is_rolled_back_logged_and_retried_next_run(
+    database_url: str, archive_server, monkeypatch, capsys
 ) -> None:
-    # A worker that is behind, restarted or running several lanes must still
-    # recalculate the later day from the corrected earlier day.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         try:
             _published_with_late_battle(
                 connection_info, archive_server, processor, database
             )
+            next_day = DAY + timedelta(days=1)
             boundary = DAY + timedelta(days=2)
             _finish_reset_sweep(connection_info, boundary)
-            for minutes in range(31, 91, 10):
-                # A fresh sweep each time, as after a worker restart.
-                LateBattleSweep(database).run_when_due(
-                    now=boundary + timedelta(minutes=minutes)
-                )
-            assert _queued_days(connection_info) == ["2026-08-04T05:00:00Z"]
+            before = _published(connection_info, DAY)
+            recalculate = reconciliation_db.recalculate_ranked_day
 
-            for minutes in range(91, 200, 10):
-                LateBattleSweep(database).run_when_due(
-                    now=boundary + timedelta(minutes=minutes)
-                )
-                # Every queued job is due now; run the newest first, as a
-                # second lane would.
-                for job_id in reversed(_late_job_ids(connection_info)):
-                    processor.process_job(job_id, owner=f"lane-{job_id}")
+            def fail_on_next_day(*args, day_start, **kwargs):
+                if day_start == next_day:
+                    raise RuntimeError("next day failed")
+                recalculate(*args, day_start=day_start, **kwargs)
 
-            assert _queued_days(connection_info) == [
-                "2026-08-04T05:00:00Z",
-                "2026-08-05T05:00:00Z",
-            ]
+            monkeypatch.setattr(
+                reconciliation_db, "recalculate_ranked_day", fail_on_next_day
+            )
+            clock = [0.0]
+            monkeypatch.setattr(late_battle_sweep, "monotonic", lambda: clock[0])
+            sweep = LateBattleSweep(database)
+            sweep.run_when_due(now=boundary + timedelta(minutes=31))
+
+            # The corrected first day is rolled back with the failed day.
+            assert _published(connection_info, DAY) == before
+            lines = _sweep_lines(capsys)
+            assert [line["status"] for line in lines] == ["player_failed", "retrying"]
+            assert "next day failed" in lines[0]["error"]
+
+            monkeypatch.setattr(
+                reconciliation_db, "recalculate_ranked_day", recalculate
+            )
+            clock[0] += 600
+            sweep.run_when_due(now=boundary + timedelta(minutes=41))
+            assert [line["status"] for line in _sweep_lines(capsys)] == ["complete"]
+            after = _published(connection_info, DAY)
+            assert after is not None
+            assert after[0] == [("#2PP", 0, 0), ("#QPP", 3, -40)]
+            assert _previous_day_version(connection_info, next_day) == after[1]
+        finally:
+            database.close()
+
+
+def test_correction_finishes_in_one_pass_before_the_window_slides(
+    database_url: str, archive_server, capsys
+) -> None:
+    # The late battle's day is the oldest day in the window: it and every
+    # later saved day are corrected in the same pass, so nothing is left for
+    # the next Reset, when that day has left the window.
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _published_with_late_battle(
+                connection_info, archive_server, processor, database
+            )
+            boundary = DAY + timedelta(days=7)
+            _finish_reset_sweep(connection_info, boundary)
+
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=31)
+            ) == (1, 0)
             corrected = _published(connection_info, DAY)
             assert corrected is not None
             assert corrected[0] == [("#2PP", 0, 0), ("#QPP", 3, -40)]
@@ -565,11 +574,18 @@ def test_later_day_waits_for_the_corrected_day_even_after_a_restart(
                 _previous_day_version(connection_info, DAY + timedelta(days=1))
                 == corrected[1]
             )
+
+            next_boundary = boundary + timedelta(days=1)
+            _finish_reset_sweep(connection_info, next_boundary)
+            assert sweep_late_battles(
+                database, now=next_boundary + timedelta(minutes=31)
+            ) == (0, 0)
+            assert _sweep_lines(capsys) == []
         finally:
             database.close()
 
 
-def test_late_battle_older_than_the_window_is_logged_and_not_queued(
+def test_late_battle_older_than_the_window_is_logged_and_not_corrected(
     database_url: str, archive_server, capsys
 ) -> None:
     # The worker was stopped for over a week after the late battle was saved.
@@ -585,47 +601,18 @@ def test_late_battle_older_than_the_window_is_logged_and_not_queued(
 
             assert sweep_late_battles(
                 database, now=boundary + timedelta(minutes=31)
-            ) == ([], 0)
+            ) == (0, 0)
 
-            assert _queued_days(connection_info) == []
             assert _published(connection_info, DAY) == before
             with psycopg.connect(connection_info) as connection:
                 player_id = connection.execute(
                     "SELECT id FROM players WHERE normalized_tag = %s", (TAG,)
                 ).fetchone()[0]
-            events = [
-                json.loads(line)
-                for line in capsys.readouterr().out.splitlines()
-                if '"late_battle_sweep_skipped"' in line
-            ]
-            assert [event["player_days"] for event in events] == [
-                [f"{player_id}:2026-08-04T05:00:00+00:00"]
-            ]
+            assert [
+                (line["status"], line["player_days"]) for line in _sweep_lines(capsys)
+            ] == [("skipped", [f"{player_id}:2026-08-04T05:00:00+00:00"])]
         finally:
             database.close()
-
-
-OPPONENT = "#2PP"
-
-
-def _lists_the_battle(connection_info: str, tag: str) -> bool:
-    """Whether the player's latest saved result lists the shared battle.
-
-    A battle whose two reports disagree is left off the public battle list.
-    """
-    with psycopg.connect(connection_info) as connection:
-        row = connection.execute(
-            """
-            SELECT log.battles
-            FROM api_player_daily_logs AS log
-            JOIN players AS player ON player.id = log.player_id
-            WHERE player.normalized_tag = %s AND log.ranked_day_start = %s
-            ORDER BY log.version DESC
-            LIMIT 1
-            """,
-            (tag, DAY),
-        ).fetchone()
-    return any(item["opponent_tag"] in (TAG, OPPONENT) for item in row[0])
 
 
 @pytest.mark.parametrize("late_army", ["u2x0-2x1", "u1x0-2x1"])
@@ -667,7 +654,8 @@ def test_other_players_day_is_corrected_when_a_late_report_changes_agreement(
                 )[1],
             )
             defense = _late_defense()
-            if late_army == "u1x0-2x1":
+            agreed = late_army == "u1x0-2x1"
+            if agreed:
                 # An earlier defender report disagreed with the attacker.
                 _save_log(
                     connection_info,
@@ -688,7 +676,7 @@ def test_other_players_day_is_corrected_when_a_late_report_changes_agreement(
                         request_key=f"published-{tag}",
                     ),
                 )
-            before = _lists_the_battle(connection_info, OPPONENT)
+            assert _saved_disagreement(connection_info, OPPONENT) == [agreed]
             _save_log(
                 connection_info,
                 archive_server,
@@ -700,11 +688,11 @@ def test_other_players_day_is_corrected_when_a_late_report_changes_agreement(
             boundary = DAY + timedelta(days=1)
             _finish_reset_sweep(connection_info, boundary)
 
-            _correct(database, processor, boundary + timedelta(minutes=31))
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=31)
+            ) == (2, 0)
 
-            agreed = late_army == "u1x0-2x1"
-            assert before is not agreed
-            assert _lists_the_battle(connection_info, OPPONENT) is agreed
-            assert _lists_the_battle(connection_info, TAG) is agreed
+            assert _saved_disagreement(connection_info, OPPONENT) == [not agreed]
+            assert _saved_disagreement(connection_info, TAG) == [not agreed]
         finally:
             database.close()

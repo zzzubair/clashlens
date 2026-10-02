@@ -310,9 +310,9 @@ this age can stay high while the Live Leaderboard is already current. Worker
 rules.
 A response fetched before the Reset sweep finished that is still waiting also
 holds back that day's [late-battle check](domain.md#6-ranked-day-and-leaderboard-snapshots);
-the worker logs a `late_battle_sweep` line with status `running` while it is
-still correcting days and `complete` once every correction for a Reset has
-finished.
+the worker logs a `late_battle_sweep` line with status `complete` once every
+player's correction for a Reset has succeeded, or `retrying` after a
+`player_failed` line, in which case it tries again 10 minutes later.
 
 **Fix or escalate:** repair the reported cause through an approved change.
 Escalate a wait that keeps growing; restarting services does not shrink it.
