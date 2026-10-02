@@ -250,7 +250,11 @@ A domain change is complete only when every affected source observation, derived
   cannot be recalculated and are skipped. Only the previous 7 Legend days are
   corrected, because the recalculation supports only the current and previous
   Season; a mismatch on an older day is logged as a `late_battle_sweep` line
-  with status `skipped` and not corrected. For each player with a mismatch in
+  with status `skipped` and not corrected. A saved day in those 7 days whose
+  latest result was built from an older version of the day before it than the
+  one now current also counts as a mismatch, so a rolled-back correction whose
+  first day another recalculation then fixed still has its later days
+  recalculated. For each player with a mismatch in
   those 7 days, in one database transaction, the worker recalculates and
   publishes that day and then every later day that already has a saved result,
   oldest first, because each day's result uses the day before it. It never
@@ -259,8 +263,9 @@ A domain change is complete only when every affected source observation, derived
   back, logged with status `player_failed`, and retried at the next check 10
   minutes later; checks for that Reset stop once every player has succeeded.
   Each check reads every kept battle report once: about 200,000 a day at
-  12,500 players, so about 5.6 million for each full 28-day season kept. That
-  read time has not been measured at that size. A battle saved after the last
+  12,500 players, so about 5.6 million for each full 28-day season kept, and
+  every saved result of the previous 7 Legend days, about 87,500 at 12,500
+  players. That read time has not been measured at that size. A battle saved after the last
   check of a Reset is added after the next Reset. Known limitation: a late
   battle that is older than 7 Legend days by the time the check runs, for
   example after a worker outage of over a week, is not corrected.

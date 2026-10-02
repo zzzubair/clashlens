@@ -549,6 +549,58 @@ def test_failed_player_is_rolled_back_logged_and_retried_next_run(
             database.close()
 
 
+def test_later_day_is_retried_after_an_existing_job_fixes_only_the_first_day(
+    database_url: str, archive_server, monkeypatch
+) -> None:
+    with domain_database(database_url, include_coordinator=True) as connection_info:
+        database, processor = _processor(connection_info, archive_server)
+        try:
+            _published_with_late_battle(
+                connection_info, archive_server, processor, database
+            )
+            next_day = DAY + timedelta(days=1)
+            boundary = DAY + timedelta(days=2)
+            _finish_reset_sweep(connection_info, boundary)
+            existing_job = reconciliation_db.enqueue_reconciliation(
+                database,
+                player_tag=TAG,
+                day_start=DAY,
+                now=boundary,
+                request_key="existing-first-day-job",
+            )
+            recalculate = reconciliation_db.recalculate_ranked_day
+
+            def fail_on_next_day(*args, day_start, **kwargs):
+                if day_start == next_day:
+                    raise RuntimeError("next day failed")
+                recalculate(*args, day_start=day_start, **kwargs)
+
+            monkeypatch.setattr(
+                reconciliation_db, "recalculate_ranked_day", fail_on_next_day
+            )
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=31)
+            ) == (0, 1)
+            monkeypatch.setattr(
+                reconciliation_db, "recalculate_ranked_day", recalculate
+            )
+
+            # The existing job adds the late battle to the first day only.
+            _process(processor, existing_job)
+            first = _published(connection_info, DAY)
+            assert first is not None
+            assert first[0] == [("#2PP", 0, 0), ("#QPP", 3, -40)]
+            assert _previous_day_version(connection_info, next_day) != first[1]
+
+            assert sweep_late_battles(
+                database, now=boundary + timedelta(minutes=41)
+            ) == (1, 0)
+            assert _published(connection_info, DAY) == first
+            assert _previous_day_version(connection_info, next_day) == first[1]
+        finally:
+            database.close()
+
+
 def test_correction_finishes_in_one_pass_before_the_window_slides(
     database_url: str, archive_server, capsys
 ) -> None:

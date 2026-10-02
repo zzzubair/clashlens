@@ -5,8 +5,8 @@ in the last minute before the 05:00 UTC Reset can first be saved after its
 Legend day's result was published. Once per Reset, after the Reset sweep has
 finished and every response fetched before it finished has been processed,
 this finds each player whose saved result for one of the previous 7 Legend
-days misses such a report, or still holds the old agreement flag for its
-battle. For each such player, in one transaction, it recalculates and
+days misses such a report, still holds the old agreement flag for its battle,
+or was built from an older version of the previous day than the current one. For each such player, in one transaction, it recalculates and
 publishes that day and then every later saved day, in order, with the existing
 ranked-day recalculation. The live recalculation and Reset paths are
 unchanged.
@@ -27,6 +27,7 @@ from .db import (
     Database,
 )
 from .domain import ranked_day_for
+from .reconciliation import RECONCILIATION_RULE_VERSION
 
 # First check 30 minutes after the Reset, then every 10 minutes until every
 # selected player has been corrected.
@@ -95,6 +96,38 @@ WHERE NOT coalesce(version.contribution_evidence @> pair.expected, false)
 ORDER BY pair.player_id, pair.ranked_day_start
 """
 
+# A saved day in the window whose latest result was built from an older
+# version of the previous day than the one now current, for example after a
+# rolled-back correction whose first day an existing job then recalculated.
+_OUTDATED_DAYS = """
+SELECT saved.player_id, saved.ranked_day_start
+FROM (
+    SELECT DISTINCT log.player_id, log.ranked_day_start
+    FROM api_player_daily_logs AS log
+    WHERE log.ranked_day_start >= %(window_start)s
+      AND log.ranked_day_start < %(boundary)s
+) AS saved
+CROSS JOIN LATERAL (
+    SELECT version.input_evidence -> 'previous_day' ->> 'version_id' AS previous_id
+    FROM ranked_day_versions AS version
+    WHERE version.player_id = saved.player_id
+      AND version.ranked_day_start = saved.ranked_day_start
+      AND version.reconciliation_rule_version = %(rule)s
+    ORDER BY version.version DESC, version.id DESC
+    LIMIT 1
+) AS built
+CROSS JOIN LATERAL (
+    SELECT version.id
+    FROM ranked_day_versions AS version
+    WHERE version.player_id = saved.player_id
+      AND version.ranked_day_start = saved.ranked_day_start - interval '24 hours'
+      AND version.reconciliation_rule_version = %(rule)s
+    ORDER BY version.version DESC, version.id DESC
+    LIMIT 1
+) AS previous
+WHERE built.previous_id IS DISTINCT FROM previous.id::text
+"""
+
 
 def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] | None:
     """Correct each selected player, or return None while the Reset is not ready.
@@ -141,6 +174,14 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
         stale_days = connection.execute(
             _STALE_DAYS, {"boundary": boundary, "margin": SAVE_MARGIN}
         ).fetchall()
+        outdated_days = connection.execute(
+            _OUTDATED_DAYS,
+            {
+                "boundary": boundary,
+                "window_start": boundary - WINDOW,
+                "rule": RECONCILIATION_RULE_VERSION,
+            },
+        ).fetchall()
     event = {"event": "late_battle_sweep", "boundary_at": boundary.isoformat()}
     first_days: dict[int, datetime] = {}
     skipped: list[str] = []
@@ -149,6 +190,10 @@ def sweep_late_battles(database: Database, *, now: datetime) -> tuple[int, int] 
             skipped.append(f"{player_id}:{day_start.astimezone(UTC).isoformat()}")
         else:
             first_days.setdefault(int(player_id), day_start)
+    for player_id, day_start in outdated_days:
+        first_days[int(player_id)] = min(
+            first_days.get(int(player_id), day_start), day_start
+        )
     if skipped:
         print(
             json.dumps(
