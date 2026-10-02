@@ -81,12 +81,21 @@ def claim_upload(
                 SET state = 'leased', lease_owner = %s, lease_token = %s,
                     lease_expires_at = %s, attempt_count = attempt_count + 1,
                     settled_lease_token = NULL, last_error_retryable = NULL,
+                    upload_generation = CASE
+                        WHEN upload_generation = '' AND EXISTS (
+                            SELECT 1 FROM archive_catalogue AS catalogue
+                            WHERE catalogue.response_hash = %s
+                              AND catalogue.availability <> 'verified'
+                              AND position('/generation/' IN catalogue.archive_reference) = 0
+                        ) THEN %s
+                        ELSE upload_generation
+                    END,
                     updated_at = clock_timestamp()
                 WHERE response_hash = %s
                 RETURNING response_hash, spool_key, byte_size, lease_expires_at,
                           attempt_count, upload_generation
                 """,
-                (owner, token, expires, row[0]),
+                (owner, token, expires, row[0], uuid4().hex, row[0]),
             ).fetchone()
             assert claimed is not None
     return UploadClaim(

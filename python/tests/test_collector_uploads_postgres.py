@@ -789,12 +789,20 @@ def test_identical_response_reuploads_when_its_location_is_tombstoned(
             )
 
 
-@pytest.mark.parametrize("availability", ["verified", "retiring", "expired"])
-def test_upload_completion_never_reuses_a_tombstoned_legacy_location(
-    database_url: str, availability: str
+@pytest.mark.parametrize(
+    ("at_claim", "at_completion"),
+    [
+        ("verified", "verified"),
+        ("retiring", "retiring"),
+        ("expired", "expired"),
+        ("verified", "retiring"),
+    ],
+)
+def test_upload_never_reuses_a_tombstoned_legacy_location(
+    database_url: str, at_claim: str, at_completion: str
 ) -> None:
     # A location catalogued before upload rows existed has no upload row, so
-    # its bytes seen again upload to the same key without a generation.
+    # its bytes seen again would upload to the same key without a generation.
     with domain_database(database_url, include_coordinator=True) as connection_info:
         player_id = _player(connection_info)
         database = CollectorDatabase(connection_info)
@@ -809,7 +817,7 @@ def test_upload_completion_never_reuses_a_tombstoned_legacy_location(
                     first_verified_at, retire_after, availability
                 ) VALUES (%s, %s, 1, 'fixture-instance', %s, %s, %s)
                 """,
-                (response_hash, reference, NOW - timedelta(days=200), NOW - timedelta(days=1), availability),
+                (response_hash, reference, NOW - timedelta(days=200), NOW - timedelta(days=1), at_claim),
             )
         observed = database.record_response(
             _handoff(
@@ -818,28 +826,42 @@ def test_upload_completion_never_reuses_a_tombstoned_legacy_location(
                 player_id=player_id,
             )
         )
-        claim = claim_upload(database, owner="uploader", now=NOW)
-        assert claim is not None and claim.generation == ""
+        claim = claim_upload(database, owner="uploader", lease_seconds=120, now=NOW)
+        assert claim is not None
+        # The write destination is chosen before any bytes are written.
+        assert (claim.generation == "") is (at_claim == "verified")
+        destination = reference + (f"/generation/{claim.generation}" if claim.generation else "")
+        with psycopg.connect(connection_info) as connection:
+            connection.execute(
+                "UPDATE archive_catalogue SET availability = %s WHERE archive_reference = %s",
+                (at_completion, reference),
+            )
         complete_upload(
             database,
             claim,
-            archive_reference=reference,
+            archive_reference=destination,
             archive_instance_id="fixture-instance",
             now=NOW + timedelta(minutes=1),
         )
         with psycopg.connect(connection_info) as connection:
-            bound, retire_after = connection.execute(
-                """
-                SELECT observation.archive_reference, catalogue.retire_after
-                FROM collector_observations AS observation, archive_catalogue AS catalogue
-                WHERE observation.id = %s AND catalogue.archive_reference = %s
-                """,
-                (observed.observation_id, reference),
-            ).fetchone()
-        if availability == "verified":
-            assert bound == reference
+            bound = connection.execute(
+                "SELECT archive_reference FROM collector_observations WHERE id = %s",
+                (observed.observation_id,),
+            ).fetchone()[0]
+            retire_after = connection.execute(
+                "SELECT retire_after FROM archive_catalogue WHERE archive_reference = %s",
+                (bound or reference,),
+            ).fetchone()[0]
+        if destination != reference:
+            # A new location counts from its own verification a minute later.
+            assert bound == destination
+            assert retire_after == NOW + timedelta(days=86, minutes=1)
+            return
+        if at_completion == "verified":
+            assert bound == destination
             assert retire_after == NOW + timedelta(days=86)
             return
+        # Marked between claim and completion: never attached, uploaded again.
         assert bound is None
         assert retire_after == NOW - timedelta(days=1)
         retry = claim_upload(database, owner="uploader", now=NOW + timedelta(minutes=1))

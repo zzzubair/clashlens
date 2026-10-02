@@ -173,8 +173,13 @@ immutable raw responses and may read back the marker or one exact object to
 prove a write; the worker credential can only read. Neither runtime credential
 may list, overwrite, delete, or broadly browse archive objects.
 The database also has separate collector, worker, and API roles. The admin
-database URL exists only as a short-lived Podman secret during fixture
-bootstrap or while an operator explicitly handles a failed item.
+database URL exists as a short-lived Podman secret during fixture bootstrap or
+while an operator explicitly handles a failed item. With
+[raw-response cleanup](#raw-response-cleanup) set to `preview` or `apply`, it is
+also kept as the persistent Podman secret
+`clashlens-archive-operator-database-url` from `up` until cleanup is set back
+to `off`. It carries full administrator database authority and only the
+cleanup container mounts it.
 
 ### Paris fixed-address relay
 
