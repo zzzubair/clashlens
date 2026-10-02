@@ -274,30 +274,12 @@ def test_refresh_during_a_check_does_not_hide_its_failed_profile(
 @pytest.mark.parametrize(
     "bad_row",
     [
-        {"battleTimestamp": "yesterday"},
-        # Live battleTime is the battle's length, not its date.
-        {"battleTimestamp": None, "battleTime": 180},
-    ],
-)
-def test_malformed_log_neither_clears_owed_fetches_nor_stops_collection(
-    game: SimpleNamespace, bad_row: dict[str, Any]
-) -> None:
-    game.settle()
-    game.client.logs[TAG] = [_battle(OPPONENT, game.clock[0], attack=False) | bad_row]
-    game.client.profile()["trophies"] -= 40
-
-    assert [game.check() for _ in range(3)] == [BOTH] * 3
-
-    game.client.logs[TAG] = [_battle(OPPONENT, game.clock[0], attack=False)]
-    assert [game.check() for _ in range(3)] == [BOTH, BOTH, PROFILE]
-
-
-@pytest.mark.parametrize(
-    "bad_row",
-    [
         # Live logs keep rows like this for days: no opponent, no battle.
         {"opponentPlayerTag": None, "battleTime": 0, "destructionPercentage": 0},
         {"stars": None},
+        {"battleTimestamp": "yesterday"},
+        # Live battleTime is the battle's length, not its date.
+        {"battleTimestamp": None, "battleTime": 180},
     ],
 )
 def test_malformed_row_is_retried_once_not_on_every_check(
@@ -309,6 +291,23 @@ def test_malformed_row_is_retried_once_not_on_every_check(
 
     # The change's fetch, the retry, then the follow-up past the API cache.
     assert [game.check() for _ in range(4)] == [BOTH, BOTH, BOTH, PROFILE]
+
+
+def test_new_malformed_row_older_than_the_newest_still_gets_its_retry() -> None:
+    state = _Schedule()
+    now = state.settle(TAG)
+    state.profile(TAG, now, trophies=4_960)
+    newest = _battle(UNTRACKED, now - timedelta(seconds=10), attack=False)
+    assert state.log(TAG, now, newest)
+
+    # The follow-up is the first log to show this older row, malformed.
+    older = _battle(UNTRACKED, now - timedelta(seconds=40), attack=False)
+    malformed = older | {"opponentPlayerTag": None}
+    assert not state.log(TAG, now + timedelta(seconds=61), newest, malformed)
+    assert state.due(TAG, now + timedelta(seconds=63))
+
+    assert state.log(TAG, now + timedelta(seconds=91), newest, malformed)
+    assert not state.due(TAG, now + timedelta(seconds=93))
 
 
 def test_failed_log_fetch_keeps_the_obligation(game: SimpleNamespace) -> None:
@@ -506,6 +505,44 @@ def test_opponent_that_already_has_the_battle_is_not_refetched() -> None:
     state.log(TAG, now, _battle(OPPONENT, battle_at))
 
     assert not state.due(OPPONENT, now + timedelta(seconds=2))
+
+
+def test_defense_against_the_opponent_does_not_hide_a_later_attack_on_them() -> None:
+    state = _Schedule()
+    now = state.settle(TAG)
+    state.settle(OPPONENT)
+    # The opponent attacked this player; this player's log already shows it.
+    state.log(TAG, now, _battle(OPPONENT, now - timedelta(seconds=30), attack=False))
+    assert not state.due(TAG, now + timedelta(seconds=2))
+
+    # This player then attacks the opponent, whose log times it 3 minutes on.
+    later = now + timedelta(minutes=4)
+    state.log(
+        OPPONENT,
+        later,
+        _battle(TAG, now + timedelta(minutes=3) - timedelta(seconds=30), attack=False),
+    )
+
+    assert state.due(TAG, later + timedelta(seconds=62))
+
+
+def test_opponent_is_told_about_a_battle_once_not_on_every_log() -> None:
+    state = _Schedule()
+    now = state.settle(TAG)
+    state.settle(OPPONENT)
+    attack = _battle(OPPONENT, now - timedelta(seconds=20))
+    state.log(TAG, now, attack)
+    # Live logs keep a row with no opponent for days.
+    defense = _battle(TAG, now - timedelta(seconds=180), attack=False)
+    no_opponent = defense | {"opponentPlayerTag": None}
+    state.log(OPPONENT, now + timedelta(seconds=61), no_opponent)
+    state.log(OPPONENT, now + timedelta(seconds=151), no_opponent)
+    assert not state.due(OPPONENT, now + timedelta(seconds=153))
+
+    # This player's after-attack fetch shows the same attack again.
+    state.log(TAG, now + timedelta(seconds=160), attack)
+
+    assert not state.due(OPPONENT, now + timedelta(seconds=241))
 
 
 def test_first_log_seen_after_a_restart_still_marks_opponents() -> None:

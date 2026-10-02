@@ -19,7 +19,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from .battle import LIVE_SOURCE_PARSER_VERSION, _parse_battle_timestamp, _parse_row
+from .battle import LIVE_SOURCE_PARSER_VERSION, _parse_row
 
 # Read from each valid profile. A defender's profile shows a battle at once;
 # an attacker's often shows an attack many minutes late.
@@ -66,11 +66,12 @@ class _Player:
     follow_up_after: datetime | None = None
     battle_log_at: datetime | None = None
     latest_battle_at: datetime | None = None
-    # Opponents of the battles near the newest, to recognise a battle that an
-    # opponent's log reports under its own timestamp.
-    recent: tuple[tuple[str, datetime], ...] = ()
-    # Newest row time in any log, malformed rows included.
-    latest_row_at: datetime | None = None
+    # Time, opponent and side of the battles near the newest, to recognise a
+    # battle that an opponent's log reports under its own timestamp, and to
+    # tell an opponent about each battle only once.
+    recent: tuple[tuple[datetime, str, bool], ...] = ()
+    # The malformed rows of the last log, each identified by its own content.
+    malformed: frozenset[bytes] = frozenset()
 
 
 class BattleLogSchedule:
@@ -98,21 +99,12 @@ class BattleLogSchedule:
             read = _battles(body, normalized_tag)
             if read is None:
                 return False
-            battles, malformed_at = read
+            battles, malformed = read
             player = self._players.setdefault(normalized_tag, _Player())
-            # A malformed row holds the log owed once, for a corrected copy.
-            # Live logs keep rows with no opponent for days.
-            complete = all(
-                at is not None
-                and player.latest_row_at is not None
-                and at <= player.latest_row_at
-                for at in malformed_at
-            )
-            for at in [battle[0] for battle in battles] + malformed_at:
-                if at is not None and (
-                    player.latest_row_at is None or at > player.latest_row_at
-                ):
-                    player.latest_row_at = at
+            # A newly seen malformed row holds the log owed once, for a
+            # corrected copy. Live logs keep rows with no opponent for days.
+            complete = malformed <= player.malformed
+            player.malformed = malformed
             if complete:
                 _note_complete_log(player, started_at, completed_at)
             self._note_battles(normalized_tag, player, battles, completed_at)
@@ -127,6 +119,7 @@ class BattleLogSchedule:
         completed_at: datetime,
     ) -> None:
         previous = player.latest_battle_at
+        known = set(player.recent)
         for battle_at, _opponent_tag, attack in battles:
             if player.latest_battle_at is None or battle_at > player.latest_battle_at:
                 player.latest_battle_at = battle_at
@@ -140,17 +133,21 @@ class BattleLogSchedule:
         newest = player.latest_battle_at
         if newest is not None:
             player.recent = tuple(
-                (tag, at)
-                for tag, at in {
-                    *player.recent,
-                    *((tag, at) for at, tag, _attack in battles),
-                }
-                if at >= newest - 2 * SAME_BATTLE_GAP
+                battle
+                for battle in {*player.recent, *battles}
+                if battle[0] >= newest - 2 * SAME_BATTLE_GAP
             )
-        for battle_at, opponent_tag, _attack in battles:
+        for battle in battles:
+            battle_at, opponent_tag, attack = battle
+            # Only a battle this player's logs show for the first time tells
+            # its opponent. One older than `recent` keeps was shown before.
+            if battle in known or (
+                previous is not None and battle_at < previous - 2 * SAME_BATTLE_GAP
+            ):
+                continue
             opponent = self._players.get(opponent_tag)
             if opponent is not None and not _has_battle(
-                opponent, normalized_tag, battle_at
+                opponent, normalized_tag, battle_at, not attack
             ):
                 opponent.owed = max(opponent.owed, 1)
                 _start_no_earlier_than(opponent, completed_at + FOLLOW_UP_GAP)
@@ -175,15 +172,22 @@ class BattleLogSchedule:
         )
 
 
-def _has_battle(player: _Player, opponent_tag: str, battle_at: datetime) -> bool:
-    """Whether the player's logs already reached a battle the opponent reported."""
+def _has_battle(
+    player: _Player, opponent_tag: str, battle_at: datetime, attack: bool
+) -> bool:
+    """Whether the player's logs already reached a battle the opponent reported.
+
+    `attack` is this player's side of it, the opposite of the opponent's.
+    """
     if player.latest_battle_at is None:
         return False
     if player.latest_battle_at > battle_at + SAME_BATTLE_GAP:
         return True
     return any(
-        tag == opponent_tag and abs(at - battle_at) <= SAME_BATTLE_GAP
-        for tag, at in player.recent
+        tag == opponent_tag
+        and side == attack
+        and abs(at - battle_at) <= SAME_BATTLE_GAP
+        for at, tag, side in player.recent
     )
 
 
@@ -258,12 +262,12 @@ def _count(value: object) -> bool:
 
 def _battles(
     body: bytes, normalized_tag: str
-) -> tuple[list[tuple[datetime, str, bool]], list[datetime | None]] | None:
+) -> tuple[list[tuple[datetime, str, bool]], frozenset[bytes]] | None:
     """Each valid Legend battle's time, opponent and side, and malformed rows.
 
     A row is valid when it passes the worker's own row rules with an explicit
-    battleTimestamp. Each malformed Legend row gives its readable
-    battleTimestamp, or None. None means the body is not a battle log at all.
+    battleTimestamp. Each malformed Legend row is identified by a hash of its
+    content. None means the body is not a battle log at all.
     """
     try:
         payload = json.loads(body)
@@ -273,18 +277,18 @@ def _battles(
     if not isinstance(items, list):
         return None
     battles = []
-    malformed_at: list[datetime | None] = []
+    malformed: set[bytes] = set()
     for index, item in enumerate(items):
         try:
             row = _parse_row(index, item, normalized_tag, LIVE_SOURCE_PARSER_VERSION)
         except Exception:  # noqa: BLE001 - one bad row never stops collection
-            malformed_at.append(_row_time(item))
+            malformed.add(_row_identity(item))
             continue
         if row.outcome == "ignored_non_legend":
             continue
         # Live battleTime is the battle's length, never a stand-in date.
         if row.battle is None or item.get("battleTimestamp") is None:
-            malformed_at.append(_row_time(item))
+            malformed.add(_row_identity(item))
         else:
             battles.append(
                 (
@@ -293,14 +297,8 @@ def _battles(
                     row.battle.perspective == "attacker",
                 )
             )
-    return battles, malformed_at
+    return battles, frozenset(malformed)
 
 
-def _row_time(item: object) -> datetime | None:
-    value = item.get("battleTimestamp") if isinstance(item, dict) else None
-    if value is None:
-        return None
-    try:
-        return _parse_battle_timestamp(value, LIVE_SOURCE_PARSER_VERSION)
-    except Exception:  # noqa: BLE001 - an unreadable time never counts as seen
-        return None
+def _row_identity(item: object) -> bytes:
+    return hashlib.sha256(json.dumps(item, sort_keys=True).encode()).digest()

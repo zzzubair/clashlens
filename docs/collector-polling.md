@@ -198,26 +198,33 @@ and only when every Legend row in it passes the worker's row checks (valid side,
 stars, destruction and opponent tag) and has an explicit `battleTimestamp`;
 `battleTime`, the battle's length, never stands in for it. A failed log leaves
 the fetch owed for the next check and does not reset the 15-minute safety
-clock. A malformed row does the same once, in case a corrected copy follows,
-and after that only if it has no readable `battleTimestamp`: live logs keep
-rows with no opponent for days; 448 players' logs had shown one by 2026-10-02. Valid
-rows in such a log still count as seen battles and still mark tracked
-opponents.
+clock. A malformed row does the same once, the first time a log shows it, in
+case a corrected copy follows. The collector recognises a row it has seen by
+the row's own content, not its time: live logs keep rows with no opponent for
+days; 448 players' logs had shown one by 2026-10-02. Valid rows in such a log
+still count as seen battles and still mark tracked opponents.
 
 The two players' logs time the same battle differently: on 2026-10-02 the
 attacker's `battleTimestamp` was 108–211 seconds after the defender's. So the
 opponent fetch treats a battle as already seen when this player's log has a
-battle against that opponent within 5 minutes of it, or any battle more than 5
-minutes after it. Comparing times alone made each defender look behind every
-time the attacker's log was fetched again: replaying the production window,
-that was 0.34 of the 0.49 extra requests per check.
+battle against that opponent within 5 minutes of it on the other side (the
+opponent's defense matches only this player's attack, and the reverse), or any
+battle more than 5 minutes after it. It does not compare Legend days: the two
+timestamps of one battle can fall on either side of the Reset. Comparing times
+alone made each defender look behind every time the attacker's log was fetched
+again: replaying the production window, that was 0.34 of the 0.49 extra
+requests per check.
 
 A battle that moves no trophies still counts. When player A attacks player B
 for 0 stars and 49%, A gains trophies and B loses none, but B's `Unbreakable`
 count goes up, so B's next check fetches B's log. If A attacked in the 10
 minutes before, A's log shows it too, and the opponent fetch then covers B as
-well. Every valid battle in a saved log can mark its opponent, including the
-first log after a restart and a row that was malformed in an earlier copy.
+well. A valid battle marks its opponent once, on the first saved log of this
+player that shows it, including the first log after a restart and a row that
+was malformed in an earlier copy; later logs showing it again do not. The
+collector only remembers battles up to 10 minutes older than this player's
+newest one, so a row corrected when it is already more than 10 minutes older
+than that counts as seen and does not mark its opponent.
 Only players the collector has already checked since starting get an opponent
 fetch. Anything still left, such as a tracked player's first 0-star attack
 under 10% on an untracked player, waits for the attacker's profile or the
