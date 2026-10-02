@@ -1,0 +1,11 @@
+# Managed by Clash Lens ./ops.
+[Unit]
+Description=Clash Lens raw-response cleanup schedule
+PartOf=clashlens.target
+
+[Timer]
+# One batch of up to 1,000 deletions and 1,000 markings, then the next batch
+# 30 seconds after it finishes.
+OnActiveSec=5min
+OnUnitInactiveSec=30s
+Unit=clashlens-archive-retention.service

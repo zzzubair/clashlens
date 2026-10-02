@@ -247,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     prune_archive = subparsers.add_parser(
         "prune-archive",
-        help="preview or retire season-expired raw objects (operator credentials)",
+        help="preview, mark or delete expired raw objects after the recovery hold (operator credentials)",
     )
     _database_argument(prune_archive)
     _archive_arguments(prune_archive)
@@ -496,7 +496,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if isinstance(archive, SpoolFirstReader):
                     archive.spool.close()
                 database.close()
-            return 0
+            return 1 if report["failed_objects"] else 0
         if arguments.command == "prune-history":
             import psycopg
 

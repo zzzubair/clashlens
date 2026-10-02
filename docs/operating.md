@@ -57,7 +57,7 @@ The private probe should exit successfully; its
 [private-read condition](deployment.md#alert-conditions) explains what it checks.
 The alert timer should be active with recent successful runs matching the
 [configured schedule](deployment.md#private-discord-alerts).
-The alert and backup services run once per timer firing, so `inactive (dead)`
+The alert, backup and raw-response cleanup services run once per timer firing, so `inactive (dead)`
 between successful runs is normal. `failed`, missing units, delivery failures or
 unavailable measurements need investigation.
 
@@ -199,7 +199,7 @@ Use the [alert conditions and delivery rules](deployment.md#alert-conditions)
 to interpret messages. Confirm both the measurements below and the recovery
 message in the private operator channel. `./ops alert-check` can run the check
 immediately, but **sends real Discord messages** and saves alert state.
-A successful exit means the check and delivery worked, not that all seven
+A successful exit means the check and delivery worked, not that all eight
 conditions are healthy.
 
 ### Tracker stopped
@@ -409,6 +409,24 @@ for Top 100 and 0.93 s for all tracked players.
 **Recovered:** `army_analytics_completed_days` lists the backfilled days.
 Check the Armies page against the
 [current-season coverage and population rules](domain.md#population-filters-and-lenses).
+
+### Raw-response cleanup failed
+
+Use the [cleanup alert condition](deployment.md#alert-conditions). Cleanup
+deletes old raw responses on its own timer; see
+[raw-response cleanup](deployment.md#raw-response-cleanup).
+
+**First checks:** `./ops logs archive-retention --since '1 hour ago' --no-pager`.
+Each run prints one JSON report; `failed_objects` counts objects whose marking
+or deletion failed, and the journal names each one's location and error type.
+
+**Fix or escalate:** repair the reported storage, network, credential or
+database problem with approval. Failed objects stay marked and are retried by
+the next run; never delete them by hand or mark rows in the database to silence
+the alert. To pause deletion, set `CLASHLENS_ARCHIVE_RETENTION=preview` and run
+`./ops up` with approval.
+
+**Recovered:** the next batch succeeds and the Discord recovery arrives.
 
 ### When alerts themselves fail
 

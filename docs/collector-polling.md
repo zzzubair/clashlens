@@ -394,12 +394,11 @@ Missing files still let cleanup finish a deletion interrupted by a crash.
 
 League history is collected initially and after each season-ending Reset. It
 is stored in full and parsed separately from profiles and battle logs. Raw
-responses currently become eligible for retirement 56 days after their season
-ends; a body seen in a later season keeps that season's later deadline. The
-agreed replacement must also preserve bytes needed by seven-day backup recovery,
-including restore time; see [history-retention.md](history-retention.md).
-Retirement requires separate operator
-credentials and is never part of starting or stopping the stack.
+responses become due 86 days after their season ends; a body seen in a later
+season keeps that season's later deadline. Their bytes are deleted nine days
+after that, to keep seven-day backup recovery and restore time safe; see
+[history-retention.md](history-retention.md). Retirement uses separate operator
+credentials and runs only on its own timer when switched on.
 
 Collection allows six concurrent requests per key. Request-start limits and
 shared permission rules belong in [Clash API keys](operating.md#clash-api-keys).

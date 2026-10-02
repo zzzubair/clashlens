@@ -341,10 +341,9 @@ applications each hold one API key:
   overwrite. Its key pair goes in `app.env` as `CLASHLENS_ARCHIVE_*`.
 - `clashlens-archive-worker` — object read only. Its key pair goes in
   `app.env` as `CLASHLENS_WORKER_ARCHIVE_*`.
-- `clashlens-archive-operator` — object delete only, for `prune-archive`.
-  Keep its key pair in a separate mode-600 file outside `app.env`, the
-  checkout, and the generated unit environment; it is used only by explicit
-  operator runs.
+- `clashlens-archive-operator` — object delete only, for
+  [raw-response cleanup](#raw-response-cleanup). Keep its key pair outside
+  `app.env`, the checkout and the generated unit environment, as described there.
 
 The bucket policy is an allowlist: anything not granted there is denied for
 the scoped credentials, which is what makes list, delete, and unconditional
@@ -528,6 +527,8 @@ published port. Run WAL-G as OS user `postgres`, mounting the secret at
    object referenced by the sample and verify its hash. Missing required evidence
    means the restore failed. Do not promote this scratch database into production.
 5. Repeat for the seven-day-old boundary, using a full backup from before it.
+   If the restore could take more than two days while production keeps
+   running, first run `systemctl --user stop clashlens-archive-retention.timer`.
    Repeat affected checks after the season history and cleanup work in #140
    changes stored data or maintenance.
 
@@ -548,15 +549,13 @@ reviewed cleanup. Real traffic must be measured before accepting the €60 total
 monthly envelope. Do not silently let failed pruning or WAL uploads accumulate.
 
 On September 25 Zubair chose to preserve raw responses for the entire promised
-seven-day recovery window, including time to restore. The current season-end
-plus 56-day expiry code does not yet enforce this protection: a restored
-catalogue could reference a response deleted later. #122 owns implementation
-and restore proof; #129 must use that protection in scheduled cleanup. Do not
-enable production expiry until it is proven. Seven extra days add about 10%
-to the older modeled 70-day average raw lifetime, roughly €0.40–€2/month using
-#120's €4–€20 range. This is an earlier pricing model, not a measured bill or a
-final restore allowance; reprice it for 12,500 live players, weekly checks of
-the 22,157-tag known pool and measured growth.
+seven-day recovery window, including time to restore. The cleanup code holds
+each response's bytes for nine days after marking it for deletion: seven days
+plus a two-day restore allowance. See
+[raw expiry](history-retention.md#implemented-raw-expiry-and-required-recovery-protection)
+for the rule and its cost, and [raw-response cleanup](#raw-response-cleanup) for
+switching it on. Restoring a genuine seven-day-old point and checking its raw
+references is still open in #140.
 
 Validation on 2026-09-19 used a separate PostgreSQL cluster with all 34 migrations
 and synthetic records, under R2 prefix `validation-20260919`. A full backup took
@@ -580,6 +579,51 @@ checks do not prove those remaining gates. Keep real collection disabled until
 backups and #124 alerts are proven. This documentation update does not deploy
 or close #122.
 
+## Raw-response cleanup
+
+The scheduled cleanup deletes old raw responses from the Scaleway archive under
+the [86-day rule and nine-day recovery hold](history-retention.md#implemented-raw-expiry-and-required-recovery-protection).
+It is off by default. Store the operator key pair as two service-owned mode-600
+one-line files beside the Clash API keys:
+`clashlens-archive-operator-access-key` and
+`clashlens-archive-operator-secret-key` in `CLASHLENS_API_KEY_HOST_DIR`. Then set
+`CLASHLENS_ARCHIVE_RETENTION` in `app.env`:
+
+- `off`: no timer, and `up` removes the operator secrets from Podman.
+- `preview`: the timer runs the preview every time. It changes nothing.
+- `apply`: the timer marks and deletes.
+
+`up` copies the operator keys and an administrator database address into Podman
+secrets that only the cleanup container mounts. The collector, worker, API and
+website never receive them. Each run starts a short-lived container with the
+same spool as the collector, processes one batch of up to 1,000 deletions and
+1,000 markings, and prints one JSON report to the journal. The timer starts five
+minutes after `up` and runs again 30 seconds after each batch finishes.
+Scheduled runs do not take the shared operation lock, so they never delay
+deployment or backups; `up` and `down` stop the timer first. A manual run takes
+the lock like other operator commands.
+
+```sh
+./ops archive-prune              # preview now
+./ops archive-prune --apply      # one batch now; only when set to apply
+./ops logs archive-retention --since today
+```
+
+Enable it in two approved steps:
+
+1. Set `preview`, run `./ops up`, then `./ops archive-prune`. Put its `summary`
+   numbers (objects, bytes, oldest and newest for each group) in the deployment
+   report.
+2. Only after that report is approved, set `apply` and run `./ops up`.
+
+Throughput is unmeasured. The planning estimate is about 50 ms per deletion,
+or roughly 785,000 objects a day, against about 553,000 new objects a day on
+October 2. After switching on deletion, compare `deleted_objects` per run with
+that rate. If cleanup cannot keep up, the backlog and the bill keep growing.
+
+A run with any failed object exits unsuccessfully, which marks the service
+failed and raises the [cleanup alert](#alert-conditions). The next run retries.
+
 ## Status and logs
 
 ```sh
@@ -598,7 +642,7 @@ without printing configuration files.
 
 ## Private Discord alerts
 
-`./ops alert-check` checks the seven conditions below and posts changes to the
+`./ops alert-check` checks the eight conditions below and posts changes to the
 private operator channel through an incoming webhook. Create the service-owned
 mode-600 file `/srv/clashlens-secrets/clashlens-discord-alert-webhook` separately.
 Its default directory follows `CLASHLENS_API_KEY_HOST_DIR`; an optional
@@ -646,6 +690,10 @@ use the [operating notes](operating.md#respond-to-alerts).
   run clears the grace clock and any active alert. Delayed alerts and their
   recoveries report when the timeouts or errors first began, or the last
   intentional resume if later.
+- **A failed scheduled raw-response cleanup**: `clashlens-archive-retention.service`
+  is in the failed state, meaning its last batch had a failed object or could
+  not run. It clears after the next successful batch. With cleanup off, the unit
+  is absent and never alerts.
 - **A failed private player-data read**, including when process readiness says
   healthy. The check enters the private API container, checks `/readyz`, and
   signs a `/v1/players/search` read limited to one result. Keys stay inside the
