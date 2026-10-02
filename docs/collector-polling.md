@@ -352,9 +352,15 @@ Every other response (the first per player and endpoint since the collector
 started, a changed one, a reset or work-bound one) is saved to the spool before
 its own database work. So is a known-unchanged one when the database does not
 accept it as unchanged, or when that one-attempt check fails, times out or is
-cancelled. No response waits on the database while holding the shared lock:
-the lock covers only the spool write, so a later response is saved before it
-waits for an earlier one's database commit. Saved responses for the same lock
+cancelled. Many players can share one body, such as the same not-found profile,
+so the check does not wait while another response updates that body's records,
+or while the worker holds that player or their last saved response; it saves
+the response instead. A shared body already sighted within the last 10 minutes
+of the same season keeps its earlier latest sighting time, which only orders
+spool cleanup and starts the archive retention clock. No response waits on the
+database while holding the shared lock: the lock covers only the spool write,
+so a later response is saved before it waits for an earlier one's database
+commit. Saved responses for the same lock
 still commit in the order they were saved. Restart recovery first finishes any
 saved response the database already shows as committed, then replays the rest
 in the order they were received, so a later response never hides an earlier

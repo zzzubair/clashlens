@@ -487,10 +487,9 @@ holds no lock, so no other response waits behind it. Any other response (the
 first per player and endpoint after a restart, a changed one, a reset or
 work-bound one) is saved to the spool before its own database work, exactly as
 before; so is a matching one the database does not accept as unchanged, or
-whose check fails or is cancelled. Many players can share one body, such as
-the same not-found profile, so the check does not wait while another response
-updates that body's records, or while the worker holds that player or their
-last saved response; it saves the response instead. No response waits on the database while
+whose check fails or is cancelled, or finds a row it needs held (see
+[collector polling](collector-polling.md#spool-archive-and-rate-enforcement)).
+No response waits on the database while
 holding the shared lock, so a later response is saved before it waits for an
 earlier one's commit; saved responses still commit in saved order. Restart
 recovery finishes any already committed saved response first, then replays the
