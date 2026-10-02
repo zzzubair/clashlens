@@ -215,6 +215,11 @@ def test_late_battle_corrects_its_day_then_later_days_in_order(
     with domain_database(database_url, include_coordinator=True) as connection_info:
         database, processor = _processor(connection_info, archive_server)
         worker_database = _WorkerRoleDatabase(connection_info)
+        # The role database skips Database.__init__, so give it the schema
+        # features the production worker detects at startup.
+        for name, value in vars(database).items():
+            if name.startswith(("_supports_", "_contract_version")):
+                setattr(worker_database, name, value)
         try:
             _published_with_late_battle(
                 connection_info, archive_server, processor, database
