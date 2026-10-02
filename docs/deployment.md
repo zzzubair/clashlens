@@ -489,8 +489,9 @@ work-bound one) is saved to the spool before its own database work, exactly as
 before; so is a matching one the database does not accept as unchanged, or
 whose check fails or is cancelled. No response waits on the database while
 holding the shared lock, so a later response is saved before it waits for an
-earlier one's commit; saved responses still commit in saved order. A hard crash
-can therefore
+earlier one's commit; saved responses still commit in saved order. Restart
+recovery finishes any already committed saved response first, then replays the
+rest in the order they were received. A hard crash can therefore
 lose only an unchanged sighting's seen time, poll count, and the sighting time
 and retirement deadline it would have extended; no raw response or other kept
 data is lost, and the next poll records the sighting again. The memory record

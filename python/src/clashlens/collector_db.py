@@ -995,6 +995,7 @@ class CollectorDatabase:
         connection: Any,
         handoff: ResponseHandoff,
         observation_id: int | None,
+        saved: bool,
     ) -> None:
         connection.execute(
             """
@@ -1025,8 +1026,9 @@ class CollectorDatabase:
                     collector_response_state.last_seen_at
                     THEN EXCLUDED.last_occurrence_key
                     ELSE collector_response_state.last_occurrence_key END,
-                last_applied_occurrence_key =
+                last_applied_occurrence_key = COALESCE(
                     EXCLUDED.last_applied_occurrence_key,
+                    collector_response_state.last_applied_occurrence_key),
                 last_seen_at = GREATEST(
                     EXCLUDED.last_seen_at, collector_response_state.last_seen_at
                 ),
@@ -1049,7 +1051,7 @@ class CollectorDatabase:
                 handoff.response_hash,
                 handoff.content_fingerprint,
                 handoff.occurrence_key,
-                handoff.occurrence_key,
+                handoff.occurrence_key if saved else None,
                 handoff.response_completed_at,
                 observation_id,
                 handoff.response_completed_at
@@ -1090,7 +1092,7 @@ class CollectorDatabase:
             with connection.transaction():
                 connection.execute("SET LOCAL transaction_timeout = '2s'")
                 state = self._lock_response_state(connection, handoff)
-                return self._record_unchanged(connection, handoff, state, None)
+                return self._record_unchanged(connection, handoff, state, None, False)
 
     @staticmethod
     def _lock_response_state(
@@ -1118,6 +1120,7 @@ class CollectorDatabase:
         handoff: ResponseHandoff,
         state: tuple[Any, ...] | None,
         work_kind: str | None,
+        saved: bool,
     ) -> bool:
         # Reset needs boundary-time proof even when the used fields
         # match the previous poll. Ordinary unchanged responses compact
@@ -1154,7 +1157,7 @@ class CollectorDatabase:
             ).fetchone()
             if availability is None or availability[0] != "verified":
                 return False
-        self._upsert_response_state(connection, handoff, state[2])
+        self._upsert_response_state(connection, handoff, state[2], saved)
         self._record_intent_endpoint(connection, handoff, state[2])
         connection.execute(
             """UPDATE collector_response_uploads
@@ -1232,7 +1235,7 @@ class CollectorDatabase:
                         "legacy response handoff has no durable commit identity"
                     )
 
-                if self._record_unchanged(connection, handoff, state, work_kind):
+                if self._record_unchanged(connection, handoff, state, work_kind, True):
                     return ResponseResult(
                         False, None, None, handoff.response_hash, parser_version
                     )
@@ -1292,7 +1295,7 @@ class CollectorDatabase:
                 processing_job_id = self._upsert_processing_job(
                     connection, handoff, observation_id, parser_version
                 )
-                self._upsert_response_state(connection, handoff, observation_id)
+                self._upsert_response_state(connection, handoff, observation_id, True)
                 self._record_intent_endpoint(connection, handoff, observation_id)
         return ResponseResult(
             True,
@@ -1386,6 +1389,15 @@ class CollectorDatabase:
             ).fetchone()
             assert row is not None
         return int(row[0])
+
+    def applied_occurrence_keys(self, keys: list[str]) -> set[str]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT last_applied_occurrence_key FROM collector_response_state
+                WHERE last_applied_occurrence_key = ANY(%s)""",
+                (keys,),
+            ).fetchall()
+        return {row[0] for row in rows}
 
     def referenced_spool_hashes(self) -> set[str]:
         with self._connection() as connection:

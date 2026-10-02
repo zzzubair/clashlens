@@ -208,6 +208,9 @@ class _Store:
         self.marked.extend(deleted)
         return len(deleted)
 
+    def applied_occurrence_keys(self, _keys: list[str]) -> set[str]:
+        return set()
+
     def referenced_spool_hashes(self) -> set[str]:
         return self.referenced
 

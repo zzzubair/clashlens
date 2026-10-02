@@ -3,15 +3,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import UTC, datetime
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
 from domain_test_support import domain_database
 from test_collector import _collector
-from test_collector_uploads_postgres import _player
+from test_collector_uploads_postgres import NOW, _handoff, _player
 
-from clashlens.collector_db import CollectorDatabase, CollectorWork
+from clashlens.collector_db import CollectorDatabase, CollectorWork, ResponseHandoff
 from clashlens.collector_http import FetchedResponse, KeyPool
 from clashlens.spool import Spool
 
@@ -92,3 +93,36 @@ def test_unchanged_profile_is_recorded_without_saving_its_bytes(
         finally:
             database.close()
             spool.close()
+
+
+def test_unsaved_sighting_keeps_a_saved_refresh_recoverable(database_url: str) -> None:
+    with domain_database(database_url) as connection_info:
+        database = CollectorDatabase(connection_info)
+        first = _handoff(
+            occurrence_key="first",
+            response_hash="a" * 64,
+            player_id=_player(connection_info),
+            content_fingerprint="f" * 64,
+        )
+
+        def poll(key: str, digest: str, minutes: int) -> ResponseHandoff:
+            return replace(
+                first,
+                occurrence_key=key,
+                response_hash=digest * 64,
+                spool_key=f"sha256/{digest * 2}/{digest * 64}",
+                response_completed_at=NOW + timedelta(minutes=minutes),
+            )
+
+        try:
+            database.record_response(first)
+            # A saved Refresh with the same used fields commits, then an
+            # overlapping unsaved sighting commits before the Refresh's saved
+            # record is removed, and the collector crashes.
+            refresh = poll("refresh", "b", 1)
+            database.record_response(refresh)
+            assert database.record_unchanged_response(poll("unsaved", "c", 2))
+            database.record_recovered_response(refresh, serialized=True)
+            assert _sightings(connection_info)[0] == 3
+        finally:
+            database.close()

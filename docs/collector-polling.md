@@ -354,8 +354,11 @@ accept it as unchanged, or when that one-attempt check fails, times out or is
 cancelled. No response waits on the database while holding the shared lock:
 the lock covers only the spool write, so a later response is saved before it
 waits for an earlier one's database commit. Saved responses for the same lock
-still commit in the order they were saved, so restart recovery replays them in
-that order. A changed or unknown response is therefore never lost to a
+still commit in the order they were saved. Restart recovery first finishes any
+saved response the database already shows as committed, then replays the rest
+in the order they were received, so a later response never hides an earlier
+change and none is counted twice. A recorded unchanged sighting leaves the
+saved response's commit record alone. A changed or unknown response is therefore never lost to a
 database wait. The trade-off: a hard crash before a known-unchanged
 sighting commits loses that sighting, meaning its seen time, its poll count, and
 the later sighting time and archive retirement deadline it would have given the

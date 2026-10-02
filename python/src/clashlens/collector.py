@@ -678,9 +678,28 @@ class Collector:
         return ResponseHandoff(**value), protocol == _HANDOFF_PROTOCOL
 
     def recover_handoffs(self) -> int:
+        records = [
+            (name, *self._deserialize_handoff(payload))
+            for name, payload in self.spool.iter_handoffs()
+        ]
+        # Responses already applied go first, then the rest in the order they
+        # were received, so a later one never compacts away an earlier change
+        # or replaces the commit marker of one already applied.
+        applied = (
+            self.database.applied_occurrence_keys(
+                [handoff.occurrence_key for _name, handoff, _serialized in records]
+            )
+            if records
+            else set()
+        )
+        records.sort(
+            key=lambda record: (
+                record[1].occurrence_key not in applied,
+                record[1].response_completed_at,
+            )
+        )
         recovered = 0
-        for name, payload in self.spool.iter_handoffs():
-            handoff, serialized = self._deserialize_handoff(payload)
+        for name, handoff, serialized in records:
             if self.spool.verify(handoff.response_hash, handoff.byte_size) is None:
                 raise SpoolError("handoff raw response is missing or corrupt")
             self.database.record_recovered_response(handoff, serialized=serialized)

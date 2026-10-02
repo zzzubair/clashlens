@@ -6,7 +6,7 @@ import hashlib
 import threading
 import time
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,52 @@ from test_collector import _Client, _collector, _Reservation, _Spool, _Store
 from clashlens.collector_db import CollectorDatabase, CollectorWork
 from clashlens.collector_http import FetchedResponse, KeyPool
 from clashlens.spool import Spool
+
+
+@pytest.mark.parametrize(
+    ("applied", "replayed"),
+    [(set(), ["z-earlier", "a-later"]), ({"a-later"}, ["a-later", "z-earlier"])],
+)
+def test_recovery_replays_applied_then_received_order(
+    tmp_path: Path, applied: set[str], replayed: list[str]
+) -> None:
+    class RecoveryStore:
+        def __init__(self) -> None:
+            self.replayed: list[str] = []
+
+        def applied_occurrence_keys(self, keys: list[str]) -> set[str]:
+            return applied & set(keys)
+
+        def record_recovered_response(self, handoff: Any, *, serialized: bool) -> None:
+            assert serialized
+            self.replayed.append(handoff.occurrence_key)
+
+        def referenced_spool_hashes(self) -> set[str]:
+            return set()
+
+    spool = Spool(tmp_path / "spool", max_body_bytes=1024)
+    store = RecoveryStore()
+    collector = _collector(spool, store, _Client(_Spool()))  # type: ignore[arg-type]
+    work = CollectorWork(1, "#2PP", datetime.now(UTC))
+    received = datetime.now(UTC)
+    # File names sort opposite to the order the responses were received.
+    for key, body, offset in (("z-earlier", b"5032", 0), ("a-later", b"5033", 1)):
+        digest = hashlib.sha256(body).hexdigest()
+        at = received + timedelta(seconds=offset)
+        response = FetchedResponse("profile", body, 200, at, at, "regular-1", {})
+        handoff = replace(
+            collector._make_handoff(work, response, digest), occurrence_key=key
+        )
+        name, payload = collector.serialize_handoff(handoff)
+        with spool.reserve(1024) as reservation:
+            spool.publish_handoff(body, digest, name, payload, reservation)
+
+    try:
+        assert collector.recover_handoffs() == 2
+        assert store.replayed == replayed
+        assert spool.iter_handoffs() == []
+    finally:
+        spool.close()
 
 
 def test_cleanup_batch_acknowledges_a_file_already_removed_by_a_crash(
@@ -472,7 +518,7 @@ def test_post_publish_failure_fences_a_waiting_successor() -> None:
         results = await asyncio.gather(first, second, return_exceptions=True)
         assert isinstance(results[0], RuntimeError)
         assert results[1] == ["capacity_paused"]
-        # Both saved responses are left for restart recovery to replay in order.
+        # Both saved responses are left for restart recovery.
         assert len(spool.handoffs) == 2
         assert await collector.health_response("/readyz") == (
             503,
