@@ -792,11 +792,12 @@ def test_scheduled_raw_cleanup_deletes_and_never_waits_for_operations(
     env = dict(mode_config, **{k: env[k] for k in ("SYSTEMCTL_BIN", "PATH")}, PODMAN_BIN=str(podman))
     lock_path = tmp_path / "state" / "clashlens" / "ops.lock"
     with lock_path.open("w") as lock:
-        # A deployment or backup holding the operation lock does not delay cleanup.
+        # A deployment or backup holding the operation lock does not delay cleanup. Each run makes
+        # about 100 Podman checks through the Python stand-in, so slow CI runners need 60 seconds.
         fcntl.flock(lock, fcntl.LOCK_EX)
         scheduled = subprocess.run(
             ["bash", str(OPS), "archive-prune", "--scheduled"],
-            env=env, capture_output=True, text=True, timeout=15, check=False,
+            env=env, capture_output=True, text=True, timeout=60, check=False,
         )
     assert (scheduled.returncode == 0) is deletes, scheduled.stderr
     if deletes:
@@ -808,12 +809,12 @@ def test_scheduled_raw_cleanup_deletes_and_never_waits_for_operations(
         assert not runs.exists()
         preview = subprocess.run(
             ["bash", str(OPS), "archive-prune"],
-            env=env, capture_output=True, text=True, timeout=15, check=False,
+            env=env, capture_output=True, text=True, timeout=60, check=False,
         )
         assert preview.returncode == 0, preview.stderr
         assert not runs.read_text().rstrip().endswith("--apply")
     manual = subprocess.run(
         ["bash", str(OPS), "archive-prune", "--apply"],
-        env=env, capture_output=True, text=True, timeout=15, check=False,
+        env=env, capture_output=True, text=True, timeout=60, check=False,
     )
     assert (manual.returncode == 0) is deletes, manual.stderr
