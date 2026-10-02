@@ -174,12 +174,9 @@ prove a write; the worker credential can only read. Neither runtime credential
 may list, overwrite, delete, or broadly browse archive objects.
 The database also has separate collector, worker, and API roles. The admin
 database URL exists as a short-lived Podman secret during fixture bootstrap or
-while an operator explicitly handles a failed item. With
-[raw-response cleanup](#raw-response-cleanup) set to `preview` or `apply`, it is
-also kept as the persistent Podman secret
-`clashlens-archive-operator-database-url` from `up` until cleanup is set back
-to `off`. It carries full administrator database authority and only the
-cleanup container mounts it.
+while an operator explicitly handles a failed item. The persistent administrator
+credential used by cleanup follows the separate
+[raw-response cleanup lifecycle](#raw-response-cleanup).
 
 ### Paris fixed-address relay
 
@@ -596,7 +593,10 @@ one-line files beside the Clash API keys:
 - `apply`: the timer marks and deletes.
 
 `up` copies the operator keys and an administrator database address into Podman
-secrets that only the cleanup container mounts. The collector, worker, API and
+secrets that only the cleanup container mounts. The database secret,
+`clashlens-archive-operator-database-url`, carries full administrator database
+authority. These secrets remain after `down`; the next production `up` with
+`CLASHLENS_ARCHIVE_RETENTION=off` removes them. The collector, worker, API and
 website never receive them. Each run starts a short-lived container with the
 same spool as the collector, processes one batch of up to 1,000 deletions and
 1,000 markings, and prints one JSON report. In `apply` the timer starts five
@@ -618,10 +618,12 @@ Enable it in two approved steps:
 2. Only after #122/#129 prove the seven-day-old restore above and that report
    is approved, set `apply` and run `./ops up`.
 
-Throughput is unmeasured. The planning estimate is about 50 ms per deletion,
-or roughly 785,000 objects a day, against about 553,000 new objects a day on
-October 2. After switching on deletion, compare `deleted_objects` per run with
-that rate. If cleanup cannot keep up, the backlog and the bill keep growing.
+Throughput is unmeasured. At an assumed 50 ms per deletion, deleting 1,000
+objects takes 50 seconds. With the 30-second gap, that is a theoretical
+1.08 million deletions a day before marking, database waits and container startup,
+against about 553,000 new objects a day on October 2. After switching on deletion,
+total `deleted_objects` across a full day and compare it with new arrivals.
+If cleanup cannot keep up, the backlog and the bill keep growing.
 
 A run with any failed object exits unsuccessfully, which marks the service
 failed. Logs record its report and each failed object's location and error type.
