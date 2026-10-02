@@ -64,6 +64,8 @@ def test_collector_exports_population_check_ages_with_missing_history(database_u
                 ("#HALF", True),
                 ("#FAIL", True),
                 ("#OFF", False),
+                ("#NOTFOUND", True),
+                ("#NEVERFOUND", True),
             ):
                 connection.execute(
                     "INSERT INTO players (normalized_tag, active) VALUES (%s, %s)",
@@ -73,6 +75,14 @@ def test_collector_exports_population_check_ages_with_missing_history(database_u
             seed_check(connection, "#FAIL", "profile", None)
             for endpoint in ("profile", "battle_log"):
                 seed_check(connection, "#OFF", endpoint, now - timedelta(days=10))
+                seed_check(
+                    connection,
+                    "#NOTFOUND",
+                    endpoint,
+                    now - timedelta(days=1),
+                    not_found=now if endpoint == "profile" else None,
+                )
+            seed_check(connection, "#NEVERFOUND", "profile", None, not_found=now)
         options = conninfo_to_dict(info)["options"]
         database = CollectorDatabase(
             make_conninfo(info, options=options + " -c role=clashlens_collector")
@@ -87,7 +97,7 @@ def test_collector_exports_population_check_ages_with_missing_history(database_u
                 for line in body.decode().splitlines()
             }
             prefix = "clashlens_collector_"
-            assert metrics[prefix + "active_players"] == 23
+            assert metrics[prefix + "active_players"] == 25
             assert metrics[prefix + "check_age_sample_players"] == 20
             assert metrics[prefix + "check_age_missing_players"] == 3
             elapsed = (
@@ -97,6 +107,60 @@ def test_collector_exports_population_check_ages_with_missing_history(database_u
                 assert metrics[prefix + f"check_age_{name}_seconds"] == pytest.approx(
                     age + elapsed, abs=0.001
                 )
+        finally:
+            database.close()
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "success_seconds", "not_found_seconds", "visible"),
+    [
+        ("profile", None, 0, False),
+        ("profile", -120, 0, False),
+        ("profile", 0, 0, True),
+        ("profile", 0, -120, True),
+        ("battle_log", -120, 0, True),
+    ],
+)
+def test_collector_check_age_not_found_membership(
+    database_url,
+    endpoint,
+    success_seconds,
+    not_found_seconds,
+    visible,
+):
+    now = datetime.now(UTC)
+    with domain_database(database_url) as info:
+        with psycopg.connect(info) as connection:
+            connection.execute(
+                "INSERT INTO players (normalized_tag, active) VALUES ('#P', true)"
+            )
+            for checked_endpoint in ("profile", "battle_log"):
+                at = now - timedelta(seconds=180)
+                not_found = None
+                if checked_endpoint == endpoint:
+                    at = (
+                        None
+                        if success_seconds is None
+                        else now + timedelta(seconds=success_seconds)
+                    )
+                    not_found = now + timedelta(seconds=not_found_seconds)
+                seed_check(connection, "#P", checked_endpoint, at, not_found=not_found)
+        database = CollectorDatabase(info)
+        try:
+            measured = database.health_metrics()
+            assert measured["active_players"] == 1
+            assert measured["check_age_sample_players"] == int(visible)
+            assert measured["check_age_missing_players"] == 0
+            for name in ("p50", "p95", "max"):
+                if visible:
+                    elapsed = (
+                        measured["metrics_sample_timestamp_seconds"] - now.timestamp()
+                    )
+                    assert measured[f"check_age_{name}_seconds"] == pytest.approx(
+                        180 + elapsed, abs=0.001
+                    )
+                else:
+                    assert f"check_age_{name}_seconds" not in measured
         finally:
             database.close()
 
@@ -297,5 +361,32 @@ def test_unchanged_success_advances_check_age_but_failure_does_not(database_url)
             assert measured["check_age_max_seconds"] == pytest.approx(
                 20 + elapsed, abs=0.001
             )
+            # A profile 404 hides the player until a success; a server error
+            # in between must not restore them to the freshness population.
+            for seconds, status in enumerate((404, 500, 200), start=1):
+                database.record_response(
+                    replace(
+                        original,
+                        occurrence_key=f"profile-{status}",
+                        request_started_at=now + timedelta(seconds=seconds - 1),
+                        response_completed_at=now + timedelta(seconds=seconds),
+                        http_status=status,
+                    )
+                )
+                measured = database.health_metrics()
+                assert measured["check_age_sample_players"] == int(status == 200)
+                assert measured["check_age_missing_players"] == 0
+                if status == 200:
+                    elapsed = (
+                        measured["metrics_sample_timestamp_seconds"] - now.timestamp()
+                    )
+                    assert measured["check_age_max_seconds"] == pytest.approx(
+                        20 + elapsed, abs=0.001
+                    )
+                else:
+                    assert all(
+                        f"check_age_{name}_seconds" not in measured
+                        for name in ("p50", "p95", "max")
+                    )
         finally:
             database.close()

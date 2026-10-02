@@ -27,6 +27,11 @@ def health_metrics(connection: Any) -> dict[str, int | float]:
               ON battle.scope = 'player' AND battle.identity_key = player.normalized_tag
              AND battle.endpoint = 'battle_log'
             WHERE player.active
+              AND NOT (
+                  profile.last_not_found_at IS NOT NULL
+                  AND (profile.last_success_at IS NULL
+                       OR profile.last_not_found_at > profile.last_success_at)
+              )
         ), checks AS (
             SELECT count(age) AS samples, count(*) - count(age) AS missing,
                    percentile_disc(0.5) WITHIN GROUP (ORDER BY age) AS p50,

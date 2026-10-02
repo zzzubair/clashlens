@@ -93,3 +93,63 @@ Reset trial, container build, full repository suite, or hosted checks were run.
 The synthetic ages establish percentile correctness and query cost, not a
 production freshness promise. Automated no-mistakes validation and publication
 remain a separate firstmate handoff.
+
+## Not-found exclusion follow-up
+
+Measured locally on 2026-10-02 using PostgreSQL 18.6 on the same AMD Ryzen 5
+5500U host. The collector now excludes players under the Live Leaderboard's
+profile not-found rule from all three check-age gauges and their sample/missing
+counts. Active-player and due-work counts retain those players for retries.
+This adds one filter to the existing profile-state join, with no new query,
+database grant, index, schema change, or metric.
+
+Before the filter, three regression cases failed: a hidden player with old
+successes entered the age samples, and a never-found player entered the
+missing-check count. After the filter, **108 tests passed in 85.97 seconds**,
+without skips, across:
+
+```text
+tests/test_freshness_metrics_postgres.py
+tests/test_api_db_public_ops.py
+tests/test_alerts.py
+tests/test_collector_metrics_postgres.py
+tests/test_collector_readiness.py
+tests/test_collector_db_postgres.py
+```
+
+The changed tests cover emitted metrics under the collector's database role,
+mixed and entirely hidden populations, a not-found time equal to a success,
+a newer success, and battle-log not-found responses that must not hide a player.
+A real response-recording sequence checks profile success, not found, server
+error, and successful recovery. Existing missing-history and future-time cases
+remain covered. Ruff lint/format checks and `git diff --check` also passed.
+
+The query comparison used one disposable database with 13,000 active, due
+players and 26,000 endpoint states. Ten players had 23.5-hour-old successful
+checks and newer profile not-found responses; the other 12,990 had successful
+profile checks 30 seconds old and battle-log checks 60 seconds old. Work queues
+and saved-response history were empty. After `ANALYZE`, both the previous and
+updated full health functions ran under `clashlens_collector` on one open
+connection. Each had a first call followed by 30 alternating repeated calls,
+including database round trips and Python result conversion:
+
+- Previous query: first 42.562 ms; repeated minimum 32.826 ms, median 34.864 ms,
+  maximum 42.099 ms.
+- Updated query: first 37.056 ms; repeated minimum 32.082 ms, median 34.692 ms,
+  maximum 37.434 ms.
+- Samples changed from 13,000 to 12,990. Maximum age changed from 84,601.023
+  seconds to 61.066 seconds. The median and 95th percentile remained about
+  61 seconds. Active-player and due-work counts stayed at 13,000.
+
+`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` took 44.453 ms for the updated query,
+with no temporary-storage reads or writes. The filter removed exactly ten
+players using the already-joined compact profile state. The repeated median
+remains about 35 ms per 30-second sampling interval; the small timing difference
+is shared-host noise, not evidence of a speedup.
+
+The commands used the locked Python 3.12 environment and temporary PostgreSQL
+recipe in `.no-mistakes.yaml`, with files inside this worktree. Pytest used the
+six paths above with `-q --durations=10` and a worktree-local `--basetemp`.
+This follow-up did not check production plans, a populated processing backlog,
+the full repository suite, container builds, hosted checks, or live API traffic.
+Nothing was deployed. The database was stopped after validation.
