@@ -172,8 +172,9 @@ existing eligibility processing locally; live import and capacity are pending.
 - Added storage for both historical populations and Clan Castle units; measured
   raw-deletion restore allowance and the revised six-month projection.
 - Discord server/invite/channel identifiers, ticket provider/plan, permissions,
-  transcript retention and support staffing. Alert thresholds for queues,
-  uploads and Reset delays still need explicit values in #124.
+  transcript retention and support staffing. Overdue-check and Live Leaderboard
+  thresholds are defined in [alert conditions](deployment.md#alert-conditions);
+  job/upload stalls and missed Reset publication remain deferred under #140.
 - [#61](https://github.com/zzzubair/clashlens/issues/61) stays post-launch. Its
   14-day cross-season comparison needs a retention review: compact history does
   not retain all requested daily destruction/star data, and seven-day detail

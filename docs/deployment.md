@@ -204,8 +204,9 @@ The server runs Ubuntu 24.04, Docker and Tailscale. The relay code is in
 `/root/.local/share/clashlens-egress-proxy`. `deploy/egress-proxy/deploy.sh`
 runs Tinyproxy without root privileges, with a read-only filesystem, a 64 MiB
 memory limit, at most 50 connections, and warning logs capped at three 10 MB
-files. It holds no API keys or response archive. Thirty collector connections
-plus token-verification traffic fit below that connection limit.
+files. It holds no API keys or response archive. With six regular keys and one
+interactive key, the collector's default connection limit is 42, leaving eight
+of the proxy's 50 connections for separate token-verification traffic.
 
 The filter allows only `CONNECT api.clashofclans.com:443`, an encrypted tunnel
 whose API certificate the caller still checks. Ordinary HTTP requests, other

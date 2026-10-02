@@ -198,7 +198,7 @@ requires real-traffic approval.
 The transaction below saves all changes together or none of them. It keeps
 existing identities and history and serializes
 manual imports with a database lock and queues at most 500 IDs per call.
-Unfinished checks are reused across all five-minute cycles. Applied profile
+Unfinished checks are reused across older eligibility weeks. Applied profile
 results and finished checks with profile responses from this week are reused,
 including failed checks which need separate review. Use the profile response
 time, including the latest unchanged response, to decide the week.

@@ -50,8 +50,8 @@ Integrations needing Clash Lens data use the private API rather than reading
 the database or archive. The agreed Discord setup uses a private incoming
 webhook for operator alerts and an existing ticket bot for support. Neither
 needs access to the product database or archive. No custom product bot is part
-of this launch. Isolate future integrations only where availability or measured
-resource use requires it.
+of the current stack. Isolate future integrations only where availability or
+measured resource use requires it.
 
 ## Durable seams
 
@@ -138,9 +138,11 @@ Every fourth claim keeps the existing oldest-first order so daily results and
 other derived work keep moving. If all planned claims are rejected, that call
 falls back to the existing order without refreshing the plan again.
 
-Each worker thread searches for its own next job, including when the queue is
-idle. A search that finds nothing costs about 4 ms, so idle polling stays per
-thread instead of going through one shared search.
+Worker threads share the newest-job plan, but each thread claims its own next
+job, including when the queue is idle. An empty plan is refreshed at most once
+per second; threads still use the ordinary claim query when it has no candidate.
+That query measured about 4 ms when it found nothing, so idle claims stay per
+thread.
 
 An ordinary check's job is finished as `superseded`, without being
 applied, when newer processed evidence from the same player and Legend day
