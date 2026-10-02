@@ -7,6 +7,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -393,6 +394,16 @@ render_units
     )
     memory = postgres["Container"]["Memory"]
     assert int(buffers[:-2]) * mib[buffers[-2:]] * 2 <= int(memory[:-1]) * mib[memory[-1]]
+    # Podman reads these with Go's duration parser, which rejects systemd's "min".
+    assert postgres.has_option("Container", "HealthStartPeriod")
+    go_duration = re.compile(r"(\d+(ns|us|ms|s|m|h))+")
+    for path in units.glob("*.container"):
+        unit = configparser.ConfigParser(interpolation=None, strict=False)
+        unit.optionxform = str
+        unit.read(path)
+        for key in ("HealthInterval", "HealthTimeout", "HealthStartPeriod"):
+            value = unit.get("Container", key, fallback=None)
+            assert value is None or go_duration.fullmatch(value), (path.name, key, value)
     if mode == "fixture":
         assert not network.has_option("Network", "Subnet")
         assert not pod.has_option("Pod", "IP")
