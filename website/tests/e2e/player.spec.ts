@@ -120,10 +120,13 @@ for (const ageSeconds of [30, 60, 61, 120]) {
     );
     // The browser clock disagrees with the server, which must decide. Shift
     // Date.now directly: Playwright's clock also hides reload navigation timing.
-    await page.addInitScript((offset) => {
-      const now = Date.now;
-      Date.now = () => now() + offset;
-    }, Date.parse(observedAt) + (automaticCount ? 0 : 3_600_000) - Date.now());
+    await page.addInitScript(
+      (offset) => {
+        const now = Date.now;
+        Date.now = () => now() + offset;
+      },
+      Date.parse(observedAt) + (automaticCount ? 0 : 3_600_000) - Date.now(),
+    );
     // Exercise the existing refusal display without spending the shared allowance.
     const submissions = await refuseRefreshes(page);
 
