@@ -119,6 +119,11 @@ const PLAYER = {
   },
 } satisfies PlayerPage;
 
+const NEWER_PROFILE = {
+  ...PLAYER.profile,
+  freshness: { ...PLAYER.profile.freshness, observedAt: "2026-08-06T12:00:01Z" },
+};
+
 const SAVED_DAY: RankedDaySummary = {
   dayNumber: null,
   label: "Ranked day",
@@ -502,7 +507,11 @@ describe("automatic tag lookup", () => {
   it.each(["profile", "refresh"])(
     "uses the %s response when an older lookup still says tracking",
     async (source) => {
-      const departed = { ...PLAYER, trackingState: "not_in_legend" };
+      const departed = {
+        ...PLAYER,
+        trackingState: "not_in_legend",
+        profile: NEWER_PROFILE,
+      };
       mocks.createPythonClient.mockReturnValue({
         getPlayer: vi.fn().mockResolvedValue(source === "profile" ? departed : PLAYER),
         getPlayerSeasons: vi.fn().mockResolvedValue(SEASONS),
@@ -602,6 +611,24 @@ describe("automatic tag lookup", () => {
     expect(result.player?.season).toBeNull();
   });
 
+  it("keeps a newly published battle when a completed Refresh has the same check time", async () => {
+    mocks.createPythonClient.mockReturnValue({
+      getPlayer: vi
+        .fn()
+        .mockResolvedValue({ ...PLAYER, currentDay: SAVED_DAY, recentDays: [SAVED_DAY] }),
+      getPlayerSeasons: vi.fn().mockResolvedValue([]),
+      getRefreshStatus: vi.fn().mockResolvedValue(REFRESH_STATUS),
+    });
+    mocks.getPlayerLookup.mockResolvedValue({ tag: TAG, state: "tracking" });
+    const result = await playerLoader({
+      request: new Request(`${requestFor(null).url}?refresh=work_1`),
+      params: { tag: TAG },
+    } as never);
+    const html = await renderRoute(result);
+    expect(html).toContain("Current trophies");
+    expect(html.match(/id="battle-saved-attack"/g)).toHaveLength(1);
+  });
+
   it.each(
     (["tracking", "not_in_legend"] as const).flatMap((trackingState) =>
       [false, true].flatMap((lookupFailed) =>
@@ -634,6 +661,7 @@ describe("automatic tag lookup", () => {
       const displayed: PlayerPage = {
         ...PLAYER,
         trackingState,
+        profile: NEWER_PROFILE,
         season: {
           id: SEASON,
           anchor: "2026-09-07T05:00:00Z",

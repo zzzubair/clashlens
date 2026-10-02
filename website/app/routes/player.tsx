@@ -150,7 +150,7 @@ export async function loader({
         : null;
   return {
     requestedTag: normalizedTag,
-    player: refreshStatus?.player ?? player,
+    player,
     error,
     refreshStatus,
     refreshError,
