@@ -1,12 +1,10 @@
-/* Complete fallback fonts advertise only their extra characters. Unsupported symbols
-   go straight to system fonts instead of downloading a file without the glyph. */
+/* Each weight is split into two files that together hold every original character.
+   Unsupported symbols go straight to system fonts without downloading either file. */
 @font-face {
   font-family: Barlow;
   font-weight: 400;
   font-display: swap;
-  src:
-    url("/fonts/barlow-regular.woff2") format("woff2"),
-    url("/fonts/barlow-regular.ttf") format("truetype");
+  src: url("/fonts/barlow-regular-extended.woff2") format("woff2");
   unicode-range:
     U+0100-0113, U+0116-012B, U+012D-0130, U+0133-0137, U+0139-013E, U+0140-0148,
     U+014A-014D, U+014F-0151, U+0154-017E, U+018F, U+0192, U+01A0-01A1, U+01AF-01B0,
@@ -21,9 +19,7 @@
   font-family: Barlow;
   font-weight: 600;
   font-display: swap;
-  src:
-    url("/fonts/barlow-semibold.woff2") format("woff2"),
-    url("/fonts/barlow-semibold.ttf") format("truetype");
+  src: url("/fonts/barlow-semibold-extended.woff2") format("woff2");
   unicode-range:
     U+0100-0113, U+0116-012B, U+012D-0130, U+0133-0137, U+0139-013E, U+0140-0148,
     U+014A-014D, U+014F-0151, U+0154-017E, U+018F, U+0192, U+01A0-01A1, U+01AF-01B0,
@@ -38,9 +34,7 @@
   font-family: Barlow;
   font-weight: 700;
   font-display: swap;
-  src:
-    url("/fonts/barlow-bold.woff2") format("woff2"),
-    url("/fonts/barlow-bold.ttf") format("truetype");
+  src: url("/fonts/barlow-bold-extended.woff2") format("woff2");
   unicode-range:
     U+0100-0113, U+0116-012B, U+012D-0130, U+0133-0137, U+0139-013E, U+0140-0148,
     U+014A-014D, U+014F-0151, U+0154-017E, U+018F, U+0192, U+01A0-01A1, U+01AF-01B0,

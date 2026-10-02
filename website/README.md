@@ -317,8 +317,23 @@ The root repository `Containerfile` builds the Python asyncio collector; this
 
 ## Font assets
 
-The browser loads the three Barlow weights as WOFF2, with the original TTF files
-retained as fallbacks. The WOFF2 files were converted from those exact originals
-with fontTools 4.66.0, without removing characters or changing glyphs. Their SIL
-Open Font License remains in `public/fonts/OFL.txt`. Font conversion is a one-time
-asset step and adds no application or build dependency.
+The browser loads each Barlow weight as two WOFF2 files: `-latin` for common
+characters and `-extended` for the rest. `app/appearance.css` gives each file the
+matching character range, so a page downloads only the files its text needs.
+Together the two files hold every character of the complete originals, with the
+same outlines, widths and hinting. The complete TTF and WOFF2 originals and their
+SIL Open Font License (`public/fonts/OFL.txt`) stay in `public/fonts`.
+
+The split files were made from the complete TTFs with fontTools 4.66.0 and
+Brotli 1.2.0 in a throwaway virtual environment, so the website gains no
+dependency. From `website/public/fonts`, with `LATIN` and `EXTENDED` set to the
+comma-separated `unicode-range` values from `app/appearance.css`:
+
+```sh
+for weight in regular semibold bold; do
+  pyftsubset "barlow-$weight.ttf" --unicodes="$LATIN" --layout-features='*' \
+    --flavor=woff2 --output-file="barlow-$weight-latin.woff2"
+  pyftsubset "barlow-$weight.ttf" --unicodes="$EXTENDED" --layout-features='*' \
+    --flavor=woff2 --output-file="barlow-$weight-extended.woff2"
+done
+```
