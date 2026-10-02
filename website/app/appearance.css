@@ -63,8 +63,8 @@ body {
   --cl-muted: #a1a1aa;
   --cl-border: #2c2d32;
   --cl-outline: #3f4046;
-  --cl-blue: #ff9a4d;
-  --cl-blue-dark: #ffb27a;
+  --cl-accent: #ff9a4d;
+  --cl-accent-contrast: #ffb27a;
   --cl-action: #ff7a1a;
   --cl-action-hover: #ff8f3d;
   --cl-action-shade: #b8460c;
@@ -303,10 +303,10 @@ main {
   color: var(--cl-muted);
 }
 [data-theme="dark"] .empty-chart span {
-  background: var(--cl-blue);
+  background: var(--cl-accent);
 }
 [data-theme="dark"] .empty-chart span:nth-child(2) {
-  background: var(--cl-blue-dark);
+  background: var(--cl-accent-contrast);
 }
 [data-theme="dark"] .empty-chart span:nth-child(3) {
   background: var(--cl-action);

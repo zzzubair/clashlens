@@ -334,3 +334,25 @@ back to Barlow or the system font. Its SIL Open Font License is in
 API (`leaguetiers/326/s5Y12RDRg7tgznd2RwU9kgLbedC5Not4peiHfOaWfJo.png`, as saved
 in a profile response on October 2, 2026), resized to 160 pixels high. It is used under the Supercell Fan Content Policy,
 which the site footer links to.
+
+The footer uses the exact notice in the policy's "Insert disclaimers" section,
+checked on October 2, 2026. The URL is visible and linked. The root README uses
+the same notice. Its browser test checks the complete rendered text, link, and
+320-pixel layout in light and dark themes; the existing 12.48-pixel footer text
+and wrapping remain unchanged.
+
+Shared orange accent colours use `--cl-accent` and `--cl-accent-contrast` in
+`theme.css` and the dark overrides in `appearance.css`. The contrast variant is
+darker in light mode and lighter in dark mode. All four values and every use
+were preserved when renaming the former blue-named settings.
+
+For that rename, full-page Chrome screenshots before and after changing only
+the colour names showed zero changed pixels on both Home in light mode
+(375 × 876) and Sign in in dark mode (375 × 812). These used the local website
+with the data service unavailable and sign-in disabled. The task worktree's
+`results/fan-notice/` holds the images, pixel-diff images and `colour-diff.json`.
+The final notice was also visually checked at 320 pixels in both themes, with
+no horizontal overflow. All 496 unit tests, the footer browser test, type
+checking, lint, formatting and `build:verify` passed on Node 22.23.2. Node 24,
+the full browser suite, populated player pages and real providers were not
+checked in this task. Nothing was deployed.
