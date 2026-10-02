@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import psycopg
+import pytest
 from domain_test_support import domain_database
 from test_collector import _collector
 from test_collector_uploads_postgres import NOW, _handoff, _player
@@ -93,6 +95,86 @@ def test_unchanged_profile_is_recorded_without_saving_its_bytes(
         finally:
             database.close()
             spool.close()
+
+
+def test_timed_out_unchanged_check_still_saves_the_response(
+    database_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, ignored = _profile(1), _profile(2)
+    with domain_database(database_url) as connection_info:
+        player_id = _player(connection_info)
+        database = CollectorDatabase(connection_info)
+        spool = Spool(tmp_path / "spool", max_body_bytes=4 << 20)
+        collector = _collector(spool, database, _Profiles([first, ignored]))  # type: ignore[arg-type]
+        work = CollectorWork(player_id, "#2PP", datetime.now(UTC))
+        errors: list[Exception] = []
+        check = database.record_unchanged_response
+
+        def timed(handoff: ResponseHandoff) -> bool:
+            try:
+                return check(handoff)
+            except psycopg.Error as error:
+                errors.append(error)
+                raise
+
+        monkeypatch.setattr(database, "record_unchanged_response", timed)
+
+        async def scenario() -> None:
+            def poll() -> asyncio.Future[list[str]]:
+                return asyncio.ensure_future(
+                    collector.collect_player(work, lane="ordinary", endpoints=("profile",))
+                )
+
+            assert await poll() == ["recorded"]
+            # A lock held past the fast path's two-second limit makes
+            # PostgreSQL end its transaction; the response is then saved.
+            with psycopg.connect(connection_info) as holder:
+                holder.execute("SELECT 1 FROM collector_response_state FOR UPDATE")
+                second = poll()
+                await asyncio.sleep(3)
+            assert await second == ["recorded"]
+
+        try:
+            asyncio.run(scenario())
+            assert [type(error) for error in errors] == [
+                psycopg.errors.TransactionTimeout
+            ]
+            polls, _, observations = _sightings(connection_info)
+            assert (polls, observations) == (2, 1)
+            assert hashlib.sha256(ignored).hexdigest() in spool.final_hashes()
+            assert spool.iter_handoffs() == []
+        finally:
+            database.close()
+            spool.close()
+
+
+def test_unchanged_check_skips_a_shared_body_another_sighting_holds(
+    database_url: str,
+) -> None:
+    # Players can share one body (hundreds get the same not-found profile),
+    # so a held upload row must send the sighting to the saved path at once.
+    with domain_database(database_url) as connection_info:
+        database = CollectorDatabase(connection_info)
+        first = _handoff(
+            occurrence_key="first",
+            response_hash="a" * 64,
+            player_id=_player(connection_info),
+        )
+        again = replace(
+            first, occurrence_key="again", response_completed_at=NOW + timedelta(1)
+        )
+        try:
+            database.record_response(first)
+            with psycopg.connect(connection_info) as holder:
+                holder.execute("SELECT 1 FROM collector_response_uploads FOR UPDATE")
+                started = time.monotonic()
+                assert not database.record_unchanged_response(again)
+                assert time.monotonic() - started < 1
+                assert _sightings(connection_info)[0] == 1
+            assert database.record_unchanged_response(again)
+            assert _sightings(connection_info)[0] == 2
+        finally:
+            database.close()
 
 
 def test_unsaved_sighting_keeps_a_saved_refresh_recoverable(database_url: str) -> None:
